@@ -164,22 +164,28 @@ impl Media {
         let (tx, mut rx) = mpsc::channel(32);
         let (events_tx, events) = mpsc::channel(32);
         let task = tokio::spawn(async move {
-            let read_events = events_tx.clone();
-            let reader = tokio::spawn(async move {
+            let mut reader = tokio::spawn(async move {
                 while let Ok(frame) = receive::<LiveMediaEvent>(&mut output).await {
-                    if read_events.send(frame.payload).await.is_err() {
+                    if events_tx.send(frame.payload).await.is_err() {
                         break;
                     }
                 }
             });
-            while let Some(payload) = rx.recv().await {
-                let shutdown = matches!(payload, LiveMediaRequest::Shutdown);
-                if send(&mut input, &Envelope::new(0, payload)).await.is_err() || shutdown {
-                    break;
+            let mut reader_finished = false;
+            loop {
+                tokio::select! {
+                    _ = &mut reader => { reader_finished = true; break; },
+                    payload = rx.recv() => {
+                        let Some(payload) = payload else { break; };
+                        let shutdown = matches!(payload, LiveMediaRequest::Shutdown);
+                        if send(&mut input, &Envelope::new(0, payload)).await.is_err() || shutdown { break; }
+                    },
                 }
             }
-            reader.abort();
-            let _ = reader.await;
+            if !reader_finished {
+                reader.abort();
+                let _ = reader.await;
+            }
             let _ = child.kill().await;
         });
         Ok(Self {

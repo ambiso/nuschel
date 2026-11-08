@@ -19,7 +19,7 @@ use std::{
 
 enum Event {
     Request(LiveMediaRequest),
-    Capture(Vec<f32>),
+    Capture(u64, Vec<f32>),
     DeviceError(String),
     Closed,
 }
@@ -98,15 +98,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut noise_suppression = false;
     let mut deafened = false;
     let mut sequence = 0;
+    let mut epoch = 0;
     let mut speakers = BTreeMap::<u32, Speaker>::new();
     let mut devices = None;
     let mut retry_at = Instant::now();
     let mut last_cleanup = Instant::now();
     loop {
-        if devices.is_none() && Instant::now() >= retry_at {
-            match open_devices(tx.clone(), muted.clone(), mixer.clone()) {
+        if devices.is_none() && !deafened && Instant::now() >= retry_at {
+            match open_devices(tx.clone(), muted.clone(), mixer.clone(), epoch) {
                 Ok(opened) => {
-                    let message = if opened._input.is_some() {
+                    let message = if muted.load(Ordering::Relaxed) {
+                        "Audio ready · microphone muted"
+                    } else if opened._input.is_some() {
                         "Audio ready"
                     } else {
                         "Playback ready; microphone unavailable"
@@ -151,15 +154,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
             }
             Some(Event::Request(LiveMediaRequest::SetState {
+                epoch: new_epoch,
                 muted: mute,
                 deafened: deaf,
             })) => {
                 let was_muted = muted.swap(mute || deaf, Ordering::Relaxed);
+                epoch = new_epoch;
+                devices.take();
+                retry_at = Instant::now();
                 deafened = deaf;
-                if deaf {
-                    if let Ok(mut mixer) = mixer.lock() {
-                        mixer.speakers.clear();
-                    }
+                if deaf && let Ok(mut mixer) = mixer.lock() {
+                    mixer.speakers.clear();
                 }
                 if !was_muted && (mute || deaf) {
                     let mut packet = vec![0; MAX_PACKET_BYTES];
@@ -168,6 +173,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     emit(
                         &mut output,
                         LiveMediaEvent::Packet {
+                            epoch,
                             sequence,
                             opus: packet,
                             end: true,
@@ -233,14 +239,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            Some(Event::Capture(mut samples)) => {
-                if muted.load(Ordering::Relaxed) || samples.len() != 960 {
+            Some(Event::Capture(capture_epoch, mut samples)) => {
+                if capture_epoch != epoch || muted.load(Ordering::Relaxed) || samples.len() != 960 {
                     continue;
                 }
                 if noise_suppression {
                     let mut input = [0.; 480];
                     let mut clean = [0.; 480];
-                    for frame in samples.chunks_exact_mut(480) {
+                    for frame in samples.as_chunks_mut::<480>().0 {
                         for (output, sample) in input.iter_mut().zip(frame.iter()) {
                             *output = sample * 32768.;
                         }
@@ -256,6 +262,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 emit(
                     &mut output,
                     LiveMediaEvent::Packet {
+                        epoch,
                         sequence,
                         opus: packet,
                         end: false,
@@ -291,6 +298,7 @@ fn open_devices(
     tx: SyncSender<Event>,
     muted: Arc<AtomicBool>,
     mixer: Arc<Mutex<Mixer>>,
+    epoch: u64,
 ) -> Result<Devices, String> {
     let mut hosts = vec![];
     #[cfg(target_os = "linux")]
@@ -311,7 +319,7 @@ fn open_devices(
     for id in hosts {
         match cpal::host_from_id(id)
             .map_err(|error| error.to_string())
-            .and_then(|host| open_host(&host, tx.clone(), muted.clone(), mixer.clone()))
+            .and_then(|host| open_host(&host, tx.clone(), muted.clone(), mixer.clone(), epoch))
         {
             Ok(devices) => return Ok(devices),
             Err(error) => errors.push(format!("{id:?}: {error}")),
@@ -324,6 +332,7 @@ fn open_host(
     tx: SyncSender<Event>,
     muted: Arc<AtomicBool>,
     mixer: Arc<Mutex<Mixer>>,
+    epoch: u64,
 ) -> Result<Devices, String> {
     let output = host
         .default_output_device()
@@ -332,26 +341,61 @@ fn open_host(
         .default_output_config()
         .map_err(|error| error.to_string())?;
     let stream = match config.sample_format() {
-        SampleFormat::F32 => output_stream::<f32>(&output, config.into(), tx.clone(), mixer),
-        SampleFormat::I16 => output_stream::<i16>(&output, config.into(), tx.clone(), mixer),
-        SampleFormat::U16 => output_stream::<u16>(&output, config.into(), tx.clone(), mixer),
-        SampleFormat::I32 => output_stream::<i32>(&output, config.into(), tx.clone(), mixer),
+        SampleFormat::F32 => {
+            output_stream::<f32>(&output, stream_config(host, config), tx.clone(), mixer)
+        }
+        SampleFormat::I16 => {
+            output_stream::<i16>(&output, stream_config(host, config), tx.clone(), mixer)
+        }
+        SampleFormat::U16 => {
+            output_stream::<u16>(&output, stream_config(host, config), tx.clone(), mixer)
+        }
+        SampleFormat::I32 => {
+            output_stream::<i32>(&output, stream_config(host, config), tx.clone(), mixer)
+        }
         _ => return Err("unsupported output sample format".into()),
     }?;
     stream.play().map_err(|error| error.to_string())?;
-    let input = host.default_input_device().and_then(|input| {
-        let config = input.default_input_config().ok()?;
-        let stream = match config.sample_format() {
-            SampleFormat::F32 => input_stream::<f32>(&input, config.into(), tx.clone(), muted),
-            SampleFormat::I16 => input_stream::<i16>(&input, config.into(), tx.clone(), muted),
-            SampleFormat::U16 => input_stream::<u16>(&input, config.into(), tx.clone(), muted),
-            SampleFormat::I32 => input_stream::<i32>(&input, config.into(), tx.clone(), muted),
-            _ => return None,
-        }
-        .ok()?;
-        stream.play().ok()?;
-        Some(stream)
-    });
+    let input = (!muted.load(Ordering::Relaxed))
+        .then(|| host.default_input_device())
+        .flatten()
+        .and_then(|input| {
+            let config = input.default_input_config().ok()?;
+            let stream = match config.sample_format() {
+                SampleFormat::F32 => input_stream::<f32>(
+                    &input,
+                    stream_config(host, config),
+                    tx.clone(),
+                    muted,
+                    epoch,
+                ),
+                SampleFormat::I16 => input_stream::<i16>(
+                    &input,
+                    stream_config(host, config),
+                    tx.clone(),
+                    muted,
+                    epoch,
+                ),
+                SampleFormat::U16 => input_stream::<u16>(
+                    &input,
+                    stream_config(host, config),
+                    tx.clone(),
+                    muted,
+                    epoch,
+                ),
+                SampleFormat::I32 => input_stream::<i32>(
+                    &input,
+                    stream_config(host, config),
+                    tx.clone(),
+                    muted,
+                    epoch,
+                ),
+                _ => return None,
+            }
+            .ok()?;
+            stream.play().ok()?;
+            Some(stream)
+        });
     Ok(Devices {
         _input: input,
         _output: stream,
@@ -372,6 +416,7 @@ fn input_stream<T>(
     config: cpal::StreamConfig,
     tx: SyncSender<Event>,
     muted: Arc<AtomicBool>,
+    epoch: u64,
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample,
@@ -412,7 +457,7 @@ where
                         frame.push(previous + (sample - previous) * fraction);
                         if frame.len() == 960 {
                             let complete = std::mem::replace(&mut frame, Vec::with_capacity(960));
-                            let _ = tx.try_send(Event::Capture(complete));
+                            let _ = tx.try_send(Event::Capture(epoch, complete));
                         }
                     }
                     previous = sample;
@@ -464,4 +509,17 @@ where
             None,
         )
         .map_err(|error| error.to_string())
+}
+
+fn stream_config(host: &cpal::Host, supported: cpal::SupportedStreamConfig) -> cpal::StreamConfig {
+    let mut config: cpal::StreamConfig = supported.into();
+    // PulseAudio's default can buffer two seconds. These Linux backends control
+    // per-stream buffers, without changing a system device's global settings.
+    #[cfg(target_os = "linux")]
+    if matches!(host.id(), cpal::HostId::PulseAudio | cpal::HostId::PipeWire) {
+        config.buffer_size = cpal::BufferSize::Fixed(480);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = host;
+    config
 }

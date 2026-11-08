@@ -48,8 +48,21 @@ Process separation and OS sandboxing are different guarantees. The worker execut
 can also be run directly for development; that does not establish restricted privileges.
 Do not describe an adapter as sandboxed until its platform policy is implemented and
 tested. Native Windows/macOS and mobile require their own capability review. The
-current media/storage IPC harnesses do not yet implement dedicated desktop OS sandbox
-profiles. The NixOS server's storage preflight inherits its hardened systemd unit.
+Linux desktop storage runs with only its writable history directory, runtime libraries,
+private temporary storage and inherited IPC. The media profile grants audio sockets
+and ALSA devices, runtime libraries and private temporary storage; it grants no host
+home, D-Bus socket, session credentials, or network namespace. Both long-lived profiles
+have an address-space limit. Media restarts remount recreated audio sockets.
+
+An authorized audio service socket is a capability to that service's API; filesystem
+and network namespaces do not restrict every operation an audio daemon exposes. Trusted
+Nuschel code creates/changes only its own streams. The sandbox is not an audio-protocol
+firewall or a claim that a compromised audio daemon cannot act outside it.
+
+Muted clients do not open microphone streams. Capture generations invalidate queued
+PCM and encoded packets across mute/deafen changes and audio-worker restarts.
+Windows/macOS media/storage profiles remain unimplemented. The NixOS server's storage
+preflight inherits its hardened systemd unit.
 
 ## Release gates
 

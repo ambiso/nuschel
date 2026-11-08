@@ -36,6 +36,14 @@ worker. Their optimized string/DOM internals are not assumed free of unsafe code
 No remote image, font, stylesheet, script or URL is loaded by this path. First-party
 code continues to forbid unsafe. The GUI consumes normalized text and style spans.
 
+`vendor/pulseaudio` retains upstream 0.3.2 under MIT with two narrowly documented
+authentication fixes. This preserves CPAL's Rust PulseAudio implementation inside
+the media worker. See [the patch notes](../vendor/pulseaudio/NUSCHEL-PATCHES.md).
+Crane's dependency build preserves that dependency's actual API; it must not replace
+it with a dummy library while compiling registry CPAL. Remove the override once the
+upstream release includes the fixes. PulseAudio buffers are configured per stream;
+native Windows/macOS device-wide buffer settings are left to the OS.
+
 ## Unmaintained transitive dependencies
 
 The following are unmaintained advisories, not vulnerability or unsoundness waivers.

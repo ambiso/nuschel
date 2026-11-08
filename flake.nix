@@ -49,7 +49,8 @@
             (craneLib.filterCargoSources path type)
             || lib.hasSuffix ".proto" path
             || lib.hasSuffix ".sql" path
-            || lib.hasSuffix ".json" path;
+            || lib.hasSuffix ".json" path
+            || lib.hasPrefix "LICENSE" (builtins.baseNameOf path);
         };
         nativeBuildInputs = [
           pkgs.pkg-config
@@ -82,7 +83,27 @@
           cargoExtraArgs = "--workspace";
           LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
         };
-        cargoArtifacts = craneLib.buildDepsOnly common;
+        # Registry CPAL uses this patched path dependency. Its real API must
+        # survive Crane's dummy-source pass so CPAL can compile against it.
+        pulseSource = lib.cleanSourceWith {
+          src = ./vendor/pulseaudio;
+          filter =
+            path: type:
+            (craneLib.filterCargoSources path type)
+            || lib.hasPrefix "LICENSE" (builtins.baseNameOf path)
+            || lib.hasSuffix ".md" path;
+        };
+        dummySrc = craneLib.mkDummySrc {
+          inherit src;
+          extraDummyScript = ''
+            rm -rf "$out/vendor/pulseaudio"
+            cp -R ${pulseSource} "$out/vendor/pulseaudio"
+            chmod -R u+w "$out/vendor/pulseaudio"
+          '';
+        };
+        buildDeps =
+          args: craneLib.buildDepsOnly ((builtins.removeAttrs args [ "src" ]) // { inherit dummySrc; });
+        cargoArtifacts = buildDeps common;
         serverCommon = common // {
           pname = "nuscheld";
           cargoExtraArgs = "-p nuscheld -p nuschel-storage-worker";
@@ -91,7 +112,7 @@
         serverPackage = craneLib.buildPackage (
           serverCommon
           // {
-            cargoArtifacts = craneLib.buildDepsOnly serverCommon;
+            cargoArtifacts = buildDeps serverCommon;
             postInstall = ''
               install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
               install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
@@ -105,9 +126,11 @@
             postInstall = ''
               install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
               install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
+              install -Dm644 ${./vendor/pulseaudio/LICENSE.md} "$out/share/licenses/nuschel/pulseaudio-MIT"
             ''
             + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-              wrapProgram "$out/bin/nuschel" \
+              for program in nuschel nuschel-cli; do
+                wrapProgram "$out/bin/$program" \
                 --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}" \
                 --prefix PATH : "${
                   lib.makeBinPath [
@@ -115,6 +138,7 @@
                     pkgs.util-linux
                   ]
                 }"
+              done
             '';
           }
         );
@@ -128,7 +152,7 @@
             exePath = "/bin/nuschel";
           })
           // {
-            meta.description = "Nuschel GPUI desktop client foundation";
+            meta.description = "Nuschel Mumble desktop client";
           };
         checks = {
           build = package;

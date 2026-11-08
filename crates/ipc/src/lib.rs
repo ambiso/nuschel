@@ -246,6 +246,7 @@ mod tests {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LiveMediaRequest {
     SetState {
+        epoch: u64,
         muted: bool,
         deafened: bool,
     },
@@ -270,6 +271,7 @@ pub enum LiveMediaEvent {
         message: String,
     },
     Packet {
+        epoch: u64,
         sequence: u64,
         opus: Vec<u8>,
         end: bool,

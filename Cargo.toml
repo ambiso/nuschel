@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*"]
+exclude = ["vendor/pulseaudio"]
 default-members = ["apps/desktop", "apps/server"]
 
 [workspace.metadata.crane]
@@ -33,3 +34,6 @@ undocumented_unsafe_blocks = "deny"
 lto = "thin"
 codegen-units = 1
 strip = "debuginfo"
+
+[patch.crates-io]
+pulseaudio = { path = "vendor/pulseaudio" }
