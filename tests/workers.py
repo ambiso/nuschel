@@ -43,6 +43,36 @@ def exchange(executable, payloads, arguments=()):
     return results
 
 
+def check_history_pages(binaries, arguments):
+    message = {"server": "paged-fixture", "channel": "general", "author": "fixture-user",
+               "observed_at_ms": 123, "body": "Repeated text\nwith identical timestamps"}
+    appended = exchange(binaries / "nuschel-storage-worker", [
+        {"kind": "append", "message": message} for _ in range(11)
+    ], arguments)
+    expected = [response["value"] for response in appended]
+    assert all(response["status"] == "appended" for response in appended)
+    seen = []
+    before = None
+    while True:
+        # Each page reopens the persistent store in a new worker process.
+        response, = exchange(binaries / "nuschel-storage-worker", [
+            {"kind": "history_page", "server": "paged-fixture", "channel": "general",
+             "before": before, "limit": 4},
+        ], arguments)
+        assert response["status"] == "history_page", response
+        page = response["value"]
+        ids = [entry["id"] for entry in page["messages"]]
+        assert ids == sorted(ids) and 0 < len(ids) <= 4
+        assert all(entry["message"] == message for entry in page["messages"])
+        seen.extend(ids)
+        cursor = page["next_before"]
+        if cursor is None:
+            break
+        assert cursor == ids[0] and (before is None or cursor < before)
+        before = cursor
+    assert sorted(seen) == expected, "all history must be reachable without gaps or duplicates"
+
+
 def check_workers(binaries):
     source = "first\n\nsecond\n```rust\nfn main() {}\n```\nlast"
     rendered, = exchange(binaries / "nuschel-content-worker", [{"text": source}])
@@ -73,6 +103,7 @@ def check_workers(binaries):
             {"kind": "recent", "server": "fixture-server", "channel": "general", "limit": 10},
         ], arguments)
         assert restored == {"status": "messages", "value": [message]}
+        check_history_pages(binaries, arguments)
 
     encoded, = exchange(binaries / "nuschel-media-worker", [{"kind": "encode_opus", "samples": [0.0] * 960}])
     assert encoded["status"] == "packet", encoded
@@ -124,6 +155,7 @@ def check_postgres(binaries, url_file):
         {"kind": "recent", "server": "postgres-fixture", "channel": "general", "limit": 1},
     ], arguments)
     assert restored == {"status": "messages", "value": [message]}
+    check_history_pages(binaries, arguments)
 
 
 if __name__ == "__main__":

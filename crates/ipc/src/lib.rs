@@ -6,7 +6,7 @@ pub mod host;
 
 use std::io::{self, Read, Write};
 
-use nuschel_core::{ChatMessage, MessageDocument};
+use nuschel_core::{ChatMessage, HistoryPage, MessageDocument};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -60,6 +60,12 @@ pub enum StorageRequest {
         channel: String,
         limit: u16,
     },
+    HistoryPage {
+        server: String,
+        channel: String,
+        before: Option<i64>,
+        limit: u16,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -72,6 +78,7 @@ pub enum StorageRequest {
 pub enum StorageResponse {
     Appended(i64),
     Messages(Vec<ChatMessage>),
+    HistoryPage(HistoryPage),
     Rejected(String),
 }
 

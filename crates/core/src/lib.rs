@@ -18,6 +18,23 @@ pub struct ChatMessage {
     pub body: String,
 }
 
+/// A storage ID is meaningful only within its database and server/channel scope.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryEntry {
+    pub id: i64,
+    pub message: ChatMessage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryPage {
+    /// Chronological display order, including repeated messages with identical timestamps.
+    pub messages: Vec<HistoryEntry>,
+    /// Exclusive cursor for the next older page; None means the beginning was reached.
+    pub next_before: Option<i64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MessageDocument {

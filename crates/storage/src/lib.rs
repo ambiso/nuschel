@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Asynchronous SQLx persistence. Only the storage worker may link this crate.
 
-use nuschel_core::{ChatMessage, MAX_CONTENT_BYTES};
+use nuschel_core::{ChatMessage, HistoryEntry, HistoryPage, MAX_CONTENT_BYTES};
 use sqlx::{
     PgPool, SqlitePool,
     postgres::PgPoolOptions,
@@ -109,41 +109,74 @@ impl History {
         })
     }
 
-    /// A bounded page in display order. Never deduplicate messages by their text.
+    /// The most recent bounded page, retained for existing local-history callers.
     pub async fn recent(
         &self,
         server: &str,
         channel: &str,
         limit: usize,
     ) -> Result<Vec<ChatMessage>, Error> {
-        type Row = (String, String, String, i64, String);
-        let limit = limit.min(MAX_PAGE_MESSAGES) as i64;
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        Ok(self
+            .page(server, channel, None, limit)
+            .await?
+            .messages
+            .into_iter()
+            .map(|entry| entry.message)
+            .collect())
+    }
+
+    /// Walk the entire archive through bounded pages. The exclusive ID cursor is
+    /// stable under concurrent appends; timestamps and message bodies are not IDs.
+    /// A trusted session adapter must authorize the server/channel on every request.
+    pub async fn page(
+        &self,
+        server: &str,
+        channel: &str,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<HistoryPage, Error> {
+        type Row = (i64, String, String, String, i64, String);
+        let limit = limit.clamp(1, MAX_PAGE_MESSAGES);
+        let fetch_limit = (limit + 1) as i64;
         let rows: Vec<Row> = match &self.pool {
             Pool::Sqlite(pool) => sqlx::query_as(
-                "SELECT server, channel, author, observed_at_ms, body FROM messages WHERE server = ?1 AND channel = ?2 ORDER BY id DESC LIMIT ?3",
-            ).bind(server).bind(channel).bind(limit).fetch_all(pool).await?,
+                "SELECT id, server, channel, author, observed_at_ms, body FROM messages WHERE server = ?1 AND channel = ?2 AND (?3 IS NULL OR id < ?3) ORDER BY id DESC LIMIT ?4",
+            ).bind(server).bind(channel).bind(before).bind(fetch_limit).fetch_all(pool).await?,
             Pool::Postgres(pool) => sqlx::query_as(
-                "SELECT server, channel, author, observed_at_ms, body FROM messages WHERE server = $1 AND channel = $2 ORDER BY id DESC LIMIT $3",
-            ).bind(server).bind(channel).bind(limit).fetch_all(pool).await?,
+                "SELECT id, server, channel, author, observed_at_ms, body FROM messages WHERE server = $1 AND channel = $2 AND ($3::BIGINT IS NULL OR id < $3) ORDER BY id DESC LIMIT $4",
+            ).bind(server).bind(channel).bind(before).bind(fetch_limit).fetch_all(pool).await?,
         };
+        let fetched = rows.len();
         let mut messages = Vec::new();
         let mut bytes = 0;
-        for (server, channel, author, observed_at_ms, body) in rows {
+        for (id, server, channel, author, observed_at_ms, body) in rows.into_iter().take(limit) {
             let size = server.len() + channel.len() + author.len() + body.len();
             if size > MAX_PAGE_TEXT_BYTES - bytes {
                 break;
             }
             bytes += size;
-            messages.push(ChatMessage {
-                server,
-                channel,
-                author,
-                observed_at_ms,
-                body,
+            messages.push(HistoryEntry {
+                id,
+                message: ChatMessage {
+                    server,
+                    channel,
+                    author,
+                    observed_at_ms,
+                    body,
+                },
             });
         }
+        let next_before = (fetched > messages.len())
+            .then(|| messages.last().map(|entry| entry.id))
+            .flatten();
         messages.reverse();
-        Ok(messages)
+        Ok(HistoryPage {
+            messages,
+            next_before,
+        })
     }
 }
 
@@ -172,6 +205,69 @@ mod tests {
                 .await?
                 .is_empty()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn archive_pagination_survives_appends_and_duplicate_timestamps() -> Result<(), Error> {
+        let history = History::connect("sqlite::memory:").await?;
+        let mut message = ChatMessage {
+            server: "one".into(),
+            channel: "general".into(),
+            author: "someone".into(),
+            observed_at_ms: 1,
+            body: "same message".into(),
+        };
+        let mut expected = Vec::new();
+        for _ in 0..105 {
+            expected.push(history.append(&message).await?);
+        }
+        let first = history.page("one", "general", None, 3).await?;
+        let mut ids = first
+            .messages
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>();
+        let mut before = first.next_before;
+        let new_id = history.append(&message).await?;
+        // Another channel and another server never leak into the archive.
+        message.channel = "private".into();
+        history.append(&message).await?;
+        message.channel = "general".into();
+        message.server = "two".into();
+        history.append(&message).await?;
+        while let Some(cursor) = before {
+            let page = history.page("one", "general", Some(cursor), 17).await?;
+            ids.extend(page.messages.iter().map(|entry| entry.id));
+            before = page.next_before;
+        }
+        ids.sort_unstable();
+        assert_eq!(ids, expected);
+        assert!(!ids.contains(&new_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn byte_bounded_pages_do_not_skip_large_messages() -> Result<(), Error> {
+        let history = History::connect("sqlite::memory:").await?;
+        let message = ChatMessage {
+            server: "one".into(),
+            channel: "general".into(),
+            author: "someone".into(),
+            observed_at_ms: 0,
+            body: "x".repeat(MAX_CONTENT_BYTES),
+        };
+        let oldest = history.append(&message).await?;
+        let newest = history.append(&message).await?;
+        let first = history.page("one", "general", None, 100).await?;
+        assert_eq!(first.messages.len(), 1);
+        assert_eq!(first.messages[0].id, newest);
+        let last = history
+            .page("one", "general", first.next_before, 100)
+            .await?;
+        assert_eq!(last.messages.len(), 1);
+        assert_eq!(last.messages[0].id, oldest);
+        assert_eq!(last.next_before, None);
         Ok(())
     }
 }
