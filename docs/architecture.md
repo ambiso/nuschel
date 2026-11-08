@@ -167,9 +167,12 @@ Opus packets (1,275 bytes), and encoded video frames (256 KiB). Receive reorderi
 retransmission caches are configured explicitly. These are input/cache limits, not
 a proof of a hard total-memory bound for upstream protocol internals. Video admission
 reserves 96 kbit/s for audio plus transport overhead, reacts to BWE events and rejects
-frames exceeding its current pacing/120 ms queue budget. Rejection means drop/adapt,
+frames exceeding its pacing budget or 120 ms of estimated transmission time. This
+does not guarantee a bound on real network delay. Rejection means drop/adapt,
 never save the frame in an unbounded retry queue. This conservative guard complements
 str0m's pacer; a real encoder must also adapt bitrate and handle keyframe requests.
+Dropping interframes requires tracking frame dependencies or obtaining a new keyframe;
+the current video probe deliberately sends independent keyframes only.
 
 Modern sessions should use WebRTC for voice, video and screen sharing, with an SFU
 forwarding encoded media. Legacy sessions retain Mumble voice and text; stock Mumble

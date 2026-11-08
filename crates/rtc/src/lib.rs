@@ -158,7 +158,7 @@ impl Peer {
     }
 
     pub fn offer(&mut self, video: bool) -> Result<String, Error> {
-        if !matches!(self.signaling, Signaling::New) {
+        if self.closed || !matches!(self.signaling, Signaling::New) {
             return Err(Error::SignalingState);
         }
         let mut api = self.rtc.sdp_api();
@@ -176,7 +176,7 @@ impl Peer {
     /// SDP fingerprints must arrive over authenticated signaling before use in a
     /// real call. Successful DTLS verifies that fingerprint, not a user identity.
     pub fn accept_offer(&mut self, sdp: &str) -> Result<String, Error> {
-        if !matches!(self.signaling, Signaling::New) {
+        if self.closed || !matches!(self.signaling, Signaling::New) {
             return Err(Error::SignalingState);
         }
         validate_sdp(sdp)?;
@@ -187,7 +187,7 @@ impl Peer {
     }
 
     pub fn accept_answer(&mut self, sdp: &str) -> Result<(), Error> {
-        if !matches!(self.signaling, Signaling::Offering(_)) {
+        if self.closed || !matches!(self.signaling, Signaling::Offering(_)) {
             return Err(Error::SignalingState);
         }
         validate_sdp(sdp)?;

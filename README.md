@@ -19,7 +19,7 @@ and chat, while precise touchpad input retains its native motion. Microphone cap
 **Show more** for long content. Legacy HTML is converted into inert text in a worker.
 History and cached channel trees survive application restarts, including offline browsing.
 
-This is an early client: UDP transport, CELT-only servers, whisper controls, automatic
+This is an early client: Mumble UDP transport, CELT-only servers, whisper controls, automatic
 reconnection, and comprehensive administration are not implemented. Voice currently
 transmits continuously while unmuted. Audio service failures restart only the media
 worker and preserve the server connection and mute state. Automatic AEC/effect detection
@@ -31,8 +31,8 @@ The modern media transport is now a str0m trial in `nuschel-rtc`. Run
 `nix run --cores 2 .#rtc-probe` for the headless audio/video loopback probe, or
 `just rtc` inside the development shell to include worker Opus encoding/decoding.
 Both send Opus and a generated VP8 test pattern between two loopback UDP peers.
-No microphone, camera, public STUN service
-or external server is used. The probe reports encoded-frame delivery delay and
+No microphone, camera, public STUN service or external server is used.
+The probe reports encoded-frame delivery delay and
 checks received bytes; it is not a microphone-to-speaker latency measurement.
 Video admission follows the bandwidth estimate, reserves room for audio and drops
 frames rather than accumulating a stale queue. Desktop video calls, authenticated
