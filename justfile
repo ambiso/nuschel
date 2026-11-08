@@ -32,5 +32,5 @@ audit:
 
 fmt:
     cargo fmt --all
-    nixfmt flake.nix
+    nixfmt flake.nix nix/*.nix
     taplo fmt

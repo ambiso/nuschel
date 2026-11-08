@@ -131,17 +131,19 @@
           };
         checks = {
           build = package;
+          server-build = serverPackage;
           clippy = craneLib.cargoClippy (
             common
             // {
               inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--workspace --all-targets -- --deny warnings";
+              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
             }
           );
           fmt = craneLib.cargoFmt { inherit src; };
           deny = craneLib.cargoDeny (
             common
             // {
+              cargoExtraArgs = "";
               cargoDenyChecks = "bans licenses sources";
             }
           );

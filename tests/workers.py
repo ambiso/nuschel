@@ -105,7 +105,7 @@ else:
 """
         environment = os.environ | {"NUSCHEL_TEST_SECRET": "must not be inherited"}
         subprocess.run([
-            str(binaries / "nuschel"), "sandbox-probe", sys.executable, "-c", probe,
+            str(binaries / "nuschel"), "sandbox-probe", sys.executable, "--", "-c", probe,
             str(secret), socket.gethostbyname(server),
         ], check=True, timeout=15, env=environment)
         document = subprocess.run([

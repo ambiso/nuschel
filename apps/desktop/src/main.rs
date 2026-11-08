@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }) = arguments.command
     {
         let mut command = nuschel_ipc::host::content_sandbox_command(&executable, &arguments)?;
-        let status = runtime.block_on(command.status())?;
+        let status = runtime.block_on(async { command.status().await })?;
         return if status.success() {
             Ok(())
         } else {
