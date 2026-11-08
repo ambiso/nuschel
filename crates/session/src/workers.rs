@@ -1,0 +1,219 @@
+// SPDX-License-Identifier: EUPL-1.2
+//! Bounded asynchronous adapters for persistent worker processes.
+#[cfg(not(target_os = "linux"))]
+use tokio::process::Command;
+
+use crate::Error;
+use nuschel_core::{ChatMessage, HistoryPage};
+use nuschel_ipc::{
+    Envelope, LiveMediaEvent, LiveMediaRequest, MAX_FRAME_BYTES, PROTOCOL_VERSION, StorageRequest,
+    StorageResponse, write_frame,
+};
+use serde::{Serialize, de::DeserializeOwned};
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::{Child, ChildStdin, ChildStdout},
+    sync::mpsc,
+    time::{Duration, timeout},
+};
+
+pub fn sibling(name: &str) -> std::io::Result<PathBuf> {
+    let current = std::env::current_exe()?;
+    let parent = current
+        .parent()
+        .ok_or_else(|| std::io::Error::other("executable has no directory"))?;
+    Ok(parent.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)))
+}
+
+pub struct Storage {
+    child: Child,
+    input: ChildStdin,
+    output: ChildStdout,
+    request_id: u64,
+}
+impl Storage {
+    pub fn start(directory: &Path) -> Result<Self, Error> {
+        let executable = sibling("nuschel-storage-worker")?;
+        #[cfg(target_os = "linux")]
+        let mut command = nuschel_ipc::host::storage_sandbox_command(&executable, directory)
+            .map_err(|e| Error::Worker(e.to_string()))?;
+        #[cfg(not(target_os = "linux"))]
+        let mut command = {
+            let mut c = Command::new(&executable);
+            c.env_clear()
+                .arg("--database")
+                .arg(directory.join("history.sqlite3"));
+            c
+        };
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        let input = child
+            .stdin
+            .take()
+            .ok_or_else(|| Error::Worker("storage stdin missing".into()))?;
+        let output = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Worker("storage stdout missing".into()))?;
+        Ok(Self {
+            child,
+            input,
+            output,
+            request_id: 0,
+        })
+    }
+    async fn request(&mut self, payload: StorageRequest) -> Result<StorageResponse, Error> {
+        self.request_id += 1;
+        let id = self.request_id;
+        let exchange = async {
+            send(&mut self.input, &Envelope::new(id, payload)).await?;
+            let response: Envelope<StorageResponse> = receive(&mut self.output).await?;
+            if response.request_id != id {
+                return Err(Error::Worker("storage response ID mismatch".into()));
+            }
+            match response.payload {
+                StorageResponse::Rejected(error) => Err(Error::Worker(error)),
+                response => Ok(response),
+            }
+        };
+        match timeout(Duration::from_secs(5), exchange).await {
+            Ok(Ok(response)) => Ok(response),
+            result => {
+                let _ = self.child.kill().await;
+                match result {
+                    Ok(Err(error)) => Err(error),
+                    _ => Err(Error::Timeout("waiting for local history")),
+                }
+            }
+        }
+    }
+    pub async fn append(&mut self, message: ChatMessage) -> Result<i64, Error> {
+        match self.request(StorageRequest::Append { message }).await? {
+            StorageResponse::Appended(id) => Ok(id),
+            _ => Err(Error::Worker("unexpected storage response".into())),
+        }
+    }
+    pub async fn page(
+        &mut self,
+        server: String,
+        channel: String,
+        before: Option<i64>,
+    ) -> Result<HistoryPage, Error> {
+        match self
+            .request(StorageRequest::HistoryPage {
+                server,
+                channel,
+                before,
+                limit: 40,
+            })
+            .await?
+        {
+            StorageResponse::HistoryPage(page) => Ok(page),
+            _ => Err(Error::Worker("unexpected storage response".into())),
+        }
+    }
+    pub async fn stop(mut self) {
+        let _ = self.child.kill().await;
+    }
+}
+
+pub struct Media {
+    pub commands: mpsc::Sender<LiveMediaRequest>,
+    pub events: mpsc::Receiver<LiveMediaEvent>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Media {
+    pub fn start() -> Result<Self, Error> {
+        let executable = sibling("nuschel-media-worker")?;
+        #[cfg(target_os = "linux")]
+        let mut command = nuschel_ipc::host::media_sandbox_command(&executable)
+            .map_err(|e| Error::Worker(e.to_string()))?;
+        #[cfg(not(target_os = "linux"))]
+        let mut command = {
+            let mut c = Command::new(&executable);
+            c.env_clear().arg("--live");
+            for name in ["SystemRoot", "WINDIR", "TEMP", "TMP"] {
+                if let Some(value) = std::env::var_os(name) {
+                    c.env(name, value);
+                }
+            }
+            c
+        };
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        let mut input = child
+            .stdin
+            .take()
+            .ok_or_else(|| Error::Worker("media stdin missing".into()))?;
+        let mut output = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Worker("media stdout missing".into()))?;
+        let (tx, mut rx) = mpsc::channel(32);
+        let (events_tx, events) = mpsc::channel(32);
+        let task = tokio::spawn(async move {
+            let read_events = events_tx.clone();
+            let reader = tokio::spawn(async move {
+                while let Ok(frame) = receive::<LiveMediaEvent>(&mut output).await {
+                    if read_events.send(frame.payload).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            while let Some(payload) = rx.recv().await {
+                let shutdown = matches!(payload, LiveMediaRequest::Shutdown);
+                if send(&mut input, &Envelope::new(0, payload)).await.is_err() || shutdown {
+                    break;
+                }
+            }
+            reader.abort();
+            let _ = reader.await;
+            let _ = child.kill().await;
+        });
+        Ok(Self {
+            commands: tx,
+            events,
+            task,
+        })
+    }
+}
+impl Drop for Media {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn send<T: Serialize>(input: &mut ChildStdin, frame: &Envelope<T>) -> Result<(), Error> {
+    let mut bytes = Vec::new();
+    write_frame(&mut bytes, frame).map_err(|e| Error::Worker(e.to_string()))?;
+    timeout(Duration::from_secs(3), input.write_all(&bytes))
+        .await
+        .map_err(|_| Error::Timeout("writing to worker"))??;
+    Ok(())
+}
+async fn receive<T: DeserializeOwned>(output: &mut ChildStdout) -> Result<Envelope<T>, Error> {
+    let size = output.read_u32().await? as usize;
+    if size > MAX_FRAME_BYTES {
+        return Err(Error::Worker("oversized worker response".into()));
+    }
+    let mut bytes = vec![0; size];
+    output.read_exact(&mut bytes).await?;
+    let response: Envelope<T> =
+        serde_json::from_slice(&bytes).map_err(|e| Error::Worker(e.to_string()))?;
+    if response.version != PROTOCOL_VERSION {
+        return Err(Error::Worker("worker protocol mismatch".into()));
+    }
+    Ok(response)
+}

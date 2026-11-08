@@ -8,6 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+html5ever = "0.40.1"
+markup5ever_rcdom = "0.40.1"
 nuschel-core.workspace = true
 pulldown-cmark = { version = "0.13.6", default-features = false }
 syntect = { version = "5.3.0", default-features = false, features = [

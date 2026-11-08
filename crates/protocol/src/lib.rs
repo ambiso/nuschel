@@ -4,6 +4,8 @@
 use bytes::{Buf, Bytes, BytesMut};
 use thiserror::Error;
 
+pub mod voice;
+
 pub mod control {
     include!(concat!(env!("OUT_DIR"), "/mumble_proto.rs"));
 }

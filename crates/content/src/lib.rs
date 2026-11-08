@@ -84,6 +84,59 @@ impl ContentRenderer {
         Ok(MessageDocument { blocks })
     }
 
+    /// Legacy Mumble rich text becomes inert text before it crosses back into
+    /// the UI. No image, URL, style, script, font or other resource is loaded.
+    pub fn legacy_plain_text(&self, source: &str) -> Result<String, Error> {
+        use html5ever::tendril::TendrilSink;
+        use markup5ever_rcdom::{NodeData, RcDom};
+        if source.len() > MAX_CONTENT_BYTES {
+            return Err(Error::TooLarge);
+        }
+        let dom = html5ever::parse_document(RcDom::default(), Default::default()).one(source);
+        let mut pending = vec![(dom.document.clone(), false)];
+        let mut text = String::new();
+        while let Some((node, closing)) = pending.pop() {
+            match &node.data {
+                NodeData::Text { contents } if !closing => text.push_str(&contents.borrow()),
+                NodeData::Element { name, .. } => {
+                    let tag = name.local.as_ref();
+                    if matches!(tag, "script" | "style" | "head" | "iframe" | "object") {
+                        continue;
+                    }
+                    if tag == "br" && !closing {
+                        text.push('\n');
+                    }
+                    if matches!(
+                        tag,
+                        "p" | "div" | "li" | "pre" | "blockquote" | "tr" | "h1" | "h2" | "h3"
+                    ) {
+                        if !text.is_empty() && !text.ends_with('\n') {
+                            text.push('\n');
+                        }
+                        if !closing {
+                            pending.push((node.clone(), true));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if text.len() > MAX_CONTENT_BYTES {
+                return Err(Error::TooLarge);
+            }
+            if !closing {
+                pending.extend(
+                    node.children
+                        .borrow()
+                        .iter()
+                        .rev()
+                        .cloned()
+                        .map(|child| (child, false)),
+                );
+            }
+        }
+        Ok(text)
+    }
+
     fn highlight(&self, source: &str, language: Option<&str>) -> Result<Vec<CodeRun>, Error> {
         let syntax = language
             .and_then(|token| self.syntaxes.find_syntax_by_token(token))
@@ -112,6 +165,21 @@ impl ContentRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_html_is_inert_and_preserves_explicit_line_breaks() -> Result<(), Error> {
+        let renderer = ContentRenderer::new()?;
+        assert_eq!(renderer.legacy_plain_text("<p>one<br/><br/>two &amp; &lt;tag&gt;</p><script>secret()</script><img src='https://example.invalid/a'>")?, "one\n\ntwo & <tag>\n");
+        let source = "```rust<br/>fn main() {}<br/>```";
+        assert!(matches!(
+            renderer
+                .render(&renderer.legacy_plain_text(source)?)?
+                .blocks
+                .first(),
+            Some(ContentBlock::Code { .. })
+        ));
+        Ok(())
+    }
 
     #[test]
     fn literal_messages_keep_blank_lines_and_html_inert() -> Result<(), Error> {

@@ -9,7 +9,7 @@ platforms. First-party source forbids unsafe code; dependencies require separate
 
 | Component | Initial choice | Review boundary |
 | --- | --- | --- |
-| Mumble protobuf | Prost, generated from vendored schemas | Framing limits precede decoding; full sessions are not implemented |
+| Mumble protobuf | Prost, generated from vendored schemas | Framing limits precede decoding; native sessions use bounded Tokio queues and TLS |
 | Content | pulldown-cmark and Syntect with fancy-regex | No native Oniguruma; fixed bundled syntax/theme set; content worker and timeout |
 | Echo cancellation | Sonora | Rust port of WebRTC processing; assess quality/timing before routing real calls |
 | Noise suppression | nnnoiseless | Rust RNNoise-derived implementation; enable only when route policy calls for suppression |
@@ -18,9 +18,23 @@ platforms. First-party source forbids unsafe code; dependencies require separate
 | Desktop | GPUI Kit without default component/assets features | Native rendering exception, not a message HTML or embedded-browser runtime |
 | TLS | rustls with ring | Explicit crypto exception; no OpenSSL dependency |
 
-Sonora and nnnoiseless are dependencies for the next audio pipeline milestone. The
-current media harness exercises raw Opus encode/decode, not live AEC, noise suppression,
-or device routing. Selection does not certify these ports for production audio.
+The live media worker owns CPAL streams, per-speaker Opus decoders, mixing, resampling,
+and optional RNNoise. AEC route detection and automatic DSP selection remain subsequent
+work; unknown upstream effects must not be treated as absent. Sonora is not active yet.
+
+The native session crate uses rustls/tokio-rustls with the explicitly selected ring
+provider (the existing crypto exception), WebPKI roots, and rcgen for a persistent
+client identity. Certificate pins still require TLS handshake signature verification;
+an untrusted leaf stops the handshake before any Mumble password is transmitted.
+rcgen's certificate construction is Rust; its signing operations use the reviewed
+provider. `sha2` supplies certificate fingerprints within that crypto boundary.
+`uuid` uses OS randomness for local bookmark/temporary-file identities; `directories`
+uses platform configuration-directory APIs, under the existing OS-service exception.
+
+Legacy HTML normalization uses html5ever and markup5ever_rcdom in the confined content
+worker. Their optimized string/DOM internals are not assumed free of unsafe code.
+No remote image, font, stylesheet, script or URL is loaded by this path. First-party
+code continues to forbid unsafe. The GUI consumes normalized text and style spans.
 
 ## Unmaintained transitive dependencies
 

@@ -35,6 +35,15 @@ impl<T> Envelope<T> {
 #[serde(deny_unknown_fields)]
 pub struct ContentRequest {
     pub text: String,
+    #[serde(default)]
+    pub legacy_html: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedContent {
+    pub source: String,
+    pub document: MessageDocument,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,6 +55,7 @@ pub struct ContentRequest {
 )]
 pub enum ContentResponse {
     Rendered(MessageDocument),
+    Prepared(PreparedContent),
     Rejected(String),
 }
 
@@ -229,4 +239,39 @@ mod tests {
         ));
         assert!(output.is_empty());
     }
+}
+
+/// Live audio has independent events: request_id 0 denotes a stream event.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LiveMediaRequest {
+    SetState {
+        muted: bool,
+        deafened: bool,
+    },
+    Configure {
+        bitrate: u32,
+        noise_suppression: bool,
+    },
+    Playback {
+        sender: u32,
+        sequence: u64,
+        opus: Vec<u8>,
+        end: bool,
+        volume: f32,
+    },
+    Shutdown,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LiveMediaEvent {
+    Status {
+        ready: bool,
+        message: String,
+    },
+    Packet {
+        sequence: u64,
+        opus: Vec<u8>,
+        end: bool,
+    },
 }

@@ -1,0 +1,30 @@
+[package]
+name = "nuschel-session"
+description = "Native Mumble client sessions and worker supervision"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nuschel-core.workspace = true
+nuschel-client.workspace = true
+nuschel-ipc.workspace = true
+nuschel-protocol.workspace = true
+bytes = "1.12.1"
+prost = "0.14.4"
+thiserror = "2.0.21"
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+webpki-roots = "1.0.11"
+directories = "6"
+uuid = { version = "1.29.1", features = ["v4"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["net", "rt-multi-thread", "io-util", "time", "sync", "process", "fs", "macros"] }
+rustls = { version = "0.23.41", default-features = false, features = ["std", "ring", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
+
+[lints]
+workspace = true

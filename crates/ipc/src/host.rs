@@ -11,7 +11,8 @@ use tokio::{
 };
 
 use crate::{
-    ContentRequest, ContentResponse, Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION, write_frame,
+    ContentRequest, ContentResponse, Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION, PreparedContent,
+    write_frame,
 };
 
 #[derive(Debug, Error)]
@@ -71,6 +72,14 @@ pub fn content_sandbox_command(
 /// A one-request harness with bounded output, a deadline, and kill/reap on failure.
 /// The live client should retain a bounded worker pool rather than spawn once per message.
 pub async fn render_content(executable: &Path, text: &str) -> Result<MessageDocument, Error> {
+    Ok(prepare_content(executable, text, false).await?.document)
+}
+
+pub async fn prepare_content(
+    executable: &Path,
+    text: &str,
+    legacy_html: bool,
+) -> Result<PreparedContent, Error> {
     #[cfg(target_os = "linux")]
     let mut command = content_sandbox_command(executable, &[])?;
     #[cfg(not(target_os = "linux"))]
@@ -96,6 +105,7 @@ pub async fn render_content(executable: &Path, text: &str) -> Result<MessageDocu
             request_id,
             ContentRequest {
                 text: text.to_owned(),
+                legacy_html,
             },
         ),
     )?;
@@ -120,7 +130,11 @@ pub async fn render_content(executable: &Path, text: &str) -> Result<MessageDocu
             return Err(Error::InvalidResponse);
         }
         match response.payload {
-            ContentResponse::Rendered(document) => Ok(document),
+            ContentResponse::Rendered(document) => Ok(PreparedContent {
+                source: text.to_owned(),
+                document,
+            }),
+            ContentResponse::Prepared(prepared) => Ok(prepared),
             ContentResponse::Rejected(reason) => Err(Error::Rejected(reason)),
         }
     };
@@ -135,4 +149,79 @@ pub async fn render_content(executable: &Path, text: &str) -> Result<MessageDocu
             }
         }
     }
+}
+
+/// Long-lived SQLite helper: its database directory is writable; network and the
+/// rest of the home directory are absent. The trusted supervisor chooses the path.
+#[cfg(target_os = "linux")]
+pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Command, Error> {
+    let mut command = persistent_sandbox(executable)?;
+    command
+        .arg("--bind")
+        .arg(directory.canonicalize()?)
+        .arg("/data");
+    command.args(["--", "/worker", "--database", "/data/history.sqlite3"]);
+    Ok(command)
+}
+
+/// Audio service sockets and ALSA devices only. No session credentials, home,
+/// D-Bus socket, or network namespace are granted to native audio/codec processing.
+#[cfg(target_os = "linux")]
+pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
+    let mut command = persistent_sandbox(executable)?;
+    command.args(["--dir", "/run/audio", "--dir", "/run/audio/pulse"]);
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let runtime = std::path::PathBuf::from(runtime);
+        for (source, target) in [
+            (runtime.join("pipewire-0"), "/run/audio/pipewire-0"),
+            (runtime.join("pulse/native"), "/run/audio/pulse/native"),
+        ] {
+            if source.exists() {
+                command.arg("--ro-bind").arg(source).arg(target);
+            }
+        }
+    }
+    if Path::new("/dev/snd").exists() {
+        command.args(["--dev-bind", "/dev/snd", "/dev/snd"]);
+    }
+    for directory in ["/sys/devices", "/sys/class/sound", "/proc/asound"] {
+        if Path::new(directory).exists() {
+            command.args(["--ro-bind", directory, directory]);
+        }
+    }
+    command.args([
+        "--setenv",
+        "XDG_RUNTIME_DIR",
+        "/run/audio",
+        "--setenv",
+        "PULSE_SERVER",
+        "unix:/run/audio/pulse/native",
+    ]);
+    for name in ["PULSE_SOURCE", "PULSE_SINK", "NUSCHEL_AUDIO_BACKEND"] {
+        if let Some(value) = std::env::var_os(name) {
+            command.arg("--setenv").arg(name).arg(value);
+        }
+    }
+    command.args(["--", "/worker", "--live"]);
+    Ok(command)
+}
+
+#[cfg(target_os = "linux")]
+fn persistent_sandbox(executable: &Path) -> Result<Command, Error> {
+    // Reuse the exact helper discovery/runtime mounts of the content sandbox,
+    // but give long-lived workers no five-second lifetime CPU limit.
+    let template = content_sandbox_command(executable, &[])?;
+    let arguments = template
+        .as_std()
+        .get_args()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    // content_sandbox_command: prlimit --as=... --cpu=5 -- bwrap ... -- /worker.
+    let bwrap = arguments.get(3).ok_or(Error::InvalidResponse)?;
+    let mut command = Command::new(template.as_std().get_program());
+    command.arg("--as=1073741824").arg("--").arg(bwrap);
+    let tail = &arguments[4..];
+    command.args(&tail[..tail.len().saturating_sub(2)]);
+    command.env_clear();
+    Ok(command)
 }

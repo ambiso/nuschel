@@ -21,6 +21,8 @@ nuschel-ipc = { path = "crates/ipc", version = "0.1.0" }
 nuschel-protocol = { path = "crates/protocol", version = "0.1.0" }
 nuschel-storage = { path = "crates/storage", version = "0.1.0" }
 
+nuschel-session = { path = "crates/session", version = "0.1.0" }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
