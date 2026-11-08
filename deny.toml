@@ -1,0 +1,38 @@
+# Nuschel is EUPL-1.2. Dependency licenses are reviewed independently;
+# cargo-deny checks SPDX expressions, not legal compatibility or attribution.
+[graph]
+all-features = true
+
+[advisories]
+unmaintained = "all"
+yanked = "deny"
+
+[licenses]
+confidence-threshold = 0.95
+allow = [
+  "EUPL-1.2",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+  { name = "openssl", reason = "Use rustls for transport security" },
+  { name = "openssl-sys", reason = "Avoid adding an OpenSSL FFI dependency" },
+  { name = "onig", reason = "Use Syntect's Rust fancy-regex backend in the content worker" },
+  { name = "onig_sys", reason = "Keep native regex parsing out of the content pipeline" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
