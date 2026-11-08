@@ -383,7 +383,7 @@ fn conversation(
                                     .flex()
                                     .flex_col()
                                     .gap_3()
-                                    .when(!message.expanded, |content| {
+                                    .when(message.has_more && !message.expanded, |content| {
                                         content.max_h(px(300.)).overflow_hidden()
                                     })
                                     .children(document_blocks(&message.document)),
