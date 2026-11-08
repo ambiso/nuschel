@@ -12,8 +12,10 @@ Screenshots are copied into the test result.
 `mumble_client.py` uses the production session CLI to test certificate rejection/pinning,
 login, channel trees and joining, permission denial, multiline chat and Opus tunneling.
 It checks both codec directions against the reference libopus implementation.
-`desktop_mumble.py` drives the real Add Server dialog, certificate confirmation,
-independent history browsing/voice joining, chat, playback/capture, mute privacy,
+`desktop_mumble.py` first checks an offline cached tree with long Unicode names,
+expansion defaults, full-name tooltips, wheel scrolling and a draggable scrollbar.
+It then drives the real Add Server dialog, certificate confirmation,
+independent history browsing/double-click voice joining, chat, playback/capture, mute privacy,
 audio service socket replacement, offline history and reconnect persistence.
 The fixture seeds channels in a stopped stock server database; the real server handles
 all protocol traffic. These tests do not yet drive the stock Mumble GUI or test UDP.

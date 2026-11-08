@@ -15,6 +15,7 @@ import struct
 import subprocess
 import tempfile
 import time
+import uuid
 
 from mumble_client import Client, ReferenceOpus, certificate_pin, rms, tone
 
@@ -189,7 +190,55 @@ class DesktopTest:
         assert len(packets) >= 15, f"Too few captured audio packets: {len(packets)}, events {before}->{len(self.peer.events)}, user={self.peer.users.get(session)}, tail={[(event['kind'], event.get('epoch'), event.get('sequence')) for event in list(self.peer.events)[-6:]]}"
         assert rms(self.reference.decode(packets)) > 0.01, "reference decoder did not hear the captured tone"
 
+    def check_channel_browser(self):
+        voice_profile = self.profile
+        self.profile = self.root / "browser-profile"
+        (self.profile / "config").mkdir(parents=True)
+        long_name = "A very long channel name with spaces and Unicode 👋 ending in FULLNAMEVISIBLE"
+        channels = [
+            dict(id=0, parent=None, name="Root", position=0),
+            dict(id=1, parent=0, name="Group branch", position=0),
+            dict(id=2, parent=1, name="Second depth", position=0),
+            dict(id=3, parent=2, name="Third depth", position=0),
+            dict(id=4, parent=0, name=long_name, position=1),
+        ] + [dict(id=index, parent=0, name=f"Scroll row {index:02}", position=index) for index in range(5, 60)]
+        (self.profile / "config/servers.json").write_text(json.dumps([
+            dict(id=str(uuid.uuid4()), name="Offline channel browser", host="127.0.0.1", port=64738,
+                 username="Preview", cached_channels=channels)
+        ]))
+        self.start_app()
+        self.wait_text("Group branch")
+        initial = self.text()
+        assert "Second depth" not in initial and "Third depth" not in initial
+        self.capture("channel-browser-default")
+        self.click(104, 174)
+        self.wait_text("Second depth")
+        assert "Third depth" not in self.text(), "deeper branches opened automatically"
+        self.click(116, 212)
+        self.wait_text("Third depth")
+        self.click(104, 174)
+        self.xdo("mousemove", "--window", self.window, 180, 212)
+        self.wait_text("FULLNAMEVISIBLE")
+        self.capture("channel-long-name-tooltip")
+        self.xdo("mousemove", "--window", self.window, 180, 350)
+        self.xdo("click", "--repeat", 4, "--delay", 25, 5)
+        self.capture("channel-browser-wheel-moving")
+        time.sleep(0.3)
+        self.capture("channel-browser-wheel")
+        assert "Group branch" not in self.text(), "wheel scrolling did not move the channel list"
+        # Drag the real scrollbar to the bottom; fixed-height rows must remain reachable.
+        self.xdo("mousemove", "--window", self.window, 273, 300, "mousedown", 1)
+        self.xdo("mousemove", "--window", self.window, 273, 745)
+        self.xdo("mouseup", 1)
+        self.wait_text("Scroll row 59")
+        self.capture("channel-browser-scrollbar")
+        terminate(self.app)
+        self.app = self.window = None
+        self.profile = voice_profile
+        print("Offline channel tree defaults, branch expansion, long-name tooltip and scrollbar passed.", flush=True)
+
     def run(self):
+        self.check_channel_browser()
         pin = certificate_pin(self.args.binaries, self.args.host, self.args.port, self.root / "certificate-probe")
         self.peer = Client(self.args.binaries, self.args.host, self.args.port, pin, "DesktopPeer", self.root / "peer")
         self.peer.send(kind="join", channel=2)
@@ -218,10 +267,12 @@ class DesktopTest:
         bookmark = json.loads((self.profile / "config/servers.json").read_text())[0]
         assert bookmark["certificate_sha256"] == pin
         assert "not-saved-fixture-password" not in json.dumps(bookmark) and "password" not in bookmark
+        self.click(104, 174)  # Explicitly expand Lobby; only Root starts expanded.
         self.click(160, 212)  # Browse the nested Development channel.
         time.sleep(0.5)
         assert self.peer.users[session]["channel"] == 0, "browsing text moved voice"
-        self.click(680, 35)  # Explicit Join voice.
+        self.xdo("mousemove", "--window", self.window, 160, 212)
+        self.xdo("click", "--repeat", 2, "--delay", 100, 1)  # Double-click joins voice.
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == session
                        and event["user"]["channel"] == 2)
         body = "DESKTOPHISTORYMARKER\n\n```rust\nlet connected = true;\n```"
@@ -289,6 +340,7 @@ class DesktopTest:
         self.peer.wait(lambda event: event["kind"] == "user_removed" and event["session"] == session)
         self.start_app()
         self.wait_text("Disconnected")
+        self.click(104, 174)
         self.click(160, 212)
         self.wait_text(marker)
         assert not any(user["name"] == "NuschelDesktop" for user in self.peer.users.values())
