@@ -12,6 +12,7 @@ platform decisions reversible without duplicating the session model.
 | `nuschel-core` | Domain values, typed content, non-destructive message previews | UI, network runtime, database, native FFI |
 | `nuschel-client` | Client preferences, state transitions, audio policy | GPUI, SQLite, codecs, platform device handles |
 | `nuschel-protocol` | Mumble protobuf schemas and bounded control framing | UI, audio decoding, sockets |
+| `nuschel-rtc` | str0m WebRTC state machine, bounded SDP and encoded audio/video | UI, sockets, codecs, device handles, database |
 | `nuschel-session` | Native TLS/control sessions, identities, bookmarks and worker supervision | GPUI, SQLite implementation, content parser, codecs |
 | `nuschel-cli` | Diagnostic frontend using the real session implementation | GPUI, audio codecs |
 | `nuschel-ipc` | Versioned worker messages, framing, and native supervision | Content parser, SQLite, codecs |
@@ -153,13 +154,21 @@ mute/deafen, UDP reachability, nonce resync, and TCP tunneling. Mumble's histori
 packet format must not be substituted with a generic modern OCB implementation.
 Handle both legacy UDP encoding and the protobuf format introduced with Mumble 1.5.
 
-The implementation of a future WebRTC transport remains open and must be Rust.
-C++ and Go WebRTC implementations are excluded, including implementations hidden
-behind Rust bindings or isolated workers. Do not use `str0m`: it is excluded based
-on the maintainer's prior experience with it. Review the selected features and
-transitive dependencies, and evaluate interoperability, robustness, recovery and
-sustained-call behavior before selecting an implementation. Existing platform and
-cryptographic exceptions remain governed by the safety policy.
+Nuschel is trialing str0m 0.25 for its modern WebRTC media transport. C++ and Go
+WebRTC implementations remain excluded, including implementations hidden behind
+Rust bindings or isolated workers. `nuschel-rtc` owns the socket-independent state
+machine; callers route datagrams and honor its timer deadlines. Capture, playback,
+DSP and codecs remain in the media worker. The trial does not replace the Mumble
+session transport or establish browser interoperability and sustained-call quality.
+Existing platform and cryptographic exceptions remain governed by the safety policy.
+
+Modern sessions should use WebRTC for voice, video and screen sharing, with an SFU
+forwarding encoded media. Legacy sessions retain Mumble voice and text; stock Mumble
+servers cannot relay video. A future server can bridge compatible Opus packets without
+decoding them, but must translate timing/routing and enforce channel authorization.
+Do not route video through Mumble TCP tunnels. MLS-required sessions must not bridge
+plaintext legacy participants. SFrame with MLS-exported keys is the intended future
+media encryption layer; DTLS-SRTP by itself does not provide E2EE through an SFU.
 
 Persistent chat, server message IDs, history pagination, and independent text-channel
 subscriptions require a capability-negotiated extension. Stock clients continue to

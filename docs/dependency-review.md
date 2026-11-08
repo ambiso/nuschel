@@ -17,10 +17,21 @@ platforms. First-party source forbids unsafe code; dependencies require separate
 | History | SQLx/Tokio, bundled SQLite locally and PostgreSQL for servers | SQLite FFI and database access remain in the storage worker; extension loading/deserialization are disabled |
 | Desktop | GPUI Kit without default component/assets features | Native rendering exception, not a message HTML or embedded-browser runtime |
 | TLS | rustls with ring | Explicit crypto exception; no OpenSSL dependency |
+| WebRTC trial | str0m 0.25, defaults disabled, `rust-crypto` | Rust protocol core forbids unsafe; codecs stay in workers; DTLS crypto exception described below |
 
 The live media worker owns CPAL streams, per-speaker Opus decoders, mixing, resampling,
 and optional RNNoise. AEC route detection and automatic DSP selection remain subsequent
 work; unknown upstream effects must not be treated as absent. Sonora is not active yet.
+
+str0m is confined to `nuschel-rtc`, with examples and native WebRTC bindings disabled.
+Its `rust-crypto` feature selects the RustCrypto SRTP/hash provider, but its dimpl 0.9
+DTLS dependency also enables AWS-LC through the `rcgen` feature. dimpl's default
+provider prefers AWS-LC when both backends are enabled. Consequently DTLS and
+certificate generation still use native crypto under the existing crypto exception;
+this is not a fully memory-safe dependency graph. No OpenSSL or C++/Go WebRTC engine
+is introduced. Review the actual Cargo feature graph on updates rather than relying
+on a feature's name. The trial accepts bounded signaling/datagrams and encoded media;
+it must never load a codec or open a microphone in the network process.
 
 The native session crate uses rustls/tokio-rustls with the explicitly selected ring
 provider (the existing crypto exception), WebPKI roots, and rcgen for a persistent

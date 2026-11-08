@@ -41,6 +41,9 @@ allow = [
 multiple-versions = "warn"
 wildcards = "deny"
 deny = [
+  { name = "str0m", wrappers = [
+    "nuschel-rtc",
+  ], reason = "Keep the WebRTC implementation behind the encoded-media transport boundary" },
   { name = "openssl", reason = "Use rustls for transport security" },
   { name = "openssl-sys", reason = "Avoid adding an OpenSSL FFI dependency" },
   { name = "onig", reason = "Use Syntect's Rust fancy-regex backend in the content worker" },
@@ -78,6 +81,10 @@ deny = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[[bans.features]]
+name = "str0m"
+deny = ["aws-lc-rs", "examples", "openssl", "openssl-dimpl", "vendored", "apple-crypto", "wincrypto", "wincrypto-dimpl"]
 
 [[bans.features]]
 name = "sqlx"
