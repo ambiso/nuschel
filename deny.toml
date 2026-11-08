@@ -15,6 +15,7 @@ allow = [
   "Apache-2.0 WITH LLVM-exception",
   "BSD-2-Clause",
   "BSD-3-Clause",
+  "CC0-1.0",
   "ISC",
   "MIT",
   "MPL-2.0",
@@ -30,6 +31,33 @@ deny = [
   { name = "openssl-sys", reason = "Avoid adding an OpenSSL FFI dependency" },
   { name = "onig", reason = "Use Syntect's Rust fancy-regex backend in the content worker" },
   { name = "onig_sys", reason = "Keep native regex parsing out of the content pipeline" },
+  { name = "gpui-kit", wrappers = [
+    "nuschel",
+  ], reason = "GPUI is an explicit desktop rendering exception" },
+  { name = "cpal", wrappers = [
+    "nuschel-media-worker",
+  ], reason = "Native audio APIs belong in the media worker" },
+  { name = "opus-pure", wrappers = [
+    "nuschel-media-worker",
+  ], reason = "Keep codec SIMD and packet processing in the media worker" },
+  { name = "sonora", wrappers = [
+    "nuschel-media-worker",
+  ], reason = "DSP runs outside the UI and network session" },
+  { name = "nnnoiseless", wrappers = [
+    "nuschel-media-worker",
+  ], reason = "Keep speech processing on the media execution path" },
+  { name = "rusqlite", wrappers = [
+    "nuschel-storage",
+  ], reason = "SQLite FFI is confined to the storage implementation" },
+  { name = "nuschel-storage", wrappers = [
+    "nuschel-storage-worker",
+  ], reason = "Do not link SQLite into the UI, client, or server" },
+  { name = "syntect", wrappers = [
+    "nuschel-content",
+  ], reason = "Untrusted grammars and message parsing belong in the content worker" },
+  { name = "nuschel-content", wrappers = [
+    "nuschel-content-worker",
+  ], reason = "The UI consumes typed text spans over IPC" },
 ]
 
 [sources]

@@ -68,6 +68,8 @@
           pkgs.libxcb
         ];
         common = {
+          pname = "nuschel";
+          version = "0.1.0";
           inherit src nativeBuildInputs buildInputs;
           strictDeps = true;
           cargoExtraArgs = "--workspace";
@@ -109,17 +111,23 @@
           };
         };
         devShells.default = craneLib.devShell {
-          inherit nativeBuildInputs buildInputs;
+          inherit buildInputs;
           LIBCLANG_PATH = common.LIBCLANG_PATH;
-          packages = [
-            pkgs.cargo-deny
-            pkgs.cargo-audit
-            pkgs.just
-            pkgs.nixfmt
-            pkgs.taplo
-            pkgs.jujutsu
-          ]
-          ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.bubblewrap ];
+          packages =
+            nativeBuildInputs
+            ++ [
+              pkgs.cargo-deny
+              pkgs.cargo-audit
+              pkgs.just
+              pkgs.nixfmt
+              pkgs.taplo
+              pkgs.jujutsu
+              pkgs.python3
+            ]
+            ++ lib.optionals pkgs.stdenv.isLinux [
+              pkgs.bubblewrap
+              pkgs.util-linux
+            ];
           LD_LIBRARY_PATH = lib.optionalString pkgs.stdenv.isLinux (lib.makeLibraryPath buildInputs);
         };
         formatter = pkgs.nixfmt;

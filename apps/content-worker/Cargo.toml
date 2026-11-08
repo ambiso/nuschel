@@ -1,0 +1,15 @@
+[package]
+name = "nuschel-content-worker"
+description = "Isolated rich-content parsing process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nuschel-content.workspace = true
+nuschel-ipc.workspace = true
+
+[lints]
+workspace = true

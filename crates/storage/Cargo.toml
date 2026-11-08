@@ -1,0 +1,16 @@
+[package]
+name = "nuschel-storage"
+description = "Local SQLite history, confined to the storage worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nuschel-core.workspace = true
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+thiserror = "2.0.21"
+
+[lints]
+workspace = true
