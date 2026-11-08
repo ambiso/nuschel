@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 mod view;
 
-use std::path::PathBuf;
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use clap::{Parser, Subcommand};
 use gpui_kit::{AppContext, WindowOptions};
@@ -34,7 +34,10 @@ enum Action {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = Arguments::parse();
     tracing_subscriber::fmt()
-        .with_env_filter("nuschel=info")
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "nuschel=info".into()),
+        )
         .with_writer(std::io::stderr)
         .init();
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -76,6 +79,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     let has_more = PreviewPolicy::default().preview(EXAMPLE, false).has_more;
     let preferences = ClientPreferences::default();
+    // GPUI owns the event loop; preserve startup errors until it returns so failed
+    // launches also report failure to the invoking shell or process supervisor.
+    let launch_error = Rc::new(RefCell::new(None));
+    let window_error = Rc::clone(&launch_error);
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         cx.on_window_closed(|cx, _| {
@@ -93,10 +100,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 history_enabled: preferences.save_local_history,
             })
         }) {
-            tracing::error!(%error, "could not open the desktop window");
-            cx.quit();
+            *window_error.borrow_mut() =
+                Some(format!("could not open the desktop window: {error}"));
+            // Linux starts its event loop after this launch callback. Quitting
+            // here would be cleared when that loop starts; queue it instead.
+            cx.spawn(async |cx| {
+                let _ = cx.update(|cx| cx.quit());
+            })
+            .detach();
         }
     });
+    if let Some(error) = launch_error.take() {
+        return Err(error.into());
+    }
     Ok(())
 }
 
