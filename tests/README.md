@@ -1,5 +1,9 @@
 # Integration testing
 
+Tests must launch their own servers on loopback or an isolated VM network. Do not
+use public or third-party Mumble servers for testing. The host argument exists for
+addressing the server fixture in another test VM.
+
 Run `just vm` (Nix builds use `--cores 2`) for the Linux integration harness.
 The test runs the actual GPUI client under Xvfb against a stock Mumble server,
 with synthetic audio on a private PulseAudio daemon. It never opens the host microphone.
