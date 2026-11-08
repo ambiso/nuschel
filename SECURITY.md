@@ -60,7 +60,9 @@ Nuschel code creates/changes only its own streams. The sandbox is not an audio-p
 firewall or a claim that a compromised audio daemon cannot act outside it.
 
 Muted clients do not open microphone streams. Capture generations invalidate queued
-PCM and encoded packets across mute/deafen changes and audio-worker restarts.
+PCM and encoded packets across mute/deafen changes and audio-worker restarts. The
+desktop replaces the media process on mute/deafen transitions: native stream teardown
+can block, so dropping a stream alone is insufficient to guarantee capture closes.
 Windows/macOS media/storage profiles remain unimplemented. The NixOS server's storage
 preflight inherits its hardened systemd unit.
 

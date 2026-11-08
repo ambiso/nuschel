@@ -251,7 +251,11 @@ async fn connection_loop(
             Some(command) = commands.recv() => {
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
                     muted = *mute || *deaf; deafened = *deaf; capture_epoch += 1;
-                    if let Some(media) = &media { let _ = media.commands.try_send(LiveMediaRequest::SetState { epoch: capture_epoch, muted, deafened }); }
+                    // Native stream teardown can block inside a backend (including Pulse).
+                    // Replacing the isolated worker closes its audio capability even then;
+                    // no old callback or queued capture can survive a mute transition.
+                    media.take();
+                    retry_audio = tokio::time::Instant::now();
                 }
                 if session_commands.send(command).await.is_err() { break; }
             },
@@ -276,7 +280,7 @@ async fn connection_loop(
                 SessionEvent::Welcome(body) => { let (text, _) = prepare(&body, true).await; let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Welcome(text) }).await; },
                 event => { let _ = events.send(Event::Protocol { server: id.clone(), generation, event }).await; },
             },
-            _ = tokio::time::sleep_until(retry_audio), if audio_enabled && media.is_none() => {
+            _ = tokio::time::sleep_until(retry_audio), if audio_enabled && !deafened && media.is_none() => {
                 capture_epoch += 1;
                 match Media::start() {
                     Ok(worker) => {

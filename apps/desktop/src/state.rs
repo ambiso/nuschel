@@ -876,6 +876,9 @@ impl Desktop {
                         if channel.messages.len() > 500 {
                             channel.messages.truncate(500);
                         }
+                        if !channel.viewing_older {
+                            self.scroll.scroll_to_bottom();
+                        }
                     }
                 }
                 Event::Protocol {
