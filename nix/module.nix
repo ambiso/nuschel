@@ -132,8 +132,9 @@ in
     systemd.services.nuschel = {
       description = "Nuschel Mumble-compatible server";
       wantedBy = [ "multi-user.target" ];
-      after = [ "network.target" ] ++ lib.optional localPostgres "postgresql.service";
-      requires = lib.optional localPostgres "postgresql.service";
+      # The service can listen before postgresql-setup creates roles/databases.
+      after = [ "network.target" ] ++ lib.optional localPostgres "postgresql.target";
+      requires = lib.optional localPostgres "postgresql.target";
       serviceConfig = {
         Type = "simple";
         DynamicUser = true;
