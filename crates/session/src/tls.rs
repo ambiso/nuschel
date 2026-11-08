@@ -19,10 +19,16 @@ use tokio::{
 };
 use tokio_rustls::{TlsConnector, client::TlsStream};
 
+#[derive(Clone, Debug)]
+struct Observed {
+    fingerprint: String,
+    rejected: bool,
+}
+
 #[derive(Debug)]
 struct Verifier {
     pin: Option<String>,
-    observed: Arc<Mutex<Option<String>>>,
+    observed: Arc<Mutex<Option<Observed>>>,
     webpki: Arc<WebPkiServerVerifier>,
     provider: Arc<CryptoProvider>,
 }
@@ -36,12 +42,7 @@ impl ServerCertVerifier for Verifier {
         now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         let actual = fingerprint(end_entity.as_ref());
-        *self
-            .observed
-            .lock()
-            .map_err(|_| rustls::Error::General("certificate state unavailable".into()))? =
-            Some(actual.clone());
-        if let Some(pin) = &self.pin {
+        let result = if let Some(pin) = &self.pin {
             if pin.eq_ignore_ascii_case(&actual) {
                 Ok(ServerCertVerified::assertion())
             } else {
@@ -52,8 +53,18 @@ impl ServerCertVerifier for Verifier {
         } else {
             self.webpki
                 .verify_server_cert(end_entity, intermediates, name, ocsp, now)
-        }
+        };
+        *self
+            .observed
+            .lock()
+            .map_err(|_| rustls::Error::General("certificate state unavailable".into()))? =
+            Some(Observed {
+                fingerprint: actual,
+                rejected: result.is_err(),
+            });
+        result
     }
+
     fn verify_tls12_signature(
         &self,
         message: &[u8],
@@ -135,13 +146,15 @@ pub async fn connect(
     match result {
         Ok(stream) => Ok((
             stream,
-            actual.ok_or_else(|| Error::Tls("server did not present a certificate".into()))?,
+            actual
+                .ok_or_else(|| Error::Tls("server did not present a certificate".into()))?
+                .fingerprint,
         )),
         Err(error) => {
-            if let Some(sha256) = actual {
+            if let Some(observed) = actual.filter(|certificate| certificate.rejected) {
                 // No Authenticate frame or password is sent until TLS succeeds.
                 Err(Error::Certificate {
-                    sha256,
+                    sha256: observed.fingerprint,
                     changed: server.certificate_sha256.is_some(),
                     reason: error.to_string(),
                 })

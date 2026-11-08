@@ -31,6 +31,7 @@ pub struct Channel {
 }
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct User {
+    pub instance: u64,
     pub session: u32,
     pub name: String,
     pub channel: u32,
@@ -75,9 +76,23 @@ pub enum SessionEvent {
 #[derive(Debug)]
 pub enum Command {
     Join(u32),
-    SendText { target: TextTarget, body: String },
-    SetSelf { muted: bool, deafened: bool },
-    Voice { target: u32, packet: VoicePacket },
+    CreateChannel {
+        parent: u32,
+        name: String,
+    },
+    SendText {
+        target: TextTarget,
+        body: String,
+        expected_peer: Option<u64>,
+    },
+    SetSelf {
+        muted: bool,
+        deafened: bool,
+    },
+    Voice {
+        target: u32,
+        packet: VoicePacket,
+    },
     Disconnect,
 }
 /// Passwords exist only in memory and are never part of a saved bookmark or Debug output.
@@ -130,6 +145,9 @@ pub async fn run(
                     let Some(command) = command else { break; };
                     match command {
                         Command::Disconnect => break,
+                        Command::CreateChannel { parent, name } => if state.own_session.is_some() && state.channels.contains_key(&parent) && !name.is_empty() && name.len() <= 128 {
+                            send(&mut writer, 7, &proto::ChannelState { parent: Some(parent), name: Some(name), temporary: Some(true), ..Default::default() }).await?;
+                        },
                         Command::Join(channel) => if state.own_session.is_some() && state.channels.contains_key(&channel) {
                             send(&mut writer, 9, &proto::UserState { channel_id: Some(channel), ..Default::default() }).await?;
                         },
@@ -137,7 +155,7 @@ pub async fn run(
                             state.local_muted = muted || deafened; state.local_deafened = deafened;
                             send(&mut writer, 9, &proto::UserState { self_mute: Some(muted || deafened), self_deaf: Some(deafened), ..Default::default() }).await?;
                         },
-                        Command::SendText { target, body } => {
+                        Command::SendText { target, body, expected_peer } => {
                             if state.own_session.is_none() { emit(&events, SessionEvent::Notice("Connect before sending a message.".into())).await?; continue; }
                             if body.trim().is_empty() || body.len() > MAX_CONTENT_BYTES {
                                 emit(&events, SessionEvent::Notice("Message is empty or exceeds 64 KiB.".into())).await?; continue;
@@ -148,8 +166,8 @@ pub async fn run(
                             }
                             let mut message = proto::TextMessage { message: wire_body, ..Default::default() };
                             match target { TextTarget::Channel(id) => {
-                                if !state.channels.contains_key(&id) { continue; } message.channel_id.push(id);
-                            }, TextTarget::Direct(id) => { if !state.users.contains_key(&id) { continue; } message.session.push(id); } }
+                                if !state.channels.contains_key(&id) { emit(&events, SessionEvent::Notice("This channel is no longer available.".into())).await?; continue; } message.channel_id.push(id);
+                            }, TextTarget::Direct(id) => { if !state.users.get(&id).is_some_and(|user| expected_peer.is_none_or(|instance| instance == user.instance)) { emit(&events, SessionEvent::Notice("The recipient disconnected or changed. Open a new private conversation.".into())).await?; continue; } message.session.push(id); } }
                             send(&mut writer, 11, &message).await?;
                             let own = state.users.get(&state.own_session.unwrap()).cloned().unwrap_or_default();
                             let peer = match target { TextTarget::Direct(id) => state.users.get(&id).cloned(), _ => None };
@@ -157,9 +175,8 @@ pub async fn run(
                                 body, html: false, outgoing: true, observed_at_ms: now_ms() })).await?;
                         },
                         Command::Voice { target, packet } => if state.own_session.is_some() && state.opus
-                            && ((!state.local_muted && !state.local_deafened && state.may_speak()) || packet.end) {
-                            if let Ok(payload) = voice::encode_voice(state.version, target, &packet) { write_control(&mut writer, 1, &payload).await?; }
-                        },
+                            && ((!state.local_muted && !state.local_deafened && state.may_speak()) || packet.end)
+                            && let Ok(payload) = voice::encode_voice(state.version, target, &packet) { write_control(&mut writer, 1, &payload).await?; },
                     }
                 },
                 _ = ping.tick() => send(&mut writer, 3, &proto::Ping { timestamp: Some(now_ms() as u64), ..Default::default() }).await?,
@@ -175,6 +192,7 @@ pub async fn run(
 }
 
 struct State {
+    user_instance: u64,
     channels: BTreeMap<u32, Channel>,
     users: BTreeMap<u32, User>,
     own_session: Option<u32>,
@@ -188,6 +206,7 @@ struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            user_instance: 0,
             channels: BTreeMap::new(),
             users: BTreeMap::new(),
             own_session: None,
@@ -228,10 +247,10 @@ impl State {
                 });
             }
             1 => {
-                if !self.local_deafened {
-                    if let Ok(packet) = voice::decode_voice(&frame.payload) {
-                        emit(events, SessionEvent::Audio(packet)).await?;
-                    }
+                if !self.local_deafened
+                    && let Ok(packet) = voice::decode_voice(&frame.payload)
+                {
+                    emit(events, SessionEvent::Audio(packet)).await?;
                 }
             }
             3 => {
@@ -260,7 +279,11 @@ impl State {
                 )
                 .await?;
                 if let Some(welcome) = sync.welcome_text {
-                    emit(events, SessionEvent::Welcome(welcome)).await?;
+                    emit(
+                        events,
+                        SessionEvent::Welcome(bounded(welcome, MAX_CONTENT_BYTES)),
+                    )
+                    .await?;
                 }
             }
             6 => {
@@ -281,10 +304,10 @@ impl State {
                         description: String::new(),
                         position: 0,
                     });
-                    if let Some(parent) = update.parent {
-                        if id != 0 {
-                            channel.parent = Some(parent);
-                        }
+                    if let Some(parent) = update.parent
+                        && id != 0
+                    {
+                        channel.parent = Some(parent);
                     }
                     if let Some(name) = update.name {
                         channel.name = bounded(name, 512);
@@ -314,8 +337,13 @@ impl State {
                     if !self.users.contains_key(&session) && self.users.len() >= 16384 {
                         return Err(Error::Protocol("user limit exceeded".into()));
                     }
+                    if !self.users.contains_key(&session) {
+                        self.user_instance += 1;
+                    }
+                    let instance = self.user_instance;
                     let user = self.users.entry(session).or_insert_with(|| User {
                         session,
+                        instance,
                         name: format!("User {session}"),
                         ..Default::default()
                     });

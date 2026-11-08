@@ -12,3 +12,6 @@
 *.sqlite3-wal
 *.profraw
 .DS_Store
+
+__pycache__/
+*.py[cod]

@@ -198,7 +198,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 end,
                 volume,
             })) => {
-                if deafened || opus.is_empty() || opus.len() > 1000 || !volume.is_finite() {
+                if deafened || opus.is_empty() || opus.len() > 1024 || !volume.is_finite() {
                     continue;
                 }
                 if !speakers.contains_key(&sender) && speakers.len() >= 64 {

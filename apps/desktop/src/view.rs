@@ -1,286 +1,339 @@
 // SPDX-License-Identifier: EUPL-1.2
-use std::collections::BTreeSet;
-
-use gpui_kit::{prelude::*, *};
-use nuschel_client::{Conversation, HistorySource, Navigation, SessionSecurity};
+use crate::{
+    dialogs::{self, button},
+    state::{Desktop, Status},
+};
+use gpui_kit::{base::input::Textarea, prelude::*, *};
+use nuschel_client::{HistorySource, SessionSecurity};
 use nuschel_core::{ContentBlock, MessageDocument};
-
-pub(super) struct MessageView {
-    pub author: String,
-    pub time: String,
-    pub document: MessageDocument,
-    pub expanded: bool,
-    pub has_more: bool,
-}
-
-pub(super) struct ChannelView {
-    pub id: u32,
-    pub parent: Option<u32>,
-    pub name: String,
-    pub topic: String,
-    pub messages: Vec<MessageView>,
-}
-
-pub(super) struct ServerView {
-    pub id: String,
-    pub name: String,
-    pub initials: String,
-    pub history_source: HistorySource,
-    pub security: SessionSecurity,
-    pub channels: Vec<ChannelView>,
-}
-
-pub struct Desktop {
-    servers: Vec<ServerView>,
-    navigation: Navigation,
-    collapsed: BTreeSet<(String, u32)>,
-    history_enabled: bool,
-}
-
-impl Desktop {
-    pub fn preview(document: MessageDocument, has_more: bool, history_enabled: bool) -> Self {
-        let mut desktop = Self {
-            servers: crate::preview::servers(document, has_more),
-            navigation: Navigation::default(),
-            collapsed: BTreeSet::new(),
-            history_enabled,
-        };
-        desktop.browse_server(0);
-        desktop
-    }
-
-    fn selected_indices(&self) -> (usize, usize) {
-        let selected = self
-            .navigation
-            .selection()
-            .expect("preview has a selection");
-        let server = self
-            .servers
-            .iter()
-            .position(|s| s.id == selected.server)
-            .unwrap_or(0);
-        let channel = self.servers[server]
-            .channels
-            .iter()
-            .position(|c| c.id == selected.channel)
-            .unwrap_or(0);
-        (server, channel)
-    }
-
-    fn browse_server(&mut self, index: usize) {
-        let server = &self.servers[index];
-        let channel = self
-            .navigation
-            .remembered_channel(&server.id)
-            .filter(|id| server.channels.iter().any(|channel| channel.id == *id))
-            .unwrap_or(server.channels[0].id);
-        self.browse_channel(index, channel);
-    }
-
-    fn browse_channel(&mut self, server: usize, channel: u32) {
-        let server = &self.servers[server];
-        if server.channels.iter().any(|entry| entry.id == channel) {
-            self.navigation.browse(
-                Conversation {
-                    server: server.id.clone(),
-                    channel,
-                },
-                server.history_source,
-            );
-        }
-    }
-
-    fn toggle_message(&mut self, index: usize) {
-        let (server, channel) = self.selected_indices();
-        if let Some(message) = self.servers[server].channels[channel]
-            .messages
-            .get_mut(index)
-        {
-            message.expanded = !message.expanded;
-        }
-    }
-
-    /// Iterative traversal keeps arbitrary channel nesting off the Rust call stack.
-    fn channel_rows(&self, server: usize) -> Vec<(usize, usize, bool)> {
-        let server = &self.servers[server];
-        let mut pending = server
-            .channels
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(_, channel)| channel.parent.is_none())
-            .map(|(index, _)| (index, 0))
-            .collect::<Vec<_>>();
-        let mut visited = BTreeSet::new();
-        let mut rows = Vec::new();
-        while let Some((index, depth)) = pending.pop() {
-            let channel = &server.channels[index];
-            if !visited.insert(channel.id) {
-                continue;
-            }
-            let children = server
-                .channels
-                .iter()
-                .enumerate()
-                .filter(|(_, child)| child.parent == Some(channel.id))
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            rows.push((index, depth, !children.is_empty()));
-            if !self.collapsed.contains(&(server.id.clone(), channel.id)) {
-                pending.extend(children.into_iter().rev().map(|index| (index, depth + 1)));
-            }
-        }
-        rows
-    }
-}
+use nuschel_session::connection::TextTarget;
 
 impl Render for Desktop {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (server_index, channel_index) = self.selected_indices();
-        let server = &self.servers[server_index];
-        let channel = &server.channels[channel_index];
-        let server_buttons = self
-            .servers
-            .iter()
-            .enumerate()
-            .map(|(index, server)| {
-                let selected = index == server_index;
-                div()
-                    .id(("server", index))
-                    .role(Role::Button)
-                    .tab_index(0)
-                    .aria_label(format!(
-                        "{}; {}",
-                        server.name,
-                        security_label(server.security)
-                    ))
-                    .aria_selected(selected)
-                    .relative()
-                    .w(px(48.))
-                    .h(px(48.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_xl()
-                    .bg(rgb(if selected { 0x5865f2 } else { 0x282d39 }))
-                    .hover(|style| style.bg(rgb(0x4a55cf)))
-                    .cursor_pointer()
-                    .font_weight(FontWeight::BOLD)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.browse_server(index);
-                        cx.notify();
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                        if activation_key(event) {
-                            this.browse_server(index);
-                            cx.notify();
-                        }
-                    }))
-                    .child(text!(server.initials.clone()).with_id(("server-name", index)))
-                    .child(
-                        div()
-                            .absolute()
-                            .right(px(-3.))
-                            .bottom(px(-3.))
-                            .p_1()
-                            .rounded_md()
-                            .bg(rgb(0x11151d))
-                            .child(security_icon(server.security, index)),
-                    )
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.apply_composer_acks(window, cx);
+        self.reconcile_selection(window, cx);
+        let Some((server, channel)) = self.selected_indices() else {
+            return dialogs::empty(self, cx);
+        };
+        div()
+            .size_full()
+            .relative()
+            .flex()
+            .bg(rgb(0x202632))
+            .text_color(rgb(0xe9edf5))
+            .font_family("sans-serif")
+            .text_base()
+            .child(server_rail(self, server, cx))
+            .child(channel_panel(self, server, channel, cx))
+            .child(conversation(self, server, channel, cx))
+            .when(self.form.is_some(), |view| {
+                view.child(dialogs::server_form(self, cx))
             })
-            .collect::<Vec<_>>();
-
-        let channel_rows = self
-            .channel_rows(server_index)
-            .into_iter()
-            .map(|(index, depth, has_children)| {
-                let entry = &server.channels[index];
-                let channel_id = entry.id;
-                let selected = index == channel_index;
-                let collapsed = self.collapsed.contains(&(server.id.clone(), channel_id));
-                let server_id = server.id.clone();
-                div()
-                    .id(("channel-row", index))
-                    .role(Role::TreeItem)
-                    .tab_index(0)
-                    .aria_label(entry.name.clone())
-                    .aria_selected(selected)
-                    .aria_level(depth + 1)
-                    .when(has_children, |row| row.aria_expanded(!collapsed))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .min_h(px(34.))
-                    .pr_2()
-                    .pl(px(8. + depth as f32 * 14.))
-                    .rounded_md()
-                    .cursor_pointer()
-                    .text_color(rgb(if selected { 0xf4f5fa } else { 0xadb5c6 }))
-                    .when(selected, |row| row.bg(rgb(0x333b50)))
-                    .hover(|style| style.bg(rgb(0x2a3142)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.browse_channel(server_index, channel_id);
+            .into_any_element()
+    }
+}
+fn server_rail(this: &Desktop, selected: usize, cx: &mut Context<Desktop>) -> AnyElement {
+    let servers = this
+        .servers
+        .iter()
+        .enumerate()
+        .map(|(index, server)| {
+            div()
+                .id(("server", index))
+                .role(Role::Button)
+                .tab_index(0)
+                .aria_label(format!(
+                    "{}; {}",
+                    server.name,
+                    security_label(server.security)
+                ))
+                .aria_selected(index == selected)
+                .relative()
+                .w(px(48.))
+                .h(px(48.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_xl()
+                .bg(rgb(if index == selected {
+                    0x5865f2
+                } else {
+                    0x282d39
+                }))
+                .hover(|style| style.bg(rgb(0x4a55cf)))
+                .cursor_pointer()
+                .font_weight(FontWeight::BOLD)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.browse_server(index, window, cx);
+                    cx.notify();
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if activation_key(event) {
+                        this.browse_server(index, window, cx);
                         cx.notify();
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                        if activation_key(event) {
-                            this.browse_channel(server_index, channel_id);
-                            cx.notify();
-                        }
-                    }))
-                    .child(
-                        div()
-                            .id(("channel-branch", index))
-                            .w(px(12.))
-                            .text_color(rgb(0x7f8ba3))
-                            .when(has_children, |branch| {
-                                branch
-                                    .role(Role::Button)
-                                    .tab_index(0)
-                                    .aria_label(format!(
-                                        "{} {}",
-                                        if collapsed { "Expand" } else { "Collapse" },
-                                        entry.name
-                                    ))
-                                    .on_click(cx.listener({
-                                        let server_id = server_id.clone();
-                                        move |this, _, _, cx| {
-                                            let key = (server_id.clone(), channel_id);
+                    }
+                }))
+                .child(text!(server.initials.clone()).with_id(("server-name", index)))
+                .child(
+                    div()
+                        .absolute()
+                        .right(px(-3.))
+                        .bottom(px(-3.))
+                        .p_1()
+                        .rounded_md()
+                        .bg(rgb(0x11151d))
+                        .child(security_icon(server.security, index)),
+                )
+        })
+        .collect::<Vec<_>>();
+    div()
+        .w(px(72.))
+        .h_full()
+        .flex_shrink_0()
+        .py_4()
+        .gap_4()
+        .bg(rgb(0x11151d))
+        .flex()
+        .flex_col()
+        .items_center()
+        .child(
+            div()
+                .text_xs()
+                .text_color(rgb(0x8f9bb3))
+                .child(text!("N").with_id("brand")),
+        )
+        .children(servers)
+        .child(button(
+            "add-server",
+            "+",
+            |this, window, cx| this.open_form(None, window, cx),
+            cx,
+        ))
+        .into_any_element()
+}
+fn channel_panel(
+    this: &Desktop,
+    server_index: usize,
+    selected_channel: usize,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let server = &this.servers[server_index];
+    let rows = this
+        .channel_rows(server_index)
+        .into_iter()
+        .map(|(index, depth, has_children)| {
+            let entry = &server.channels[index];
+            let id = entry.id;
+            let collapsed = this.collapsed.contains(&(server.id.clone(), id));
+            let server_id = server.id.clone();
+            let members = server
+                .users
+                .values()
+                .filter(|user| entry.target == TextTarget::Channel(user.channel))
+                .count();
+            div()
+                .id(("channel-row", index))
+                .role(Role::TreeItem)
+                .tab_index(0)
+                .aria_label(entry.name.clone())
+                .aria_selected(index == selected_channel)
+                .aria_level(depth + 1)
+                .when(has_children, |row| row.aria_expanded(!collapsed))
+                .flex()
+                .items_center()
+                .gap_2()
+                .min_h(px(34.))
+                .pr_2()
+                .pl(px(8. + depth.min(10) as f32 * 12.))
+                .rounded_md()
+                .cursor_pointer()
+                .text_color(rgb(if index == selected_channel {
+                    0xf4f5fa
+                } else {
+                    0xadb5c6
+                }))
+                .when(index == selected_channel, |row| row.bg(rgb(0x333b50)))
+                .hover(|style| style.bg(rgb(0x2a3142)))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.browse_channel(server_index, id, window, cx);
+                    cx.notify();
+                }))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    if activation_key(event) {
+                        this.browse_channel(server_index, id, window, cx);
+                        cx.notify();
+                    }
+                }))
+                .child(
+                    div()
+                        .id(("branch", index))
+                        .w(px(12.))
+                        .text_color(rgb(0x7f8ba3))
+                        .when(has_children, |branch| {
+                            branch
+                                .role(Role::Button)
+                                .tab_index(0)
+                                .aria_label(format!("Toggle {}", entry.name))
+                                .on_click(cx.listener({
+                                    let server_id = server_id.clone();
+                                    move |this, _, _, cx| {
+                                        let key = (server_id.clone(), id);
+                                        if !this.collapsed.remove(&key) {
+                                            this.collapsed.insert(key);
+                                        }
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }
+                                }))
+                                .on_key_down(cx.listener(
+                                    move |this, event: &KeyDownEvent, _, cx| {
+                                        if activation_key(event) {
+                                            let key = (server_id.clone(), id);
                                             if !this.collapsed.remove(&key) {
                                                 this.collapsed.insert(key);
                                             }
                                             cx.stop_propagation();
                                             cx.notify();
                                         }
-                                    }))
-                                    .on_key_down(cx.listener(
-                                        move |this, event: &KeyDownEvent, _, cx| {
-                                            if activation_key(event) {
-                                                let key = (server_id.clone(), channel_id);
-                                                if !this.collapsed.remove(&key) {
-                                                    this.collapsed.insert(key);
-                                                }
-                                                cx.stop_propagation();
-                                                cx.notify();
-                                            }
-                                        },
-                                    ))
+                                    },
+                                ))
+                        })
+                        .child(
+                            text!(if has_children {
+                                if collapsed { "▸" } else { "▾" }
+                            } else {
+                                "#"
                             })
-                            .child(
-                                text!(if has_children {
-                                    if collapsed { "▸" } else { "▾" }
-                                } else {
-                                    "#"
-                                })
-                                .with_id(("channel-symbol", index)),
-                            ),
+                            .with_id(("channel-symbol", index)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(text!(entry.name.clone()).with_id(("channel-name", index))),
+                )
+                .when(members > 0, |row| {
+                    row.child(
+                        div()
+                            .text_xs()
+                            .text_color(rgb(0x8998b3))
+                            .child(text!(members.to_string()).with_id(("member-count", index))),
                     )
-                    .child(text!(entry.name.clone()).with_id(("channel-name", index)))
-            })
-            .collect::<Vec<_>>();
-
-        let messages = channel
+                })
+        })
+        .collect::<Vec<_>>();
+    let voice = server
+        .voice_channel()
+        .and_then(|id| {
+            server
+                .channels
+                .iter()
+                .find(|channel| channel.target == TextTarget::Channel(id))
+        })
+        .map(|channel| format!("Voice · {}", channel.name))
+        .unwrap_or_else(|| "Voice disconnected".into());
+    div()
+        .w(px(208.))
+        .h_full()
+        .flex_shrink_0()
+        .bg(rgb(0x191f2a))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .h(px(72.))
+                .flex_shrink_0()
+                .px_4()
+                .flex()
+                .flex_col()
+                .justify_center()
+                .gap_1()
+                .border_b_1()
+                .border_color(rgb(0x2a3243))
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .child(text!(server.name.clone()).with_id("server-heading")),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x929eb4))
+                        .child(text!(server.status_label()).with_id("connection")),
+                ),
+        )
+        .child(
+            div()
+                .px_4()
+                .pt_5()
+                .pb_2()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(0x8f9ab0))
+                .child(text!("CHANNELS").with_id("channels-heading")),
+        )
+        .child(
+            div()
+                .id("channel-tree")
+                .role(Role::Tree)
+                .aria_label("Channels")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .px_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(rows),
+        )
+        .child(
+            div()
+                .p_4()
+                .border_t_1()
+                .border_color(rgb(0x2a3243))
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(div().text_sm().child(text!(voice).with_id("voice-status")))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(rgb(0x8f9ab0))
+                        .child(text!(server.audio_status.clone()).with_id("audio-status")),
+                ),
+        )
+        .into_any_element()
+}
+fn conversation(
+    this: &Desktop,
+    index: usize,
+    channel_index: usize,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let server = &this.servers[index];
+    let channel = &server.channels[channel_index];
+    let members = server
+        .users
+        .values()
+        .filter(|user| {
+            channel.target == TextTarget::Channel(user.channel)
+                && Some(user.session) != server.own_session
+        })
+        .take(100)
+        .map(|user| {
+            let session = user.session;
+            div().id(("member", session as usize)).child(button(
+                "direct-message-user",
+                format!("@ {}", user.name),
+                move |this, window, cx| this.open_direct(index, session, window, cx),
+                cx,
+            ))
+        })
+        .collect::<Vec<_>>();
+    let messages =
+        channel
             .messages
             .iter()
             .enumerate()
@@ -335,240 +388,60 @@ impl Render for Desktop {
                                     })
                                     .children(document_blocks(&message.document)),
                             )
-                            .when(message.has_more, |content| {
-                                content.child(
-                                    div()
-                                        .id(("show-more", index))
-                                        .role(Role::Button)
-                                        .tab_index(0)
-                                        .aria_expanded(message.expanded)
-                                        .cursor_pointer()
-                                        .text_sm()
-                                        .text_color(rgb(0x9bb6ff))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.toggle_message(index);
-                                            cx.notify();
-                                        }))
-                                        .on_key_down(cx.listener(
-                                            move |this, event: &KeyDownEvent, _, cx| {
-                                                if activation_key(event) {
-                                                    this.toggle_message(index);
-                                                    cx.notify();
-                                                }
-                                            },
-                                        ))
-                                        .child(
-                                            text!(if message.expanded {
-                                                "Show less"
-                                            } else {
-                                                "Show more"
-                                            })
-                                            .with_id(("expand-label", index)),
-                                        ),
-                                )
+                            .when(message.has_more, |view| {
+                                view.child(button(
+                                    "show-more",
+                                    if message.expanded {
+                                        "Show less"
+                                    } else {
+                                        "Show more"
+                                    },
+                                    move |this, _, cx| {
+                                        this.toggle_message(index);
+                                        cx.notify();
+                                    },
+                                    cx,
+                                ))
                             }),
                     )
             })
             .collect::<Vec<_>>();
-
-        div()
-            .size_full()
-            .flex()
-            .bg(rgb(0x202632))
-            .text_color(rgb(0xe9edf5))
-            .font_family("sans-serif")
-            .text_base()
-            .child(
-                div()
-                    .w(px(72.))
-                    .h_full()
-                    .flex_shrink_0()
-                    .py_4()
-                    .gap_4()
-                    .bg(rgb(0x11151d))
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(rgb(0x8f9bb3))
-                            .child(text!("N").with_id("brand")),
-                    )
-                    .children(server_buttons),
-            )
-            .child(
-                div()
-                    .w(px(208.))
-                    .h_full()
-                    .flex_shrink_0()
-                    .bg(rgb(0x191f2a))
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .h(px(72.))
-                            .flex_shrink_0()
-                            .px_4()
-                            .flex()
-                            .flex_col()
-                            .justify_center()
-                            .gap_1()
-                            .border_b_1()
-                            .border_color(rgb(0x2a3243))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::BOLD)
-                                    .child(text!(server.name.clone()).with_id("server-heading")),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(0x929eb4))
-                                    .child(text!("Preview · Not connected").with_id("connection")),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .px_4()
-                            .pt_5()
-                            .pb_2()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(0x8f9ab0))
-                            .child(text!("CHANNELS").with_id("channels-heading")),
-                    )
-                    .child(
-                        div()
-                            .id("channel-tree")
-                            .role(Role::Tree)
-                            .aria_label("Channels")
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .px_2()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .children(channel_rows),
-                    )
-                    .child(
-                        div()
-                            .p_4()
-                            .border_t_1()
-                            .border_color(rgb(0x2a3243))
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .child(text!("Voice disconnected").with_id("voice-status")),
-                            )
-                            .child(div().text_xs().text_color(rgb(0x8f9ab0)).child(
-                                text!("Browse chat without joining voice").with_id("voice-hint"),
-                            )),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .h(px(72.))
-                            .flex_shrink_0()
-                            .px_6()
-                            .flex()
-                            .items_center()
-                            .gap_4()
-                            .border_b_1()
-                            .border_color(rgb(0x30394b))
-                            .child(
-                                div()
-                                    .text_color(rgb(0x8592ad))
-                                    .text_xl()
-                                    .child(text!("#").with_id("channel-hash")),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(div().font_weight(FontWeight::SEMIBOLD).child(
-                                        text!(channel.name.clone()).with_id("channel-heading"),
-                                    ))
-                                    .child(div().text_xs().text_color(rgb(0x9aa6bc)).child(
-                                        text!(channel.topic.clone()).with_id("channel-topic"),
-                                    )),
-                            )
-                            .child(security_icon(
-                                server.security,
-                                self.servers.len() + server_index,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!(
-                                "timeline:{}:{}",
-                                server.id, channel.id
-                            )))
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .px_6()
-                            .py_4()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div().pb_4().text_xs().text_color(rgb(0x929eb4)).child(
-                                    text!(match server.history_source {
-                                        HistorySource::LocalObserved =>
-                                            "Local history · messages seen on this device",
-                                        HistorySource::ServerArchive =>
-                                            "Server history · preview messages",
-                                    })
-                                    .with_id("history-source"),
-                                ),
-                            )
-                            .children(messages),
-                    )
-                    .child(
-                        div()
-                            .mx_6()
-                            .mb_3()
-                            .p_4()
-                            .rounded_lg()
-                            .bg(rgb(0x2a3242))
-                            .text_color(rgb(0x929eb4))
-                            .child(
-                                text!("Connect to send a message").with_id("composer-placeholder"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .px_6()
-                            .pb_3()
-                            .text_xs()
-                            .text_color(rgb(0x8895ad))
-                            .child(
-                                text!(if self.history_enabled {
-                                    "Local history enabled"
-                                } else {
-                                    "Local history disabled"
-                                })
-                                .with_id("history-default"),
-                            ),
-                    ),
-            )
-    }
+    div().flex_1().min_w_0().h_full().flex().flex_col()
+        .child(div().min_h(px(72.)).flex_shrink_0().px_5().py_3().flex().flex_wrap().items_center().gap_3().border_b_1().border_color(rgb(0x30394b))
+            .child(div().min_w(px(100.)).flex_1().font_weight(FontWeight::SEMIBOLD).child(text!(channel.name.clone()).with_id("channel-heading")))
+            .when(server.status == Status::Connected, |view| view
+                .when(matches!(channel.target, TextTarget::Channel(_)), |view| view.child(button("join-voice", "Join voice", |this, _, cx| { this.join_selected(); cx.notify(); }, cx)))
+                .child(button("mute", if server.muted { "Unmute" } else { "Mute" }, |this, _, cx| { this.set_mute(false); cx.notify(); }, cx))
+                .child(button("deafen", if server.deafened { "Undeafen" } else { "Deafen" }, |this, _, cx| { this.set_mute(true); cx.notify(); }, cx))
+                .child(button("disconnect", "Disconnect", move |this, _, cx| { this.disconnect(index); cx.notify(); }, cx)))
+            .when(server.status != Status::Connected, |view| view.child(button("connect-server", "Connect", move |this, window, cx| this.open_form(Some(index), window, cx), cx)))
+            .child(button("edit-server", "Edit", move |this, window, cx| this.open_form(Some(index), window, cx), cx))
+            .child(security_icon(server.security, this.servers.len() + index)))
+        .when_some(server.notice.clone().or_else(|| this.error.clone()), |view, notice| view.child(div().px_6().py_2().bg(rgb(0x493340)).text_color(rgb(0xffc0cb)).text_sm().child(text!(notice).with_id("connection-notice"))))
+        .when_some(server.certificate.as_ref(), |view, certificate| view.child(div().p_5().bg(rgb(0x40303a)).flex().flex_col().gap_3()
+            .child(div().font_weight(FontWeight::BOLD).child(text!(if certificate.changed { "Server certificate changed" } else { "Confirm server certificate" }).with_id("certificate-heading")))
+            .child(text!("Verify this SHA-256 fingerprint with the server owner before trusting it. No password has been sent.").with_id("certificate-explanation"))
+            .child(div().font_family("monospace").text_sm().child(text!(certificate.sha256.as_bytes().chunks(8).map(|chunk| std::str::from_utf8(chunk).unwrap_or("?")).collect::<Vec<_>>().join(" ")).with_id("certificate-fingerprint")))
+            .child(div().text_xs().child(text!(certificate.reason.clone()).with_id("certificate-reason")))
+            .child(button("trust-certificate", if certificate.changed { "Trust changed certificate and connect" } else { "Trust certificate and connect" }, move |this, _, cx| { this.trust_certificate(index); cx.notify(); }, cx))))
+        .child(div().px_6().pt_2().flex().gap_3()
+            .when(channel.next_before.is_some() && !channel.loading, |view| view.child(button("older-history", "Load older messages", |this, _, cx| { this.load_older(); cx.notify(); }, cx)))
+            .when(channel.viewing_older, |view| view.child(button("latest-history", format!("Jump to latest ({})", channel.new_messages), |this, _, cx| { this.load_history(None); cx.notify(); }, cx)))
+            .when(channel.loading, |view| view.child(text!("Loading local history…").with_id("history-loading"))))
+        .child(div().px_6().pt_2().flex().flex_wrap().gap_2().children(members))
+        .child(div().id(SharedString::from(format!("timeline:{}:{}", server.id, channel.id))).track_scroll(&this.scroll).flex_1().min_h_0().overflow_y_scroll().px_6().py_4().flex().flex_col()
+            .when_some(server.welcome.as_ref(), |view, welcome| view.child(div().p_3().mb_4().rounded_md().bg(rgb(0x29354a)).text_sm().child(text!(welcome.clone()).with_id("server-welcome"))))
+            .child(div().pb_3().text_xs().text_color(rgb(0x929eb4)).child(text!(match server.history_source { HistorySource::LocalObserved => "Local history · messages seen on this device", HistorySource::ServerArchive => "Server history" }).with_id("history-source")))
+            .child(div().pb_3().text_xs().text_color(rgb(0x929eb4)).child(text!(server.users.values().filter(|user| channel.target == TextTarget::Channel(user.channel))
+                .map(|user| format!("{}{}", user.name, if user.muted || user.self_muted { " (muted)" } else { "" })).collect::<Vec<_>>().join(" · ")).with_id("channel-users")))
+            .children(messages))
+        .child(div().mx_6().mb_3().p_3().rounded_lg().bg(rgb(0x2a3242)).flex().flex_col().gap_2().child(Textarea::new(&this.composer))
+            .child(div().flex().items_center().justify_between()
+                .child(div().text_xs().text_color(rgb(0x929eb4)).child(text!("Enter for a new line · Ctrl/Cmd+Enter to send").with_id("composer-hint")))
+                .child(button("send-message", if this.sending() { "Sending…" } else { "Send" }, |this, window, cx| this.send_message(window, cx), cx))))
+        .child(div().px_6().pb_3().text_xs().text_color(rgb(0x8895ad)).child(text!(if this.history_enabled { "Local history enabled · no end-to-end encryption" } else { "Local history disabled" }).with_id("history-default")))
+        .into_any_element()
 }
-
 fn activation_key(event: &KeyDownEvent) -> bool {
     event.keystroke.key == "enter" || event.keystroke.key == "space"
 }

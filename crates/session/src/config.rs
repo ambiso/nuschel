@@ -10,6 +10,15 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CachedChannel {
+    pub id: u32,
+    pub parent: Option<u32>,
+    pub name: String,
+    pub position: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServerBookmark {
     pub id: String,
     pub name: String,
@@ -18,6 +27,8 @@ pub struct ServerBookmark {
     pub username: String,
     #[serde(default)]
     pub certificate_sha256: Option<String>,
+    #[serde(default)]
+    pub cached_channels: Vec<CachedChannel>,
 }
 
 impl ServerBookmark {
@@ -54,6 +65,7 @@ impl ServerBookmark {
             port,
             username: username.trim().into(),
             certificate_sha256: None,
+            cached_channels: Vec::new(),
         })
     }
 
@@ -102,7 +114,7 @@ impl Profile {
             return Ok(Vec::new());
         }
         let servers: Vec<ServerBookmark> =
-            serde_json::from_slice(&read_bounded(&path, 512 * 1024)?)?;
+            serde_json::from_slice(&read_bounded(&path, 8 * 1024 * 1024)?)?;
         if servers.len() > 100 {
             return Err(io::Error::other("too many saved servers"));
         }
@@ -110,6 +122,14 @@ impl Profile {
         for server in &servers {
             ServerBookmark::new(&server.name, &server.host, server.port, &server.username)
                 .map_err(io::Error::other)?;
+            if server.cached_channels.len() > 4096
+                || server
+                    .cached_channels
+                    .iter()
+                    .any(|channel| channel.name.len() > 512)
+            {
+                return Err(io::Error::other("saved channel cache exceeds its limit"));
+            }
             if Uuid::parse_str(&server.id).is_err()
                 || !ids.insert(&server.id)
                 || server.certificate_sha256.as_ref().is_some_and(|pin| {
@@ -128,10 +148,11 @@ impl Profile {
         if servers.len() > 100 {
             return Err(io::Error::other("at most 100 servers may be saved"));
         }
-        atomic_private_write(
-            &self.config_dir.join("servers.json"),
-            &serde_json::to_vec_pretty(servers)?,
-        )
+        let bytes = serde_json::to_vec_pretty(servers)?;
+        if bytes.len() > 8 * 1024 * 1024 {
+            return Err(io::Error::other("server metadata exceeds 8 MiB"));
+        }
+        atomic_private_write(&self.config_dir.join("servers.json"), &bytes)
     }
 
     pub fn history_path(&self) -> PathBuf {
@@ -139,6 +160,15 @@ impl Profile {
     }
 
     pub fn identity(&self) -> Result<ClientIdentity, Box<dyn std::error::Error + Send + Sync>> {
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let identity_lock = options.open(self.config_dir.join("identity.lock"))?;
+        identity_lock.lock()?;
         let path = self.config_dir.join("identity.json");
         if path.exists() {
             return Ok(serde_json::from_slice(&read_bounded(&path, 64 * 1024)?)?);

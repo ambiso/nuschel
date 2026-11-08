@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::udp;
 
-pub const MAX_VOICE_BYTES: usize = 1020;
+pub const MAX_VOICE_BYTES: usize = 1024;
 pub const PROTOBUF_VERSION: u64 = (1_u64 << 48) | (5_u64 << 32);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -31,7 +31,7 @@ pub fn encode_voice(
     target: u32,
     packet: &VoicePacket,
 ) -> Result<Vec<u8>, VoiceError> {
-    if target > 31 || packet.opus.is_empty() || packet.opus.len() > 1000 {
+    if target > 31 || packet.opus.is_empty() || packet.opus.len() > MAX_VOICE_BYTES {
         return Err(VoiceError::Invalid);
     }
     let mut bytes = Vec::with_capacity(packet.opus.len() + 24);

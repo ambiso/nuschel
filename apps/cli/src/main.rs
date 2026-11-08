@@ -38,6 +38,10 @@ struct Arguments {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Input {
+    CreateChannel {
+        parent: u32,
+        name: String,
+    },
     Join {
         channel: u32,
     },
@@ -76,10 +80,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let profile = Profile::open(args.profile_dir)?;
     let mut server =
         ServerBookmark::new("", &args.host, args.port, &args.username).map_err(io::Error::other)?;
-    if let Some(pin) = &args.certificate_sha256 {
-        if pin.len() != 64 || !pin.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return Err("expected a 64-character SHA-256 certificate fingerprint".into());
-        }
+    if let Some(pin) = &args.certificate_sha256
+        && (pin.len() != 64 || !pin.bytes().all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err("expected a 64-character SHA-256 certificate fingerprint".into());
     }
     server.certificate_sha256 = args.certificate_sha256;
     let password = args
@@ -111,14 +115,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 _ => {}
             }
             let command = match serde_json::from_slice::<Input>(&line) {
+                Ok(Input::CreateChannel { parent, name }) => {
+                    Command::CreateChannel { parent, name }
+                }
                 Ok(Input::Join { channel }) => Command::Join(channel),
                 Ok(Input::Text { channel, body }) => Command::SendText {
                     target: TextTarget::Channel(channel),
                     body,
+                    expected_peer: None,
                 },
                 Ok(Input::Direct { session, body }) => Command::SendText {
                     target: TextTarget::Direct(session),
                     body,
+                    expected_peer: None,
                 },
                 Ok(Input::Mute { muted, deafened }) => Command::SetSelf { muted, deafened },
                 Ok(Input::Voice {

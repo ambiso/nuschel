@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
-mod preview;
+mod backend;
+mod dialogs;
+mod state;
 mod view;
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use clap::{Parser, Subcommand};
 use gpui_kit::{AppContext, WindowOptions};
-use nuschel_client::ClientPreferences;
-use nuschel_core::{ContentBlock, MessageDocument, PreviewPolicy};
-
-const EXAMPLE: &str = "Welcome to Nuschel.\nNewlines stay newlines.\n\n```rust\nfn main() {\n    println!(\"Hello, Mumble!\");\n}\n```\n\nThis desktop shell keeps content parsing in a separate worker.\nThe original message stays available when its preview is collapsed.\n\nOne\nTwo\nThree\nFour\nFive\nSix\nSeven\nEight\nNine\nTen";
+use nuschel_session::config::Profile;
 
 #[derive(Parser)]
 #[command(version, about = "Nuschel GPUI desktop foundation")]
 struct Arguments {
+    #[arg(long, global = true)]
+    profile_dir: Option<PathBuf>,
     #[command(subcommand)]
     command: Option<Action>,
 }
@@ -41,7 +42,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .with_writer(std::io::stderr)
         .init();
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_all()
         .build()?;
     #[cfg(target_os = "linux")]
@@ -66,20 +68,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // A fixed development message is processed before starting the GUI event loop.
-    // Live messages will use asynchronous bounded requests through the session adapter.
-    let document = runtime
-        .block_on(nuschel_ipc::host::render_content(&worker, EXAMPLE))
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "content worker unavailable; showing literal text");
-            MessageDocument {
-                blocks: vec![ContentBlock::Text {
-                    text: EXAMPLE.into(),
-                }],
-            }
-        });
-    let has_more = PreviewPolicy::default().preview(EXAMPLE, false).has_more;
-    let preferences = ClientPreferences::default();
+    let profile = Profile::open(arguments.profile_dir)?;
+    let bookmarks = profile.load_servers()?;
+    let runtime_handle = runtime.handle().clone();
     // GPUI owns the event loop; preserve startup errors until it returns so failed
     // launches also report failure to the invoking shell or process supervisor.
     let launch_error = Rc::new(RefCell::new(None));
@@ -94,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .detach();
         if let Err(error) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             window.set_window_title("Nuschel");
-            cx.new(|_| view::Desktop::preview(document, has_more, preferences.save_local_history))
+            cx.new(|cx| state::Desktop::new(profile, bookmarks, runtime_handle, window, cx))
         }) {
             *window_error.borrow_mut() =
                 Some(format!("could not open the desktop window: {error}"));
