@@ -153,11 +153,13 @@ mute/deafen, UDP reachability, nonce resync, and TCP tunneling. Mumble's histori
 packet format must not be substituted with a generic modern OCB implementation.
 Handle both legacy UDP encoding and the protobuf format introduced with Mumble 1.5.
 
-The implementation of a future WebRTC transport remains open. Do not use `str0m`:
-it is excluded based on the maintainer's prior experience with it. Prefer memory-safe
-implementations and evaluate interoperability, robustness, recovery and sustained-call
-behavior before selecting one. Native-code exceptions still require the isolation and
-dependency review described in the safety policy.
+The implementation of a future WebRTC transport remains open and must be Rust.
+C++ and Go WebRTC implementations are excluded, including implementations hidden
+behind Rust bindings or isolated workers. Do not use `str0m`: it is excluded based
+on the maintainer's prior experience with it. Review the selected features and
+transitive dependencies, and evaluate interoperability, robustness, recovery and
+sustained-call behavior before selecting an implementation. Existing platform and
+cryptographic exceptions remain governed by the safety policy.
 
 Persistent chat, server message IDs, history pagination, and independent text-channel
 subscriptions require a capability-negotiated extension. Stock clients continue to
