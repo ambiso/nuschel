@@ -3,7 +3,11 @@ use crate::{
     dialogs::{self, button},
     state::{Desktop, Status},
 };
-use gpui_kit::{base::input::Textarea, prelude::*, *};
+use gpui_kit::{
+    base::{Scrollbar, ScrollbarMode, input::Textarea},
+    prelude::*,
+    *,
+};
 use nuschel_client::{HistorySource, SessionSecurity};
 use nuschel_core::{ContentBlock, MessageDocument};
 use nuschel_session::connection::TextTarget;
@@ -125,15 +129,15 @@ fn channel_panel(
         .map(|(index, depth, has_children)| {
             let entry = &server.channels[index];
             let id = entry.id;
-            let collapsed = this.collapsed.contains(&(server.id.clone(), id));
-            let server_id = server.id.clone();
+            let collapsed = !this.channel_expanded(server_index, id);
+            let full_name = entry.name.clone();
             let members = server
                 .users
                 .values()
                 .filter(|user| entry.target == TextTarget::Channel(user.channel))
                 .count();
             div()
-                .id(("channel-row", index))
+                .id(("channel-row", id as usize))
                 .role(Role::TreeItem)
                 .tab_index(0)
                 .aria_label(entry.name.clone())
@@ -143,7 +147,10 @@ fn channel_panel(
                 .flex()
                 .items_center()
                 .gap_2()
-                .min_h(px(34.))
+                .h(px(34.))
+                .flex_shrink_0()
+                .min_w_0()
+                .overflow_hidden()
                 .pr_2()
                 .pl(px(8. + depth.min(10) as f32 * 12.))
                 .rounded_md()
@@ -155,8 +162,12 @@ fn channel_panel(
                 }))
                 .when(index == selected_channel, |row| row.bg(rgb(0x333b50)))
                 .hover(|style| style.bg(rgb(0x2a3142)))
-                .on_click(cx.listener(move |this, _, window, cx| {
+                .tooltip(move |_, cx| cx.new(|_| ChannelNameTooltip(full_name.clone())).into())
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     this.browse_channel(server_index, id, window, cx);
+                    if event.click_count() == 2 {
+                        this.join_selected();
+                    }
                     cx.notify();
                 }))
                 .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
@@ -167,32 +178,24 @@ fn channel_panel(
                 }))
                 .child(
                     div()
-                        .id(("branch", index))
+                        .id(("branch", id as usize))
                         .w(px(12.))
+                        .flex_shrink_0()
                         .text_color(rgb(0x7f8ba3))
                         .when(has_children, |branch| {
                             branch
                                 .role(Role::Button)
                                 .tab_index(0)
                                 .aria_label(format!("Toggle {}", entry.name))
-                                .on_click(cx.listener({
-                                    let server_id = server_id.clone();
-                                    move |this, _, _, cx| {
-                                        let key = (server_id.clone(), id);
-                                        if !this.collapsed.remove(&key) {
-                                            this.collapsed.insert(key);
-                                        }
-                                        cx.stop_propagation();
-                                        cx.notify();
-                                    }
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.toggle_channel(server_index, id);
+                                    cx.stop_propagation();
+                                    cx.notify();
                                 }))
                                 .on_key_down(cx.listener(
                                     move |this, event: &KeyDownEvent, _, cx| {
                                         if activation_key(event) {
-                                            let key = (server_id.clone(), id);
-                                            if !this.collapsed.remove(&key) {
-                                                this.collapsed.insert(key);
-                                            }
+                                            this.toggle_channel(server_index, id);
                                             cx.stop_propagation();
                                             cx.notify();
                                         }
@@ -205,18 +208,21 @@ fn channel_panel(
                             } else {
                                 "#"
                             })
-                            .with_id(("channel-symbol", index)),
+                            .with_id(("channel-symbol", id as usize)),
                         ),
                 )
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(text!(entry.name.clone()).with_id(("channel-name", index))),
+                        .truncate()
+                        .id(("channel-name", id as usize))
+                        .child(entry.name.clone()),
                 )
                 .when(members > 0, |row| {
                     row.child(
                         div()
+                            .flex_shrink_0()
                             .text_xs()
                             .text_color(rgb(0x8998b3))
                             .child(text!(members.to_string()).with_id(("member-count", index))),
@@ -255,7 +261,8 @@ fn channel_panel(
                 .child(
                     div()
                         .font_weight(FontWeight::BOLD)
-                        .child(text!(server.name.clone()).with_id("server-heading")),
+                        .truncate()
+                        .child(server.name.clone()),
                 )
                 .child(
                     div()
@@ -276,17 +283,48 @@ fn channel_panel(
         )
         .child(
             div()
-                .id("channel-tree")
-                .role(Role::Tree)
-                .aria_label("Channels")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .px_2()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .children(rows),
+                .relative()
+                .child(
+                    div()
+                        .id(SharedString::from(format!("channel-tree:{}", server.id)))
+                        .role(Role::Tree)
+                        .aria_label("Channels")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&this.channel_scroll)
+                        .pl_2()
+                        .pr_4()
+                        .child(
+                            div()
+                                .id("channel-rows")
+                                .min_h_full()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .on_scroll(cx.listener(|this, event, window, cx| {
+                                    this.smooth_scroll(true, event, window, cx)
+                                }))
+                                .children(rows),
+                        ),
+                )
+                .child(
+                    div().absolute().inset_0().child(
+                        Scrollbar::vertical(&this.channel_scroll)
+                            .id("channel-scrollbar")
+                            .mode(ScrollbarMode::Always)
+                            .styles(|styles| {
+                                styles
+                                    .track(|track| track.width(px(10.)).bg(rgb(0x151a24).into()))
+                                    .thumb(|thumb| {
+                                        thumb.width(px(6.)).bg(rgb(0x64728e)).radius(px(3.))
+                                    })
+                                    .thumb_hover(|thumb| thumb.bg(rgb(0x8d9bb6)))
+                                    .thumb_active(|thumb| thumb.bg(rgb(0xa6b5d0)))
+                            }),
+                    ),
+                ),
         )
         .child(
             div()
@@ -296,7 +334,7 @@ fn channel_panel(
                 .flex()
                 .flex_col()
                 .gap_2()
-                .child(div().text_sm().child(text!(voice).with_id("voice-status")))
+                .child(div().text_sm().truncate().child(voice))
                 .child(
                     div()
                         .text_xs()
@@ -408,7 +446,7 @@ fn conversation(
             .collect::<Vec<_>>();
     div().flex_1().min_w_0().h_full().flex().flex_col()
         .child(div().min_h(px(72.)).flex_shrink_0().px_5().py_3().flex().flex_wrap().items_center().gap_3().border_b_1().border_color(rgb(0x30394b))
-            .child(div().min_w(px(100.)).flex_1().font_weight(FontWeight::SEMIBOLD).child(text!(channel.name.clone()).with_id("channel-heading")))
+            .child(div().min_w_0().flex_1().truncate().font_weight(FontWeight::SEMIBOLD).child(channel.name.clone()))
             .when(server.status == Status::Connected, |view| view
                 .when(matches!(channel.target, TextTarget::Channel(_)), |view| view.child(button("join-voice", "Join voice", |this, _, cx| { this.join_selected(); cx.notify(); }, cx)))
                 .child(button("mute", if server.muted { "Unmute" } else { "Mute" }, |this, _, cx| { this.set_mute(false); cx.notify(); }, cx))
@@ -429,12 +467,14 @@ fn conversation(
             .when(channel.viewing_older, |view| view.child(button("latest-history", format!("Jump to latest ({})", channel.new_messages), |this, _, cx| { this.load_history(None); cx.notify(); }, cx)))
             .when(channel.loading, |view| view.child(text!("Loading local history…").with_id("history-loading"))))
         .child(div().px_6().pt_2().flex().flex_wrap().gap_2().children(members))
-        .child(div().id(SharedString::from(format!("timeline:{}:{}", server.id, channel.id))).track_scroll(&this.scroll).flex_1().min_h_0().overflow_y_scroll().px_6().py_4().flex().flex_col()
+        .child(div().id(SharedString::from(format!("timeline:{}:{}", server.id, channel.id))).track_scroll(&this.scroll).flex_1().min_h_0().overflow_y_scroll().px_6().py_4()
+            .child(div().id("timeline-content").min_h_full().flex().flex_col()
+                .on_scroll(cx.listener(|this, event, window, cx| this.smooth_scroll(false, event, window, cx)))
             .when_some(server.welcome.as_ref(), |view, welcome| view.child(div().p_3().mb_4().rounded_md().bg(rgb(0x29354a)).text_sm().child(text!(welcome.clone()).with_id("server-welcome"))))
             .child(div().pb_3().text_xs().text_color(rgb(0x929eb4)).child(text!(match server.history_source { HistorySource::LocalObserved => "Local history · messages seen on this device", HistorySource::ServerArchive => "Server history" }).with_id("history-source")))
             .child(div().pb_3().text_xs().text_color(rgb(0x929eb4)).child(text!(server.users.values().filter(|user| channel.target == TextTarget::Channel(user.channel))
                 .map(|user| format!("{}{}", user.name, if user.muted || user.self_muted { " (muted)" } else { "" })).collect::<Vec<_>>().join(" · ")).with_id("channel-users")))
-            .children(messages))
+            .children(messages)))
         .child(div().mx_6().mb_3().p_3().rounded_lg().bg(rgb(0x2a3242)).flex().flex_col().gap_2().child(Textarea::new(&this.composer))
             .child(div().flex().items_center().justify_between()
                 .child(div().text_xs().text_color(rgb(0x929eb4)).child(text!("Enter for a new line · Ctrl/Cmd+Enter to send").with_id("composer-hint")))
@@ -442,6 +482,23 @@ fn conversation(
         .child(div().px_6().pb_3().text_xs().text_color(rgb(0x8895ad)).child(text!(if this.history_enabled { "Local history enabled · no end-to-end encryption" } else { "Local history disabled" }).with_id("history-default")))
         .into_any_element()
 }
+struct ChannelNameTooltip(String);
+impl Render for ChannelNameTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_2()
+            .max_w(px(420.))
+            .rounded_md()
+            .bg(rgb(0x11151d))
+            .border_1()
+            .border_color(rgb(0x45516b))
+            .text_sm()
+            .text_color(rgb(0xe9edf5))
+            .child(self.0.clone())
+    }
+}
+
 fn activation_key(event: &KeyDownEvent) -> bool {
     event.keystroke.key == "enter" || event.keystroke.key == "space"
 }

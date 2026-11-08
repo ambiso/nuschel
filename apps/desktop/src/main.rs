@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 mod backend;
 mod dialogs;
+mod scrolling;
 mod state;
 mod view;
 

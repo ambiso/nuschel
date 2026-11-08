@@ -168,7 +168,9 @@ query block the server's control state machine or voice forwarding.
 The desktop has a narrow server rail, a channel pane (208 logical pixels initially),
 and the conversation. Channels remain a hierarchical tree, including channels that
 have both children and a conversation. A single click selects text history; it must
-never move a voice connection. Voice membership is a separate explicit action.
+never move a voice connection. A double-click joins voice, as does the explicit Join voice button. Branch toggles
+consume pointer events so expanding a branch cannot join voice. Only root branches
+start expanded; explicit expansion choices survive updates during the session.
 Remember the selected conversation for each server. Tree branches, server selection,
 channel selection, and message expansion support pointer and keyboard activation.
 

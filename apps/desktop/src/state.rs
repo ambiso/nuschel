@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
-use crate::backend::{Backend, Event, RenderedMessage};
+use crate::{
+    backend::{Backend, Event, RenderedMessage},
+    scrolling::SmoothScroll,
+};
 use gpui_kit::{
     base::input::{InputEvent, InputState, TextareaState},
     *,
@@ -209,13 +212,17 @@ struct PendingSend {
 pub struct Desktop {
     pub servers: Vec<ServerView>,
     pub navigation: Navigation,
-    pub collapsed: BTreeSet<(String, u32)>,
+    expansion: BTreeMap<(String, u32), bool>,
     pub history_enabled: bool,
     pub backend: Backend,
     pub profile: Profile,
     pub form: Option<ServerForm>,
     pub composer: Entity<TextareaState>,
     pub scroll: ScrollHandle,
+    pub channel_scroll: ScrollHandle,
+    chat_motion: SmoothScroll,
+    channel_motion: SmoothScroll,
+    scroll_frame_pending: bool,
     pub error: Option<String>,
     cache_dirty: bool,
     sending: Option<PendingSend>,
@@ -278,13 +285,17 @@ impl Desktop {
         let mut desktop = Self {
             servers: bookmarks.into_iter().map(ServerView::new).collect(),
             navigation: Navigation::default(),
-            collapsed: BTreeSet::new(),
+            expansion: BTreeMap::new(),
             history_enabled: true,
             backend: Backend::new(handle, profile.clone()),
             profile,
             form: None,
             composer,
             scroll: ScrollHandle::new(),
+            channel_scroll: ScrollHandle::new(),
+            chat_motion: SmoothScroll::default(),
+            channel_motion: SmoothScroll::default(),
+            scroll_frame_pending: false,
             error: None,
             cache_dirty: false,
             sending: None,
@@ -312,6 +323,14 @@ impl Desktop {
         let Some(server) = self.servers.get(index) else {
             return;
         };
+        if self
+            .navigation
+            .selection()
+            .is_none_or(|selection| selection.server != server.id)
+        {
+            self.channel_motion.cancel();
+            self.channel_scroll.set_offset(point(px(0.), px(0.)));
+        }
         let channel = self
             .navigation
             .remembered_channel(&server.id)
@@ -352,6 +371,7 @@ impl Desktop {
             },
             HistorySource::LocalObserved,
         );
+        self.chat_motion.cancel();
         self.load_history(None);
         self.scroll.scroll_to_bottom();
     }
@@ -364,8 +384,8 @@ impl Desktop {
             message.expanded = !message.expanded;
         }
     }
-    pub fn channel_rows(&self, index: usize) -> Vec<(usize, usize, bool)> {
-        let Some(server) = self.servers.get(index) else {
+    pub fn channel_rows(&self, server_index: usize) -> Vec<(usize, usize, bool)> {
+        let Some(server) = self.servers.get(server_index) else {
             return Vec::new();
         };
         let mut pending = server
@@ -391,11 +411,77 @@ impl Desktop {
                 .map(|(index, _)| index)
                 .collect::<Vec<_>>();
             rows.push((index, depth, !children.is_empty()));
-            if !self.collapsed.contains(&(server.id.clone(), channel.id)) {
+            if self.channel_expanded(server_index, channel.id) {
                 pending.extend(children.into_iter().rev().map(|index| (index, depth + 1)));
             }
         }
         rows
+    }
+    pub fn channel_expanded(&self, server_index: usize, id: u32) -> bool {
+        let server = &self.servers[server_index];
+        self.expansion
+            .get(&(server.id.clone(), id))
+            .copied()
+            .unwrap_or_else(|| {
+                server
+                    .channels
+                    .iter()
+                    .any(|channel| channel.id == id && channel.parent.is_none())
+            })
+    }
+    pub fn toggle_channel(&mut self, server_index: usize, id: u32) {
+        let expanded = self.channel_expanded(server_index, id);
+        self.expansion
+            .insert((self.servers[server_index].id.clone(), id), !expanded);
+    }
+    pub fn smooth_scroll(
+        &mut self,
+        channels: bool,
+        event: &ScrollEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let consumed = if channels {
+            self.channel_motion.wheel(
+                &self.channel_scroll,
+                event,
+                window.line_height(),
+                cx.reduce_motion(),
+            )
+        } else {
+            self.chat_motion.wheel(
+                &self.scroll,
+                event,
+                window.line_height(),
+                cx.reduce_motion(),
+            )
+        };
+        if consumed {
+            cx.stop_propagation();
+            cx.notify();
+            self.schedule_scroll_frame(window, cx);
+        }
+    }
+    fn schedule_scroll_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.scroll_frame_pending || !(self.chat_motion.active() || self.channel_motion.active())
+        {
+            return;
+        }
+        self.scroll_frame_pending = true;
+        let entity = cx.entity().downgrade();
+        window.on_next_frame(move |window, cx| {
+            if let Some(entity) = entity.upgrade() {
+                entity.update(cx, |this, cx| {
+                    this.scroll_frame_pending = false;
+                    let changed = this.chat_motion.advance(&this.scroll)
+                        | this.channel_motion.advance(&this.channel_scroll);
+                    if changed {
+                        cx.notify();
+                    }
+                    this.schedule_scroll_frame(window, cx);
+                });
+            }
+        });
     }
     pub fn open_form(
         &mut self,
@@ -1007,8 +1093,8 @@ impl Desktop {
                     if channel.viewing_older {
                         channel.new_messages += 1;
                     } else {
-                        let at_bottom =
-                            self.scroll.max_offset().y + self.scroll.offset().y <= px(32.);
+                        let at_bottom = !self.chat_motion.active()
+                            && self.scroll.max_offset().y + self.scroll.offset().y <= px(32.);
                         merge_message(channel, message);
                         if at_bottom
                             && self.navigation.selection().is_some_and(|selected| {
@@ -1138,6 +1224,7 @@ impl Desktop {
                 });
             }
             SessionEvent::ChannelRemoved(id) => {
+                self.expansion.remove(&(server.id.clone(), id));
                 server
                     .bookmark
                     .cached_channels

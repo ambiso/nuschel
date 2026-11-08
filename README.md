@@ -10,8 +10,11 @@ TCP tunnel. Use **+** in the server rail to add a server. Self-signed certificat
 require confirmation before credentials are sent; accepted fingerprints are saved.
 Passwords remain in memory for the connection attempt and are not saved.
 
-Click a channel to browse its local history, then **Join voice** to move your voice
-connection. Microphone capture starts muted. Enter inserts a newline; Ctrl+Enter
+Click a channel to browse its local history. Double-click it or use **Join voice**
+to move your voice connection. Initially only the root is expanded; deeper branches
+open on demand. Long channel names use an ellipsis with their full name on hover.
+The channel list has a draggable scrollbar. Wheel steps scroll smoothly in the list
+and chat, while precise touchpad input retains its native motion. Microphone capture starts muted. Enter inserts a newline; Ctrl+Enter
 (or Cmd+Enter) sends. Messages preserve blank lines, highlight fenced code, and offer
 **Show more** for long content. Legacy HTML is converted into inert text in a worker.
 History and cached channel trees survive application restarts, including offline browsing.
