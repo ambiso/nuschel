@@ -26,6 +26,9 @@ just vm
 ```
 
 `cargo add` is built into the pinned Cargo. `Cargo.lock` and `flake.lock` are tracked.
+The Nix environment uses Rust's latest stable release from the locked rust-overlay
+revision; `nix flake update rust-overlay` advances it. Outside Nix, rustup follows
+the `stable` channel independently of `flake.lock`.
 `nix flake check` runs the native build, tests, Clippy, formatting, dependency policy,
 and a vulnerability check using a pinned advisory database. `cargo deny check` also
 checks the current advisory database and registry yanks outside the Nix sandbox.

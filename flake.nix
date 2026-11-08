@@ -36,7 +36,8 @@
           overlays = [ (import rust-overlay) ];
         };
         inherit (pkgs) lib;
-        toolchain = pkgs.rust-bin.stable."1.95.0".default.override {
+        # flake.lock pins rust-overlay, including what it considers latest stable.
+        toolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" ];
           targets = [ "wasm32-unknown-unknown" ];
         };
@@ -57,7 +58,7 @@
           pkgs.clang
           pkgs.makeWrapper
         ];
-        buildInputs = lib.optionals pkgs.stdenv.isLinux [
+        buildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux [
           pkgs.alsa-lib
           pkgs.pipewire
           pkgs.libpulseaudio
@@ -105,7 +106,7 @@
               install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
               install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
             ''
-            + lib.optionalString pkgs.stdenv.isLinux ''
+            + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
               wrapProgram "$out/bin/nuschel" \
                 --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}" \
                 --prefix PATH : "${
@@ -157,7 +158,7 @@
             '';
           };
         }
-        // lib.optionalAttrs pkgs.stdenv.isLinux {
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           vm-smoke = import ./nix/vm-smoke.nix {
             inherit pkgs;
             nuschel = package;
@@ -178,11 +179,13 @@
               pkgs.jujutsu
               pkgs.python3
             ]
-            ++ lib.optionals pkgs.stdenv.isLinux [
+            ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               pkgs.bubblewrap
               pkgs.util-linux
             ];
-          LD_LIBRARY_PATH = lib.optionalString pkgs.stdenv.isLinux (lib.makeLibraryPath buildInputs);
+          LD_LIBRARY_PATH = lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
+            lib.makeLibraryPath buildInputs
+          );
         };
         formatter = pkgs.nixfmt;
       }
