@@ -39,6 +39,8 @@ pkgs.testers.runNixOSTest {
         services.murmur = {
           enable = true;
           openFirewall = true;
+          # Negative certificate probes and independent test profiles share one VM IP.
+          autobanAttempts = 0;
         };
       };
     client =

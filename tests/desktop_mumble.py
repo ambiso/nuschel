@@ -264,6 +264,8 @@ class DesktopTest:
         assert not self.pulse_json("source-outputs"), "undeafen lost mute state"
         print("Real PulseAudio playback/capture, reference-codec audio, mute privacy and deafen passed.", flush=True)
         inode = self.socket.stat().st_ino
+        # Hold the old inode so tmpfs cannot recycle its number for the new socket.
+        old_socket = os.open(self.socket, os.O_PATH | os.O_CLOEXEC)
         terminate(self.pulse)
         self.pulse = None
         marker = "CHATWHILEAUDIOISDOWN"
@@ -271,6 +273,7 @@ class DesktopTest:
         eventually(lambda: self.has_message(marker), "audio failure interrupted chat/history")
         self.start_audio()
         assert self.socket.stat().st_ino != inode, "fixture did not replace the audio socket"
+        os.close(old_socket)
         eventually(lambda: self.pulse_json("sink-inputs"), "audio did not recover after replacing service socket", timeout=30)
         assert self.peer.users[session]["channel"] == 2
         assert not self.pulse_json("source-outputs"), "audio recovery lost mute state"
