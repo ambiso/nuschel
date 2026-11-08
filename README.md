@@ -33,6 +33,14 @@ checks the current advisory database and registry yanks outside the Nix sandbox.
 Use `jj` for incremental commits. See [the architecture](docs/architecture.md),
 [the safety policy](SECURITY.md), and [the integration test plan](tests/README.md).
 
+On NixOS, the desktop loads the host's Vulkan driver. The flake's glibc must be new
+enough to load that driver; an older nixpkgs pin can produce `No GPU adapters found`
+even when other applications work. Diagnose driver loading with
+`VK_LOADER_DEBUG=error,warn RUST_LOG=nuschel=info,gpui_wgpu=info nix run .`.
+If the log reports a missing `GLIBC_*` version, update the pin with
+`nix flake update nixpkgs` and rebuild. Adding driver search paths cannot fix that
+ABI mismatch.
+
 ## Server module and databases
 
 The flake exports `nixosModules.default` and a headless `packages.<system>.server`
