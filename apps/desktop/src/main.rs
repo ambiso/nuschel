@@ -77,6 +77,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window_error = Rc::clone(&launch_error);
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
+        // Input carets and selections resolve from Base's theme, not inherited text colors.
+        let theme = gpui_kit::base::Theme::global_mut(cx);
+        theme.appearance = gpui_kit::base::ThemeAppearance::Dark;
+        theme.tokens.colors = gpui_kit::base::ColorTokens::dark();
+        theme.tokens.colors.accent = gpui_kit::rgb(0x557ee6).into();
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
