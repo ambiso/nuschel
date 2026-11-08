@@ -153,6 +153,12 @@ mute/deafen, UDP reachability, nonce resync, and TCP tunneling. Mumble's histori
 packet format must not be substituted with a generic modern OCB implementation.
 Handle both legacy UDP encoding and the protobuf format introduced with Mumble 1.5.
 
+The implementation of a future WebRTC transport remains open. Do not use `str0m`:
+it is excluded based on the maintainer's prior experience with it. Prefer memory-safe
+implementations and evaluate interoperability, robustness, recovery and sustained-call
+behavior before selecting one. Native-code exceptions still require the isolation and
+dependency review described in the safety policy.
+
 Persistent chat, server message IDs, history pagination, and independent text-channel
 subscriptions require a capability-negotiated extension. Stock clients continue to
 receive ordinary live TextMessage messages; stock servers provide live chat plus local
