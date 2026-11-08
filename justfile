@@ -7,6 +7,13 @@ check:
     cargo test --workspace
     cargo deny check
 
+workers:
+    cargo build --workspace
+    python3 tests/workers.py
+
+vm:
+    nix build .#checks.x86_64-linux.vm-smoke --no-link -L
+
 build:
     cargo build --workspace
 

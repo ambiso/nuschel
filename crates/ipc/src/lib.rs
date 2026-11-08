@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Worker IPC. Workers receive explicit data over inherited pipes, never credentials.
 
+#[cfg(not(target_family = "wasm"))]
+pub mod host;
+
 use std::io::{self, Read, Write};
 
 use nuschel_core::{ChatMessage, MessageDocument};

@@ -17,6 +17,7 @@
 
   outputs =
     {
+      self,
       nixpkgs,
       crane,
       flake-utils,
@@ -24,7 +25,10 @@
       advisory-db,
       ...
     }:
-    flake-utils.lib.eachDefaultSystem (
+    {
+      nixosModules.default = import ./nix/module.nix { inherit self; };
+    }
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = import nixpkgs {
@@ -43,6 +47,7 @@
             path: type:
             (craneLib.filterCargoSources path type)
             || lib.hasSuffix ".proto" path
+            || lib.hasSuffix ".sql" path
             || lib.hasSuffix ".json" path;
         };
         nativeBuildInputs = [
@@ -50,6 +55,7 @@
           pkgs.protobuf
           pkgs.cmake
           pkgs.clang
+          pkgs.makeWrapper
         ];
         buildInputs = lib.optionals pkgs.stdenv.isLinux [
           pkgs.alsa-lib
@@ -76,14 +82,53 @@
           LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
         };
         cargoArtifacts = craneLib.buildDepsOnly common;
-        package = craneLib.buildPackage (common // { inherit cargoArtifacts; });
+        serverCommon = common // {
+          pname = "nuscheld";
+          cargoExtraArgs = "-p nuscheld -p nuschel-storage-worker";
+          buildInputs = [ ];
+        };
+        serverPackage = craneLib.buildPackage (
+          serverCommon
+          // {
+            cargoArtifacts = craneLib.buildDepsOnly serverCommon;
+            postInstall = ''
+              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
+              install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
+            '';
+          }
+        );
+        package = craneLib.buildPackage (
+          common
+          // {
+            inherit cargoArtifacts;
+            postInstall = ''
+              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
+              install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
+            ''
+            + lib.optionalString pkgs.stdenv.isLinux ''
+              wrapProgram "$out/bin/nuschel" \
+                --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}" \
+                --prefix PATH : "${
+                  lib.makeBinPath [
+                    pkgs.bubblewrap
+                    pkgs.util-linux
+                  ]
+                }"
+            '';
+          }
+        );
       in
       {
         packages.default = package;
-        apps.default = flake-utils.lib.mkApp {
-          drv = package;
-          exePath = "/bin/nuschel";
-        };
+        packages.server = serverPackage;
+        apps.default =
+          (flake-utils.lib.mkApp {
+            drv = package;
+            exePath = "/bin/nuschel";
+          })
+          // {
+            meta.description = "Nuschel GPUI desktop client foundation";
+          };
         checks = {
           build = package;
           clippy = craneLib.cargoClippy (
@@ -108,6 +153,13 @@
               mkdir -p .cargo
               cp ${pkgs.writeText "nuschel-sandbox-audit.toml" "[yanked]\nenabled = false\n"} .cargo/audit.toml
             '';
+          };
+        }
+        // lib.optionalAttrs pkgs.stdenv.isLinux {
+          vm-smoke = import ./nix/vm-smoke.nix {
+            inherit pkgs;
+            nuschel = package;
+            module = self.nixosModules.default;
           };
         };
         devShells.default = craneLib.devShell {

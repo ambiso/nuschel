@@ -3,6 +3,9 @@ resolver = "3"
 members = ["crates/*", "apps/*"]
 default-members = ["apps/desktop", "apps/server"]
 
+[workspace.metadata.crane]
+name = "nuschel"
+
 [workspace.package]
 version = "0.1.0"
 edition = "2024"

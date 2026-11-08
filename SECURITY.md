@@ -17,7 +17,8 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | GPUI and graphics/font/window backends | Native desktop rendering and accessibility | Desktop shell only; never parse message HTML in the renderer |
 | CPAL and OS audio bindings | Access to PipeWire/PulseAudio/CoreAudio/WASAPI | Media worker; device handles and audio only |
 | Codec and DSP SIMD in Rust dependencies | Optimized processing still contains unsafe internals | Media worker; no session credentials, arbitrary files, or network |
-| SQLite through rusqlite | Mature transactional history persistence | Storage worker; one database directory, parameterized operations |
+| SQLx SQLite backend | Native SQLite provides transactional local history | Storage worker; one database directory, parameterized operations; extension loading and deserialization disabled |
+| SQLx PostgreSQL backend | Server persistence on a managed database | Storage worker; database credentials and a scoped database connection |
 | TLS crypto provider | Cryptographic implementation and CPU-specific acceleration | Session/server authority; bounded protocol framing and reviewed provider |
 | OS sandbox/process APIs | Establish restricted worker execution | Small supervisor adapter; prefer safe Rust wrappers |
 
@@ -33,6 +34,11 @@ pipes. They receive no server credentials. Content responses contain only inert 
 and style data. A worker cannot name an executable, choose a database, request a URL
 fetch, or send an arbitrary SQL statement through the protocol.
 
+The Linux content supervisor uses bubblewrap namespaces, read-only runtime libraries,
+an empty environment, private temporary storage, a 512 MiB address-space limit, a
+five-second CPU limit, and a five-second wall deadline. It kills and reaps failed
+one-shot helpers. It does not expose the user's home, audio devices, or network.
+
 Desktop confinement must restrict filesystem/network access, inherited environment and
 handles, process creation, memory, CPU, and wall time. Content processing needs no
 user files, network, device access, or secrets. Media needs explicitly scoped audio
@@ -41,7 +47,9 @@ service/device access. Storage needs only the selected database and its sidecars
 Process separation and OS sandboxing are different guarantees. The worker executables
 can also be run directly for development; that does not establish restricted privileges.
 Do not describe an adapter as sandboxed until its platform policy is implemented and
-tested. Native Windows/macOS and mobile require their own capability review.
+tested. Native Windows/macOS and mobile require their own capability review. The
+current media/storage IPC harnesses do not yet implement dedicated desktop OS sandbox
+profiles. The NixOS server's storage preflight inherits its hardened systemd unit.
 
 ## Release gates
 

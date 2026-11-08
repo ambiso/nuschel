@@ -1,6 +1,6 @@
 [package]
 name = "nuschel-storage"
-description = "Local SQLite history, confined to the storage worker"
+description = "SQLx SQLite/PostgreSQL persistence, confined to the storage worker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,8 +9,18 @@ publish.workspace = true
 
 [dependencies]
 nuschel-core.workspace = true
-rusqlite = { version = "0.41.1", features = ["bundled"] }
+sqlx = { version = "0.9.0", default-features = false, features = [
+  "runtime-tokio",
+  "sqlite-bundled",
+  "postgres",
+  "tls-rustls-ring-webpki",
+  "migrate",
+  "macros",
+] }
 thiserror = "2.0.21"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt"] }

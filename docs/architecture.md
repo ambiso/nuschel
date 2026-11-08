@@ -14,7 +14,7 @@ platform decisions reversible without duplicating the session model.
 | `nuschel-protocol` | Mumble protobuf schemas and bounded control framing | UI, audio decoding, sockets |
 | `nuschel-ipc` | Versioned worker messages, framing, and native supervision | Content parser, SQLite, codecs |
 | `nuschel-content` | Literal text, fenced code parsing, syntax highlighting | Network access, database, native regex engines |
-| `nuschel-storage` | Parameterized SQLite history operations | Network or UI |
+| `nuschel-storage` | SQLx/Tokio history operations for SQLite and PostgreSQL | UI, session credentials, arbitrary SQL from IPC |
 | `nuschel` | GPUI desktop shell and native application supervision | Direct parser, database, or codec implementation |
 | `nuscheld` | Server session/routing authority and native transports | GPUI, content parser, audio decoding |
 | `nuschel-content-worker` | Parse and highlight untrusted content | Credentials, microphone, user files, network |
@@ -94,10 +94,13 @@ scope queries; persist author display snapshots and local observation timestamps
 Connection session IDs are not durable author identities. Mark disconnected intervals
 in the timeline. Do not deduplicate repeated text or fabricate missed messages.
 
-The storage worker uses SQLite WAL and parameterized statements. Database schema
-versions are explicit and a newer version is rejected. It needs access only to the
-chosen database directory, including WAL/SHM sidecars. No worker request can select
-another database path or execute SQL.
+The storage worker uses SQLx with Tokio: SQLite WAL for local history and PostgreSQL
+for server persistence. Separate embedded migrations account for dialect differences
+and track checksums through SQLx. Statements bind parameters. SQLite needs only the
+chosen database directory, including WAL/SHM sidecars; PostgreSQL needs a connection to
+its configured database and that database's credential. No worker request can select
+another database or execute SQL. Keep database credentials outside command lines and
+Nix store values; the server module uses systemd LoadCredential.
 
 ## Audio configuration and recovery
 

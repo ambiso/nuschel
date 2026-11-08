@@ -3,6 +3,8 @@
 The NixOS VM test driver is the Linux integration harness. The foundation smoke test
 checks installed Nuschel binaries, a real stock Mumble server, and worker processing.
 It does not claim client/server protocol compatibility while sessions are unimplemented.
+It also provisions PostgreSQL through the Nuschel NixOS module, runs its real migration
+preflight under the hardened service settings, and exercises persistent SQLx operations.
 
 ## Client and server matrix
 
