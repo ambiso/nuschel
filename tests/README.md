@@ -1,12 +1,22 @@
 # Integration testing
 
-The NixOS VM test driver is the Linux integration harness. The foundation smoke test
-checks installed Nuschel binaries, a real stock Mumble server, and worker processing.
-It does not claim client/server protocol compatibility while sessions are unimplemented.
-It also provisions PostgreSQL through the Nuschel NixOS module, runs its real migration
-preflight under the hardened service settings, and exercises persistent SQLx operations.
-Both SQLite and PostgreSQL tests reopen the storage worker between archive pages and
-verify that identical messages/timestamps survive pagination without gaps or duplicates.
+Run `just vm` (Nix builds use `--cores 2`) for the Linux integration harness.
+The test runs the actual GPUI client under Xvfb against a stock Mumble server,
+with synthetic audio on a private PulseAudio daemon. It never opens the host microphone.
+Screenshots are copied into the test result.
+
+`mumble_client.py` uses the production session CLI to test certificate rejection/pinning,
+login, channel trees and joining, permission denial, multiline chat and Opus tunneling.
+It checks both codec directions against the reference libopus implementation.
+`desktop_mumble.py` drives the real Add Server dialog, certificate confirmation,
+independent history browsing/voice joining, chat, playback/capture, mute privacy,
+audio service socket replacement, offline history and reconnect persistence.
+The fixture seeds channels in a stopped stock server database; the real server handles
+all protocol traffic. These tests do not yet drive the stock Mumble GUI or test UDP.
+
+The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
+module's hardened database preflight. Nuschel server protocol tests remain deferred.
+Both databases reopen the worker between pages and retain duplicate messages correctly.
 
 ## Client and server matrix
 

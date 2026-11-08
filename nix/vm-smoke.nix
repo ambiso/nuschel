@@ -7,7 +7,7 @@ let
   postgresFixture = pkgs.writeText "nuschel-postgres-test-url" "postgresql:///nuschel?host=/run/postgresql&user=postgres\n";
 in
 pkgs.testers.runNixOSTest {
-  name = "nuschel-foundation";
+  name = "nuschel-mumble-client";
   nodes = {
     database =
       { lib, ... }:
@@ -49,8 +49,15 @@ pkgs.testers.runNixOSTest {
           pkgs.python3
           pkgs.bubblewrap
           pkgs.util-linux
+          pkgs.xvfb-run
+          pkgs.xdotool
+          pkgs.imagemagick
+          pkgs.tesseract
+          pkgs.pulseaudio
         ];
-        virtualisation.memorySize = 2048;
+        hardware.graphics.enable = true;
+        fonts.packages = [ pkgs.dejavu_fonts ];
+        virtualisation.memorySize = 3072;
         users.users.tester = {
           isNormalUser = true;
           createHome = true;
@@ -61,12 +68,19 @@ pkgs.testers.runNixOSTest {
     start_all()
     server.wait_for_unit("murmur.service")
     server.wait_for_open_port(64738)
+    server.succeed("systemctl stop murmur.service")
+    server.succeed("${pkgs.python3}/bin/python3 ${../tests/mumble_fixture.py} /var/lib/murmur/murmur.sqlite")
+    server.succeed("systemctl start murmur.service")
+    server.wait_for_open_port(64738)
     client.wait_for_unit("multi-user.target")
     client.wait_until_succeeds("python3 -c 'import socket; socket.create_connection((\"server\", 64738), timeout=2).close()'")
     client.succeed("nuschel --help")
     client.succeed("nuscheld --help")
     # Run as an ordinary user so the sandbox test does not depend on root privileges.
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests/workers.py} ${nuschel}/bin --sandbox-server server'")
+    client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/mumble_client.py ${nuschel}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so'")
+    client.succeed("su - tester -c 'xvfb-run -a -s \"-screen 0 1120x850x24\" ${pkgs.python3}/bin/python3 ${../tests}/desktop_mumble.py ${nuschel}/bin --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschel-desktop-artifacts'")
+    client.copy_from_machine("/tmp/nuschel-desktop-artifacts", "desktop")
     database.wait_for_unit("nuschel.service")
     database.succeed("su - postgres -c '${pkgs.python3}/bin/python3 ${../tests/workers.py} ${nuschel}/bin --postgres-url-file ${postgresFixture}'")
   '';

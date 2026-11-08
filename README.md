@@ -4,23 +4,32 @@ Nuschel is an EUPL-1.2 Rust workspace for a Mumble-compatible desktop client and
 server. GPUI is the desktop renderer. Shared state, protocol framing, and message
 presentation do not depend on GPUI, leaving mobile and web adapters open.
 
-This is a foundation, not a working voice client or server yet. It includes bounded
-protocol/worker framing, content processing, local history storage, audio policy,
-and independent worker executables. Session negotiation, network transports, native
-audio routing, permissions, and protocol interoperability are subsequent milestones.
+The desktop connects to stock Mumble servers with TLS, persistent client certificates,
+channel trees, live chat, direct messages, mute/deafen, and Opus voice over Mumble's
+TCP tunnel. Use **+** in the server rail to add a server. Self-signed certificates
+require confirmation before credentials are sent; accepted fingerprints are saved.
+Passwords remain in memory for the connection attempt and are not saved.
 
-The GPUI shell includes development messages demonstrating preserved newlines,
-expandable long messages, and syntax highlighting through the content worker. Its
-server rail, narrow channel tree, and chat pane are interactive previews. A single
-click browses a channel without joining voice; each server remembers its selection.
-These fixtures are labelled as previews and are not live server connections.
+Click a channel to browse its local history, then **Join voice** to move your voice
+connection. Microphone capture starts muted. Enter inserts a newline; Ctrl+Enter
+(or Cmd+Enter) sends. Messages preserve blank lines, highlight fenced code, and offer
+**Show more** for long content. Legacy HTML is converted into inert text in a worker.
+History and cached channel trees survive application restarts, including offline browsing.
+
+This is an early client: UDP transport, CELT-only servers, whisper controls, automatic
+reconnection, and comprehensive administration are not implemented. Voice currently
+transmits continuously while unmuted. Audio service failures restart only the media
+worker and preserve the server connection and mute state. Automatic AEC/effect detection
+is still planned; the client does not enable a speculative second echo canceller.
+Linux is exercised in integration tests; Windows/macOS audio need native validation.
+The Nuschel server and MLS implementation are deferred.
 
 ## Development
 
 ```sh
 direnv allow
 # Or enter the same pinned environment explicitly:
-nix develop
+nix develop --cores 2
 just build
 just check
 just workers
@@ -32,7 +41,7 @@ just vm
 The Nix environment uses Rust's latest stable release from the locked rust-overlay
 revision; `nix flake update rust-overlay` advances it. Outside Nix, rustup follows
 the `stable` channel independently of `flake.lock`.
-`nix flake check` runs the native build, tests, Clippy, formatting, dependency policy,
+`nix flake check --cores 2` runs the native build, tests, Clippy, formatting, dependency policy,
 and a vulnerability check using a pinned advisory database. `cargo deny check` also
 checks the current advisory database and registry yanks outside the Nix sandbox.
 

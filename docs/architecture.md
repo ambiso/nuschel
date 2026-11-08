@@ -12,6 +12,8 @@ platform decisions reversible without duplicating the session model.
 | `nuschel-core` | Domain values, typed content, non-destructive message previews | UI, network runtime, database, native FFI |
 | `nuschel-client` | Client preferences, state transitions, audio policy | GPUI, SQLite, codecs, platform device handles |
 | `nuschel-protocol` | Mumble protobuf schemas and bounded control framing | UI, audio decoding, sockets |
+| `nuschel-session` | Native TLS/control sessions, identities, bookmarks and worker supervision | GPUI, SQLite implementation, content parser, codecs |
+| `nuschel-cli` | Diagnostic frontend using the real session implementation | GPUI, audio codecs |
 | `nuschel-ipc` | Versioned worker messages, framing, and native supervision | Content parser, SQLite, codecs |
 | `nuschel-content` | Literal text, fenced code parsing, syntax highlighting | Network access, database, native regex engines |
 | `nuschel-storage` | SQLx/Tokio history operations for SQLite and PostgreSQL | UI, session credentials, arbitrary SQL from IPC |
@@ -44,7 +46,8 @@ flowchart LR
 ```
 
 The native session adapter owns TLS identity, server authentication, control state,
-encrypted UDP, and reconnection. Workers receive only the data and capabilities they
+TCP-tunneled Opus, and typed connection events. Encrypted UDP and automatic reconnection
+remain future work. Workers receive only the data and capabilities they
 need. In particular, the media worker receives Opus/PCM and route instructions, not
 the credentials or encryption keys that authenticate the Mumble session.
 
@@ -60,14 +63,15 @@ results fail explicitly. Helpers are selected by trusted executable paths and
 communicate over inherited pipes, not a publicly listening socket. Request IDs are
 checked by the supervisor. Worker stderr must never become protocol stdout.
 
-The initial media harness uses the same protocol for codec checks. Real-time audio
-needs a separate bounded binary data path with explicit format/generation metadata
-and backpressure. Avoid serializing every live PCM frame as JSON. Do not introduce
+The media harness uses the same protocol for codec checks. Live control and small
+compressed Opus frames currently use bounded JSON IPC with capture generation tags;
+PCM stays inside the worker. A binary transport can replace this if profiling warrants it. Do not introduce
 shared writable memory merely for performance without reviewing the new trust boundary.
 
 The UI and network event loop must not wait synchronously for parsing, disk, or DSP.
-The native audio callback must not allocate, lock, write logs, or perform IPC itself.
-Preallocated bounded queues connect callback I/O to media processing. Drop stale
+The native audio callback must avoid blocking, logs and IPC. Bounded queues and
+nonblocking locks connect callback I/O to media processing; callback allocation and
+lock avoidance remain performance work. Drop stale
 audio rather than building latency; apply a different durability policy to chat.
 
 ## Content and history
@@ -85,9 +89,9 @@ use its measured layout height to handle narrow windows and text scaling.
 
 Parsing and history each have explicit limits. The initial content limit is 64 KiB;
 the adapter must report a rejected message rather than silently truncate it. Revisit
-the storage limit separately when adding attachments or legacy HTML. Legacy Mumble
-HTML needs conversion in the content worker to an inert supported subset before
-claiming full rich-text interoperability.
+the storage limit separately when adding attachments or legacy HTML. Legacy Mumble HTML is converted to inert text in the content worker: entities and
+line breaks are preserved, executable/resource elements are discarded. Images and
+arbitrary rich formatting are not rendered.
 
 History is on by default, including with stock servers. Server and channel identities
 scope queries; persist author display snapshots and local observation timestamps.
@@ -136,7 +140,8 @@ unavailable. Monitoring is local and does not save microphone audio by default.
 Device changes and audio-server restarts invalidate device handles, link IDs, reference
 timing, and DSP state. Increment the route generation; stop old callbacks; discard old
 queued PCM; re-enumerate; recreate Nuschel-owned resources; re-evaluate effects; resume.
-Keep network/chat state alive. Automatic recovery must not repeatedly undo an explicit
+Keep network/chat state alive. Mute/deafen transitions replace the media worker so
+blocked native stream destructors cannot retain microphone access. Automatic recovery must not repeatedly undo an explicit
 user routing change.
 
 ## Protocol and server compatibility
@@ -169,8 +174,10 @@ channel selection, and message expansion support pointer and keyboard activation
 
 The portable navigation model issues a generation-tagged history ticket whenever a
 conversation is selected. Ignore late responses after switching away, including
-switching back to the same channel. The shell currently uses clearly labelled fixtures;
-the network session adapter will execute these history requests asynchronously.
+switching back to the same channel. The desktop executes local history requests asynchronously through the storage worker.
+History is scoped to the endpoint and observed server certificate; cached channel names
+allow offline browsing. Direct messages use peer certificate hashes when available,
+otherwise a connection-specific identity avoids merging reused session IDs.
 
 For a Nuschel server, show all retained history the authenticated member is authorized
 to read, including messages from before their current connection. Fetch older pages
@@ -203,8 +210,7 @@ The client shows a red open lock for transport-only sessions and a green closed 
 only after the authenticated MLS session is established. Unknown or negotiating state
 has a neutral or pending indicator. A server advertisement or configuration flag
 cannot produce a green lock. Labels explain "no end-to-end encryption" so that users
-do not confuse transport encryption with E2EE. The preview demonstrates only the
-transport-only mode; it must not fabricate an MLS-established session.
+do not confuse transport encryption with E2EE. The current client displays only transport-only sessions.
 
 Use an existing Rust MLS implementation after dependency/security review, in a
 dedicated crypto worker that owns credentials, ratchet state, key deletion and
