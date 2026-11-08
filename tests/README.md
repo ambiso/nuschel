@@ -5,6 +5,8 @@ checks installed Nuschel binaries, a real stock Mumble server, and worker proces
 It does not claim client/server protocol compatibility while sessions are unimplemented.
 It also provisions PostgreSQL through the Nuschel NixOS module, runs its real migration
 preflight under the hardened service settings, and exercises persistent SQLx operations.
+Both SQLite and PostgreSQL tests reopen the storage worker between archive pages and
+verify that identical messages/timestamps survive pagination without gaps or duplicates.
 
 ## Client and server matrix
 
@@ -34,6 +36,14 @@ UDP and forced TCP tunneling separately. Include channel/whisper routing isolati
 - Snapshot unrelated graph objects and defaults before/after recovery.
 - Restart client and server independently; compare legacy local history with negotiated
   server history and verify ACLs, observation timestamps, gaps, and repeated messages.
+- Browse another channel/server while remaining in voice; deliver history responses out
+  of order and ensure only the current conversation updates. Walk beyond the first
+  page, append live messages concurrently, revoke access mid-pagination, and restart
+  both peers. Entire retained, authorized history must remain reachable.
+- For the future MLS-required mode, reject legacy clients and downgrade attempts.
+  No green lock before authenticated MLS establishment; cover voice and chat separately.
+  Exercise member/device removal, epochs, offline gaps, archive access grants and key
+  loss. Assert that the server's stored archive never contains decrypted message bodies.
 - Kill/stall content, media, and storage workers independently; verify bounded failure
   and the documented recovery behavior.
 

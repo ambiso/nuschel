@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Shared client state and policies; platform adapters execute the resulting commands.
 
+mod navigation;
+pub use navigation::*;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

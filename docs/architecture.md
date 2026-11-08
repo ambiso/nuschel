@@ -158,6 +158,82 @@ Keep history writes and pagination off the voice-routing critical path. Apply ra
 limits and bounded queues per connection. Do not let a slow reader or a large history
 query block the server's control state machine or voice forwarding.
 
+## Desktop navigation and complete history
+
+The desktop has a narrow server rail, a channel pane (208 logical pixels initially),
+and the conversation. Channels remain a hierarchical tree, including channels that
+have both children and a conversation. A single click selects text history; it must
+never move a voice connection. Voice membership is a separate explicit action.
+Remember the selected conversation for each server. Tree branches, server selection,
+channel selection, and message expansion support pointer and keyboard activation.
+
+The portable navigation model issues a generation-tagged history ticket whenever a
+conversation is selected. Ignore late responses after switching away, including
+switching back to the same channel. The shell currently uses clearly labelled fixtures;
+the network session adapter will execute these history requests asynchronously.
+
+For a Nuschel server, show all retained history the authenticated member is authorized
+to read, including messages from before their current connection. Fetch older pages
+as the user scrolls; complete access does not mean an unbounded response or allocating
+the whole archive. Stock servers fall back to local observations with explicit gaps.
+Check current channel ACLs on every page; a capability announcement is not permission.
+Use durable conversation identities, an authenticated server identity, and stable
+server message IDs. Persist before acknowledging a new message; retries need an
+idempotency key rather than deduplication by text or timestamp. Membership changes,
+retention, moderation, edits, and deletion/tombstone policy must also apply to history.
+
+The storage worker implements exclusive-ID paging for SQLite and PostgreSQL. It
+returns chronological pages capped at 100 messages and 96 KiB of unescaped text,
+with a cursor when older records remain. Byte limits must not silently skip a message.
+Concurrent inserts do not shift older pages. IDs are scoped to a database and query;
+the future session adapter must not treat an arbitrary remote cursor as authorization.
+The existing plaintext message table supports local and non-E2EE server history.
+
+## MLS and encrypted history
+
+MLS is a separate, strict server security policy, not an optional decoration on a
+legacy session. A legacy-compatible server continues to support stock Mumble clients
+and transport encryption, but the server can read message and audio content. An
+MLS-required server rejects clients without the negotiated MLS protocol and must not
+silently downgrade, bridge plaintext to a legacy participant, or expose decrypted
+history through legacy APIs. Operators can run separate server instances for the
+two policies. No MLS wire protocol or cryptographic session is implemented yet.
+
+The client shows a red open lock for transport-only sessions and a green closed lock
+only after the authenticated MLS session is established. Unknown or negotiating state
+has a neutral or pending indicator. A server advertisement or configuration flag
+cannot produce a green lock. Labels explain "no end-to-end encryption" so that users
+do not confuse transport encryption with E2EE. The preview demonstrates only the
+transport-only mode; it must not fabricate an MLS-established session.
+
+Use an existing Rust MLS implementation after dependency/security review, in a
+dedicated crypto worker that owns credentials, ratchet state, key deletion and
+transactional state persistence. Bind member credentials to verified device identities,
+channel authorization, and the correct server/group identity. Plan one MLS group per
+conversation; membership/ACL changes must be reflected in committed group membership.
+MLS application messages protect chat. Voice needs an independently specified media
+encryption protocol with exported keys, replay protection, sender identity and epoch
+handling. Chat-only encryption must not turn the whole server's voice/chat badge green.
+
+MLS forward secrecy depends on deleting old epoch/message secrets; adding a member
+does not automatically grant access to all earlier messages. See
+[RFC 9420, sections 12.4.3.1 and 16.6](https://www.rfc-editor.org/rfc/rfc9420.html#section-16.6).
+Full persistent history therefore needs a separately specified encrypted archive,
+client-held archive keys, and an explicit policy for granting historical access to
+new members and devices. Do not retain all MLS epoch secrets just to decrypt an archive.
+Historical-access policy and archive-key rotation/recovery must describe their own
+compromise and revocation limits; access to retained history changes the protection
+available after a device compromise. Offline delivery, expired membership and key loss
+need visible gaps instead of promises that every stored ciphertext can be decrypted.
+
+An MLS server stores opaque authenticated ciphertext and delivery metadata in a
+separate storage representation, never decrypted `ChatMessage` bodies or group secrets.
+Its role is delivery and archive authorization, not a hidden member with decryption
+keys. Local decrypted history stays on the device under the user's history policy;
+at-rest protection and device key recovery need OS credential-store integration.
+The crypto worker must not get the server database credential or unrestricted network
+access. The storage worker must not get live MLS private keys.
+
 ## Mobile and browser adapters
 
 Mobile and web are future targets with open renderer choices. Core and client state

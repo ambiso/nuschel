@@ -10,7 +10,10 @@ and independent worker executables. Session negotiation, network transports, nat
 audio routing, permissions, and protocol interoperability are subsequent milestones.
 
 The GPUI shell includes development messages demonstrating preserved newlines,
-expandable long messages, and syntax highlighting through the content worker.
+expandable long messages, and syntax highlighting through the content worker. Its
+server rail, narrow channel tree, and chat pane are interactive previews. A single
+click browses a channel without joining voice; each server remembers its selection.
+These fixtures are labelled as previews and are not live server connections.
 
 ## Development
 
@@ -77,6 +80,14 @@ state directory, restricted permissions and systemd hardening. See
 - Fenced code is highlighted in the content worker with Syntect's Rust regex backend.
 - Local chat history is enabled by default, including on legacy Mumble servers.
   Legacy history contains messages observed locally, not messages sent while offline.
+- Nuschel server archives use bounded cursor pages so the full retained history is
+  reachable. The SQLite/PostgreSQL storage worker implements this; session negotiation
+  and history fetching over the network remain unimplemented.
+
+Red open locks mean **no end-to-end encryption**, not an absence of Mumble transport
+encryption. Green locks are reserved for authenticated MLS sessions. MLS is a planned
+strict server mode, incompatible with stock clients; no MLS session exists yet.
+See [the MLS and archive design](docs/architecture.md#mls-and-encrypted-history).
 
 These rules live in shared crates; a mobile renderer can implement the same behavior.
 

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
+mod preview;
 mod view;
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
@@ -93,19 +94,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .detach();
         if let Err(error) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             window.set_window_title("Nuschel");
-            cx.new(|_| view::Desktop {
-                document,
-                expanded: false,
-                has_more,
-                history_enabled: preferences.save_local_history,
-            })
+            cx.new(|_| view::Desktop::preview(document, has_more, preferences.save_local_history))
         }) {
             *window_error.borrow_mut() =
                 Some(format!("could not open the desktop window: {error}"));
             // Linux starts its event loop after this launch callback. Quitting
             // here would be cleared when that loop starts; queue it instead.
             cx.spawn(async |cx| {
-                let _ = cx.update(|cx| cx.quit());
+                cx.update(|cx| cx.quit());
             })
             .detach();
         }
