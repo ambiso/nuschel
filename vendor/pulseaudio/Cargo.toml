@@ -77,11 +77,7 @@ version = "0.4"
 
 [dependencies.mio]
 version = "1"
-features = [
-    "os-ext",
-    "os-poll",
-    "net",
-]
+features = ["os-ext", "os-poll", "net"]
 
 [dependencies.num-traits]
 version = "0.2"
@@ -119,7 +115,4 @@ features = ["full"]
 
 [dev-dependencies.tokio-util]
 version = "0.7"
-features = [
-    "io",
-    "compat",
-]
+features = ["io", "compat"]

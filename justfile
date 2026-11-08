@@ -11,6 +11,10 @@ workers:
     cargo build --workspace
     python3 tests/workers.py
 
+rtc:
+    cargo build -p nuschel-rtc-probe -p nuschel-media-worker
+    python3 tests/rtc_probe.py
+
 vm:
     nix build --cores 2 .#checks.x86_64-linux.vm-smoke --no-link -L
 
@@ -33,4 +37,4 @@ audit:
 fmt:
     cargo fmt --all
     nixfmt flake.nix nix/*.nix
-    taplo fmt
+    rg --files -g '*.toml' -0 | xargs -0 taplo fmt

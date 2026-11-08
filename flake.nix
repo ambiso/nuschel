@@ -50,6 +50,7 @@
             || lib.hasSuffix ".proto" path
             || lib.hasSuffix ".sql" path
             || lib.hasSuffix ".json" path
+            || lib.hasSuffix ".vp8" path
             || lib.hasPrefix "LICENSE" (builtins.baseNameOf path);
         };
         nativeBuildInputs = [
@@ -109,6 +110,20 @@
           cargoExtraArgs = "-p nuscheld -p nuschel-storage-worker";
           buildInputs = [ ];
         };
+        rtcCommon = common // {
+          pname = "nuschel-rtc-probe";
+          cargoExtraArgs = "-p nuschel-rtc -p nuschel-rtc-probe";
+          buildInputs = [ ];
+        };
+        rtcPackage = craneLib.buildPackage (
+          rtcCommon
+          // {
+            cargoArtifacts = buildDeps rtcCommon;
+            postInstall = ''
+              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
+            '';
+          }
+        );
         serverPackage = craneLib.buildPackage (
           serverCommon
           // {
@@ -146,6 +161,15 @@
       {
         packages.default = package;
         packages.server = serverPackage;
+        packages.rtc-probe = rtcPackage;
+        apps.rtc-probe =
+          (flake-utils.lib.mkApp {
+            drv = rtcPackage;
+            exePath = "/bin/nuschel-rtc-probe";
+          })
+          // {
+            meta.description = "Local-only str0m audio/video transport trial";
+          };
         apps.default =
           (flake-utils.lib.mkApp {
             drv = package;
@@ -157,6 +181,7 @@
         checks = {
           build = package;
           server-build = serverPackage;
+          rtc-build = rtcPackage;
           clippy = craneLib.cargoClippy (
             common
             // {

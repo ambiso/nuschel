@@ -84,7 +84,16 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 [[bans.features]]
 name = "str0m"
-deny = ["aws-lc-rs", "examples", "openssl", "openssl-dimpl", "vendored", "apple-crypto", "wincrypto", "wincrypto-dimpl"]
+deny = [
+  "aws-lc-rs",
+  "examples",
+  "openssl",
+  "openssl-dimpl",
+  "vendored",
+  "apple-crypto",
+  "wincrypto",
+  "wincrypto-dimpl",
+]
 
 [[bans.features]]
 name = "sqlx"

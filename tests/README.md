@@ -67,3 +67,28 @@ Run a separate NixOS VM sandbox test to establish forbidden file/network access.
 it separate from parser tests: successful IPC alone does not prove confinement.
 Windows/macOS hardware, microphone permission, accessibility, Bluetooth, echo, and
 mobile background-call behavior still need native platform testing.
+
+## WebRTC transport trial
+
+`cargo test -p nuschel-rtc` exchanges ICE/DTLS/SRTP datagrams in memory with a virtual
+clock. It checks bidirectional Opus/VP8 payloads and timestamps, video fragmentation
+and retransmission, audio progress during video loss, video backpressure, SDP/media
+limits, shutdown, fingerprint rejection, authenticated-packet tampering and replay.
+The harness drops an interior video packet; a missing first-ever RTP packet has no
+previous sequence number from which a receiver can infer the loss.
+
+`just rtc` builds the real `nuschel-rtc-probe` and media worker. `rtc_probe.py` sends
+a generated tone through the worker encoder, the two loopback peers and the worker
+decoder. The VM also decodes the received packet with reference libopus. Video uses
+the locally generated [VP8 keyframe](fixtures/README.md), spans multiple RTP packets,
+and is compared byte for byte after reassembly. The probe fails if encoded-frame
+delivery accumulates over 500 ms of delay; that threshold accommodates a loaded test
+machine and is not an acceptable target for live voice quality. No host audio devices
+are opened. Codec helpers are separate processes; the direct diagnostic invocation
+does not establish their OS confinement.
+
+These are transport/codec checks, not live browser, camera, renderer, A/V sync or
+long-call quality tests. The current SDP adapter supports an initial audio-only or
+audio/video offer/answer, one track per kind; renegotiation, ICE restart, SFU forwarding
+and server capability negotiation are not implemented. SDP fingerprints in the probe
+are exchanged in-process; a real call must authenticate that signaling channel.

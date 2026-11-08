@@ -162,6 +162,15 @@ DSP and codecs remain in the media worker. The trial does not replace the Mumble
 session transport or establish browser interoperability and sustained-call quality.
 Existing platform and cryptographic exceptions remain governed by the safety policy.
 
+The trial has bounded SDP (32 KiB, at most two media sections), UDP input (2 KiB),
+Opus packets (1,275 bytes), and encoded video frames (256 KiB). Receive reordering and
+retransmission caches are configured explicitly. These are input/cache limits, not
+a proof of a hard total-memory bound for upstream protocol internals. Video admission
+reserves 96 kbit/s for audio plus transport overhead, reacts to BWE events and rejects
+frames exceeding its current pacing/120 ms queue budget. Rejection means drop/adapt,
+never save the frame in an unbounded retry queue. This conservative guard complements
+str0m's pacer; a real encoder must also adapt bitrate and handle keyframe requests.
+
 Modern sessions should use WebRTC for voice, video and screen sharing, with an SFU
 forwarding encoded media. Legacy sessions retain Mumble voice and text; stock Mumble
 servers cannot relay video. A future server can bridge compatible Opus packets without

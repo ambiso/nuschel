@@ -4658,6 +4658,14 @@ name = "nuschel-rtc"
 version = "0.1.0"
 dependencies = [
  "str0m",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "nuschel-rtc-probe"
+version = "0.1.0"
+dependencies = [
+ "nuschel-rtc",
 ]
 
 [[package]]

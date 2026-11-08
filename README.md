@@ -27,6 +27,17 @@ is still planned; the client does not enable a speculative second echo canceller
 Linux is exercised in integration tests; Windows/macOS audio need native validation.
 The Nuschel server and MLS implementation are deferred.
 
+The modern media transport is now a str0m trial in `nuschel-rtc`. Run
+`nix run --cores 2 .#rtc-probe` for the headless audio/video loopback probe, or
+`just rtc` inside the development shell to include worker Opus encoding/decoding.
+Both send Opus and a generated VP8 test pattern between two loopback UDP peers.
+No microphone, camera, public STUN service
+or external server is used. The probe reports encoded-frame delivery delay and
+checks received bytes; it is not a microphone-to-speaker latency measurement.
+Video admission follows the bandwidth estimate, reserves room for audio and drops
+frames rather than accumulating a stale queue. Desktop video calls, authenticated
+server signaling, TURN, browser interoperability and adaptive playout remain future work.
+
 ## Development
 
 ```sh
