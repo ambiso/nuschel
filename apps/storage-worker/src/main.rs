@@ -55,6 +55,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .page(&server, &channel, before, usize::from(limit))
                 .await
                 .map(StorageResponse::HistoryPage),
+            StorageRequest::Search {
+                server,
+                query,
+                limit,
+            } => history
+                .search(&server, &query, usize::from(limit))
+                .await
+                .map(StorageResponse::SearchResults),
         }
         .unwrap_or_else(|error| StorageResponse::Rejected(error.to_string()));
         write_frame(&mut output, &Envelope::new(request.request_id, payload))?;

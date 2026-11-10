@@ -368,6 +368,21 @@ impl ServerView {
     }
 }
 
+pub struct SearchView {
+    pub server: String,
+    pub input: Entity<InputState>,
+    pub query: String,
+    pub results: Vec<SearchHit>,
+    pub loading: bool,
+}
+pub struct SearchHit {
+    pub channel: u32,
+    pub place: String,
+    pub author: String,
+    pub time: String,
+    pub snippet: String,
+}
+
 pub struct ServerForm {
     pub editing: Option<String>,
     pub name: Entity<InputState>,
@@ -408,6 +423,7 @@ pub struct Desktop {
     pub recording_ptt: bool,
     pub ptt_active: bool,
     pub identity_status: Option<String>,
+    pub search: Option<SearchView>,
     global_ptt: Option<(String, crate::global_ptt::GlobalPtt)>,
     pub global_ptt_status: Option<String>,
     pending_browse: Option<(String, u32)>,
@@ -497,6 +513,7 @@ impl Desktop {
             recording_ptt: false,
             ptt_active: false,
             identity_status: None,
+            search: None,
             global_ptt: None,
             global_ptt_status: None,
             pending_browse: None,
@@ -1185,6 +1202,44 @@ impl Desktop {
         }
         self.set_push_to_talk(held);
     }
+    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((index, _)) = self.selected_indices() else {
+            return;
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search local history"));
+        input.update(cx, |input, cx| input.focus(window, cx));
+        self.search = Some(SearchView {
+            server: self.servers[index].id.clone(),
+            input,
+            query: String::new(),
+            results: Vec::new(),
+            loading: false,
+        });
+    }
+    pub fn run_search(&mut self, cx: &mut Context<Self>) {
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let query = search.input.read(cx).value().trim().to_string();
+        let Some(server) = self
+            .servers
+            .iter()
+            .find(|server| server.id == search.server)
+        else {
+            return;
+        };
+        let Some(identity) = server.history_identity() else {
+            return;
+        };
+        if query.is_empty() {
+            return;
+        }
+        search.query = query.clone();
+        search.loading = true;
+        if let Err(error) = self.backend.search(server.id.clone(), identity, query) {
+            self.error = Some(error);
+        }
+    }
     pub fn set_mute(&mut self, deafen: bool) {
         let Some((index, _)) = self.selected_indices() else {
             return;
@@ -1414,6 +1469,51 @@ impl Desktop {
                     {
                         self.acknowledged.push((pending.conversation, pending.body));
                     }
+                }
+                Event::SearchResults {
+                    server,
+                    query,
+                    results,
+                } => {
+                    let Some(search) = self
+                        .search
+                        .as_mut()
+                        .filter(|search| search.server == server && search.query == query)
+                    else {
+                        continue;
+                    };
+                    let Some(view) = self.servers.iter().find(|entry| entry.id == server) else {
+                        continue;
+                    };
+                    search.loading = false;
+                    search.results = results
+                        .into_iter()
+                        .map(|entry| {
+                            let channel = view
+                                .channels
+                                .iter()
+                                .find(|channel| channel.storage_key == entry.message.channel);
+                            let visible: String = entry
+                                .message
+                                .body
+                                .split(nuschel_core::EMBED)
+                                .step_by(2)
+                                .collect();
+                            let mut snippet: String = visible.chars().take(240).collect();
+                            if visible.chars().count() > 240 {
+                                snippet.push('…');
+                            }
+                            SearchHit {
+                                channel: channel.map(|channel| channel.id).unwrap_or(u32::MAX),
+                                place: channel
+                                    .map(|channel| channel.name.clone())
+                                    .unwrap_or_else(|| "Earlier conversation".into()),
+                                author: entry.message.author,
+                                time: local_time(entry.message.observed_at_ms),
+                                snippet,
+                            }
+                        })
+                        .collect();
                 }
                 Event::HistoryRecovered => {
                     if self

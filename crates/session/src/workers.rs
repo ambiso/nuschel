@@ -120,6 +120,23 @@ impl Storage {
             _ => Err(Error::Worker("unexpected storage response".into())),
         }
     }
+    pub async fn search(
+        &mut self,
+        server: String,
+        query: String,
+    ) -> Result<Vec<nuschel_core::HistoryEntry>, Error> {
+        match self
+            .request(StorageRequest::Search {
+                server,
+                query,
+                limit: 50,
+            })
+            .await?
+        {
+            StorageResponse::SearchResults(entries) => Ok(entries),
+            _ => Err(Error::Worker("unexpected storage response".into())),
+        }
+    }
     pub async fn stop(mut self) {
         let _ = self.child.kill().await;
     }

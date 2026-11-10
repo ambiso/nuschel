@@ -80,6 +80,11 @@ pub enum StorageRequest {
         before: Option<i64>,
         limit: u16,
     },
+    Search {
+        server: String,
+        query: String,
+        limit: u16,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,6 +98,7 @@ pub enum StorageResponse {
     Appended(i64),
     Messages(Vec<ChatMessage>),
     HistoryPage(HistoryPage),
+    SearchResults(Vec<nuschel_core::HistoryEntry>),
     Rejected(String),
 }
 
@@ -328,7 +334,7 @@ mod hostile_frames {
                 bytes.push(state as u8);
             }
             // Frequently claim a plausible length so JSON parsing is reached.
-            if bytes.len() >= 4 && state % 3 == 0 {
+            if bytes.len() >= 4 && state.is_multiple_of(3) {
                 let claimed = ((bytes.len() - 4) as u32).to_be_bytes();
                 bytes[..4].copy_from_slice(&claimed);
             }

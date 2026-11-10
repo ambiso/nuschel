@@ -84,6 +84,11 @@ pub enum Event {
         body: String,
     },
     HistoryError(String),
+    SearchResults {
+        server: String,
+        query: String,
+        results: Vec<nuschel_core::HistoryEntry>,
+    },
     /// History writes work again after an earlier failure.
     HistoryRecovered,
     /// Microphone level for the settings meter, about ten times per second.
@@ -176,6 +181,11 @@ enum StorageCommand {
         ticket: HistoryTicket,
         before: Option<i64>,
     },
+    Search {
+        server: String,
+        identity: String,
+        query: String,
+    },
 }
 impl Backend {
     pub fn new(handle: Handle, profile: Profile, settings: ClientSettings) -> Self {
@@ -259,6 +269,15 @@ impl Backend {
                 })
                 .await;
         });
+    }
+    pub fn search(&self, server: String, identity: String, query: String) -> Result<(), String> {
+        self.storage
+            .try_send(StorageCommand::Search {
+                server,
+                identity,
+                query,
+            })
+            .map_err(|_| "History is busy; try again shortly.".into())
     }
     pub fn runtime(&self) -> &Handle {
         &self.handle
@@ -844,6 +863,31 @@ async fn storage_loop(
                         },
                     })
                     .await;
+            }
+            StorageCommand::Search {
+                server,
+                identity,
+                query,
+            } => {
+                let result = match &mut storage {
+                    Some(worker) => worker.search(identity, query.clone()).await,
+                    None => Err(Error::Worker("Local history is unavailable.".into())),
+                };
+                match result {
+                    Ok(results) => {
+                        let _ = events
+                            .send(Event::SearchResults {
+                                server,
+                                query,
+                                results,
+                            })
+                            .await;
+                    }
+                    Err(error) => {
+                        storage.take();
+                        let _ = events.send(Event::HistoryError(error.to_string())).await;
+                    }
+                }
             }
             StorageCommand::Load {
                 server,

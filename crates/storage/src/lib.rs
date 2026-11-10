@@ -109,6 +109,59 @@ impl History {
         })
     }
 
+    /// Case-insensitive substring search within one server's history, newest
+    /// first. The query is bound as a parameter with LIKE wildcards escaped; no
+    /// caller-provided SQL is executed. Inline image data is never matched.
+    pub async fn search(
+        &self,
+        server: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<HistoryEntry>, Error> {
+        let query = query.trim();
+        if query.is_empty() || query.len() > 256 || server.len() > 512 {
+            return Ok(Vec::new());
+        }
+        let pattern = format!(
+            "%{}%",
+            query
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let limit = limit.clamp(1, 100) as i64;
+        type Row = (i64, String, String, String, i64, String);
+        let rows: Vec<Row> = match &self.pool {
+            Pool::Sqlite(pool) => sqlx::query_as(
+                "SELECT id, server, channel, author, observed_at_ms, body FROM messages WHERE server = ?1 AND (body LIKE ?2 ESCAPE '\\' OR author LIKE ?2 ESCAPE '\\') ORDER BY id DESC LIMIT ?3",
+            ).bind(server).bind(&pattern).bind(limit).fetch_all(pool).await?,
+            Pool::Postgres(pool) => sqlx::query_as(
+                "SELECT id, server, channel, author, observed_at_ms, body FROM messages WHERE server = $1 AND (body ILIKE $2 ESCAPE '\\' OR author ILIKE $2 ESCAPE '\\') ORDER BY id DESC LIMIT $3",
+            ).bind(server).bind(&pattern).bind(limit).fetch_all(pool).await?,
+        };
+        Ok(rows
+            .into_iter()
+            .filter(|(_, _, _, author, _, body)| {
+                // A match only inside embedded image data is not a text match.
+                let visible: String = body.split(nuschel_core::EMBED).step_by(2).collect();
+                let needle = query.to_lowercase();
+                visible.to_lowercase().contains(&needle) || author.to_lowercase().contains(&needle)
+            })
+            .map(
+                |(id, server, channel, author, observed_at_ms, body)| HistoryEntry {
+                    id,
+                    message: ChatMessage {
+                        server,
+                        channel,
+                        author,
+                        observed_at_ms,
+                        body,
+                    },
+                },
+            )
+            .collect())
+    }
+
     /// The most recent bounded page, retained for existing local-history callers.
     pub async fn recent(
         &self,
@@ -246,6 +299,45 @@ mod tests {
         ids.sort_unstable();
         assert_eq!(ids, expected);
         assert!(!ids.contains(&new_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn search_is_scoped_case_insensitive_and_literal() -> Result<(), Error> {
+        let history = History::connect("sqlite::memory:").await?;
+        for (server, channel, body) in [
+            ("one", "general", "Deploy the Rust server"),
+            ("one", "dev", "100% done_now"),
+            ("two", "general", "rust elsewhere"),
+            (
+                "one",
+                "general",
+                "\u{FFFC}data:image/png;base64,rustrust\u{FFFC}",
+            ),
+        ] {
+            history
+                .append(&ChatMessage {
+                    server: server.into(),
+                    channel: channel.into(),
+                    author: "someone".into(),
+                    observed_at_ms: 0,
+                    body: body.into(),
+                })
+                .await?;
+        }
+        let found = history.search("one", "RUST", 10).await?;
+        assert_eq!(
+            found.len(),
+            1,
+            "scoped to the server, case-insensitive, ignores image data"
+        );
+        assert_eq!(
+            history.search("one", "%", 10).await?.len(),
+            1,
+            "wildcards are literal"
+        );
+        assert_eq!(history.search("one", "_", 10).await?.len(), 1);
+        assert!(history.search("one", "  ", 10).await?.is_empty());
         Ok(())
     }
 

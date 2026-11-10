@@ -1083,6 +1083,20 @@ fn conversation(
                         cx,
                     ))
                 })
+                .child(icon_button(
+                    "open-search",
+                    "search",
+                    "Search local history",
+                    TEXT_MUTED,
+                    this.search.is_some().then_some(ACCENT),
+                    |this, window, cx| {
+                        if this.search.take().is_none() {
+                            this.open_search(window, cx);
+                        }
+                        cx.notify();
+                    },
+                    cx,
+                ))
                 .child(
                     div()
                         .id("conversation-security")
@@ -1191,157 +1205,285 @@ fn conversation(
         .when_some(server.certificate.as_ref(), |view, certificate| {
             view.child(certificate_card(certificate, index, cx))
         })
-        .child(
-            div()
-                .id(SharedString::from(format!(
-                    "timeline:{}:{}",
-                    server.id, channel.id
-                )))
-                .track_scroll(&this.scroll)
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .px_4()
-                .py_4()
-                .child(
-                    div()
-                        .id("timeline-content")
-                        .min_h_full()
-                        .flex()
-                        .flex_col()
-                        .justify_end()
-                        .on_scroll(cx.listener(|this, event, window, cx| {
-                            this.smooth_scroll(false, event, window, cx)
-                        }))
-                        .child(
-                            div()
-                                .pb_4()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .size(px(56.))
-                                        .rounded_full()
-                                        .bg(color(ELEVATED))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_color(color(TEXT_MUTED))
-                                        .child(icon(
-                                            if is_channel { "hash" } else { "message" },
-                                            30.,
-                                            color(TEXT_MUTED),
-                                        )),
-                                )
-                                .child(
-                                    div().text_2xl().font_weight(FontWeight::BOLD).child(
-                                        text!(format!("Welcome to {}", channel.name))
-                                            .with_id("timeline-heading"),
-                                    ),
-                                )
-                                .child(
-                                    div().text_sm().text_color(color(TEXT_MUTED)).child(
-                                        text!(match server.history_source {
-                                            HistorySource::LocalObserved =>
-                                                "Local history · messages seen on this device",
-                                            HistorySource::ServerArchive => "Server history",
-                                        })
-                                        .with_id("history-source"),
-                                    ),
-                                )
-                                .when_some(
-                                    channel.description.as_ref().filter(|_| is_channel),
-                                    |view, description| {
-                                        view.child(
-                                            div()
-                                                .id("channel-description")
-                                                .mt_2()
-                                                .p_3()
-                                                .rounded(px(8.))
-                                                .bg(color(SIDEBAR))
-                                                .flex()
-                                                .flex_col()
-                                                .gap_2()
-                                                .text_sm()
-                                                .children(document_blocks(description)),
-                                        )
-                                    },
-                                )
-                                .when_some(
-                                    server
-                                        .welcome
-                                        .as_ref()
-                                        .filter(|_| is_channel && channel.id == 0),
-                                    |view, welcome| {
-                                        view.child(
-                                            div()
-                                                .mt_2()
-                                                .p_3()
-                                                .rounded(px(8.))
-                                                .bg(color(SIDEBAR))
-                                                .border_l_4()
-                                                .border_color(color(ACCENT))
-                                                .text_sm()
-                                                .child(
-                                                    text!(welcome.clone())
-                                                        .with_id("server-welcome"),
-                                                ),
-                                        )
-                                    },
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap_2()
-                                        .when(
-                                            channel.next_before.is_some() && !channel.loading,
-                                            |view| {
+        .map(|view| match search_panel(this, index, cx) {
+            Some(panel) => view.child(panel),
+            None => view.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "timeline:{}:{}",
+                        server.id, channel.id
+                    )))
+                    .track_scroll(&this.scroll)
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_4()
+                    .py_4()
+                    .child(
+                        div()
+                            .id("timeline-content")
+                            .min_h_full()
+                            .flex()
+                            .flex_col()
+                            .justify_end()
+                            .on_scroll(cx.listener(|this, event, window, cx| {
+                                this.smooth_scroll(false, event, window, cx)
+                            }))
+                            .child(
+                                div()
+                                    .pb_4()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .size(px(56.))
+                                            .rounded_full()
+                                            .bg(color(ELEVATED))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .text_color(color(TEXT_MUTED))
+                                            .child(icon(
+                                                if is_channel { "hash" } else { "message" },
+                                                30.,
+                                                color(TEXT_MUTED),
+                                            )),
+                                    )
+                                    .child(
+                                        div().text_2xl().font_weight(FontWeight::BOLD).child(
+                                            text!(format!("Welcome to {}", channel.name))
+                                                .with_id("timeline-heading"),
+                                        ),
+                                    )
+                                    .child(
+                                        div().text_sm().text_color(color(TEXT_MUTED)).child(
+                                            text!(match server.history_source {
+                                                HistorySource::LocalObserved =>
+                                                    "Local history · messages seen on this device",
+                                                HistorySource::ServerArchive => "Server history",
+                                            })
+                                            .with_id("history-source"),
+                                        ),
+                                    )
+                                    .when_some(
+                                        channel.description.as_ref().filter(|_| is_channel),
+                                        |view, description| {
+                                            view.child(
+                                                div()
+                                                    .id("channel-description")
+                                                    .mt_2()
+                                                    .p_3()
+                                                    .rounded(px(8.))
+                                                    .bg(color(SIDEBAR))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .gap_2()
+                                                    .text_sm()
+                                                    .children(document_blocks(description)),
+                                            )
+                                        },
+                                    )
+                                    .when_some(
+                                        server
+                                            .welcome
+                                            .as_ref()
+                                            .filter(|_| is_channel && channel.id == 0),
+                                        |view, welcome| {
+                                            view.child(
+                                                div()
+                                                    .mt_2()
+                                                    .p_3()
+                                                    .rounded(px(8.))
+                                                    .bg(color(SIDEBAR))
+                                                    .border_l_4()
+                                                    .border_color(color(ACCENT))
+                                                    .text_sm()
+                                                    .child(
+                                                        text!(welcome.clone())
+                                                            .with_id("server-welcome"),
+                                                    ),
+                                            )
+                                        },
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .gap_2()
+                                            .when(
+                                                channel.next_before.is_some() && !channel.loading,
+                                                |view| {
+                                                    view.child(styled_button(
+                                                        "older-history",
+                                                        "Load older messages",
+                                                        Tone::Secondary,
+                                                        |this, _, cx| {
+                                                            this.load_older();
+                                                            cx.notify();
+                                                        },
+                                                        cx,
+                                                    ))
+                                                },
+                                            )
+                                            .when(channel.viewing_older, |view| {
                                                 view.child(styled_button(
-                                                    "older-history",
-                                                    "Load older messages",
+                                                    "latest-history",
+                                                    format!(
+                                                        "Jump to latest ({})",
+                                                        channel.new_messages
+                                                    ),
                                                     Tone::Secondary,
                                                     |this, _, cx| {
-                                                        this.load_older();
+                                                        this.load_history(None);
                                                         cx.notify();
                                                     },
                                                     cx,
                                                 ))
-                                            },
-                                        )
-                                        .when(channel.viewing_older, |view| {
-                                            view.child(styled_button(
-                                                "latest-history",
-                                                format!(
-                                                    "Jump to latest ({})",
-                                                    channel.new_messages
-                                                ),
-                                                Tone::Secondary,
-                                                |this, _, cx| {
-                                                    this.load_history(None);
-                                                    cx.notify();
-                                                },
-                                                cx,
-                                            ))
-                                        })
-                                        .when(channel.loading, |view| {
-                                            view.child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(color(TEXT_FAINT))
-                                                    .child(
-                                                        text!("Loading local history…")
-                                                            .with_id("history-loading"),
-                                                    ),
-                                            )
-                                        }),
-                                ),
-                        )
-                        .children(messages),
-                ),
-        )
+                                            })
+                                            .when(channel.loading, |view| {
+                                                view.child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(color(TEXT_FAINT))
+                                                        .child(
+                                                            text!("Loading local history…")
+                                                                .with_id("history-loading"),
+                                                        ),
+                                                )
+                                            }),
+                                    ),
+                            )
+                            .children(messages),
+                    ),
+            ),
+        })
         .child(composer(this, server, channel.name.clone(), cx))
         .into_any_element()
+}
+
+fn search_panel(
+    this: &Desktop,
+    server_index: usize,
+    cx: &mut Context<Desktop>,
+) -> Option<AnyElement> {
+    let search = this
+        .search
+        .as_ref()
+        .filter(|search| search.server == this.servers[server_index].id)?;
+    let status = if search.loading {
+        "Searching…".to_string()
+    } else if search.query.is_empty() {
+        "Type and press Enter. Searches messages saved on this device.".to_string()
+    } else if search.results.is_empty() {
+        format!("No messages contain “{}”.", search.query)
+    } else {
+        format!(
+            "{} recent matches for “{}”",
+            search.results.len(),
+            search.query
+        )
+    };
+    let results = search.results.iter().enumerate().map(|(index, hit)| {
+        let channel = hit.channel;
+        div()
+            .id(("search-hit", index))
+            .role(Role::ListItem)
+            .tab_index(0)
+            .p_3()
+            .rounded(px(8.))
+            .cursor_pointer()
+            .hover(|style| style.bg(color(HOVER)))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if channel != u32::MAX {
+                    this.search = None;
+                    this.browse_channel(server_index, channel, window, cx);
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(color(TEXT_FAINT))
+                    .child(text!(format!("#{}", hit.place)).with_id(("hit-place", index)))
+                    .child(text!(hit.time.clone()).with_id(("hit-time", index))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme::name_color(&hit.author))
+                            .child(text!(hit.author.clone()).with_id(("hit-author", index))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(text!(hit.snippet.clone()).with_id(("hit-snippet", index))),
+                    ),
+            )
+    });
+    Some(
+        div()
+            .id("search-panel")
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .px_4()
+            .py_3()
+            .gap_3()
+            .child(
+                div()
+                    .px_3()
+                    .py(px(9.))
+                    .rounded(px(8.))
+                    .bg(color(INPUT))
+                    .border_1()
+                    .border_color(color(BORDER_STRONG))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "enter" {
+                            this.run_search(cx);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    }))
+                    .child(icon("search", 16., color(TEXT_FAINT)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(gpui_kit::base::input::Input::new(&search.input)),
+                    ),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(color(TEXT_MUTED))
+                    .child(text!(status).with_id("search-status")),
+            )
+            .child(
+                div()
+                    .id("search-results")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .children(results),
+            )
+            .into_any_element(),
+    )
 }
 
 fn activity_row(line: &crate::state::ActivityLine, index: usize) -> AnyElement {
