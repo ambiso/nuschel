@@ -8,7 +8,7 @@
                                       (Invoke-WebRequest http://10.0.2.100/files/NAME)
     windows_vm.py screenshot OUT.png  capture the VM display
     windows_vm.py click X Y | type TEXT | key ctrl-alt-delete
-    windows_vm.py status | down
+    windows_vm.py status | pause | resume | down
 
 State (disk, firmware variables, sockets) lives in $NUSCHEL_WINDOWS_VM_DIR,
 default ~/vms/nuschel-windows; keep it out of backups and off the RAM-backed
@@ -299,6 +299,12 @@ def daemon(args: argparse.Namespace) -> None:
         if op == "down":
             qmp.command("system_powerdown")
             return {}
+        if op == "pause":
+            qmp.command("stop")
+            return {}
+        if op == "resume":
+            qmp.command("cont")
+            return {}
         return {"error": f"unknown op {op}"}
 
     def accept() -> None:
@@ -352,7 +358,8 @@ def main() -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     up = commands.add_parser("up")
     up.add_argument("--iso")
-    up.add_argument("--cpus", type=int, default=4)
+    # Two virtual CPUs: the host's build jobs are limited to two cores as well.
+    up.add_argument("--cpus", type=int, default=2)
     up.add_argument("--memory", type=int, default=6144)
     up.add_argument("--murmur-port", type=int)
     run = commands.add_parser("run")
@@ -373,6 +380,8 @@ def main() -> None:
     key.add_argument("combo", help="qcodes joined by '-', e.g. ctrl-alt-delete or meta_l-r")
     commands.add_parser("status")
     commands.add_parser("down")
+    commands.add_parser("pause", help="stop the guest's CPUs while it is not needed")
+    commands.add_parser("resume")
     wait = commands.add_parser("wait-agent")
     wait.add_argument("--timeout", type=float, default=3600)
     args = parser.parse_args()
@@ -398,6 +407,8 @@ def main() -> None:
         print(json.dumps(client({"op": "status"})))
     elif args.command == "down":
         client({"op": "down"})
+    elif args.command in ("pause", "resume"):
+        client({"op": args.command})
     elif args.command == "wait-agent":
         deadline = time.monotonic() + args.timeout
         while time.monotonic() < deadline:
