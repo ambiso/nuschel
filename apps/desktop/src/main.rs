@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
+// A GUI program on Windows: without this, starting Nuschel from Explorer, the
+// Start menu or the Run key (autostart) opens an empty console window as well.
+// Command-line use goes through nuschel-cli.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 mod assets;
 mod autostart;
 mod backend;
