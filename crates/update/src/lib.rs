@@ -462,6 +462,20 @@ mod tests {
         .unwrap()
     }
 
+    /// `NUSCHEL_UPDATE_DIST=dist cargo test -p nuschel-update -- --ignored`
+    /// checks a release made by release/make-update.py against the built-in key.
+    #[test]
+    #[ignore = "needs a release directory"]
+    fn a_published_manifest_verifies_with_the_release_key() {
+        let dist = PathBuf::from(std::env::var("NUSCHEL_UPDATE_DIST").unwrap());
+        let manifest = fs::read(dist.join(MANIFEST)).unwrap();
+        let signature = fs::read_to_string(dist.join(format!("{MANIFEST}.minisig"))).unwrap();
+        for platform in ["windows-x86_64", "macos-universal"] {
+            let (_, files) = verify(&manifest, &signature, &trusted_keys(None), platform).unwrap();
+            assert!(!files.is_empty(), "{platform}");
+        }
+    }
+
     #[test]
     fn the_release_key_parses() {
         assert!(minisign_verify::PublicKey::decode(RELEASE_KEY.trim()).is_ok());
