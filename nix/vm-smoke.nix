@@ -82,8 +82,9 @@ pkgs.testers.runNixOSTest {
     server.succeed("systemctl start murmur.service")
     server.wait_for_open_port(64738)
     # A SuperUser password for the administration tests.
-    server.succeed("cp /run/murmur/murmurd.ini /tmp/murmurd.ini && systemctl stop murmur.service")
-    server.succeed("runuser -u murmur -- ${pkgs.murmur}/bin/mumble-server -ini /tmp/murmurd.ini -supw nuschel-super || true")
+    # The copy must be readable by the murmur user; -supw exits 0 once the password is set.
+    server.succeed("install -m 0644 /run/murmur/murmurd.ini /tmp/murmurd.ini && systemctl stop murmur.service")
+    server.succeed("runuser -u murmur -- ${pkgs.murmur}/bin/mumble-server -ini /tmp/murmurd.ini -supw nuschel-super")
     server.succeed("systemctl start murmur.service")
     server.wait_for_open_port(64738)
     client.wait_for_unit("multi-user.target")
