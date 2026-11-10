@@ -49,10 +49,33 @@ impl Render for Desktop {
             .text_color(color(TEXT))
             .font_family("sans-serif")
             .text_size(px(15.))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if !event.is_held && this.key_down(&event.keystroke) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .on_key_up(cx.listener(|this, event: &KeyUpEvent, _, cx| {
+                if this.key_up(&event.keystroke) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
+                this.modifiers_changed(&event.modifiers);
+                cx.notify();
+            }))
             .child(chrome::title_bar(title.into(), window, cx))
             .child(body)
             .when(self.form.is_some(), |view| {
                 view.child(dialogs::server_form(self, cx))
+            })
+            .when(self.settings_open, |view| {
+                view.child(crate::settings::dialog(
+                    self,
+                    selected.map(|(server, _)| &self.servers[server]),
+                    cx,
+                ))
             })
             .into_any_element();
         chrome::frame(window, content)
@@ -753,6 +776,18 @@ fn user_panel(server: &ServerView, cx: &mut Context<Desktop>) -> AnyElement {
                         .child(text!(status).with_id("audio-status")),
                 ),
         )
+        .child(icon_button(
+            "open-settings",
+            "settings",
+            "Voice & audio settings",
+            TEXT_MUTED,
+            None,
+            |this, _, cx| {
+                this.settings_open = true;
+                cx.notify();
+            },
+            cx,
+        ))
         .when(connected, |panel| {
             panel
                 .child(icon_button(

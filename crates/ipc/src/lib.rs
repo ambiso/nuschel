@@ -252,13 +252,21 @@ pub enum LiveMediaRequest {
     },
     Configure {
         bitrate: u32,
-        noise_suppression: bool,
+        /// Measured server-to-client loss, used to tune Opus in-band FEC.
+        #[serde(default)]
+        packet_loss_percent: u8,
+        settings: nuschel_core::audio::AudioSettings,
+    },
+    /// Push-to-talk key state from the desktop.
+    PushToTalk {
+        active: bool,
     },
     Playback {
         sender: u32,
         sequence: u64,
         opus: Vec<u8>,
         end: bool,
+        /// Product of the sender's volume adjustment and the local per-user volume.
         volume: f32,
     },
     Shutdown,
@@ -275,5 +283,27 @@ pub enum LiveMediaEvent {
         sequence: u64,
         opus: Vec<u8>,
         end: bool,
+    },
+    /// Roughly ten times per second while the microphone is open.
+    Level {
+        /// Processed input level in dBFS.
+        level_db: f32,
+        /// Speech probability for the latest frame.
+        voice: f32,
+        transmitting: bool,
+    },
+    /// Device inventory and the active route, sent whenever devices are opened.
+    Devices {
+        inputs: Vec<nuschel_core::audio::AudioDevice>,
+        outputs: Vec<nuschel_core::audio::AudioDevice>,
+        input: Option<String>,
+        output: Option<String>,
+        echo: nuschel_core::audio::EchoSource,
+    },
+    /// Echo-canceller measurements for the adaptive controller and diagnostics.
+    Echo {
+        erle_db: Option<f32>,
+        residual_likelihood: Option<f32>,
+        delay_ms: Option<i32>,
     },
 }

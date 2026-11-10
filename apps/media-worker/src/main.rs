@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
+mod dsp;
+mod jitter;
 mod live;
 
 use std::io;

@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The desktop sees typed events; transport, parsing, audio and history run off its thread.
 use nuschel_client::HistoryTicket;
+use nuschel_core::audio::{AudioDevice, EchoSource};
 use nuschel_core::{ChatMessage, ContentBlock, MessageDocument};
 use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
 use nuschel_session::{
     Error,
-    config::{Profile, ServerBookmark},
+    config::{ClientSettings, Profile, ServerBookmark},
     connection::{self, Command, ConnectOptions, IncomingText, SessionEvent, TextTarget},
     workers::{self, Media, Storage},
 };
 use std::{collections::BTreeMap, path::PathBuf};
-use tokio::{runtime::Handle, sync::mpsc};
+use tokio::{
+    runtime::Handle,
+    sync::{mpsc, watch},
+};
 
 pub struct RenderedMessage {
     pub id: Option<i64>,
@@ -62,6 +66,29 @@ pub enum Event {
         body: String,
     },
     HistoryError(String),
+    /// Microphone level for the settings meter, about ten times per second.
+    AudioLevel {
+        server: String,
+        generation: u64,
+        level_db: f32,
+        voice: f32,
+        transmitting: bool,
+    },
+    AudioDevices {
+        server: String,
+        generation: u64,
+        inputs: Vec<AudioDevice>,
+        outputs: Vec<AudioDevice>,
+        input: Option<String>,
+        output: Option<String>,
+        echo: EchoSource,
+    },
+    Echo {
+        server: String,
+        generation: u64,
+        erle_db: Option<f32>,
+        residual_likelihood: Option<f32>,
+    },
     /// Voice activity for a session (including our own) on one connection generation.
     Talking {
         server: String,
@@ -83,6 +110,8 @@ pub struct Backend {
     content: mpsc::Sender<ContentJob>,
     connections: BTreeMap<String, Connection>,
     generation: u64,
+    settings: watch::Sender<ClientSettings>,
+    push_to_talk: watch::Sender<bool>,
     storage_task: tokio::task::JoinHandle<()>,
     content_task: tokio::task::JoinHandle<()>,
 }
@@ -108,7 +137,7 @@ enum StorageCommand {
     },
 }
 impl Backend {
-    pub fn new(handle: Handle, profile: Profile) -> Self {
+    pub fn new(handle: Handle, profile: Profile, settings: ClientSettings) -> Self {
         let (sender, events) = mpsc::channel(512);
         let (storage, storage_rx) = mpsc::channel(128);
         let (content, content_rx) = mpsc::channel(64);
@@ -127,6 +156,8 @@ impl Backend {
             content,
             connections: BTreeMap::new(),
             generation: 0,
+            settings: watch::Sender::new(settings),
+            push_to_talk: watch::Sender::new(false),
             storage_task,
             content_task,
         }
@@ -154,6 +185,7 @@ impl Backend {
             receiver,
             self.sender.clone(),
             self.content.clone(),
+            (self.settings.subscribe(), self.push_to_talk.subscribe()),
         ));
         self.connections.insert(id, Connection { commands, task });
         Ok(generation)
@@ -165,6 +197,14 @@ impl Backend {
             .commands
             .try_send(command)
             .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+    }
+    /// Apply new preferences to every live connection and its media worker.
+    pub fn apply_settings(&self, settings: ClientSettings) {
+        self.settings.send_replace(settings);
+    }
+    pub fn set_push_to_talk(&self, active: bool) {
+        self.push_to_talk
+            .send_if_modified(|current| std::mem::replace(current, active) != active);
     }
     pub fn disconnect(&mut self, server: &str) {
         if let Some(connection) = self.connections.remove(server) {
@@ -200,6 +240,7 @@ impl Drop for Backend {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn connection_loop(
     profile: Profile,
     server: ServerBookmark,
@@ -208,6 +249,7 @@ async fn connection_loop(
     mut commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<Event>,
     content: mpsc::Sender<ContentJob>,
+    (mut settings, mut push_to_talk): (watch::Receiver<ClientSettings>, watch::Receiver<bool>),
 ) {
     let id = server.id.clone();
     let options = match profile.identity() {
@@ -215,7 +257,7 @@ async fn connection_loop(
             server: server.clone(),
             identity,
             password,
-            force_tcp: false,
+            force_tcp: settings.borrow().force_tcp,
         },
         Err(error) => {
             let _ = events
@@ -244,11 +286,35 @@ async fn connection_loop(
     let mut retry_audio = tokio::time::Instant::now();
     let mut finished = false;
     let mut own_session = None;
+    let mut hashes = BTreeMap::<u32, Option<String>>::new();
+    let mut applied_audio = settings.borrow().audio.clone();
+    let mut loss_percent = 5_u8;
     let mut speaking = BTreeMap::<u32, tokio::time::Instant>::new();
     let mut talk_tick = tokio::time::interval(std::time::Duration::from_millis(100));
     talk_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            changed = settings.changed() => {
+                if changed.is_err() { break; }
+                let current = settings.borrow_and_update().clone();
+                let route = |audio: &nuschel_core::audio::AudioSettings| (audio.input_device.clone(), audio.output_device.clone(), audio.echo_cancellation, audio.device_overrides.clone());
+                if route(&current.audio) != route(&applied_audio) {
+                    // New devices need new native streams: replace the worker, as for mute.
+                    media.take();
+                    capture_epoch += 1;
+                    retry_audio = tokio::time::Instant::now();
+                } else if let Some(media) = &media {
+                    let _ = media.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio.clone() });
+                }
+                applied_audio = current.audio;
+            },
+            changed = push_to_talk.changed() => {
+                if changed.is_err() { break; }
+                let active = *push_to_talk.borrow_and_update();
+                if let Some(media) = &media {
+                    let _ = media.commands.try_send(LiveMediaRequest::PushToTalk { active });
+                }
+            },
             _ = talk_tick.tick(), if !speaking.is_empty() => {
                 let now = tokio::time::Instant::now();
                 let silent = speaking.iter().filter(|(_, last)| now.duration_since(**last) > TALK_HOLD).map(|(session, _)| *session).collect::<Vec<_>>();
@@ -290,10 +356,36 @@ async fn connection_loop(
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Connected { session: own_session, max_bandwidth } }).await;
                 },
                 SessionEvent::Audio(packet) => {
+                    let hash = hashes.get(&packet.sender).cloned().flatten();
+                    let (muted_locally, volume) = {
+                        let current = settings.borrow();
+                        (current.locally_muted(hash.as_deref()), current.volume_for(hash.as_deref()))
+                    };
+                    if muted_locally { continue; }
                     mark_talking(&events, &id, generation, &mut speaking, packet.sender, !packet.end).await;
                     if let Some(media) = &media {
-                        let _ = media.commands.try_send(LiveMediaRequest::Playback { sender: packet.sender, sequence: packet.sequence, opus: packet.opus, end: packet.end, volume: packet.volume });
+                        let _ = media.commands.try_send(LiveMediaRequest::Playback { sender: packet.sender, sequence: packet.sequence, opus: packet.opus, end: packet.end, volume: packet.volume * volume });
                     }
+                },
+                SessionEvent::User(user) => {
+                    hashes.insert(user.session, user.certificate_hash.clone());
+                    let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::User(user) }).await;
+                },
+                SessionEvent::UserRemoved(session) => {
+                    hashes.remove(&session);
+                    let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::UserRemoved(session) }).await;
+                },
+                SessionEvent::Transport(stats) => {
+                    let total = stats.good.saturating_add(stats.lost).max(1);
+                    let measured = ((stats.lost as u64 * 100 / total as u64) as u8).clamp(1, 30);
+                    if measured.abs_diff(loss_percent) >= 3 {
+                        loss_percent = measured;
+                        if let Some(media) = &media {
+                            let current = settings.borrow().clone();
+                            let _ = media.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio });
+                        }
+                    }
+                    let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Transport(stats) }).await;
                 },
                 SessionEvent::Text(text) => if let Some(peer) = &peer {
                     if text.outgoing { let _ = events.send(Event::Sent { server: id.clone(), generation, target: text.target.clone(), body: text.body.clone() }).await; }
@@ -309,8 +401,10 @@ async fn connection_loop(
                 capture_epoch += 1;
                 match Media::start() {
                     Ok(worker) => {
-                        let _ = worker.commands.try_send(LiveMediaRequest::Configure { bitrate, noise_suppression: false });
+                        let current = settings.borrow().clone();
+                        let _ = worker.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio });
                         let _ = worker.commands.try_send(LiveMediaRequest::SetState { epoch: capture_epoch, muted, deafened });
+                        let _ = worker.commands.try_send(LiveMediaRequest::PushToTalk { active: *push_to_talk.borrow() });
                         media = Some(worker);
                     },
                     Err(error) => { retry_audio = tokio::time::Instant::now() + std::time::Duration::from_secs(3); let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message: error.to_string() }).await; },
@@ -324,8 +418,17 @@ async fn connection_loop(
                     if !muted || end { let _ = session_commands.try_send(Command::Voice { target: 0, packet }); }
                     if let Some(session) = own_session { mark_talking(&events, &id, generation, &mut speaking, session, !end && !muted).await; }
                 },
+                Some(LiveMediaEvent::Level { level_db, voice, transmitting }) => {
+                    let _ = events.try_send(Event::AudioLevel { server: id.clone(), generation, level_db, voice, transmitting });
+                },
+                Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo }) => {
+                    let _ = events.send(Event::AudioDevices { server: id.clone(), generation, inputs, outputs, input, output, echo }).await;
+                },
+                Some(LiveMediaEvent::Echo { erle_db, residual_likelihood, .. }) => {
+                    let _ = events.try_send(Event::Echo { server: id.clone(), generation, erle_db, residual_likelihood });
+                },
                 Some(LiveMediaEvent::Status { ready, message }) => {
-                    if !ready { media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_secs(2); }
+                    if !ready { media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 }); }
                     let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message }).await;
                 },
                 None => { media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_secs(2); let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message: "Audio worker restarting…".into() }).await; },

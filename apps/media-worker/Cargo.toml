@@ -13,6 +13,7 @@ nnnoiseless = { version = "0.5.2", default-features = false }
 nuschel-core.workspace = true
 nuschel-ipc.workspace = true
 opus-pure = "0.2.3"
+rtrb = "0.4"
 sonora = { version = "0.3.0", default-features = false }
 
 [lints]

@@ -10,7 +10,7 @@ use gpui_kit::{
 use nuschel_client::{Conversation, HistorySource, Navigation, SessionSecurity};
 use nuschel_core::{MAX_CONTENT_BYTES, MessageDocument, PreviewPolicy};
 use nuschel_session::{
-    config::{CachedChannel, MumbleUrl, Profile, ServerBookmark},
+    config::{CachedChannel, ClientSettings, MumbleUrl, Profile, ServerBookmark},
     connection::{Command, SessionEvent, TextTarget, User},
     udp::TransportStats,
 };
@@ -127,6 +127,20 @@ pub struct CertificatePrompt {
     pub changed: bool,
     pub reason: String,
 }
+/// What the media worker reports about the active audio route.
+#[derive(Default)]
+pub struct AudioInfo {
+    pub level_db: f32,
+    pub voice: f32,
+    pub transmitting: bool,
+    pub inputs: Vec<nuschel_core::audio::AudioDevice>,
+    pub outputs: Vec<nuschel_core::audio::AudioDevice>,
+    pub input: Option<String>,
+    pub output: Option<String>,
+    pub echo: nuschel_core::audio::EchoSource,
+    pub erle_db: Option<f32>,
+    pub residual_echo: Option<f32>,
+}
 pub struct ServerView {
     pub id: String,
     pub name: String,
@@ -148,6 +162,7 @@ pub struct ServerView {
     pub certificate: Option<CertificatePrompt>,
     pub talking: BTreeSet<u32>,
     pub transport: Option<TransportStats>,
+    pub audio: AudioInfo,
     /// Channel path from a `mumble://` link, joined once the tree has loaded.
     pub pending_channel: Vec<String>,
 }
@@ -196,6 +211,7 @@ impl ServerView {
             certificate: None,
             talking: BTreeSet::new(),
             transport: None,
+            audio: AudioInfo::default(),
             pending_channel: Vec::new(),
         }
     }
@@ -261,6 +277,10 @@ pub struct Desktop {
     scroll_frame_pending: bool,
     pub error: Option<String>,
     pub title_drag: bool,
+    pub settings: ClientSettings,
+    pub settings_open: bool,
+    pub recording_ptt: bool,
+    pub ptt_active: bool,
     pending_browse: Option<(String, u32)>,
     cache_dirty: bool,
     sending: Option<PendingSend>,
@@ -304,6 +324,7 @@ impl Desktop {
                     _ => {}
                 },
             );
+        let settings = profile.load_settings().unwrap_or_default();
         let poll = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -326,7 +347,7 @@ impl Desktop {
             navigation: Navigation::default(),
             expansion: BTreeMap::new(),
             history_enabled: true,
-            backend: Backend::new(handle, profile.clone()),
+            backend: Backend::new(handle, profile.clone(), settings.clone()),
             profile,
             form: None,
             composer,
@@ -337,6 +358,10 @@ impl Desktop {
             scroll_frame_pending: false,
             error: None,
             title_drag: false,
+            settings,
+            settings_open: false,
+            recording_ptt: false,
+            ptt_active: false,
             pending_browse: None,
             cache_dirty: false,
             sending: None,
@@ -900,6 +925,80 @@ impl Desktop {
             self.servers[server].notice = Some(error);
         }
     }
+    /// Change preferences, persist them and apply them to live connections.
+    pub fn update_settings(&mut self, change: impl FnOnce(&mut ClientSettings)) {
+        let mut settings = self.settings.clone();
+        change(&mut settings);
+        let settings = settings.sanitized();
+        if settings == self.settings {
+            return;
+        }
+        if let Err(error) = self.profile.save_settings(&settings) {
+            self.error = Some(format!("Could not save settings: {error}"));
+        }
+        self.backend.apply_settings(settings.clone());
+        self.settings = settings;
+    }
+    fn ptt_key_matches(&self, key: &str) -> bool {
+        self.settings
+            .push_to_talk_key
+            .as_deref()
+            .is_some_and(|wanted| wanted.eq_ignore_ascii_case(key))
+    }
+    pub fn set_push_to_talk(&mut self, active: bool) {
+        if self.ptt_active != active {
+            self.ptt_active = active;
+            self.backend.set_push_to_talk(active);
+        }
+    }
+    /// Returns true when the key was consumed by push-to-talk or key recording.
+    pub fn key_down(&mut self, keystroke: &Keystroke) -> bool {
+        if keystroke.key == "escape"
+            && !self.recording_ptt
+            && (self.form.is_some() || self.settings_open)
+        {
+            self.form = None;
+            self.settings_open = false;
+            return true;
+        }
+        if self.recording_ptt {
+            if keystroke.key != "escape" {
+                let key = keystroke.key.clone();
+                self.update_settings(|settings| settings.push_to_talk_key = Some(key));
+            }
+            self.recording_ptt = false;
+            return true;
+        }
+        if self.ptt_key_matches(&keystroke.key) {
+            self.set_push_to_talk(true);
+            return true;
+        }
+        false
+    }
+    pub fn key_up(&mut self, keystroke: &Keystroke) -> bool {
+        if self.ptt_key_matches(&keystroke.key) {
+            self.set_push_to_talk(false);
+            return true;
+        }
+        false
+    }
+    /// Modifier-only push-to-talk keys (e.g. "control") arrive as modifier changes.
+    pub fn modifiers_changed(&mut self, modifiers: &Modifiers) {
+        let Some(key) = self.settings.push_to_talk_key.as_deref() else {
+            return;
+        };
+        let held = match key {
+            "control" | "ctrl" => modifiers.control,
+            "alt" => modifiers.alt,
+            "shift" => modifiers.shift,
+            "platform" | "super" | "cmd" => modifiers.platform,
+            _ => return,
+        };
+        if self.recording_ptt {
+            return;
+        }
+        self.set_push_to_talk(held);
+    }
     pub fn set_mute(&mut self, deafen: bool) {
         let Some((index, _)) = self.selected_indices() else {
             return;
@@ -1221,6 +1320,59 @@ impl Desktop {
                         } else {
                             server.talking.remove(&session);
                         }
+                    }
+                }
+                Event::AudioLevel {
+                    server,
+                    generation,
+                    level_db,
+                    voice,
+                    transmitting,
+                } => {
+                    if let Some(server) = self
+                        .servers
+                        .iter_mut()
+                        .find(|entry| entry.id == server && entry.generation == generation)
+                    {
+                        server.audio.level_db = level_db;
+                        server.audio.voice = voice;
+                        server.audio.transmitting = transmitting;
+                    }
+                }
+                Event::AudioDevices {
+                    server,
+                    generation,
+                    inputs,
+                    outputs,
+                    input,
+                    output,
+                    echo,
+                } => {
+                    if let Some(server) = self
+                        .servers
+                        .iter_mut()
+                        .find(|entry| entry.id == server && entry.generation == generation)
+                    {
+                        server.audio.inputs = inputs;
+                        server.audio.outputs = outputs;
+                        server.audio.input = input;
+                        server.audio.output = output;
+                        server.audio.echo = echo;
+                    }
+                }
+                Event::Echo {
+                    server,
+                    generation,
+                    erle_db,
+                    residual_likelihood,
+                } => {
+                    if let Some(server) = self
+                        .servers
+                        .iter_mut()
+                        .find(|entry| entry.id == server && entry.generation == generation)
+                    {
+                        server.audio.erle_db = erle_db;
+                        server.audio.residual_echo = residual_likelihood;
                     }
                 }
                 Event::AudioStatus {

@@ -184,6 +184,67 @@ fn percent_decode(text: &str) -> Result<String, String> {
     Ok(decoded)
 }
 
+/// Local preferences. Per-user adjustments are keyed by certificate hash, as in
+/// Mumble, so they follow a person rather than a reusable display name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClientSettings {
+    pub audio: nuschel_core::audio::AudioSettings,
+    /// Keep voice in the TLS tunnel (Mumble's "Force TCP mode").
+    pub force_tcp: bool,
+    /// Reconnect automatically after an unexpected disconnect.
+    pub auto_reconnect: bool,
+    pub user_volumes: std::collections::BTreeMap<String, f32>,
+    pub local_mutes: std::collections::BTreeSet<String>,
+    /// Push-to-talk key in GPUI keystroke notation, e.g. "f13" or "ctrl-space".
+    pub push_to_talk_key: Option<String>,
+}
+impl Default for ClientSettings {
+    fn default() -> Self {
+        Self {
+            audio: Default::default(),
+            force_tcp: false,
+            auto_reconnect: true,
+            user_volumes: Default::default(),
+            local_mutes: Default::default(),
+            push_to_talk_key: None,
+        }
+    }
+}
+impl ClientSettings {
+    pub fn sanitized(mut self) -> Self {
+        self.audio = self.audio.sanitized();
+        self.user_volumes
+            .retain(|hash, volume| hash.len() <= 128 && volume.is_finite());
+        for volume in self.user_volumes.values_mut() {
+            *volume = volume.clamp(0., 4.);
+        }
+        self.local_mutes.retain(|hash| hash.len() <= 128);
+        while self.user_volumes.len() > 4096 {
+            self.user_volumes.pop_first();
+        }
+        while self.local_mutes.len() > 4096 {
+            self.local_mutes.pop_first();
+        }
+        if self
+            .push_to_talk_key
+            .as_ref()
+            .is_some_and(|key| key.is_empty() || key.len() > 64)
+        {
+            self.push_to_talk_key = None;
+        }
+        self
+    }
+    pub fn volume_for(&self, hash: Option<&str>) -> f32 {
+        hash.and_then(|hash| self.user_volumes.get(hash))
+            .copied()
+            .unwrap_or(1.)
+    }
+    pub fn locally_muted(&self, hash: Option<&str>) -> bool {
+        hash.is_some_and(|hash| self.local_mutes.contains(hash))
+    }
+}
+
 #[derive(Clone)]
 pub struct Profile {
     pub config_dir: PathBuf,
@@ -261,6 +322,22 @@ impl Profile {
             return Err(io::Error::other("server metadata exceeds 8 MiB"));
         }
         atomic_private_write(&self.config_dir.join("servers.json"), &bytes)
+    }
+
+    pub fn load_settings(&self) -> io::Result<ClientSettings> {
+        let path = self.config_dir.join("settings.json");
+        if !path.exists() {
+            return Ok(ClientSettings::default());
+        }
+        let settings: ClientSettings = serde_json::from_slice(&read_bounded(&path, 1024 * 1024)?)?;
+        Ok(settings.sanitized())
+    }
+
+    pub fn save_settings(&self, settings: &ClientSettings) -> io::Result<()> {
+        atomic_private_write(
+            &self.config_dir.join("settings.json"),
+            &serde_json::to_vec_pretty(settings)?,
+        )
     }
 
     pub fn history_path(&self) -> PathBuf {
@@ -353,6 +430,21 @@ mod tests {
             server.history_identity("one"),
             server.history_identity("two")
         );
+    }
+    #[test]
+    fn settings_round_trip_and_are_sanitized() {
+        let root = std::env::temp_dir().join(format!("nuschel-settings-{}", Uuid::new_v4()));
+        let profile = Profile::open(Some(root.clone())).unwrap();
+        assert_eq!(profile.load_settings().unwrap(), ClientSettings::default());
+        let mut settings = ClientSettings::default();
+        settings.user_volumes.insert("abc".into(), 9.);
+        settings.local_mutes.insert("def".into());
+        profile.save_settings(&settings).unwrap();
+        let loaded = profile.load_settings().unwrap();
+        assert_eq!(loaded.volume_for(Some("abc")), 4.);
+        assert!(loaded.locally_muted(Some("def")));
+        assert_eq!(loaded.volume_for(None), 1.);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn parses_mumble_urls_like_stock_clients() {

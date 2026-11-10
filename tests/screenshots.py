@@ -30,6 +30,7 @@ def main():
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
     parser.add_argument("--scenes", default="all")
+    parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     width, height = map(int, args.size.split("x"))
@@ -43,8 +44,25 @@ def main():
         app = None
         shell = GnomeSession(args.gnome_shell, width + 160, height + 100,
                              log=(args.output / "gnome-shell.log").open("w"))
+        pulse = None
         try:
             shell.start()
+            if args.pulse_bin:
+                socket_dir = shell.runtime / "pulse"
+                socket_dir.mkdir(mode=0o700, exist_ok=True)
+                script = shell.runtime / "default.pa"
+                script.write_text(f"load-module module-native-protocol-unix socket={socket_dir / 'native'} auth-anonymous=1\n"
+                                  "load-module module-null-sink sink_name=speakers sink_properties=device.description=Speakers\n"
+                                  "load-module module-sine-source source_name=microphone frequency=220 rate=48000\n"
+                                  "update-source-proplist microphone device.description=\"Test microphone\"\n"
+                                  "set-default-sink speakers\nset-default-source microphone\n")
+                pulse = subprocess.Popen([str(args.pulse_bin / "pulseaudio"), "--daemonize=no", "--use-pid-file=no",
+                                          "--exit-idle-time=-1", "-n", "--file=" + str(script)],
+                                         env=shell.environment() | {"PULSE_RUNTIME_PATH": str(socket_dir),
+                                                                    "PULSE_STATE_PATH": str(shell.runtime / "pulse-state")},
+                                         stdout=(args.output / "pulse.log").open("w"), stderr=subprocess.STDOUT,
+                                         start_new_session=True)
+                eventually(lambda: (socket_dir / "native").exists(), "private PulseAudio did not start")
             pin = certificate_pin(args.binaries, "127.0.0.1", port, root / "probe")
             for index, (name, channel) in enumerate([("Ada Lovelace", 2), ("Grace", 2), ("Linus", 5), ("Margaret", 7)]):
                 bot = Client(args.binaries, "127.0.0.1", port, pin, name, root / f"bot{index}")
@@ -90,6 +108,19 @@ def main():
                 shot("02-add-server")
                 shell.key("Escape")
                 time.sleep(0.5)
+            if args.scenes in ("all", "settings"):
+                click(239, 773)
+                time.sleep(1.0)
+                shot("04-settings")
+                click(1200, 400)  # backdrop click closes the dialog
+                time.sleep(0.4)
+                click(279, 773)  # unmute: the sine microphone drives the meter
+                time.sleep(2.5)
+                click(239, 773)
+                time.sleep(1.5)
+                shot("05-settings-live")
+                shell.key("Escape")
+                time.sleep(0.4)
             if args.scenes in ("all", "maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)
@@ -110,6 +141,8 @@ def main():
                     bot.close()
                 except Exception:  # noqa: BLE001 - best-effort cleanup
                     pass
+            if pulse and pulse.poll() is None:
+                os.killpg(pulse.pid, signal.SIGTERM)
             shell.stop()
             murmur.stop()
 

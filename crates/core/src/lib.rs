@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod audio;
+
 /// Parsing limits are separate from UI collapsing. Storage retains the original body.
 pub const MAX_CONTENT_BYTES: usize = 64 * 1024;
 

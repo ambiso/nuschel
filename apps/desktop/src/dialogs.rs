@@ -166,16 +166,17 @@ pub fn modal(
         .items_center()
         .justify_center()
         .occlude()
-        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-            if event.keystroke.key == "escape" {
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
                 close(this);
-                cx.stop_propagation();
                 cx.notify();
-            }
-        }))
+            }),
+        )
         .child(
             div()
                 .id(id)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .role(Role::Dialog)
                 .aria_label(label)
                 .w(px(width))

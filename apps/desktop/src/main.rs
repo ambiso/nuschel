@@ -4,6 +4,7 @@ mod backend;
 mod chrome;
 mod dialogs;
 mod scrolling;
+mod settings;
 mod state;
 mod theme;
 mod view;
