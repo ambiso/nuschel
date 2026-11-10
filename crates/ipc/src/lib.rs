@@ -311,3 +311,29 @@ pub enum LiveMediaEvent {
         delay_ms: Option<i32>,
     },
 }
+
+#[cfg(test)]
+mod hostile_frames {
+    use super::*;
+    #[test]
+    fn random_frames_are_rejected_without_panicking() {
+        let mut state = 0x1234_5678_9abc_def0_u64;
+        for _ in 0..20_000 {
+            let mut bytes = Vec::new();
+            let length = (state % 96) as usize;
+            for _ in 0..length {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                bytes.push(state as u8);
+            }
+            // Frequently claim a plausible length so JSON parsing is reached.
+            if bytes.len() >= 4 && state % 3 == 0 {
+                let claimed = ((bytes.len() - 4) as u32).to_be_bytes();
+                bytes[..4].copy_from_slice(&claimed);
+            }
+            let _ = read_frame::<LiveMediaRequest>(&mut bytes.as_slice());
+            let _ = read_frame::<ContentRequest>(&mut bytes.as_slice());
+        }
+    }
+}

@@ -420,4 +420,57 @@ mod tests {
         ));
         Ok(())
     }
+
+    #[test]
+    fn hostile_markup_and_images_never_panic() -> Result<(), Error> {
+        let renderer = ContentRenderer::new()?;
+        let fragments = [
+            "<",
+            ">",
+            "<img src=\"data:image/png;base64,",
+            "\"/>",
+            "```",
+            "rust\n",
+            "<br/>",
+            "&amp;",
+            "&#x0;",
+            "<script>",
+            "</p>",
+            "<table><tr><td>",
+            "\u{FFFC}",
+            "data:image/gif;base64,R0lGODlh",
+            "AAAA",
+            "\n\n",
+            "<b><i><u>",
+            "<a href='javascript:x'>",
+            "~~~",
+            "`",
+            "\u{202E}",
+            "<!--",
+            "-->",
+            "<![CDATA[",
+        ];
+        let mut state = 99_u64;
+        for _ in 0..3_000 {
+            let mut text = String::new();
+            for _ in 0..(state % 24) {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                text.push_str(fragments[(state % fragments.len() as u64) as usize]);
+            }
+            let plain = renderer.legacy_plain_text(&text)?;
+            renderer.render(&plain)?;
+            renderer.render(&text)?;
+        }
+        // Image decoders reject arbitrary bytes behind valid magic numbers.
+        for magic in [&b"\x89PNG\r\n\x1a\n"[..], b"\xff\xd8\xff", b"GIF89a"] {
+            for length in [0, 1, 7, 64, 512] {
+                let mut bytes = magic.to_vec();
+                bytes.extend((0..length).map(|index| (index * 37 % 251) as u8));
+                assert!(decode_image(&bytes, 64, 64).is_none());
+            }
+        }
+        Ok(())
+    }
 }

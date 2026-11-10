@@ -86,3 +86,63 @@ mod tests {
         assert_eq!(decode_control(&mut buffer), Err(Error::TooLarge));
     }
 }
+
+/// Deterministic hostile-input tests: every decoder must reject garbage without
+/// panicking, and bounded inputs must never trigger large allocations.
+#[cfg(test)]
+mod hostile_input {
+    use super::*;
+
+    pub(crate) struct Rng(u64);
+    impl Rng {
+        pub(crate) fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        pub(crate) fn bytes(&mut self, max: usize) -> Vec<u8> {
+            let length = (self.next() as usize) % (max + 1);
+            (0..length).map(|_| self.next() as u8).collect()
+        }
+    }
+
+    #[test]
+    fn voice_and_udp_decoders_survive_random_bytes() {
+        let mut rng = Rng(0x5eed_1234_abcd_ef01);
+        for _ in 0..50_000 {
+            let mut bytes = rng.bytes(64);
+            // Bias towards valid headers so deeper paths are exercised.
+            if let Some(first) = bytes.first_mut() {
+                *first = [0x00, 0x01, 0x20, 0x80, 0x9f, *first][(rng.next() % 6) as usize];
+            }
+            let _ = voice::decode_voice(&bytes);
+            let _ = voice::decode_udp(&bytes);
+        }
+    }
+
+    #[test]
+    fn crypt_state_rejects_random_datagrams() {
+        let mut rng = Rng(42);
+        let mut state = crypt::CryptState::new(&[7; 16], &[1; 16], &[2; 16]).unwrap();
+        for _ in 0..20_000 {
+            assert!(state.decrypt(&rng.bytes(200)).is_none());
+        }
+        assert_eq!(state.stats.good, 0);
+    }
+
+    #[test]
+    fn control_framing_survives_random_streams() {
+        let mut rng = Rng(9);
+        for _ in 0..20_000 {
+            let mut buffer = BytesMut::from(rng.bytes(64).as_slice());
+            while let Ok(Some(frame)) = decode_control(&mut buffer) {
+                assert!(frame.payload.len() <= MAX_CONTROL_BYTES);
+                use prost::Message as _;
+                let _ = control::UserState::decode(frame.payload.clone());
+                let _ = control::TextMessage::decode(frame.payload.clone());
+                let _ = control::Acl::decode(frame.payload);
+            }
+        }
+    }
+}

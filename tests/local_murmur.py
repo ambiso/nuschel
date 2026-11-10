@@ -69,9 +69,13 @@ class Murmur:
             os.killpg(self.process.pid, signal.SIGTERM)
             self.process.wait(timeout=10)
 
+    SUPERUSER_PASSWORD = "nuschel-super"
+
     def seed(self):
         self.start()
         self.stop()
+        subprocess.run([str(self.binary), "-ini", str(self.ini), "-supw", self.SUPERUSER_PASSWORD],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, check=False)
         with sqlite3.connect(self.database) as database:
             database.executemany(
                 "INSERT OR IGNORE INTO channels (server_id, channel_id, parent_id, name, inheritacl)"
