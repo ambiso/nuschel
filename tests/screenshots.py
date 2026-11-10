@@ -114,6 +114,9 @@ def main():
                                    env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             eventually(lambda: app.poll() is None and shell.window("Nuschel"), "Nuschel window did not appear")
             shell.place("Nuschel", 40, 40, width, height)
+            # Channel messages reach only current members: wait until Andi has joined.
+            bots[0].wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "Andi"
+                         and e["user"]["channel"] == 2, timeout=30)
             time.sleep(1.0)
             avatars = [make_png(root / f"avatar{index}.png", 96, index) for index in range(2)]
             bots[0].send(kind="avatar", path=str(avatars[0]))
@@ -189,6 +192,8 @@ def main():
                 shell.key("Escape")
                 time.sleep(0.4)
             if want("long"):
+                click(228, 268)  # back to #Development (the menus scene opens a DM)
+                time.sleep(0.6)
                 # One paragraph that fits when wide but wraps past the collapse
                 # height in a narrow window, and one that is always long.
                 paragraph = " ".join(f"word{n}" for n in range(100))

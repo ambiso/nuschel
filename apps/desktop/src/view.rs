@@ -448,7 +448,7 @@ fn sidebar(
         .when_some(voice_card(server, server_index, cx), |sidebar, card| {
             sidebar.child(card)
         })
-        .child(user_panel(server, cx))
+        .child(user_panel(server, this.settings.audio.transmit, cx))
         .into_any_element()
 }
 
@@ -888,7 +888,11 @@ fn voice_card(
     )
 }
 
-fn user_panel(server: &ServerView, cx: &mut Context<Desktop>) -> AnyElement {
+fn user_panel(
+    server: &ServerView,
+    transmit: nuschel_core::audio::TransmitMode,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
     let own = server
         .own_session
         .and_then(|session| server.users.get(&session));
@@ -899,14 +903,30 @@ fn user_panel(server: &ServerView, cx: &mut Context<Desktop>) -> AnyElement {
         .own_session
         .is_some_and(|session| server.talking.contains(&session));
     let connected = server.status == Status::Connected;
+    // A short state fits beside the controls; the full audio message is the tooltip.
+    let detail = server.audio_status.clone();
     let status = if !connected {
         server.status_label().to_string()
     } else if server.deafened {
         "Deafened".into()
     } else if server.muted {
         "Muted".into()
+    } else if talking {
+        "Talking".into()
+    } else if detail.starts_with("Audio ready") {
+        match transmit {
+            nuschel_core::audio::TransmitMode::VoiceActivity => "Voice activity",
+            nuschel_core::audio::TransmitMode::PushToTalk => "Push to talk",
+            nuschel_core::audio::TransmitMode::Continuous => "Transmitting",
+        }
+        .into()
     } else {
-        server.audio_status.clone()
+        detail
+            .split([':', '·'])
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string()
     };
     div()
         .h(px(56.))
@@ -940,9 +960,11 @@ fn user_panel(server: &ServerView, cx: &mut Context<Desktop>) -> AnyElement {
                 )
                 .child(
                     div()
+                        .id("audio-status-line")
                         .text_xs()
                         .truncate()
                         .text_color(color(TEXT_MUTED))
+                        .tooltip(move |_, cx| cx.new(|_| Tooltip(detail.clone().into())).into())
                         .child(text!(status).with_id("audio-status")),
                 ),
         )
