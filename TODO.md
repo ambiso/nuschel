@@ -177,7 +177,11 @@ ServerConfig.
       `runtime_shaders`, `fxc.exe` on Windows).
       Vendored patches: Apple build script checks the target OS; Windows compiles HLSL at run time.
 - [ ] Native Windows and macOS audio validation on real hardware.
-      Needs hardware; impossible from this Linux host.
+      Windows 11 in a KVM guest (`tests/windows_vm.py`): GUI, auto-connect muted and
+      deafened, WASAPI device lists, microphone and echo tests, autostart, updates. It
+      found the console window beside the app. Real hardware and macOS remain.
+- [ ] Automate the Windows VM checks as a script (they were driven by hand so far)
+      and add UDP (QEMU's guest forwards carry only TCP, so voice used the tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
       macOS Seatbelt profiles (media is a deny list for now); Windows is only a kill-on-close job, not a sandbox. Neither has run on its OS.
 - [ ] Platform effect detection: Windows `IAudioEffectsManager` /
@@ -235,5 +239,12 @@ ServerConfig.
 
 ### Release and other targets
 
+- [x] Release workflow (one Linux runner, cross builds) with signed in-place updates
+      for Windows and macOS.
+- [ ] Store `UPDATE_SIGNING_KEY` as a repository secret and back the key up.
+- [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
+      updates itself where it was unpacked.
+- [ ] macOS Developer ID signing and notarisation with `rcodesign` (needs an Apple
+      Developer account); until then first start needs "Open Anyway".
 - [ ] Third-party notices and attribution; walk through the release gates in `SECURITY.md`.
 - [ ] Mobile and web clients (renderer open; shared core already compiles to WASM).

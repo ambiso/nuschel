@@ -26,8 +26,8 @@ all protocol traffic.
 | --- | --- |
 | `udp_voice.py` | Encrypted OCB2 UDP voice, forced TCP and mixed relay; jitter and 5% loss with netem; inbound UDP blocked (IPv4 and IPv6) falls back to the TLS tunnel and recovers |
 | `protocol_features.py` | Whisper/shout isolation, channel listening, permissions, user stats, comments and avatars, self-registration, SuperUser administration (registered users, bans, ACL, kick), OpenSSL-made PKCS#12 import (channel links are not yet covered) |
-| `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, clipping detection that leaves system levels untouched |
-| `pipewire_recovery.py` | A private PipeWire + WirePlumber + pipewire-pulse session with virtual nodes only: playback, PipeWire restart with the replacement worker pinned to PipeWire (no ALSA fallback), pipewire-pulse restart, PipeWire echo-cancel reuse without touching session defaults, device lists without other applications' streams |
+| `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, the Settings echo test at -31 dB coupling with and without Nuschel's canceller, clipping detection that leaves system levels untouched |
+| `pipewire_recovery.py` | A private PipeWire + WirePlumber + pipewire-pulse session with virtual nodes only: playback, PipeWire restart with the replacement worker pinned to PipeWire (no ALSA fallback), pipewire-pulse restart, PipeWire echo-cancel reuse without touching session defaults, device lists without other applications' streams, an RNNoise filter-chain behind echo-cancel (both of Nuschel's stages off, playback to the canceller) |
 | `opus_eval.py` | opus-pure against reference libopus: decoder conformance in SILK, Hybrid and CELT, encoder interop both ways, 5,000 hostile packets |
 | `stock_client.py` | The real stock Mumble GUI with a certificate exported by Nuschel; voice in both directions |
 | `desktop_recovery.py` | Media and storage worker crashes keep the session and history; server restart reconnects with backoff, rejoins the channel muted and marks the gap |
@@ -37,6 +37,13 @@ all protocol traffic.
 Development aids outside the VM: `screenshots.py` (scenes under a private headless
 GNOME Shell on the real GPU; it never touches the user's session) and
 `accessibility.py --gnome-shell` (the same check with Nuschel's own window controls).
+
+`windows_vm.py` installs Windows 11 Enterprise (evaluation ISO from Microsoft)
+unattended into a KVM guest with two vCPUs and drives it through a PowerShell agent
+in the desktop session, QMP screenshots, clicks and keys. The guest has no network
+except forwards into host loopback (the harness on 10.0.2.100:80, a test Murmur on
+10.0.2.100:64738). Keep its state directory (`$NUSCHEL_WINDOWS_VM_DIR`, default
+`~/vms/nuschel-windows`) out of backups and off a RAM-backed `/tmp`.
 
 The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
 module's hardened database preflight. Nuschel server protocol tests remain deferred.
