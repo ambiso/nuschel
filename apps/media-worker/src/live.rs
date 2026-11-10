@@ -133,6 +133,25 @@ impl Transmit {
     }
 }
 
+/// `--probe-route`: open the default (or configured) devices once, as a call
+/// would, and print what Nuschel found upstream of the microphone. A
+/// diagnostic for users: it opens the microphone briefly and sends nothing.
+pub fn probe_route() -> Result<(), Box<dyn std::error::Error>> {
+    let (tx, _rx) = mpsc::sync_channel(64);
+    let (_devices, route) = open_devices(tx, true, &AudioSettings::default(), None)?;
+    let report = serde_json::json!({
+        "input": route.input,
+        "output": route.output,
+        "echo_cancellation": route.echo,
+        "noise_suppression_upstream": route.noise,
+        "inputs": route.inputs,
+        "outputs": route.outputs,
+    });
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    // Dropping native streams can block; the OS closes them with the process.
+    std::process::exit(0)
+}
+
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::sync_channel(256);
     let input_tx = tx.clone();

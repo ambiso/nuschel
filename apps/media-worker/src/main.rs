@@ -15,6 +15,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().any(|argument| argument == "--live") {
         return live::run();
     }
+    if std::env::args().any(|argument| argument == "--probe-route") {
+        return live::probe_route();
+    }
     // Native device I/O and DSP will live here too. This process receives no server credentials.
     let mut encoder = OpusEncoder::new(48_000, 1, Application::Voip)?;
     encoder.bitrate_bps = 64_000;
