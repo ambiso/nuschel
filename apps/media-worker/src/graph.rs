@@ -16,6 +16,9 @@ pub struct Node {
     pub class: String,
     /// Shared by the nodes one module creates (filter-chain, echo-cancel, loopback).
     pub link_group: Option<String>,
+    /// Where a stream asks to be linked (`target.object`): a node name or serial.
+    pub target: Option<String>,
+    pub serial: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,6 +42,9 @@ pub struct Upstream {
     pub noise: Option<String>,
     /// The echo canceller's sink: Nuschel's playback must reach it as the reference.
     pub reference: Option<String>,
+    /// The walk met a capture stream without links (a passive filter that
+    /// nobody records from yet): the answer may be incomplete.
+    pub dangling: bool,
 }
 
 const MAX_STAGES: usize = 16;
@@ -138,13 +144,26 @@ impl Graph {
                 })
                 .map(|node| node.id)
                 .collect();
-            let next = self
+            let linked = self
                 .links
                 .iter()
                 .filter(|link| capture.contains(&link.input))
                 .map(|link| link.output)
                 .find(|id| !visited.contains(id))
                 .and_then(|id| self.node(id));
+            // An unlinked capture stream: follow the node it asks for, if any.
+            let unlinked = stage.iter().find(|node| {
+                node.class.starts_with("Stream/Input")
+                    && !self.links.iter().any(|link| link.input == node.id)
+            });
+            found.dangling |= linked.is_none() && unlinked.is_some();
+            let next = linked.or_else(|| {
+                let target = unlinked?.target.as_deref()?;
+                self.nodes.iter().find(|node| {
+                    !visited.contains(&node.id)
+                        && (node.name == target || node.serial.as_deref() == Some(target))
+                })
+            });
             let Some(next) = next else {
                 break;
             };
@@ -171,19 +190,34 @@ pub fn snapshot() -> Option<Graph> {
     let mainloop = pw::main_loop::MainLoopRc::new(None).ok()?;
     let context = pw::context::ContextRc::new(&mainloop, None).ok()?;
     let core = context.connect_rc(None).ok()?;
-    let registry = core.get_registry().ok()?;
+    let registry = core.get_registry_rc().ok()?;
     let graph = Rc::new(RefCell::new(Graph::default()));
-    let pending = core.sync(0).ok()?;
+    // The registry announces only a few properties per node; the module
+    // grouping (`node.link-group`) and stream targets come with each node's
+    // info, so every node is bound and read in a second round trip.
+    let bound = Rc::new(RefCell::new(Vec::new()));
+    let pending = Rc::new(std::cell::Cell::new(core.sync(0).ok()?));
+    let rounds = Rc::new(std::cell::Cell::new(0_u8));
     let finished = Rc::new(std::cell::Cell::new(false));
     let _core_listener = core
         .add_listener_local()
         .done({
             let mainloop = mainloop.clone();
             let finished = finished.clone();
+            let core = core.clone();
+            let pending = pending.clone();
+            let rounds = rounds.clone();
             move |id, seq| {
-                if id == pw::core::PW_ID_CORE && seq == pending {
-                    finished.set(true);
-                    mainloop.quit();
+                if id != pw::core::PW_ID_CORE || seq != pending.get() {
+                    return;
+                }
+                rounds.set(rounds.get() + 1);
+                match core.sync(0) {
+                    Ok(next) if rounds.get() < 2 => pending.set(next),
+                    _ => {
+                        finished.set(rounds.get() >= 2);
+                        mainloop.quit();
+                    }
                 }
             }
         })
@@ -192,20 +226,56 @@ pub fn snapshot() -> Option<Graph> {
         .add_listener_local()
         .global({
             let graph = graph.clone();
+            let bound = bound.clone();
+            let registry = registry.downgrade();
             move |global| {
                 let Some(props) = global.props else {
                     return;
                 };
                 let text = |key: &str| props.get(key).unwrap_or_default().to_string();
                 match global.type_ {
-                    pw::types::ObjectType::Node => graph.borrow_mut().nodes.push(Node {
-                        id: global.id,
-                        name: text("node.name"),
-                        description: text("node.description"),
-                        media_name: text("media.name"),
-                        class: text("media.class"),
-                        link_group: props.get("node.link-group").map(str::to_string),
-                    }),
+                    pw::types::ObjectType::Node => {
+                        graph.borrow_mut().nodes.push(Node {
+                            id: global.id,
+                            name: text("node.name"),
+                            description: text("node.description"),
+                            media_name: text("media.name"),
+                            class: text("media.class"),
+                            link_group: None,
+                            target: None,
+                            serial: props.get("object.serial").map(str::to_string),
+                        });
+                        let Some(registry) = registry.upgrade() else {
+                            return;
+                        };
+                        let Ok(node) = registry.bind::<pw::node::Node, _>(global) else {
+                            return;
+                        };
+                        let id = global.id;
+                        let graph = graph.clone();
+                        let listener = node
+                            .add_listener_local()
+                            .info(move |info| {
+                                let Some(props) = info.props() else {
+                                    return;
+                                };
+                                let mut graph = graph.borrow_mut();
+                                let Some(node) = graph.nodes.iter_mut().find(|node| node.id == id)
+                                else {
+                                    return;
+                                };
+                                node.link_group = props.get("node.link-group").map(str::to_string);
+                                node.target = props
+                                    .get("target.object")
+                                    .or_else(|| props.get("node.target"))
+                                    .map(str::to_string);
+                                if let Some(name) = props.get("media.name") {
+                                    node.media_name = name.to_string();
+                                }
+                            })
+                            .register();
+                        bound.borrow_mut().push((node, listener));
+                    }
                     pw::types::ObjectType::Link => {
                         let id = |key: &str| props.get(key).and_then(|value| value.parse().ok());
                         if let (Some(output), Some(input)) =
@@ -245,6 +315,8 @@ mod tests {
             media_name: String::new(),
             class: class.into(),
             link_group: group.map(str::to_string),
+            target: None,
+            serial: None,
         }
     }
 
@@ -384,6 +456,23 @@ mod tests {
         };
         // A cycle back into the chain ends the walk instead of looping.
         assert!(cyclic.upstream("effect_output.rnnoise").echo.is_some());
+    }
+
+    #[test]
+    fn a_passive_filter_without_links_follows_its_target() {
+        let mut graph = rnnoise_after_echo_cancel();
+        graph.links.retain(|link| link.input != 60);
+        let found = graph.upstream("effect_output.rnnoise");
+        assert!(found.dangling && found.echo.is_none(), "{found:?}");
+        graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.id == 60)
+            .unwrap()
+            .target = Some("echo-cancel-source".into());
+        let found = graph.upstream("effect_output.rnnoise");
+        assert_eq!(found.echo.as_deref(), Some("Echo-Cancel Source"));
+        assert!(found.dangling);
     }
 
     #[test]

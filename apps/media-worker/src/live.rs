@@ -801,13 +801,43 @@ fn open_host(
         input_id = Some(format!("pipewire:{}", backend_name(&id)));
         input_name = name;
     }
+    // The microphone opens first: a filter-chain's capture (as in PipeWire's
+    // RNNoise configuration) is passive and is linked to its own source only
+    // once someone records from the chain.
+    let mut capture_consumer = None;
+    let input = capture
+        .then(|| input_device.clone())
+        .flatten()
+        .and_then(|input| {
+            let config = input.default_input_config().ok()?;
+            let (producer, consumer) = RingBuffer::<f32>::new(RING);
+            let stream = match config.sample_format() {
+                SampleFormat::F32 => {
+                    input_stream::<f32>(&input, stream_config(host, config), tx.clone(), producer)
+                }
+                SampleFormat::I16 => {
+                    input_stream::<i16>(&input, stream_config(host, config), tx.clone(), producer)
+                }
+                SampleFormat::U16 => {
+                    input_stream::<u16>(&input, stream_config(host, config), tx.clone(), producer)
+                }
+                SampleFormat::I32 => {
+                    input_stream::<i32>(&input, stream_config(host, config), tx.clone(), producer)
+                }
+                _ => return None,
+            }
+            .ok()?;
+            stream.play().ok()?;
+            capture_consumer = Some(consumer);
+            Some(stream)
+        });
     // Processing that already happens before Nuschel: follow PipeWire's graph
     // upstream (mic → echo-cancel → RNNoise → default source), falling back to
     // recognising an echo-cancel source by name (PulseAudio, other systems).
     #[cfg(target_os = "linux")]
     let found = input_id
         .as_ref()
-        .and_then(|id| crate::graph::snapshot().map(|graph| graph.upstream(backend_name(id))))
+        .map(|id| upstream_processing(backend_name(id), input.is_some()))
         .unwrap_or_default();
     #[cfg(not(target_os = "linux"))]
     let found = crate::graph::Upstream::default();
@@ -890,30 +920,6 @@ fn open_host(
         _ => return Err("unsupported output sample format".into()),
     }?;
     stream.play().map_err(|error| error.to_string())?;
-    let mut capture_consumer = None;
-    let input = capture.then_some(input_device).flatten().and_then(|input| {
-        let config = input.default_input_config().ok()?;
-        let (producer, consumer) = RingBuffer::<f32>::new(RING);
-        let stream = match config.sample_format() {
-            SampleFormat::F32 => {
-                input_stream::<f32>(&input, stream_config(host, config), tx.clone(), producer)
-            }
-            SampleFormat::I16 => {
-                input_stream::<i16>(&input, stream_config(host, config), tx.clone(), producer)
-            }
-            SampleFormat::U16 => {
-                input_stream::<u16>(&input, stream_config(host, config), tx.clone(), producer)
-            }
-            SampleFormat::I32 => {
-                input_stream::<i32>(&input, stream_config(host, config), tx.clone(), producer)
-            }
-            _ => return None,
-        }
-        .ok()?;
-        stream.play().ok()?;
-        capture_consumer = Some(consumer);
-        Some(stream)
-    });
     Ok((
         Devices {
             _input: input,
@@ -931,6 +937,25 @@ fn open_host(
             noise: found.noise,
         },
     ))
+}
+
+/// Walk PipeWire's graph upstream from `source`. While our own capture has
+/// just started, passive filter links may still be on their way: wait for
+/// them briefly rather than miss a canceller behind a noise suppressor.
+#[cfg(target_os = "linux")]
+fn upstream_processing(source: &str, capturing: bool) -> crate::graph::Upstream {
+    let mut found = crate::graph::Upstream::default();
+    for attempt in 0..8 {
+        let Some(graph) = crate::graph::snapshot() else {
+            break;
+        };
+        found = graph.upstream(source);
+        if !(capturing && found.dangling) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50 + attempt * 25));
+    }
+    found
 }
 
 /// Real sources (without monitors) and sinks by node name, from the PulseAudio

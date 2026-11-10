@@ -18,6 +18,10 @@ appeared. Checks:
    into the canceller's sink and leaves the session defaults alone. Device
    lists hold only real sources and sinks (no other applications' streams,
    sink monitors or virtual default entries).
+5. An RNNoise filter-chain behind the echo canceller (PipeWire's own
+   source-rnnoise.conf layout: mic → echo-cancel → RNNoise → default source)
+   is followed upstream: Nuschel turns off both its echo canceller and its
+   noise suppressor and feeds the system canceller its playback.
 """
 import argparse
 import json
@@ -62,6 +66,22 @@ ECHO_CANCEL = """context.modules = [
   }
 ]
 """
+# PipeWire's source-rnnoise.conf, mono, capturing the echo canceller's output.
+# Without --rnnoise-ladspa a pass-through plugin stands in for RNNoise (the
+# graph and names are what Nuschel recognises).
+RNNOISE = """context.modules = [
+  { name = libpipewire-module-filter-chain
+    args = {
+      node.description = "Noise Canceling source"
+      media.name = "Noise Canceling source"
+      filter.graph = { nodes = [ PLUGIN ] }
+      audio.position = [ MONO ]
+      capture.props = { node.name = "effect_input.rnnoise" node.passive = true target.object = "echo-cancel-source" }
+      playback.props = { node.name = "effect_output.rnnoise" media.class = Audio/Source }
+    }
+  }
+]
+"""
 NO_HARDWARE = """wireplumber.profiles = {
   main = {
     monitor.alsa = disabled
@@ -99,6 +119,11 @@ class PipeWire:
 
     def enable_echo_cancel(self):
         (self.config / "pipewire/pipewire.conf.d/20-echo-cancel.conf").write_text(ECHO_CANCEL)
+
+    def enable_rnnoise(self, ladspa=None):
+        plugin = (f'{{ type = ladspa name = rnnoise plugin = "{ladspa}" label = noise_suppressor_mono }}'
+                  if ladspa else "{ type = builtin name = rnnoise label = copy }")
+        (self.config / "pipewire/pipewire.conf.d/30-rnnoise.conf").write_text(RNNOISE.replace("PLUGIN", plugin))
 
     def start(self, name):
         binary = {"pipewire": self.pipewire / "bin/pipewire", "pipewire-pulse": self.pipewire / "bin/pipewire-pulse",
@@ -332,6 +357,46 @@ def check_echo_cancel(binary, pipewire):
           "session defaults untouched.", flush=True)
 
 
+def links(pipewire):
+    """(output node name, input node name) for every link in the graph."""
+    result = subprocess.run([str(pipewire.pipewire / "bin/pw-dump")], env=pipewire.env, capture_output=True,
+                            text=True, timeout=10)
+    objects = json.loads(result.stdout or "[]")
+    names = {entry["id"]: entry["info"]["props"].get("node.name") for entry in objects
+             if entry.get("type") == "PipeWire:Interface:Node"}
+    return {(names.get(entry["info"].get("output-node-id")), names.get(entry["info"].get("input-node-id")))
+            for entry in objects if entry.get("type") == "PipeWire:Interface:Link"}
+
+
+def check_rnnoise_chain(binary, pipewire):
+    subprocess.run([str(pipewire.pipewire / "bin/pw-metadata"), "-n", "default", "0",
+                    "default.configured.audio.source", '{ "name": "effect_output.rnnoise" }', "Spa:String:JSON"],
+                   env=pipewire.env, check=True, capture_output=True, timeout=10)
+    deadline = time.monotonic() + 10
+    while not any("effect_output.rnnoise" in line and "'default.audio.source'" in line for line in defaults(pipewire)):
+        assert time.monotonic() < deadline, f"the RNNoise source did not become the default: {defaults(pipewire)}"
+        time.sleep(0.2)
+    before = defaults(pipewire)
+    worker = Worker(binary, pipewire, muted=False)
+    devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
+    status = worker.ready()
+    graph = links(pipewire)
+    assert devices["input"] == "pipewire:effect_output.rnnoise", devices["input"]
+    assert devices["echo"] == {"kind": "upstream", "device": "Echo-Cancel Source"}, devices["echo"]
+    assert devices["noise"] == "Noise Canceling source", devices["noise"]
+    assert devices["output"].endswith(":echo-cancel-sink"), \
+        f"Nuschel's playback must reach the canceller's reference: {devices['output']}"
+    assert "system echo cancellation" in status["message"], status
+    # The chain Nuschel recognised is the one PipeWire actually built.
+    assert ("echo-cancel-source", "effect_input.rnnoise") in graph, sorted(graph)
+    time.sleep(1)
+    after = defaults(pipewire)
+    worker.stop()
+    assert before == after, f"the session defaults changed: {before} -> {after}"
+    print("RNNoise behind echo-cancel recognised: Nuschel's canceller and noise suppressor are off, "
+          "its playback feeds the system canceller, session defaults untouched.", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
@@ -340,25 +405,39 @@ def main():
     parser.add_argument("--opus-library", type=Path, required=True)
     parser.add_argument("--dbus-daemon", default=shutil.which("dbus-daemon") or "dbus-daemon")
     parser.add_argument("--output", type=Path, default=Path(tempfile.gettempdir()))
+    parser.add_argument("--rnnoise-ladspa", type=Path, help="librnnoise_ladspa.so (else a pass-through)")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     Worker.logs = args.output
     packets = ReferenceOpus(args.opus_library).encode_tone(100)
     binary = args.binaries / "nuschel-media-worker"
     with tempfile.TemporaryDirectory(prefix="nuschel-pw-", dir=os.environ.get("NUSCHEL_SHORT_TMP")) as temporary:
-        pipewire = PipeWire(args.pipewire, args.wireplumber, args.dbus_daemon, Path(temporary) / "plain")
-        try:
-            pipewire.up()
-            check_restarts(binary, pipewire, packets, args.output)
-        finally:
-            pipewire.close()
-        pipewire = PipeWire(args.pipewire, args.wireplumber, args.dbus_daemon, Path(temporary) / "echo")
-        try:
-            pipewire.enable_echo_cancel()
-            pipewire.up(expected=("speakers", "microphone", "echo-cancel-source", "echo-cancel-sink"))
-            check_echo_cancel(binary, pipewire)
-        finally:
-            pipewire.close()
+        only = os.environ.get("NUSCHEL_PIPEWIRE_ONLY")
+        if only in (None, "restarts"):
+            pipewire = PipeWire(args.pipewire, args.wireplumber, args.dbus_daemon, Path(temporary) / "plain")
+            try:
+                pipewire.up()
+                check_restarts(binary, pipewire, packets, args.output)
+            finally:
+                pipewire.close()
+        if only in (None, "echo"):
+            pipewire = PipeWire(args.pipewire, args.wireplumber, args.dbus_daemon, Path(temporary) / "echo")
+            try:
+                pipewire.enable_echo_cancel()
+                pipewire.up(expected=("speakers", "microphone", "echo-cancel-source", "echo-cancel-sink"))
+                check_echo_cancel(binary, pipewire)
+            finally:
+                pipewire.close()
+        if only in (None, "rnnoise"):
+            pipewire = PipeWire(args.pipewire, args.wireplumber, args.dbus_daemon, Path(temporary) / "rnnoise")
+            try:
+                pipewire.enable_echo_cancel()
+                pipewire.enable_rnnoise(args.rnnoise_ladspa)
+                pipewire.up(expected=("speakers", "microphone", "echo-cancel-source", "echo-cancel-sink",
+                                      "effect_output.rnnoise"))
+                check_rnnoise_chain(binary, pipewire)
+            finally:
+                pipewire.close()
 
 
 if __name__ == "__main__":
