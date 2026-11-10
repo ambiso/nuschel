@@ -335,7 +335,7 @@ fn sidebar(
                     .role(Role::TreeItem)
                     .aria_label(format!("{} is listening", user.name))
                     .h(px(26.))
-                    .pl(px(30. + depth.saturating_sub(1).min(10) as f32 * 14.))
+                    .pl(px(user_indent(depth)))
                     .flex()
                     .items_center()
                     .gap_2()
@@ -742,6 +742,13 @@ fn channel_row(
         .into_any_element()
 }
 
+/// People sit under their channel's name, further in than its sub-channels'
+/// icons: `depth` is the channel's depth plus one. The constant is the
+/// channel row's inset, chevron, gap, speaker icon and gap.
+fn user_indent(depth: usize) -> f32 {
+    50. + depth.saturating_sub(1).min(10) as f32 * 14.
+}
+
 fn user_row(
     server: &ServerView,
     server_index: usize,
@@ -773,7 +780,7 @@ fn user_row(
         .flex_shrink_0()
         .min_w_0()
         .pr_2()
-        .pl(px(30. + depth.saturating_sub(1).min(10) as f32 * 14.))
+        .pl(px(user_indent(depth)))
         .rounded(px(6.))
         .cursor_pointer()
         .text_color(color(if own { TEXT } else { TEXT_MUTED }))

@@ -947,11 +947,7 @@ impl State {
                     )
                     .await;
                 }
-                let wire_body = if self.allow_html {
-                    escape_html(&body)
-                } else {
-                    body.clone()
-                };
+                let wire_body = legacy_body(&body, self.allow_html);
                 if wire_body.len() > self.message_limit {
                     return emit(
                         events,
@@ -1855,6 +1851,22 @@ pub fn now_ms() -> i64 {
         .as_millis()
         .min(i64::MAX as u128) as i64
 }
+/// The text stock Mumble clients receive. They print "Name: " before the
+/// first line, so a message that opens with a code fence gets a leading line
+/// break: the fence and the code then start on lines of their own.
+pub fn legacy_body(body: &str, html: bool) -> String {
+    let body = if body.starts_with("```") {
+        std::borrow::Cow::Owned(format!("\n{body}"))
+    } else {
+        std::borrow::Cow::Borrowed(body)
+    };
+    if html {
+        escape_html(&body)
+    } else {
+        body.into_owned()
+    }
+}
+
 pub fn escape_html(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     for c in body.chars() {
@@ -2235,6 +2247,19 @@ mod tests {
         assert_eq!(
             escape_html("<script>&\n\n```rust\nfn main() {}\n```"),
             "&lt;script&gt;&amp;<br/><br/>```rust<br/>fn main() {}<br/>```"
+        );
+    }
+
+    #[test]
+    fn a_message_opening_with_a_code_fence_starts_on_a_new_line_for_stock_mumble() {
+        assert_eq!(
+            legacy_body("```rust\nfn main() {}\n```", true),
+            "<br/>```rust<br/>fn main() {}<br/>```"
+        );
+        assert_eq!(legacy_body("```\nx\n```", false), "\n```\nx\n```");
+        assert_eq!(
+            legacy_body("see:\n```\nx\n```", true),
+            "see:<br/>```<br/>x<br/>```"
         );
     }
 
