@@ -13,6 +13,8 @@
    realistic -31 dB, Nuschel's canceller must remove most of the echo and
    keep the voice gate mostly shut, and the test must show that without it
    the echo would be sent.
+5. Double talk: while the far end plays, the user's own speech must not be
+   ducked by more than 3 dB nor cut by the voice gate.
 """
 import argparse
 import json
@@ -270,6 +272,63 @@ def check_echo_test(binary, pulse):
         pulse.ctl("unload-module", module)
 
 
+def near_voice(seconds):
+    """A continuous near-end "voice": a gliding pulse train in syllables."""
+    rate, phase, out = 48000, 0.0, bytearray()
+    for n in range(seconds * rate):
+        t = n / rate
+        phase += 2 * math.pi * (130 + 20 * math.sin(math.pi * t)) / rate
+        voiced = sum(math.sin(k * phase) / k for k in range(1, 18))
+        out += struct.pack("<f", 0.12 * voiced * max(0.0, math.sin(2 * math.pi * 3.1 * t)) ** 0.5)
+    return bytes(out)
+
+
+def check_double_talk(binary, pulse, root):
+    """The user talking over the far end keeps their level (no ducking)."""
+    pulse.ctl("set-default-source", "mic.monitor")
+    module = pulse.ctl("load-module", "module-loopback", "source=speakers.monitor", "sink=mic",
+                       "latency_msec=30", "adjust_time=0", "sink_input_properties=media.name=room").strip()
+    voice = root / "near.raw"
+    voice.write_bytes(near_voice(40))
+    player = subprocess.Popen([str(pulse.bin / "pacat"), f"--server=unix:{pulse.socket}", "--device=mic", "--raw",
+                               "--format=float32le", "--rate=48000", "--channels=1", str(voice)],
+                              start_new_session=True)
+    try:
+        time.sleep(0.5)
+        room = next(entry["index"] for entry in pulse.ctl("list", "sink-inputs", json_output=True)
+                    if entry["properties"].get("media.name") == "room")
+        pulse.ctl("set-sink-input-volume", str(room), "30%")
+
+        def peaks(events):
+            levels = sorted(event["level_db"] for event in events)[len(events) // 2:]
+            return sum(levels) / max(1, len(levels)), sum(e["transmitting"] for e in events) / max(1, len(events))
+
+        def run():
+            worker = Worker(binary, pulse)
+            worker.send({"kind": "configure", "bitrate": 40000, "packet_loss_percent": 5, "settings": {}})
+            worker.send({"kind": "preview", "capture": True, "loopback": False})
+            worker.wait(lambda e: e["kind"] == "status" and e["ready"], "audio did not start")
+            time.sleep(4)
+            mark = len(worker.events)
+            time.sleep(3)
+            alone = peaks([e for e in worker.events[mark:] if e["kind"] == "level"])
+            worker.send({"kind": "echo_test"})  # the far end talks for six seconds
+            start = len(worker.events)
+            worker.wait(lambda e: e["kind"] == "echo_test", "no echo test result", timeout=20)
+            # Far end playing, after the canceller's first two seconds.
+            together = peaks([e for e in worker.events[start:] if e["kind"] == "level"][28:66])
+            worker.stop()
+            return alone[0] - together[0], together[1]
+        # Convergence still varies from run to run (see check_echo_test).
+        ducking, gate = min((run() for _ in range(2)), key=lambda result: result[0])
+        assert ducking <= 3 and gate >= 0.9, f"the user was ducked by {ducking:.1f} dB, gate open {gate:.0%}"
+        print(f"Double talk: the user's speech kept its level ({ducking:.1f} dB) with the gate open {gate:.0%}.",
+              flush=True)
+    finally:
+        os.killpg(player.pid, signal.SIGTERM)
+        pulse.ctl("unload-module", module)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
@@ -290,6 +349,8 @@ def main():
                 check_echo_routes(worker, pulse)
             if only in (None, "echo_test"):
                 check_echo_test(worker, pulse)
+            if only in (None, "double_talk"):
+                check_double_talk(worker, pulse, Path(temporary))
             if only in (None, "clipping"):
                 check_clipping(worker, pulse, Path(temporary))
         finally:

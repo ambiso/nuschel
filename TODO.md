@@ -69,8 +69,12 @@ are not concealed (`apps/media-worker/src/live.rs`).
       reduction and 0-27% of far-end speech leaking through the gate, against echo
       below detection for PulseAudio's. Fixed so far: far-end audio was handed over in
       playback-ring bursts (now as the device consumes it) and automatic gain raised
-      residual echo after RNNoise (now held while the far end plays). Next: sample-
-      accurate latency accounting from cpal's stream timestamps.
+      residual echo after RNNoise (now held only on echo-dominant frames, so the user
+      talking over the far end is not ducked). When the canceller has not converged its
+      suppressor still ducks the user during double talk: 6-9 dB in about a third of
+      runs with automatic gain off, against 0-2 dB once converged. Next: sample-
+      accurate latency accounting from cpal's stream timestamps, then check on real
+      hardware with Settings → Echo test.
 - [ ] Nuschel records nothing from PulseAudio's `module-sine-source`, and its own
       playback is silent while it records the monitor of the sink it plays into.
       Both found in test rigs; check the PulseAudio client's stream setup.

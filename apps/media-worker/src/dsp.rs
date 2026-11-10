@@ -101,10 +101,11 @@ impl CapturePipeline {
         }
     }
 
-    /// Tell the chain whether the far end is audible. While it is, automatic
-    /// gain may fall but not rise: what is left of the echo after cancellation
-    /// and noise suppression is speech-like, and raising the gain on it would
-    /// send the far end's own voice back to them.
+    /// Tell the chain whether the far end is audible. While echo dominates a
+    /// frame, automatic gain may fall but not rise: what is left of the echo
+    /// after cancellation and noise suppression is speech-like, and raising the
+    /// gain on it would send the far end's own voice back to them. The user's
+    /// own speech over the far end is not held back (no ducking).
     pub fn set_far_end(&mut self, active: bool) {
         self.far_end = active;
         if !active {
@@ -141,6 +142,7 @@ impl CapturePipeline {
         echo_guard: bool,
     ) -> FrameResult {
         self.input.copy_from_slice(frame);
+        let captured = rms(frame);
         if self
             .front
             .process_capture_f32(&[&self.input], &mut [&mut self.output])
@@ -148,6 +150,10 @@ impl CapturePipeline {
         {
             frame.copy_from_slice(&self.output);
         }
+        // Echo dominates this frame when the far end plays and the canceller
+        // removed most of it (6 dB or more); the user talking over the far end
+        // keeps most of the energy and is not held back.
+        let echo_dominant = self.far_end && rms(frame) < captured * 0.5;
         // RNNoise works on 16-bit scaled samples and also estimates speech.
         for (scaled, sample) in self.input.iter_mut().zip(frame.iter()) {
             *scaled = sample * SCALE;
@@ -168,7 +174,7 @@ impl CapturePipeline {
                 let before = rms(&self.input);
                 if before > 1e-5 {
                     let applied = rms(frame) / before;
-                    if self.far_end {
+                    if echo_dominant {
                         let ceiling = *self.gain_ceiling.get_or_insert(self.near_gain);
                         if applied > ceiling {
                             let scale = ceiling / applied;
