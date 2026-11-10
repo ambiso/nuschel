@@ -34,6 +34,9 @@ struct Arguments {
     certificate_sha256: Option<String>,
     #[arg(long)]
     profile_dir: Option<PathBuf>,
+    /// Keep voice in the TLS tunnel instead of encrypted UDP.
+    #[arg(long)]
+    force_tcp: bool,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -95,6 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         server,
         identity: profile.identity()?,
         password,
+        force_tcp: args.force_tcp,
     };
     let (tx, rx) = mpsc::channel(32);
     let (events_tx, mut events) = mpsc::channel(64);
@@ -179,6 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::Notice(message) => json!({"kind":"notice", "message":message}),
                 SessionEvent::PermissionDenied(message) => json!({"kind":"permission_denied", "message":message}),
                 SessionEvent::Audio(packet) => json!({"kind":"audio", "sender":packet.sender, "sequence":packet.sequence, "opus":packet.opus, "end":packet.end}),
+                SessionEvent::Transport(stats) => json!({"kind":"transport", "stats":stats}),
             })?,
         }
     }

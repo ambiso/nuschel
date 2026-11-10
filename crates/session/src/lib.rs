@@ -3,6 +3,7 @@
 pub mod config;
 pub mod connection;
 mod tls;
+pub mod udp;
 pub mod workers;
 
 use thiserror::Error;

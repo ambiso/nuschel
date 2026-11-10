@@ -12,6 +12,7 @@ use nuschel_core::{MAX_CONTENT_BYTES, MessageDocument, PreviewPolicy};
 use nuschel_session::{
     config::{CachedChannel, MumbleUrl, Profile, ServerBookmark},
     connection::{Command, SessionEvent, TextTarget, User},
+    udp::TransportStats,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -146,6 +147,7 @@ pub struct ServerView {
     pub welcome: Option<String>,
     pub certificate: Option<CertificatePrompt>,
     pub talking: BTreeSet<u32>,
+    pub transport: Option<TransportStats>,
     /// Channel path from a `mumble://` link, joined once the tree has loaded.
     pub pending_channel: Vec<String>,
 }
@@ -193,14 +195,25 @@ impl ServerView {
             welcome: None,
             certificate: None,
             talking: BTreeSet::new(),
+            transport: None,
             pending_channel: Vec::new(),
         }
     }
-    pub fn status_label(&self) -> &'static str {
+    pub fn status_label(&self) -> String {
         match self.status {
-            Status::Disconnected => "Disconnected",
-            Status::Connecting => "Connecting…",
-            Status::Connected => "Connected · TCP voice",
+            Status::Disconnected => "Disconnected".into(),
+            Status::Connecting => "Connecting…".into(),
+            Status::Connected => match &self.transport {
+                Some(stats) if stats.udp_active => {
+                    format!("Connected · UDP · {:.0} ms", stats.udp.average_ms)
+                }
+                Some(stats) if stats.tcp.packets > 0 => format!(
+                    "Connected · TCP{} · {:.0} ms",
+                    if stats.forced_tcp { " (forced)" } else { "" },
+                    stats.tcp.average_ms
+                ),
+                _ => "Connected".into(),
+            },
         }
     }
     pub fn voice_channel(&self) -> Option<u32> {
@@ -842,6 +855,7 @@ impl Desktop {
         server.own_session = None;
         server.users.clear();
         server.talking.clear();
+        server.transport = None;
         server.audio_status = "Audio disconnected".into();
         if self
             .navigation
@@ -1485,6 +1499,7 @@ impl Desktop {
                 }
             }
             SessionEvent::Welcome(text) => server.welcome = Some(text),
+            SessionEvent::Transport(stats) => server.transport = Some(stats),
             SessionEvent::Text(_) | SessionEvent::Audio(_) => {}
         }
     }

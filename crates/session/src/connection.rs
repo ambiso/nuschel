@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
+use crate::udp::{self, PingStats, Received, TransportStats, Udp};
 use crate::{
     Error,
     config::{ClientIdentity, ServerBookmark},
@@ -7,7 +8,8 @@ use bytes::Bytes;
 use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_protocol::{
     ControlFrame, MAX_CONTROL_BYTES, control as proto,
-    voice::{self, VoicePacket},
+    crypt::CryptState,
+    voice::{self, UdpMessage, VoicePacket},
 };
 use prost::Message;
 use serde::Serialize;
@@ -66,12 +68,17 @@ pub enum SessionEvent {
     ChannelRemoved(u32),
     User(User),
     UserRemoved(u32),
-    Connected { session: u32, max_bandwidth: u32 },
+    Connected {
+        session: u32,
+        max_bandwidth: u32,
+    },
     Text(IncomingText),
     Welcome(String),
     PermissionDenied(String),
     Notice(String),
     Audio(VoicePacket),
+    /// UDP/TCP state and latency, emitted on changes and every few seconds.
+    Transport(TransportStats),
 }
 #[derive(Debug)]
 pub enum Command {
@@ -100,6 +107,8 @@ pub struct ConnectOptions {
     pub server: ServerBookmark,
     pub identity: ClientIdentity,
     pub password: Option<String>,
+    /// Never use UDP; voice stays in the TLS tunnel (Mumble's "Force TCP mode").
+    pub force_tcp: bool,
 }
 
 pub async fn run(
@@ -107,8 +116,10 @@ pub async fn run(
     mut commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<SessionEvent>,
 ) -> Result<(), Error> {
-    let (stream, peer) = crate::tls::connect(&options.server, options.identity).await?;
+    let (stream, peer, peer_addr) = crate::tls::connect(&options.server, options.identity).await?;
     emit(&events, SessionEvent::PeerCertificate(peer)).await?;
+    let udp = Udp::bind(peer_addr, options.force_tcp).await.ok();
+    let mut datagram = vec![0; udp::MAX_DATAGRAM];
     let (reader, mut writer) = tokio::io::split(stream);
     let (frames_tx, mut frames) = mpsc::channel(32);
     let read_task = tokio::spawn(async move {
@@ -130,8 +141,10 @@ pub async fn run(
         send(&mut writer, 2, &proto::Authenticate { username: Some(options.server.username), password: options.password,
             opus: Some(true), ..Default::default() }).await?;
         send(&mut writer, 9, &proto::UserState { self_mute: Some(true), self_deaf: Some(false), ..Default::default() }).await?;
-        let mut state = State::default();
-        let mut ping = time::interval(Duration::from_secs(5));
+        let mut state = State { udp, ..State::default() };
+        let mut ticks = 0_u64;
+        let mut reported_udp = false;
+        let mut ping = time::interval(Duration::from_secs(1));
         ping.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         let deadline = time::sleep_until(Instant::now() + Duration::from_secs(20));
         tokio::pin!(deadline);
@@ -140,6 +153,31 @@ pub async fn run(
                 frame = frames.recv() => {
                     let frame = frame.ok_or_else(|| Error::Protocol("connection reader stopped".into()))??;
                     state.handle(frame, &events).await?;
+                    for (kind, payload) in std::mem::take(&mut state.outbound) {
+                        write_control(&mut writer, kind, &payload).await?;
+                    }
+                },
+                received = async {
+                    match &state.udp {
+                        Some(udp) if udp.has_key() => udp.recv(&mut datagram).await,
+                        _ => std::future::pending().await,
+                    }
+                } => {
+                    let Ok(size) = received else { continue; };
+                    let now = now_ms() as u64;
+                    let Some(udp) = state.udp.as_mut() else { continue; };
+                    match udp.handle(&datagram[..size], now) {
+                        Received::Message(UdpMessage::Audio(packet)) => if !state.local_deafened {
+                            emit(&events, SessionEvent::Audio(packet)).await?;
+                        },
+                        Received::Message(UdpMessage::Ping { .. }) | Received::Ignored => {},
+                        Received::RequestResync => send(&mut writer, 15, &proto::CryptSetup::default()).await?,
+                    }
+                    let active = state.udp.as_ref().is_some_and(Udp::active);
+                    if active != reported_udp {
+                        reported_udp = active;
+                        emit(&events, SessionEvent::Transport(state.transport())).await?;
+                    }
                 },
                 command = commands.recv() => {
                     let Some(command) = command else { break; };
@@ -176,10 +214,39 @@ pub async fn run(
                         },
                         Command::Voice { target, packet } => if state.own_session.is_some() && state.opus
                             && ((!state.local_muted && !state.local_deafened && state.may_speak()) || packet.end)
-                            && let Ok(payload) = voice::encode_voice(state.version, target, &packet) { write_control(&mut writer, 1, &payload).await?; },
+                            && let Ok(payload) = voice::encode_voice(state.version, target, &packet) {
+                            let sent = match state.udp.as_mut() { Some(udp) => udp.send_voice(&payload).await, None => false };
+                            if !sent { write_control(&mut writer, 1, &payload).await?; }
+                        },
                     }
                 },
-                _ = ping.tick() => send(&mut writer, 3, &proto::Ping { timestamp: Some(now_ms() as u64), ..Default::default() }).await?,
+                _ = ping.tick() => {
+                    ticks += 1;
+                    let now = now_ms() as u64;
+                    if let Some(udp) = state.udp.as_mut() {
+                        udp.maybe_ping(state.version, now).await;
+                        if udp.probe_failed() {
+                            // The server may now send voice by UDP that never arrives.
+                            // A tunneled datagram switches it back to the TCP tunnel.
+                            write_control(&mut writer, 1, &voice::encode_ping(state.version, now)).await?;
+                        }
+                    }
+                    let active = state.udp.as_ref().is_some_and(Udp::active);
+                    if ticks % 5 == 1 || active != reported_udp {
+                        let stats = state.transport();
+                        send(&mut writer, 3, &proto::Ping {
+                            timestamp: Some(now),
+                            good: Some(stats.good), late: Some(stats.late), lost: Some(stats.lost), resync: Some(stats.resync),
+                            udp_packets: Some(stats.udp.packets), tcp_packets: Some(stats.tcp.packets),
+                            udp_ping_avg: Some(stats.udp.average_ms), udp_ping_var: Some(stats.udp.variance_ms),
+                            tcp_ping_avg: Some(stats.tcp.average_ms), tcp_ping_var: Some(stats.tcp.variance_ms),
+                        }).await?;
+                        reported_udp = active;
+                        if state.own_session.is_some() {
+                            emit(&events, SessionEvent::Transport(stats)).await?;
+                        }
+                    }
+                },
                 _ = &mut deadline, if state.own_session.is_none() => return Err(Error::Timeout("waiting for Mumble login")),
             }
         }
@@ -192,6 +259,10 @@ pub async fn run(
 }
 
 struct State {
+    udp: Option<Udp>,
+    tcp_ping: PingStats,
+    /// Control replies produced while handling a frame, flushed by the session loop.
+    outbound: Vec<(u16, Vec<u8>)>,
     user_instance: u64,
     channels: BTreeMap<u32, Channel>,
     users: BTreeMap<u32, User>,
@@ -206,6 +277,9 @@ struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            udp: None,
+            tcp_ping: PingStats::default(),
+            outbound: Vec::new(),
             user_instance: 0,
             channels: BTreeMap::new(),
             users: BTreeMap::new(),
@@ -220,6 +294,22 @@ impl Default for State {
     }
 }
 impl State {
+    fn transport(&self) -> TransportStats {
+        let crypt = self.udp.as_ref().map(Udp::crypt_stats).unwrap_or_default();
+        TransportStats {
+            udp_active: self.udp.as_ref().is_some_and(Udp::active),
+            forced_tcp: self.udp.as_ref().is_none_or(|udp| udp.forced_tcp),
+            udp: self.udp.as_ref().map(|udp| udp.stats).unwrap_or_default(),
+            tcp: self.tcp_ping,
+            good: crypt.good,
+            late: crypt.late,
+            lost: crypt.lost,
+            resync: crypt.resync,
+        }
+    }
+    fn queue<M: Message>(&mut self, kind: u16, message: &M) {
+        self.outbound.push((kind, message.encode_to_vec()));
+    }
     fn may_speak(&self) -> bool {
         self.own_session
             .and_then(|session| self.users.get(&session))
@@ -248,13 +338,17 @@ impl State {
             }
             1 => {
                 if !self.local_deafened
-                    && let Ok(packet) = voice::decode_voice(&frame.payload)
+                    && let Ok(UdpMessage::Audio(packet)) = voice::decode_udp(&frame.payload)
                 {
                     emit(events, SessionEvent::Audio(packet)).await?;
                 }
             }
             3 => {
-                let _: proto::Ping = decode(&frame)?;
+                let ping: proto::Ping = decode(&frame)?;
+                let now = now_ms() as u64;
+                if let Some(timestamp) = ping.timestamp.filter(|sent| *sent <= now) {
+                    self.tcp_ping.record((now - timestamp) as f32);
+                }
             }
             4 => {
                 let rejected: proto::Reject = decode(&frame)?;
@@ -453,7 +547,39 @@ impl State {
                 )
                 .await?;
             }
-            15 => { /* CryptSetup is unused while voice is tunneled through TLS. */ }
+            15 => {
+                let setup: proto::CryptSetup = decode(&frame)?;
+                match (setup.key, setup.client_nonce, setup.server_nonce) {
+                    (Some(key), Some(client_nonce), Some(server_nonce)) => {
+                        if let Some(udp) = self.udp.as_mut() {
+                            match CryptState::new(&key, &client_nonce, &server_nonce) {
+                                Ok(crypt) => udp.set_key(crypt),
+                                Err(_) => {
+                                    return Err(Error::Protocol("invalid UDP key".into()));
+                                }
+                            }
+                        }
+                    }
+                    (None, None, Some(server_nonce)) => {
+                        if let Some(udp) = self.udp.as_mut() {
+                            udp.set_decrypt_iv(&server_nonce);
+                        }
+                    }
+                    (None, None, None) => {
+                        // The server lost our send nonce and asks for it.
+                        if let Some(iv) = self.udp.as_ref().and_then(Udp::encrypt_iv) {
+                            self.queue(
+                                15,
+                                &proto::CryptSetup {
+                                    client_nonce: Some(iv.to_vec()),
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
             21 => {
                 let version: proto::CodecVersion = decode(&frame)?;
                 self.opus = version.opus.unwrap_or(false);

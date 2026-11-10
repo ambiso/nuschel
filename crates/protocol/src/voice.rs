@@ -115,6 +115,48 @@ pub fn decode_voice(bytes: &[u8]) -> Result<VoicePacket, VoiceError> {
     }
 }
 
+/// A decrypted UDP datagram (or tunneled equivalent).
+#[derive(Clone, Debug, PartialEq)]
+pub enum UdpMessage {
+    Audio(VoicePacket),
+    Ping { timestamp: u64 },
+}
+
+/// Ping datagram in the format the server expects for its negotiated version.
+pub fn encode_ping(version: u64, timestamp: u64) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(16);
+    if version >= PROTOBUF_VERSION {
+        bytes.push(1);
+        let _ = udp::Ping {
+            timestamp,
+            ..Default::default()
+        }
+        .encode(&mut bytes);
+    } else {
+        bytes.push(0x20);
+        write_varint(timestamp, &mut bytes);
+    }
+    bytes
+}
+
+/// Decode voice or ping datagrams in either the legacy or protobuf format.
+pub fn decode_udp(bytes: &[u8]) -> Result<UdpMessage, VoiceError> {
+    match bytes.first() {
+        Some(1) => udp::Ping::decode(&bytes[1..])
+            .map(|ping| UdpMessage::Ping {
+                timestamp: ping.timestamp,
+            })
+            .map_err(|_| VoiceError::Invalid),
+        Some(byte) if byte >> 5 == 1 && byte & 0x1f == 0 => {
+            let mut rest = &bytes[1..];
+            Ok(UdpMessage::Ping {
+                timestamp: read_varint(&mut rest)?,
+            })
+        }
+        _ => decode_voice(bytes).map(UdpMessage::Audio),
+    }
+}
+
 fn write_varint(value: u64, bytes: &mut Vec<u8>) {
     if value < 0x80 {
         bytes.push(value as u8);
@@ -202,6 +244,19 @@ mod tests {
         let sent = udp::Audio::decode(&sent[1..]).unwrap();
         assert_eq!(sent.header, Some(udp::audio::Header::Target(31)));
         assert_eq!(sent.sender_session, 0);
+    }
+    #[test]
+    fn pings_round_trip_in_both_formats() {
+        for version in [0x0001_0004_0000, PROTOBUF_VERSION] {
+            let ping = encode_ping(version, 123_456_789);
+            assert_eq!(
+                decode_udp(&ping).unwrap(),
+                UdpMessage::Ping {
+                    timestamp: 123_456_789
+                }
+            );
+        }
+        assert_eq!(encode_ping(0, 5), [0x20, 5]);
     }
     #[test]
     fn rejects_truncated_lengths_and_non_finite_volume() {

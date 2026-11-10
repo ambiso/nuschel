@@ -16,15 +16,16 @@ from workers import exchange
 
 
 class Client:
-    def __init__(self, binaries, host, port, pin, username, profile):
+    def __init__(self, binaries, host, port, pin, username, profile, extra=()):
         self.binaries = Path(binaries)
         self.queue = queue.Queue()
         self.events = collections.deque(maxlen=1000)
         self.users = {}
         self.channels = {}
+        self.transport = {}
         self.process = subprocess.Popen([
             str(self.binaries / "nuschel-cli"), "--host", host, "--port", str(port),
-            "--username", username, "--certificate-sha256", pin, "--profile-dir", str(profile),
+            "--username", username, "--certificate-sha256", pin, "--profile-dir", str(profile), *extra,
         ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
@@ -43,6 +44,8 @@ class Client:
                     self.channels[event["channel"]["id"]] = event["channel"]
                 elif event["kind"] == "channel_removed":
                     self.channels.pop(event["channel"], None)
+                elif event["kind"] == "transport":
+                    self.transport = event["stats"]
                 self.queue.put(event)
         finally:
             self.queue.put(None)

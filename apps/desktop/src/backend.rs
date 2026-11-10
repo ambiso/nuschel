@@ -215,6 +215,7 @@ async fn connection_loop(
             server: server.clone(),
             identity,
             password,
+            force_tcp: false,
         },
         Err(error) => {
             let _ = events

@@ -4,6 +4,7 @@
 use bytes::{Buf, Bytes, BytesMut};
 use thiserror::Error;
 
+pub mod crypt;
 pub mod voice;
 
 pub mod control {

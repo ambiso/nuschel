@@ -101,7 +101,7 @@ impl ServerCertVerifier for Verifier {
 pub async fn connect(
     server: &ServerBookmark,
     identity: ClientIdentity,
-) -> Result<(TlsStream<TcpStream>, String), Error> {
+) -> Result<(TlsStream<TcpStream>, String, std::net::SocketAddr), Error> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let webpki = WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
@@ -131,6 +131,7 @@ pub async fn connect(
     .await
     .map_err(|_| Error::Timeout("connecting"))??;
     socket.set_nodelay(true)?;
+    let peer_addr = socket.peer_addr()?;
     let name = ServerName::try_from(server.host.clone())
         .map_err(|_| Error::Tls("invalid TLS server name".into()))?;
     let result = timeout(
@@ -149,6 +150,7 @@ pub async fn connect(
             actual
                 .ok_or_else(|| Error::Tls("server did not present a certificate".into()))?
                 .fingerprint,
+            peer_addr,
         )),
         Err(error) => {
             if let Some(observed) = actual.filter(|certificate| certificate.rejected) {

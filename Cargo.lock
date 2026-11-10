@@ -4700,6 +4700,7 @@ dependencies = [
 name = "nuschel-protocol"
 version = "0.1.0"
 dependencies = [
+ "aes 0.8.4",
  "bytes",
  "prost",
  "prost-build",
