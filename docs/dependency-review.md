@@ -72,6 +72,7 @@ advisories against the same packages are still checked.
 | [RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371) | GPUI/accessibility dependencies use zbus_names from the zbus 5 family |
 | [RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370) | The same stack uses zvariant; functionality moved into zbus 6 |
 | [RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372) | zvariant_derive moves with that coordinated zbus 6 migration |
+| [RUSTSEC-2026-0459](https://rustsec.org/advisories/RUSTSEC-2026-0459) | SQLite before 3.54 can return stale memory for a crafted database plus WAL; the storage worker opens only its own profile database. sqlx 0.9 caps libsqlite3-sys below the fixed 0.39: upgrade with the next sqlx release |
 
 Revisit the corresponding entries whenever GPUI Kit or Syntect is upgraded. Do not
 add a workspace-direct dependency on these packages to exploit a transitive allowance.
