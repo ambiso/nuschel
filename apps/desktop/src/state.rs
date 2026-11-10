@@ -9,7 +9,7 @@ use gpui_kit::{
     *,
 };
 use nuschel_client::{Conversation, HistorySource, Navigation, SessionSecurity};
-use nuschel_core::{MAX_CONTENT_BYTES, PreviewPolicy};
+use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_session::{
     config::{CachedChannel, ClientSettings, MumbleUrl, Profile, ServerBookmark},
     connection::{Command, ServerLimits, SessionEvent, TextTarget, User},
@@ -28,7 +28,17 @@ pub struct MessageView {
     pub status: Option<&'static str>,
     pub document: Document,
     pub expanded: bool,
-    pub has_more: bool,
+    /// Laid-out content height from the last frame, so "Show more" follows
+    /// the real wrapped height (window width, images, code) rather than a
+    /// character count.
+    pub measured: std::rc::Rc<std::cell::Cell<f32>>,
+}
+/// Messages taller than this are collapsed until expanded.
+pub const COLLAPSED_HEIGHT: f32 = 300.;
+impl MessageView {
+    pub fn has_more(&self) -> bool {
+        self.measured.get() > COLLAPSED_HEIGHT + 1.
+    }
 }
 impl From<RenderedMessage> for MessageView {
     fn from(message: RenderedMessage) -> Self {
@@ -44,26 +54,12 @@ impl From<RenderedMessage> for MessageView {
             } else {
                 None
             },
-            has_more: PreviewPolicy::default()
-                .preview(&without_embeds(&message.message.body), false)
-                .has_more,
+            measured: Default::default(),
             document: message.document.into(),
             expanded: false,
         }
     }
 }
-/// Inline image data counts as one character for collapsing long messages.
-fn without_embeds(body: &str) -> std::borrow::Cow<'_, str> {
-    if !body.contains(nuschel_core::EMBED) {
-        return body.into();
-    }
-    body.split(nuschel_core::EMBED)
-        .enumerate()
-        .map(|(index, part)| if index % 2 == 1 { "▣" } else { part })
-        .collect::<String>()
-        .into()
-}
-
 /// "Disconnected from 14:51 to 14:52 (40 s)…", with dates only when they differ from today.
 fn gap_text(from_ms: i64, to_ms: i64) -> String {
     let seconds = (to_ms - from_ms).max(0) / 1000;
@@ -374,6 +370,7 @@ pub struct SearchView {
     pub query: String,
     pub results: Vec<SearchHit>,
     pub loading: bool,
+    _changes: Subscription,
 }
 pub struct SearchHit {
     pub channel: u32,
@@ -1208,12 +1205,20 @@ impl Desktop {
         };
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search local history"));
         input.update(cx, |input, cx| input.focus(window, cx));
+        // Search as you type; replies for older queries are dropped on arrival.
+        let changes = cx.subscribe(&input, |this, _, event, cx| {
+            if matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
+                this.run_search(cx);
+                cx.notify();
+            }
+        });
         self.search = Some(SearchView {
             server: self.servers[index].id.clone(),
             input,
             query: String::new(),
             results: Vec::new(),
             loading: false,
+            _changes: changes,
         });
     }
     pub fn run_search(&mut self, cx: &mut Context<Self>) {
@@ -1231,7 +1236,13 @@ impl Desktop {
         let Some(identity) = server.history_identity() else {
             return;
         };
+        if query == search.query {
+            return;
+        }
         if query.is_empty() {
+            search.query.clear();
+            search.results.clear();
+            search.loading = false;
             return;
         }
         search.query = query.clone();
@@ -1498,7 +1509,10 @@ impl Desktop {
                                 .body
                                 .split(nuschel_core::EMBED)
                                 .step_by(2)
-                                .collect();
+                                .collect::<String>()
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ");
                             let mut snippet: String = visible.chars().take(240).collect();
                             if visible.chars().count() > 240 {
                                 snippet.push('…');

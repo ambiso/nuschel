@@ -24,6 +24,11 @@ from gnome_session import GnomeSession  # noqa: E402
 from local_murmur import Murmur, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
 
+def SEARCH_BUTTON(width):
+    """The conversation header's search button, in window screenshot pixels."""
+    return (width - 77, 86)
+
+
 def make_png(path, width, seed, height=None):
     """A small gradient PNG written with the standard library only."""
     height = height or width
@@ -51,7 +56,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all")
+    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,menus,long,search,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -124,19 +129,26 @@ def main():
                 print(path, flush=True)
 
             shot("01-connected")
+            scenes = set(args.scenes.split(","))
+
+            def want(scene):
+                return "all" in scenes or scene in scenes
 
             def click(x, y, count=1, button=1):
                 # Coordinates are pixels in the window screenshots above.
                 window = shell.window("Nuschel")
                 shell.click(window["x"] - 12 + x, window["y"] - 12 + y, button=button, count=count)
 
-            if args.scenes in ("all", "dialog"):
+            click(width // 2, 140)  # the first click after mapping can be swallowed; spend it on the timeline
+            time.sleep(0.4)
+
+            if want("dialog"):
                 click(59, 227)
                 time.sleep(1.0)
                 shot("02-add-server")
                 shell.key("Escape")
                 time.sleep(0.5)
-            if args.scenes in ("all", "settings"):
+            if want("settings"):
                 click(239, 773)
                 time.sleep(1.0)
                 shot("04-settings")
@@ -149,7 +161,7 @@ def main():
                 shot("05-settings-live")
                 shell.key("Escape")
                 time.sleep(0.4)
-            if args.scenes in ("all", "menus"):
+            if want("menus"):
                 bots[2].send(kind="join", channel=2)  # Linus joins Development
                 time.sleep(0.8)
                 bots[3].close()  # Margaret disconnects
@@ -172,7 +184,30 @@ def main():
                 shot("09-channel-menu")
                 shell.key("Escape")
                 time.sleep(0.4)
-            if args.scenes in ("all", "maximize"):
+            if want("long"):
+                # One paragraph that fits when wide but wraps past the collapse
+                # height in a narrow window, and one that is always long.
+                paragraph = " ".join(f"word{n}" for n in range(100))
+                bots[1].send(kind="text", channel=2, body=paragraph)
+                time.sleep(0.4)
+                bots[0].send(kind="text", channel=2, body="\n".join(f"line {n}" for n in range(40)))
+                time.sleep(1.5)
+                shot("10-long-wide")
+                shell.place("Nuschel", 40, 40, 900, height)
+                time.sleep(1.5)
+                shot("11-long-narrow")
+                shell.place("Nuschel", 40, 40, width, height)
+                time.sleep(1.0)
+            if want("search"):
+                click(*SEARCH_BUTTON(width))
+                time.sleep(0.8)
+                shell.type("patch")
+                time.sleep(1.5)
+                shot("12-search")
+                shell.key("Escape")
+                time.sleep(0.6)
+                shot("13-search-closed")
+            if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)
                 window = shell.window("Nuschel")

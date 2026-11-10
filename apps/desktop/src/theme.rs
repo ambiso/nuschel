@@ -7,6 +7,8 @@ pub const RAIL: u32 = 0x0f1218;
 pub const SIDEBAR: u32 = 0x161a22;
 pub const SIDEBAR_FOOTER: u32 = 0x12151c;
 pub const MAIN: u32 = 0x1c212b;
+/// MAIN under the message row's hover tint (black at 0x18 alpha).
+pub const MAIN_HOVERED: u32 = 0x191e27;
 pub const ELEVATED: u32 = 0x262c38;
 pub const INPUT: u32 = 0x232935;
 pub const HOVER: u32 = 0x232a36;

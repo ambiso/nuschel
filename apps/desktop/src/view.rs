@@ -5,7 +5,7 @@ use crate::{
     chrome,
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
     menus::MenuTarget,
-    state::{Desktop, ServerView, Status, TreeRow},
+    state::{COLLAPSED_HEIGHT, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
 };
 use gpui_kit::{
@@ -1373,13 +1373,18 @@ fn search_panel(
     let status = if search.loading {
         "Searching…".to_string()
     } else if search.query.is_empty() {
-        "Type and press Enter. Searches messages saved on this device.".to_string()
+        "Searches messages saved on this device.".to_string()
     } else if search.results.is_empty() {
         format!("No messages contain “{}”.", search.query)
     } else {
         format!(
-            "{} recent matches for “{}”",
+            "{} recent {} for “{}”",
             search.results.len(),
+            if search.results.len() == 1 {
+                "match"
+            } else {
+                "matches"
+            },
             search.query
         )
     };
@@ -1452,8 +1457,8 @@ fn search_panel(
                     .items_center()
                     .gap_2()
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if event.keystroke.key == "enter" {
-                            this.run_search(cx);
+                        if event.keystroke.key == "escape" {
+                            this.search = None;
                             cx.stop_propagation();
                             cx.notify();
                         }
@@ -1563,6 +1568,7 @@ fn message_row(
         .when(grouped, |row| row.py(px(2.)))
         .when(!grouped, |row| row.pt_3().pb(px(2.)))
         .rounded(px(6.))
+        .group("message")
         .hover(|style| style.bg(tint(0x000000, 0x18)))
         .child(if grouped {
             div().w(px(40.)).flex_shrink_0().into_any_element()
@@ -1611,19 +1617,64 @@ fn message_row(
                             ),
                     )
                 })
-                .child(
+                .child({
+                    let measured = message.measured.clone();
+                    let clamped = !message.expanded;
                     div()
+                        .on_children_prepainted(move |bounds, window, _| {
+                            // The inner column never shrinks, so its height is
+                            // the full content height even while clamped.
+                            let Some(inner) = bounds.first() else { return };
+                            let height = f32::from(inner.size.height);
+                            let before = measured.replace(height);
+                            if (before > COLLAPSED_HEIGHT + 1.) != (height > COLLAPSED_HEIGHT + 1.)
+                            {
+                                window.refresh();
+                            }
+                        })
                         .id(("message-content", index))
                         .flex()
                         .flex_col()
-                        .gap_2()
                         .text_color(color(0xdbdfe8))
-                        .when(message.has_more && !message.expanded, |content| {
-                            content.max_h(px(300.)).overflow_hidden()
+                        .when(clamped, |content| {
+                            content
+                                .relative()
+                                .max_h(px(COLLAPSED_HEIGHT))
+                                .overflow_hidden()
                         })
-                        .children(document_blocks(&message.document)),
-                )
-                .when(message.has_more, |view| {
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_shrink_0()
+                                .gap_2()
+                                .children(document_blocks(&message.document)),
+                        )
+                        .when(clamped && message.has_more(), |content| {
+                            // Fade the cut-off edge into the row background
+                            // (which darkens slightly while hovered).
+                            let fade = |background: u32| {
+                                linear_gradient(
+                                    180.,
+                                    linear_color_stop(tint(background, 0), 0.),
+                                    linear_color_stop(color(background), 1.),
+                                )
+                            };
+                            content.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .h(px(56.))
+                                    .bg(fade(MAIN))
+                                    .group_hover("message", move |style| {
+                                        style.bg(fade(MAIN_HOVERED))
+                                    }),
+                            )
+                        })
+                })
+                .when(message.has_more(), |view| {
                     view.child(
                         div()
                             .id(("show-more", index))
@@ -1713,24 +1764,29 @@ fn composer(
                 .text_xs()
                 .text_color(color(TEXT_FAINT))
                 .child(
-                    text!(if channel_name.starts_with("@ ") {
-                        format!("Message {}", channel_name.trim_start_matches("@ "))
-                    } else {
-                        format!("Message #{channel_name}")
-                    })
-                    .with_id("composer-target"),
+                    div().flex_shrink_0().child(
+                        text!(if channel_name.starts_with("@ ") {
+                            format!("Message {}", channel_name.trim_start_matches("@ "))
+                        } else {
+                            format!("Message #{channel_name}")
+                        })
+                        .with_id("composer-target"),
+                    ),
                 )
                 .child(div().flex_1())
-                .child(
+                // The hints give way (with an ellipsis) in narrow windows.
+                .child(div().min_w_0().truncate().child(
                     text!("Enter for a new line · Ctrl/Cmd+Enter to send").with_id("composer-hint"),
-                )
+                ))
                 .child(
-                    text!(if this.history_enabled {
-                        "Local history on · no end-to-end encryption"
-                    } else {
-                        "Local history off"
-                    })
-                    .with_id("history-default"),
+                    div().min_w_0().truncate().child(
+                        text!(if this.history_enabled {
+                            "Local history on · no end-to-end encryption"
+                        } else {
+                            "Local history off"
+                        })
+                        .with_id("history-default"),
+                    ),
                 ),
         )
         .into_any_element()
