@@ -45,6 +45,12 @@ pub struct CapturePipeline {
     gate: Gate,
     input: [f32; FRAME],
     output: [f32; FRAME],
+    /// Whether the far end is playing (see `set_far_end`).
+    far_end: bool,
+    /// Automatic gain applied while only the near end could be heard, and the
+    /// ceiling it is held under while the far end plays.
+    near_gain: f32,
+    gain_ceiling: Option<f32>,
 }
 
 fn stream() -> StreamConfig {
@@ -89,6 +95,20 @@ impl CapturePipeline {
             gate: Gate::new(settings),
             input: [0.; FRAME],
             output: [0.; FRAME],
+            far_end: false,
+            near_gain: 1.,
+            gain_ceiling: None,
+        }
+    }
+
+    /// Tell the chain whether the far end is audible. While it is, automatic
+    /// gain may fall but not rise: what is left of the echo after cancellation
+    /// and noise suppression is speech-like, and raising the gain on it would
+    /// send the far end's own voice back to them.
+    pub fn set_far_end(&mut self, active: bool) {
+        self.far_end = active;
+        if !active {
+            self.gain_ceiling = None;
         }
     }
 
@@ -145,6 +165,20 @@ impl CapturePipeline {
                 .is_ok()
             {
                 frame.copy_from_slice(&self.output);
+                let before = rms(&self.input);
+                if before > 1e-5 {
+                    let applied = rms(frame) / before;
+                    if self.far_end {
+                        let ceiling = *self.gain_ceiling.get_or_insert(self.near_gain);
+                        if applied > ceiling {
+                            let scale = ceiling / applied;
+                            frame.iter_mut().for_each(|sample| *sample *= scale);
+                        }
+                    } else {
+                        // Smoothed over roughly half a second of frames.
+                        self.near_gain += (applied - self.near_gain) * 0.02;
+                    }
+                }
             }
         } else {
             soft_limit(frame);
@@ -175,6 +209,10 @@ impl CapturePipeline {
             delay_ms: stats.delay_ms,
         }
     }
+}
+
+fn rms(frame: &[f32]) -> f32 {
+    (frame.iter().map(|sample| sample * sample).sum::<f32>() / frame.len().max(1) as f32).sqrt()
 }
 
 pub fn level_db(frame: &[f32]) -> f32 {

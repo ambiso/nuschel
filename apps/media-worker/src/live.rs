@@ -32,10 +32,14 @@ use std::{
 /// Mixed audio is kept ready in the playback ring; the adaptive controller
 /// sizes it (device buffering is extra). The ring must hold the largest fill.
 const RING: usize = 20 * FRAME;
-/// The canceller's delay hint for the smallest playback fill.
-const BASE_DELAY_MS: i32 = 50;
+/// The canceller's initial delay guess: device buffering on both sides plus
+/// the acoustic path. Far-end audio reaches it when the device takes it from
+/// Nuschel's ring, so the ring's own fill is not part of the delay.
+const ECHO_DELAY_HINT_MS: i32 = 30;
 
 const MAX_SPEAKERS: usize = 64;
+/// Far-end frames waiting for the device; the playback ring holds fewer.
+const FAR_END_FRAMES: usize = RING / FRAME + 2;
 const LEVEL_EVERY: u32 = 10;
 
 enum Event {
@@ -179,6 +183,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut loopback = false;
     let mut looped = VecDeque::<f32>::with_capacity(RING);
     let mut probe: Option<EchoProbe> = None;
+    // Far-end frames queued for playback that the device has not taken yet,
+    // and sample counts into and out of the current playback ring.
+    let mut far_end = VecDeque::<[f32; FRAME]>::with_capacity(FAR_END_FRAMES + 1);
+    let (mut pushed_samples, mut fed_samples) = (0_u64, 0_u64);
     // A noise suppressor upstream of the microphone (e.g. RNNoise) replaces ours.
     let mut upstream_noise = false;
     loop {
@@ -191,7 +199,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     upstream_noise = route.noise.is_some();
                     let mut chain =
                         CapturePipeline::new(&chain_settings(&settings, upstream_noise), echo);
-                    chain.set_delay_hint(delay_hint(&controller));
+                    chain.set_delay_hint(ECHO_DELAY_HINT_MS);
                     pipeline = Some(chain);
                     let message = if muted {
                         "Audio ready · microphone muted".to_string()
@@ -230,6 +238,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         },
                     )?;
                     devices = Some(opened);
+                    far_end.clear();
+                    (pushed_samples, fed_samples) = (0, 0);
                     last_window = Instant::now();
                     skip_window = true;
                 }
@@ -324,7 +334,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         &chain_settings(&settings, upstream_noise),
                         chain.echo_cancellation(),
                     );
-                    rebuilt.set_delay_hint(delay_hint(&controller));
+                    rebuilt.set_delay_hint(ECHO_DELAY_HINT_MS);
                     *chain = rebuilt;
                 }
             }
@@ -426,8 +436,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if pushed.len() < FRAME {
                 break;
             }
-            if let Some(chain) = pipeline.as_mut() {
-                chain.render(&mix);
+            // The canceller sees this frame once the device has taken it from
+            // the ring (below), not now: the ring is refilled in bursts.
+            far_end.push_back(mix);
+            pushed_samples += FRAME as u64;
+            if far_end.len() > FAR_END_FRAMES {
+                far_end.pop_front();
             }
             controller.observe_render(&mix);
         }
@@ -443,13 +457,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .as_ref()
                 .filter(|chain| chain.echo_cancellation())
                 .and_then(|chain| chain.echo_metrics().residual_likelihood);
-            let before = controller.playback_samples();
             if let Some(health) = controller.window(residual, underruns) {
-                if controller.playback_samples() != before
-                    && let Some(chain) = pipeline.as_mut()
-                {
-                    chain.set_delay_hint(delay_hint(&controller));
-                }
                 emit(
                     &mut output,
                     LiveMediaEvent::Health {
@@ -461,6 +469,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 )?;
             }
+        }
+        // Far end: hand the canceller each frame as the device consumes it, as
+        // WebRTC does from its playout callback, so render and capture reach it
+        // at the pace they happen and its delay estimate holds.
+        let played = pushed_samples - (RING - open.playback.slots()) as u64;
+        while fed_samples + FRAME as u64 <= played {
+            let Some(frame) = far_end.pop_front() else {
+                fed_samples = played;
+                break;
+            };
+            if let Some(chain) = pipeline.as_mut() {
+                chain.render(&frame);
+            }
+            fed_samples += FRAME as u64;
         }
         // Capture: process every complete 10 ms frame.
         let Some(capture) = open.capture.as_mut() else {
@@ -474,6 +496,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 break;
             };
             let raw = capture_frame;
+            chain.set_far_end(controller.far_active());
             let result = chain.process(&mut capture_frame, push_to_talk, controller.guard_gate());
             controller.observe_capture(&raw, result.voice);
             frames_seen = frames_seen.wrapping_add(1);
@@ -558,12 +581,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(0);
     }
     Ok(())
-}
-
-/// Device buffering plus Nuschel's own playback fill above the minimum.
-fn delay_hint(controller: &Controller) -> i32 {
-    let extra = controller.playback_samples() - crate::adaptive::PLAYBACK_MIN_FRAMES * FRAME;
-    BASE_DELAY_MS + (extra / (RATE as usize / 1000)) as i32
 }
 
 /// Close a transmission with a terminator packet so receivers stop promptly.

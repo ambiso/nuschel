@@ -6,10 +6,11 @@ use crate::dsp::{FRAME, RATE};
 
 /// Silence first, to learn the room's noise floor.
 const BASELINE: u32 = 60;
-/// Three seconds of signal.
-const SIGNAL: u32 = 300;
-/// Device latency: echo arrives a little after the signal is queued.
-const SETTLE: u32 = 25;
+/// Six seconds of signal.
+const SIGNAL: u32 = 600;
+/// Measure only once an echo canceller has had time to adapt, as it has in
+/// a call that has been running for a while (and device latency has passed).
+const SETTLE: u32 = 250;
 /// Keep measuring briefly after the signal so the echo tail is included.
 const TAIL: u32 = 15;
 /// Echo must exceed the noise floor by this factor (3 dB) to count.
@@ -43,13 +44,33 @@ impl Energy {
     }
 }
 
+/// One syllable (or the pause after it) of the test signal.
+#[derive(Default, Clone, Copy)]
+struct Syllable {
+    remaining: u32,
+    length: u32,
+    voiced: bool,
+    pitch: (f64, f64),
+    formants: (f64, f64),
+    fricative: bool,
+}
+
+/// Vowel formants (F1, F2) in Hz, roughly /a/, /e/, /i/, /o/, /u/.
+const VOWELS: [(f64, f64); 5] = [
+    (730., 1090.),
+    (530., 1840.),
+    (270., 2290.),
+    (570., 840.),
+    (300., 870.),
+];
+
 #[derive(Default)]
 pub struct EchoProbe {
     rendered: u32,
     captured: u32,
     phase: f64,
-    sample: u64,
     noise: u32,
+    syllable: Syllable,
     render: Energy,
     floor_raw: Energy,
     floor_processed: Energy,
@@ -88,35 +109,70 @@ impl EchoProbe {
         }
     }
 
-    /// A voiced, syllabic signal: a gliding pitch with formant-shaped
-    /// harmonics, four syllables per second and a little breath noise. Broad
-    /// enough for an echo canceller to adapt to, and it opens a voice gate.
-    fn next_sample(&mut self) -> f32 {
-        let t = self.sample as f64 / f64::from(RATE);
-        self.sample += 1;
-        let pitch = 150. + 35. * (std::f64::consts::TAU * 0.7 * t).sin();
-        self.phase =
-            (self.phase + std::f64::consts::TAU * pitch / f64::from(RATE)) % std::f64::consts::TAU;
-        let syllable = (std::f64::consts::TAU * 4. * t).sin().max(0.).powf(0.6);
-        let formant = |frequency: f64, centre: f64, width: f64| {
-            (-((frequency - centre) / width).powi(2)).exp()
-        };
-        let mut voiced = 0.;
-        for harmonic in 1..=24 {
-            let frequency = pitch * f64::from(harmonic);
-            let weight = (0.3
-                + formant(frequency, 650., 220.)
-                + 0.7 * formant(frequency, 1150., 300.)
-                + 0.4 * formant(frequency, 2600., 500.))
-                / f64::from(harmonic).sqrt();
-            voiced += weight * (self.phase * f64::from(harmonic)).sin();
-        }
+    /// Uniform in [0, 1) from a fixed-seed generator: every test plays the same signal.
+    fn random(&mut self) -> f64 {
         self.noise = self
             .noise
             .wrapping_mul(1_664_525)
             .wrapping_add(1_013_904_223);
-        let breath = (f64::from(self.noise >> 8) / f64::from(1_u32 << 24) - 0.5) * 0.15;
-        ((voiced * 0.17 + breath) * syllable).clamp(-0.9, 0.9) as f32
+        f64::from(self.noise >> 8) / f64::from(1_u32 << 24)
+    }
+
+    /// Speech-like and deliberately aperiodic: syllables and pauses of random
+    /// length, each with its own pitch contour and vowel, some with breath
+    /// noise. A regular signal would give an echo canceller's delay estimator
+    /// several equally good answers.
+    fn next_sample(&mut self) -> f32 {
+        if self.syllable.remaining == 0 {
+            let rate = f64::from(RATE);
+            self.syllable = if self.syllable.voiced {
+                let length = ((0.04 + 0.16 * self.random()) * rate) as u32;
+                Syllable {
+                    remaining: length,
+                    length,
+                    ..Syllable::default()
+                }
+            } else {
+                let length = ((0.12 + 0.25 * self.random()) * rate) as u32;
+                let start = 110. + 130. * self.random();
+                let vowel = VOWELS[(self.random() * VOWELS.len() as f64) as usize % VOWELS.len()];
+                Syllable {
+                    remaining: length,
+                    length,
+                    voiced: true,
+                    pitch: (start, start * (0.8 + 0.4 * self.random())),
+                    formants: vowel,
+                    fricative: self.random() < 0.4,
+                }
+            };
+        }
+        let syllable = self.syllable;
+        self.syllable.remaining -= 1;
+        if !syllable.voiced {
+            return 0.;
+        }
+        let progress = 1. - f64::from(syllable.remaining) / f64::from(syllable.length.max(1));
+        let envelope = (std::f64::consts::PI * progress).sin().powf(0.5);
+        let pitch = syllable.pitch.0 + (syllable.pitch.1 - syllable.pitch.0) * progress;
+        self.phase =
+            (self.phase + std::f64::consts::TAU * pitch / f64::from(RATE)) % std::f64::consts::TAU;
+        let formant = |frequency: f64, centre: f64, width: f64| {
+            (-((frequency - centre) / width).powi(2)).exp()
+        };
+        let mut voiced = 0.;
+        for harmonic in 1..=28 {
+            let frequency = pitch * f64::from(harmonic);
+            let weight = (0.25
+                + formant(frequency, syllable.formants.0, 160.)
+                + 0.7 * formant(frequency, syllable.formants.1, 260.)
+                + 0.3 * formant(frequency, 2700., 450.))
+                / f64::from(harmonic).sqrt();
+            voiced += weight * (self.phase * f64::from(harmonic)).sin();
+        }
+        let breath = (self.random() - 0.5) * if syllable.fricative { 1.2 } else { 0.3 };
+        // Fricatives sit at the start of a syllable.
+        let breath = breath * if progress < 0.3 { 1. } else { 0.3 };
+        ((voiced * 0.17 + breath) * envelope).clamp(-0.9, 0.9) as f32
     }
 
     /// Account one captured frame before (`raw`) and after Nuschel's

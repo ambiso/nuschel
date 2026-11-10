@@ -59,6 +59,21 @@ are not concealed (`apps/media-worker/src/live.rs`).
       and PulseAudio `module-echo-cancel` on the selected input, bypass Nuschel's AEC
       and route Nuschel playback into that canceller's reference. Unknown stays unknown,
       with a per-device override.
+- [x] Upstream processing found by walking PipeWire's graph from the microphone
+      (mic → echo-cancel → RNNoise filter-chain → default source): a system echo
+      canceller anywhere in the chain gets Nuschel's playback as its reference and
+      turns Nuschel's off; a noise suppressor turns Nuschel's suppressor off.
+- [x] Microphone and echo tests in Settings without a server or unmuting.
+- [ ] Nuschel's canceller converges less reliably than PulseAudio's WebRTC
+      `module-echo-cancel` in the media_live rig (-31 dB coupling): 11-46 dB of echo
+      reduction and 0-27% of far-end speech leaking through the gate, against echo
+      below detection for PulseAudio's. Fixed so far: far-end audio was handed over in
+      playback-ring bursts (now as the device consumes it) and automatic gain raised
+      residual echo after RNNoise (now held while the far end plays). Next: sample-
+      accurate latency accounting from cpal's stream timestamps.
+- [ ] Nuschel records nothing from PulseAudio's `module-sine-source`, and its own
+      playback is silent while it records the monitor of the sink it plays into.
+      Both found in test rigs; check the PulseAudio client's stream setup.
 - [ ] Decide whether mute/deafen can avoid replacing the media worker (it currently
       restarts it so a blocked native stream teardown cannot keep the microphone open).
       Keep the restart as fallback; measure the audible gap.

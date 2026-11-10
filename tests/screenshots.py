@@ -31,6 +31,12 @@ def SEARCH_BUTTON(width):
 
 # The voice card's warning line, in window screenshot pixels.
 CLIPPING_WARNING = (205, 728)
+# Settings: "Test echo" before the microphone test has started.
+ECHO_TEST_BUTTON = (862, 225)
+# The cog next to the server name, Lobby's chevron, and the channel list's right edge.
+SERVER_SETTINGS_BUTTON = (279, 86)
+LOBBY_CHEVRON = (129, 234)
+SIDEBAR_EDGE = (346, 400)
 
 
 def make_png(path, width, seed, height=None):
@@ -60,7 +66,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,menus,long,search,clipping,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,clipping,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -84,9 +90,12 @@ def main():
                 script = shell.runtime / "default.pa"
                 script.write_text(f"load-module module-native-protocol-unix socket={socket_dir / 'native'} auth-anonymous=1\n"
                                   "load-module module-null-sink sink_name=speakers sink_properties=device.description=Speakers\n"
-                                  "load-module module-sine-source source_name=microphone frequency=220 rate=48000\n"
-                                  "update-source-proplist microphone device.description=\"Test microphone\"\n"
-                                  "set-default-sink speakers\nset-default-source microphone\n")
+                                  # A tone played into a null sink: its monitor is the microphone.
+                                  # (Nuschel records nothing from module-sine-source; see TODO.md.)
+                                  "load-module module-null-sink sink_name=microphone sink_properties=device.description=Mic\n"
+                                  "load-module module-sine sink=microphone frequency=220\n"
+                                  "update-source-proplist microphone.monitor device.description=\"Test microphone\"\n"
+                                  "set-default-sink speakers\nset-default-source microphone.monitor\n")
                 pulse = subprocess.Popen([str(args.pulse_bin / "pulseaudio"), "--daemonize=no", "--use-pid-file=no",
                                           "--exit-idle-time=-1", "-n", "--file=" + str(script)],
                                          env=shell.environment() | {"PULSE_RUNTIME_PATH": str(socket_dir),
@@ -146,6 +155,10 @@ def main():
                 window = shell.window("Nuschel")
                 shell.click(window["x"] - 12 + x, window["y"] - 12 + y, button=button, count=count)
 
+            def drag(start, end):
+                window = shell.window("Nuschel")
+                origin = (window["x"] - 12, window["y"] - 12)
+                shell.drag((origin[0] + start[0], origin[1] + start[1]), (origin[0] + end[0], origin[1] + end[1]))
             click(width // 2, 140)  # the first click after mapping can be swallowed; spend it on the timeline
             time.sleep(0.4)
 
@@ -159,15 +172,27 @@ def main():
                 click(239, 773)
                 time.sleep(1.0)
                 shot("04-settings")
-                click(1200, 400)  # backdrop click closes the dialog
-                time.sleep(0.4)
-                click(279, 773)  # unmute: the sine microphone drives the meter
-                time.sleep(2.5)
-                click(239, 773)
-                time.sleep(1.5)
+                # Still muted: the echo test opens the sine microphone itself
+                # (and so starts the microphone test with its meter).
+                click(*ECHO_TEST_BUTTON)
+                time.sleep(2.0)
                 shot("05-settings-live")
+                time.sleep(5.0)
+                shot("05b-echo-test")
                 shell.key("Escape")
                 time.sleep(0.4)
+            if want("server"):
+                click(*SERVER_SETTINGS_BUTTON)
+                time.sleep(1.0)
+                shot("02b-server-settings")
+                shell.key("Escape")
+                time.sleep(0.4)
+                # Collapse Lobby: its people show as a badge, and widen the list.
+                click(*LOBBY_CHEVRON)
+                time.sleep(0.6)
+                drag(SIDEBAR_EDGE, (SIDEBAR_EDGE[0] + 140, SIDEBAR_EDGE[1]))
+                time.sleep(0.8)
+                shot("16-collapsed-wide")
             if want("menus"):
                 bots[2].send(kind="join", channel=2)  # Linus joins Development
                 time.sleep(0.8)
