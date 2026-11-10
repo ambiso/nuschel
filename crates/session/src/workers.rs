@@ -34,27 +34,21 @@ pub struct Storage {
     input: ChildStdin,
     output: ChildStdout,
     request_id: u64,
+    _containment: nuschel_ipc::host::Containment,
 }
 impl Storage {
     pub fn start(directory: &Path) -> Result<Self, Error> {
         let executable = sibling("nuschel-storage-worker")?;
-        #[cfg(target_os = "linux")]
         let mut command = nuschel_ipc::host::storage_sandbox_command(&executable, directory)
             .map_err(|e| Error::Worker(e.to_string()))?;
-        #[cfg(not(target_os = "linux"))]
-        let mut command = {
-            let mut c = Command::new(&executable);
-            c.env_clear()
-                .arg("--database")
-                .arg(directory.join("history.sqlite3"));
-            c
-        };
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()?;
+        let containment =
+            nuschel_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
         let input = child
             .stdin
             .take()
@@ -68,6 +62,7 @@ impl Storage {
             input,
             output,
             request_id: 0,
+            _containment: containment,
         })
     }
     async fn request(&mut self, payload: StorageRequest) -> Result<StorageResponse, Error> {
@@ -150,26 +145,16 @@ pub struct Media {
 impl Media {
     pub fn start() -> Result<Self, Error> {
         let executable = sibling("nuschel-media-worker")?;
-        #[cfg(target_os = "linux")]
         let mut command = nuschel_ipc::host::media_sandbox_command(&executable)
             .map_err(|e| Error::Worker(e.to_string()))?;
-        #[cfg(not(target_os = "linux"))]
-        let mut command = {
-            let mut c = Command::new(&executable);
-            c.env_clear().arg("--live");
-            for name in ["SystemRoot", "WINDIR", "TEMP", "TMP"] {
-                if let Some(value) = std::env::var_os(name) {
-                    c.env(name, value);
-                }
-            }
-            c
-        };
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()?;
+        let containment =
+            nuschel_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
         let mut input = child
             .stdin
             .take()
@@ -181,6 +166,8 @@ impl Media {
         let (tx, mut rx) = mpsc::channel(32);
         let (events_tx, events) = mpsc::channel(32);
         let task = tokio::spawn(async move {
+            // The worker lives exactly as long as this task holds its containment.
+            let _containment = containment;
             let mut reader = tokio::spawn(async move {
                 while let Ok(frame) = receive::<LiveMediaEvent>(&mut output).await {
                     if events_tx.send(frame.payload).await.is_err() {

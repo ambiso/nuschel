@@ -20,7 +20,11 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | SQLx SQLite backend | Native SQLite provides transactional local history | Storage worker; one database directory, parameterized operations; extension loading and deserialization disabled |
 | SQLx PostgreSQL backend | Server persistence on a managed database | Storage worker; database credentials and a scoped database connection |
 | TLS crypto provider | Cryptographic implementation and CPU-specific acceleration | Session/server authority; bounded protocol framing and reviewed provider |
-| OS sandbox/process APIs | Establish restricted worker execution | Small supervisor adapter; prefer safe Rust wrappers |
+| OS sandbox/process APIs | Establish restricted worker execution | Small supervisor adapter; prefer safe Rust wrappers (`win32job` for Windows job objects) |
+| `aes` (OCB2 voice crypto) | Mumble's UDP voice encryption; AES-NI intrinsics | Session authority; fixed-size blocks, keys from the TLS control channel |
+| `rsa` (identity generation only) | Stock Mumble imports only RSA client certificates | Generates the local Mumble client key only; TLS signing uses ring, so the Marvin timing issue (RUSTSEC-2023-0071) in private-key operations never runs on untrusted input; `cargo-deny` confines the crate to `nuschel-session` |
+| `image` decoders (PNG, JPEG, GIF) | Inline images and avatars from untrusted peers | Content worker only, with dimension and allocation limits; the UI receives raw RGBA |
+| Global shortcuts (`ashpd` portal; `global-hotkey` on Windows/macOS) | System-wide push-to-talk | Desktop shell; press/release of one bound key only |
 
 The `cargo-deny` wrapper rules enforce ownership for the named top-level dependencies.
 They do not automatically audit every transitive crate, dynamic system library, or new
@@ -63,8 +67,26 @@ Muted clients do not open microphone streams. Capture generations invalidate que
 PCM and encoded packets across mute/deafen changes and audio-worker restarts. The
 desktop replaces the media process on mute/deafen transitions: native stream teardown
 can block, so dropping a stream alone is insufficient to guarantee capture closes.
-Windows/macOS media/storage profiles remain unimplemented. The NixOS server's storage
-preflight inherits its hardened systemd unit.
+The NixOS server's storage preflight inherits its hardened systemd unit.
+
+### macOS and Windows (implemented, not yet validated on those systems)
+
+macOS workers start under `sandbox-exec` with Seatbelt profiles (`crates/ipc/src/host.rs`).
+Content and storage workers are deny-by-default on top of Apple's `system.sb`. Storage
+may read and write only its history directory, and neither gets any network rule. The
+media worker needs CoreAudio's undocumented Mach services, so for now it is confined by
+a deny list: no network, no process execution, no writes outside temporary
+directories, and no reads of the home directory except audio preferences. It must be
+narrowed to deny-by-default once it can be traced on real hardware. Unit tests check
+that the profiles are well formed. A macOS-only test checks that they load and block
+writes to the home directory. Neither test has run on macOS yet.
+
+Windows workers run with an empty environment (except `SystemRoot`, `WINDIR`, `TEMP`,
+`TMP`), without a console window, inside a kill-on-close job object. That guarantees
+they never outlive Nuschel, but **it is not a sandbox**: a Windows worker can read
+the user's files and use the network. AppContainer or restricted-token process creation
+needs unsafe Win32 calls and Windows testing. Until then, Windows offers process
+separation only.
 
 ## Release gates
 
