@@ -29,6 +29,9 @@ pub struct ServerBookmark {
     pub certificate_sha256: Option<String>,
     #[serde(default)]
     pub cached_channels: Vec<CachedChannel>,
+    /// Access tokens grant ACL group membership; sent with every login.
+    #[serde(default)]
+    pub tokens: Vec<String>,
 }
 
 impl ServerBookmark {
@@ -66,6 +69,7 @@ impl ServerBookmark {
             username: username.trim().into(),
             certificate_sha256: None,
             cached_channels: Vec::new(),
+            tokens: Vec::new(),
         })
     }
 
@@ -291,6 +295,9 @@ impl Profile {
         for server in &servers {
             ServerBookmark::new(&server.name, &server.host, server.port, &server.username)
                 .map_err(io::Error::other)?;
+            if server.tokens.len() > 64 || server.tokens.iter().any(|token| token.len() > 256) {
+                return Err(io::Error::other("too many or oversized access tokens"));
+            }
             if server.cached_channels.len() > 4096
                 || server
                     .cached_channels
@@ -369,11 +376,124 @@ impl Profile {
     }
 }
 
+/// PKCS#12 files from Mumble's certificate wizard are small; refuse anything large.
+pub const MAX_PKCS12_BYTES: usize = 256 * 1024;
+
+impl Profile {
+    /// Replace the client identity with one exported by Mumble (or another client).
+    /// The previous identity is kept as a timestamped backup.
+    pub fn import_identity(&self, pkcs12: &[u8], password: &str) -> Result<ClientIdentity, String> {
+        let identity = ClientIdentity::from_pkcs12(pkcs12, password)?;
+        let current = self.config_dir.join("identity.json");
+        if current.exists() {
+            let backup = self.config_dir.join(format!(
+                "identity.{}.json.bak",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_secs())
+                    .unwrap_or(0)
+            ));
+            fs::copy(&current, backup).map_err(|error| error.to_string())?;
+        }
+        let bytes = serde_json::to_vec(&identity).map_err(|error| error.to_string())?;
+        atomic_private_write(&current, &bytes).map_err(|error| error.to_string())?;
+        Ok(identity)
+    }
+
+    /// Export the identity so Mumble and other clients can log in as the same user.
+    pub fn export_identity(&self, password: &str) -> Result<Vec<u8>, String> {
+        self.identity()
+            .map_err(|error| error.to_string())?
+            .to_pkcs12(password)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClientIdentity {
     pub certificate: Vec<u8>,
     pub private_key: Vec<u8>,
+}
+
+impl std::fmt::Debug for ClientIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientIdentity")
+            .field("certificate_sha256", &fingerprint(&self.certificate))
+            .finish_non_exhaustive()
+    }
+}
+
+impl ClientIdentity {
+    /// SHA-1 of the certificate, the hash Mumble servers show and register.
+    pub fn mumble_hash(&self) -> String {
+        use sha1::Digest as _;
+        sha1::Sha1::digest(&self.certificate)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    pub fn from_pkcs12(pkcs12: &[u8], password: &str) -> Result<Self, String> {
+        if pkcs12.len() > MAX_PKCS12_BYTES {
+            return Err("The certificate file is too large.".into());
+        }
+        let store = p12_keystore::KeyStore::from_pkcs12(
+            pkcs12,
+            password,
+            p12_keystore::Pkcs12ImportPolicy::Relaxed,
+        )
+        .map_err(|error| match error {
+            p12_keystore::error::Error::MacError(_) | p12_keystore::error::Error::UnpadError => {
+                "Wrong password for this certificate file.".to_string()
+            }
+            other => format!("Could not read the certificate file: {other}"),
+        })?;
+        let (_, chain) = store
+            .private_key_chain()
+            .ok_or("The file contains no private key with a certificate.")?;
+        let certificate = chain
+            .certs()
+            .first()
+            .ok_or("The file's private key has no certificate.")?
+            .as_der()
+            .to_vec();
+        let identity = Self {
+            certificate,
+            private_key: chain.key().as_der().to_vec(),
+        };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    pub fn to_pkcs12(&self, password: &str) -> Result<Vec<u8>, String> {
+        let key = p12_keystore::PrivateKey::from_der(&self.private_key)
+            .map_err(|error| error.to_string())?;
+        let certificate = p12_keystore::Certificate::from_der(&self.certificate)
+            .map_err(|error| error.to_string())?;
+        let chain =
+            p12_keystore::PrivateKeyChain::new(self.mumble_hash().into_bytes(), key, [certificate]);
+        let mut store = p12_keystore::KeyStore::new();
+        store.add_entry(
+            "Nuschel",
+            p12_keystore::KeyStoreEntry::PrivateKeyChain(chain),
+        );
+        store
+            .writer(password)
+            .write()
+            .map_err(|error| error.to_string())
+    }
+
+    /// Rustls must accept the key for TLS client authentication.
+    fn validate(&self) -> Result<(), String> {
+        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
+        rustls::crypto::ring::default_provider()
+            .key_provider
+            .load_private_key(PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+                self.private_key.clone(),
+            )))
+            .map(|_| ())
+            .map_err(|_| "This key type is not supported for Mumble logins.".into())
+    }
 }
 
 pub fn fingerprint(bytes: &[u8]) -> String {
@@ -430,6 +550,23 @@ mod tests {
             server.history_identity("one"),
             server.history_identity("two")
         );
+    }
+    #[test]
+    fn identities_round_trip_through_pkcs12() {
+        let root = std::env::temp_dir().join(format!("nuschel-identity-{}", Uuid::new_v4()));
+        let profile = Profile::open(Some(root.clone())).unwrap();
+        let original = profile.identity().unwrap();
+        let exported = profile.export_identity("secret").unwrap();
+        assert!(ClientIdentity::from_pkcs12(&exported, "wrong").is_err());
+        let other = Profile::open(Some(root.join("other"))).unwrap();
+        let imported = other.import_identity(&exported, "secret").unwrap();
+        assert_eq!(imported.certificate, original.certificate);
+        assert_eq!(
+            other.identity().unwrap().mumble_hash(),
+            original.mumble_hash()
+        );
+        assert!(ClientIdentity::from_pkcs12(b"not a pkcs12 file", "").is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn settings_round_trip_and_are_sanitized() {

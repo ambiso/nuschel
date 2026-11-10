@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 use crate::{
-    backend::{Backend, Event, RenderedMessage},
+    backend::{Backend, Event, RenderKey, RenderedMessage},
     scrolling::SmoothScroll,
 };
 use gpui_kit::{
@@ -11,7 +11,8 @@ use nuschel_client::{Conversation, HistorySource, Navigation, SessionSecurity};
 use nuschel_core::{MAX_CONTENT_BYTES, MessageDocument, PreviewPolicy};
 use nuschel_session::{
     config::{CachedChannel, ClientSettings, MumbleUrl, Profile, ServerBookmark},
-    connection::{Command, SessionEvent, TextTarget, User},
+    connection::{Command, ServerLimits, SessionEvent, TextTarget, User},
+    model::{Acl, Ban, ContextAction, RegisteredUser, RejectKind, UserStats},
     udp::TransportStats,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -96,8 +97,38 @@ pub struct ChannelView {
     pub loading: bool,
     pub viewing_older: bool,
     pub new_messages: usize,
+    /// Joins, moves, moderation and connection gaps; in memory only.
+    pub activity: std::collections::VecDeque<ActivityLine>,
+    pub links: BTreeSet<u32>,
+    pub temporary: bool,
+    pub max_users: u32,
+    /// Raw Mumble HTML description and its inert rendering from the content worker.
+    pub description_raw: String,
+    pub description: Option<MessageDocument>,
+}
+#[derive(Clone)]
+pub struct ActivityLine {
+    pub observed_at_ms: i64,
+    pub text: String,
+    pub warning: bool,
+}
+pub const MAX_ACTIVITY: usize = 200;
+impl Default for ChannelView {
+    fn default() -> Self {
+        Self::root()
+    }
 }
 impl ChannelView {
+    pub fn log(&mut self, text: String, observed_at_ms: i64, warning: bool) {
+        self.activity.push_back(ActivityLine {
+            observed_at_ms,
+            text,
+            warning,
+        });
+        while self.activity.len() > MAX_ACTIVITY {
+            self.activity.pop_front();
+        }
+    }
     fn root() -> Self {
         Self {
             id: 0,
@@ -113,6 +144,12 @@ impl ChannelView {
             loading: false,
             viewing_older: false,
             new_messages: 0,
+            activity: Default::default(),
+            links: BTreeSet::new(),
+            temporary: false,
+            max_users: 0,
+            description_raw: String::new(),
+            description: None,
         }
     }
 }
@@ -163,6 +200,21 @@ pub struct ServerView {
     pub talking: BTreeSet<u32>,
     pub transport: Option<TransportStats>,
     pub audio: AudioInfo,
+    pub permissions: BTreeMap<u32, u32>,
+    pub limits: Option<ServerLimits>,
+    pub context_actions: Vec<ContextAction>,
+    /// A server recommendation the user can act on (e.g. push-to-talk).
+    pub suggestion: Option<String>,
+    pub stats: BTreeMap<u32, UserStats>,
+    pub registered_users: Option<Vec<RegisteredUser>>,
+    pub bans: Option<Vec<Ban>>,
+    pub acl: Option<Acl>,
+    pub user_names: BTreeMap<u32, String>,
+    pub reconnecting: Option<String>,
+    /// Rendered user comments keyed by session, with the raw HTML they came from.
+    pub comments: BTreeMap<u32, (String, MessageDocument)>,
+    /// Active whisper/shout target label while one is selected.
+    pub whisper: Option<String>,
     /// Channel path from a `mumble://` link, joined once the tree has loaded.
     pub pending_channel: Vec<String>,
 }
@@ -185,6 +237,7 @@ impl ServerView {
                 loading: false,
                 viewing_older: false,
                 new_messages: 0,
+                ..Default::default()
             })
             .collect::<Vec<_>>();
         if !channels.iter().any(|channel| channel.id == 0) {
@@ -212,6 +265,18 @@ impl ServerView {
             talking: BTreeSet::new(),
             transport: None,
             audio: AudioInfo::default(),
+            permissions: BTreeMap::new(),
+            limits: None,
+            context_actions: Vec::new(),
+            suggestion: None,
+            stats: BTreeMap::new(),
+            registered_users: None,
+            bans: None,
+            acl: None,
+            user_names: BTreeMap::new(),
+            reconnecting: None,
+            comments: BTreeMap::new(),
+            whisper: None,
             pending_channel: Vec::new(),
         }
     }
@@ -231,6 +296,23 @@ impl ServerView {
                 _ => "Connected".into(),
             },
         }
+    }
+    /// Effective permission bits for a channel, if the server has told us.
+    pub fn may(&self, channel: u32, bits: u32) -> bool {
+        self.permissions
+            .get(&channel)
+            .is_some_and(|permissions| permissions & bits == bits)
+    }
+    /// Like `may`, but optimistic while permissions are still unknown.
+    pub fn may_try(&self, channel: u32, bits: u32) -> bool {
+        self.permissions
+            .get(&channel)
+            .is_none_or(|permissions| permissions & bits == bits)
+    }
+    pub fn channel_view(&mut self, id: u32) -> Option<&mut ChannelView> {
+        self.channels
+            .iter_mut()
+            .find(|channel| channel.target == TextTarget::Channel(id))
     }
     pub fn voice_channel(&self) -> Option<u32> {
         self.own_session
@@ -282,6 +364,8 @@ pub struct Desktop {
     pub recording_ptt: bool,
     pub ptt_active: bool,
     pending_browse: Option<(String, u32)>,
+    /// A rejected login waiting to reopen the server form for a retry.
+    pending_retry: Option<(usize, RejectKind, String)>,
     cache_dirty: bool,
     sending: Option<PendingSend>,
     acknowledged: Vec<(Conversation, String)>,
@@ -363,6 +447,7 @@ impl Desktop {
             recording_ptt: false,
             ptt_active: false,
             pending_browse: None,
+            pending_retry: None,
             cache_dirty: false,
             sending: None,
             acknowledged: Vec::new(),
@@ -1137,6 +1222,7 @@ impl Desktop {
                 loading: false,
                 viewing_older: false,
                 new_messages: 0,
+                ..Default::default()
             });
             id
         };
@@ -1294,6 +1380,7 @@ impl Desktop {
                     server,
                     generation,
                     reason,
+                    reject,
                 } => {
                     if let Some(index) = self
                         .servers
@@ -1301,7 +1388,87 @@ impl Desktop {
                         .position(|entry| entry.id == server && entry.generation == generation)
                     {
                         self.disconnect(index);
-                        self.servers[index].notice = Some(reason);
+                        self.servers[index].notice = Some(reason.clone());
+                        if let Some(kind) =
+                            reject.filter(|kind| kind.needs_password() || kind.needs_username())
+                        {
+                            self.pending_retry = Some((index, kind, reason));
+                        }
+                    }
+                }
+                Event::Reconnecting {
+                    server,
+                    generation,
+                    attempt,
+                    delay_secs,
+                    reason,
+                } => {
+                    if let Some(server) = self
+                        .servers
+                        .iter_mut()
+                        .find(|entry| entry.id == server && entry.generation == generation)
+                    {
+                        server.status = Status::Connecting;
+                        server.own_session = None;
+                        server.users.clear();
+                        server.talking.clear();
+                        server.transport = None;
+                        server.permissions.clear();
+                        server.reconnecting = Some(format!(
+                            "Connection lost: {reason}. Reconnecting in {delay_secs} s (attempt {attempt})…"
+                        ));
+                    }
+                }
+                Event::Gap {
+                    server,
+                    generation,
+                    from_ms,
+                    to_ms,
+                } => {
+                    if let Some(server) = self
+                        .servers
+                        .iter_mut()
+                        .find(|entry| entry.id == server && entry.generation == generation)
+                    {
+                        server.reconnecting = None;
+                        let text = format!(
+                            "Disconnected from {} to {}. Messages sent meanwhile were not received.",
+                            local_time(from_ms),
+                            local_time(to_ms)
+                        );
+                        for channel in &mut server.channels {
+                            channel.log(text.clone(), to_ms, true);
+                        }
+                    }
+                }
+                Event::Rendered {
+                    server,
+                    generation,
+                    key,
+                    source,
+                    document,
+                } => {
+                    if let Some(server) = self
+                        .servers
+                        .iter_mut()
+                        .find(|entry| entry.id == server && entry.generation == generation)
+                    {
+                        match key {
+                            RenderKey::Description(id) => {
+                                if let Some(channel) = server.channel_view(id)
+                                    && channel.description_raw == source
+                                {
+                                    channel.description = Some(document);
+                                }
+                            }
+                            RenderKey::Comment(session) => {
+                                if server.users.get(&session).is_some_and(|user| {
+                                    user.comment.as_deref() == Some(source.as_str())
+                                }) {
+                                    server.comments.insert(session, (source, document));
+                                }
+                            }
+                        }
                     }
                 }
                 Event::Talking {
@@ -1438,6 +1605,7 @@ impl Desktop {
                             loading: false,
                             viewing_older: false,
                             new_messages: 0,
+                            ..Default::default()
                         });
                         server.channels.len() - 1
                     } else {
@@ -1484,6 +1652,27 @@ impl Desktop {
         changed
     }
     pub fn reconcile_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((index, kind, reason)) = self.pending_retry.take()
+            && index < self.servers.len()
+        {
+            self.open_form(Some(index), window, cx);
+            if let Some(form) = &mut self.form {
+                form.error = Some(format!(
+                    "{reason} {}",
+                    if kind.needs_password() {
+                        "Enter the password and try again."
+                    } else {
+                        "Choose another username."
+                    }
+                ));
+                let field = if kind.needs_password() {
+                    form.password.clone()
+                } else {
+                    form.username.clone()
+                };
+                field.update(cx, |input, cx| input.focus(window, cx));
+            }
+        }
         if let Some((server, channel)) = self.pending_browse.take()
             && let Some(index) = self.servers.iter().position(|entry| entry.id == server)
         {
@@ -1533,6 +1722,7 @@ impl Desktop {
                     .retain(|channel| server.seen_channels.contains(&channel.id));
                 self.cache_dirty = true;
                 server.status = Status::Connected;
+                server.reconnecting = None;
                 server.own_session = Some(session);
                 self.passwords.remove(&server.id);
                 let path = std::mem::take(&mut server.pending_channel);
@@ -1584,10 +1774,13 @@ impl Desktop {
                     .iter_mut()
                     .find(|channel| channel.target == TextTarget::Channel(update.id))
                 {
-                    channel.name = update.name;
+                    channel.name = update.name.clone();
                     channel.parent = update.parent;
                     channel.position = update.position;
                     channel.topic = "Channel chat · select Join voice to move here".into();
+                    channel.links = update.links.clone();
+                    channel.temporary = update.temporary;
+                    channel.max_users = update.max_users;
                 } else {
                     server.channels.push(ChannelView {
                         id: update.id,
@@ -1603,6 +1796,7 @@ impl Desktop {
                         loading: false,
                         viewing_older: false,
                         new_messages: 0,
+                        ..Default::default()
                     });
                 }
                 server.channels.sort_by(|a, b| {
@@ -1610,6 +1804,71 @@ impl Desktop {
                         .cmp(&b.position)
                         .then_with(|| a.name.cmp(&b.name))
                 });
+            }
+            SessionEvent::Permissions {
+                channel,
+                permissions,
+                flush,
+            } => {
+                if flush {
+                    server.permissions.clear();
+                }
+                if channel != u32::MAX {
+                    server.permissions.insert(channel, permissions);
+                }
+            }
+            SessionEvent::Activity(activity) => {
+                let mut targets = activity.channels.clone();
+                if targets.is_empty() {
+                    targets.push(0);
+                    targets.extend(server.voice_channel());
+                }
+                targets.sort_unstable();
+                targets.dedup();
+                for id in targets {
+                    if let Some(channel) = server.channel_view(id) {
+                        channel.log(activity.text.clone(), activity.observed_at_ms, false);
+                    }
+                }
+            }
+            SessionEvent::Limits(limits) => server.limits = Some(limits),
+            SessionEvent::Stats(stats) => {
+                server.stats.insert(stats.session, stats);
+            }
+            SessionEvent::Suggest {
+                push_to_talk,
+                minimum_version,
+                ..
+            } => {
+                let mut tips = Vec::new();
+                if push_to_talk == Some(true)
+                    && self.settings.audio.transmit != nuschel_core::audio::TransmitMode::PushToTalk
+                {
+                    tips.push("This server recommends push-to-talk.".to_string());
+                }
+                if let Some(version) = minimum_version {
+                    tips.push(format!("This server recommends Mumble {version} or newer; some features may be missing."));
+                }
+                server.suggestion = (!tips.is_empty()).then(|| tips.join(" "));
+            }
+            SessionEvent::ContextActions(actions) => server.context_actions = actions,
+            SessionEvent::RegisteredUsers(users) => server.registered_users = Some(users),
+            SessionEvent::Bans(bans) => server.bans = Some(bans),
+            SessionEvent::Acl(acl) => server.acl = Some(acl),
+            SessionEvent::UserNames(names) => server.user_names.extend(names),
+            SessionEvent::UnsupportedCodec { session } => {
+                if let Some(user) = server.users.get(&session).cloned()
+                    && let Some(channel) = server.channel_view(user.channel)
+                {
+                    channel.log(
+                        format!(
+                            "{} uses a legacy voice codec (CELT/Speex) that Nuschel cannot play.",
+                            user.name
+                        ),
+                        nuschel_session::connection::now_ms(),
+                        true,
+                    );
+                }
             }
             SessionEvent::ChannelRemoved(id) => {
                 self.expansion.remove(&(server.id.clone(), id));

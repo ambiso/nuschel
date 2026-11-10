@@ -6,6 +6,7 @@ use nuschel_session::{
     Error,
     config::{Profile, ServerBookmark},
     connection::{self, Command, ConnectOptions, SessionEvent, TextTarget},
+    model::{UserAction, VoiceTargetSpec},
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -37,6 +38,14 @@ struct Arguments {
     /// Keep voice in the TLS tunnel instead of encrypted UDP.
     #[arg(long)]
     force_tcp: bool,
+    /// Access token (repeatable).
+    #[arg(long = "token")]
+    tokens: Vec<String>,
+    /// Import a PKCS#12 client certificate (e.g. exported by Mumble) into the profile first.
+    #[arg(long)]
+    import_certificate: Option<PathBuf>,
+    #[arg(long, default_value = "")]
+    certificate_password: String,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -44,6 +53,59 @@ enum Input {
     CreateChannel {
         parent: u32,
         name: String,
+        #[serde(default = "yes")]
+        temporary: bool,
+    },
+    Register,
+    Comment {
+        text: String,
+    },
+    Tokens {
+        tokens: Vec<String>,
+    },
+    Listen {
+        channel: u32,
+        listen: bool,
+    },
+    Link {
+        channel: u32,
+        #[serde(default)]
+        add: Vec<u32>,
+        #[serde(default)]
+        remove: Vec<u32>,
+    },
+    Whisper {
+        id: u32,
+        #[serde(default)]
+        sessions: Vec<u32>,
+        channel: Option<u32>,
+        #[serde(default)]
+        children: bool,
+    },
+    Permissions {
+        channel: u32,
+    },
+    Stats {
+        session: u32,
+    },
+    Blobs {
+        #[serde(default)]
+        textures: Vec<u32>,
+        #[serde(default)]
+        comments: Vec<u32>,
+        #[serde(default)]
+        descriptions: Vec<u32>,
+    },
+    Moderate {
+        session: u32,
+        action: String,
+        reason: Option<String>,
+        channel: Option<u32>,
+    },
+    RegisteredUsers,
+    Bans,
+    Acl {
+        channel: u32,
     },
     Join {
         channel: u32,
@@ -71,6 +133,9 @@ enum Input {
     },
     Disconnect,
 }
+fn yes() -> bool {
+    true
+}
 fn output(value: serde_json::Value) -> io::Result<()> {
     let mut out = io::stdout().lock();
     serde_json::to_writer(&mut out, &value)?;
@@ -81,6 +146,13 @@ fn output(value: serde_json::Value) -> io::Result<()> {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Arguments::parse();
     let profile = Profile::open(args.profile_dir)?;
+    if let Some(path) = &args.import_certificate {
+        let bytes = std::fs::read(path)?;
+        let identity = profile
+            .import_identity(&bytes, &args.certificate_password)
+            .map_err(io::Error::other)?;
+        output(json!({"kind":"certificate_imported", "hash":identity.mumble_hash()}))?;
+    }
     let mut server =
         ServerBookmark::new("", &args.host, args.port, &args.username).map_err(io::Error::other)?;
     if let Some(pin) = &args.certificate_sha256
@@ -89,6 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Err("expected a 64-character SHA-256 certificate fingerprint".into());
     }
     server.certificate_sha256 = args.certificate_sha256;
+    server.tokens = args.tokens;
     let password = args
         .password_file
         .map(std::fs::read_to_string)
@@ -99,6 +172,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         identity: profile.identity()?,
         password,
         force_tcp: args.force_tcp,
+        muted: true,
+        deafened: false,
+        channel: None,
     };
     let (tx, rx) = mpsc::channel(32);
     let (events_tx, mut events) = mpsc::channel(64);
@@ -119,9 +195,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 _ => {}
             }
             let command = match serde_json::from_slice::<Input>(&line) {
-                Ok(Input::CreateChannel { parent, name }) => {
-                    Command::CreateChannel { parent, name }
+                Ok(Input::CreateChannel {
+                    parent,
+                    name,
+                    temporary,
+                }) => Command::CreateChannel {
+                    parent,
+                    name,
+                    temporary,
+                },
+                Ok(Input::Register) => Command::RegisterSelf,
+                Ok(Input::Comment { text }) => Command::SetComment(text),
+                Ok(Input::Tokens { tokens }) => Command::SetTokens(tokens),
+                Ok(Input::Listen { channel, listen }) => Command::Listen { channel, listen },
+                Ok(Input::Link {
+                    channel,
+                    add,
+                    remove,
+                }) => Command::LinkChannels {
+                    channel,
+                    add,
+                    remove,
+                },
+                Ok(Input::Whisper {
+                    id,
+                    sessions,
+                    channel,
+                    children,
+                }) => Command::SetVoiceTarget {
+                    id,
+                    targets: match channel {
+                        Some(channel) => vec![VoiceTargetSpec::Channel {
+                            channel,
+                            links: false,
+                            children,
+                            group: None,
+                        }],
+                        None => vec![VoiceTargetSpec::Users(sessions)],
+                    },
+                },
+                Ok(Input::Permissions { channel }) => Command::RequestPermissions(channel),
+                Ok(Input::Stats { session }) => Command::RequestStats(session),
+                Ok(Input::Blobs {
+                    textures,
+                    comments,
+                    descriptions,
+                }) => Command::RequestBlobs {
+                    textures,
+                    comments,
+                    descriptions,
+                },
+                Ok(Input::Moderate {
+                    session,
+                    action,
+                    reason,
+                    channel,
+                }) => {
+                    let action = match action.as_str() {
+                        "kick" => UserAction::Kick,
+                        "ban" => UserAction::Ban,
+                        "mute" => UserAction::Mute(true),
+                        "unmute" => UserAction::Mute(false),
+                        "deafen" => UserAction::Deafen(true),
+                        "undeafen" => UserAction::Deafen(false),
+                        "priority" => UserAction::PrioritySpeaker(true),
+                        "move" => UserAction::Move(channel.unwrap_or(0)),
+                        "register" => UserAction::Register,
+                        "reset_comment" => UserAction::ResetComment,
+                        "reset_avatar" => UserAction::ResetAvatar,
+                        other => {
+                            let _ = output(
+                                json!({"kind":"error", "message":format!("unknown action {other}")}),
+                            );
+                            continue;
+                        }
+                    };
+                    Command::User {
+                        session,
+                        action,
+                        reason,
+                    }
                 }
+                Ok(Input::RegisteredUsers) => Command::QueryRegisteredUsers,
+                Ok(Input::Bans) => Command::QueryBans,
+                Ok(Input::Acl { channel }) => Command::QueryAcl(channel),
                 Ok(Input::Join { channel }) => Command::Join(channel),
                 Ok(Input::Text { channel, body }) => Command::SendText {
                     target: TextTarget::Channel(channel),
@@ -169,6 +326,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     output(json!({"kind":"certificate_required", "sha256":sha256, "changed":changed, "reason":reason}))?;
                     return Err("server certificate requires explicit confirmation".into());
                 },
+                Err(Error::Rejected { kind, reason }) => { output(json!({"kind":"rejected", "reject":kind, "message":reason}))?; return Err("rejected".into()); },
                 Err(error) => { output(json!({"kind":"disconnected", "message":error.to_string()}))?; return Err(error.into()); },
             },
             Some(event) = events.recv() => output(match event {
@@ -184,6 +342,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::PermissionDenied(message) => json!({"kind":"permission_denied", "message":message}),
                 SessionEvent::Audio(packet) => json!({"kind":"audio", "sender":packet.sender, "sequence":packet.sequence, "opus":packet.opus, "end":packet.end}),
                 SessionEvent::Transport(stats) => json!({"kind":"transport", "stats":stats}),
+                SessionEvent::Permissions { channel, permissions, flush } => json!({"kind":"permissions", "channel":channel, "permissions":permissions, "flush":flush}),
+                SessionEvent::Activity(activity) => json!({"kind":"activity", "activity":activity}),
+                SessionEvent::Limits(limits) => json!({"kind":"limits", "limits":limits}),
+                SessionEvent::Stats(stats) => json!({"kind":"stats", "stats":stats}),
+                SessionEvent::Suggest { push_to_talk, positional, minimum_version } => json!({"kind":"suggest", "push_to_talk":push_to_talk, "positional":positional, "minimum_version":minimum_version}),
+                SessionEvent::ContextActions(actions) => json!({"kind":"context_actions", "actions":actions}),
+                SessionEvent::RegisteredUsers(users) => json!({"kind":"registered_users", "users":users}),
+                SessionEvent::Bans(bans) => json!({"kind":"bans", "bans":bans}),
+                SessionEvent::Acl(acl) => json!({"kind":"acl", "acl":acl}),
+                SessionEvent::UserNames(names) => json!({"kind":"user_names", "names":names}),
+                SessionEvent::UnsupportedCodec { session } => json!({"kind":"unsupported_codec", "session":session}),
             })?,
         }
     }

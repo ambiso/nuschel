@@ -8,6 +8,7 @@ use nuschel_session::{
     Error,
     config::{ClientSettings, Profile, ServerBookmark},
     connection::{self, Command, ConnectOptions, IncomingText, SessionEvent, TextTarget},
+    model::RejectKind,
     workers::{self, Media, Storage},
 };
 use std::{collections::BTreeMap, path::PathBuf};
@@ -39,6 +40,23 @@ pub enum Event {
         server: String,
         generation: u64,
         reason: String,
+        /// Set when the server refused the login, so the UI can ask for a password or name.
+        reject: Option<RejectKind>,
+    },
+    /// The connection dropped; a new attempt starts after `delay_secs`.
+    Reconnecting {
+        server: String,
+        generation: u64,
+        attempt: u32,
+        delay_secs: u64,
+        reason: String,
+    },
+    /// We were not connected between these times; history may be missing messages.
+    Gap {
+        server: String,
+        generation: u64,
+        from_ms: i64,
+        to_ms: i64,
     },
     AudioStatus {
         server: String,
@@ -89,6 +107,14 @@ pub enum Event {
         erle_db: Option<f32>,
         residual_likelihood: Option<f32>,
     },
+    /// Inert rendering of untrusted Mumble HTML (descriptions, comments).
+    Rendered {
+        server: String,
+        generation: u64,
+        key: RenderKey,
+        source: String,
+        document: MessageDocument,
+    },
     /// Voice activity for a session (including our own) on one connection generation.
     Talking {
         server: String,
@@ -96,6 +122,11 @@ pub enum Event {
         session: u32,
         talking: bool,
     },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderKey {
+    Description(u32),
+    Comment(u32),
 }
 struct Connection {
     commands: mpsc::Sender<Command>,
@@ -112,6 +143,7 @@ pub struct Backend {
     generation: u64,
     settings: watch::Sender<ClientSettings>,
     push_to_talk: watch::Sender<bool>,
+    render_permits: std::sync::Arc<tokio::sync::Semaphore>,
     storage_task: tokio::task::JoinHandle<()>,
     content_task: tokio::task::JoinHandle<()>,
 }
@@ -158,6 +190,7 @@ impl Backend {
             generation: 0,
             settings: watch::Sender::new(settings),
             push_to_talk: watch::Sender::new(false),
+            render_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             storage_task,
             content_task,
         }
@@ -197,6 +230,26 @@ impl Backend {
             .commands
             .try_send(command)
             .map_err(|_| "Connection is busy or has ended; reconnect to try again.".into())
+    }
+    /// Render untrusted Mumble HTML in the sandboxed content worker.
+    pub fn render_html(&self, server: String, generation: u64, key: RenderKey, source: String) {
+        let events = self.sender.clone();
+        let permits = self.render_permits.clone();
+        self.handle.spawn(async move {
+            let Ok(_permit) = permits.acquire().await else {
+                return;
+            };
+            let (_, document) = prepare(&source, true).await;
+            let _ = events
+                .send(Event::Rendered {
+                    server,
+                    generation,
+                    key,
+                    source,
+                    document,
+                })
+                .await;
+        });
     }
     /// Apply new preferences to every live connection and its media worker.
     pub fn apply_settings(&self, settings: ClientSettings) {
@@ -240,6 +293,24 @@ impl Drop for Backend {
     }
 }
 
+/// What to restore when a dropped connection is re-established.
+#[derive(Default)]
+struct Restore {
+    channel: Option<u32>,
+    muted: bool,
+    deafened: bool,
+    connected: bool,
+    disconnected_at_ms: Option<i64>,
+}
+
+enum Outcome {
+    Ended(Result<Result<(), Error>, tokio::task::JoinError>),
+    /// The desktop dropped this connection.
+    Closed,
+}
+
+/// Supervise one server connection: reconnect with backoff after transient
+/// failures, restoring channel and mute/deafen, and report gaps in history.
 #[allow(clippy::too_many_arguments)]
 async fn connection_loop(
     profile: Profile,
@@ -252,12 +323,142 @@ async fn connection_loop(
     (mut settings, mut push_to_talk): (watch::Receiver<ClientSettings>, watch::Receiver<bool>),
 ) {
     let id = server.id.clone();
+    let mut restore = Restore {
+        muted: true,
+        ..Restore::default()
+    };
+    let mut attempt = 0_u32;
+    loop {
+        let started = tokio::time::Instant::now();
+        let outcome = connect_once(
+            &profile,
+            &server,
+            password.clone(),
+            generation,
+            &mut commands,
+            &events,
+            &content,
+            (&mut settings, &mut push_to_talk),
+            &mut restore,
+        )
+        .await;
+        let result = match outcome {
+            Outcome::Closed => return,
+            Outcome::Ended(result) => result,
+        };
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            attempt = 0;
+        }
+        let error = match result {
+            Ok(Ok(())) => {
+                let _ = events
+                    .send(Event::Disconnected {
+                        server: id.clone(),
+                        generation,
+                        reason: "Disconnected".into(),
+                        reject: None,
+                    })
+                    .await;
+                return;
+            }
+            Ok(Err(Error::Certificate {
+                sha256,
+                changed,
+                reason,
+            })) => {
+                let _ = events
+                    .send(Event::Certificate {
+                        server: id.clone(),
+                        generation,
+                        sha256,
+                        changed,
+                        reason,
+                    })
+                    .await;
+                return;
+            }
+            Ok(Err(error)) => error,
+            Err(error) => {
+                let _ = events
+                    .send(Event::Disconnected {
+                        server: id.clone(),
+                        generation,
+                        reason: format!("Connection task failed: {error}"),
+                        reject: None,
+                    })
+                    .await;
+                return;
+            }
+        };
+        let reject = match &error {
+            Error::Rejected { kind, .. } => Some(*kind),
+            _ => None,
+        };
+        if !(error.transient() && restore.connected && settings.borrow().auto_reconnect) {
+            let _ = events
+                .send(Event::Disconnected {
+                    server: id.clone(),
+                    generation,
+                    reason: error.to_string(),
+                    reject,
+                })
+                .await;
+            return;
+        }
+        restore
+            .disconnected_at_ms
+            .get_or_insert_with(connection::now_ms);
+        attempt += 1;
+        let delay = [1, 2, 4, 8, 15, 30][(attempt as usize - 1).min(5)];
+        let _ = events
+            .send(Event::Reconnecting {
+                server: id.clone(),
+                generation,
+                attempt,
+                delay_secs: delay,
+                reason: error.to_string(),
+            })
+            .await;
+        let wait = tokio::time::sleep(std::time::Duration::from_secs(delay));
+        tokio::pin!(wait);
+        loop {
+            tokio::select! {
+                _ = &mut wait => break,
+                command = commands.recv() => match command {
+                    None | Some(Command::Disconnect) => return,
+                    // Commands made while offline are dropped; the UI shows the state.
+                    Some(_) => {}
+                },
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn connect_once(
+    profile: &Profile,
+    server: &ServerBookmark,
+    password: Option<String>,
+    generation: u64,
+    commands: &mut mpsc::Receiver<Command>,
+    events: &mpsc::Sender<Event>,
+    content: &mpsc::Sender<ContentJob>,
+    (settings, push_to_talk): (
+        &mut watch::Receiver<ClientSettings>,
+        &mut watch::Receiver<bool>,
+    ),
+    restore: &mut Restore,
+) -> Outcome {
+    let id = server.id.clone();
     let options = match profile.identity() {
         Ok(identity) => ConnectOptions {
             server: server.clone(),
             identity,
             password,
             force_tcp: settings.borrow().force_tcp,
+            muted: restore.muted,
+            deafened: restore.deafened,
+            channel: restore.channel,
         },
         Err(error) => {
             let _ = events
@@ -265,9 +466,10 @@ async fn connection_loop(
                     server: id,
                     generation,
                     reason: error.to_string(),
+                    reject: None,
                 })
                 .await;
-            return;
+            return Outcome::Closed;
         }
     };
     let (session_commands, receiver) = mpsc::channel(32);
@@ -276,8 +478,8 @@ async fn connection_loop(
     let mut media: Option<Media> = None;
     let mut peer = None;
     let nonce = format!("{}:{generation}:{}", id, connection::now_ms());
-    let mut muted = true;
-    let mut deafened = false;
+    let mut muted = restore.muted;
+    let mut deafened = restore.deafened;
     let mut sequence = 0;
     let mut content_gap = false;
     let mut capture_epoch = 0;
@@ -285,6 +487,7 @@ async fn connection_loop(
     let mut bitrate = 48_000;
     let mut retry_audio = tokio::time::Instant::now();
     let mut finished = false;
+    let mut outcome = None;
     let mut own_session = None;
     let mut hashes = BTreeMap::<u32, Option<String>>::new();
     let mut applied_audio = settings.borrow().audio.clone();
@@ -325,13 +528,7 @@ async fn connection_loop(
             },
             result = &mut session => {
                 finished = true;
-                match result {
-                    Ok(Err(Error::Certificate { sha256, changed, reason })) => { let _ = events.send(Event::Certificate { server: id.clone(), generation, sha256, changed, reason }).await; },
-                    result => {
-                        let reason = match result { Ok(Ok(())) => "Disconnected".into(), Ok(Err(error)) => error.to_string(), Err(error) => format!("Connection task failed: {error}") };
-                        let _ = events.send(Event::Disconnected { server: id.clone(), generation, reason }).await;
-                    },
-                }
+                outcome = Some(Outcome::Ended(result));
                 break;
             },
             Some(command) = commands.recv() => {
@@ -348,6 +545,10 @@ async fn connection_loop(
             Some(event) = incoming.recv() => match event {
                 SessionEvent::PeerCertificate(sha256) => { peer = Some(sha256.clone()); let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::PeerCertificate(sha256) }).await; },
                 SessionEvent::Connected { session: connected_session, max_bandwidth } => {
+                    restore.connected = true;
+                    if let Some(from_ms) = restore.disconnected_at_ms.take() {
+                        let _ = events.send(Event::Gap { server: id.clone(), generation, from_ms, to_ms: connection::now_ms() }).await;
+                    }
                     own_session = Some(connected_session);
                     let own_session = connected_session;
                     audio_enabled = true;
@@ -369,6 +570,9 @@ async fn connection_loop(
                 },
                 SessionEvent::User(user) => {
                     hashes.insert(user.session, user.certificate_hash.clone());
+                    if Some(user.session) == own_session {
+                        restore.channel = Some(user.channel);
+                    }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::User(user) }).await;
                 },
                 SessionEvent::UserRemoved(session) => {
@@ -435,10 +639,13 @@ async fn connection_loop(
             },
         }
     }
+    restore.muted = muted;
+    restore.deafened = deafened;
     if !finished {
         session.abort();
         let _ = session.await;
     }
+    outcome.unwrap_or(Outcome::Closed)
 }
 
 const TALK_HOLD: std::time::Duration = std::time::Duration::from_millis(280);

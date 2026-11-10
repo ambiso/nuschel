@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
-use crate::udp::{self, PingStats, Received, TransportStats, Udp};
 use crate::{
     Error,
     config::{ClientIdentity, ServerBookmark},
+    model::{
+        Acl, AclEntry, AclGroup, Activity, Ban, ChannelEdit, ContextAction, PacketStats,
+        RegisteredUser, RejectKind, UserAction, UserStats, VoiceTargetSpec,
+    },
+    udp::{self, PingStats, Received, TransportStats, Udp},
 };
 use bytes::Bytes;
 use nuschel_core::MAX_CONTENT_BYTES;
@@ -23,27 +27,40 @@ use tokio::{
     time::{self, Duration, Instant, timeout},
 };
 
-#[derive(Clone, Debug, Serialize)]
-pub struct Channel {
-    pub id: u32,
-    pub parent: Option<u32>,
-    pub name: String,
-    pub description: String,
-    pub position: i32,
+pub use crate::model::{Channel, User};
+
+/// Wire message types (Mumble's TCP control protocol).
+mod kind {
+    pub const VERSION: u16 = 0;
+    pub const UDP_TUNNEL: u16 = 1;
+    pub const AUTHENTICATE: u16 = 2;
+    pub const PING: u16 = 3;
+    pub const REJECT: u16 = 4;
+    pub const SERVER_SYNC: u16 = 5;
+    pub const CHANNEL_REMOVE: u16 = 6;
+    pub const CHANNEL_STATE: u16 = 7;
+    pub const USER_REMOVE: u16 = 8;
+    pub const USER_STATE: u16 = 9;
+    pub const BAN_LIST: u16 = 10;
+    pub const TEXT_MESSAGE: u16 = 11;
+    pub const PERMISSION_DENIED: u16 = 12;
+    pub const ACL: u16 = 13;
+    pub const QUERY_USERS: u16 = 14;
+    pub const CRYPT_SETUP: u16 = 15;
+    pub const CONTEXT_ACTION_MODIFY: u16 = 16;
+    pub const CONTEXT_ACTION: u16 = 17;
+    pub const USER_LIST: u16 = 18;
+    pub const VOICE_TARGET: u16 = 19;
+    pub const PERMISSION_QUERY: u16 = 20;
+    pub const CODEC_VERSION: u16 = 21;
+    pub const USER_STATS: u16 = 22;
+    pub const REQUEST_BLOB: u16 = 23;
+    pub const SERVER_CONFIG: u16 = 24;
+    pub const SUGGEST_CONFIG: u16 = 25;
 }
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct User {
-    pub instance: u64,
-    pub session: u32,
-    pub name: String,
-    pub channel: u32,
-    pub certificate_hash: Option<String>,
-    pub muted: bool,
-    pub deafened: bool,
-    pub self_muted: bool,
-    pub self_deafened: bool,
-    pub suppressed: bool,
-}
+
+const MAX_BLOB_REQUEST: usize = 64;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum TextTarget {
@@ -61,6 +78,17 @@ pub struct IncomingText {
     pub outgoing: bool,
     pub observed_at_ms: i64,
 }
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ServerLimits {
+    pub allow_html: bool,
+    pub message_length: usize,
+    pub image_message_length: usize,
+    pub max_users: Option<u32>,
+    pub recording_allowed: bool,
+    pub max_bandwidth: Option<u32>,
+}
+
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
     PeerCertificate(String),
@@ -79,13 +107,54 @@ pub enum SessionEvent {
     Audio(VoicePacket),
     /// UDP/TCP state and latency, emitted on changes and every few seconds.
     Transport(TransportStats),
+    /// Effective permissions for a channel; `flush` invalidates all cached values first.
+    Permissions {
+        channel: u32,
+        permissions: u32,
+        flush: bool,
+    },
+    Activity(Activity),
+    Limits(ServerLimits),
+    Stats(UserStats),
+    /// The server recommends settings; frontends decide whether to follow them.
+    Suggest {
+        push_to_talk: Option<bool>,
+        positional: Option<bool>,
+        minimum_version: Option<String>,
+    },
+    ContextActions(Vec<ContextAction>),
+    RegisteredUsers(Vec<RegisteredUser>),
+    Bans(Vec<Ban>),
+    Acl(Acl),
+    /// Resolved names for registered user ids (ACL editor).
+    UserNames(BTreeMap<u32, String>),
+    /// A voice packet from a legacy codec Nuschel does not decode.
+    UnsupportedCodec {
+        session: u32,
+    },
 }
+
 #[derive(Debug)]
 pub enum Command {
     Join(u32),
     CreateChannel {
         parent: u32,
         name: String,
+        temporary: bool,
+    },
+    EditChannel {
+        channel: u32,
+        edit: ChannelEdit,
+    },
+    RemoveChannel(u32),
+    LinkChannels {
+        channel: u32,
+        add: Vec<u32>,
+        remove: Vec<u32>,
+    },
+    Listen {
+        channel: u32,
+        listen: bool,
     },
     SendText {
         target: TextTarget,
@@ -96,12 +165,46 @@ pub enum Command {
         muted: bool,
         deafened: bool,
     },
+    SetComment(String),
+    SetAvatar(Vec<u8>),
+    /// Register our own certificate under our current name.
+    RegisterSelf,
+    SetTokens(Vec<String>),
+    User {
+        session: u32,
+        action: UserAction,
+        reason: Option<String>,
+    },
+    RequestPermissions(u32),
+    RequestBlobs {
+        textures: Vec<u32>,
+        comments: Vec<u32>,
+        descriptions: Vec<u32>,
+    },
+    RequestStats(u32),
+    SetVoiceTarget {
+        id: u32,
+        targets: Vec<VoiceTargetSpec>,
+    },
+    ContextAction {
+        action: String,
+        session: Option<u32>,
+        channel: Option<u32>,
+    },
+    QueryRegisteredUsers,
+    UpdateRegisteredUsers(Vec<RegisteredUser>),
+    QueryBans,
+    UpdateBans(Vec<Ban>),
+    QueryAcl(u32),
+    UpdateAcl(Acl),
+    QueryUserNames(Vec<u32>),
     Voice {
         target: u32,
         packet: VoicePacket,
     },
     Disconnect,
 }
+
 /// Passwords exist only in memory and are never part of a saved bookmark or Debug output.
 pub struct ConnectOptions {
     pub server: ServerBookmark,
@@ -109,6 +212,11 @@ pub struct ConnectOptions {
     pub password: Option<String>,
     /// Never use UDP; voice stays in the TLS tunnel (Mumble's "Force TCP mode").
     pub force_tcp: bool,
+    /// Restored after a reconnect; a fresh connection starts muted.
+    pub muted: bool,
+    pub deafened: bool,
+    /// Rejoin this channel after login (reconnect).
+    pub channel: Option<u32>,
 }
 
 pub async fn run(
@@ -133,15 +241,36 @@ pub async fn run(
         }
     });
     let result = async {
-        send(&mut writer, 0, &proto::Version {
-            version_v1: Some(0x0001_0500), version_v2: Some(voice::PROTOBUF_VERSION),
+        send(&mut writer, kind::VERSION, &proto::Version {
+            version_v1: Some(0x0001_0500),
+            version_v2: Some(voice::PROTOBUF_VERSION),
             release: Some(format!("Nuschel {}", env!("CARGO_PKG_VERSION"))),
-            os: Some(std::env::consts::OS.into()), ..Default::default()
-        }).await?;
-        send(&mut writer, 2, &proto::Authenticate { username: Some(options.server.username), password: options.password,
-            opus: Some(true), ..Default::default() }).await?;
-        send(&mut writer, 9, &proto::UserState { self_mute: Some(true), self_deaf: Some(false), ..Default::default() }).await?;
-        let mut state = State { udp, ..State::default() };
+            os: Some(std::env::consts::OS.into()),
+            ..Default::default()
+        })
+        .await?;
+        send(&mut writer, kind::AUTHENTICATE, &proto::Authenticate {
+            username: Some(options.server.username.clone()),
+            password: options.password,
+            tokens: options.server.tokens.clone(),
+            opus: Some(true),
+            ..Default::default()
+        })
+        .await?;
+        let muted = options.muted || options.deafened;
+        send(&mut writer, kind::USER_STATE, &proto::UserState {
+            self_mute: Some(muted),
+            self_deaf: Some(options.deafened),
+            ..Default::default()
+        })
+        .await?;
+        let mut state = State {
+            udp,
+            local_muted: muted,
+            local_deafened: options.deafened,
+            rejoin: options.channel,
+            ..State::default()
+        };
         let mut ticks = 0_u64;
         let mut reported_udp = false;
         let mut ping = time::interval(Duration::from_secs(1));
@@ -153,9 +282,6 @@ pub async fn run(
                 frame = frames.recv() => {
                     let frame = frame.ok_or_else(|| Error::Protocol("connection reader stopped".into()))??;
                     state.handle(frame, &events).await?;
-                    for (kind, payload) in std::mem::take(&mut state.outbound) {
-                        write_control(&mut writer, kind, &payload).await?;
-                    }
                 },
                 received = async {
                     match &state.udp {
@@ -171,7 +297,7 @@ pub async fn run(
                             emit(&events, SessionEvent::Audio(packet)).await?;
                         },
                         Received::Message(UdpMessage::Ping { .. }) | Received::Ignored => {},
-                        Received::RequestResync => send(&mut writer, 15, &proto::CryptSetup::default()).await?,
+                        Received::RequestResync => state.queue(kind::CRYPT_SETUP, &proto::CryptSetup::default()),
                     }
                     let active = state.udp.as_ref().is_some_and(Udp::active);
                     if active != reported_udp {
@@ -183,41 +309,13 @@ pub async fn run(
                     let Some(command) = command else { break; };
                     match command {
                         Command::Disconnect => break,
-                        Command::CreateChannel { parent, name } => if state.own_session.is_some() && state.channels.contains_key(&parent) && !name.is_empty() && name.len() <= 128 {
-                            send(&mut writer, 7, &proto::ChannelState { parent: Some(parent), name: Some(name), temporary: Some(true), ..Default::default() }).await?;
-                        },
-                        Command::Join(channel) => if state.own_session.is_some() && state.channels.contains_key(&channel) {
-                            send(&mut writer, 9, &proto::UserState { channel_id: Some(channel), ..Default::default() }).await?;
-                        },
-                        Command::SetSelf { muted, deafened } => {
-                            state.local_muted = muted || deafened; state.local_deafened = deafened;
-                            send(&mut writer, 9, &proto::UserState { self_mute: Some(muted || deafened), self_deaf: Some(deafened), ..Default::default() }).await?;
-                        },
-                        Command::SendText { target, body, expected_peer } => {
-                            if state.own_session.is_none() { emit(&events, SessionEvent::Notice("Connect before sending a message.".into())).await?; continue; }
-                            if body.trim().is_empty() || body.len() > MAX_CONTENT_BYTES {
-                                emit(&events, SessionEvent::Notice("Message is empty or exceeds 64 KiB.".into())).await?; continue;
-                            }
-                            let wire_body = if state.allow_html { escape_html(&body) } else { body.clone() };
-                            if wire_body.len() > state.message_limit {
-                                emit(&events, SessionEvent::Notice(format!("Message exceeds this server's {}-byte limit.", state.message_limit))).await?; continue;
-                            }
-                            let mut message = proto::TextMessage { message: wire_body, ..Default::default() };
-                            match target { TextTarget::Channel(id) => {
-                                if !state.channels.contains_key(&id) { emit(&events, SessionEvent::Notice("This channel is no longer available.".into())).await?; continue; } message.channel_id.push(id);
-                            }, TextTarget::Direct(id) => { if !state.users.get(&id).is_some_and(|user| expected_peer.is_none_or(|instance| instance == user.instance)) { emit(&events, SessionEvent::Notice("The recipient disconnected or changed. Open a new private conversation.".into())).await?; continue; } message.session.push(id); } }
-                            send(&mut writer, 11, &message).await?;
-                            let own = state.users.get(&state.own_session.unwrap()).cloned().unwrap_or_default();
-                            let peer = match target { TextTarget::Direct(id) => state.users.get(&id).cloned(), _ => None };
-                            emit(&events, SessionEvent::Text(IncomingText { target, author: own.name, peer,
-                                body, html: false, outgoing: true, observed_at_ms: now_ms() })).await?;
-                        },
                         Command::Voice { target, packet } => if state.own_session.is_some() && state.opus
                             && ((!state.local_muted && !state.local_deafened && state.may_speak()) || packet.end)
                             && let Ok(payload) = voice::encode_voice(state.version, target, &packet) {
                             let sent = match state.udp.as_mut() { Some(udp) => udp.send_voice(&payload).await, None => false };
-                            if !sent { write_control(&mut writer, 1, &payload).await?; }
+                            if !sent { write_control(&mut writer, kind::UDP_TUNNEL, &payload).await?; }
                         },
+                        command => state.command(command, &events).await?,
                     }
                 },
                 _ = ping.tick() => {
@@ -228,19 +326,19 @@ pub async fn run(
                         if udp.probe_failed() {
                             // The server may now send voice by UDP that never arrives.
                             // A tunneled datagram switches it back to the TCP tunnel.
-                            write_control(&mut writer, 1, &voice::encode_ping(state.version, now)).await?;
+                            write_control(&mut writer, kind::UDP_TUNNEL, &voice::encode_ping(state.version, now)).await?;
                         }
                     }
                     let active = state.udp.as_ref().is_some_and(Udp::active);
                     if ticks % 5 == 1 || active != reported_udp {
                         let stats = state.transport();
-                        send(&mut writer, 3, &proto::Ping {
+                        state.queue(kind::PING, &proto::Ping {
                             timestamp: Some(now),
                             good: Some(stats.good), late: Some(stats.late), lost: Some(stats.lost), resync: Some(stats.resync),
                             udp_packets: Some(stats.udp.packets), tcp_packets: Some(stats.tcp.packets),
                             udp_ping_avg: Some(stats.udp.average_ms), udp_ping_var: Some(stats.udp.variance_ms),
                             tcp_ping_avg: Some(stats.tcp.average_ms), tcp_ping_var: Some(stats.tcp.variance_ms),
-                        }).await?;
+                        });
                         reported_udp = active;
                         if state.own_session.is_some() {
                             emit(&events, SessionEvent::Transport(stats)).await?;
@@ -249,10 +347,14 @@ pub async fn run(
                 },
                 _ = &mut deadline, if state.own_session.is_none() => return Err(Error::Timeout("waiting for Mumble login")),
             }
+            for (kind, payload) in std::mem::take(&mut state.outbound) {
+                write_control(&mut writer, kind, &payload).await?;
+            }
         }
         let _ = timeout(Duration::from_secs(2), writer.shutdown()).await;
         Ok(())
-    }.await;
+    }
+    .await;
     read_task.abort();
     let _ = read_task.await;
     result
@@ -261,7 +363,7 @@ pub async fn run(
 struct State {
     udp: Option<Udp>,
     tcp_ping: PingStats,
-    /// Control replies produced while handling a frame, flushed by the session loop.
+    /// Control messages produced while handling a frame or command, flushed by the loop.
     outbound: Vec<(u16, Vec<u8>)>,
     user_instance: u64,
     channels: BTreeMap<u32, Channel>,
@@ -270,9 +372,14 @@ struct State {
     version: u64,
     allow_html: bool,
     message_limit: usize,
+    image_limit: usize,
     opus: bool,
     local_muted: bool,
     local_deafened: bool,
+    rejoin: Option<u32>,
+    permissions: BTreeMap<u32, u32>,
+    context_actions: BTreeMap<String, ContextAction>,
+    unsupported_codec: BTreeSet<u32>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -287,9 +394,14 @@ impl Default for State {
             version: 0,
             allow_html: true,
             message_limit: 5000,
+            image_limit: 131_072,
             opus: true,
             local_muted: true,
             local_deafened: false,
+            rejoin: None,
+            permissions: BTreeMap::new(),
+            context_actions: BTreeMap::new(),
+            unsupported_codec: BTreeSet::new(),
         }
     }
 }
@@ -321,13 +433,560 @@ impl State {
                     && !user.self_deafened
             })
     }
+    fn user_name(&self, session: Option<u32>) -> String {
+        session
+            .and_then(|session| self.users.get(&session))
+            .map(|user| user.name.clone())
+            .unwrap_or_else(|| "the server".into())
+    }
+    fn channel_name(&self, channel: u32) -> String {
+        self.channels
+            .get(&channel)
+            .map(|channel| channel.name.clone())
+            .unwrap_or_else(|| format!("channel {channel}"))
+    }
+    async fn activity(
+        &self,
+        events: &mpsc::Sender<SessionEvent>,
+        channels: Vec<u32>,
+        text: String,
+    ) -> Result<(), Error> {
+        if self.own_session.is_none() {
+            return Ok(());
+        }
+        emit(
+            events,
+            SessionEvent::Activity(Activity {
+                channels,
+                text,
+                observed_at_ms: now_ms(),
+            }),
+        )
+        .await
+    }
+    fn logged_in(&self) -> bool {
+        self.own_session.is_some()
+    }
+
+    async fn command(
+        &mut self,
+        command: Command,
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        if !self.logged_in() {
+            return emit(
+                events,
+                SessionEvent::Notice("Still connecting; try again in a moment.".into()),
+            )
+            .await;
+        }
+        let own = self.own_session.unwrap_or_default();
+        match command {
+            Command::Disconnect | Command::Voice { .. } => {}
+            Command::Join(channel) => {
+                if self.channels.contains_key(&channel) {
+                    self.queue(
+                        kind::USER_STATE,
+                        &proto::UserState {
+                            session: Some(own),
+                            channel_id: Some(channel),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            Command::CreateChannel {
+                parent,
+                name,
+                temporary,
+            } => {
+                if self.channels.contains_key(&parent) && valid_name(&name) {
+                    self.queue(
+                        kind::CHANNEL_STATE,
+                        &proto::ChannelState {
+                            parent: Some(parent),
+                            name: Some(name),
+                            temporary: Some(temporary),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            Command::EditChannel { channel, edit } => {
+                if self.channels.contains_key(&channel)
+                    && edit.name.as_deref().is_none_or(valid_name)
+                {
+                    let description = edit
+                        .description
+                        .map(|text| bounded(text, MAX_CONTENT_BYTES));
+                    self.queue(
+                        kind::CHANNEL_STATE,
+                        &proto::ChannelState {
+                            channel_id: Some(channel),
+                            name: edit.name,
+                            description,
+                            position: edit.position,
+                            max_users: edit.max_users,
+                            parent: edit.parent.filter(|parent| {
+                                self.channels.contains_key(parent) && *parent != channel
+                            }),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            Command::RemoveChannel(channel) => {
+                if channel != 0 && self.channels.contains_key(&channel) {
+                    self.queue(
+                        kind::CHANNEL_REMOVE,
+                        &proto::ChannelRemove {
+                            channel_id: channel,
+                        },
+                    );
+                }
+            }
+            Command::LinkChannels {
+                channel,
+                add,
+                remove,
+            } => {
+                let known = |ids: Vec<u32>| {
+                    ids.into_iter()
+                        .filter(|id| self.channels.contains_key(id))
+                        .take(256)
+                        .collect::<Vec<_>>()
+                };
+                let (links_add, links_remove) = (known(add), known(remove));
+                self.queue(
+                    kind::CHANNEL_STATE,
+                    &proto::ChannelState {
+                        channel_id: Some(channel),
+                        links_add,
+                        links_remove,
+                        ..Default::default()
+                    },
+                );
+            }
+            Command::Listen { channel, listen } => {
+                if self.channels.contains_key(&channel) {
+                    let mut message = proto::UserState {
+                        session: Some(own),
+                        ..Default::default()
+                    };
+                    if listen {
+                        message.listening_channel_add.push(channel);
+                    } else {
+                        message.listening_channel_remove.push(channel);
+                    }
+                    self.queue(kind::USER_STATE, &message);
+                }
+            }
+            Command::SetSelf { muted, deafened } => {
+                self.local_muted = muted || deafened;
+                self.local_deafened = deafened;
+                self.queue(
+                    kind::USER_STATE,
+                    &proto::UserState {
+                        self_mute: Some(muted || deafened),
+                        self_deaf: Some(deafened),
+                        ..Default::default()
+                    },
+                );
+            }
+            Command::SetComment(comment) => {
+                let comment = if self.allow_html {
+                    escape_html(&comment)
+                } else {
+                    comment
+                };
+                if comment.len() > self.message_limit.max(1) {
+                    return emit(
+                        events,
+                        SessionEvent::Notice(format!(
+                            "Comments are limited to {} bytes on this server.",
+                            self.message_limit
+                        )),
+                    )
+                    .await;
+                }
+                self.queue(
+                    kind::USER_STATE,
+                    &proto::UserState {
+                        session: Some(own),
+                        comment: Some(comment),
+                        ..Default::default()
+                    },
+                );
+            }
+            Command::SetAvatar(texture) => {
+                if texture.len() > self.image_limit {
+                    return emit(
+                        events,
+                        SessionEvent::Notice(format!(
+                            "Avatars are limited to {} KiB on this server.",
+                            self.image_limit / 1024
+                        )),
+                    )
+                    .await;
+                }
+                self.queue(
+                    kind::USER_STATE,
+                    &proto::UserState {
+                        session: Some(own),
+                        texture: Some(texture),
+                        ..Default::default()
+                    },
+                );
+            }
+            Command::RegisterSelf => {
+                self.queue(
+                    kind::USER_STATE,
+                    &proto::UserState {
+                        session: Some(own),
+                        user_id: Some(0),
+                        ..Default::default()
+                    },
+                );
+            }
+            Command::SetTokens(tokens) => {
+                let tokens = tokens
+                    .into_iter()
+                    .filter(|token| !token.is_empty() && token.len() <= 256)
+                    .take(64)
+                    .collect();
+                self.queue(
+                    kind::AUTHENTICATE,
+                    &proto::Authenticate {
+                        tokens,
+                        ..Default::default()
+                    },
+                );
+            }
+            Command::User {
+                session,
+                action,
+                reason,
+            } => {
+                if !self.users.contains_key(&session) {
+                    return Ok(());
+                }
+                let reason = reason.map(|text| bounded(text, 1024));
+                match action {
+                    UserAction::Kick | UserAction::Ban => self.queue(
+                        kind::USER_REMOVE,
+                        &proto::UserRemove {
+                            session,
+                            reason,
+                            ban: Some(action == UserAction::Ban),
+                            ..Default::default()
+                        },
+                    ),
+                    action => {
+                        let mut message = proto::UserState {
+                            session: Some(session),
+                            ..Default::default()
+                        };
+                        match action {
+                            UserAction::Mute(value) => message.mute = Some(value),
+                            UserAction::Deafen(value) => message.deaf = Some(value),
+                            UserAction::PrioritySpeaker(value) => {
+                                message.priority_speaker = Some(value)
+                            }
+                            UserAction::Move(channel) => message.channel_id = Some(channel),
+                            UserAction::Register => message.user_id = Some(0),
+                            UserAction::ResetComment => message.comment = Some(String::new()),
+                            UserAction::ResetAvatar => message.texture = Some(Vec::new()),
+                            UserAction::Kick | UserAction::Ban => {}
+                        }
+                        self.queue(kind::USER_STATE, &message);
+                    }
+                }
+            }
+            Command::RequestPermissions(channel) => {
+                if self.channels.contains_key(&channel) {
+                    self.queue(
+                        kind::PERMISSION_QUERY,
+                        &proto::PermissionQuery {
+                            channel_id: Some(channel),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            Command::RequestBlobs {
+                textures,
+                comments,
+                descriptions,
+            } => {
+                let users = |ids: Vec<u32>| {
+                    ids.into_iter()
+                        .filter(|id| self.users.contains_key(id))
+                        .take(MAX_BLOB_REQUEST)
+                        .collect::<Vec<_>>()
+                };
+                let message = proto::RequestBlob {
+                    session_texture: users(textures),
+                    session_comment: users(comments),
+                    channel_description: descriptions
+                        .into_iter()
+                        .filter(|id| self.channels.contains_key(id))
+                        .take(MAX_BLOB_REQUEST)
+                        .collect(),
+                };
+                if !(message.session_texture.is_empty()
+                    && message.session_comment.is_empty()
+                    && message.channel_description.is_empty())
+                {
+                    self.queue(kind::REQUEST_BLOB, &message);
+                }
+            }
+            Command::RequestStats(session) => {
+                if self.users.contains_key(&session) {
+                    self.queue(
+                        kind::USER_STATS,
+                        &proto::UserStats {
+                            session: Some(session),
+                            stats_only: Some(false),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            Command::SetVoiceTarget { id, targets } => {
+                if (1..=30).contains(&id) {
+                    let targets = targets
+                        .into_iter()
+                        .take(32)
+                        .map(|target| match target {
+                            VoiceTargetSpec::Users(sessions) => proto::voice_target::Target {
+                                session: sessions.into_iter().take(256).collect(),
+                                ..Default::default()
+                            },
+                            VoiceTargetSpec::Channel {
+                                channel,
+                                links,
+                                children,
+                                group,
+                            } => proto::voice_target::Target {
+                                channel_id: Some(channel),
+                                links: Some(links),
+                                children: Some(children),
+                                group,
+                                ..Default::default()
+                            },
+                        })
+                        .collect();
+                    self.queue(
+                        kind::VOICE_TARGET,
+                        &proto::VoiceTarget {
+                            id: Some(id),
+                            targets,
+                        },
+                    );
+                }
+            }
+            Command::ContextAction {
+                action,
+                session,
+                channel,
+            } => {
+                if self.context_actions.contains_key(&action) {
+                    self.queue(
+                        kind::CONTEXT_ACTION,
+                        &proto::ContextAction {
+                            action,
+                            session,
+                            channel_id: channel,
+                        },
+                    );
+                }
+            }
+            Command::QueryRegisteredUsers => {
+                self.queue(kind::USER_LIST, &proto::UserList::default())
+            }
+            Command::UpdateRegisteredUsers(users) => self.queue(
+                kind::USER_LIST,
+                &proto::UserList {
+                    users: users
+                        .into_iter()
+                        .take(10_000)
+                        .map(|user| proto::user_list::User {
+                            user_id: user.user_id,
+                            name: user.name,
+                            ..Default::default()
+                        })
+                        .collect(),
+                },
+            ),
+            Command::QueryBans => self.queue(
+                kind::BAN_LIST,
+                &proto::BanList {
+                    query: Some(true),
+                    ..Default::default()
+                },
+            ),
+            Command::UpdateBans(bans) => self.queue(
+                kind::BAN_LIST,
+                &proto::BanList {
+                    bans: bans
+                        .into_iter()
+                        .take(10_000)
+                        .map(|ban| proto::ban_list::BanEntry {
+                            address: ban.address,
+                            mask: ban.mask,
+                            name: ban.name,
+                            hash: ban.hash,
+                            reason: ban.reason,
+                            start: ban.start,
+                            duration: ban.duration,
+                        })
+                        .collect(),
+                    query: Some(false),
+                },
+            ),
+            Command::QueryAcl(channel) => {
+                if self.channels.contains_key(&channel) {
+                    self.queue(
+                        kind::ACL,
+                        &proto::Acl {
+                            channel_id: channel,
+                            query: Some(true),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            Command::UpdateAcl(acl) => self.queue(
+                kind::ACL,
+                &proto::Acl {
+                    channel_id: acl.channel,
+                    inherit_acls: Some(acl.inherit_acls),
+                    groups: acl
+                        .groups
+                        .into_iter()
+                        .filter(|group| !group.inherited)
+                        .map(|group| proto::acl::ChanGroup {
+                            name: group.name,
+                            inherited: Some(false),
+                            inherit: Some(group.inherit),
+                            inheritable: Some(group.inheritable),
+                            add: group.add,
+                            remove: group.remove,
+                            inherited_members: Vec::new(),
+                        })
+                        .collect(),
+                    acls: acl
+                        .entries
+                        .into_iter()
+                        .filter(|entry| !entry.inherited)
+                        .map(|entry| proto::acl::ChanAcl {
+                            apply_here: Some(entry.apply_here),
+                            apply_subs: Some(entry.apply_subs),
+                            inherited: Some(false),
+                            user_id: entry.user_id,
+                            group: entry.group,
+                            grant: Some(entry.grant),
+                            deny: Some(entry.deny),
+                        })
+                        .collect(),
+                    query: Some(false),
+                },
+            ),
+            Command::QueryUserNames(ids) => {
+                self.queue(
+                    kind::QUERY_USERS,
+                    &proto::QueryUsers {
+                        ids: ids.into_iter().take(1024).collect(),
+                        names: Vec::new(),
+                    },
+                );
+            }
+            Command::SendText {
+                target,
+                body,
+                expected_peer,
+            } => {
+                if body.trim().is_empty() || body.len() > MAX_CONTENT_BYTES {
+                    return emit(
+                        events,
+                        SessionEvent::Notice("Message is empty or exceeds 64 KiB.".into()),
+                    )
+                    .await;
+                }
+                let wire_body = if self.allow_html {
+                    escape_html(&body)
+                } else {
+                    body.clone()
+                };
+                if wire_body.len() > self.message_limit {
+                    return emit(
+                        events,
+                        SessionEvent::Notice(format!(
+                            "Message exceeds this server's {}-byte limit.",
+                            self.message_limit
+                        )),
+                    )
+                    .await;
+                }
+                let mut message = proto::TextMessage {
+                    message: wire_body,
+                    ..Default::default()
+                };
+                match target {
+                    TextTarget::Channel(id) => {
+                        if !self.channels.contains_key(&id) {
+                            return emit(
+                                events,
+                                SessionEvent::Notice("This channel is no longer available.".into()),
+                            )
+                            .await;
+                        }
+                        message.channel_id.push(id);
+                    }
+                    TextTarget::Direct(id) => {
+                        if !self.users.get(&id).is_some_and(|user| {
+                            expected_peer.is_none_or(|instance| instance == user.instance)
+                        }) {
+                            return emit(events, SessionEvent::Notice("The recipient disconnected or changed. Open a new private conversation.".into())).await;
+                        }
+                        message.session.push(id);
+                    }
+                }
+                self.queue(kind::TEXT_MESSAGE, &message);
+                let author = self
+                    .users
+                    .get(&own)
+                    .map(|user| user.name.clone())
+                    .unwrap_or_default();
+                let peer = match target {
+                    TextTarget::Direct(id) => self.users.get(&id).cloned(),
+                    _ => None,
+                };
+                emit(
+                    events,
+                    SessionEvent::Text(IncomingText {
+                        target,
+                        author,
+                        peer,
+                        body,
+                        html: false,
+                        outgoing: true,
+                        observed_at_ms: now_ms(),
+                    }),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn handle(
         &mut self,
         frame: ControlFrame,
         events: &mpsc::Sender<SessionEvent>,
     ) -> Result<(), Error> {
         match frame.kind {
-            0 => {
+            kind::VERSION => {
                 let version: proto::Version = decode(&frame)?;
                 self.version = version.version_v2.unwrap_or_else(|| {
                     let v = version.version_v1.unwrap_or(0);
@@ -336,29 +995,39 @@ impl State {
                         | (u64::from(v & 0xff) << 16)
                 });
             }
-            1 => {
-                if !self.local_deafened
-                    && let Ok(UdpMessage::Audio(packet)) = voice::decode_udp(&frame.payload)
-                {
-                    emit(events, SessionEvent::Audio(packet)).await?;
+            kind::UDP_TUNNEL => match voice::decode_udp(&frame.payload) {
+                Ok(UdpMessage::Audio(packet)) if !self.local_deafened => {
+                    emit(events, SessionEvent::Audio(packet)).await?
                 }
-            }
-            3 => {
+                Err(voice::VoiceError::Unsupported) => {
+                    // CELT/Speex from a legacy client: tell the frontend once per user.
+                    if let Some(sender) = legacy_sender(&frame.payload)
+                        && self.unsupported_codec.insert(sender)
+                    {
+                        emit(events, SessionEvent::UnsupportedCodec { session: sender }).await?;
+                    }
+                }
+                _ => {}
+            },
+            kind::PING => {
                 let ping: proto::Ping = decode(&frame)?;
                 let now = now_ms() as u64;
                 if let Some(timestamp) = ping.timestamp.filter(|sent| *sent <= now) {
                     self.tcp_ping.record((now - timestamp) as f32);
                 }
             }
-            4 => {
+            kind::REJECT => {
                 let rejected: proto::Reject = decode(&frame)?;
-                return Err(Error::Rejected(
-                    rejected
+                let kind = RejectKind::from_wire(rejected.r#type);
+                return Err(Error::Rejected {
+                    kind,
+                    reason: rejected
                         .reason
-                        .unwrap_or_else(|| "login was rejected".into()),
-                ));
+                        .map(|reason| bounded(reason, 1024))
+                        .unwrap_or_else(|| kind.describe().into()),
+                });
             }
-            5 => {
+            kind::SERVER_SYNC => {
                 let sync: proto::ServerSync = decode(&frame)?;
                 let session = sync
                     .session
@@ -372,6 +1041,18 @@ impl State {
                     },
                 )
                 .await?;
+                if let Some(permissions) = sync.permissions {
+                    self.permissions.insert(0, permissions as u32);
+                    emit(
+                        events,
+                        SessionEvent::Permissions {
+                            channel: 0,
+                            permissions: permissions as u32,
+                            flush: false,
+                        },
+                    )
+                    .await?;
+                }
                 if let Some(welcome) = sync.welcome_text {
                     emit(
                         events,
@@ -379,96 +1060,124 @@ impl State {
                     )
                     .await?;
                 }
+                if let Some(channel) = self.rejoin.take()
+                    && self.channels.contains_key(&channel)
+                {
+                    self.queue(
+                        kind::USER_STATE,
+                        &proto::UserState {
+                            session: Some(session),
+                            channel_id: Some(channel),
+                            ..Default::default()
+                        },
+                    );
+                }
             }
-            6 => {
+            kind::CHANNEL_REMOVE => {
                 let channel: proto::ChannelRemove = decode(&frame)?;
                 self.channels.remove(&channel.channel_id);
+                self.permissions.remove(&channel.channel_id);
+                for other in self.channels.values_mut() {
+                    other.links.remove(&channel.channel_id);
+                }
                 emit(events, SessionEvent::ChannelRemoved(channel.channel_id)).await?;
             }
-            7 => {
+            kind::CHANNEL_STATE => {
                 let update: proto::ChannelState = decode(&frame)?;
-                if let Some(id) = update.channel_id {
-                    if !self.channels.contains_key(&id) && self.channels.len() >= 4096 {
-                        return Err(Error::Protocol("channel limit exceeded".into()));
-                    }
-                    let channel = self.channels.entry(id).or_insert_with(|| Channel {
-                        id,
-                        parent: (id != 0).then_some(0),
-                        name: format!("Channel {id}"),
-                        description: String::new(),
-                        position: 0,
-                    });
-                    if let Some(parent) = update.parent
-                        && id != 0
-                    {
-                        channel.parent = Some(parent);
-                    }
-                    if let Some(name) = update.name {
-                        channel.name = bounded(name, 512);
-                    }
-                    if let Some(description) = update.description {
-                        channel.description = bounded(description, 4096);
-                    }
-                    if let Some(position) = update.position {
-                        channel.position = position;
-                    }
-                    emit(events, SessionEvent::Channel(channel.clone())).await?;
+                let Some(id) = update.channel_id else {
+                    return Ok(());
+                };
+                if !self.channels.contains_key(&id) && self.channels.len() >= 4096 {
+                    return Err(Error::Protocol("channel limit exceeded".into()));
                 }
+                let channel = self.channels.entry(id).or_insert_with(|| Channel {
+                    id,
+                    parent: (id != 0).then_some(0),
+                    name: format!("Channel {id}"),
+                    can_enter: true,
+                    ..Default::default()
+                });
+                if let Some(parent) = update.parent
+                    && id != 0
+                {
+                    channel.parent = Some(parent);
+                }
+                if let Some(name) = update.name {
+                    channel.name = bounded(name, 512);
+                }
+                if let Some(hash) = &update.description_hash {
+                    channel.set_description_hash(hash);
+                }
+                if let Some(description) = update.description {
+                    channel.description = bounded(description, MAX_CONTENT_BYTES);
+                }
+                if let Some(position) = update.position {
+                    channel.position = position;
+                }
+                if let Some(temporary) = update.temporary {
+                    channel.temporary = temporary;
+                }
+                if let Some(max_users) = update.max_users {
+                    channel.max_users = max_users;
+                }
+                if let Some(value) = update.is_enter_restricted {
+                    channel.enter_restricted = value;
+                }
+                if let Some(value) = update.can_enter {
+                    channel.can_enter = value;
+                }
+                // `links` replaces the set; add/remove adjust it incrementally.
+                if !update.links.is_empty() {
+                    channel.links = update.links.iter().copied().take(4096).collect();
+                }
+                channel
+                    .links
+                    .extend(update.links_add.iter().copied().take(4096));
+                for removed in &update.links_remove {
+                    channel.links.remove(removed);
+                }
+                let snapshot = channel.clone();
+                // Links are symmetric; mirror them so either side shows the link.
+                for other in self.channels.values_mut().filter(|other| other.id != id) {
+                    if snapshot.links.contains(&other.id) {
+                        other.links.insert(id);
+                    } else {
+                        other.links.remove(&id);
+                    }
+                }
+                emit(events, SessionEvent::Channel(snapshot)).await?;
             }
-            8 => {
+            kind::USER_REMOVE => {
                 let remove: proto::UserRemove = decode(&frame)?;
+                let actor = remove.actor.map(|actor| self.user_name(Some(actor)));
+                let reason = remove.reason.map(|reason| bounded(reason, 1024));
+                let ban = remove.ban.unwrap_or(false);
                 if Some(remove.session) == self.own_session {
-                    return Err(Error::Removed(
-                        remove.reason.unwrap_or_else(|| "session removed".into()),
-                    ));
+                    return Err(Error::Removed { actor, reason, ban });
                 }
-                self.users.remove(&remove.session);
+                let Some(user) = self.users.remove(&remove.session) else {
+                    return Ok(());
+                };
+                let text = match (&actor, &reason) {
+                    (Some(actor), Some(reason)) if !reason.is_empty() => {
+                        format!(
+                            "{} was {} by {actor}: {reason}",
+                            user.name,
+                            if ban { "banned" } else { "kicked" }
+                        )
+                    }
+                    (Some(actor), _) => format!(
+                        "{} was {} by {actor}",
+                        user.name,
+                        if ban { "banned" } else { "kicked" }
+                    ),
+                    (None, _) => format!("{} disconnected", user.name),
+                };
+                self.activity(events, vec![user.channel], text).await?;
                 emit(events, SessionEvent::UserRemoved(remove.session)).await?;
             }
-            9 => {
-                let update: proto::UserState = decode(&frame)?;
-                if let Some(session) = update.session {
-                    if !self.users.contains_key(&session) && self.users.len() >= 16384 {
-                        return Err(Error::Protocol("user limit exceeded".into()));
-                    }
-                    if !self.users.contains_key(&session) {
-                        self.user_instance += 1;
-                    }
-                    let instance = self.user_instance;
-                    let user = self.users.entry(session).or_insert_with(|| User {
-                        session,
-                        instance,
-                        name: format!("User {session}"),
-                        ..Default::default()
-                    });
-                    if let Some(name) = update.name {
-                        user.name = bounded(name, 512);
-                    }
-                    if let Some(channel) = update.channel_id {
-                        user.channel = channel;
-                    }
-                    if let Some(value) = update.mute {
-                        user.muted = value;
-                    }
-                    if let Some(value) = update.deaf {
-                        user.deafened = value;
-                    }
-                    if let Some(value) = update.self_mute {
-                        user.self_muted = value;
-                    }
-                    if let Some(value) = update.self_deaf {
-                        user.self_deafened = value;
-                    }
-                    if let Some(value) = update.suppress {
-                        user.suppressed = value;
-                    }
-                    if let Some(value) = update.hash {
-                        user.certificate_hash = Some(bounded(value, 128));
-                    }
-                    emit(events, SessionEvent::User(user.clone())).await?;
-                }
-            }
-            11 => {
+            kind::USER_STATE => self.user_state(decode(&frame)?, events).await?,
+            kind::TEXT_MESSAGE => {
                 let message: proto::TextMessage = decode(&frame)?;
                 if message.message.len() > MAX_CONTENT_BYTES {
                     emit(
@@ -535,29 +1244,50 @@ impl State {
                     .await?;
                 }
             }
-            12 => {
+            kind::PERMISSION_DENIED => {
                 let denied: proto::PermissionDenied = decode(&frame)?;
-                emit(
-                    events,
-                    SessionEvent::PermissionDenied(
-                        denied
-                            .reason
-                            .unwrap_or_else(|| format!("Permission denied ({:?})", denied.r#type)),
-                    ),
-                )
-                .await?;
+                let text = denied
+                    .reason
+                    .map(|reason| bounded(reason, 1024))
+                    .unwrap_or_else(|| match denied.r#type {
+                        Some(2) => "Only the SuperUser may do that.".into(),
+                        Some(3) => "That channel name is not allowed.".into(),
+                        Some(4) => "That message is too long for this server.".into(),
+                        Some(6) => {
+                            "Temporary channels cannot have children or be edited that way.".into()
+                        }
+                        Some(7) => "You need a certificate to do that.".into(),
+                        Some(8) => format!(
+                            "The name \"{}\" is not allowed.",
+                            denied.name.unwrap_or_default()
+                        ),
+                        Some(9) => "That channel is full.".into(),
+                        Some(10) => "Channels cannot be nested that deeply.".into(),
+                        Some(11) => "This server has reached its channel limit.".into(),
+                        Some(12 | 13) => "The listener limit was reached.".into(),
+                        _ => {
+                            let permission = denied
+                                .permission
+                                .and_then(|bit| {
+                                    crate::model::permission::NAMED
+                                        .iter()
+                                        .find(|(value, _)| *value == bit)
+                                })
+                                .map(|(_, name)| *name)
+                                .unwrap_or("that action");
+                            format!("Permission denied: {permission}")
+                        }
+                    });
+                emit(events, SessionEvent::PermissionDenied(text)).await?;
             }
-            15 => {
+            kind::CRYPT_SETUP => {
                 let setup: proto::CryptSetup = decode(&frame)?;
                 match (setup.key, setup.client_nonce, setup.server_nonce) {
                     (Some(key), Some(client_nonce), Some(server_nonce)) => {
                         if let Some(udp) = self.udp.as_mut() {
-                            match CryptState::new(&key, &client_nonce, &server_nonce) {
-                                Ok(crypt) => udp.set_key(crypt),
-                                Err(_) => {
-                                    return Err(Error::Protocol("invalid UDP key".into()));
-                                }
-                            }
+                            let crypt = CryptState::new(&key, &client_nonce, &server_nonce)
+                                .map_err(|_| Error::Protocol("invalid UDP key".into()))?;
+                            udp.set_key(crypt);
                         }
                     }
                     (None, None, Some(server_nonce)) => {
@@ -569,7 +1299,7 @@ impl State {
                         // The server lost our send nonce and asks for it.
                         if let Some(iv) = self.udp.as_ref().and_then(Udp::encrypt_iv) {
                             self.queue(
-                                15,
+                                kind::CRYPT_SETUP,
                                 &proto::CryptSetup {
                                     client_nonce: Some(iv.to_vec()),
                                     ..Default::default()
@@ -580,20 +1310,17 @@ impl State {
                     _ => {}
                 }
             }
-            21 => {
+            kind::CODEC_VERSION => {
                 let version: proto::CodecVersion = decode(&frame)?;
                 self.opus = version.opus.unwrap_or(false);
                 if !self.opus {
-                    emit(
-                        events,
-                        SessionEvent::Notice(
-                            "This server has disabled Opus; voice is unavailable.".into(),
-                        ),
-                    )
+                    emit(events, SessionEvent::Notice(
+                        "This server uses the legacy CELT codec. Nuschel supports Opus only, so voice is unavailable here; text chat still works.".into(),
+                    ))
                     .await?;
                 }
             }
-            24 => {
+            kind::SERVER_CONFIG => {
                 let config: proto::ServerConfig = decode(&frame)?;
                 if let Some(html) = config.allow_html {
                     self.allow_html = html;
@@ -605,12 +1332,469 @@ impl State {
                         (limit as usize).min(MAX_CONTENT_BYTES)
                     };
                 }
+                if let Some(limit) = config.image_message_length {
+                    self.image_limit = if limit == 0 {
+                        1024 * 1024
+                    } else {
+                        (limit as usize).min(1024 * 1024)
+                    };
+                }
+                emit(
+                    events,
+                    SessionEvent::Limits(ServerLimits {
+                        allow_html: self.allow_html,
+                        message_length: self.message_limit,
+                        image_message_length: self.image_limit,
+                        max_users: config.max_users,
+                        recording_allowed: config.recording_allowed.unwrap_or(true),
+                        max_bandwidth: config.max_bandwidth,
+                    }),
+                )
+                .await?;
             }
-            _ => { /* Optional messages are framed and ignored without unsafe processing. */ }
+            kind::PERMISSION_QUERY => {
+                let query: proto::PermissionQuery = decode(&frame)?;
+                let flush = query.flush.unwrap_or(false);
+                if flush {
+                    self.permissions.clear();
+                }
+                if let (Some(channel), Some(permissions)) = (query.channel_id, query.permissions) {
+                    self.permissions.insert(channel, permissions);
+                    emit(
+                        events,
+                        SessionEvent::Permissions {
+                            channel,
+                            permissions,
+                            flush,
+                        },
+                    )
+                    .await?;
+                } else if flush {
+                    emit(
+                        events,
+                        SessionEvent::Permissions {
+                            channel: u32::MAX,
+                            permissions: 0,
+                            flush,
+                        },
+                    )
+                    .await?;
+                }
+            }
+            kind::USER_STATS => {
+                let stats: proto::UserStats = decode(&frame)?;
+                let packet = |stats: Option<proto::user_stats::Stats>| {
+                    stats.map(|stats| PacketStats {
+                        good: stats.good.unwrap_or(0),
+                        late: stats.late.unwrap_or(0),
+                        lost: stats.lost.unwrap_or(0),
+                        resync: stats.resync.unwrap_or(0),
+                    })
+                };
+                let version = stats.version.as_ref();
+                emit(
+                    events,
+                    SessionEvent::Stats(UserStats {
+                        session: stats.session.unwrap_or(0),
+                        release: version
+                            .and_then(|v| v.release.clone())
+                            .map(|text| bounded(text, 256)),
+                        os: version.and_then(|v| {
+                            let os = v.os.clone()?;
+                            Some(bounded(
+                                format!("{os} {}", v.os_version.clone().unwrap_or_default())
+                                    .trim()
+                                    .to_string(),
+                                256,
+                            ))
+                        }),
+                        version: version.and_then(|v| {
+                            v.version_v2.map(format_version).or_else(|| {
+                                v.version_v1.map(|v1| format_version(legacy_version(v1)))
+                            })
+                        }),
+                        address: stats.address.as_deref().and_then(format_address),
+                        online_seconds: stats.onlinesecs,
+                        idle_seconds: stats.idlesecs,
+                        bandwidth: stats.bandwidth,
+                        udp_ping_ms: stats.udp_ping_avg,
+                        tcp_ping_ms: stats.tcp_ping_avg,
+                        udp_packets: stats.udp_packets,
+                        tcp_packets: stats.tcp_packets,
+                        from_client: packet(stats.from_client),
+                        from_server: packet(stats.from_server),
+                        opus: stats.opus.unwrap_or(false),
+                        strong_certificate: stats.strong_certificate.unwrap_or(false),
+                        certificate_count: stats.certificates.len(),
+                    }),
+                )
+                .await?;
+            }
+            kind::SUGGEST_CONFIG => {
+                let suggest: proto::SuggestConfig = decode(&frame)?;
+                let minimum = suggest
+                    .version_v2
+                    .or_else(|| suggest.version_v1.map(legacy_version))
+                    .filter(|version| *version > voice::PROTOBUF_VERSION)
+                    .map(format_version);
+                emit(
+                    events,
+                    SessionEvent::Suggest {
+                        push_to_talk: suggest.push_to_talk,
+                        positional: suggest.positional,
+                        minimum_version: minimum,
+                    },
+                )
+                .await?;
+            }
+            kind::CONTEXT_ACTION_MODIFY => {
+                let modify: proto::ContextActionModify = decode(&frame)?;
+                if modify.action.len() > 256 {
+                    return Ok(());
+                }
+                if modify.operation == Some(1) {
+                    self.context_actions.remove(&modify.action);
+                } else if self.context_actions.len() < 64 {
+                    let context = modify.context.unwrap_or(0);
+                    self.context_actions.insert(
+                        modify.action.clone(),
+                        ContextAction {
+                            text: bounded(
+                                modify.text.unwrap_or_else(|| modify.action.clone()),
+                                256,
+                            ),
+                            action: modify.action,
+                            server: context & 1 != 0,
+                            channel: context & 2 != 0,
+                            user: context & 4 != 0,
+                        },
+                    );
+                }
+                emit(
+                    events,
+                    SessionEvent::ContextActions(self.context_actions.values().cloned().collect()),
+                )
+                .await?;
+            }
+            kind::USER_LIST => {
+                let list: proto::UserList = decode(&frame)?;
+                emit(
+                    events,
+                    SessionEvent::RegisteredUsers(
+                        list.users
+                            .into_iter()
+                            .take(100_000)
+                            .map(|user| RegisteredUser {
+                                user_id: user.user_id,
+                                name: user.name.map(|name| bounded(name, 512)),
+                                last_seen: user.last_seen.map(|text| bounded(text, 64)),
+                                last_channel: user.last_channel,
+                            })
+                            .collect(),
+                    ),
+                )
+                .await?;
+            }
+            kind::BAN_LIST => {
+                let list: proto::BanList = decode(&frame)?;
+                emit(
+                    events,
+                    SessionEvent::Bans(
+                        list.bans
+                            .into_iter()
+                            .take(100_000)
+                            .map(|ban| Ban {
+                                address: ban.address,
+                                mask: ban.mask,
+                                name: ban.name.map(|text| bounded(text, 512)),
+                                hash: ban.hash.map(|text| bounded(text, 128)),
+                                reason: ban.reason.map(|text| bounded(text, 1024)),
+                                start: ban.start.map(|text| bounded(text, 64)),
+                                duration: ban.duration,
+                            })
+                            .collect(),
+                    ),
+                )
+                .await?;
+            }
+            kind::ACL => {
+                let acl: proto::Acl = decode(&frame)?;
+                emit(
+                    events,
+                    SessionEvent::Acl(Acl {
+                        channel: acl.channel_id,
+                        inherit_acls: acl.inherit_acls.unwrap_or(true),
+                        groups: acl
+                            .groups
+                            .into_iter()
+                            .take(1024)
+                            .map(|group| AclGroup {
+                                name: bounded(group.name, 256),
+                                inherited: group.inherited.unwrap_or(true),
+                                inherit: group.inherit.unwrap_or(true),
+                                inheritable: group.inheritable.unwrap_or(true),
+                                add: group.add,
+                                remove: group.remove,
+                                inherited_members: group.inherited_members,
+                            })
+                            .collect(),
+                        entries: acl
+                            .acls
+                            .into_iter()
+                            .take(4096)
+                            .map(|entry| AclEntry {
+                                apply_here: entry.apply_here.unwrap_or(true),
+                                apply_subs: entry.apply_subs.unwrap_or(true),
+                                inherited: entry.inherited.unwrap_or(true),
+                                user_id: entry.user_id,
+                                group: entry.group.map(|group| bounded(group, 256)),
+                                grant: entry.grant.unwrap_or(0),
+                                deny: entry.deny.unwrap_or(0),
+                            })
+                            .collect(),
+                    }),
+                )
+                .await?;
+            }
+            kind::QUERY_USERS => {
+                let query: proto::QueryUsers = decode(&frame)?;
+                emit(
+                    events,
+                    SessionEvent::UserNames(
+                        query
+                            .ids
+                            .into_iter()
+                            .zip(query.names)
+                            .take(4096)
+                            .map(|(id, name)| (id, bounded(name, 512)))
+                            .collect(),
+                    ),
+                )
+                .await?;
+            }
+            _ => { /* Optional messages (e.g. plugin data) are framed and ignored. */ }
+        }
+        Ok(())
+    }
+
+    async fn user_state(
+        &mut self,
+        update: proto::UserState,
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        let Some(session) = update.session else {
+            return Ok(());
+        };
+        let known = self.users.contains_key(&session);
+        if !known && self.users.len() >= 16384 {
+            return Err(Error::Protocol("user limit exceeded".into()));
+        }
+        if !known {
+            self.user_instance += 1;
+        }
+        let instance = self.user_instance;
+        let own = Some(session) == self.own_session;
+        let actor = update
+            .actor
+            .filter(|actor| *actor != session && Some(*actor) != self.own_session.filter(|_| own));
+        let actor_name = update
+            .actor
+            .filter(|actor| *actor != session)
+            .map(|actor| self.user_name(Some(actor)));
+        let mut log = Vec::new();
+        let user = self.users.entry(session).or_insert_with(|| User {
+            session,
+            instance,
+            name: format!("User {session}"),
+            ..Default::default()
+        });
+        let previous = user.clone();
+        if let Some(name) = update.name {
+            user.name = bounded(name, 512);
+        }
+        if let Some(id) = update.user_id {
+            user.user_id = Some(id);
+        }
+        if let Some(channel) = update.channel_id {
+            user.channel = channel;
+        }
+        if let Some(value) = update.mute {
+            user.muted = value;
+        }
+        if let Some(value) = update.deaf {
+            user.deafened = value;
+        }
+        if let Some(value) = update.self_mute {
+            user.self_muted = value;
+        }
+        if let Some(value) = update.self_deaf {
+            user.self_deafened = value;
+        }
+        if let Some(value) = update.suppress {
+            user.suppressed = value;
+        }
+        if let Some(value) = update.priority_speaker {
+            user.priority_speaker = value;
+        }
+        if let Some(value) = update.recording {
+            user.recording = value;
+        }
+        if let Some(value) = update.hash {
+            user.certificate_hash = Some(bounded(value, 128));
+        }
+        if let Some(hash) = &update.comment_hash {
+            user.set_comment_hash(hash);
+        }
+        if let Some(comment) = update.comment {
+            user.comment = (!comment.is_empty()).then(|| bounded(comment, MAX_CONTENT_BYTES));
+            if user.comment.is_none() {
+                user.comment_hash = None;
+            }
+        }
+        if let Some(hash) = &update.texture_hash {
+            user.set_texture_hash(hash);
+        }
+        if let Some(texture) = update.texture {
+            if texture.is_empty() {
+                user.texture = None;
+                user.texture_hash = None;
+            } else if texture.len() <= 1024 * 1024 {
+                user.texture = Some(texture);
+            }
+        }
+        user.listening
+            .extend(update.listening_channel_add.iter().copied().take(256));
+        for channel in &update.listening_channel_remove {
+            user.listening.remove(channel);
+        }
+        let user = user.clone();
+        if self.own_session.is_some() {
+            let by = |verb: &str| match &actor_name {
+                Some(actor) => format!("{} was {verb} by {actor}", user.name),
+                None => format!("{} was {verb}", user.name),
+            };
+            if !known {
+                log.push((vec![user.channel], format!("{} connected", user.name)));
+            } else if previous.channel != user.channel {
+                let destination = self.channel_name(user.channel);
+                let text = match (&actor_name, own) {
+                    (Some(actor), true) => format!("You were moved to {destination} by {actor}"),
+                    (Some(actor), false) => {
+                        format!("{} was moved to {destination} by {actor}", user.name)
+                    }
+                    (None, true) => format!("You joined {destination}"),
+                    (None, false) => format!("{} moved to {destination}", user.name),
+                };
+                log.push((vec![previous.channel, user.channel], text));
+            }
+            if known && previous.muted != user.muted {
+                log.push((
+                    vec![user.channel],
+                    by(if user.muted { "muted" } else { "unmuted" }),
+                ));
+            }
+            if known && previous.deafened != user.deafened {
+                log.push((
+                    vec![user.channel],
+                    by(if user.deafened {
+                        "deafened"
+                    } else {
+                        "undeafened"
+                    }),
+                ));
+            }
+            if known && previous.suppressed != user.suppressed && actor.is_some() {
+                log.push((
+                    vec![user.channel],
+                    by(if user.suppressed {
+                        "suppressed"
+                    } else {
+                        "unsuppressed"
+                    }),
+                ));
+            }
+            if known && previous.priority_speaker != user.priority_speaker {
+                log.push((
+                    vec![user.channel],
+                    format!(
+                        "{} is {} a priority speaker",
+                        user.name,
+                        if user.priority_speaker {
+                            "now"
+                        } else {
+                            "no longer"
+                        }
+                    ),
+                ));
+            }
+            if previous.recording != user.recording {
+                log.push((
+                    vec![user.channel],
+                    format!(
+                        "{} {} recording",
+                        user.name,
+                        if user.recording { "started" } else { "stopped" }
+                    ),
+                ));
+            }
+            if known && previous.user_id.is_none() && user.user_id.is_some() {
+                log.push((
+                    Vec::new(),
+                    format!("{} is now registered on this server", user.name),
+                ));
+            }
+        }
+        emit(events, SessionEvent::User(user)).await?;
+        for (channels, text) in log {
+            self.activity(events, channels, text).await?;
         }
         Ok(())
     }
 }
+
+/// The sender session of a legacy (non-Opus) voice packet, for a one-time notice.
+fn legacy_sender(payload: &[u8]) -> Option<u32> {
+    let (&header, rest) = payload.split_first()?;
+    if matches!(header >> 5, 0 | 2 | 3) {
+        let first = *rest.first()?;
+        // Session ids are small; decode only the 1- and 2-byte varint forms.
+        return match first {
+            0..=0x7f => Some(u32::from(first)),
+            0x80..=0xbf => Some((u32::from(first & 0x3f) << 8) | u32::from(*rest.get(1)?)),
+            _ => None,
+        };
+    }
+    None
+}
+
+fn valid_name(name: &str) -> bool {
+    !name.trim().is_empty() && name.len() <= 512 && !name.chars().any(char::is_control)
+}
+
+fn legacy_version(v1: u32) -> u64 {
+    ((u64::from(v1) >> 16) << 48)
+        | (u64::from((v1 >> 8) & 0xff) << 32)
+        | (u64::from(v1 & 0xff) << 16)
+}
+
+fn format_version(version: u64) -> String {
+    format!(
+        "{}.{}.{}",
+        version >> 48,
+        (version >> 32) & 0xffff,
+        (version >> 16) & 0xffff
+    )
+}
+
+fn format_address(address: &[u8]) -> Option<String> {
+    let octets: [u8; 16] = address.try_into().ok()?;
+    let ip = std::net::Ipv6Addr::from(octets);
+    Some(match ip.to_ipv4_mapped() {
+        Some(v4) => v4.to_string(),
+        None => ip.to_string(),
+    })
+}
+
 fn bounded(mut text: String, limit: usize) -> String {
     if text.len() > limit {
         let mut end = limit;
@@ -683,7 +1867,7 @@ async fn read_control(reader: &mut (impl AsyncRead + Unpin)) -> Result<ControlFr
     timeout(Duration::from_secs(30), reader.read_exact(&mut header))
         .await
         .map_err(|_| Error::Timeout("waiting for server traffic"))??;
-    let size = u32::from_be_bytes(header[2..6].try_into().unwrap()) as usize;
+    let size = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
     if size > MAX_CONTROL_BYTES {
         return Err(Error::Protocol("oversized control frame".into()));
     }
@@ -700,39 +1884,51 @@ async fn read_control(reader: &mut (impl AsyncRead + Unpin)) -> Result<ControlFr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn frame<M: Message>(kind: u16, message: M) -> ControlFrame {
+        ControlFrame {
+            kind,
+            payload: message.encode_to_vec().into(),
+        }
+    }
+
+    async fn drain(rx: &mut mpsc::Receiver<SessionEvent>) -> Vec<SessionEvent> {
+        let mut out = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            out.push(event);
+        }
+        out
+    }
+
     #[tokio::test]
     async fn partial_user_updates_preserve_name_and_channel() {
         let mut state = State::default();
         let (tx, mut rx) = mpsc::channel(8);
         state
             .handle(
-                ControlFrame {
-                    kind: 9,
-                    payload: proto::UserState {
+                frame(
+                    kind::USER_STATE,
+                    proto::UserState {
                         session: Some(42),
                         name: Some("Ada".into()),
                         channel_id: Some(5),
                         ..Default::default()
-                    }
-                    .encode_to_vec()
-                    .into(),
-                },
+                    },
+                ),
                 &tx,
             )
             .await
             .unwrap();
         state
             .handle(
-                ControlFrame {
-                    kind: 9,
-                    payload: proto::UserState {
+                frame(
+                    kind::USER_STATE,
+                    proto::UserState {
                         session: Some(42),
                         self_mute: Some(true),
                         ..Default::default()
-                    }
-                    .encode_to_vec()
-                    .into(),
-                },
+                    },
+                ),
                 &tx,
             )
             .await
@@ -745,6 +1941,261 @@ mod tests {
         assert_eq!(user.channel, 5);
         assert!(user.self_muted);
     }
+
+    #[tokio::test]
+    async fn moderation_and_presence_become_activity_lines() {
+        let mut state = State {
+            own_session: Some(1),
+            ..State::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        for (session, name) in [(1, "Me"), (2, "Ada"), (3, "Mod")] {
+            state
+                .handle(
+                    frame(
+                        kind::USER_STATE,
+                        proto::UserState {
+                            session: Some(session),
+                            name: Some(name.into()),
+                            ..Default::default()
+                        },
+                    ),
+                    &tx,
+                )
+                .await
+                .unwrap();
+        }
+        state
+            .handle(
+                frame(
+                    kind::USER_STATE,
+                    proto::UserState {
+                        session: Some(2),
+                        actor: Some(3),
+                        mute: Some(true),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .handle(
+                frame(
+                    kind::USER_REMOVE,
+                    proto::UserRemove {
+                        session: 2,
+                        actor: Some(3),
+                        reason: Some("spam".into()),
+                        ban: Some(true),
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        let lines: Vec<String> = drain(&mut rx)
+            .await
+            .into_iter()
+            .filter_map(|event| match event {
+                SessionEvent::Activity(activity) => Some(activity.text),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            lines.contains(&"Ada was muted by Mod".to_string()),
+            "{lines:?}"
+        );
+        assert!(
+            lines.contains(&"Ada was banned by Mod: spam".to_string()),
+            "{lines:?}"
+        );
+        let error = state
+            .handle(
+                frame(
+                    kind::USER_REMOVE,
+                    proto::UserRemove {
+                        session: 1,
+                        actor: Some(3),
+                        reason: Some("bye".into()),
+                        ban: Some(false),
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, Error::Removed { actor: Some(ref actor), ban: false, .. } if actor == "Mod")
+        );
+    }
+
+    #[tokio::test]
+    async fn reject_types_are_reported_for_retry_prompts() {
+        let mut state = State::default();
+        let (tx, _rx) = mpsc::channel(8);
+        let error = state
+            .handle(
+                frame(
+                    kind::REJECT,
+                    proto::Reject {
+                        r#type: Some(4),
+                        reason: None,
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::Rejected {
+                kind: RejectKind::WrongServerPassword,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn links_are_mirrored_and_permissions_cached() {
+        let mut state = State {
+            own_session: Some(1),
+            ..State::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        for id in [0, 1, 2] {
+            state
+                .handle(
+                    frame(
+                        kind::CHANNEL_STATE,
+                        proto::ChannelState {
+                            channel_id: Some(id),
+                            ..Default::default()
+                        },
+                    ),
+                    &tx,
+                )
+                .await
+                .unwrap();
+        }
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(1),
+                        links_add: vec![2],
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(state.channels[&2].links.contains(&1));
+        state
+            .handle(
+                frame(
+                    kind::PERMISSION_QUERY,
+                    proto::PermissionQuery {
+                        channel_id: Some(2),
+                        permissions: Some(0x20c),
+                        flush: Some(false),
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(state.permissions[&2], 0x20c);
+        state
+            .handle(
+                frame(kind::CHANNEL_REMOVE, proto::ChannelRemove { channel_id: 2 }),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(!state.channels[&1].links.contains(&2));
+        drain(&mut rx).await;
+    }
+
+    #[tokio::test]
+    async fn commands_produce_wire_messages() {
+        let mut state = State {
+            own_session: Some(7),
+            ..State::default()
+        };
+        let (tx, _rx) = mpsc::channel(64);
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(0),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .handle(
+                frame(
+                    kind::USER_STATE,
+                    proto::UserState {
+                        session: Some(9),
+                        name: Some("Bob".into()),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .command(
+                Command::SetVoiceTarget {
+                    id: 1,
+                    targets: vec![VoiceTargetSpec::Users(vec![9])],
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .command(
+                Command::User {
+                    session: 9,
+                    action: UserAction::Kick,
+                    reason: Some("bye".into()),
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .command(
+                Command::Listen {
+                    channel: 0,
+                    listen: true,
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
+        let kinds: Vec<u16> = state.outbound.iter().map(|(kind, _)| *kind).collect();
+        assert_eq!(
+            kinds,
+            [kind::VOICE_TARGET, kind::USER_REMOVE, kind::USER_STATE]
+        );
+        let target = proto::VoiceTarget::decode(state.outbound[0].1.as_slice()).unwrap();
+        assert_eq!(target.targets[0].session, [9]);
+        let listen = proto::UserState::decode(state.outbound[2].1.as_slice()).unwrap();
+        assert_eq!(listen.listening_channel_add, [0]);
+    }
+
     #[test]
     fn literal_chat_survives_html_enabled_servers() {
         assert_eq!(
@@ -752,6 +2203,13 @@ mod tests {
             "&lt;script&gt;&amp;<br/><br/>```rust<br/>fn main() {}<br/>```"
         );
     }
+
+    #[test]
+    fn identifies_legacy_codec_senders() {
+        assert_eq!(legacy_sender(&[0x40, 0x05, 0x00]), Some(5));
+        assert_eq!(legacy_sender(&[0x80, 0x05]), None, "Opus is not legacy");
+    }
+
     #[tokio::test]
     async fn rejects_oversized_frame_before_body_allocation() {
         let mut input = &[0_u8, 1, 255, 255, 255, 255][..];
