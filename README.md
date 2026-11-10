@@ -4,28 +4,42 @@ Nuschel is an EUPL-1.2 Rust workspace for a Mumble-compatible desktop client and
 server. GPUI is the desktop renderer. Shared state, protocol framing, and message
 presentation do not depend on GPUI, leaving mobile and web adapters open.
 
-The desktop connects to stock Mumble servers with TLS, persistent client certificates,
-channel trees, live chat, direct messages, mute/deafen, and Opus voice over Mumble's
-TCP tunnel. Use **+** in the server rail to add a server. Self-signed certificates
-require confirmation before credentials are sent; accepted fingerprints are saved.
-Passwords remain in memory for the connection attempt and are not saved.
+The desktop connects to stock Mumble servers (tested against 1.5, 1.4 and 1.3) with
+TLS and a persistent client certificate. Identities are RSA-2048 so that stock Mumble
+can import them; PKCS#12 import and export are in **Voice & audio → Identity**. Use
+**+** in the server rail to add a server, or open a `mumble://` link. Self-signed
+certificates require confirmation before credentials are sent, and accepted
+fingerprints are saved. Passwords stay in memory for the connection attempt only.
 
-Click a channel to browse its local history. Double-click it or use **Join voice**
-to move your voice connection. Initially only the root is expanded; deeper branches
-open on demand. Long channel names use an ellipsis with their full name on hover.
-The channel list has a draggable scrollbar. Wheel steps scroll smoothly in the list
-and chat, while precise touchpad input retains its native motion. Microphone capture starts muted. Enter inserts a newline; Ctrl+Enter
-(or Cmd+Enter) sends. Messages preserve blank lines, highlight fenced code, and offer
-**Show more** for long content. Legacy HTML is converted into inert text in a worker.
-History and cached channel trees survive application restarts, including offline browsing.
+Voice uses Mumble's encrypted UDP transport, with automatic fallback to the TLS
+tunnel when UDP is blocked and a force-TCP option. Transmission is by voice activity
+(RNNoise), push-to-talk (in the window, and system-wide where the desktop grants a
+shortcut), or continuous. Capture runs echo cancellation, noise suppression and
+automatic gain in Rust. On Linux a system echo canceller (PipeWire/PulseAudio
+echo-cancel) is detected and reused instead of being stacked, with a per-microphone
+override. An adaptive controller watches for playback stutters, residual echo and
+a clipping microphone. It adjusts only Nuschel's own buffer and voice gate, and
+tells you what it cannot fix. Microphone capture starts muted. Audio service
+failures restart only the media worker and keep the connection and mute state.
 
-This is an early client: Mumble UDP transport, CELT-only servers, whisper controls, automatic
-reconnection, and comprehensive administration are not implemented. Voice currently
-transmits continuously while unmuted. Audio service failures restart only the media
-worker and preserve the server connection and mute state. Automatic AEC/effect detection
-is still planned; the client does not enable a speculative second echo canceller.
-Linux is exercised in integration tests; Windows/macOS audio need native validation.
-The Nuschel server and MLS implementation are deferred.
+Click a channel to browse its local history. Double-click it, or use **Join
+channel**, to move your voice connection. Right-click users, channels and servers
+for whisper and shout, channel listening and links, per-user volume and local mute,
+direct messages, comments and avatars, registration, moderation, the channel
+editor, ACLs, bans and registered users. Entries appear only when the server's
+permissions allow them. Lost connections reconnect with backoff, rejoin your
+channel with mute state intact, and mark the gap in the timeline. Enter inserts a
+newline; Ctrl+Enter (Cmd+Enter) sends. Messages keep blank lines, highlight fenced
+code, show inline images (decoded in a sandboxed worker), and collapse by measured
+height behind **Show more**. Search finds messages saved on this device. History and
+cached channel trees survive restarts, including offline browsing. Controls and
+text fields are exposed to screen readers (AT-SPI on Linux is tested).
+
+Linux is covered by integration tests in NixOS VMs. Windows and macOS packages are
+cross-built from Linux (`.#windows`, `.#macos-aarch64`, `.#macos-universal`), but
+their audio, sandboxing and accessibility have not been validated on those systems.
+See [SECURITY.md](SECURITY.md) for what each platform's worker confinement does and
+does not provide. The Nuschel server and MLS implementation are deferred.
 
 The modern media transport is now a str0m trial in `nuschel-rtc`. Run
 `nix run --cores 2 .#rtc-probe` for the headless audio/video loopback probe, or

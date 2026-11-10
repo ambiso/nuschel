@@ -58,22 +58,25 @@ A process boundary alone is not an OS sandbox. The supervisor must limit inherit
 handles, environment, filesystem/network access, outstanding work, memory, and lifetime.
 Current enforcement and exceptions are recorded in [the safety policy](../SECURITY.md).
 
-Control IPC is a versioned, length-prefixed JSON protocol with a 1 MiB limit checked
-before allocating a frame body. Unknown versions, truncated frames, and oversized
+Control IPC is a versioned, length-prefixed JSON protocol with a 4 MiB limit checked
+before allocating a frame body (inline images make content and history replies the
+largest frames). Unknown versions, truncated frames, and oversized
 results fail explicitly. Helpers are selected by trusted executable paths and
 communicate over inherited pipes, not a publicly listening socket. Request IDs are
 checked by the supervisor. Worker stderr must never become protocol stdout.
 
 The media harness uses the same protocol for codec checks. Live control and small
-compressed Opus frames currently use bounded JSON IPC with capture generation tags;
-PCM stays inside the worker. A binary transport can replace this if profiling warrants it. Do not introduce
-shared writable memory merely for performance without reviewing the new trust boundary.
+compressed Opus frames use bounded JSON IPC with capture generation tags; PCM stays
+inside the worker. Measured cost is 7.4 µs per packet each way (0.15% of a core with
+four talkers), so a binary transport is not warranted (see
+[the DSP evaluation](dsp-evaluation.md)). Do not introduce shared writable memory
+merely for performance without reviewing the new trust boundary.
 
 The UI and network event loop must not wait synchronously for parsing, disk, or DSP.
-The native audio callback must avoid blocking, logs and IPC. Bounded queues and
-nonblocking locks connect callback I/O to media processing; callback allocation and
-lock avoidance remain performance work. Drop stale
-audio rather than building latency; apply a different durability policy to chat.
+The native audio callbacks only convert samples and move them through lock-free SPSC
+rings; underruns are counted with one relaxed atomic. A test runs both converters under
+a counting allocator and requires zero allocations. Drop stale audio rather than
+building latency; apply a different durability policy to chat.
 
 ## Content and history
 
@@ -120,20 +123,31 @@ defaults, move another application's stream, or change hardware gain to make a l
 optimization. If the route is opaque, retain the uncertainty and expose a device-level
 override rather than stacking a speculative second canceller.
 
-The preferred in-application DSP candidates are Rust: Sonora for WebRTC-derived AEC,
-nnnoiseless for RNNoise-derived suppression, and opus-pure for the codec. Rust ports
-still need interoperability, audio-quality, performance, and robustness evaluation;
-being written in Rust is not proof of memory safety or correct Opus output. Codec and
+The in-application DSP is Rust: Sonora for WebRTC-derived AEC and AGC2, nnnoiseless
+for RNNoise-derived suppression, and opus-pure for the codec. Their interoperability,
+robustness and cost are measured in [the DSP evaluation](dsp-evaluation.md); perceptual
+quality on recorded speech is still open. Being written in Rust is not proof of memory
+safety or correct Opus output. Codec and
 DSP SIMD remains confined to the media worker. Native PipeWire or platform processing
 can be reused when it is already working well on the active route.
 
-On Linux, inspect PipeWire nodes/links and PulseAudio module/stream metadata. On
-Windows, inspect active stream effects and effect-change notifications where the OS
-supports them. On macOS, native voice processing is an option, but its gain control
-and other-audio ducking must be evaluated against Nuschel's ownership rule.
+On Linux, Nuschel recognises PipeWire and PulseAudio echo-cancel nodes, reuses them,
+and routes only its own playback to the paired reference sink. On Windows, the planned
+source is `IAudioEffectsManager` (active stream effects and change notifications) and
+`IAcousticEchoCancellationControl`. On macOS it is the voice-processing I/O unit, whose
+gain control and other-audio ducking must be evaluated against Nuschel's ownership rule.
+Both need COM or Objective-C calls through unsafe bindings and validation on those
+systems, so they are not implemented. On Windows and macOS, Automatic mode cannot see a
+system canceller and therefore runs Nuschel's own; the per-microphone override lets
+users turn it off where the system (or a headset) already cancels echo.
 
 While audio is active, observe residual echo, clipping, noise, underruns, latency, and
-near-end speech preservation. Use far-end-only and double-talk conditions correctly;
+near-end speech preservation. The media worker's adaptive controller (`adaptive.rs`)
+does this in two-second windows with hysteresis. Device underruns raise Nuschel's
+playback buffer (40 to 120 ms) and it relaxes after a clean minute. Persistent residual
+echo during far-end speech makes the voice gate demand clearer speech while only the
+far end talks. A clipping microphone is reported to the user, since its level is not
+Nuschel's to change. Use far-end-only and double-talk conditions correctly;
 silencing the microphone does not count as better cancellation. Apply hysteresis and
 allow AEC to converge. Do not claim ERLE when the required unprocessed reference is
 unavailable. Monitoring is local and does not save microphone audio by default.

@@ -18,7 +18,24 @@ It then drives the real Add Server dialog, certificate confirmation,
 independent history browsing/double-click voice joining, chat, playback/capture, mute privacy,
 audio service socket replacement, offline history and reconnect persistence.
 The fixture seeds channels in a stopped stock server database; the real server handles
-all protocol traffic. These tests do not yet drive the stock Mumble GUI or test UDP.
+all protocol traffic.
+
+## Suites in the VM run
+
+| Script | What it proves |
+| --- | --- |
+| `udp_voice.py` | Encrypted OCB2 UDP voice, forced TCP and mixed relay; jitter and 5% loss with netem; inbound UDP blocked (IPv4 and IPv6) falls back to the TLS tunnel and recovers |
+| `protocol_features.py` | Whisper/shout isolation, channel listening, permissions, user stats, comments and avatars, self-registration, SuperUser administration (registered users, bans, ACL, kick), OpenSSL-made PKCS#12 import (channel links are not yet covered) |
+| `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, clipping detection that leaves system levels untouched |
+| `opus_eval.py` | opus-pure against reference libopus: decoder conformance in SILK, Hybrid and CELT, encoder interop both ways, 5,000 hostile packets |
+| `stock_client.py` | The real stock Mumble GUI with a certificate exported by Nuschel; voice in both directions |
+| `desktop_recovery.py` | Media and storage worker crashes keep the session and history; server restart reconnects with backoff, rejoins the channel muted and marks the gap |
+| `accessibility.py` | The AT-SPI tree as a screen reader sees it: named controls, channel tree, users and composer; Mute operated through the Action interface alone |
+| 1.4 / 1.3 loops | `mumble_client.py`, `udp_voice.py` and `protocol_features.py` against stock Mumble 1.4.287 and 1.3.4 (legacy UDP format) |
+
+Development aids outside the VM: `screenshots.py` (scenes under a private headless
+GNOME Shell on the real GPU; it never touches the user's session) and
+`accessibility.py --gnome-shell` (the same check with Nuschel's own window controls).
 
 The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
 module's hardened database preflight. Nuschel server protocol tests remain deferred.
@@ -65,8 +82,9 @@ UDP and forced TCP tunneling separately. Include channel/whisper routing isolati
 
 Run a separate NixOS VM sandbox test to establish forbidden file/network access. Keep
 it separate from parser tests: successful IPC alone does not prove confinement.
-Windows/macOS hardware, microphone permission, accessibility, Bluetooth, echo, and
-mobile background-call behavior still need native platform testing.
+Windows/macOS hardware, microphone permission, screen readers (NVDA, Narrator,
+VoiceOver), Bluetooth, echo, and mobile background-call behavior still need native
+platform testing. The macOS Seatbelt profiles have a macOS-only test that has not run.
 
 ## WebRTC transport trial
 
