@@ -104,13 +104,15 @@ def main():
                 finally:
                     subprocess.run(["tc", "qdisc", "del", "dev", device, "root"], check=False)
             if args.block_udp:
-                # Drop inbound UDP for Bob's socket only: replies stop, so Bob must
-                # return to the tunnel and tell the server to stop sending UDP.
+                # Drop inbound UDP from the server on this host: replies stop, so the
+                # UDP clients (Alice and Bob) must return to the tunnel and tell the
+                # server to stop sending them UDP.
                 iptables("-I", "INPUT", "-p", "udp", "--sport", str(args.port), "-j", "DROP")
                 try:
-                    wait_transport(bob, lambda s: not s["udp_active"], "UDP never deactivated", timeout=25)
+                    for client in (alice, bob):
+                        wait_transport(client, lambda s: not s["udp_active"], "UDP never deactivated", timeout=25)
                     # The client tunnels a ping as soon as it notices, so the server
-                    # must already be using the TCP tunnel for Bob.
+                    # must already be using the TCP tunnel for both.
                     time.sleep(1.0)
                     talk(alice, bob, packets, 100)
                     talk(bob, alice, packets, 100)
