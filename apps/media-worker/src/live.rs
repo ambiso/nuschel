@@ -564,7 +564,11 @@ fn open_devices(
             .and_then(|host| open_host(&host, tx.clone(), capture, settings))
         {
             Ok(opened) => return Ok(opened),
-            Err(error) => errors.push(format!("{id:?}: {error}")),
+            Err(error) => {
+                // Diagnostics only: stderr never carries protocol frames.
+                eprintln!("audio host {id:?} unavailable: {error}");
+                errors.push(format!("{id:?}: {error}"));
+            }
         }
     }
     Err(errors.join("; "))

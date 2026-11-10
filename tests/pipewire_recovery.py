@@ -153,12 +153,17 @@ class PipeWire:
 
 
 class Worker:
+    count = 0
+    logs = Path(tempfile.gettempdir())
+
     def __init__(self, binary, pipewire, host=None, backend=None, muted=True):
-        env = dict(pipewire.env) | {"PULSE_SERVER": f"unix:{pipewire.runtime}/pulse/native"}
+        env = dict(pipewire.env) | {"PULSE_SERVER": f"unix:{pipewire.runtime}/pulse/native", "PIPEWIRE_DEBUG": "2"}
         if backend:
             env["NUSCHEL_AUDIO_BACKEND"] = backend
+        Worker.count += 1
+        self.log = Worker.logs / f"worker-{Worker.count}.log"
         self.process = subprocess.Popen([str(binary), "--live"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, env=env)
+                                        stderr=self.log.open("w"), env=env)
         self.events = []
         threading.Thread(target=self._read, daemon=True).start()
         self.send({"kind": "configure", "bitrate": 40000, "packet_loss_percent": 5, "settings": {}, "host": host})
@@ -220,7 +225,8 @@ def check_restarts(binary, pipewire, packets, output):
     worker = Worker(binary, pipewire)
     worker.ready()
     devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
-    assert devices["output"].startswith("pipewire:"), devices
+    assert devices["output"].startswith("pipewire:"), \
+        f"native PipeWire was not used: {devices}\nworker log:\n{worker.log.read_text()[-3000:]}"
     level = play_and_measure(worker, pipewire, packets, output / "pipewire-before.wav")
     assert level > 0.02, f"playback did not reach the speakers (RMS {level:.4f})"
     print(f"Native PipeWire playback reached the speakers (RMS {level:.3f}).", flush=True)
@@ -316,6 +322,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path(tempfile.gettempdir()))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+    Worker.logs = args.output
     packets = ReferenceOpus(args.opus_library).encode_tone(100)
     binary = args.binaries / "nuschel-media-worker"
     with tempfile.TemporaryDirectory(prefix="nuschel-pw-", dir=os.environ.get("NUSCHEL_SHORT_TMP")) as temporary:
