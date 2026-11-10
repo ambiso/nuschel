@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*"]
-exclude = ["vendor/pulseaudio"]
+exclude = ["vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-apple"]
 default-members = ["apps/desktop", "apps/server"]
 
 [workspace.metadata.crane]
@@ -43,3 +43,6 @@ strip = "debuginfo"
 
 [patch.crates-io]
 pulseaudio = { path = "vendor/pulseaudio" }
+# Cross-compilation fixes for GPUI's platform crates (see vendor/*/NUSCHEL-PATCH.md).
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
+gpui-pre-apple = { path = "vendor/gpui-pre-apple" }

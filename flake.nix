@@ -57,6 +57,8 @@
             || lib.hasSuffix ".json" path
             || lib.hasSuffix ".vp8" path
             || lib.hasSuffix ".svg" path
+            # Vendored GPUI platform crates keep their shaders and headers.
+            || lib.hasInfix "/vendor/gpui-pre-" path
             || lib.hasPrefix "LICENSE" (builtins.baseNameOf path);
         };
         nativeBuildInputs = [
@@ -106,6 +108,12 @@
             rm -rf "$out/vendor/pulseaudio"
             cp -R ${pulseSource} "$out/vendor/pulseaudio"
             chmod -R u+w "$out/vendor/pulseaudio"
+            # GPUI compiles against these patched crates during the dependency pass.
+            for crate in gpui-pre-windows gpui-pre-apple; do
+              rm -rf "$out/vendor/$crate"
+              cp -R ${./vendor}/$crate "$out/vendor/$crate"
+              chmod -R u+w "$out/vendor/$crate"
+            done
           '';
         };
         buildDeps =
@@ -163,10 +171,93 @@
             '';
           }
         );
+        # Cross builds from Linux. A separate toolchain keeps native checks cached.
+        crossToolchain =
+          p:
+          p.pkgsBuildHost.rust-bin.stable.latest.default.override {
+            targets = [
+              "x86_64-pc-windows-gnu"
+              "x86_64-apple-darwin"
+              "aarch64-apple-darwin"
+            ];
+          };
+        desktopCrates = "-p nuschel -p nuschel-content-worker -p nuschel-media-worker -p nuschel-storage-worker";
+        crossCommon = {
+          version = "0.1.0";
+          inherit src dummySrc;
+          strictDeps = true;
+          doCheck = false; # Tests run natively, never under an emulator.
+          cargoExtraArgs = desktopCrates;
+          nativeBuildInputs = [
+            pkgs.protobuf
+            pkgs.pkg-config
+          ];
+        };
+        mingw = pkgs.pkgsCross.mingwW64;
+        windowsPackage = ((crane.mkLib mingw).overrideToolchain crossToolchain).buildPackage (
+          crossCommon
+          // {
+            pname = "nuschel-windows";
+            __CRANE_EXPORT_CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = "${pkgs.coreutils}/bin/false";
+            CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-C target-feature=+crt-static -L native=${mingw.windows.pthreads}/lib";
+            postInstall = ''
+              for program in nuschel nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
+                test -f "$out/bin/$program.exe"
+              done
+              if ${pkgs.binutils}/bin/objdump -p "$out/bin/nuschel.exe" | grep -iE 'DLL Name:.*(libgcc|libstdc|libwinpthread)'; then
+                echo "Windows binary depends on a MinGW runtime DLL" >&2
+                exit 1
+              fi
+              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
+            '';
+          }
+        );
+        # Same pinned SDK approach as ../opendeck-akp05.
+        macSdk = pkgs.fetchzip {
+          url = "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX11.3.sdk.tar.xz";
+          hash = "sha256-BoFWhRSHaD0j3dzDOFtGJ6DiRrdzMJhkjxztxCluFKo=";
+        };
+        macSlice =
+          arch:
+          ((crane.mkLib pkgs).overrideToolchain crossToolchain).buildPackage (
+            crossCommon
+            // {
+              pname = "nuschel-macos-${arch}";
+              nativeBuildInputs = crossCommon.nativeBuildInputs ++ [
+                pkgs.cargo-zigbuild
+                pkgs.zig
+              ];
+              CARGO_BUILD_TARGET = "${arch}-apple-darwin";
+              cargoBuildCommand = "cargoWithProfile zigbuild --target ${arch}-apple-darwin";
+              cargoCheckCommand = "true";
+              SDKROOT = macSdk;
+              MACOSX_DEPLOYMENT_TARGET = "11.3";
+              preBuild = ''
+                export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+                export CARGO_ZIGBUILD_CACHE_DIR="$TMPDIR/zigbuild-cache"
+              '';
+            }
+          );
+        macUniversal =
+          pkgs.runCommand "nuschel-macos-universal" { nativeBuildInputs = [ pkgs.llvmPackages.llvm ]; } ''
+            mkdir -p "$out/bin"
+            for program in nuschel nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
+              llvm-lipo -create ${macSlice "x86_64"}/bin/$program ${macSlice "aarch64"}/bin/$program \
+                -output "$out/bin/$program"
+              llvm-lipo "$out/bin/$program" -verify_arch x86_64 arm64
+            done
+            if llvm-otool -L "$out/bin/nuschel" | grep -qE '^[[:space:]]+/nix/store/'; then
+              echo "macOS binary depends on a Nix store library" >&2
+              exit 1
+            fi
+          '';
       in
       {
         packages.default = package;
         packages.server = serverPackage;
+        packages.windows = windowsPackage;
+        packages.macos-universal = macUniversal;
+        packages.macos-aarch64 = macSlice "aarch64";
         packages.rtc-probe = rtcPackage;
         apps.rtc-probe =
           (flake-utils.lib.mkApp {
