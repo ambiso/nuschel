@@ -219,6 +219,7 @@
           url = "https://github.com/joseluisq/macosx-sdks/releases/download/14.5/MacOSX14.5.sdk.tar.xz";
           hash = "sha256-YABLNOdte3WE8mnUm32zSlQ3lyDFQNnxXTW9gj51MX0=";
         };
+        macMinimum = "14.2";
         macSlice =
           arch:
           ((crane.mkLib pkgs).overrideToolchain crossToolchain).buildPackage (
@@ -233,10 +234,24 @@
               cargoBuildCommand = "cargoWithProfile zigbuild --target ${arch}-apple-darwin";
               cargoCheckCommand = "true";
               SDKROOT = macSdk;
-              MACOSX_DEPLOYMENT_TARGET = "14.2";
+              MACOSX_DEPLOYMENT_TARGET = macMinimum;
+              # cargo-zigbuild links for an unversioned zig target, for which zig
+              # assumes its newest macOS (15.0); a later versioned -target wins.
+              "CARGO_TARGET_${pkgs.lib.toUpper arch}_APPLE_DARWIN_RUSTFLAGS" =
+                "-C link-arg=-target -C link-arg=${arch}-macos.${macMinimum}-none";
               preBuild = ''
                 export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
                 export CARGO_ZIGBUILD_CACHE_DIR="$TMPDIR/zigbuild-cache"
+              '';
+              postInstall = ''
+                for program in "$out"/bin/*; do
+                  [ -f "$program" ] || continue
+                  minimum=$(${pkgs.llvmPackages.llvm}/bin/llvm-otool -l "$program" | sed -n 's/^ *minos //p' | head -1)
+                  if [ "$minimum" != "${macMinimum}" ]; then
+                    echo "$program requires macOS $minimum, expected ${macMinimum}" >&2
+                    exit 1
+                  fi
+                done
               '';
             }
           );
