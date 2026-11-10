@@ -205,7 +205,8 @@
           );
           audit = craneLib.cargoAudit {
             inherit src advisory-db;
-            cargoAuditExtraArgs = "--deny unsound";
+            # RUSTSEC-2023-0071: rsa only generates the local Mumble key (see deny.toml).
+            cargoAuditExtraArgs = "--deny unsound --ignore RUSTSEC-2023-0071";
             # Registry-dependent yanked checks remain enabled in `cargo deny check`.
             preBuild = ''
               mkdir -p .cargo
