@@ -426,7 +426,7 @@ pub fn dialog(
             div()
                 .text_xs()
                 .text_color(color(TEXT_FAINT))
-                .child(text!("The key works while Nuschel is focused, and system-wide where the desktop grants a global shortcut.").with_id("ptt-note"))
+                .child(text!(this.global_ptt_status.clone().unwrap_or_else(|| "The key works while Nuschel is focused, and system-wide where the desktop grants a global shortcut.".into())).with_id("ptt-note"))
                 .into_any_element(),
         );
     }

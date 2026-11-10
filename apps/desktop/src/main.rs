@@ -4,6 +4,7 @@ mod backend;
 mod chrome;
 mod dialogs;
 mod document;
+mod global_ptt;
 mod menus;
 mod panels;
 mod scrolling;

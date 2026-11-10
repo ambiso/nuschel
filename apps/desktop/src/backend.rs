@@ -258,6 +258,9 @@ impl Backend {
                 .await;
         });
     }
+    pub fn runtime(&self) -> &Handle {
+        &self.handle
+    }
     /// Decode an avatar image in the sandboxed content worker.
     pub fn decode_avatar(&self, server: String, generation: u64, hash: String, encoded: Vec<u8>) {
         let events = self.sender.clone();

@@ -392,6 +392,8 @@ pub struct Desktop {
     pub recording_ptt: bool,
     pub ptt_active: bool,
     pub identity_status: Option<String>,
+    global_ptt: Option<(String, crate::global_ptt::GlobalPtt)>,
+    pub global_ptt_status: Option<String>,
     pending_browse: Option<(String, u32)>,
     /// A rejected login waiting to reopen the server form for a retry.
     pending_retry: Option<(usize, RejectKind, String)>,
@@ -479,6 +481,8 @@ impl Desktop {
             recording_ptt: false,
             ptt_active: false,
             identity_status: None,
+            global_ptt: None,
+            global_ptt_status: None,
             pending_browse: None,
             pending_retry: None,
             cache_dirty: false,
@@ -495,7 +499,29 @@ impl Desktop {
         if let Some(url) = startup {
             desktop.open_url(url, window, cx);
         }
+        desktop.sync_global_ptt();
         desktop
+    }
+    /// Keep the system-wide push-to-talk binding in step with the settings.
+    pub fn sync_global_ptt(&mut self) {
+        let wanted = (self.settings.audio.transmit
+            == nuschel_core::audio::TransmitMode::PushToTalk)
+            .then(|| self.settings.push_to_talk_key.clone())
+            .flatten();
+        match (&wanted, &self.global_ptt) {
+            (Some(key), Some((bound, _))) if key == bound => {}
+            (Some(key), _) => {
+                self.global_ptt = Some((
+                    key.clone(),
+                    crate::global_ptt::GlobalPtt::start(self.backend.runtime(), key.clone()),
+                ));
+                self.global_ptt_status = Some("Requesting a system-wide shortcut…".into());
+            }
+            (None, _) => {
+                self.global_ptt = None;
+                self.global_ptt_status = None;
+            }
+        }
     }
     /// Connect to a `mumble://` link, reusing a matching saved server.
     pub fn open_url(&mut self, url: MumbleUrl, window: &mut Window, cx: &mut Context<Self>) {
@@ -1072,6 +1098,7 @@ impl Desktop {
         }
         self.backend.apply_settings(settings.clone());
         self.settings = settings;
+        self.sync_global_ptt();
     }
     fn ptt_key_matches(&self, key: &str) -> bool {
         self.settings
@@ -1327,6 +1354,25 @@ impl Desktop {
     }
     fn drain_events(&mut self) -> bool {
         let mut changed = false;
+        while let Some(event) = self
+            .global_ptt
+            .as_mut()
+            .and_then(|(_, global)| global.events.try_recv().ok())
+        {
+            changed = true;
+            match event {
+                crate::global_ptt::GlobalEvent::Pressed => self.set_push_to_talk(true),
+                crate::global_ptt::GlobalEvent::Released => self.set_push_to_talk(false),
+                crate::global_ptt::GlobalEvent::Bound(trigger) => {
+                    self.global_ptt_status =
+                        Some(format!("System-wide shortcut active: {trigger}"));
+                }
+                crate::global_ptt::GlobalEvent::Unavailable(reason) => {
+                    self.global_ptt_status =
+                        Some(format!("Only while Nuschel is focused: {reason}"));
+                }
+            }
+        }
         for _ in 0..256 {
             let Ok(event) = self.backend.events.try_recv() else {
                 break;
