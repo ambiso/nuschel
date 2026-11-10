@@ -220,6 +220,11 @@
           hash = "sha256-YABLNOdte3WE8mnUm32zSlQ3lyDFQNnxXTW9gj51MX0=";
         };
         macMinimum = "14.2";
+        # cargo-zigbuild gives zig an unversioned macOS target, for which zig
+        # assumes its newest release (15.0) whatever MACOSX_DEPLOYMENT_TARGET says.
+        cargoZigbuild = pkgs.cargo-zigbuild.overrideAttrs (old: {
+          patches = (old.patches or [ ]) ++ [ ./nix/cargo-zigbuild-macos-version.patch ];
+        });
         macSlice =
           arch:
           ((crane.mkLib pkgs).overrideToolchain crossToolchain).buildPackage (
@@ -227,7 +232,7 @@
             // {
               pname = "nuschel-macos-${arch}";
               nativeBuildInputs = crossCommon.nativeBuildInputs ++ [
-                pkgs.cargo-zigbuild
+                cargoZigbuild
                 pkgs.zig
               ];
               CARGO_BUILD_TARGET = "${arch}-apple-darwin";
@@ -235,10 +240,6 @@
               cargoCheckCommand = "true";
               SDKROOT = macSdk;
               MACOSX_DEPLOYMENT_TARGET = macMinimum;
-              # cargo-zigbuild links for an unversioned zig target, for which zig
-              # assumes its newest macOS (15.0); a later versioned -target wins.
-              "CARGO_TARGET_${pkgs.lib.toUpper arch}_APPLE_DARWIN_RUSTFLAGS" =
-                "-C link-arg=-target -C link-arg=${arch}-macos.${macMinimum}-none";
               preBuild = ''
                 export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
                 export CARGO_ZIGBUILD_CACHE_DIR="$TMPDIR/zigbuild-cache"
