@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 use crate::{
-    dialogs::{self, button},
-    state::{Desktop, Status},
+    assets::icon,
+    chrome,
+    dialogs::{self, Tone, Tooltip, icon_button, styled_button},
+    state::{Desktop, ServerView, Status, TreeRow},
+    theme::{self, *},
 };
 use gpui_kit::{
     base::{Scrollbar, ScrollbarMode, input::Textarea},
@@ -10,84 +13,129 @@ use gpui_kit::{
 };
 use nuschel_client::{HistorySource, SessionSecurity};
 use nuschel_core::{ContentBlock, MessageDocument};
-use nuschel_session::connection::TextTarget;
+use nuschel_session::connection::{TextTarget, User};
+
+/// Consecutive messages by one author within this window share a header.
+const GROUP_MS: i64 = 5 * 60 * 1000;
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_composer_acks(window, cx);
         self.reconcile_selection(window, cx);
-        let Some((server, channel)) = self.selected_indices() else {
-            return dialogs::empty(self, cx);
-        };
-        div()
+        let selected = self.selected_indices();
+        let title = selected
+            .map(|(server, channel)| {
+                let server = &self.servers[server];
+                format!("{} — {}", server.name, server.channels[channel].name)
+            })
+            .unwrap_or_default();
+        let body = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .child(server_rail(self, selected.map(|(server, _)| server), cx))
+            .map(|body| match selected {
+                Some((server, channel)) => body
+                    .child(sidebar(self, server, channel, cx))
+                    .child(conversation(self, server, channel, cx)),
+                None => body.child(dialogs::empty(cx)),
+            });
+        let content = div()
             .size_full()
             .relative()
             .flex()
-            .bg(rgb(0x202632))
-            .text_color(rgb(0xe9edf5))
+            .flex_col()
+            .bg(color(MAIN))
+            .text_color(color(TEXT))
             .font_family("sans-serif")
-            .text_base()
-            .child(server_rail(self, server, cx))
-            .child(channel_panel(self, server, channel, cx))
-            .child(conversation(self, server, channel, cx))
+            .text_size(px(15.))
+            .child(chrome::title_bar(title.into(), window, cx))
+            .child(body)
             .when(self.form.is_some(), |view| {
                 view.child(dialogs::server_form(self, cx))
             })
-            .into_any_element()
+            .into_any_element();
+        chrome::frame(window, content)
     }
 }
-fn server_rail(this: &Desktop, selected: usize, cx: &mut Context<Desktop>) -> AnyElement {
+
+fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop>) -> AnyElement {
     let servers = this
         .servers
         .iter()
         .enumerate()
         .map(|(index, server)| {
+            let active = Some(index) == selected;
+            let online = server.status == Status::Connected;
             div()
-                .id(("server", index))
-                .role(Role::Button)
-                .tab_index(0)
-                .aria_label(format!(
-                    "{}; {}",
-                    server.name,
-                    security_label(server.security)
-                ))
-                .aria_selected(index == selected)
+                .id(("server-slot", index))
                 .relative()
-                .w(px(48.))
-                .h(px(48.))
-                .flex_shrink_0()
+                .w_full()
                 .flex()
-                .items_center()
                 .justify_center()
-                .rounded_xl()
-                .bg(rgb(if index == selected {
-                    0x5865f2
-                } else {
-                    0x282d39
-                }))
-                .hover(|style| style.bg(rgb(0x4a55cf)))
-                .cursor_pointer()
-                .font_weight(FontWeight::BOLD)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.browse_server(index, window, cx);
-                    cx.notify();
-                }))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                    if activation_key(event) {
-                        this.browse_server(index, window, cx);
-                        cx.notify();
-                    }
-                }))
-                .child(text!(server.initials.clone()).with_id(("server-name", index)))
                 .child(
                     div()
                         .absolute()
-                        .right(px(-3.))
-                        .bottom(px(-3.))
-                        .p_1()
-                        .rounded_md()
-                        .bg(rgb(0x11151d))
-                        .child(security_icon(server.security, index)),
+                        .left_0()
+                        .top(px(if active { 6. } else { 19. }))
+                        .w(px(4.))
+                        .h(px(if active { 36. } else { 10. }))
+                        .rounded_r(px(4.))
+                        .bg(color(TEXT))
+                        .when(!active && !online, |pill| pill.invisible()),
+                )
+                .child(
+                    div()
+                        .id(("server", index))
+                        .role(Role::Button)
+                        .tab_index(0)
+                        .aria_label(format!(
+                            "{}; {}; {}",
+                            server.name,
+                            server.status_label(),
+                            security_label(server.security)
+                        ))
+                        .aria_selected(active)
+                        .relative()
+                        .size(px(48.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(if active { 16. } else { 24. }))
+                        .bg(if active {
+                            color(ACCENT).into()
+                        } else {
+                            theme::avatar(&server.name)
+                        })
+                        .when(!active && !online, |icon| icon.opacity(0.6))
+                        .hover(|style| style.rounded(px(16.)).opacity(1.))
+                        .cursor_pointer()
+                        .text_color(color(0xffffff))
+                        .font_weight(FontWeight::BOLD)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.browse_server(index, window, cx);
+                            cx.notify();
+                        }))
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                            if activation_key(event) {
+                                this.browse_server(index, window, cx);
+                                cx.notify();
+                            }
+                        }))
+                        .child(text!(theme::initials(&server.name)).with_id(("server-name", index)))
+                        .child(
+                            div()
+                                .absolute()
+                                .right(px(-4.))
+                                .bottom(px(-4.))
+                                .size(px(20.))
+                                .rounded_full()
+                                .bg(color(RAIL))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(security_icon(server.security, index, 12.)),
+                        ),
                 )
         })
         .collect::<Vec<_>>();
@@ -95,191 +143,185 @@ fn server_rail(this: &Desktop, selected: usize, cx: &mut Context<Desktop>) -> An
         .w(px(72.))
         .h_full()
         .flex_shrink_0()
-        .py_4()
-        .gap_4()
-        .bg(rgb(0x11151d))
+        .pt_3()
+        .gap_2()
+        .bg(color(RAIL))
         .flex()
         .flex_col()
         .items_center()
+        .children(servers)
         .child(
             div()
-                .text_xs()
-                .text_color(rgb(0x8f9bb3))
-                .child(text!("N").with_id("brand")),
+                .w(px(32.))
+                .h(px(2.))
+                .my_1()
+                .rounded_full()
+                .bg(color(BORDER_STRONG)),
         )
-        .children(servers)
-        .child(button(
-            "add-server",
-            "+",
-            |this, window, cx| this.open_form(None, window, cx),
-            cx,
-        ))
+        .child(
+            div()
+                .id("add-server")
+                .group("add-server")
+                .role(Role::Button)
+                .aria_label("Add a server")
+                .tab_index(0)
+                .size(px(48.))
+                .rounded(px(24.))
+                .bg(color(ELEVATED))
+                .text_color(color(SUCCESS))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(|style| {
+                    style
+                        .rounded(px(16.))
+                        .bg(color(SUCCESS))
+                        .text_color(color(0xffffff))
+                })
+                .tooltip(|_, cx| cx.new(|_| Tooltip("Add a server".into())).into())
+                .on_click(cx.listener(|this, _, window, cx| this.open_form(None, window, cx)))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if activation_key(event) {
+                        this.open_form(None, window, cx);
+                    }
+                }))
+                .child(
+                    icon("plus", 22., color(SUCCESS))
+                        .group_hover("add-server", |style| style.text_color(color(0xffffff))),
+                ),
+        )
         .into_any_element()
 }
-fn channel_panel(
+
+fn sidebar(
     this: &Desktop,
     server_index: usize,
     selected_channel: usize,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let server = &this.servers[server_index];
+    let voice_channel = server.voice_channel();
     let rows = this
-        .channel_rows(server_index)
+        .tree_rows(server_index)
         .into_iter()
-        .map(|(index, depth, has_children)| {
-            let entry = &server.channels[index];
-            let id = entry.id;
-            let collapsed = !this.channel_expanded(server_index, id);
-            let full_name = entry.name.clone();
-            let members = server
-                .users
-                .values()
-                .filter(|user| entry.target == TextTarget::Channel(user.channel))
-                .count();
+        .map(|row| match row {
+            TreeRow::Channel {
+                index,
+                depth,
+                has_children,
+                hidden_users,
+            } => channel_row(
+                this,
+                server_index,
+                index,
+                depth,
+                has_children,
+                hidden_users,
+                index == selected_channel,
+                voice_channel,
+                cx,
+            ),
+            TreeRow::User { session, depth } => match server.users.get(&session) {
+                Some(user) => user_row(server, server_index, user, depth, cx),
+                None => div().into_any_element(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let directs = server
+        .channels
+        .iter()
+        .enumerate()
+        .filter(|(_, channel)| matches!(channel.target, TextTarget::Direct(_)))
+        .map(|(index, channel)| {
+            let id = channel.id;
+            let selected = index == selected_channel;
             div()
-                .id(("channel-row", id as usize))
+                .id(("direct-row", id as usize))
                 .role(Role::TreeItem)
                 .tab_index(0)
-                .aria_label(entry.name.clone())
-                .aria_selected(index == selected_channel)
-                .aria_level(depth + 1)
-                .when(has_children, |row| row.aria_expanded(!collapsed))
+                .aria_label(channel.name.clone())
+                .aria_selected(selected)
+                .h(px(30.))
+                .px_2()
                 .flex()
                 .items_center()
                 .gap_2()
-                .h(px(34.))
-                .flex_shrink_0()
-                .min_w_0()
-                .overflow_hidden()
-                .pr_2()
-                .pl(px(8. + depth.min(10) as f32 * 12.))
-                .rounded_md()
+                .rounded(px(6.))
                 .cursor_pointer()
-                .text_color(rgb(if index == selected_channel {
-                    0xf4f5fa
-                } else {
-                    0xadb5c6
-                }))
-                .when(index == selected_channel, |row| row.bg(rgb(0x333b50)))
-                .hover(|style| style.bg(rgb(0x2a3142)))
-                .tooltip(move |_, cx| cx.new(|_| ChannelNameTooltip(full_name.clone())).into())
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                .text_color(color(if selected { TEXT } else { TEXT_MUTED }))
+                .when(selected, |row| row.bg(color(SELECTED)))
+                .hover(|style| style.bg(color(HOVER)).text_color(color(TEXT)))
+                .on_click(cx.listener(move |this, _, window, cx| {
                     this.browse_channel(server_index, id, window, cx);
-                    if event.click_count() == 2 {
-                        this.join_selected();
-                    }
                     cx.notify();
                 }))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                    if activation_key(event) {
-                        this.browse_channel(server_index, id, window, cx);
-                        cx.notify();
-                    }
-                }))
+                .child(icon("message", 16., color(TEXT_FAINT)))
                 .child(
                     div()
-                        .id(("branch", id as usize))
-                        .w(px(12.))
-                        .flex_shrink_0()
-                        .text_color(rgb(0x7f8ba3))
-                        .when(has_children, |branch| {
-                            branch
-                                .role(Role::Button)
-                                .tab_index(0)
-                                .aria_label(format!("Toggle {}", entry.name))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.toggle_channel(server_index, id);
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }))
-                                .on_key_down(cx.listener(
-                                    move |this, event: &KeyDownEvent, _, cx| {
-                                        if activation_key(event) {
-                                            this.toggle_channel(server_index, id);
-                                            cx.stop_propagation();
-                                            cx.notify();
-                                        }
-                                    },
-                                ))
-                        })
-                        .child(
-                            text!(if has_children {
-                                if collapsed { "▸" } else { "▾" }
-                            } else {
-                                "#"
-                            })
-                            .with_id(("channel-symbol", id as usize)),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex_1()
                         .min_w_0()
+                        .flex_1()
                         .truncate()
-                        .id(("channel-name", id as usize))
-                        .child(entry.name.clone()),
+                        .child(channel.name.trim_start_matches("@ ").to_string()),
                 )
-                .when(members > 0, |row| {
-                    row.child(
-                        div()
-                            .flex_shrink_0()
-                            .text_xs()
-                            .text_color(rgb(0x8998b3))
-                            .child(text!(members.to_string()).with_id(("member-count", index))),
-                    )
-                })
+                .into_any_element()
         })
         .collect::<Vec<_>>();
-    let voice = server
-        .voice_channel()
-        .and_then(|id| {
-            server
-                .channels
-                .iter()
-                .find(|channel| channel.target == TextTarget::Channel(id))
-        })
-        .map(|channel| format!("Voice · {}", channel.name))
-        .unwrap_or_else(|| "Voice disconnected".into());
     div()
-        .w(px(208.))
+        .w(px(248.))
         .h_full()
         .flex_shrink_0()
-        .bg(rgb(0x191f2a))
+        .bg(color(SIDEBAR))
         .flex()
         .flex_col()
         .child(
             div()
-                .h(px(72.))
+                .h(px(52.))
                 .flex_shrink_0()
-                .px_4()
+                .pl_4()
+                .pr_2()
                 .flex()
-                .flex_col()
-                .justify_center()
-                .gap_1()
+                .items_center()
+                .gap_2()
                 .border_b_1()
-                .border_color(rgb(0x2a3243))
+                .border_color(color(BORDER))
                 .child(
                     div()
-                        .font_weight(FontWeight::BOLD)
-                        .truncate()
-                        .child(server.name.clone()),
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .truncate()
+                                .child(text!(server.name.clone()).with_id("server-heading")),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .text_xs()
+                                .text_color(color(status_color(server.status)))
+                                .child(
+                                    div()
+                                        .size(px(7.))
+                                        .rounded_full()
+                                        .bg(color(status_color(server.status))),
+                                )
+                                .child(text!(server.status_label()).with_id("connection")),
+                        ),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(0x929eb4))
-                        .child(text!(server.status_label()).with_id("connection")),
-                ),
-        )
-        .child(
-            div()
-                .px_4()
-                .pt_5()
-                .pb_2()
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(0x8f9ab0))
-                .child(text!("CHANNELS").with_id("channels-heading")),
+                .child(icon_button(
+                    "edit-server",
+                    "pencil",
+                    "Edit server",
+                    TEXT_MUTED,
+                    None,
+                    move |this, window, cx| this.open_form(Some(server_index), window, cx),
+                    cx,
+                )),
         )
         .child(
             div()
@@ -295,18 +337,26 @@ fn channel_panel(
                         .overflow_y_scroll()
                         .track_scroll(&this.channel_scroll)
                         .pl_2()
-                        .pr_4()
+                        .pr_3()
+                        .pt_3()
+                        .pb_4()
                         .child(
                             div()
                                 .id("channel-rows")
                                 .min_h_full()
                                 .flex()
                                 .flex_col()
-                                .gap_1()
+                                .gap(px(2.))
                                 .on_scroll(cx.listener(|this, event, window, cx| {
                                     this.smooth_scroll(true, event, window, cx)
                                 }))
-                                .children(rows),
+                                .child(section_label("channels-heading", "VOICE CHANNELS"))
+                                .children(rows)
+                                .when(!directs.is_empty(), |list| {
+                                    list.child(div().h_3())
+                                        .child(section_label("direct-heading", "DIRECT MESSAGES"))
+                                        .children(directs)
+                                }),
                         ),
                 )
                 .child(
@@ -316,34 +366,431 @@ fn channel_panel(
                             .mode(ScrollbarMode::Always)
                             .styles(|styles| {
                                 styles
-                                    .track(|track| track.width(px(10.)).bg(rgb(0x151a24).into()))
+                                    .track(|track| track.width(px(8.)).bg(color(SIDEBAR).into()))
                                     .thumb(|thumb| {
-                                        thumb.width(px(6.)).bg(rgb(0x64728e)).radius(px(3.))
+                                        thumb.width(px(4.)).bg(color(BORDER_STRONG)).radius(px(2.))
                                     })
-                                    .thumb_hover(|thumb| thumb.bg(rgb(0x8d9bb6)))
-                                    .thumb_active(|thumb| thumb.bg(rgb(0xa6b5d0)))
+                                    .thumb_hover(|thumb| thumb.bg(color(TEXT_FAINT)))
+                                    .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
                             }),
                     ),
                 ),
         )
+        .when_some(voice_card(server, server_index, cx), |sidebar, card| {
+            sidebar.child(card)
+        })
+        .child(user_panel(server, cx))
+        .into_any_element()
+}
+
+fn section_label(id: &'static str, label: &'static str) -> AnyElement {
+    div()
+        .px_2()
+        .pb_1()
+        .text_xs()
+        .font_weight(FontWeight::BOLD)
+        .text_color(color(TEXT_FAINT))
+        .child(text!(label).with_id(id))
+        .into_any_element()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn channel_row(
+    this: &Desktop,
+    server_index: usize,
+    index: usize,
+    depth: usize,
+    has_children: bool,
+    hidden_users: usize,
+    selected: bool,
+    voice_channel: Option<u32>,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let server = &this.servers[server_index];
+    let entry = &server.channels[index];
+    let id = entry.id;
+    let collapsed = !this.channel_expanded(server_index, id);
+    let in_voice = voice_channel == Some(id);
+    let full_name = entry.name.clone();
+    div()
+        .id(("channel-row", id as usize))
+        .role(Role::TreeItem)
+        .tab_index(0)
+        .aria_label(entry.name.clone())
+        .aria_selected(selected)
+        .aria_level(depth + 1)
+        .when(has_children, |row| row.aria_expanded(!collapsed))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .h(px(32.))
+        .flex_shrink_0()
+        .min_w_0()
+        .overflow_hidden()
+        .pr_2()
+        .pl(px(4. + depth.min(10) as f32 * 14.))
+        .rounded(px(6.))
+        .cursor_pointer()
+        .text_color(color(if selected || in_voice {
+            TEXT
+        } else {
+            TEXT_MUTED
+        }))
+        .when(selected, |row| row.bg(color(SELECTED)))
+        .hover(|style| style.bg(color(HOVER)).text_color(color(TEXT)))
+        .tooltip(move |_, cx| cx.new(|_| Tooltip(full_name.clone().into())).into())
+        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+            this.browse_channel(server_index, id, window, cx);
+            if event.click_count() == 2 {
+                this.join_selected();
+            }
+            cx.notify();
+        }))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            if activation_key(event) {
+                this.browse_channel(server_index, id, window, cx);
+                cx.notify();
+            }
+        }))
         .child(
             div()
-                .p_4()
-                .border_t_1()
-                .border_color(rgb(0x2a3243))
+                .id(("branch", id as usize))
+                .size(px(18.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(4.))
+                .text_color(color(TEXT_FAINT))
+                .when(has_children, |branch| {
+                    branch
+                        .role(Role::Button)
+                        .tab_index(0)
+                        .aria_label(format!("Toggle {}", entry.name))
+                        .hover(|style| style.bg(color(BORDER_STRONG)).text_color(color(TEXT)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.toggle_channel(server_index, id);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }))
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                            if activation_key(event) {
+                                this.toggle_channel(server_index, id);
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }))
+                        .child(icon(
+                            if collapsed {
+                                "chevron-right"
+                            } else {
+                                "chevron-down"
+                            },
+                            14.,
+                            color(TEXT_FAINT),
+                        ))
+                }),
+        )
+        .child(
+            div()
+                .text_color(color(if in_voice { SUCCESS } else { TEXT_FAINT }))
+                .child(icon(
+                    "volume",
+                    16.,
+                    color(if in_voice { SUCCESS } else { TEXT_FAINT }),
+                )),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .when(in_voice, |name| name.font_weight(FontWeight::SEMIBOLD))
+                .id(("channel-name", id as usize))
+                .child(entry.name.clone()),
+        )
+        .when(hidden_users > 0, |row| {
+            row.child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(6.))
+                    .rounded_full()
+                    .bg(color(ELEVATED))
+                    .text_xs()
+                    .text_color(color(TEXT_MUTED))
+                    .child(text!(hidden_users.to_string()).with_id(("member-count", index))),
+            )
+        })
+        .into_any_element()
+}
+
+fn user_row(
+    server: &ServerView,
+    server_index: usize,
+    user: &User,
+    depth: usize,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let session = user.session;
+    let own = server.own_session == Some(session);
+    let talking = server.talking.contains(&session);
+    let muted = user.muted || user.self_muted || user.suppressed;
+    let deafened = user.deafened || user.self_deafened;
+    div()
+        .id(("user-row", session as usize))
+        .role(Role::TreeItem)
+        .tab_index(0)
+        .aria_label(format!(
+            "{}{}{}{}",
+            user.name,
+            if talking { ", talking" } else { "" },
+            if muted { ", muted" } else { "" },
+            if deafened { ", deafened" } else { "" }
+        ))
+        .aria_level(depth + 1)
+        .flex()
+        .items_center()
+        .gap_2()
+        .h(px(30.))
+        .flex_shrink_0()
+        .min_w_0()
+        .pr_2()
+        .pl(px(30. + depth.saturating_sub(1).min(10) as f32 * 14.))
+        .rounded(px(6.))
+        .cursor_pointer()
+        .text_color(color(if own { TEXT } else { TEXT_MUTED }))
+        .hover(|style| style.bg(color(HOVER)).text_color(color(TEXT)))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.open_direct(server_index, session, window, cx);
+        }))
+        .child(avatar(
+            &user.name,
+            22.,
+            talking,
+            ("user-avatar", session as usize),
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_sm()
+                .when(talking, |name| name.text_color(color(TEXT)))
+                .child(text!(user.name.clone()).with_id(("user-name", session as usize))),
+        )
+        .when(muted, |row| {
+            row.child(
+                div()
+                    .text_color(color(if user.muted || user.suppressed {
+                        DANGER
+                    } else {
+                        TEXT_FAINT
+                    }))
+                    .child(icon(
+                        "mic-off",
+                        14.,
+                        color(if user.muted || user.suppressed {
+                            DANGER
+                        } else {
+                            TEXT_FAINT
+                        }),
+                    )),
+            )
+        })
+        .when(deafened, |row| {
+            row.child(
+                div()
+                    .text_color(color(if user.deafened { DANGER } else { TEXT_FAINT }))
+                    .child(icon(
+                        "headphones-off",
+                        14.,
+                        color(if user.deafened { DANGER } else { TEXT_FAINT }),
+                    )),
+            )
+        })
+        .into_any_element()
+}
+
+fn avatar(name: &str, size: f32, talking: bool, id: (&'static str, usize)) -> AnyElement {
+    div()
+        .size(px(size))
+        .flex_shrink_0()
+        .rounded_full()
+        .border_2()
+        .border_color(if talking {
+            color(SUCCESS)
+        } else {
+            color(SIDEBAR)
+        })
+        .bg(theme::avatar(name))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px((size * 0.42).max(9.)))
+        .font_weight(FontWeight::BOLD)
+        .text_color(color(0xffffff))
+        .child(text!(theme::initials(name)).with_id(id))
+        .into_any_element()
+}
+
+fn voice_card(
+    server: &ServerView,
+    server_index: usize,
+    cx: &mut Context<Desktop>,
+) -> Option<AnyElement> {
+    let id = server
+        .voice_channel()
+        .filter(|_| server.status == Status::Connected)?;
+    let name = server
+        .channels
+        .iter()
+        .find(|channel| channel.target == TextTarget::Channel(id))
+        .map(|channel| channel.name.clone())
+        .unwrap_or_else(|| "Unknown channel".into());
+    Some(
+        div()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(color(BORDER))
+            .bg(color(SIDEBAR_FOOTER))
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_color(color(SUCCESS))
+                    .child(icon("signal", 18., color(SUCCESS))),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(color(SUCCESS))
+                            .child(text!("Voice connected").with_id("voice-heading")),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .truncate()
+                            .text_color(color(TEXT_MUTED))
+                            .child(
+                                text!(format!("{name} / {}", server.name)).with_id("voice-channel"),
+                            ),
+                    ),
+            )
+            .child(icon_button(
+                "disconnect",
+                "hang-up",
+                "Disconnect",
+                TEXT_MUTED,
+                None,
+                move |this, _, cx| {
+                    this.disconnect(server_index);
+                    cx.notify();
+                },
+                cx,
+            ))
+            .into_any_element(),
+    )
+}
+
+fn user_panel(server: &ServerView, cx: &mut Context<Desktop>) -> AnyElement {
+    let own = server
+        .own_session
+        .and_then(|session| server.users.get(&session));
+    let name = own
+        .map(|user| user.name.clone())
+        .unwrap_or_else(|| server.bookmark.username.clone());
+    let talking = server
+        .own_session
+        .is_some_and(|session| server.talking.contains(&session));
+    let connected = server.status == Status::Connected;
+    let status = if !connected {
+        server.status_label().to_string()
+    } else if server.deafened {
+        "Deafened".into()
+    } else if server.muted {
+        "Muted".into()
+    } else {
+        server.audio_status.clone()
+    };
+    div()
+        .h(px(56.))
+        .flex_shrink_0()
+        .px_2()
+        .bg(color(SIDEBAR_FOOTER))
+        .border_t_1()
+        .border_color(color(BORDER))
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(avatar(&name, 34., talking, ("own-avatar", 0)))
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
                 .flex()
                 .flex_col()
-                .gap_2()
-                .child(div().text_sm().truncate().child(voice))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .truncate()
+                        .child(text!(name).with_id("own-name")),
+                )
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(0x8f9ab0))
-                        .child(text!(server.audio_status.clone()).with_id("audio-status")),
+                        .truncate()
+                        .text_color(color(TEXT_MUTED))
+                        .child(text!(status).with_id("audio-status")),
                 ),
         )
+        .when(connected, |panel| {
+            panel
+                .child(icon_button(
+                    "mute",
+                    if server.muted { "mic-off" } else { "mic" },
+                    if server.muted { "Unmute" } else { "Mute" },
+                    if server.muted { DANGER } else { TEXT_MUTED },
+                    server.muted.then_some(DANGER),
+                    |this, _, cx| {
+                        this.set_mute(false);
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(icon_button(
+                    "deafen",
+                    if server.deafened {
+                        "headphones-off"
+                    } else {
+                        "headphones"
+                    },
+                    if server.deafened {
+                        "Undeafen"
+                    } else {
+                        "Deafen"
+                    },
+                    if server.deafened { DANGER } else { TEXT_MUTED },
+                    server.deafened.then_some(DANGER),
+                    |this, _, cx| {
+                        this.set_mute(true);
+                        cx.notify();
+                    },
+                    cx,
+                ))
+        })
         .into_any_element()
 }
+
 fn conversation(
     this: &Desktop,
     index: usize,
@@ -352,150 +799,506 @@ fn conversation(
 ) -> AnyElement {
     let server = &this.servers[index];
     let channel = &server.channels[channel_index];
-    let members = server
-        .users
-        .values()
-        .filter(|user| {
-            channel.target == TextTarget::Channel(user.channel)
-                && Some(user.session) != server.own_session
+    let is_channel = matches!(channel.target, TextTarget::Channel(_));
+    let connected = server.status == Status::Connected;
+    let in_this_voice = server
+        .voice_channel()
+        .is_some_and(|voice| channel.target == TextTarget::Channel(voice));
+    let mut messages = Vec::new();
+    let mut previous: Option<(&str, i64)> = None;
+    for (position, message) in channel.messages.iter().enumerate() {
+        let grouped = previous.is_some_and(|(author, at)| {
+            author == message.author && message.observed_at_ms.saturating_sub(at) < GROUP_MS
+        });
+        previous = Some((&message.author, message.observed_at_ms));
+        messages.push(message_row(message, position, grouped, cx));
+    }
+    let topic = if !is_channel {
+        "Private conversation".to_string()
+    } else if in_this_voice {
+        "You are talking here".to_string()
+    } else if connected {
+        "Double-click the channel or use Join voice to talk here".to_string()
+    } else {
+        channel.topic.clone()
+    };
+    div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .flex()
+        .flex_col()
+        .bg(color(MAIN))
+        .child(
+            div()
+                .h(px(52.))
+                .flex_shrink_0()
+                .px_4()
+                .flex()
+                .items_center()
+                .gap_3()
+                .border_b_1()
+                .border_color(color(BORDER))
+                .child(div().text_color(color(TEXT_FAINT)).child(icon(
+                    if is_channel { "hash" } else { "message" },
+                    20.,
+                    color(TEXT_FAINT),
+                )))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w(px(280.))
+                        .truncate()
+                        .font_weight(FontWeight::BOLD)
+                        .child(text!(channel.name.clone()).with_id("channel-heading")),
+                )
+                .child(div().w(px(1.)).h(px(20.)).bg(color(BORDER_STRONG)))
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .truncate()
+                        .text_sm()
+                        .text_color(color(TEXT_MUTED))
+                        .child(text!(topic).with_id("channel-topic")),
+                )
+                .when(connected && is_channel && !in_this_voice, |header| {
+                    header.child(styled_button(
+                        "join-voice",
+                        "Join voice",
+                        Tone::Primary,
+                        |this, _, cx| {
+                            this.join_selected();
+                            cx.notify();
+                        },
+                        cx,
+                    ))
+                })
+                .when(!connected, |header| {
+                    header.child(styled_button(
+                        "connect-server",
+                        "Connect",
+                        Tone::Primary,
+                        move |this, window, cx| this.open_form(Some(index), window, cx),
+                        cx,
+                    ))
+                })
+                .child(
+                    div()
+                        .id("conversation-security")
+                        .px_2()
+                        .tooltip({
+                            let label = security_label(server.security);
+                            move |_, cx| cx.new(|_| Tooltip(label.into())).into()
+                        })
+                        .child(security_icon(
+                            server.security,
+                            this.servers.len() + index,
+                            18.,
+                        )),
+                ),
+        )
+        .when_some(
+            server.notice.clone().or_else(|| this.error.clone()),
+            |view, notice| {
+                view.child(
+                    div()
+                        .mx_4()
+                        .mt_3()
+                        .px_3()
+                        .py_2()
+                        .rounded(px(8.))
+                        .bg(tint(DANGER, 0x26))
+                        .border_1()
+                        .border_color(tint(DANGER, 0x60))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_sm()
+                        .text_color(color(0xffc9cc))
+                        .child(icon("alert", 16., color(DANGER_HOVER)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(text!(notice).with_id("connection-notice")),
+                        ),
+                )
+            },
+        )
+        .when_some(server.certificate.as_ref(), |view, certificate| {
+            view.child(certificate_card(certificate, index, cx))
         })
-        .take(100)
-        .map(|user| {
-            let session = user.session;
-            div().id(("member", session as usize)).child(button(
-                "direct-message-user",
-                format!("@ {}", user.name),
-                move |this, window, cx| this.open_direct(index, session, window, cx),
-                cx,
-            ))
+        .child(
+            div()
+                .id(SharedString::from(format!(
+                    "timeline:{}:{}",
+                    server.id, channel.id
+                )))
+                .track_scroll(&this.scroll)
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .px_4()
+                .py_4()
+                .child(
+                    div()
+                        .id("timeline-content")
+                        .min_h_full()
+                        .flex()
+                        .flex_col()
+                        .justify_end()
+                        .on_scroll(cx.listener(|this, event, window, cx| {
+                            this.smooth_scroll(false, event, window, cx)
+                        }))
+                        .child(
+                            div()
+                                .pb_4()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .size(px(56.))
+                                        .rounded_full()
+                                        .bg(color(ELEVATED))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(color(TEXT_MUTED))
+                                        .child(icon(
+                                            if is_channel { "hash" } else { "message" },
+                                            30.,
+                                            color(TEXT_MUTED),
+                                        )),
+                                )
+                                .child(
+                                    div().text_2xl().font_weight(FontWeight::BOLD).child(
+                                        text!(format!("Welcome to {}", channel.name))
+                                            .with_id("timeline-heading"),
+                                    ),
+                                )
+                                .child(
+                                    div().text_sm().text_color(color(TEXT_MUTED)).child(
+                                        text!(match server.history_source {
+                                            HistorySource::LocalObserved =>
+                                                "Local history · messages seen on this device",
+                                            HistorySource::ServerArchive => "Server history",
+                                        })
+                                        .with_id("history-source"),
+                                    ),
+                                )
+                                .when_some(
+                                    server.welcome.as_ref().filter(|_| is_channel),
+                                    |view, welcome| {
+                                        view.child(
+                                            div()
+                                                .mt_2()
+                                                .p_3()
+                                                .rounded(px(8.))
+                                                .bg(color(SIDEBAR))
+                                                .border_l_4()
+                                                .border_color(color(ACCENT))
+                                                .text_sm()
+                                                .child(
+                                                    text!(welcome.clone())
+                                                        .with_id("server-welcome"),
+                                                ),
+                                        )
+                                    },
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_2()
+                                        .when(
+                                            channel.next_before.is_some() && !channel.loading,
+                                            |view| {
+                                                view.child(styled_button(
+                                                    "older-history",
+                                                    "Load older messages",
+                                                    Tone::Secondary,
+                                                    |this, _, cx| {
+                                                        this.load_older();
+                                                        cx.notify();
+                                                    },
+                                                    cx,
+                                                ))
+                                            },
+                                        )
+                                        .when(channel.viewing_older, |view| {
+                                            view.child(styled_button(
+                                                "latest-history",
+                                                format!(
+                                                    "Jump to latest ({})",
+                                                    channel.new_messages
+                                                ),
+                                                Tone::Secondary,
+                                                |this, _, cx| {
+                                                    this.load_history(None);
+                                                    cx.notify();
+                                                },
+                                                cx,
+                                            ))
+                                        })
+                                        .when(channel.loading, |view| {
+                                            view.child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(color(TEXT_FAINT))
+                                                    .child(
+                                                        text!("Loading local history…")
+                                                            .with_id("history-loading"),
+                                                    ),
+                                            )
+                                        }),
+                                ),
+                        )
+                        .children(messages),
+                ),
+        )
+        .child(composer(this, server, channel.name.clone(), cx))
+        .into_any_element()
+}
+
+fn message_row(
+    message: &crate::state::MessageView,
+    index: usize,
+    grouped: bool,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    div()
+        .id(("message", index))
+        .flex()
+        .gap_3()
+        .px_2()
+        .when(grouped, |row| row.py(px(2.)))
+        .when(!grouped, |row| row.pt_3().pb(px(2.)))
+        .rounded(px(6.))
+        .hover(|style| style.bg(tint(0x000000, 0x18)))
+        .child(if grouped {
+            div().w(px(40.)).flex_shrink_0().into_any_element()
+        } else {
+            div()
+                .w(px(40.))
+                .flex_shrink_0()
+                .child(avatar(&message.author, 40., false, ("avatar", index)))
+                .into_any_element()
         })
-        .collect::<Vec<_>>();
-    let messages =
-        channel
-            .messages
-            .iter()
-            .enumerate()
-            .map(|(index, message)| {
-                div()
-                    .id(("message", index))
-                    .flex()
-                    .gap_3()
-                    .py_3()
-                    .child(
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .when(!grouped, |column| {
+                    column.child(
                         div()
-                            .w(px(34.))
-                            .h(px(34.))
-                            .flex_shrink_0()
-                            .rounded_lg()
-                            .bg(rgb(0x364364))
                             .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                text!(message.author.chars().next().unwrap_or('?').to_string())
-                                    .with_id(("avatar", index)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
+                            .items_baseline()
                             .gap_2()
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .child(div().font_weight(FontWeight::SEMIBOLD).child(
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme::name_color(&message.author))
+                                    .child(
                                         text!(message.author.clone()).with_id(("author", index)),
-                                    ))
-                                    .child(div().text_xs().text_color(rgb(0x8b95aa)).child(
-                                        text!(message.time.clone()).with_id(("time", index)),
-                                    )),
+                                    ),
                             )
                             .child(
-                                div()
-                                    .id(("message-content", index))
-                                    .flex()
-                                    .flex_col()
-                                    .gap_3()
-                                    .when(message.has_more && !message.expanded, |content| {
-                                        content.max_h(px(300.)).overflow_hidden()
+                                div().text_xs().text_color(color(TEXT_FAINT)).child(
+                                    text!(match message.status {
+                                        Some(status) => format!("{} · {status}", message.time),
+                                        None => message.time.clone(),
                                     })
-                                    .children(document_blocks(&message.document)),
-                            )
-                            .when(message.has_more, |view| {
-                                view.child(button(
-                                    "show-more",
-                                    if message.expanded {
-                                        "Show less"
-                                    } else {
-                                        "Show more"
-                                    },
-                                    move |this, _, cx| {
-                                        this.toggle_message(index);
-                                        cx.notify();
-                                    },
-                                    cx,
-                                ))
-                            }),
+                                    .with_id(("time", index)),
+                                ),
+                            ),
                     )
-            })
-            .collect::<Vec<_>>();
-    div().flex_1().min_w_0().h_full().flex().flex_col()
-        .child(div().min_h(px(72.)).flex_shrink_0().px_5().py_3().flex().flex_wrap().items_center().gap_3().border_b_1().border_color(rgb(0x30394b))
-            .child(div().min_w_0().flex_1().truncate().font_weight(FontWeight::SEMIBOLD).child(channel.name.clone()))
-            .when(server.status == Status::Connected, |view| view
-                .when(matches!(channel.target, TextTarget::Channel(_)), |view| view.child(button("join-voice", "Join voice", |this, _, cx| { this.join_selected(); cx.notify(); }, cx)))
-                .child(button("mute", if server.muted { "Unmute" } else { "Mute" }, |this, _, cx| { this.set_mute(false); cx.notify(); }, cx))
-                .child(button("deafen", if server.deafened { "Undeafen" } else { "Deafen" }, |this, _, cx| { this.set_mute(true); cx.notify(); }, cx))
-                .child(button("disconnect", "Disconnect", move |this, _, cx| { this.disconnect(index); cx.notify(); }, cx)))
-            .when(server.status != Status::Connected, |view| view.child(button("connect-server", "Connect", move |this, window, cx| this.open_form(Some(index), window, cx), cx)))
-            .child(button("edit-server", "Edit", move |this, window, cx| this.open_form(Some(index), window, cx), cx))
-            .child(security_icon(server.security, this.servers.len() + index)))
-        .when_some(server.notice.clone().or_else(|| this.error.clone()), |view, notice| view.child(div().px_6().py_2().bg(rgb(0x493340)).text_color(rgb(0xffc0cb)).text_sm().child(text!(notice).with_id("connection-notice"))))
-        .when_some(server.certificate.as_ref(), |view, certificate| view.child(div().p_5().bg(rgb(0x40303a)).flex().flex_col().gap_3()
-            .child(div().font_weight(FontWeight::BOLD).child(text!(if certificate.changed { "Server certificate changed" } else { "Confirm server certificate" }).with_id("certificate-heading")))
-            .child(text!("Verify this SHA-256 fingerprint with the server owner before trusting it. No password has been sent.").with_id("certificate-explanation"))
-            .child(div().font_family("monospace").text_sm().child(text!(certificate.sha256.as_bytes().chunks(8).map(|chunk| std::str::from_utf8(chunk).unwrap_or("?")).collect::<Vec<_>>().join(" ")).with_id("certificate-fingerprint")))
-            .child(div().text_xs().child(text!(certificate.reason.clone()).with_id("certificate-reason")))
-            .child(button("trust-certificate", if certificate.changed { "Trust changed certificate and connect" } else { "Trust certificate and connect" }, move |this, _, cx| { this.trust_certificate(index); cx.notify(); }, cx))))
-        .child(div().px_6().pt_2().flex().gap_3()
-            .when(channel.next_before.is_some() && !channel.loading, |view| view.child(button("older-history", "Load older messages", |this, _, cx| { this.load_older(); cx.notify(); }, cx)))
-            .when(channel.viewing_older, |view| view.child(button("latest-history", format!("Jump to latest ({})", channel.new_messages), |this, _, cx| { this.load_history(None); cx.notify(); }, cx)))
-            .when(channel.loading, |view| view.child(text!("Loading local history…").with_id("history-loading"))))
-        .child(div().px_6().pt_2().flex().flex_wrap().gap_2().children(members))
-        .child(div().id(SharedString::from(format!("timeline:{}:{}", server.id, channel.id))).track_scroll(&this.scroll).flex_1().min_h_0().overflow_y_scroll().px_6().py_4()
-            .child(div().id("timeline-content").min_h_full().flex().flex_col()
-                .on_scroll(cx.listener(|this, event, window, cx| this.smooth_scroll(false, event, window, cx)))
-            .when_some(server.welcome.as_ref(), |view, welcome| view.child(div().p_3().mb_4().rounded_md().bg(rgb(0x29354a)).text_sm().child(text!(welcome.clone()).with_id("server-welcome"))))
-            .child(div().pb_3().text_xs().text_color(rgb(0x929eb4)).child(text!(match server.history_source { HistorySource::LocalObserved => "Local history · messages seen on this device", HistorySource::ServerArchive => "Server history" }).with_id("history-source")))
-            .child(div().pb_3().text_xs().text_color(rgb(0x929eb4)).child(text!(server.users.values().filter(|user| channel.target == TextTarget::Channel(user.channel))
-                .map(|user| format!("{}{}", user.name, if user.muted || user.self_muted { " (muted)" } else { "" })).collect::<Vec<_>>().join(" · ")).with_id("channel-users")))
-            .children(messages)))
-        .child(div().mx_6().mb_3().p_3().rounded_lg().bg(rgb(0x2a3242)).flex().flex_col().gap_2().child(Textarea::new(&this.composer))
-            .child(div().flex().items_center().justify_between()
-                .child(div().text_xs().text_color(rgb(0x929eb4)).child(text!("Enter for a new line · Ctrl/Cmd+Enter to send").with_id("composer-hint")))
-                .child(button("send-message", if this.sending() { "Sending…" } else { "Send" }, |this, window, cx| this.send_message(window, cx), cx))))
-        .child(div().px_6().pb_3().text_xs().text_color(rgb(0x8895ad)).child(text!(if this.history_enabled { "Local history enabled · no end-to-end encryption" } else { "Local history disabled" }).with_id("history-default")))
+                })
+                .child(
+                    div()
+                        .id(("message-content", index))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .text_color(color(0xdbdfe8))
+                        .when(message.has_more && !message.expanded, |content| {
+                            content.max_h(px(300.)).overflow_hidden()
+                        })
+                        .children(document_blocks(&message.document)),
+                )
+                .when(message.has_more, |view| {
+                    view.child(
+                        div()
+                            .id(("show-more", index))
+                            .role(Role::Button)
+                            .tab_index(0)
+                            .aria_label(if message.expanded {
+                                "Show less"
+                            } else {
+                                "Show more"
+                            })
+                            .cursor_pointer()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(color(ACCENT_HOVER))
+                            .hover(|style| style.underline())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_message(index);
+                                cx.notify();
+                            }))
+                            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                                if activation_key(event) {
+                                    this.toggle_message(index);
+                                    cx.notify();
+                                }
+                            }))
+                            .child(
+                                text!(if message.expanded {
+                                    "Show less"
+                                } else {
+                                    "Show more"
+                                })
+                                .with_id(("show-more-label", index)),
+                            ),
+                    )
+                }),
+        )
         .into_any_element()
 }
-struct ChannelNameTooltip(String);
-impl Render for ChannelNameTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_3()
-            .py_2()
-            .max_w(px(420.))
-            .rounded_md()
-            .bg(rgb(0x11151d))
-            .border_1()
-            .border_color(rgb(0x45516b))
-            .text_sm()
-            .text_color(rgb(0xe9edf5))
-            .child(self.0.clone())
+
+fn composer(
+    this: &Desktop,
+    server: &ServerView,
+    channel_name: String,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let _ = server;
+    div()
+        .px_4()
+        .pb_3()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(
+            div()
+                .pl_4()
+                .pr_2()
+                .py_2()
+                .rounded(px(10.))
+                .bg(color(INPUT))
+                .border_1()
+                .border_color(color(BORDER_STRONG))
+                .flex()
+                .items_end()
+                .gap_2()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .py_1()
+                        .child(Textarea::new(&this.composer)),
+                )
+                .child(icon_button(
+                    "send-message",
+                    "send",
+                    if this.sending() { "Sending…" } else { "Send" },
+                    ACCENT_HOVER,
+                    None,
+                    |this, window, cx| this.send_message(window, cx),
+                    cx,
+                )),
+        )
+        .child(
+            div()
+                .flex()
+                .gap_3()
+                .px_1()
+                .text_xs()
+                .text_color(color(TEXT_FAINT))
+                .child(text!(format!("Message #{channel_name}")).with_id("composer-target"))
+                .child(div().flex_1())
+                .child(
+                    text!("Enter for a new line · Ctrl/Cmd+Enter to send").with_id("composer-hint"),
+                )
+                .child(
+                    text!(if this.history_enabled {
+                        "Local history on · no end-to-end encryption"
+                    } else {
+                        "Local history off"
+                    })
+                    .with_id("history-default"),
+                ),
+        )
+        .into_any_element()
+}
+
+fn certificate_card(
+    certificate: &crate::state::CertificatePrompt,
+    index: usize,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    div()
+        .mx_4()
+        .mt_3()
+        .p_4()
+        .rounded(px(10.))
+        .bg(tint(WARNING, 0x1c))
+        .border_1()
+        .border_color(tint(WARNING, 0x60))
+        .flex()
+        .gap_3()
+        .child(div().text_color(color(WARNING)).child(icon("certificate", 24., color(WARNING))))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .child(text!(if certificate.changed { "Server certificate changed" } else { "Confirm server certificate" }).with_id("certificate-heading")),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(color(TEXT_MUTED))
+                        .child(text!("Verify this SHA-256 fingerprint with the server owner before trusting it. No password has been sent.").with_id("certificate-explanation")),
+                )
+                .child(
+                    div()
+                        .p_2()
+                        .rounded(px(6.))
+                        .bg(color(APP))
+                        .font_family("monospace")
+                        .text_sm()
+                        .child(text!(certificate.sha256.as_bytes().chunks(8).map(|chunk| std::str::from_utf8(chunk).unwrap_or("?")).collect::<Vec<_>>().join(" ")).with_id("certificate-fingerprint")),
+                )
+                .child(div().text_xs().text_color(color(TEXT_FAINT)).child(text!(certificate.reason.clone()).with_id("certificate-reason")))
+                .child(
+                    div().flex().child(styled_button(
+                        "trust-certificate",
+                        if certificate.changed { "Trust changed certificate and connect" } else { "Trust certificate and connect" },
+                        if certificate.changed { Tone::Danger } else { Tone::Primary },
+                        move |this, _, cx| {
+                            this.trust_certificate(index);
+                            cx.notify();
+                        },
+                        cx,
+                    )),
+                ),
+        )
+        .into_any_element()
+}
+
+fn status_color(status: Status) -> u32 {
+    match status {
+        Status::Connected => SUCCESS,
+        Status::Connecting => WARNING,
+        Status::Disconnected => TEXT_FAINT,
     }
 }
 
@@ -512,76 +1315,44 @@ fn security_label(security: SessionSecurity) -> &'static str {
     }
 }
 
-fn security_icon(security: SessionSecurity, id: usize) -> AnyElement {
-    let color = match security {
-        SessionSecurity::TransportOnly => 0xf07582,
-        SessionSecurity::MlsEstablished => 0x5ad19a,
-        SessionSecurity::MlsPending => 0xe8bc66,
-        SessionSecurity::Unknown => 0x8f9ab0,
+fn security_icon(security: SessionSecurity, id: usize, size: f32) -> AnyElement {
+    let (name, tone) = match security {
+        SessionSecurity::TransportOnly => ("unlock", DANGER),
+        SessionSecurity::MlsEstablished => ("lock", SUCCESS),
+        SessionSecurity::MlsPending => ("lock", WARNING),
+        SessionSecurity::Unknown => ("unlock", TEXT_FAINT),
     };
-    let icon = div()
+    div()
         .id(("security", id))
         .role(Role::Image)
         .aria_label(security_label(security))
-        .w(px(16.))
-        .h(px(18.))
-        .flex_shrink_0()
-        .relative();
-    if matches!(
-        security,
-        SessionSecurity::Unknown | SessionSecurity::MlsPending
-    ) {
-        return icon
-            .text_color(rgb(color))
-            .child(
-                text!(if security == SessionSecurity::Unknown {
-                    "?"
-                } else {
-                    "…"
-                })
-                .with_id(("security-pending", id)),
-            )
-            .into_any_element();
-    }
-    icon.child(
-        div()
-            .absolute()
-            .left(px(if security == SessionSecurity::TransportOnly {
-                7.
-            } else {
-                3.
-            }))
-            .top(px(0.))
-            .w(px(9.))
-            .h(px(11.))
-            .rounded_tl_md()
-            .rounded_tr_md()
-            .border_2()
-            .border_color(rgb(color)),
-    )
-    .child(
-        div()
-            .absolute()
-            .left(px(1.))
-            .top(px(8.))
-            .w(px(13.))
-            .h(px(10.))
-            .rounded_sm()
-            .bg(rgb(color)),
-    )
-    .into_any_element()
+        .text_color(color(tone))
+        .child(icon(name, size, color(tone)))
+        .into_any_element()
 }
 
 fn document_blocks(document: &MessageDocument) -> Vec<AnyElement> {
+    let count = document.blocks.len();
     document
         .blocks
         .iter()
         .enumerate()
         .map(|(index, block)| match block {
-            ContentBlock::Text { text: source } => div()
-                .id(("text", index))
-                .child(text!(source.clone()).with_id(("body", index)))
-                .into_any_element(),
+            // Newlines inside a block are preserved; the separator newlines next to a
+            // code fence are spacing already provided by the block layout.
+            ContentBlock::Text { text: source } => {
+                let mut source = source.as_str();
+                if index + 1 < count {
+                    source = source.trim_end_matches(['\n', '\r']);
+                }
+                if index > 0 {
+                    source = source.trim_start_matches(['\n', '\r']);
+                }
+                div()
+                    .id(("text", index))
+                    .child(text!(source.to_string()).with_id(("body", index)))
+                    .into_any_element()
+            }
             ContentBlock::Code { language, runs } => {
                 let mut source = String::new();
                 let mut highlights = Vec::new();
@@ -601,24 +1372,39 @@ fn document_blocks(document: &MessageDocument) -> Vec<AnyElement> {
                         },
                     ));
                 }
+                let trimmed = source.trim_end_matches(['\n', '\r']).len();
+                source.truncate(trimmed);
+                highlights.retain_mut(|(range, _)| {
+                    range.end = range.end.min(trimmed);
+                    range.start < range.end
+                });
                 div()
                     .id(("code", index))
-                    .p_4()
-                    .rounded_md()
-                    .bg(rgb(0x141923))
+                    .rounded(px(8.))
+                    .bg(color(APP))
+                    .border_1()
+                    .border_color(color(BORDER))
                     .font_family("monospace")
+                    .text_sm()
                     .flex()
                     .flex_col()
-                    .gap_2()
                     .child(
-                        div().text_xs().text_color(rgb(0x8f9ab0)).child(
-                            text!(language.clone().unwrap_or_else(|| "code".into()))
-                                .with_id(("language", index)),
-                        ),
+                        div()
+                            .px_3()
+                            .py_1()
+                            .border_b_1()
+                            .border_color(color(BORDER))
+                            .text_xs()
+                            .text_color(color(TEXT_FAINT))
+                            .child(
+                                text!(language.clone().unwrap_or_else(|| "code".into()))
+                                    .with_id(("language", index)),
+                            ),
                     )
                     .child(
                         div()
                             .id(("code-text", index))
+                            .p_3()
                             .role(Role::Label)
                             .aria_label(source.clone())
                             .child(StyledText::new(source).with_highlights(highlights)),

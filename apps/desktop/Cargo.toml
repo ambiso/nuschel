@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
 gpui-kit = { version = "0.9.0", default-features = false }
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 nuschel-client.workspace = true
 nuschel-core.workspace = true
 nuschel-ipc.workspace = true

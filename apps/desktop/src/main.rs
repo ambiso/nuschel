@@ -1,14 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
+mod assets;
 mod backend;
+mod chrome;
 mod dialogs;
 mod scrolling;
 mod state;
+mod theme;
 mod view;
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use clap::{Parser, Subcommand};
-use gpui_kit::{AppContext, WindowOptions};
+use gpui_kit::{
+    AppContext, Bounds, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions, point, px,
+    size,
+};
 use nuschel_session::config::Profile;
 
 #[derive(Parser)]
@@ -16,6 +22,9 @@ use nuschel_session::config::Profile;
 struct Arguments {
     #[arg(long, global = true)]
     profile_dir: Option<PathBuf>,
+    /// Connect on startup: `mumble://[user@]host[:port][/channel/path]`.
+    #[arg(value_name = "URL")]
+    url: Option<String>,
     #[command(subcommand)]
     command: Option<Action>,
 }
@@ -71,38 +80,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let profile = Profile::open(arguments.profile_dir)?;
     let bookmarks = profile.load_servers()?;
+    let startup = arguments
+        .url
+        .as_deref()
+        .map(nuschel_session::config::MumbleUrl::parse)
+        .transpose()?;
     let runtime_handle = runtime.handle().clone();
     // GPUI owns the event loop; preserve startup errors until it returns so failed
     // launches also report failure to the invoking shell or process supervisor.
     let launch_error = Rc::new(RefCell::new(None));
     let window_error = Rc::clone(&launch_error);
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
-        // Input carets and selections resolve from Base's theme, not inherited text colors.
-        let theme = gpui_kit::base::Theme::global_mut(cx);
-        theme.appearance = gpui_kit::base::ThemeAppearance::Dark;
-        theme.tokens.colors = gpui_kit::base::ColorTokens::dark();
-        theme.tokens.colors.accent = gpui_kit::rgb(0x557ee6).into();
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-        if let Err(error) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
-            window.set_window_title("Nuschel");
-            cx.new(|cx| state::Desktop::new(profile, bookmarks, runtime_handle, window, cx))
-        }) {
-            *window_error.borrow_mut() =
-                Some(format!("could not open the desktop window: {error}"));
-            // Linux starts its event loop after this launch callback. Quitting
-            // here would be cleared when that loop starts; queue it instead.
-            cx.spawn(async |cx| {
-                cx.update(|cx| cx.quit());
+    gpui_kit::application()
+        .with_assets(assets::Assets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
+            // Input carets and selections resolve from Base's theme, not inherited text colors.
+            let theme = gpui_kit::base::Theme::global_mut(cx);
+            theme.appearance = gpui_kit::base::ThemeAppearance::Dark;
+            theme.tokens.colors = gpui_kit::base::ColorTokens::dark();
+            theme.tokens.colors.accent = gpui_kit::rgb(0x557ee6).into();
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
             })
             .detach();
-        }
-    });
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(1280.), px(820.)),
+                    cx,
+                ))),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Nuschel".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(14.), px(12.))),
+                }),
+                // GNOME and several other compositors do not draw decorations; Nuschel
+                // draws a consistent title bar with window controls on Linux.
+                window_decorations: Some(if cfg!(target_os = "linux") {
+                    WindowDecorations::Client
+                } else {
+                    WindowDecorations::Server
+                }),
+                window_min_size: Some(size(px(860.), px(520.))),
+                app_id: Some("org.nuschel.Nuschel".into()),
+                ..Default::default()
+            };
+            if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
+                window.set_window_title("Nuschel");
+                cx.new(|cx| {
+                    state::Desktop::new(profile, bookmarks, startup, runtime_handle, window, cx)
+                })
+            }) {
+                *window_error.borrow_mut() =
+                    Some(format!("could not open the desktop window: {error}"));
+                // Linux starts its event loop after this launch callback. Quitting
+                // here would be cleared when that loop starts; queue it instead.
+                cx.spawn(async |cx| {
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            }
+        });
     if let Some(error) = launch_error.take() {
         return Err(error.into());
     }

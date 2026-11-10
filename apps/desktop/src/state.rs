@@ -10,7 +10,7 @@ use gpui_kit::{
 use nuschel_client::{Conversation, HistorySource, Navigation, SessionSecurity};
 use nuschel_core::{MAX_CONTENT_BYTES, MessageDocument, PreviewPolicy};
 use nuschel_session::{
-    config::{CachedChannel, Profile, ServerBookmark},
+    config::{CachedChannel, MumbleUrl, Profile, ServerBookmark},
     connection::{Command, SessionEvent, TextTarget, User},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,36 +18,27 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct MessageView {
     pub id: Option<i64>,
     pub author: String,
+    pub observed_at_ms: i64,
     pub time: String,
+    pub status: Option<&'static str>,
     pub document: MessageDocument,
     pub expanded: bool,
     pub has_more: bool,
 }
 impl From<RenderedMessage> for MessageView {
     fn from(message: RenderedMessage) -> Self {
-        let minutes = message
-            .message
-            .observed_at_ms
-            .div_euclid(60_000)
-            .rem_euclid(1440);
         Self {
             id: message.id,
             author: message.message.author,
-            time: format!(
-                "{:02}:{:02} UTC{}{}",
-                minutes / 60,
-                minutes % 60,
-                if message.outgoing {
-                    " · sent, unconfirmed"
-                } else {
-                    ""
-                },
-                if message.id.is_none() {
-                    " · not saved"
-                } else {
-                    ""
-                }
-            ),
+            observed_at_ms: message.message.observed_at_ms,
+            time: local_time(message.message.observed_at_ms),
+            status: if message.id.is_none() {
+                Some("not saved")
+            } else if message.outgoing {
+                Some("sent")
+            } else {
+                None
+            },
             has_more: PreviewPolicy::default()
                 .preview(&message.message.body, false)
                 .has_more,
@@ -55,6 +46,40 @@ impl From<RenderedMessage> for MessageView {
             expanded: false,
         }
     }
+}
+/// Local observation time, labelled relative to today for recent messages.
+pub fn local_time(milliseconds: i64) -> String {
+    let zone = jiff::tz::TimeZone::system();
+    let Ok(stamp) = jiff::Timestamp::from_millisecond(milliseconds) else {
+        return String::new();
+    };
+    let when = stamp.to_zoned(zone.clone());
+    let today = jiff::Timestamp::now().to_zoned(zone).date();
+    let time = when.strftime("%H:%M").to_string();
+    if when.date() == today {
+        format!("Today at {time}")
+    } else if today
+        .yesterday()
+        .is_ok_and(|yesterday| yesterday == when.date())
+    {
+        format!("Yesterday at {time}")
+    } else {
+        format!("{} {time}", when.strftime("%Y-%m-%d"))
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeRow {
+    Channel {
+        index: usize,
+        depth: usize,
+        has_children: bool,
+        /// Users hidden inside a collapsed branch, shown as a count.
+        hidden_users: usize,
+    },
+    User {
+        session: u32,
+        depth: usize,
+    },
 }
 pub struct ChannelView {
     pub id: u32,
@@ -104,7 +129,6 @@ pub struct CertificatePrompt {
 pub struct ServerView {
     pub id: String,
     pub name: String,
-    pub initials: String,
     pub bookmark: ServerBookmark,
     pub history_source: HistorySource,
     pub security: SessionSecurity,
@@ -121,6 +145,9 @@ pub struct ServerView {
     pub audio_status: String,
     pub welcome: Option<String>,
     pub certificate: Option<CertificatePrompt>,
+    pub talking: BTreeSet<u32>,
+    /// Channel path from a `mumble://` link, joined once the tree has loaded.
+    pub pending_channel: Vec<String>,
 }
 impl ServerView {
     fn new(bookmark: ServerBookmark) -> Self {
@@ -149,12 +176,6 @@ impl ServerView {
         Self {
             id: bookmark.id.clone(),
             name: bookmark.name.clone(),
-            initials: bookmark
-                .name
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .take(2)
-                .collect(),
             bookmark,
             history_source: HistorySource::LocalObserved,
             security: SessionSecurity::Unknown,
@@ -171,6 +192,8 @@ impl ServerView {
             audio_status: "Audio disconnected".into(),
             welcome: None,
             certificate: None,
+            talking: BTreeSet::new(),
+            pending_channel: Vec::new(),
         }
     }
     pub fn status_label(&self) -> &'static str {
@@ -224,6 +247,8 @@ pub struct Desktop {
     channel_motion: SmoothScroll,
     scroll_frame_pending: bool,
     pub error: Option<String>,
+    pub title_drag: bool,
+    pending_browse: Option<(String, u32)>,
     cache_dirty: bool,
     sending: Option<PendingSend>,
     acknowledged: Vec<(Conversation, String)>,
@@ -236,6 +261,7 @@ impl Desktop {
     pub fn new(
         profile: Profile,
         bookmarks: Vec<ServerBookmark>,
+        startup: Option<MumbleUrl>,
         handle: tokio::runtime::Handle,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -243,7 +269,7 @@ impl Desktop {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Write a message…")
-                .rows(3)
+                .auto_grow(1, 10)
                 .submit_on_enter(true)
         });
         let subscription =
@@ -297,6 +323,8 @@ impl Desktop {
             channel_motion: SmoothScroll::default(),
             scroll_frame_pending: false,
             error: None,
+            title_drag: false,
+            pending_browse: None,
             cache_dirty: false,
             sending: None,
             acknowledged: Vec::new(),
@@ -308,7 +336,62 @@ impl Desktop {
         if !desktop.servers.is_empty() {
             desktop.browse_server(0, window, cx);
         }
+        if let Some(url) = startup {
+            desktop.open_url(url, window, cx);
+        }
         desktop
+    }
+    /// Connect to a `mumble://` link, reusing a matching saved server.
+    pub fn open_url(&mut self, url: MumbleUrl, window: &mut Window, cx: &mut Context<Self>) {
+        let existing = self.servers.iter().position(|server| {
+            server.bookmark.host == url.host
+                && server.bookmark.port == url.port
+                && url
+                    .username
+                    .as_ref()
+                    .is_none_or(|name| *name == server.bookmark.username)
+        });
+        let index = match existing {
+            Some(index) => index,
+            None => {
+                let Some(username) = url.username.clone() else {
+                    self.open_form(None, window, cx);
+                    if let Some(form) = &self.form {
+                        let host = url.host.clone();
+                        let port = url.port.to_string();
+                        form.host
+                            .update(cx, |input, cx| input.set_value(host, window, cx));
+                        form.port
+                            .update(cx, |input, cx| input.set_value(port, window, cx));
+                        form.username
+                            .update(cx, |input, cx| input.focus(window, cx));
+                    }
+                    return;
+                };
+                let bookmark = match ServerBookmark::new("", &url.host, url.port, &username) {
+                    Ok(bookmark) => bookmark,
+                    Err(error) => {
+                        self.error = Some(error);
+                        return;
+                    }
+                };
+                let mut bookmarks = self
+                    .servers
+                    .iter()
+                    .map(|server| server.bookmark.clone())
+                    .collect::<Vec<_>>();
+                bookmarks.push(bookmark.clone());
+                if let Err(error) = self.profile.save_servers(&bookmarks) {
+                    self.error = Some(error.to_string());
+                    return;
+                }
+                self.servers.push(ServerView::new(bookmark));
+                self.servers.len() - 1
+            }
+        };
+        self.servers[index].pending_channel = url.channel;
+        self.browse_server(index, window, cx);
+        self.connect(index, url.password);
     }
     pub fn selected_indices(&self) -> Option<(usize, usize)> {
         let selected = self.navigation.selection()?;
@@ -417,6 +500,75 @@ impl Desktop {
         }
         rows
     }
+    /// Channels in tree order with each expanded channel's users beneath it.
+    pub fn tree_rows(&self, server_index: usize) -> Vec<TreeRow> {
+        let Some(server) = self.servers.get(server_index) else {
+            return Vec::new();
+        };
+        let mut users_by_channel = BTreeMap::<u32, Vec<&User>>::new();
+        for user in server.users.values() {
+            users_by_channel.entry(user.channel).or_default().push(user);
+        }
+        let mut rows = Vec::new();
+        for (index, depth, has_children) in self.channel_rows(server_index) {
+            let channel = &server.channels[index];
+            let TextTarget::Channel(id) = channel.target else {
+                continue;
+            };
+            let expanded = self.channel_expanded(server_index, id);
+            let hidden_users = if has_children && !expanded {
+                self.subtree(server_index, id)
+                    .into_iter()
+                    .filter(|child| *child != id)
+                    .map(|child| users_by_channel.get(&child).map_or(0, Vec::len))
+                    .sum()
+            } else {
+                0
+            };
+            rows.push(TreeRow::Channel {
+                index,
+                depth,
+                has_children,
+                hidden_users,
+            });
+            if let Some(users) = users_by_channel.get_mut(&id) {
+                users.sort_by(|a, b| {
+                    a.name
+                        .to_lowercase()
+                        .cmp(&b.name.to_lowercase())
+                        .then(a.session.cmp(&b.session))
+                });
+                rows.extend(users.iter().map(|user| TreeRow::User {
+                    session: user.session,
+                    depth: depth + 1,
+                }));
+            }
+        }
+        rows
+    }
+    fn subtree(&self, server_index: usize, root: u32) -> Vec<u32> {
+        let server = &self.servers[server_index];
+        let mut found = vec![root];
+        let mut index = 0;
+        while index < found.len() && found.len() <= server.channels.len() {
+            let parent = found[index];
+            found.extend(
+                server
+                    .channels
+                    .iter()
+                    .filter(|channel| channel.parent == Some(parent) && channel.id != parent)
+                    .filter_map(|channel| match channel.target {
+                        TextTarget::Channel(id) if !found.contains(&id) => Some(id),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            index += 1;
+        }
+        found
+    }
+    /// Roots and the branch holding our own voice channel start expanded;
+    /// explicit choices made during the session take precedence.
     pub fn channel_expanded(&self, server_index: usize, id: u32) -> bool {
         let server = &self.servers[server_index];
         self.expansion
@@ -427,7 +579,29 @@ impl Desktop {
                     .channels
                     .iter()
                     .any(|channel| channel.id == id && channel.parent.is_none())
+                    || self.holds_voice(server_index, id)
             })
+    }
+    fn holds_voice(&self, server_index: usize, id: u32) -> bool {
+        let server = &self.servers[server_index];
+        let Some(mut current) = server.voice_channel() else {
+            return false;
+        };
+        for _ in 0..server.channels.len() {
+            let Some(parent) = server
+                .channels
+                .iter()
+                .find(|channel| channel.target == TextTarget::Channel(current))
+                .and_then(|channel| channel.parent)
+            else {
+                return false;
+            };
+            if parent == id {
+                return true;
+            }
+            current = parent;
+        }
+        false
     }
     pub fn toggle_channel(&mut self, server_index: usize, id: u32) {
         let expanded = self.channel_expanded(server_index, id);
@@ -667,6 +841,7 @@ impl Desktop {
         server.security = SessionSecurity::Unknown;
         server.own_session = None;
         server.users.clear();
+        server.talking.clear();
         server.audio_status = "Audio disconnected".into();
         if self
             .navigation
@@ -1016,6 +1191,24 @@ impl Desktop {
                         self.servers[index].notice = Some(reason);
                     }
                 }
+                Event::Talking {
+                    server,
+                    generation,
+                    session,
+                    talking,
+                } => {
+                    if let Some(server) = self
+                        .servers
+                        .iter_mut()
+                        .find(|entry| entry.id == server && entry.generation == generation)
+                    {
+                        if talking {
+                            server.talking.insert(session);
+                        } else {
+                            server.talking.remove(&session);
+                        }
+                    }
+                }
                 Event::AudioStatus {
                     server,
                     generation,
@@ -1125,6 +1318,11 @@ impl Desktop {
         changed
     }
     pub fn reconcile_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((server, channel)) = self.pending_browse.take()
+            && let Some(index) = self.servers.iter().position(|entry| entry.id == server)
+        {
+            self.browse_channel(index, channel, window, cx);
+        }
         if self.selected_indices().is_none() && !self.servers.is_empty() {
             let index = self
                 .navigation
@@ -1171,6 +1369,30 @@ impl Desktop {
                 server.status = Status::Connected;
                 server.own_session = Some(session);
                 self.passwords.remove(&server.id);
+                let path = std::mem::take(&mut server.pending_channel);
+                if !path.is_empty() {
+                    let mut current = 0;
+                    let mut found = true;
+                    for name in &path {
+                        match server.channels.iter().find(|channel| {
+                            channel.parent == Some(current)
+                                && channel.name == *name
+                                && matches!(channel.target, TextTarget::Channel(_))
+                        }) {
+                            Some(channel) => current = channel.id,
+                            None => {
+                                found = false;
+                                break;
+                            }
+                        }
+                    }
+                    if found {
+                        let _ = self.backend.command(&server.id, Command::Join(current));
+                        self.pending_browse = Some((server.id.clone(), current));
+                    } else {
+                        server.notice = Some(format!("Channel /{} was not found.", path.join("/")));
+                    }
+                }
             }
             SessionEvent::Channel(update) => {
                 server.seen_channels.insert(update.id);
@@ -1250,6 +1472,7 @@ impl Desktop {
             }
             SessionEvent::UserRemoved(session) => {
                 server.users.remove(&session);
+                server.talking.remove(&session);
             }
             SessionEvent::Notice(message) | SessionEvent::PermissionDenied(message) => {
                 server.notice = Some(message);

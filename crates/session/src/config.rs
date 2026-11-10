@@ -76,6 +76,114 @@ impl ServerBookmark {
     }
 }
 
+/// A `mumble://` link as produced by Mumble's "Copy URL" and web server lists.
+#[derive(Clone, PartialEq, Eq)]
+pub struct MumbleUrl {
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    /// Kept only in memory for the connection attempt; never saved.
+    pub password: Option<String>,
+    /// Channel names from the root, e.g. `/Lobby/Games` → `["Lobby", "Games"]`.
+    pub channel: Vec<String>,
+}
+impl std::fmt::Debug for MumbleUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MumbleUrl")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("channel", &self.channel)
+            .finish()
+    }
+}
+impl MumbleUrl {
+    pub fn parse(url: &str) -> Result<Self, String> {
+        let invalid =
+            || "expected mumble://[user[:password]@]host[:port][/channel/path]".to_string();
+        if url.len() > 2048 {
+            return Err(invalid());
+        }
+        let rest = url
+            .strip_prefix("mumble://")
+            .or_else(|| url.strip_prefix("MUMBLE://"))
+            .ok_or_else(invalid)?;
+        let rest = rest.split(['?', '#']).next().unwrap_or_default();
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        let (userinfo, endpoint) = match authority.rsplit_once('@') {
+            Some((user, endpoint)) => (Some(user), endpoint),
+            None => (None, authority),
+        };
+        let (username, password) = match userinfo {
+            Some(info) => {
+                let (user, password) = info.split_once(':').unwrap_or((info, ""));
+                (
+                    Some(percent_decode(user)?).filter(|user| !user.is_empty()),
+                    Some(percent_decode(password)?).filter(|password| !password.is_empty()),
+                )
+            }
+            None => (None, None),
+        };
+        let (host, port) = if let Some(bracketed) = endpoint.strip_prefix('[') {
+            let (host, tail) = bracketed.split_once(']').ok_or_else(invalid)?;
+            (host, tail.strip_prefix(':'))
+        } else {
+            match endpoint.rsplit_once(':') {
+                Some((host, port)) => (host, Some(port)),
+                None => (endpoint, None),
+            }
+        };
+        let port = match port {
+            Some(port) => port.parse::<u16>().map_err(|_| invalid())?,
+            None => 64738,
+        };
+        let host = percent_decode(host)?;
+        // Reuse bookmark validation for host and username rules.
+        ServerBookmark::new("", &host, port, username.as_deref().unwrap_or("user"))?;
+        let channel = path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .map(percent_decode)
+            .collect::<Result<Vec<_>, _>>()?;
+        if channel.len() > 64 || channel.iter().any(|name| name.len() > 512) {
+            return Err(invalid());
+        }
+        Ok(Self {
+            host: host.to_ascii_lowercase(),
+            port,
+            username,
+            password,
+            channel,
+        })
+    }
+}
+
+fn percent_decode(text: &str) -> Result<String, String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = bytes
+                .get(index + 1..index + 3)
+                .and_then(|pair| std::str::from_utf8(pair).ok())
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .ok_or("invalid percent-encoding in mumble:// URL")?;
+            out.push(hex);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    let decoded = String::from_utf8(out).map_err(|_| "mumble:// URL is not valid UTF-8")?;
+    if decoded.chars().any(char::is_control) {
+        return Err("mumble:// URL contains control characters".into());
+    }
+    Ok(decoded)
+}
+
 #[derive(Clone)]
 pub struct Profile {
     pub config_dir: PathBuf,
@@ -245,5 +353,32 @@ mod tests {
             server.history_identity("one"),
             server.history_identity("two")
         );
+    }
+    #[test]
+    fn parses_mumble_urls_like_stock_clients() {
+        let url = MumbleUrl::parse(
+            "mumble://Ada%20L:s3cret@Voice.Example.org:1234/Lobby/Dev%20Talk?version=1.2.0",
+        )
+        .unwrap();
+        assert_eq!(url.host, "voice.example.org");
+        assert_eq!(url.port, 1234);
+        assert_eq!(url.username.as_deref(), Some("Ada L"));
+        assert_eq!(url.password.as_deref(), Some("s3cret"));
+        assert_eq!(url.channel, ["Lobby", "Dev Talk"]);
+        assert!(!format!("{url:?}").contains("s3cret"));
+        let url = MumbleUrl::parse("mumble://[::1]/").unwrap();
+        assert_eq!(
+            (url.host.as_str(), url.port, url.username),
+            ("::1", 64738, None)
+        );
+        for bad in [
+            "http://x",
+            "mumble://",
+            "mumble://host:99999",
+            "mumble://a%0ab",
+            "mumble://h/%zz",
+        ] {
+            assert!(MumbleUrl::parse(bad).is_err(), "{bad}");
+        }
     }
 }

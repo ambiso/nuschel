@@ -62,6 +62,13 @@ pub enum Event {
         body: String,
     },
     HistoryError(String),
+    /// Voice activity for a session (including our own) on one connection generation.
+    Talking {
+        server: String,
+        generation: u64,
+        session: u32,
+        talking: bool,
+    },
 }
 struct Connection {
     commands: mpsc::Sender<Command>,
@@ -235,8 +242,20 @@ async fn connection_loop(
     let mut bitrate = 48_000;
     let mut retry_audio = tokio::time::Instant::now();
     let mut finished = false;
+    let mut own_session = None;
+    let mut speaking = BTreeMap::<u32, tokio::time::Instant>::new();
+    let mut talk_tick = tokio::time::interval(std::time::Duration::from_millis(100));
+    talk_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            _ = talk_tick.tick(), if !speaking.is_empty() => {
+                let now = tokio::time::Instant::now();
+                let silent = speaking.iter().filter(|(_, last)| now.duration_since(**last) > TALK_HOLD).map(|(session, _)| *session).collect::<Vec<_>>();
+                for session in silent {
+                    speaking.remove(&session);
+                    let _ = events.send(Event::Talking { server: id.clone(), generation, session, talking: false }).await;
+                }
+            },
             result = &mut session => {
                 finished = true;
                 match result {
@@ -261,14 +280,19 @@ async fn connection_loop(
             },
             Some(event) = incoming.recv() => match event {
                 SessionEvent::PeerCertificate(sha256) => { peer = Some(sha256.clone()); let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::PeerCertificate(sha256) }).await; },
-                SessionEvent::Connected { session: own_session, max_bandwidth } => {
+                SessionEvent::Connected { session: connected_session, max_bandwidth } => {
+                    own_session = Some(connected_session);
+                    let own_session = connected_session;
                     audio_enabled = true;
                     bitrate = max_bandwidth.saturating_sub(24_000).clamp(6000, 48_000);
                     retry_audio = tokio::time::Instant::now();
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Connected { session: own_session, max_bandwidth } }).await;
                 },
-                SessionEvent::Audio(packet) => if let Some(media) = &media {
-                    let _ = media.commands.try_send(LiveMediaRequest::Playback { sender: packet.sender, sequence: packet.sequence, opus: packet.opus, end: packet.end, volume: packet.volume });
+                SessionEvent::Audio(packet) => {
+                    mark_talking(&events, &id, generation, &mut speaking, packet.sender, !packet.end).await;
+                    if let Some(media) = &media {
+                        let _ = media.commands.try_send(LiveMediaRequest::Playback { sender: packet.sender, sequence: packet.sequence, opus: packet.opus, end: packet.end, volume: packet.volume });
+                    }
                 },
                 SessionEvent::Text(text) => if let Some(peer) = &peer {
                     if text.outgoing { let _ = events.send(Event::Sent { server: id.clone(), generation, target: text.target.clone(), body: text.body.clone() }).await; }
@@ -297,6 +321,7 @@ async fn connection_loop(
                     let packet = nuschel_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                     sequence += 2;
                     if !muted || end { let _ = session_commands.try_send(Command::Voice { target: 0, packet }); }
+                    if let Some(session) = own_session { mark_talking(&events, &id, generation, &mut speaking, session, !end && !muted).await; }
                 },
                 Some(LiveMediaEvent::Status { ready, message }) => {
                     if !ready { media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_secs(2); }
@@ -309,6 +334,35 @@ async fn connection_loop(
     if !finished {
         session.abort();
         let _ = session.await;
+    }
+}
+
+const TALK_HOLD: std::time::Duration = std::time::Duration::from_millis(280);
+
+async fn mark_talking(
+    events: &mpsc::Sender<Event>,
+    server: &str,
+    generation: u64,
+    speaking: &mut BTreeMap<u32, tokio::time::Instant>,
+    session: u32,
+    talking: bool,
+) {
+    let changed = if talking {
+        speaking
+            .insert(session, tokio::time::Instant::now())
+            .is_none()
+    } else {
+        speaking.remove(&session).is_some()
+    };
+    if changed {
+        let _ = events
+            .send(Event::Talking {
+                server: server.into(),
+                generation,
+                session,
+                talking,
+            })
+            .await;
     }
 }
 

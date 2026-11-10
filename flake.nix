@@ -51,6 +51,7 @@
             || lib.hasSuffix ".sql" path
             || lib.hasSuffix ".json" path
             || lib.hasSuffix ".vp8" path
+            || lib.hasSuffix ".svg" path
             || lib.hasPrefix "LICENSE" (builtins.baseNameOf path);
         };
         nativeBuildInputs = [
