@@ -680,7 +680,9 @@ fn open_host(
     let input_device = find(&settings.input_device, true)
         .cloned()
         .or_else(|| host.default_input_device());
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut input_id = input_device.as_ref().and_then(device_id);
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut input_name = input_device.as_ref().map(device_name).unwrap_or_default();
     // PipeWire's default devices are virtual nodes that follow the session
     // default; resolve the real node through the PulseAudio API so a system
@@ -1012,6 +1014,7 @@ impl PlaybackConverter {
 }
 
 fn stream_config(host: &cpal::Host, supported: cpal::SupportedStreamConfig) -> cpal::StreamConfig {
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut config: cpal::StreamConfig = supported.into();
     // PulseAudio's default can buffer two seconds. These Linux backends control
     // per-stream buffers, without changing a system device's global settings.

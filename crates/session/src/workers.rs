@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Bounded asynchronous adapters for persistent worker processes.
-#[cfg(not(target_os = "linux"))]
-use tokio::process::Command;
-
 use crate::Error;
 use nuschel_core::{ChatMessage, HistoryPage};
 use nuschel_ipc::{

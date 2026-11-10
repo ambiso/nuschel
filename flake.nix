@@ -212,10 +212,12 @@
             '';
           }
         );
-        # Same pinned SDK approach as ../opendeck-akp05.
+        # Pinned SDK, as in ../opendeck-akp05. 14.x because cpal's CoreAudio
+        # backend links the process-tap API (macOS 14.2+), which Rust cannot
+        # weak-link; the deployment target follows.
         macSdk = pkgs.fetchzip {
-          url = "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX11.3.sdk.tar.xz";
-          hash = "sha256-BoFWhRSHaD0j3dzDOFtGJ6DiRrdzMJhkjxztxCluFKo=";
+          url = "https://github.com/joseluisq/macosx-sdks/releases/download/14.5/MacOSX14.5.sdk.tar.xz";
+          hash = "sha256-YABLNOdte3WE8mnUm32zSlQ3lyDFQNnxXTW9gj51MX0=";
         };
         macSlice =
           arch:
@@ -231,7 +233,7 @@
               cargoBuildCommand = "cargoWithProfile zigbuild --target ${arch}-apple-darwin";
               cargoCheckCommand = "true";
               SDKROOT = macSdk;
-              MACOSX_DEPLOYMENT_TARGET = "11.3";
+              MACOSX_DEPLOYMENT_TARGET = "14.2";
               preBuild = ''
                 export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
                 export CARGO_ZIGBUILD_CACHE_DIR="$TMPDIR/zigbuild-cache"

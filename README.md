@@ -38,6 +38,10 @@ text fields are exposed to screen readers (AT-SPI on Linux is tested).
 Linux is covered by integration tests in NixOS VMs. Windows and macOS packages are
 cross-built from Linux (`.#windows`, `.#macos-aarch64`, `.#macos-universal`), but
 their audio, sandboxing and accessibility have not been validated on those systems.
+The macOS build needs macOS 14.2 or later because the audio library links Core
+Audio's process-tap API. The Windows workers have been run under Wine (codec,
+content and storage IPC); the Windows GUI has not, since Wine lacks the system ICU
+library that Windows 10 1703 and later provide.
 See [SECURITY.md](SECURITY.md) for what each platform's worker confinement does and
 does not provide. The Nuschel server and MLS implementation are deferred.
 
