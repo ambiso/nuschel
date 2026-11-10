@@ -73,9 +73,30 @@ fn data_uri(uri: &str) -> Option<Vec<u8>> {
     if payload.len() > MAX_CONTENT_BYTES {
         return None;
     }
+    // Stock Mumble percent-encodes the base64 text (`+` as %2B, `/` as %2F,
+    // `=` as %3D) and wraps it every 72 characters (Log::imageToImg).
     base64::engine::general_purpose::STANDARD
-        .decode(payload)
+        .decode(percent_decode(&payload)?)
         .ok()
+}
+
+/// `%XX` escapes to bytes; anything malformed rejects the payload.
+fn percent_decode(text: &str) -> Option<Vec<u8>> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = bytes.get(index + 1..index + 3)?;
+            let value = u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?;
+            out.push(value);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    Some(out)
 }
 
 pub struct ContentRenderer {
@@ -101,6 +122,9 @@ impl ContentRenderer {
         if source.len() > MAX_CONTENT_BYTES {
             return Err(Error::TooLarge);
         }
+        // Leading line breaks carry no content; messages that open with a code
+        // fence are sent with one so stock Mumble starts the fence on its own line.
+        let source = source.trim_start_matches(['\n', '\r']);
         let mut blocks = Vec::new();
         let mut consumed = 0;
         let mut code: Option<(usize, Option<String>, String)> = None;
@@ -368,6 +392,54 @@ mod tests {
     }
 
     #[test]
+    fn images_pasted_in_stock_mumble_are_decoded() -> Result<(), Error> {
+        // Log::imageToImg: base64, cut into 72-character lines, each
+        // percent-encoded, joined with newlines.
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png(40, 30));
+        let lines: Vec<String> = encoded
+            .as_bytes()
+            .chunks(72)
+            .map(|line| {
+                line.iter()
+                    .map(|&byte| match byte {
+                        b'+' => "%2B".to_string(),
+                        b'/' => "%2F".to_string(),
+                        b'=' => "%3D".to_string(),
+                        other => (other as char).to_string(),
+                    })
+                    .collect()
+            })
+            .collect();
+        assert!(
+            lines.concat().contains('%'),
+            "the fixture must exercise percent-encoding"
+        );
+        let html = format!(
+            "<p><img src=\"data:image/PNG;base64,{}\" /></p>",
+            lines.join("\n")
+        );
+        let renderer = ContentRenderer::new()?;
+        let document = renderer.render(&renderer.legacy_plain_text(&html)?)?;
+        assert!(
+            document
+                .blocks
+                .iter()
+                .any(|block| matches!(block, ContentBlock::Image { .. })),
+            "{:?}",
+            document
+                .blocks
+                .iter()
+                .map(|block| match block {
+                    ContentBlock::Image { .. } => "image".to_string(),
+                    ContentBlock::Text { text } => text.chars().take(40).collect(),
+                    _ => "other".into(),
+                })
+                .collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn hostile_image_payloads_are_rejected() {
         assert!(decode_image(b"not an image", 10, 10).is_none());
         assert!(
@@ -390,6 +462,18 @@ mod tests {
             vec![ContentBlock::Text {
                 text: source.to_owned()
             }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_leading_line_break_before_a_fence_is_dropped() -> Result<(), Error> {
+        let renderer = ContentRenderer::new()?;
+        let plain = renderer.legacy_plain_text("<br/>```rust<br/>fn main() {}<br/>```")?;
+        let document = renderer.render(&plain)?;
+        assert!(
+            matches!(document.blocks.first(), Some(ContentBlock::Code { .. })),
+            "{document:?}"
         );
         Ok(())
     }

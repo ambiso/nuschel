@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -134,8 +135,13 @@ def main():
             time.sleep(0.4)
             bots[1].send(kind="text", channel=2, body="Looks good to me.\nShip it!")
             time.sleep(0.4)
-            screenshot_png = base64.b64encode(make_png(root / "shot.png", 320, 7, height=180).read_bytes()).decode()
-            bots[0].send(kind="html", channel=2, html=f"Here is a screenshot:<br/><img src=\"data:image/png;base64,{screenshot_png}\"/>")
+            # Encoded as stock Mumble's Log::imageToImg does: base64 in 72-character
+            # lines, each percent-encoded.
+            encoded = base64.b64encode(make_png(root / "shot.png", 240, 7, height=135).read_bytes()).decode()
+            mumble_image = "\n".join(urllib.parse.quote(encoded[i:i + 72], safe="")
+                                     for i in range(0, len(encoded), 72))
+            bots[0].send(kind="html", channel=2,
+                         html=f"Here is a screenshot:<br/><img src=\"data:image/PNG;base64,{mumble_image}\" />")
             time.sleep(args.settle)
 
             def shot(name):
