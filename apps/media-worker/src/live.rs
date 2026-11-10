@@ -5,6 +5,7 @@
 //! rings; they never lock, allocate or block. This thread decodes, buffers,
 //! mixes, cancels echo, encodes and talks to the supervisor.
 use crate::{
+    adaptive::{Controller, WINDOW},
     dsp::{CapturePipeline, FRAME, RATE},
     jitter::{JitterBuffer, Pull},
 };
@@ -19,13 +20,20 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use std::{
     collections::{BTreeMap, VecDeque},
     io::{self, Write},
-    sync::mpsc::{self, SyncSender},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+        mpsc::{self, SyncSender},
+    },
     time::{Duration, Instant},
 };
 
-/// Decoded audio kept ready in the playback ring (device buffering is extra).
-const PLAYBACK_FILL: usize = 4 * FRAME;
+/// Mixed audio is kept ready in the playback ring; the adaptive controller
+/// sizes it (device buffering is extra). The ring must hold the largest fill.
 const RING: usize = 20 * FRAME;
+/// The canceller's delay hint for the smallest playback fill.
+const BASE_DELAY_MS: i32 = 50;
+
 const MAX_SPEAKERS: usize = 64;
 const LEVEL_EVERY: u32 = 10;
 
@@ -40,6 +48,8 @@ struct Devices {
     _output: cpal::Stream,
     capture: Option<Consumer<f32>>,
     playback: Producer<f32>,
+    /// Output callbacks that found the ring empty; written by the device thread.
+    underruns: Arc<AtomicU32>,
 }
 
 struct Speaker {
@@ -149,6 +159,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut retry_at = Instant::now();
     let mut last_cleanup = Instant::now();
     let mut frames_seen = 0_u32;
+    let mut controller = Controller::default();
+    let mut last_window = Instant::now();
+    // Start-up underruns (the device starts before the ring is filled) are not a signal.
+    let mut skip_window = true;
     let mut capture_frame = [0.; FRAME];
     let mut mix = [0.; FRAME];
     let mut scratch = vec![0.; MAX_PACKET_SAMPLES];
@@ -161,7 +175,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         EchoSource::Upstream(_) | EchoSource::None => false,
                     };
                     let mut chain = CapturePipeline::new(&settings, echo);
-                    chain.set_delay_hint(50);
+                    chain.set_delay_hint(delay_hint(&controller));
                     pipeline = Some(chain);
                     let message = if muted {
                         "Audio ready · microphone muted".to_string()
@@ -194,6 +208,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         },
                     )?;
                     devices = Some(opened);
+                    last_window = Instant::now();
+                    skip_window = true;
                 }
                 Err(error) => {
                     emit(
@@ -281,7 +297,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 } else if let Some(chain) = pipeline.as_mut() {
                     // Rebuild the chain with the new processing choices on the same route.
                     let mut rebuilt = CapturePipeline::new(&settings, chain.echo_cancellation());
-                    rebuilt.set_delay_hint(50);
+                    rebuilt.set_delay_hint(delay_hint(&controller));
                     *chain = rebuilt;
                 }
             }
@@ -326,7 +342,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         };
         // Playback: keep a short, steady amount of mixed audio queued.
-        while open.playback.slots() >= FRAME && RING - open.playback.slots() < PLAYBACK_FILL {
+        while open.playback.slots() >= FRAME
+            && RING - open.playback.slots() < controller.playback_samples()
+        {
             mix.fill(0.);
             for speaker in speakers.values_mut() {
                 speaker.fill(&mut scratch);
@@ -347,6 +365,38 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(chain) = pipeline.as_mut() {
                 chain.render(&mix);
             }
+            controller.observe_render(&mix);
+        }
+        if last_window.elapsed() >= WINDOW {
+            last_window = Instant::now();
+            let underruns = open.underruns.swap(0, Ordering::Relaxed);
+            let underruns = if std::mem::take(&mut skip_window) {
+                0
+            } else {
+                underruns
+            };
+            let residual = pipeline
+                .as_ref()
+                .filter(|chain| chain.echo_cancellation())
+                .and_then(|chain| chain.echo_metrics().residual_likelihood);
+            let before = controller.playback_samples();
+            if let Some(health) = controller.window(residual, underruns) {
+                if controller.playback_samples() != before
+                    && let Some(chain) = pipeline.as_mut()
+                {
+                    chain.set_delay_hint(delay_hint(&controller));
+                }
+                emit(
+                    &mut output,
+                    LiveMediaEvent::Health {
+                        clipping: health.clipping,
+                        echo_guard: health.echo_guard,
+                        double_talk: health.double_talk,
+                        underruns: health.underruns,
+                        playback_ms: health.playback_ms,
+                    },
+                )?;
+            }
         }
         // Capture: process every complete 10 ms frame.
         let Some(capture) = open.capture.as_mut() else {
@@ -359,7 +409,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let Some(chain) = pipeline.as_mut() else {
                 break;
             };
-            let result = chain.process(&mut capture_frame, push_to_talk);
+            let raw = capture_frame;
+            let result = chain.process(&mut capture_frame, push_to_talk, controller.guard_gate());
+            controller.observe_capture(&raw, result.voice);
             frames_seen = frames_seen.wrapping_add(1);
             if frames_seen.is_multiple_of(LEVEL_EVERY) {
                 emit(
@@ -421,6 +473,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(0);
     }
     Ok(())
+}
+
+/// Device buffering plus Nuschel's own playback fill above the minimum.
+fn delay_hint(controller: &Controller) -> i32 {
+    let extra = controller.playback_samples() - crate::adaptive::PLAYBACK_MIN_FRAMES * FRAME;
+    BASE_DELAY_MS + (extra / (RATE as usize / 1000)) as i32
 }
 
 /// Close a transmission with a terminator packet so receivers stop promptly.
@@ -634,30 +692,35 @@ fn open_host(
         .default_output_config()
         .map_err(|error| error.to_string())?;
     let (playback, playback_consumer) = RingBuffer::<f32>::new(RING);
+    let underruns = Arc::new(AtomicU32::new(0));
     let stream = match config.sample_format() {
         SampleFormat::F32 => output_stream::<f32>(
             &output_device,
             stream_config(host, config),
             tx.clone(),
             playback_consumer,
+            underruns.clone(),
         ),
         SampleFormat::I16 => output_stream::<i16>(
             &output_device,
             stream_config(host, config),
             tx.clone(),
             playback_consumer,
+            underruns.clone(),
         ),
         SampleFormat::U16 => output_stream::<u16>(
             &output_device,
             stream_config(host, config),
             tx.clone(),
             playback_consumer,
+            underruns.clone(),
         ),
         SampleFormat::I32 => output_stream::<i32>(
             &output_device,
             stream_config(host, config),
             tx.clone(),
             playback_consumer,
+            underruns.clone(),
         ),
         _ => return Err("unsupported output sample format".into()),
     }?;
@@ -692,6 +755,7 @@ fn open_host(
             _output: stream,
             capture: capture_consumer,
             playback,
+            underruns,
         },
         Route {
             inputs,
@@ -788,6 +852,7 @@ fn output_stream<T>(
     config: cpal::StreamConfig,
     tx: SyncSender<Event>,
     mut ring: Consumer<f32>,
+    underruns: Arc<AtomicU32>,
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample + FromSample<f32>,
@@ -805,6 +870,7 @@ where
         .build_output_stream(
             config,
             move |data: &mut [T], _| {
+                let mut dry = false;
                 for frame in data.chunks_exact_mut(channels) {
                     let sample = previous + (next - previous) * position as f32;
                     frame.fill(T::from_sample(sample));
@@ -812,8 +878,15 @@ where
                     while position >= 1. {
                         position -= 1.;
                         previous = next;
-                        next = ring.pop().unwrap_or(0.);
+                        next = ring.pop().unwrap_or_else(|_| {
+                            dry = true;
+                            0.
+                        });
                     }
+                }
+                if dry {
+                    // Lock-free; the worker thread reads and resets it.
+                    underruns.fetch_add(1, Ordering::Relaxed);
                 }
             },
             error_callback(tx),

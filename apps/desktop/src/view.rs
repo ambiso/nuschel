@@ -842,6 +842,34 @@ fn voice_card(
                             .child(
                                 text!(format!("{name} / {}", server.name)).with_id("voice-channel"),
                             ),
+                    )
+                    .when_some(
+                        server.audio.health.issues().first().map(|issue| issue.0),
+                        |column, issue| {
+                            // Details and advice are in Voice & audio settings.
+                            column.child(
+                                div()
+                                    .id("audio-issue")
+                                    .role(Role::Status)
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .text_xs()
+                                    .text_color(color(WARNING))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.settings_open = true;
+                                        cx.notify();
+                                    }))
+                                    .child(icon("alert", 12., color(WARNING)))
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .child(text!(issue).with_id("audio-issue-label")),
+                                    ),
+                            )
+                        },
                     ),
             )
             .child(icon_button(

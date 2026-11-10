@@ -209,6 +209,52 @@ pub struct AudioInfo {
     pub echo: nuschel_core::audio::EchoSource,
     pub erle_db: Option<f32>,
     pub residual_echo: Option<f32>,
+    pub health: AudioHealth,
+}
+/// The media worker's adaptive controller: what it measured and what it did
+/// with Nuschel's own playback buffer and transmit gate.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AudioHealth {
+    pub clipping: bool,
+    pub echo_guard: bool,
+    pub double_talk: f32,
+    pub underruns: u32,
+    pub playback_ms: u32,
+}
+/// The smallest playback buffer the controller uses.
+const NORMAL_PLAYBACK_MS: u32 = 40;
+impl AudioHealth {
+    /// (short label, advice) for each condition the user may want to act on.
+    pub fn issues(&self) -> Vec<(&'static str, String)> {
+        let mut issues = Vec::new();
+        if self.clipping {
+            issues.push((
+                "Microphone is clipping",
+                "Your microphone reaches its maximum level before Nuschel receives it, which distorts \
+                 your voice. Lower the microphone's input level in the system sound settings."
+                    .to_string(),
+            ));
+        }
+        if self.echo_guard {
+            issues.push((
+                "Echo detected",
+                "Some of what you hear keeps reaching your microphone. While others talk, Nuschel now \
+                 needs clearer speech before it transmits. Headphones avoid echo entirely."
+                    .to_string(),
+            ));
+        }
+        if self.playback_ms > NORMAL_PLAYBACK_MS {
+            issues.push((
+                "Playback stuttered",
+                format!(
+                    "Audio output ran dry, so Nuschel now buffers {} ms of playback. It returns to \
+                     normal after a minute without stutters.",
+                    self.playback_ms
+                ),
+            ));
+        }
+        issues
+    }
 }
 pub struct ServerView {
     pub id: String,
@@ -1794,6 +1840,19 @@ impl Desktop {
                     {
                         server.audio.erle_db = erle_db;
                         server.audio.residual_echo = residual_likelihood;
+                    }
+                }
+                Event::AudioHealth {
+                    server,
+                    generation,
+                    health,
+                } => {
+                    if let Some(server) = self
+                        .servers
+                        .iter_mut()
+                        .find(|entry| entry.id == server && entry.generation == generation)
+                    {
+                        server.audio.health = health;
                     }
                 }
                 Event::AudioStatus {

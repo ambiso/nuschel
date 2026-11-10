@@ -437,7 +437,8 @@ pub fn dialog(
     let input = server.and_then(|server| server.audio.input.clone());
     let echo_status = server.map(|server| match &server.audio.echo {
         EchoSource::Upstream(name) => format!("Using system echo cancellation: {name}. Nuschel's canceller is off to avoid doubling it."),
-        EchoSource::Nuschel => match server.audio.erle_db {
+        // ERLE is only meaningful once the far end has played something.
+        EchoSource::Nuschel => match server.audio.erle_db.filter(|erle| *erle >= 1.) {
             Some(erle) => format!("Nuschel's echo canceller is active · {erle:.0} dB echo reduction"),
             None => "Nuschel's echo canceller is active.".into(),
         },
@@ -520,6 +521,47 @@ pub fn dialog(
                         .child(text!(status).with_id("echo-status")),
                 )
             })
+            .children(
+                server
+                    .map(|server| server.audio.health.issues())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (label, advice))| {
+                        div()
+                            .id(("audio-issue", index))
+                            .role(Role::Status)
+                            .p_3()
+                            .rounded(px(8.))
+                            .bg(tint(WARNING, 0x1a))
+                            .border_1()
+                            .border_color(tint(WARNING, 0x55))
+                            .flex()
+                            .gap_2()
+                            .child(icon("alert", 16., color(WARNING)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(color(WARNING))
+                                            .child(text!(label).with_id(("issue-label", index))),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(color(TEXT_MUTED))
+                                            .child(text!(advice).with_id(("issue-advice", index))),
+                                    ),
+                            )
+                    }),
+            )
             .when_some(input.clone(), |column, id| {
                 let detail = if remembered {
                     "This microphone has its own echo setting.".to_string()

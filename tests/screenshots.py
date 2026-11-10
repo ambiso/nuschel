@@ -29,6 +29,10 @@ def SEARCH_BUTTON(width):
     return (width - 77, 86)
 
 
+# The voice card's warning line, in window screenshot pixels.
+CLIPPING_WARNING = (205, 728)
+
+
 def make_png(path, width, seed, height=None):
     """A small gradient PNG written with the standard library only."""
     height = height or width
@@ -56,7 +60,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,menus,long,search,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,menus,long,search,clipping,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -207,6 +211,31 @@ def main():
                 shell.key("Escape")
                 time.sleep(0.6)
                 shot("13-search-closed")
+            if want("clipping") and args.pulse_bin:
+                # A second microphone driven to full scale: the adaptive controller warns.
+                server = f"--server=unix:{shell.runtime / 'pulse' / 'native'}"
+                pactl = [str(args.pulse_bin / "pactl"), server]
+                subprocess.run([*pactl, "load-module", "module-null-sink", "sink_name=hot",
+                                "sink_properties=device.description=Hot"], check=True, capture_output=True)
+                subprocess.run([*pactl, "set-source-volume", "hot.monitor", "100%"], check=True)
+                subprocess.run([*pactl, "set-default-source", "hot.monitor"], check=True)
+                square = root / "square.raw"
+                square.write_bytes((struct.pack("<f", 1.0) * 24 + struct.pack("<f", -1.0) * 24) * 1000)
+                player = subprocess.Popen(
+                    ["sh", "-c", f'while :; do cat "{square}"; done | "{args.pulse_bin / "pacat"}" {server} '
+                                 '--device=hot --raw --format=float32le --rate=48000 --channels=1'],
+                    start_new_session=True)
+                try:
+                    click(279, 773)  # unmute: the worker restarts on the new default microphone
+                    time.sleep(9)
+                    shot("14-clipping")
+                    click(*CLIPPING_WARNING)
+                    time.sleep(1.0)
+                    shot("15-clipping-settings")
+                    shell.key("Escape")
+                    time.sleep(0.4)
+                finally:
+                    os.killpg(player.pid, signal.SIGTERM)
             if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)

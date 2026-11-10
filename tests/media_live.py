@@ -7,6 +7,8 @@
    default microphone, Nuschel must not stack its own canceller and must route
    only its own playback to the canceller's reference sink; Always on / Off and
    per-microphone overrides must be honoured.
+3. Adaptive controller: a microphone driven to full scale is reported as
+   clipping, and no system level is changed.
 """
 import argparse
 import json
@@ -37,8 +39,9 @@ class Pulse:
             f"load-module module-native-protocol-unix socket={self.socket} auth-anonymous=1\n"
             "load-module module-null-sink sink_name=speakers rate=48000 sink_properties=device.description=Speakers\n"
             "load-module module-null-sink sink_name=mic rate=48000 sink_properties=device.description=Microphone\n"
-            "load-module module-echo-cancel aec_method=webrtc source_master=mic.monitor sink_master=speakers "
-            "source_name=ec_source sink_name=ec_sink\n"
+            # analog_gain_control=0: the system canceller must not move the test's levels.
+            "load-module module-echo-cancel aec_method=webrtc aec_args=analog_gain_control=0 "
+            "source_master=mic.monitor sink_master=speakers source_name=ec_source sink_name=ec_sink\n"
             "set-default-sink speakers\nset-default-source mic.monitor\n")
         self.process = subprocess.Popen(
             [str(self.bin / "pulseaudio"), "--daemonize=no", "--use-pid-file=no", "--exit-idle-time=-1", "-n",
@@ -199,6 +202,34 @@ def check_echo_routes(binary, pulse):
     print("Echo modes, per-microphone override and plain microphones passed.", flush=True)
 
 
+def check_clipping(binary, pulse, output):
+    """A microphone driven to full scale must be reported, without touching its level."""
+    pulse.ctl("set-default-source", "mic.monitor")
+    pulse.ctl("set-source-volume", "mic.monitor", "100%")
+    volume_before = pulse.ctl("get-source-volume", "mic.monitor")
+    worker = start(binary, pulse, muted=False)
+    worker.wait(lambda e: e["kind"] == "status" and e["ready"], "audio did not start")
+    square = output / "square.raw"
+    square.write_bytes((struct.pack("<f", 1.0) * 24 + struct.pack("<f", -1.0) * 24) * 1000)  # one second
+    player = subprocess.Popen(
+        ["sh", "-c", f'while :; do cat "{square}"; done | "{pulse.bin / "pacat"}" --server=unix:{pulse.socket} '
+                     '--device=mic --raw --format=float32le --rate=48000 --channels=1 --latency-msec=20'],
+        start_new_session=True)
+    try:
+        health = worker.wait(lambda e: e["kind"] == "health" and e["clipping"], "clipping was not detected",
+                             timeout=20)
+    except AssertionError as error:
+        seen = [e for e in worker.events if e["kind"] in ("level", "health")][-6:]
+        raise AssertionError(f"{error}; last reports: {seen}") from None
+    finally:
+        os.killpg(player.pid, signal.SIGTERM)
+        player.wait(timeout=5)
+    worker.stop()
+    assert pulse.ctl("get-source-volume", "mic.monitor") == volume_before, "the controller changed a system level"
+    print(f"Clipping microphone reported (playback buffer {health['playback_ms']} ms); system levels untouched.",
+          flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
@@ -211,8 +242,10 @@ def main():
     with tempfile.TemporaryDirectory(prefix="nuschel-media-", dir=os.environ.get("NUSCHEL_SHORT_TMP")) as temporary:
         pulse = Pulse(args.pulse_bin, Path(temporary))
         try:
-            check_jitter(args.binaries / "nuschel-media-worker", pulse, reference, args.output)
-            check_echo_routes(args.binaries / "nuschel-media-worker", pulse)
+            if os.environ.get("NUSCHEL_MEDIA_ONLY") != "clipping":
+                check_jitter(args.binaries / "nuschel-media-worker", pulse, reference, args.output)
+                check_echo_routes(args.binaries / "nuschel-media-worker", pulse)
+            check_clipping(args.binaries / "nuschel-media-worker", pulse, Path(temporary))
         finally:
             pulse.stop()
 

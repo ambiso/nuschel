@@ -316,6 +316,20 @@ pub enum LiveMediaEvent {
         residual_likelihood: Option<f32>,
         delay_ms: Option<i32>,
     },
+    /// The adaptive controller's view of the live graph, sent when it changes.
+    Health {
+        /// The microphone reaches full scale before Nuschel receives it.
+        clipping: bool,
+        /// Persistent residual echo: the transmit gate demands clearer speech
+        /// while only the far end talks.
+        echo_guard: bool,
+        /// Share of far-end speech during which the local user also talked.
+        double_talk: f32,
+        /// Output device callbacks that ran dry in the last two seconds.
+        underruns: u32,
+        /// Nuschel's own playback buffer.
+        playback_ms: u32,
+    },
 }
 
 #[cfg(test)]

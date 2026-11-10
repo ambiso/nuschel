@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
+mod adaptive;
 mod dsp;
 mod jitter;
 mod live;

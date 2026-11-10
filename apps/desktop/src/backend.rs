@@ -114,6 +114,12 @@ pub enum Event {
         erle_db: Option<f32>,
         residual_likelihood: Option<f32>,
     },
+    /// The media worker's adaptive controller changed its view of the graph.
+    AudioHealth {
+        server: String,
+        generation: u64,
+        health: crate::state::AudioHealth,
+    },
     /// Inert rendering of untrusted Mumble HTML (descriptions, comments).
     Rendered {
         server: String,
@@ -684,6 +690,10 @@ async fn connect_once(
                 },
                 Some(LiveMediaEvent::Echo { erle_db, residual_likelihood, .. }) => {
                     let _ = events.try_send(Event::Echo { server: id.clone(), generation, erle_db, residual_likelihood });
+                },
+                Some(LiveMediaEvent::Health { clipping, echo_guard, double_talk, underruns, playback_ms }) => {
+                    let health = crate::state::AudioHealth { clipping, echo_guard, double_talk, underruns, playback_ms };
+                    let _ = events.send(Event::AudioHealth { server: id.clone(), generation, health }).await;
                 },
                 Some(LiveMediaEvent::Status { ready, message }) => {
                     if !ready { media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 }); }

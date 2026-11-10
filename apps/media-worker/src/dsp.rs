@@ -19,6 +19,8 @@ const SCALE: f32 = 32768.;
 const VOICE_HOLD_FRAMES: u32 = 30;
 /// Below this level the gate never opens, whatever the speech probability.
 const SILENCE_DB: f32 = -60.;
+/// Extra speech probability required while the echo guard is up.
+const ECHO_GUARD_MARGIN: f32 = 0.3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameResult {
@@ -109,7 +111,15 @@ impl CapturePipeline {
         }
     }
 
-    pub fn process(&mut self, frame: &mut [f32; FRAME], push_to_talk: bool) -> FrameResult {
+    /// Process one capture frame in place. `echo_guard` asks the voice gate
+    /// for clearer speech (set by the adaptive controller while residual echo
+    /// persists and only the far end is talking).
+    pub fn process(
+        &mut self,
+        frame: &mut [f32; FRAME],
+        push_to_talk: bool,
+        echo_guard: bool,
+    ) -> FrameResult {
         self.input.copy_from_slice(frame);
         if self
             .front
@@ -146,7 +156,7 @@ impl CapturePipeline {
             *sample = sample.clamp(-1., 1.);
         }
         let level_db = level_db(frame);
-        let transmit = self.gate.update(voice, level_db, push_to_talk);
+        let transmit = self.gate.update(voice, level_db, push_to_talk, echo_guard);
         FrameResult {
             level_db,
             voice,
@@ -210,7 +220,7 @@ impl Gate {
         }
     }
 
-    fn update(&mut self, voice: f32, level_db: f32, push_to_talk: bool) -> bool {
+    fn update(&mut self, voice: f32, level_db: f32, push_to_talk: bool, echo_guard: bool) -> bool {
         self.open = match self.mode {
             TransmitMode::Continuous => true,
             TransmitMode::PushToTalk => {
@@ -225,11 +235,14 @@ impl Gate {
                 }
             }
             TransmitMode::VoiceActivity => {
-                let threshold = if self.open {
+                let mut threshold = if self.open {
                     self.close_threshold
                 } else {
                     self.open_threshold
                 };
+                if echo_guard {
+                    threshold = (threshold + ECHO_GUARD_MARGIN).min(0.95);
+                }
                 if voice >= threshold && level_db > SILENCE_DB {
                     self.hangover = VOICE_HOLD_FRAMES;
                     true
@@ -280,14 +293,14 @@ mod tests {
         let mut noise_open = 0;
         for index in 0..300 {
             let mut frame = noise(index, 0.01);
-            if pipeline.process(&mut frame, false).transmit && index > 100 {
+            if pipeline.process(&mut frame, false, false).transmit && index > 100 {
                 noise_open += 1;
             }
         }
         let mut speech_open = 0;
         for index in 0..300 {
             let mut frame = speech_like(index);
-            if pipeline.process(&mut frame, false).transmit {
+            if pipeline.process(&mut frame, false, false).transmit {
                 speech_open += 1;
             }
         }
@@ -322,8 +335,8 @@ mod tests {
         for index in 0..200 {
             let mut a = noise(index, 0.05);
             let mut b = a;
-            let a = quiet.process(&mut a, false).level_db;
-            let b = raw.process(&mut b, false).level_db;
+            let a = quiet.process(&mut a, false, false).level_db;
+            let b = raw.process(&mut b, false, false).level_db;
             if index > 50 {
                 suppressed += a;
                 untouched += b;
@@ -332,6 +345,29 @@ mod tests {
         assert!(
             suppressed < untouched - 6. * 150.,
             "RNNoise removed less than 6 dB of steady noise"
+        );
+    }
+
+    #[test]
+    fn echo_guard_demands_clearer_speech_but_not_in_push_to_talk() {
+        let settings = AudioSettings::default();
+        assert!(Gate::new(&settings).update(0.75, -20., false, false));
+        let mut guarded = Gate::new(&settings);
+        assert!(
+            !guarded.update(0.75, -20., false, true),
+            "residual echo opened the gate"
+        );
+        assert!(
+            guarded.update(0.97, -20., false, true),
+            "clear speech must still pass"
+        );
+        let mut ptt = Gate::new(&AudioSettings {
+            transmit: TransmitMode::PushToTalk,
+            ..AudioSettings::default()
+        });
+        assert!(
+            ptt.update(0.0, -20., true, true),
+            "push-to-talk is the user's explicit choice"
         );
     }
 
@@ -347,12 +383,12 @@ mod tests {
         );
         let mut frame = speech_like(0);
         assert!(
-            !ptt.process(&mut frame, false).transmit,
+            !ptt.process(&mut frame, false, false).transmit,
             "speech alone does not open PTT"
         );
-        assert!(ptt.process(&mut frame, true).transmit);
+        assert!(ptt.process(&mut frame, true, false).transmit);
         let held = (0..10)
-            .filter(|_| ptt.process(&mut [0.; FRAME], false).transmit)
+            .filter(|_| ptt.process(&mut [0.; FRAME], false, false).transmit)
             .count();
         assert_eq!(held, 5, "release hold of 50 ms");
         let mut continuous = CapturePipeline::new(
@@ -362,7 +398,7 @@ mod tests {
             },
             false,
         );
-        assert!(continuous.process(&mut [0.; FRAME], false).transmit);
+        assert!(continuous.process(&mut [0.; FRAME], false, false).transmit);
     }
 
     #[test]
@@ -387,8 +423,8 @@ mod tests {
                 [0.; FRAME]
             };
             let (mut a, mut b) = (echo, echo);
-            let a = with.process(&mut a, false).level_db;
-            let b = without.process(&mut b, false).level_db;
+            let a = with.process(&mut a, false, false).level_db;
+            let b = without.process(&mut b, false, false).level_db;
             if index > 400 {
                 cancelled += a;
                 raw += b;
