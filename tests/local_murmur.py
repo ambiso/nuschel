@@ -67,7 +67,11 @@ class Murmur:
     def stop(self):
         if self.process and self.process.poll() is None:
             os.killpg(self.process.pid, signal.SIGTERM)
-            self.process.wait(timeout=10)
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(self.process.pid, signal.SIGKILL)
+                self.process.wait(timeout=5)
 
     SUPERUSER_PASSWORD = "nuschel-super"
 

@@ -64,6 +64,22 @@ fn without_embeds(body: &str) -> std::borrow::Cow<'_, str> {
         .into()
 }
 
+/// "Disconnected from 14:51 to 14:52 (40 s)…", with dates only when they differ from today.
+fn gap_text(from_ms: i64, to_ms: i64) -> String {
+    let seconds = (to_ms - from_ms).max(0) / 1000;
+    let duration = if seconds < 120 {
+        format!("{seconds} s")
+    } else {
+        format!("{} min", seconds / 60)
+    };
+    let strip = |text: String| text.trim_start_matches("Today at ").to_string();
+    format!(
+        "Disconnected from {} to {} ({duration}). Messages sent meanwhile were not received.",
+        strip(local_time(from_ms)),
+        strip(local_time(to_ms))
+    )
+}
+
 /// Local observation time, labelled relative to today for recent messages.
 pub fn local_time(milliseconds: i64) -> String {
     let zone = jiff::tz::TimeZone::system();
@@ -1399,6 +1415,11 @@ impl Desktop {
                         self.acknowledged.push((pending.conversation, pending.body));
                     }
                 }
+                Event::HistoryRecovered => {
+                    if self.error.as_deref().is_some_and(|error| error.starts_with("Local history")) {
+                        self.error = None;
+                    }
+                }
                 Event::HistoryError(error) => {
                     self.error = Some(format!("Local history: {error}"));
                     for server in &mut self.servers {
@@ -1535,11 +1556,7 @@ impl Desktop {
                         .find(|entry| entry.id == server && entry.generation == generation)
                     {
                         server.reconnecting = None;
-                        let text = format!(
-                            "Disconnected from {} to {}. Messages sent meanwhile were not received.",
-                            local_time(from_ms),
-                            local_time(to_ms)
-                        );
+                        let text = gap_text(from_ms, to_ms);
                         for channel in &mut server.channels {
                             channel.log(text.clone(), to_ms, true);
                         }
@@ -2109,7 +2126,8 @@ fn merge_message(channel: &mut ChannelView, message: RenderedMessage) {
         return;
     }
     channel.messages.push(message.into());
+    // Observation time first: an unsaved message still appears where it arrived.
     channel
         .messages
-        .sort_by_key(|message| message.id.unwrap_or(i64::MAX));
+        .sort_by_key(|message| (message.observed_at_ms, message.id.unwrap_or(i64::MAX)));
 }

@@ -84,6 +84,8 @@ pub enum Event {
         body: String,
     },
     HistoryError(String),
+    /// History writes work again after an earlier failure.
+    HistoryRecovered,
     /// Microphone level for the settings meter, about ten times per second.
     AudioLevel {
         server: String,
@@ -803,18 +805,30 @@ async fn storage_loop(
                     observed_at_ms: job.text.observed_at_ms,
                     body: source,
                 };
-                let id = if let Some(worker) = &mut storage {
+                // A crashed worker is replaced and the append retried once, so the
+                // message that discovered the failure is not lost.
+                let mut id = None;
+                for attempt in 0..2 {
+                    if storage.is_none() {
+                        storage = Storage::start(&directory).ok();
+                    }
+                    let Some(worker) = &mut storage else { break };
                     match worker.append(message.clone()).await {
-                        Ok(id) => Some(id),
+                        Ok(saved) => {
+                            id = Some(saved);
+                            break;
+                        }
                         Err(error) => {
-                            let _ = events.send(Event::HistoryError(error.to_string())).await;
                             storage.take();
-                            None
+                            if attempt == 1 {
+                                let _ = events.send(Event::HistoryError(error.to_string())).await;
+                            }
                         }
                     }
-                } else {
-                    None
-                };
+                }
+                if id.is_some() {
+                    let _ = events.send(Event::HistoryRecovered).await;
+                }
                 let _ = events
                     .send(Event::Message {
                         server: job.server,
