@@ -493,6 +493,7 @@ pub struct Desktop {
     pub preview: Option<crate::preview::PreviewView>,
     /// Whether Nuschel starts at login, read from the system when Settings opens.
     pub autostart: Option<bool>,
+    pub update: crate::update::UpdateState,
     pub menu: Option<crate::menus::Menu>,
     pub prompt: Option<crate::menus::Prompt>,
     pub panel: Option<Panel>,
@@ -593,6 +594,7 @@ impl Desktop {
             settings_open: false,
             preview: None,
             autostart: None,
+            update: Default::default(),
             menu: None,
             prompt: None,
             panel: None,
@@ -626,7 +628,22 @@ impl Desktop {
             }
         }
         desktop.sync_global_ptt();
+        if crate::update::supported() {
+            crate::update::cleanup();
+            desktop.backend.schedule_update_checks();
+        }
         desktop
+    }
+    /// Check for an update now (Settings) rather than on the schedule.
+    pub fn check_update_now(&mut self) {
+        self.update = crate::update::UpdateState::Checking;
+        self.backend.check_update();
+    }
+    pub fn install_update(&mut self) {
+        if let crate::update::UpdateState::Available(update) = &self.update {
+            self.backend.install_update(update.clone());
+            self.update = crate::update::UpdateState::Installing { done: 0, total: 0 };
+        }
     }
     /// Keep the system-wide push-to-talk binding in step with the settings.
     pub fn sync_global_ptt(&mut self) {
@@ -2025,6 +2042,31 @@ impl Desktop {
                         server.audio.output = output;
                         server.audio.echo = echo;
                         server.audio.noise = noise;
+                    }
+                }
+                Event::Update(event) => {
+                    use crate::update::{UpdateEvent, UpdateState};
+                    match event {
+                        UpdateEvent::Checked(result) => {
+                            // Installing or installed wins over a late check.
+                            if !matches!(
+                                self.update,
+                                UpdateState::Installing { .. } | UpdateState::Installed
+                            ) {
+                                self.update = match result {
+                                    Ok(Some(update)) => UpdateState::Available(update),
+                                    Ok(None) => UpdateState::UpToDate,
+                                    Err(error) => UpdateState::Failed(error),
+                                };
+                            }
+                        }
+                        UpdateEvent::Progress { done, total } => {
+                            self.update = UpdateState::Installing { done, total };
+                        }
+                        UpdateEvent::Installed(Ok(())) => self.update = UpdateState::Installed,
+                        UpdateEvent::Installed(Err(error)) => {
+                            self.update = UpdateState::Failed(error)
+                        }
                     }
                 }
                 Event::Preview(event) => {

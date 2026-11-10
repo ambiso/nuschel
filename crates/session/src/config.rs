@@ -215,6 +215,8 @@ pub struct ClientSettings {
     pub enter_sends: bool,
     /// Width of the channel list in logical pixels.
     pub sidebar_width: f32,
+    /// Look for signed updates (Windows and macOS builds).
+    pub check_updates: bool,
 }
 
 pub const SIDEBAR_WIDTH: std::ops::RangeInclusive<f32> = 200.0..=560.0;
@@ -229,6 +231,7 @@ impl Default for ClientSettings {
             push_to_talk_key: None,
             enter_sends: true,
             sidebar_width: 248.,
+            check_updates: true,
         }
     }
 }

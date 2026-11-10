@@ -111,6 +111,7 @@ pub enum Event {
     },
     /// The local audio check in Settings.
     Preview(crate::preview::Event),
+    Update(crate::update::UpdateEvent),
     Echo {
         server: String,
         generation: u64,
@@ -249,6 +250,67 @@ impl Backend {
     /// Closing the sender lets the task shut its worker down cleanly.
     pub fn stop_preview(&mut self) {
         self.preview.take();
+    }
+    /// Ask the release server for a newer version now.
+    pub fn check_update(&self) {
+        let events = self.sender.clone();
+        self.handle.spawn(async move {
+            let result = tokio::task::spawn_blocking(crate::update::check)
+                .await
+                .unwrap_or_else(|error| Err(error.to_string()));
+            let _ = events
+                .send(Event::Update(crate::update::UpdateEvent::Checked(result)))
+                .await;
+        });
+    }
+    /// Check shortly after start and then periodically, while the setting is on.
+    pub fn schedule_update_checks(&self) {
+        let events = self.sender.clone();
+        let settings = self.settings.subscribe();
+        self.handle.spawn(async move {
+            let mut delay = crate::update::FIRST_CHECK;
+            loop {
+                tokio::time::sleep(delay).await;
+                delay = crate::update::INTERVAL;
+                if !settings.borrow().check_updates {
+                    continue;
+                }
+                let result = tokio::task::spawn_blocking(crate::update::check)
+                    .await
+                    .unwrap_or_else(|error| Err(error.to_string()));
+                if events
+                    .send(Event::Update(crate::update::UpdateEvent::Checked(result)))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
+    /// Download, verify and swap in an update.
+    pub fn install_update(&self, update: crate::update::Update) {
+        let events = self.sender.clone();
+        self.handle.spawn(async move {
+            let progress = events.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let mut last = 0;
+                crate::update::install(&update, |done, total| {
+                    // About every 5% (try_send: progress may be dropped).
+                    if done == total || done.saturating_sub(last) > total / 20 {
+                        last = done;
+                        let _ = progress.try_send(Event::Update(
+                            crate::update::UpdateEvent::Progress { done, total },
+                        ));
+                    }
+                })
+            })
+            .await
+            .unwrap_or_else(|error| Err(error.to_string()));
+            let _ = events
+                .send(Event::Update(crate::update::UpdateEvent::Installed(result)))
+                .await;
+        });
     }
     /// Connect self-muted; `deafened` also deafens (automatic connections at startup).
     pub fn connect(

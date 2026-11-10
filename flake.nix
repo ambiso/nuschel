@@ -57,6 +57,8 @@
             || lib.hasSuffix ".json" path
             || lib.hasSuffix ".vp8" path
             || lib.hasSuffix ".svg" path
+            # The release signing key the updater trusts.
+            || lib.hasSuffix "release/update-key.pub" path
             # Vendored GPUI platform crates keep their shaders and headers.
             || lib.hasInfix "/vendor/gpui-pre-" path
             || lib.hasPrefix "LICENSE" (builtins.baseNameOf path);
@@ -276,12 +278,49 @@
               exit 1
             fi
           '';
+        # Nuschel.app for macOS: the universal binaries, Info.plist with the
+        # microphone usage text macOS requires, and an ad-hoc signature over
+        # the whole bundle (rcodesign, from Linux). Updates replace every file
+        # of the bundle, signature included.
+        macApp =
+          pkgs.runCommand "nuschel-macos-app"
+            {
+              nativeBuildInputs = [ pkgs.rcodesign ];
+              version = crossCommon.version;
+            }
+            ''
+              app="$out/Nuschel.app"
+              mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+              cp ${macUniversal}/bin/* "$app/Contents/MacOS/"
+              chmod 755 "$app"/Contents/MacOS/*
+              cat > "$app/Contents/Info.plist" <<PLIST
+              <?xml version="1.0" encoding="UTF-8"?>
+              <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+              <plist version="1.0">
+              <dict>
+                <key>CFBundleExecutable</key><string>nuschel</string>
+                <key>CFBundleIdentifier</key><string>org.nuschel.Nuschel</string>
+                <key>CFBundleName</key><string>Nuschel</string>
+                <key>CFBundleDisplayName</key><string>Nuschel</string>
+                <key>CFBundlePackageType</key><string>APPL</string>
+                <key>CFBundleShortVersionString</key><string>$version</string>
+                <key>CFBundleVersion</key><string>$version</string>
+                <key>LSMinimumSystemVersion</key><string>${macMinimum}</string>
+                <key>NSHighResolutionCapable</key><true/>
+                <key>NSMicrophoneUsageDescription</key><string>Nuschel sends your voice to the people in your channel.</string>
+              </dict>
+              </plist>
+              PLIST
+              install -Dm644 ${./LICENSE} "$app/Contents/Resources/EUPL-1.2"
+              rcodesign sign "$app"
+            '';
       in
       {
         packages.default = package;
         packages.server = serverPackage;
         packages.windows = windowsPackage;
         packages.macos-universal = macUniversal;
+        packages.macos-app = macApp;
         packages.macos-aarch64 = macSlice "aarch64";
         packages.rtc-probe = rtcPackage;
         apps.rtc-probe =
@@ -321,8 +360,9 @@
           );
           audit = craneLib.cargoAudit {
             inherit src advisory-db;
-            # RUSTSEC-2023-0071: rsa only generates the local Mumble key (see deny.toml).
-            cargoAuditExtraArgs = "--deny unsound --ignore RUSTSEC-2023-0071";
+            # RUSTSEC-2023-0071: rsa only generates the local Mumble key; RUSTSEC-2026-0459:
+            # SQLite opens only Nuschel's own database (see deny.toml).
+            cargoAuditExtraArgs = "--deny unsound --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0459";
             # Registry-dependent yanked checks remain enabled in `cargo deny check`.
             preBuild = ''
               mkdir -p .cargo

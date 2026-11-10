@@ -13,6 +13,7 @@ mod scrolling;
 mod settings;
 mod state;
 mod theme;
+mod update;
 mod view;
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc};

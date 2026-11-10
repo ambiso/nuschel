@@ -831,6 +831,57 @@ pub fn dialog(
             cx,
         ),
     ];
+    let mut general = general;
+    if crate::update::supported() {
+        use crate::update::UpdateState;
+        let check = settings.check_updates;
+        general.push(toggle(
+            "check-updates",
+            "Check for updates",
+            "Looks for signed releases on GitHub every few hours.".into(),
+            check,
+            Rc::new(move |this, _, _| {
+                this.update_settings(|settings| settings.check_updates = !check)
+            }),
+            cx,
+        ));
+        let status = match &this.update {
+            UpdateState::Idle => format!("Nuschel {}", env!("CARGO_PKG_VERSION")),
+            UpdateState::Checking => "Checking…".into(),
+            UpdateState::UpToDate => {
+                format!("Nuschel {} is up to date.", env!("CARGO_PKG_VERSION"))
+            }
+            UpdateState::Available(update) => format!("Nuschel {} is available.", update.version),
+            UpdateState::Installing { .. } => "Installing the update…".into(),
+            UpdateState::Installed => "Update installed; restart to use it.".into(),
+            UpdateState::Failed(error) => format!("Update failed: {error}"),
+        };
+        general.push(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(color(TEXT_MUTED))
+                        .child(text!(status).with_id("update-status")),
+                )
+                .child(styled_button(
+                    "check-update-now",
+                    "Check now",
+                    Tone::Secondary,
+                    |this, _, cx| {
+                        this.check_update_now();
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .into_any_element(),
+        );
+    }
     let force_tcp = settings.force_tcp;
     let reconnect = settings.auto_reconnect;
     let network = vec![

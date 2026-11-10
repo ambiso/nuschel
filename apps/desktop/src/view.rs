@@ -87,6 +87,7 @@ impl Render for Desktop {
                 cx.notify();
             }))
             .child(chrome::title_bar(title.into(), window, cx))
+            .when_some(update_bar(self, cx), |view, bar| view.child(bar))
             .child(body)
             .when(self.form.is_some(), |view| {
                 view.child(dialogs::server_form(self, cx))
@@ -1695,6 +1696,79 @@ fn activity_row(line: &crate::state::ActivityLine, index: usize) -> AnyElement {
             text!(crate::state::local_time(line.observed_at_ms)).with_id(("activity-time", index)),
         ))
         .into_any_element()
+}
+
+/// A release is available, downloading or installed (Windows and macOS).
+fn update_bar(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
+    use crate::update::UpdateState;
+    let (text, action): (String, Option<AnyElement>) = match &this.update {
+        UpdateState::Available(update) => (
+            format!("Nuschel {} is available.", update.version),
+            Some(styled_button(
+                "install-update",
+                "Update and restart",
+                Tone::Primary,
+                |this, _, cx| {
+                    this.install_update();
+                    cx.notify();
+                },
+                cx,
+            )),
+        ),
+        UpdateState::Installing { done, total } => (
+            if *total > 0 {
+                format!(
+                    "Downloading the update… {}%",
+                    done.saturating_mul(100) / total
+                )
+            } else {
+                "Downloading the update…".into()
+            },
+            None,
+        ),
+        UpdateState::Installed => (
+            "The update is installed.".into(),
+            Some(styled_button(
+                "restart-update",
+                "Restart now",
+                Tone::Primary,
+                |this, _, cx| match crate::update::relaunch() {
+                    Ok(()) => cx.quit(),
+                    Err(error) => {
+                        this.update = crate::update::UpdateState::Failed(error);
+                        cx.notify();
+                    }
+                },
+                cx,
+            )),
+        ),
+        _ => return None,
+    };
+    Some(
+        div()
+            .id("update-bar")
+            .role(Role::Status)
+            .flex_shrink_0()
+            .px_4()
+            .py(px(6.))
+            .flex()
+            .items_center()
+            .gap_3()
+            .bg(tint(ACCENT, 0x26))
+            .border_b_1()
+            .border_color(tint(ACCENT, 0x55))
+            .text_sm()
+            .child(icon("star", 16., color(ACCENT_HOVER)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(text!(text).with_id("update-text")),
+            )
+            .when_some(action, |bar, action| bar.child(action))
+            .into_any_element(),
+    )
 }
 
 fn banner(

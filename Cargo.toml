@@ -21,6 +21,7 @@ nuschel-content = { path = "crates/content", version = "0.1.0" }
 nuschel-ipc = { path = "crates/ipc", version = "0.1.0" }
 nuschel-protocol = { path = "crates/protocol", version = "0.1.0" }
 nuschel-storage = { path = "crates/storage", version = "0.1.0" }
+nuschel-update = { path = "crates/update", version = "0.1.0" }
 
 nuschel-session = { path = "crates/session", version = "0.1.0" }
 
