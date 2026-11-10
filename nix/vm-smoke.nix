@@ -100,6 +100,8 @@ pkgs.testers.runNixOSTest {
     client.succeed("${pkgs.python3}/bin/python3 ${../tests}/udp_voice.py ${nuschel}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so --netem --block-udp")
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/protocol_features.py ${nuschel}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so --openssl ${pkgs.openssl.bin}/bin/openssl'")
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/media_live.py ${nuschel}/bin --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so'")
+    # Private PipeWire session (virtual nodes only): restarts, host pinning, echo-cancel reuse.
+    client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/pipewire_recovery.py ${nuschel}/bin --pipewire ${pkgs.pipewire} --wireplumber ${pkgs.wireplumber} --dbus-daemon ${pkgs.dbus}/bin/dbus-daemon --opus-library ${pkgs.libopus}/lib/libopus.so'")
     # Pure-Rust Opus against reference libopus: decoder conformance, interop, hostile packets.
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/opus_eval.py ${nuschel}/bin --opus-library ${pkgs.libopus}/lib/libopus.so'")
     client.succeed("su - tester -c 'xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/stock_client.py ${nuschel}/bin --mumble ${pkgs.mumble}/bin/mumble --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschel-stock-artifacts'")

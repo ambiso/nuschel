@@ -111,6 +111,9 @@ ServerConfig.
       suppress icons (currently a text line under the channel header).
 - [x] Context menus: user (direct message, local volume/mute, info, whisper), channel
       (join, create sub-channel, links, description).
+- [ ] cpal's PipeWire host skips `Audio/Source/Virtual` nodes (e.g. filter-chain or
+      EasyEffects outputs), so they can be used only as the system default, not picked
+      in Nuschel. Fix upstream in cpal or list them through the PulseAudio API.
 - [x] Audio settings: input/output device, transmission mode, VAD threshold with meter,
       PTT key, processing toggles and per-device override.
 - [x] Connection status: ping, UDP/TCP indicator, packet loss.
@@ -130,9 +133,11 @@ ServerConfig.
 - [x] Whisper/shout routing isolation and permission-gated UI.
 - [x] Reconnect after server restart and network drop; history gap markers.
       Server restart is tested; a network drop without a restart is not separately tested.
-- [ ] PipeWire and pipewire-pulse restarts (only native PulseAudio is tested now),
+- [x] PipeWire and pipewire-pulse restarts (only native PulseAudio is tested now),
       device switch and format changes during a call.
-      Not done: the VM has no PipeWire session yet.
+      tests/pipewire_recovery.py (private PipeWire session, in the VM): restarts, the
+      audio-server pin, and PipeWire echo-cancel reuse. Device switches and format changes
+      mid-call are not tested.
 - [x] Upstream PipeWire echo-cancel present: Nuschel must not stack its own AEC and must
       not touch unrelated graph objects (snapshot before/after).
       Tested with PulseAudio module-echo-cancel; the snapshot covers defaults and levels.

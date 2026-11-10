@@ -546,6 +546,9 @@ async fn connect_once(
     let mut audio_enabled = false;
     let mut bitrate = 48_000;
     let mut retry_audio = tokio::time::Instant::now();
+    // The audio server that last worked, pinned for a while after a failure (see pinned_host).
+    let mut audio_host: (Option<String>, tokio::time::Instant) =
+        (None, tokio::time::Instant::now());
     let mut finished = false;
     let mut outcome = None;
     let mut own_session = None;
@@ -567,7 +570,7 @@ async fn connect_once(
                     capture_epoch += 1;
                     retry_audio = tokio::time::Instant::now();
                 } else if let Some(media) = &media {
-                    let _ = media.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio.clone() });
+                    let _ = media.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio.clone(), host: pinned_host(&audio_host) });
                 }
                 applied_audio = current.audio;
             },
@@ -646,7 +649,7 @@ async fn connect_once(
                         loss_percent = measured;
                         if let Some(media) = &media {
                             let current = settings.borrow().clone();
-                            let _ = media.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio });
+                            let _ = media.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio, host: pinned_host(&audio_host) });
                         }
                     }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Transport(stats) }).await;
@@ -666,7 +669,7 @@ async fn connect_once(
                 match Media::start() {
                     Ok(worker) => {
                         let current = settings.borrow().clone();
-                        let _ = worker.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio });
+                        let _ = worker.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio, host: pinned_host(&audio_host) });
                         let _ = worker.commands.try_send(LiveMediaRequest::SetState { epoch: capture_epoch, muted, deafened });
                         let _ = worker.commands.try_send(LiveMediaRequest::PushToTalk { active: *push_to_talk.borrow() });
                         media = Some(worker);
@@ -686,6 +689,9 @@ async fn connect_once(
                     let _ = events.try_send(Event::AudioLevel { server: id.clone(), generation, level_db, voice, transmitting });
                 },
                 Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo }) => {
+                    if let Some((host, _)) = output.as_deref().and_then(|id| id.split_once(':')) {
+                        audio_host.0 = Some(host.to_string());
+                    }
                     let _ = events.send(Event::AudioDevices { server: id.clone(), generation, inputs, outputs, input, output, echo }).await;
                 },
                 Some(LiveMediaEvent::Echo { erle_db, residual_likelihood, .. }) => {
@@ -696,7 +702,7 @@ async fn connect_once(
                     let _ = events.send(Event::AudioHealth { server: id.clone(), generation, health }).await;
                 },
                 Some(LiveMediaEvent::Status { ready, message }) => {
-                    if !ready { media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 }); }
+                    if !ready { audio_host.1 = tokio::time::Instant::now() + HOST_PIN; media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 }); }
                     let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message }).await;
                 },
                 None => { media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_secs(2); let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message: "Audio worker restarting…".into() }).await; },
@@ -943,4 +949,16 @@ async fn storage_loop(
     if let Some(worker) = storage {
         worker.stop().await;
     }
+}
+
+/// After an audio failure, new media workers use only the audio server that
+/// worked before, for this long. A restarting PipeWire or PulseAudio must not
+/// lose its hardware device to a fallback that opens ALSA directly.
+const HOST_PIN: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn pinned_host(audio_host: &(Option<String>, tokio::time::Instant)) -> Option<String> {
+    audio_host
+        .0
+        .clone()
+        .filter(|_| tokio::time::Instant::now() < audio_host.1)
 }

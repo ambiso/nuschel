@@ -266,6 +266,11 @@ pub enum LiveMediaRequest {
         #[serde(default)]
         packet_loss_percent: u8,
         settings: nuschel_core::audio::AudioSettings,
+        /// Use only this audio server ("pipewire", "pulseaudio", "alsa"): the one
+        /// that worked before a failure. While a sound server restarts, falling
+        /// back to raw ALSA could take the hardware device from under it.
+        #[serde(default)]
+        host: Option<String>,
     },
     /// Push-to-talk key state from the desktop.
     PushToTalk {

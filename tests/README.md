@@ -27,6 +27,7 @@ all protocol traffic.
 | `udp_voice.py` | Encrypted OCB2 UDP voice, forced TCP and mixed relay; jitter and 5% loss with netem; inbound UDP blocked (IPv4 and IPv6) falls back to the TLS tunnel and recovers |
 | `protocol_features.py` | Whisper/shout isolation, channel listening, permissions, user stats, comments and avatars, self-registration, SuperUser administration (registered users, bans, ACL, kick), OpenSSL-made PKCS#12 import (channel links are not yet covered) |
 | `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, clipping detection that leaves system levels untouched |
+| `pipewire_recovery.py` | A private PipeWire + WirePlumber + pipewire-pulse session with virtual nodes only: playback, PipeWire restart with the replacement worker pinned to PipeWire (no ALSA fallback), pipewire-pulse restart, PipeWire echo-cancel reuse without touching session defaults, device lists without other applications' streams |
 | `opus_eval.py` | opus-pure against reference libopus: decoder conformance in SILK, Hybrid and CELT, encoder interop both ways, 5,000 hostile packets |
 | `stock_client.py` | The real stock Mumble GUI with a certificate exported by Nuschel; voice in both directions |
 | `desktop_recovery.py` | Media and storage worker crashes keep the session and history; server restart reconnects with backoff, rejoins the channel muted and marks the gap |

@@ -165,6 +165,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut retry_at = Instant::now();
     let mut last_cleanup = Instant::now();
     let mut frames_seen = 0_u32;
+    let mut only_host: Option<String> = None;
     let mut controller = Controller::default();
     let mut last_window = Instant::now();
     // Start-up underruns (the device starts before the ring is filled) are not a signal.
@@ -174,7 +175,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut scratch = vec![0.; MAX_PACKET_SAMPLES];
     loop {
         if devices.is_none() && state_known && !deafened && Instant::now() >= retry_at {
-            match open_devices(tx.clone(), !muted, &settings) {
+            match open_devices(tx.clone(), !muted, &settings, only_host.as_deref()) {
                 Ok((opened, route)) => {
                     let echo = match &route.echo {
                         EchoSource::Nuschel => true,
@@ -281,7 +282,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 bitrate,
                 packet_loss_percent,
                 settings: requested,
+                host,
             })) => {
+                only_host = host;
                 transmit.encoder.bitrate_bps = bitrate.clamp(6000, 64_000) as i32;
                 transmit.encoder.packet_loss_perc = i32::from(packet_loss_percent.clamp(1, 30));
                 let requested = requested.sanitized();
@@ -532,12 +535,14 @@ fn open_devices(
     tx: SyncSender<Event>,
     capture: bool,
     settings: &AudioSettings,
+    only_host: Option<&str>,
 ) -> Result<(Devices, Route), String> {
     let mut hosts = vec![];
     #[cfg(target_os = "linux")]
     {
-        match std::env::var("NUSCHEL_AUDIO_BACKEND").ok().as_deref() {
-            Some("pulse") => hosts.push(cpal::HostId::PulseAudio),
+        let forced = std::env::var("NUSCHEL_AUDIO_BACKEND").ok();
+        match forced.as_deref().or(only_host) {
+            Some("pulse" | "pulseaudio") => hosts.push(cpal::HostId::PulseAudio),
             Some("pipewire") => hosts.push(cpal::HostId::PipeWire),
             Some("alsa") => hosts.push(cpal::HostId::Alsa),
             _ => {
@@ -548,7 +553,10 @@ fn open_devices(
         }
     }
     #[cfg(not(target_os = "linux"))]
-    hosts.push(cpal::default_host().id());
+    {
+        let _ = only_host;
+        hosts.push(cpal::default_host().id());
+    }
     let mut errors = Vec::new();
     for id in hosts {
         match cpal::host_from_id(id)
@@ -613,6 +621,18 @@ fn open_host(
         .devices()
         .map(|devices| devices.collect())
         .unwrap_or_default();
+    // PipeWire's node list also contains other applications' streams, sinks
+    // offered as (monitor) inputs, and cpal's virtual default entries. The
+    // PulseAudio API (pipewire-pulse) knows which nodes are real sinks and
+    // sources, so the PipeWire lists keep only those when it is available.
+    #[cfg(target_os = "linux")]
+    let pipewire = host.id() == cpal::HostId::PipeWire;
+    #[cfg(not(target_os = "linux"))]
+    let pipewire = false;
+    #[cfg(target_os = "linux")]
+    let pulse_nodes = pipewire.then(pulse_device_names).flatten();
+    #[cfg(not(target_os = "linux"))]
+    let pulse_nodes: Option<(Vec<String>, Vec<String>)> = None;
     let listed = |input: bool| -> Vec<AudioDevice> {
         all.iter()
             .filter(|device| {
@@ -624,8 +644,19 @@ fn open_host(
             })
             .filter_map(|device| {
                 let id = device_id(device)?;
+                let name = backend_name(&id);
                 // Sink monitors are listed as sources by PulseAudio; they are not microphones.
-                (!(input && backend_name(&id).ends_with(".monitor"))).then(|| AudioDevice {
+                let keep = if !pipewire {
+                    !(input && name.ends_with(".monitor"))
+                } else if let Some((sources, sinks)) = &pulse_nodes {
+                    let real = if input { sources } else { sinks };
+                    real.iter().any(|node| node == name)
+                } else {
+                    let duplex = device.supports_input() && device.supports_output();
+                    !matches!(name, "input_default" | "output_default" | "sink_default")
+                        && !(input && duplex)
+                };
+                keep.then(|| AudioDevice {
                     name: device_name(device),
                     id,
                 })
@@ -771,6 +802,33 @@ fn open_host(
             echo,
         },
     ))
+}
+
+/// Real sources (without monitors) and sinks by node name, from the PulseAudio
+/// API (pipewire-pulse) when it is running.
+#[cfg(target_os = "linux")]
+fn pulse_device_names() -> Option<(Vec<String>, Vec<String>)> {
+    if !std::env::var_os("PULSE_SERVER").is_some_and(|server| !server.is_empty())
+        && !std::env::var_os("XDG_RUNTIME_DIR")
+            .is_some_and(|runtime| std::path::Path::new(&runtime).join("pulse/native").exists())
+    {
+        return None;
+    }
+    let host = cpal::host_from_id(cpal::HostId::PulseAudio).ok()?;
+    let (mut sources, mut sinks) = (Vec::new(), Vec::new());
+    for device in host.devices().ok()? {
+        let Some(id) = device_id(&device) else {
+            continue;
+        };
+        let name = backend_name(&id).to_string();
+        if device.supports_input() && !name.ends_with(".monitor") {
+            sources.push(name.clone());
+        }
+        if device.supports_output() {
+            sinks.push(name);
+        }
+    }
+    Some((sources, sinks))
 }
 
 /// Ask the PulseAudio API (native or pipewire-pulse) for the default node.
