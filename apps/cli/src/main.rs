@@ -57,6 +57,13 @@ enum Input {
         temporary: bool,
     },
     Register,
+    Html {
+        channel: u32,
+        html: String,
+    },
+    Avatar {
+        path: PathBuf,
+    },
     Comment {
         text: String,
     },
@@ -205,6 +212,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     temporary,
                 },
                 Ok(Input::Register) => Command::RegisterSelf,
+                Ok(Input::Html { channel, html }) => Command::SendHtml { channel, html },
+                Ok(Input::Avatar { path }) => match std::fs::read(&path) {
+                    Ok(bytes) if bytes.len() <= 1024 * 1024 => Command::SetAvatar(bytes),
+                    _ => {
+                        let _ = output(json!({"kind":"error", "message":"cannot read avatar"}));
+                        continue;
+                    }
+                },
                 Ok(Input::Comment { text }) => Command::SetComment(text),
                 Ok(Input::Tokens { tokens }) => Command::SetTokens(tokens),
                 Ok(Input::Listen { channel, listen }) => Command::Listen { channel, listen },

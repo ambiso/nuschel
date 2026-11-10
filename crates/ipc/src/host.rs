@@ -75,11 +75,40 @@ pub async fn render_content(executable: &Path, text: &str) -> Result<MessageDocu
     Ok(prepare_content(executable, text, false).await?.document)
 }
 
+/// Decode an avatar in the sandboxed content worker; returns an Image document.
+pub async fn decode_avatar(executable: &Path, encoded: &[u8]) -> Result<MessageDocument, Error> {
+    use base64::Engine as _;
+    let text = base64::engine::general_purpose::STANDARD.encode(encoded);
+    Ok(exchange(
+        executable,
+        ContentRequest {
+            text,
+            legacy_html: false,
+            avatar: true,
+        },
+    )
+    .await?
+    .document)
+}
+
 pub async fn prepare_content(
     executable: &Path,
     text: &str,
     legacy_html: bool,
 ) -> Result<PreparedContent, Error> {
+    exchange(
+        executable,
+        ContentRequest {
+            text: text.to_owned(),
+            legacy_html,
+            avatar: false,
+        },
+    )
+    .await
+}
+
+async fn exchange(executable: &Path, content: ContentRequest) -> Result<PreparedContent, Error> {
+    let text = content.text.clone();
     #[cfg(target_os = "linux")]
     let mut command = content_sandbox_command(executable, &[])?;
     #[cfg(not(target_os = "linux"))]
@@ -99,16 +128,7 @@ pub async fn prepare_content(
         .spawn()?;
     let request_id = 1;
     let mut request = Vec::new();
-    write_frame(
-        &mut request,
-        &Envelope::new(
-            request_id,
-            ContentRequest {
-                text: text.to_owned(),
-                legacy_html,
-            },
-        ),
-    )?;
+    write_frame(&mut request, &Envelope::new(request_id, content))?;
 
     let exchange = async {
         let mut input = child.stdin.take().ok_or(Error::InvalidResponse)?;
@@ -131,7 +151,7 @@ pub async fn prepare_content(
         }
         match response.payload {
             ContentResponse::Rendered(document) => Ok(PreparedContent {
-                source: text.to_owned(),
+                source: text.clone(),
                 document,
             }),
             ContentResponse::Prepared(prepared) => Ok(prepared),

@@ -161,6 +161,11 @@ pub enum Command {
         body: String,
         expected_peer: Option<u64>,
     },
+    /// Send Mumble rich text as-is (e.g. inline images); only on HTML-enabled servers.
+    SendHtml {
+        channel: u32,
+        html: String,
+    },
     SetSelf {
         muted: bool,
         deafened: bool,
@@ -643,6 +648,30 @@ impl State {
                     },
                 );
             }
+            Command::SendHtml { channel, html } => {
+                if !self.allow_html || !self.channels.contains_key(&channel) {
+                    return emit(
+                        events,
+                        SessionEvent::Notice("This server does not accept rich text here.".into()),
+                    )
+                    .await;
+                }
+                if html.len() > self.image_limit.max(self.message_limit) {
+                    return emit(
+                        events,
+                        SessionEvent::Notice("Message exceeds this server's limit.".into()),
+                    )
+                    .await;
+                }
+                self.queue(
+                    kind::TEXT_MESSAGE,
+                    &proto::TextMessage {
+                        message: html,
+                        channel_id: vec![channel],
+                        ..Default::default()
+                    },
+                );
+            }
             Command::RegisterSelf => {
                 self.queue(
                     kind::USER_STATE,
@@ -914,7 +943,7 @@ impl State {
                 if body.trim().is_empty() || body.len() > MAX_CONTENT_BYTES {
                     return emit(
                         events,
-                        SessionEvent::Notice("Message is empty or exceeds 64 KiB.".into()),
+                        SessionEvent::Notice("Message is empty or exceeds 256 KiB.".into()),
                     )
                     .await;
                 }
@@ -1188,7 +1217,7 @@ impl State {
                     emit(
                         events,
                         SessionEvent::Notice(
-                            "Received a message exceeding the local 64 KiB limit.".into(),
+                            "Received a message exceeding the local 256 KiB limit.".into(),
                         ),
                     )
                     .await?;

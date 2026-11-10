@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
+use crate::document::{Block, Document};
 use crate::{
     assets::icon,
     chrome,
@@ -13,7 +14,6 @@ use gpui_kit::{
     *,
 };
 use nuschel_client::{HistorySource, SessionSecurity};
-use nuschel_core::{ContentBlock, MessageDocument};
 use nuschel_session::connection::{TextTarget, User};
 
 /// Consecutive messages by one author within this window share a header.
@@ -677,6 +677,7 @@ fn user_row(
             22.,
             talking,
             ("user-avatar", session as usize),
+            avatar_image(server, Some(user)),
         ))
         .child(
             div()
@@ -736,7 +737,40 @@ fn user_row(
         .into_any_element()
 }
 
-fn avatar(name: &str, size: f32, talking: bool, id: (&'static str, usize)) -> AnyElement {
+/// The decoded avatar for a user's texture hash, if we have one.
+fn avatar_image(server: &ServerView, user: Option<&User>) -> Option<std::sync::Arc<RenderImage>> {
+    user.and_then(|user| user.texture_hash.as_ref())
+        .and_then(|hash| server.avatars.get(hash))
+        .cloned()
+}
+
+fn avatar(
+    name: &str,
+    size: f32,
+    talking: bool,
+    id: (&'static str, usize),
+    image: Option<std::sync::Arc<RenderImage>>,
+) -> AnyElement {
+    if let Some(image) = image {
+        return div()
+            .size(px(size))
+            .flex_shrink_0()
+            .rounded_full()
+            .border_2()
+            .border_color(if talking {
+                color(SUCCESS)
+            } else {
+                color(SIDEBAR)
+            })
+            .overflow_hidden()
+            .child(
+                img(image)
+                    .size_full()
+                    .rounded_full()
+                    .object_fit(ObjectFit::Cover),
+            )
+            .into_any_element();
+    }
     div()
         .size(px(size))
         .flex_shrink_0()
@@ -856,7 +890,13 @@ fn user_panel(server: &ServerView, cx: &mut Context<Desktop>) -> AnyElement {
         .flex()
         .items_center()
         .gap_2()
-        .child(avatar(&name, 34., talking, ("own-avatar", 0)))
+        .child(avatar(
+            &name,
+            34.,
+            talking,
+            ("own-avatar", 0),
+            avatar_image(server, own),
+        ))
         .child(
             div()
                 .min_w_0()
@@ -955,7 +995,14 @@ fn conversation(
             author == message.author && message.observed_at_ms.saturating_sub(at) < GROUP_MS
         });
         previous = Some((&message.author, message.observed_at_ms));
-        messages.push(message_row(message, position, grouped, cx));
+        let image = avatar_image(
+            server,
+            server
+                .users
+                .values()
+                .find(|user| user.name == message.author),
+        );
+        messages.push(message_row(message, position, grouped, image, cx));
     }
     for (index, line) in activity {
         messages.push(activity_row(line, index));
@@ -1363,6 +1410,7 @@ fn message_row(
     message: &crate::state::MessageView,
     index: usize,
     grouped: bool,
+    image: Option<std::sync::Arc<RenderImage>>,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     div()
@@ -1380,7 +1428,13 @@ fn message_row(
             div()
                 .w(px(40.))
                 .flex_shrink_0()
-                .child(avatar(&message.author, 40., false, ("avatar", index)))
+                .child(avatar(
+                    &message.author,
+                    40.,
+                    false,
+                    ("avatar", index),
+                    image,
+                ))
                 .into_any_element()
         })
         .child(
@@ -1637,7 +1691,7 @@ fn security_icon(security: SessionSecurity, id: usize, size: f32) -> AnyElement 
         .into_any_element()
 }
 
-pub fn document_blocks(document: &MessageDocument) -> Vec<AnyElement> {
+pub fn document_blocks(document: &Document) -> Vec<AnyElement> {
     let count = document.blocks.len();
     document
         .blocks
@@ -1646,7 +1700,7 @@ pub fn document_blocks(document: &MessageDocument) -> Vec<AnyElement> {
         .map(|(index, block)| match block {
             // Newlines inside a block are preserved; the separator newlines next to a
             // code fence are spacing already provided by the block layout.
-            ContentBlock::Text { text: source } => {
+            Block::Text(source) => {
                 let mut source = source.as_str();
                 if index + 1 < count {
                     source = source.trim_end_matches(['\n', '\r']);
@@ -1659,7 +1713,21 @@ pub fn document_blocks(document: &MessageDocument) -> Vec<AnyElement> {
                     .child(text!(source.to_string()).with_id(("body", index)))
                     .into_any_element()
             }
-            ContentBlock::Code { language, runs } => {
+            Block::Image {
+                image,
+                width,
+                height,
+            } => div()
+                .id(("image", index))
+                .w(px(*width as f32))
+                .h(px(*height as f32))
+                .rounded(px(8.))
+                .overflow_hidden()
+                .border_1()
+                .border_color(color(BORDER))
+                .child(img(image.clone()).size_full())
+                .into_any_element(),
+            Block::Code { language, runs } => {
                 let mut source = String::new();
                 let mut highlights = Vec::new();
                 for run in runs {

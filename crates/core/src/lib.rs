@@ -6,7 +6,12 @@ use serde::{Deserialize, Serialize};
 pub mod audio;
 
 /// Parsing limits are separate from UI collapsing. Storage retains the original body.
-pub const MAX_CONTENT_BYTES: usize = 64 * 1024;
+/// 256 KiB covers Mumble's default 128 KiB image messages with room for markup.
+pub const MAX_CONTENT_BYTES: usize = 256 * 1024;
+
+/// Inline images travel inside message text as `EMBED data:image/...;base64,... EMBED`.
+/// The marker is stripped from all other text before embeds are inserted.
+pub const EMBED: char = '\u{FFFC}';
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +58,12 @@ pub enum ContentBlock {
     Code {
         language: Option<String>,
         runs: Vec<CodeRun>,
+    },
+    /// Decoded, downscaled pixels from the content worker: RGBA8, base64 encoded.
+    Image {
+        width: u32,
+        height: u32,
+        rgba: String,
     },
 }
 

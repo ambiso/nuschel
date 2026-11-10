@@ -4650,8 +4650,10 @@ dependencies = [
 name = "nuschel"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "clap",
  "gpui-kit",
+ "image",
  "jiff",
  "nuschel-client",
  "nuschel-core",
@@ -4690,7 +4692,9 @@ dependencies = [
 name = "nuschel-content"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "html5ever 0.40.1",
+ "image",
  "markup5ever_rcdom 0.40.1+unofficial",
  "nuschel-core",
  "pulldown-cmark",
@@ -4702,7 +4706,9 @@ dependencies = [
 name = "nuschel-content-worker"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "nuschel-content",
+ "nuschel-core",
  "nuschel-ipc",
 ]
 
@@ -4718,6 +4724,7 @@ dependencies = [
 name = "nuschel-ipc"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "nuschel-core",
  "serde",
  "serde_json",

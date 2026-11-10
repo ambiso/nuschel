@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
+use crate::document::Document;
 use crate::{
     backend::{Backend, Event, RenderKey, RenderedMessage},
     scrolling::SmoothScroll,
@@ -8,7 +9,7 @@ use gpui_kit::{
     *,
 };
 use nuschel_client::{Conversation, HistorySource, Navigation, SessionSecurity};
-use nuschel_core::{MAX_CONTENT_BYTES, MessageDocument, PreviewPolicy};
+use nuschel_core::{MAX_CONTENT_BYTES, PreviewPolicy};
 use nuschel_session::{
     config::{CachedChannel, ClientSettings, MumbleUrl, Profile, ServerBookmark},
     connection::{Command, ServerLimits, SessionEvent, TextTarget, User},
@@ -25,7 +26,7 @@ pub struct MessageView {
     pub observed_at_ms: i64,
     pub time: String,
     pub status: Option<&'static str>,
-    pub document: MessageDocument,
+    pub document: Document,
     pub expanded: bool,
     pub has_more: bool,
 }
@@ -44,13 +45,25 @@ impl From<RenderedMessage> for MessageView {
                 None
             },
             has_more: PreviewPolicy::default()
-                .preview(&message.message.body, false)
+                .preview(&without_embeds(&message.message.body), false)
                 .has_more,
-            document: message.document,
+            document: message.document.into(),
             expanded: false,
         }
     }
 }
+/// Inline image data counts as one character for collapsing long messages.
+fn without_embeds(body: &str) -> std::borrow::Cow<'_, str> {
+    if !body.contains(nuschel_core::EMBED) {
+        return body.into();
+    }
+    body.split(nuschel_core::EMBED)
+        .enumerate()
+        .map(|(index, part)| if index % 2 == 1 { "▣" } else { part })
+        .collect::<String>()
+        .into()
+}
+
 /// Local observation time, labelled relative to today for recent messages.
 pub fn local_time(milliseconds: i64) -> String {
     let zone = jiff::tz::TimeZone::system();
@@ -111,7 +124,7 @@ pub struct ChannelView {
     pub max_users: u32,
     /// Raw Mumble HTML description and its inert rendering from the content worker.
     pub description_raw: String,
-    pub description: Option<MessageDocument>,
+    pub description: Option<Document>,
 }
 #[derive(Clone)]
 pub struct ActivityLine {
@@ -219,7 +232,10 @@ pub struct ServerView {
     pub user_names: BTreeMap<u32, String>,
     pub reconnecting: Option<String>,
     /// Rendered user comments keyed by session, with the raw HTML they came from.
-    pub comments: BTreeMap<u32, (String, MessageDocument)>,
+    pub comments: BTreeMap<u32, (String, Document)>,
+    /// Decoded avatars by texture hash, and hashes already requested.
+    pub avatars: BTreeMap<String, std::sync::Arc<RenderImage>>,
+    pub avatar_requests: BTreeSet<String>,
     /// Active whisper/shout target label while one is selected.
     pub whisper: Option<String>,
     /// Channel path from a `mumble://` link, joined once the tree has loaded.
@@ -283,6 +299,8 @@ impl ServerView {
             user_names: BTreeMap::new(),
             reconnecting: None,
             comments: BTreeMap::new(),
+            avatars: BTreeMap::new(),
+            avatar_requests: BTreeSet::new(),
             whisper: None,
             pending_channel: Vec::new(),
         }
@@ -1179,7 +1197,7 @@ impl Desktop {
             return;
         }
         if body.len() > MAX_CONTENT_BYTES {
-            self.error = Some("Message exceeds 64 KiB.".into());
+            self.error = Some("Message exceeds 256 KiB.".into());
             return;
         }
         let server = &mut self.servers[server];
@@ -1498,14 +1516,14 @@ impl Desktop {
                                 if let Some(channel) = server.channel_view(id)
                                     && channel.description_raw == source
                                 {
-                                    channel.description = Some(document);
+                                    channel.description = Some(document.into());
                                 }
                             }
                             RenderKey::Comment(session) => {
                                 if server.users.get(&session).is_some_and(|user| {
                                     user.comment.as_deref() == Some(source.as_str())
                                 }) {
-                                    server.comments.insert(session, (source, document));
+                                    server.comments.insert(session, (source, document.into()));
                                 }
                             }
                         }
@@ -1527,6 +1545,21 @@ impl Desktop {
                         } else {
                             server.talking.remove(&session);
                         }
+                    }
+                }
+                Event::Avatar {
+                    server,
+                    generation,
+                    hash,
+                    document,
+                } => {
+                    if let Some(server) = self
+                        .servers
+                        .iter_mut()
+                        .find(|entry| entry.id == server && entry.generation == generation)
+                        && let Some(image) = Document::from(document).first_image()
+                    {
+                        server.avatars.insert(hash, image);
                     }
                 }
                 Event::AudioLevel {
@@ -1967,6 +2000,31 @@ impl Desktop {
                 }
             }
             SessionEvent::User(user) => {
+                if let Some(hash) = user.texture_hash.clone()
+                    && !server.avatars.contains_key(&hash)
+                {
+                    if let Some(texture) = user.texture.clone() {
+                        if server.avatar_requests.insert(format!("decode:{hash}")) {
+                            self.backend.decode_avatar(
+                                server.id.clone(),
+                                server.generation,
+                                hash,
+                                texture,
+                            );
+                        }
+                    } else if server.voice_channel() == Some(user.channel)
+                        && server.avatar_requests.insert(hash)
+                    {
+                        let _ = self.backend.command(
+                            &server.id,
+                            Command::RequestBlobs {
+                                textures: vec![user.session],
+                                comments: vec![],
+                                descriptions: vec![],
+                            },
+                        );
+                    }
+                }
                 if Some(user.session) == server.own_session {
                     server.muted = user.self_muted;
                     server.deafened = user.self_deafened;

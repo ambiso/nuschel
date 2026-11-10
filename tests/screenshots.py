@@ -6,6 +6,9 @@ under `xvfb-run`. Only a server bound to 127.0.0.1 is used; no host audio device
 are opened (the media worker is pointed at a private PulseAudio if one is given).
 """
 import argparse
+import base64
+import struct
+import zlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +23,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gnome_session import GnomeSession  # noqa: E402
 from local_murmur import Murmur, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
+
+def make_png(path, width, seed, height=None):
+    """A small gradient PNG written with the standard library only."""
+    height = height or width
+    rows = b"".join(
+        b"\x00" + bytes(
+            channel
+            for x in range(width)
+            for channel in ((x * 255 // width + seed * 40) % 256, (y * 255 // height + seed * 90) % 256, (128 + seed * 60) % 256)
+        )
+        for y in range(height)
+    )
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+    path.write_bytes(png)
+    return path
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -84,9 +106,15 @@ def main():
             eventually(lambda: app.poll() is None and shell.window("Nuschel"), "Nuschel window did not appear")
             shell.place("Nuschel", 40, 40, width, height)
             time.sleep(1.0)
+            avatars = [make_png(root / f"avatar{index}.png", 96, index) for index in range(2)]
+            bots[0].send(kind="avatar", path=str(avatars[0]))
+            bots[1].send(kind="avatar", path=str(avatars[1]))
             bots[0].send(kind="text", channel=2, body="Hi! Here is the patch:\n\n```rust\nfn main() {\n    println!(\"hello\");\n}\n```")
             time.sleep(0.4)
             bots[1].send(kind="text", channel=2, body="Looks good to me.\nShip it!")
+            time.sleep(0.4)
+            screenshot_png = base64.b64encode(make_png(root / "shot.png", 320, 7, height=180).read_bytes()).decode()
+            bots[0].send(kind="html", channel=2, html=f"Here is a screenshot:<br/><img src=\"data:image/png;base64,{screenshot_png}\"/>")
             time.sleep(args.settle)
 
             def shot(name):

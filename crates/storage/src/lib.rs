@@ -154,7 +154,9 @@ impl History {
         let mut bytes = 0;
         for (id, server, channel, author, observed_at_ms, body) in rows.into_iter().take(limit) {
             let size = server.len() + channel.len() + author.len() + body.len();
-            if size > MAX_PAGE_TEXT_BYTES - bytes {
+            // A page always makes progress: the first message is returned even
+            // when it alone exceeds the byte budget.
+            if !messages.is_empty() && size > MAX_PAGE_TEXT_BYTES.saturating_sub(bytes) {
                 break;
             }
             bytes += size;

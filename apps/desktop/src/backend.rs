@@ -115,6 +115,13 @@ pub enum Event {
         source: String,
         document: MessageDocument,
     },
+    /// A decoded avatar thumbnail for a texture hash.
+    Avatar {
+        server: String,
+        generation: u64,
+        hash: String,
+        document: MessageDocument,
+    },
     /// Voice activity for a session (including our own) on one connection generation.
     Talking {
         server: String,
@@ -249,6 +256,29 @@ impl Backend {
                     document,
                 })
                 .await;
+        });
+    }
+    /// Decode an avatar image in the sandboxed content worker.
+    pub fn decode_avatar(&self, server: String, generation: u64, hash: String, encoded: Vec<u8>) {
+        let events = self.sender.clone();
+        let permits = self.render_permits.clone();
+        self.handle.spawn(async move {
+            let Ok(_permit) = permits.acquire().await else {
+                return;
+            };
+            let Ok(worker) = workers::sibling("nuschel-content-worker") else {
+                return;
+            };
+            if let Ok(document) = nuschel_ipc::host::decode_avatar(&worker, &encoded).await {
+                let _ = events
+                    .send(Event::Avatar {
+                        server,
+                        generation,
+                        hash,
+                        document,
+                    })
+                    .await;
+            }
         });
     }
     /// Apply new preferences to every live connection and its media worker.

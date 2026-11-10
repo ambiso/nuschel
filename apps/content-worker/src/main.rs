@@ -11,7 +11,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     while let Some(request) = read_frame::<ContentRequest>(&mut input)? {
-        let prepared = if request.payload.legacy_html {
+        let prepared = if request.payload.avatar {
+            use base64::Engine as _;
+            Ok(base64::engine::general_purpose::STANDARD
+                .decode(&request.payload.text)
+                .ok()
+                .and_then(|bytes| nuschel_content::decode_image(&bytes, 96, 96))
+                .map(|image| {
+                    ContentResponse::Rendered(nuschel_core::MessageDocument {
+                        blocks: vec![image],
+                    })
+                })
+                .unwrap_or_else(|| {
+                    ContentResponse::Rejected("unsupported or invalid avatar image".into())
+                }))
+        } else if request.payload.legacy_html {
             renderer
                 .legacy_plain_text(&request.payload.text)
                 .and_then(|source| {

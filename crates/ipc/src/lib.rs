@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
 pub const PROTOCOL_VERSION: u16 = 1;
-pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+/// Large enough for a maximal message (256 KiB) after worst-case JSON escaping.
+pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,6 +38,9 @@ pub struct ContentRequest {
     pub text: String,
     #[serde(default)]
     pub legacy_html: bool,
+    /// `text` is a base64-encoded avatar image to decode into a small thumbnail.
+    #[serde(default)]
+    pub avatar: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
