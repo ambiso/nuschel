@@ -30,6 +30,12 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
 
+# RSA key generation is unusably slow unoptimised; tests and debug builds create identities.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+[profile.dev.package.rsa]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

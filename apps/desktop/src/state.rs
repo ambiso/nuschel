@@ -1416,7 +1416,11 @@ impl Desktop {
                     }
                 }
                 Event::HistoryRecovered => {
-                    if self.error.as_deref().is_some_and(|error| error.starts_with("Local history")) {
+                    if self
+                        .error
+                        .as_deref()
+                        .is_some_and(|error| error.starts_with("Local history"))
+                    {
                         self.error = None;
                     }
                 }

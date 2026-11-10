@@ -46,6 +46,7 @@ rcgen = { version = "0.14.10", default-features = false, features = [
 ] }
 p12-keystore = "0.4"
 sha1 = "0.11"
+rsa = { version = "0.9", default-features = false, features = ["std", "getrandom"] }
 
 [lints]
 workspace = true

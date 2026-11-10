@@ -46,6 +46,9 @@ struct Arguments {
     import_certificate: Option<PathBuf>,
     #[arg(long, default_value = "")]
     certificate_password: String,
+    /// Export the profile's client certificate as PKCS#12 (for Mumble) and exit.
+    #[arg(long)]
+    export_certificate: Option<PathBuf>,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -153,6 +156,14 @@ fn output(value: serde_json::Value) -> io::Result<()> {
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Arguments::parse();
     let profile = Profile::open(args.profile_dir)?;
+    if let Some(path) = &args.export_certificate {
+        let bytes = profile
+            .export_identity(&args.certificate_password)
+            .map_err(io::Error::other)?;
+        std::fs::write(path, bytes)?;
+        output(json!({"kind":"certificate_exported", "hash":profile.identity()?.mumble_hash()}))?;
+        return Ok(());
+    }
     if let Some(path) = &args.import_certificate {
         let bytes = std::fs::read(path)?;
         let identity = profile

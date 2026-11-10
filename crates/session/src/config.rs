@@ -365,12 +365,7 @@ impl Profile {
         if path.exists() {
             return Ok(serde_json::from_slice(&read_bounded(&path, 64 * 1024)?)?);
         }
-        let rcgen::CertifiedKey { cert, signing_key } =
-            rcgen::generate_simple_self_signed(vec!["nuschel-client.invalid".into()])?;
-        let identity = ClientIdentity {
-            certificate: cert.der().to_vec(),
-            private_key: signing_key.serialize_der(),
-        };
+        let identity = ClientIdentity::generate()?;
         atomic_private_write(&path, &serde_json::to_vec(&identity)?)?;
         Ok(identity)
     }
@@ -424,6 +419,40 @@ impl std::fmt::Debug for ClientIdentity {
 }
 
 impl ClientIdentity {
+    /// A self-signed RSA-2048 identity like Mumble's own. Stock Mumble imports
+    /// only RSA keys, so this keeps identities portable between the clients.
+    pub fn generate() -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        use rsa::pkcs8::EncodePrivateKey;
+        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)?;
+        let der = key.to_pkcs8_der()?;
+        let signing_key = rcgen::KeyPair::from_pkcs8_der_and_sign_algo(
+            &rustls::pki_types::PrivatePkcs8KeyDer::from(der.as_bytes()),
+            &rcgen::PKCS_RSA_SHA256,
+        )?;
+        let mut params = rcgen::CertificateParams::new(vec!["nuschel-client.invalid".to_string()])?;
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Nuschel user");
+        params.not_after = rcgen::date_time_ymd(2046, 1, 1);
+        let cert = params.self_signed(&signing_key)?;
+        Ok(Self {
+            certificate: cert.der().to_vec(),
+            private_key: der.as_bytes().to_vec(),
+        })
+    }
+
+    /// Stock Mumble can import only RSA client keys.
+    pub fn is_rsa(&self) -> bool {
+        // PKCS#8 AlgorithmIdentifier for rsaEncryption (1.2.840.113549.1.1.1).
+        const RSA_OID: &[u8] = &[
+            0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
+        ];
+        self.private_key
+            .windows(RSA_OID.len())
+            .take(32)
+            .any(|window| window == RSA_OID)
+    }
+
     /// SHA-1 of the certificate, the hash Mumble servers show and register.
     pub fn mumble_hash(&self) -> String {
         use sha1::Digest as _;
@@ -466,6 +495,13 @@ impl ClientIdentity {
     }
 
     pub fn to_pkcs12(&self, password: &str) -> Result<Vec<u8>, String> {
+        if !self.is_rsa() {
+            return Err(
+                "This identity uses an ECDSA key, which stock Mumble cannot import. \
+                 Identities created by current Nuschel versions use RSA."
+                    .into(),
+            );
+        }
         let key = p12_keystore::PrivateKey::from_der(&self.private_key)
             .map_err(|error| error.to_string())?;
         let certificate = p12_keystore::Certificate::from_der(&self.certificate)
@@ -550,6 +586,18 @@ mod tests {
             server.history_identity("one"),
             server.history_identity("two")
         );
+    }
+    #[test]
+    fn new_identities_are_mumble_compatible_rsa() {
+        let identity = ClientIdentity::generate().unwrap();
+        assert!(identity.is_rsa());
+        identity.validate().unwrap();
+        let legacy = ClientIdentity {
+            certificate: identity.certificate.clone(),
+            private_key: rcgen::KeyPair::generate().unwrap().serialize_der(),
+        };
+        assert!(!legacy.is_rsa());
+        assert!(legacy.to_pkcs12("").is_err());
     }
     #[test]
     fn identities_round_trip_through_pkcs12() {

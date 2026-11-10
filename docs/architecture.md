@@ -243,6 +243,19 @@ has a neutral or pending indicator. A server advertisement or configuration flag
 cannot produce a green lock. Labels explain "no end-to-end encryption" so that users
 do not confuse transport encryption with E2EE. The current client displays only transport-only sessions.
 
+Identities are separate by protocol. The Mumble identity is an RSA-2048 X.509
+TLS client certificate used only for Mumble logins; stock Mumble imports only
+RSA keys, so this keeps it portable as PKCS#12. Nuschel-native/MLS identities are
+independent device keys and credentials, never derived from the Mumble
+certificate; an optional signed binding may link both for one person, without
+either depending on the other. Mumble's constraints do not shape MLS.
+
+Cipher suites are negotiated and upgradable. Post-quantum confidentiality comes
+first (a hybrid ML-KEM/X25519 KEM such as X-Wing, available experimentally in
+OpenMLS), then post-quantum authentication with ML-DSA, preferably hybrid with
+Ed25519, once draft-ietf-mls-pq-ciphersuites settles. Group re-initialisation must
+move existing groups to a new suite without losing membership.
+
 Use an existing Rust MLS implementation after dependency/security review, in a
 dedicated crypto worker that owns credentials, ratchet state, key deletion and
 transactional state persistence. Bind member credentials to verified device identities,
