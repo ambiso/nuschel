@@ -121,22 +121,38 @@ class PipeWire:
                 if entry.get("type") == "PipeWire:Interface:Node"}
 
     def up(self, expected=("speakers", "microphone")):
-        for name in ("pipewire", "wireplumber", "pipewire-pulse"):
-            self.start(name)
+        # Start in dependency order, each once the previous is serving (as systemd
+        # orders the user services): WirePlumber exits if PipeWire is not up yet.
         deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            try:
-                nodes = self.nodes()
-                session_ready = any("'default.audio.sink'" in line for line in defaults(self))
-                if set(expected) <= set(nodes) and (self.runtime / "pulse/native").exists() and session_ready:
+
+        def wait(condition):
+            while time.monotonic() < deadline:
+                try:
+                    if condition():
+                        return True
+                except (json.JSONDecodeError, subprocess.TimeoutExpired):
+                    pass
+                time.sleep(0.2)
+            return False
+        self.start("pipewire")
+        if wait(lambda: set(expected) <= set(self.nodes())):
+            self.start("wireplumber")
+            if wait(lambda: any("'default.audio.sink'" in line for line in defaults(self))):
+                self.start("pipewire-pulse")
+                if wait(lambda: (self.runtime / "pulse/native").exists()):
+                    nodes = self.nodes()
                     hardware = [name for name, props in nodes.items() if props.get("device.api")]
                     assert not hardware, f"hardware nodes appeared in the private session: {hardware}"
                     time.sleep(0.5)
                     return
-            except (json.JSONDecodeError, subprocess.TimeoutExpired):
-                pass
-            time.sleep(0.3)
-        raise AssertionError("private PipeWire did not come up: " + (self.root / "pipewire.log").read_text()[-3000:])
+        try:
+            nodes = sorted(name for name in self.nodes() if name)
+        except (json.JSONDecodeError, subprocess.TimeoutExpired) as error:
+            nodes = f"unavailable ({error})"
+        logs = "\n".join(f"--- {name}.log\n" + (self.root / f"{name}.log").read_text()[-2000:]
+                         for name in ("pipewire", "wireplumber", "pipewire-pulse") if (self.root / f"{name}.log").exists())
+        raise AssertionError(f"private PipeWire did not come up: nodes {nodes}, expected {sorted(expected)}, "
+                             f"pulse socket {(self.runtime / 'pulse/native').exists()}, defaults {defaults(self)}\n{logs}")
 
     def down(self):
         for name in ("pipewire-pulse", "wireplumber", "pipewire"):

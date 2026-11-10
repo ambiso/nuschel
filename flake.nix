@@ -158,16 +158,23 @@
               install -Dm644 ${./vendor/pulseaudio/LICENSE.md} "$out/share/licenses/nuschel/pulseaudio-MIT"
             ''
             + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-              for program in nuschel nuschel-cli; do
-                wrapProgram "$out/bin/$program" \
-                --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}" \
+              runtimeFlags=(--prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}"
                 --prefix PATH : "${
                   lib.makeBinPath [
                     pkgs.bubblewrap
                     pkgs.util-linux
                   ]
-                }"
+                }")
+              # The desktop binary keeps its own name (screen readers announce the
+              # executable's name, not ".nuschel-wrapped"); it finds its workers
+              # beside it.
+              mkdir -p "$out/libexec/nuschel"
+              mv "$out/bin/nuschel" "$out/libexec/nuschel/nuschel"
+              for worker in nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
+                ln -s "../../bin/$worker" "$out/libexec/nuschel/$worker"
               done
+              makeWrapper "$out/libexec/nuschel/nuschel" "$out/bin/nuschel" "''${runtimeFlags[@]}"
+              wrapProgram "$out/bin/nuschel-cli" "''${runtimeFlags[@]}"
             '';
           }
         );

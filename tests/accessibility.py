@@ -112,10 +112,23 @@ class AccessibilityTest:
         else:
             env = dict(os.environ)
             assert env.get("DBUS_SESSION_BUS_ADDRESS"), "run inside a D-Bus session (dbus-run-session)"
+        # NixOS sets NO_AT_BRIDGE=1 wherever its at-spi2-core service is off; a
+        # screen-reader session never has it, and AccessKit honours it.
+        env.pop("NO_AT_BRIDGE", None)
+        # Login sessions always have a runtime directory (su does not create one);
+        # the accessibility bus socket lives there.
+        if not env.get("XDG_RUNTIME_DIR"):
+            runtime = self.root / "runtime"
+            runtime.mkdir(mode=0o700)
+            env["XDG_RUNTIME_DIR"] = str(runtime)
         session = Bus(env["DBUS_SESSION_BUS_ADDRESS"], busctl)
         # The bus launcher owns org.a11y.Bus and starts the accessibility bus; the
         # registry tracks applications on it. Neither depends on D-Bus activation.
-        self.spawn([str(self.args.at_spi / "libexec/at-spi-bus-launcher")], env, "bus-launcher.log")
+        # The launcher keeps IsEnabled in GSettings: the memory backend keeps it in
+        # this process, so the test never writes the user's dconf database (and
+        # still works where no dconf service exists, as in the VM).
+        self.spawn([str(self.args.at_spi / "libexec/at-spi-bus-launcher")], env | {"GSETTINGS_BACKEND": "memory"},
+                   "bus-launcher.log")
         eventually(lambda: self.try_call(session, "call", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus",
                                          "GetAddress"), "the accessibility bus did not start", timeout=15)
         session("set-property", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Status", "IsEnabled", "b", "true")
@@ -151,8 +164,18 @@ class AccessibilityTest:
                     if node.name.lower() == "nuschel":
                         return node
                 return None
-            nuschel = eventually(application, "Nuschel did not register with the accessibility registry",
-                                 timeout=30)
+            try:
+                nuschel = eventually(application, "Nuschel did not register with the accessibility registry",
+                                     timeout=45)
+            except AssertionError as error:
+                names = [node.name for node in registry.children()]
+                logs = "\n".join(f"--- {name}\n" + (self.root / name).read_text()[-1500:]
+                                  for name in ("desktop.log", "bus-launcher.log", "registry.log")
+                                  if (self.root / name).exists())
+                variables = {key: value for key, value in env.items() if "BUS" in key or "DISPLAY" in key
+                             or key.startswith(("AT_SPI", "NO_AT_BRIDGE", "XDG_RUNTIME"))}
+                raise AssertionError(f"{error}; registered applications: {names}; accessibility bus {a11y.address}; "
+                                     f"environment: {variables}\n{logs}")
 
             def ready():
                 nodes = snapshot(nuschel)

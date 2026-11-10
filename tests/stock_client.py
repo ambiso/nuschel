@@ -107,15 +107,22 @@ def main():
 
             # Stock client → Nuschel: Mumble transmits a tone from its microphone.
             peer.unmute()
-            mono = tone(0, 48000 * 3)
-            data = struct.pack("<%df" % (2 * len(mono)), *[v for s in mono for v in (s, s)])
+            mono = tone(0, 48000)
+            second = struct.pack("<%df" % (2 * len(mono)), *[v for s in mono for v in (s, s)])
             before = len(peer.events)
-            subprocess.run([str(args.pulse_bin / "pacat"), f"--server=unix:{socket}", "--playback", "--device=stockmic",
-                            "--raw", "--format=float32le", "--rate=48000", "--channels=2"],
-                           input=data, check=True, timeout=20, env=env)
+
+            def received():
+                return [e["opus"] for e in list(peer.events)[before:]
+                        if e["kind"] == "audio" and e["sender"] == stock["session"] and not e["end"]]
+            # Mumble opens its microphone some time after joining (seconds on a slow
+            # VM): keep playing the tone, a second at a time, until it transmits.
+            deadline = time.monotonic() + 40
+            while len(received()) <= 40 and time.monotonic() < deadline:
+                subprocess.run([str(args.pulse_bin / "pacat"), f"--server=unix:{socket}", "--playback",
+                                "--device=stockmic", "--raw", "--format=float32le", "--rate=48000", "--channels=2"],
+                               input=second, check=True, timeout=20, env=env)
             time.sleep(0.5)
-            packets = [e["opus"] for e in list(peer.events)[before:]
-                       if e["kind"] == "audio" and e["sender"] == stock["session"] and not e["end"]]
+            packets = received()
             assert len(packets) > 40, f"too few packets from the stock client: {len(packets)}"
             assert rms(reference.decode(packets)) > 0.01, "stock client's audio did not decode"
             print(f"Stock Mumble → Nuschel voice: {len(packets)} Opus packets decoded.", flush=True)
