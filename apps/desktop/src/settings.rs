@@ -602,6 +602,41 @@ pub fn dialog(
             Rc::new(move |this, _, _| this.update_settings(|settings| settings.auto_reconnect = !reconnect)), cx),
     ];
 
+    let identity = this.profile.identity().ok();
+    let identity_section = vec![
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(icon("certificate", 20., color(TEXT_MUTED)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(text!("Client certificate").with_id("identity-heading")))
+                    .child(div().text_xs().text_color(color(TEXT_MUTED)).truncate().child(text!(identity.map(|identity| format!("SHA-1 {}", identity.mumble_hash())).unwrap_or_else(|| "Not created yet".into())).with_id("identity-hash"))),
+            )
+            .child(styled_button("import-certificate", "Import…", Tone::Secondary, |this, window, cx| this.import_certificate(window, cx), cx))
+            .child(styled_button("export-certificate", "Export…", Tone::Secondary, |this, window, cx| {
+                this.open_prompt(
+                    usize::MAX,
+                    crate::menus::PromptAction::ExportCertificate,
+                    "Protect the exported certificate",
+                    "Choose a password for the .p12 file. Anyone with the file and password can log in as you.",
+                    String::new(),
+                    window,
+                    cx,
+                );
+            }, cx))
+            .into_any_element(),
+        div()
+            .text_xs()
+            .text_color(color(TEXT_FAINT))
+            .child(text!(this.identity_status.clone().unwrap_or_else(|| "Servers recognise registered users by this certificate. Mumble's Certificate Wizard exports compatible .p12 files.".into())).with_id("identity-status"))
+            .into_any_element(),
+    ];
     let content = div()
         .flex()
         .flex_col()
@@ -640,7 +675,8 @@ pub fn dialog(
                 .child(section("TRANSMISSION", voice))
                 .child(section("PROCESSING", processing))
                 .child(section("DEVICES", devices))
-                .child(section("NETWORK", network)),
+                .child(section("NETWORK", network))
+                .child(section("IDENTITY", identity_section)),
         )
         .into_any_element();
     modal(

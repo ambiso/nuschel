@@ -186,6 +186,8 @@ pub enum Command {
         id: u32,
         targets: Vec<VoiceTargetSpec>,
     },
+    /// Send subsequent voice to this registered target (0 = normal talking).
+    SelectVoiceTarget(u32),
     ContextAction {
         action: String,
         session: Option<u32>,
@@ -309,9 +311,10 @@ pub async fn run(
                     let Some(command) = command else { break; };
                     match command {
                         Command::Disconnect => break,
+                        Command::SelectVoiceTarget(id) => state.voice_target = id.min(30),
                         Command::Voice { target, packet } => if state.own_session.is_some() && state.opus
                             && ((!state.local_muted && !state.local_deafened && state.may_speak()) || packet.end)
-                            && let Ok(payload) = voice::encode_voice(state.version, target, &packet) {
+                            && let Ok(payload) = voice::encode_voice(state.version, if target == 0 { state.voice_target } else { target }, &packet) {
                             let sent = match state.udp.as_mut() { Some(udp) => udp.send_voice(&payload).await, None => false };
                             if !sent { write_control(&mut writer, kind::UDP_TUNNEL, &payload).await?; }
                         },
@@ -377,6 +380,7 @@ struct State {
     local_muted: bool,
     local_deafened: bool,
     rejoin: Option<u32>,
+    voice_target: u32,
     permissions: BTreeMap<u32, u32>,
     context_actions: BTreeMap<String, ContextAction>,
     unsupported_codec: BTreeSet<u32>,
@@ -399,6 +403,7 @@ impl Default for State {
             local_muted: true,
             local_deafened: false,
             rejoin: None,
+            voice_target: 0,
             permissions: BTreeMap::new(),
             context_actions: BTreeMap::new(),
             unsupported_codec: BTreeSet::new(),
@@ -482,7 +487,7 @@ impl State {
         }
         let own = self.own_session.unwrap_or_default();
         match command {
-            Command::Disconnect | Command::Voice { .. } => {}
+            Command::Disconnect | Command::Voice { .. } | Command::SelectVoiceTarget(_) => {}
             Command::Join(channel) => {
                 if self.channels.contains_key(&channel) {
                     self.queue(

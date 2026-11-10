@@ -156,7 +156,7 @@ struct ContentJob {
 }
 enum StorageCommand {
     Append {
-        job: ContentJob,
+        job: Box<ContentJob>,
         source: String,
         document: MessageDocument,
     },
@@ -563,7 +563,7 @@ async fn connect_once(
                         (current.locally_muted(hash.as_deref()), current.volume_for(hash.as_deref()))
                     };
                     if muted_locally { continue; }
-                    mark_talking(&events, &id, generation, &mut speaking, packet.sender, !packet.end).await;
+                    mark_talking(events, &id, generation, &mut speaking, packet.sender, !packet.end).await;
                     if let Some(media) = &media {
                         let _ = media.commands.try_send(LiveMediaRequest::Playback { sender: packet.sender, sequence: packet.sequence, opus: packet.opus, end: packet.end, volume: packet.volume * volume });
                     }
@@ -620,7 +620,7 @@ async fn connect_once(
                     let packet = nuschel_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                     sequence += 2;
                     if !muted || end { let _ = session_commands.try_send(Command::Voice { target: 0, packet }); }
-                    if let Some(session) = own_session { mark_talking(&events, &id, generation, &mut speaking, session, !end && !muted).await; }
+                    if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, !end && !muted).await; }
                 },
                 Some(LiveMediaEvent::Level { level_db, voice, transmitting }) => {
                     let _ = events.try_send(Event::AudioLevel { server: id.clone(), generation, level_db, voice, transmitting });
@@ -706,7 +706,7 @@ async fn content_loop(
         let (source, document) = prepare(&job.text.body, job.text.html).await;
         if storage
             .send(StorageCommand::Append {
-                job,
+                job: Box::new(job),
                 source,
                 document,
             })

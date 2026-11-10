@@ -3,6 +3,7 @@ use crate::{
     assets::icon,
     chrome,
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
+    menus::MenuTarget,
     state::{Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
 };
@@ -77,6 +78,13 @@ impl Render for Desktop {
                     cx,
                 ))
             })
+            .when_some(crate::panels::panel(self, cx), |view, panel| {
+                view.child(panel)
+            })
+            .when_some(crate::menus::prompt(self, cx), |view, prompt| {
+                view.child(prompt)
+            })
+            .when_some(crate::menus::menu(self, cx), |view, menu| view.child(menu))
             .into_any_element();
         chrome::frame(window, content)
     }
@@ -139,6 +147,14 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                             this.browse_server(index, window, cx);
                             cx.notify();
                         }))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                this.open_menu(index, MenuTarget::Server, event.position);
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        )
                         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                             if activation_key(event) {
                                 this.browse_server(index, window, cx);
@@ -249,6 +265,25 @@ fn sidebar(
                 Some(user) => user_row(server, server_index, user, depth, cx),
                 None => div().into_any_element(),
             },
+            TreeRow::Listener { session, depth } => match server.users.get(&session) {
+                Some(user) => div()
+                    .id(("listener-row", session as usize))
+                    .role(Role::TreeItem)
+                    .aria_label(format!("{} is listening", user.name))
+                    .h(px(26.))
+                    .pl(px(30. + depth.saturating_sub(1).min(10) as f32 * 14.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(color(TEXT_FAINT))
+                    .child(icon("ear", 14., color(TEXT_FAINT)))
+                    .child(div().truncate().child(
+                        text!(user.name.clone()).with_id(("listener-name", session as usize)),
+                    ))
+                    .into_any_element(),
+                None => div().into_any_element(),
+            },
         })
         .collect::<Vec<_>>();
     let directs = server
@@ -336,15 +371,26 @@ fn sidebar(
                                 .child(text!(server.status_label()).with_id("connection")),
                         ),
                 )
-                .child(icon_button(
-                    "edit-server",
-                    "pencil",
-                    "Edit server",
-                    TEXT_MUTED,
-                    None,
-                    move |this, window, cx| this.open_form(Some(server_index), window, cx),
-                    cx,
-                )),
+                .child(
+                    div()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                this.open_menu(server_index, MenuTarget::Server, event.position);
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        )
+                        .child(icon_button(
+                            "server-menu",
+                            "more",
+                            "Server options",
+                            TEXT_MUTED,
+                            None,
+                            |_, _, _| {},
+                            cx,
+                        )),
+                ),
         )
         .child(
             div()
@@ -461,7 +507,9 @@ fn channel_row(
         }))
         .when(selected, |row| row.bg(color(SELECTED)))
         .hover(|style| style.bg(color(HOVER)).text_color(color(TEXT)))
-        .tooltip(move |_, cx| cx.new(|_| Tooltip(full_name.clone().into())).into())
+        .when(this.menu.is_none(), |row| {
+            row.tooltip(move |_, cx| cx.new(|_| Tooltip(full_name.clone().into())).into())
+        })
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             this.browse_channel(server_index, id, window, cx);
             if event.click_count() == 2 {
@@ -475,6 +523,14 @@ fn channel_row(
                 cx.notify();
             }
         }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                this.open_menu(server_index, MenuTarget::Channel(id), event.position);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
         .child(
             div()
                 .id(("branch", id as usize))
@@ -532,6 +588,28 @@ fn channel_row(
                 .id(("channel-name", id as usize))
                 .child(entry.name.clone()),
         )
+        .when(!entry.links.is_empty(), |row| {
+            row.child(
+                div()
+                    .id(("channel-links", id as usize))
+                    .tooltip({
+                        let names = entry
+                            .links
+                            .iter()
+                            .filter_map(|link| {
+                                server.channels.iter().find(|channel| channel.id == *link)
+                            })
+                            .map(|channel| channel.name.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        move |_, cx| {
+                            cx.new(|_| Tooltip(format!("Linked with {names}").into()))
+                                .into()
+                        }
+                    })
+                    .child(icon("link", 14., color(TEXT_FAINT))),
+            )
+        })
         .when(hidden_users > 0, |row| {
             row.child(
                 div()
@@ -586,6 +664,14 @@ fn user_row(
         .on_click(cx.listener(move |this, _, window, cx| {
             this.open_direct(server_index, session, window, cx);
         }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                this.open_menu(server_index, MenuTarget::User(session), event.position);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
         .child(avatar(
             &user.name,
             22.,
@@ -601,6 +687,22 @@ fn user_row(
                 .when(talking, |name| name.text_color(color(TEXT)))
                 .child(text!(user.name.clone()).with_id(("user-name", session as usize))),
         )
+        .when(user.recording, |row| {
+            row.child(
+                div()
+                    .id(("recording", session as usize))
+                    .tooltip(|_, cx| cx.new(|_| Tooltip("Recording".into())).into())
+                    .child(icon("record", 12., color(DANGER))),
+            )
+        })
+        .when(user.priority_speaker, |row| {
+            row.child(
+                div()
+                    .id(("priority", session as usize))
+                    .tooltip(|_, cx| cx.new(|_| Tooltip("Priority speaker".into())).into())
+                    .child(icon("star", 14., color(WARNING))),
+            )
+        })
         .when(muted, |row| {
             row.child(
                 div()
@@ -841,12 +943,22 @@ fn conversation(
         .is_some_and(|voice| channel.target == TextTarget::Channel(voice));
     let mut messages = Vec::new();
     let mut previous: Option<(&str, i64)> = None;
+    let mut activity = channel.activity.iter().enumerate().peekable();
     for (position, message) in channel.messages.iter().enumerate() {
+        while let Some((index, line)) =
+            activity.next_if(|(_, line)| line.observed_at_ms <= message.observed_at_ms)
+        {
+            messages.push(activity_row(line, index));
+            previous = None;
+        }
         let grouped = previous.is_some_and(|(author, at)| {
             author == message.author && message.observed_at_ms.saturating_sub(at) < GROUP_MS
         });
         previous = Some((&message.author, message.observed_at_ms));
         messages.push(message_row(message, position, grouped, cx));
+    }
+    for (index, line) in activity {
+        messages.push(activity_row(line, index));
     }
     let topic = if !is_channel {
         "Private conversation".to_string()
@@ -897,18 +1009,24 @@ fn conversation(
                         .text_color(color(TEXT_MUTED))
                         .child(text!(topic).with_id("channel-topic")),
                 )
-                .when(connected && is_channel && !in_this_voice, |header| {
-                    header.child(styled_button(
-                        "join-voice",
-                        "Join voice",
-                        Tone::Primary,
-                        |this, _, cx| {
-                            this.join_selected();
-                            cx.notify();
-                        },
-                        cx,
-                    ))
-                })
+                .when(
+                    connected
+                        && is_channel
+                        && !in_this_voice
+                        && server.may_try(channel.id, nuschel_session::model::permission::ENTER),
+                    |header| {
+                        header.child(styled_button(
+                            "join-voice",
+                            "Join voice",
+                            Tone::Primary,
+                            |this, _, cx| {
+                                this.join_selected();
+                                cx.notify();
+                            },
+                            cx,
+                        ))
+                    },
+                )
                 .when(!connected, |header| {
                     header.child(styled_button(
                         "connect-server",
@@ -933,6 +1051,69 @@ fn conversation(
                         )),
                 ),
         )
+        .when_some(crate::panels::reconnect_banner(server), |view, text| {
+            view.child(banner("reconnect-banner", WARNING, "signal", text, None))
+        })
+        .when_some(server.whisper.clone(), |view, text| {
+            view.child(banner(
+                "whisper-banner",
+                ACCENT,
+                "whisper",
+                format!("{text} · your voice goes only there"),
+                Some(styled_button(
+                    "stop-whisper",
+                    "Stop",
+                    Tone::Secondary,
+                    move |this, _, cx| {
+                        this.stop_whisper(index);
+                        cx.notify();
+                    },
+                    cx,
+                )),
+            ))
+        })
+        .when_some(server.suggestion.clone(), |view, text| {
+            let ptt = text.contains("push-to-talk");
+            view.child(banner(
+                "suggest-banner",
+                ACCENT,
+                "info",
+                text,
+                Some(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .when(ptt, |row| {
+                            row.child(styled_button(
+                                "use-ptt",
+                                "Use push-to-talk",
+                                Tone::Primary,
+                                move |this, _, cx| {
+                                    this.update_settings(|settings| {
+                                        settings.audio.transmit =
+                                            nuschel_core::audio::TransmitMode::PushToTalk
+                                    });
+                                    this.servers[index].suggestion = None;
+                                    this.settings_open = this.settings.push_to_talk_key.is_none();
+                                    cx.notify();
+                                },
+                                cx,
+                            ))
+                        })
+                        .child(styled_button(
+                            "dismiss-suggest",
+                            "Dismiss",
+                            Tone::Ghost,
+                            move |this, _, cx| {
+                                this.servers[index].suggestion = None;
+                                cx.notify();
+                            },
+                            cx,
+                        ))
+                        .into_any_element(),
+                ),
+            ))
+        })
         .when_some(
             server.notice.clone().or_else(|| this.error.clone()),
             |view, notice| {
@@ -1023,7 +1204,28 @@ fn conversation(
                                     ),
                                 )
                                 .when_some(
-                                    server.welcome.as_ref().filter(|_| is_channel),
+                                    channel.description.as_ref().filter(|_| is_channel),
+                                    |view, description| {
+                                        view.child(
+                                            div()
+                                                .id("channel-description")
+                                                .mt_2()
+                                                .p_3()
+                                                .rounded(px(8.))
+                                                .bg(color(SIDEBAR))
+                                                .flex()
+                                                .flex_col()
+                                                .gap_2()
+                                                .text_sm()
+                                                .children(document_blocks(description)),
+                                        )
+                                    },
+                                )
+                                .when_some(
+                                    server
+                                        .welcome
+                                        .as_ref()
+                                        .filter(|_| is_channel && channel.id == 0),
                                     |view, welcome| {
                                         view.child(
                                             div()
@@ -1092,6 +1294,68 @@ fn conversation(
                 ),
         )
         .child(composer(this, server, channel.name.clone(), cx))
+        .into_any_element()
+}
+
+fn activity_row(line: &crate::state::ActivityLine, index: usize) -> AnyElement {
+    let tone = if line.warning { WARNING } else { TEXT_FAINT };
+    div()
+        .id(("activity", index))
+        .role(Role::Status)
+        .px_2()
+        .py_1()
+        .flex()
+        .items_center()
+        .gap_3()
+        .text_sm()
+        .text_color(color(tone))
+        .child(div().w(px(40.)).flex().justify_center().child(icon(
+            if line.warning { "alert" } else { "info" },
+            14.,
+            color(tone),
+        )))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(text!(line.text.clone()).with_id(("activity-text", index))),
+        )
+        .child(div().text_xs().child(
+            text!(crate::state::local_time(line.observed_at_ms)).with_id(("activity-time", index)),
+        ))
+        .into_any_element()
+}
+
+fn banner(
+    id: &'static str,
+    tone: u32,
+    icon_name: &'static str,
+    text: String,
+    action: Option<AnyElement>,
+) -> AnyElement {
+    div()
+        .id(id)
+        .role(Role::Status)
+        .mx_4()
+        .mt_3()
+        .px_3()
+        .py_2()
+        .rounded(px(8.))
+        .bg(tint(tone, 0x22))
+        .border_1()
+        .border_color(tint(tone, 0x60))
+        .flex()
+        .items_center()
+        .gap_2()
+        .text_sm()
+        .child(icon(icon_name, 16., color(tone)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(text!(text).with_id((id, 1_usize))),
+        )
+        .when_some(action, |row, action| row.child(action))
         .into_any_element()
 }
 
@@ -1252,7 +1516,14 @@ fn composer(
                 .px_1()
                 .text_xs()
                 .text_color(color(TEXT_FAINT))
-                .child(text!(format!("Message #{channel_name}")).with_id("composer-target"))
+                .child(
+                    text!(if channel_name.starts_with("@ ") {
+                        format!("Message {}", channel_name.trim_start_matches("@ "))
+                    } else {
+                        format!("Message #{channel_name}")
+                    })
+                    .with_id("composer-target"),
+                )
                 .child(div().flex_1())
                 .child(
                     text!("Enter for a new line · Ctrl/Cmd+Enter to send").with_id("composer-hint"),
@@ -1366,7 +1637,7 @@ fn security_icon(security: SessionSecurity, id: usize, size: f32) -> AnyElement 
         .into_any_element()
 }
 
-fn document_blocks(document: &MessageDocument) -> Vec<AnyElement> {
+pub fn document_blocks(document: &MessageDocument) -> Vec<AnyElement> {
     let count = document.blocks.len();
     document
         .blocks

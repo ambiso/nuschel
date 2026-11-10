@@ -3,6 +3,8 @@ mod assets;
 mod backend;
 mod chrome;
 mod dialogs;
+mod menus;
+mod panels;
 mod scrolling;
 mod settings;
 mod state;

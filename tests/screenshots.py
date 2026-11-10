@@ -121,6 +121,29 @@ def main():
                 shot("05-settings-live")
                 shell.key("Escape")
                 time.sleep(0.4)
+            if args.scenes in ("all", "menus"):
+                bots[2].send(kind="join", channel=2)  # Linus joins Development
+                time.sleep(0.8)
+                bots[3].close()  # Margaret disconnects
+                bots.pop(3)
+                time.sleep(1.2)
+                shot("06-activity")
+                click(236, 301)  # left: opens a DM with Ada
+                time.sleep(0.8)
+                shot("06b-direct")
+                click(236, 301, button=3)  # Ada Lovelace
+                time.sleep(0.8)
+                shot("07-user-menu")
+                click(290, 317)  # first entry: profile
+                time.sleep(1.5)
+                shot("08-profile")
+                shell.key("Escape")
+                time.sleep(0.4)
+                click(200, 233, button=3)  # Lobby
+                time.sleep(0.8)
+                shot("09-channel-menu")
+                shell.key("Escape")
+                time.sleep(0.4)
             if args.scenes in ("all", "maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)

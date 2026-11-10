@@ -17,6 +17,8 @@ use nuschel_session::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+pub use crate::panels::Panel;
+
 pub struct MessageView {
     pub id: Option<i64>,
     pub author: String,
@@ -79,6 +81,11 @@ pub enum TreeRow {
         hidden_users: usize,
     },
     User {
+        session: u32,
+        depth: usize,
+    },
+    /// Someone listening to (not in) this channel, Mumble 1.4+.
+    Listener {
         session: u32,
         depth: usize,
     },
@@ -361,8 +368,12 @@ pub struct Desktop {
     pub title_drag: bool,
     pub settings: ClientSettings,
     pub settings_open: bool,
+    pub menu: Option<crate::menus::Menu>,
+    pub prompt: Option<crate::menus::Prompt>,
+    pub panel: Option<Panel>,
     pub recording_ptt: bool,
     pub ptt_active: bool,
+    pub identity_status: Option<String>,
     pending_browse: Option<(String, u32)>,
     /// A rejected login waiting to reopen the server form for a retry.
     pending_retry: Option<(usize, RejectKind, String)>,
@@ -444,8 +455,12 @@ impl Desktop {
             title_drag: false,
             settings,
             settings_open: false,
+            menu: None,
+            prompt: None,
+            panel: None,
             recording_ptt: false,
             ptt_active: false,
+            identity_status: None,
             pending_browse: None,
             pending_retry: None,
             cache_dirty: false,
@@ -580,6 +595,12 @@ impl Desktop {
         self.chat_motion.cancel();
         self.load_history(None);
         self.scroll.scroll_to_bottom();
+        let server = &self.servers[index];
+        if server.status == Status::Connected && !server.permissions.contains_key(&id) {
+            let _ = self
+                .backend
+                .command(&server.id, Command::RequestPermissions(id));
+        }
     }
     pub fn toggle_message(&mut self, index: usize) {
         if let Some((server, channel)) = self.selected_indices()
@@ -666,6 +687,16 @@ impl Desktop {
                     depth: depth + 1,
                 }));
             }
+            rows.extend(
+                server
+                    .users
+                    .values()
+                    .filter(|user| user.listening.contains(&id))
+                    .map(|user| TreeRow::Listener {
+                        session: user.session,
+                        depth: depth + 1,
+                    }),
+            );
         }
         rows
     }
@@ -1040,10 +1071,19 @@ impl Desktop {
     pub fn key_down(&mut self, keystroke: &Keystroke) -> bool {
         if keystroke.key == "escape"
             && !self.recording_ptt
-            && (self.form.is_some() || self.settings_open)
+            && (self.form.is_some()
+                || self.settings_open
+                || self.menu.is_some()
+                || self.prompt.is_some()
+                || self.panel.is_some())
         {
-            self.form = None;
-            self.settings_open = false;
+            if self.menu.take().is_none()
+                && self.prompt.take().is_none()
+                && self.panel.take().is_none()
+            {
+                self.form = None;
+                self.settings_open = false;
+            }
             return true;
         }
         if self.recording_ptt {
@@ -1781,7 +1821,27 @@ impl Desktop {
                     channel.links = update.links.clone();
                     channel.temporary = update.temporary;
                     channel.max_users = update.max_users;
+                    if channel.description_raw != update.description {
+                        channel.description_raw = update.description.clone();
+                        channel.description = None;
+                        if !update.description.is_empty() {
+                            self.backend.render_html(
+                                server.id.clone(),
+                                server.generation,
+                                RenderKey::Description(update.id),
+                                update.description.clone(),
+                            );
+                        }
+                    }
                 } else {
+                    if !update.description.is_empty() {
+                        self.backend.render_html(
+                            server.id.clone(),
+                            server.generation,
+                            RenderKey::Description(update.id),
+                            update.description.clone(),
+                        );
+                    }
                     server.channels.push(ChannelView {
                         id: update.id,
                         parent: update.parent,
@@ -1796,6 +1856,10 @@ impl Desktop {
                         loading: false,
                         viewing_older: false,
                         new_messages: 0,
+                        links: update.links,
+                        temporary: update.temporary,
+                        max_users: update.max_users,
+                        description_raw: update.description,
                         ..Default::default()
                     });
                 }
@@ -1854,7 +1918,25 @@ impl Desktop {
             SessionEvent::ContextActions(actions) => server.context_actions = actions,
             SessionEvent::RegisteredUsers(users) => server.registered_users = Some(users),
             SessionEvent::Bans(bans) => server.bans = Some(bans),
-            SessionEvent::Acl(acl) => server.acl = Some(acl),
+            SessionEvent::Acl(acl) => {
+                let unknown: Vec<u32> = acl
+                    .entries
+                    .iter()
+                    .filter_map(|entry| entry.user_id)
+                    .chain(
+                        acl.groups
+                            .iter()
+                            .flat_map(|group| group.add.iter().copied()),
+                    )
+                    .filter(|id| !server.user_names.contains_key(id))
+                    .collect();
+                if !unknown.is_empty() {
+                    let _ = self
+                        .backend
+                        .command(&server.id, Command::QueryUserNames(unknown));
+                }
+                server.acl = Some(acl);
+            }
             SessionEvent::UserNames(names) => server.user_names.extend(names),
             SessionEvent::UnsupportedCodec { session } => {
                 if let Some(user) = server.users.get(&session).cloned()
