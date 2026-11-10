@@ -64,17 +64,21 @@ are not concealed (`apps/media-worker/src/live.rs`).
       canceller anywhere in the chain gets Nuschel's playback as its reference and
       turns Nuschel's off; a noise suppressor turns Nuschel's suppressor off.
 - [x] Microphone and echo tests in Settings without a server or unmuting.
-- [ ] Nuschel's canceller converges less reliably than PulseAudio's WebRTC
-      `module-echo-cancel` in the media_live rig (-31 dB coupling): 11-46 dB of echo
-      reduction and 0-27% of far-end speech leaking through the gate, against echo
-      below detection for PulseAudio's. Fixed so far: far-end audio was handed over in
-      playback-ring bursts (now as the device consumes it) and automatic gain raised
-      residual echo after RNNoise (now held only on echo-dominant frames, so the user
-      talking over the far end is not ducked). When the canceller has not converged its
-      suppressor still ducks the user during double talk: 6-9 dB in about a third of
-      runs with automatic gain off, against 0-2 dB once converged. Next: sample-
-      accurate latency accounting from cpal's stream timestamps, then check on real
-      hardware with Settings → Echo test.
+- [x] Nuschel's canceller works from a recording of the output device (all
+      applications; PipeWire sink capture, PulseAudio monitor, WASAPI loopback, macOS
+      process tap), stamped on one clock with the microphone and fed with a 25 ms lead.
+      PipeWire room on one clock: 40-41 dB of its own echo removed in 6 of 6 runs, another
+      application's stereo sound by about 50 dB; double talk ducks 0-2 dB. Fixed on the
+      way: far-end audio was handed over in playback-ring bursts, automatic gain raised
+      residual echo, and the gain hold ducked the user.
+- [ ] The PulseAudio media_live rig still varies (8-44 dB): its echo path is a loopback
+      between two independently clocked null sinks, whose delay drifts. Check on real
+      hardware with Settings → Echo test; consider AEC3's clock-drift settings.
+- [ ] macOS: the process tap asks for system audio permission; check the prompt and
+      what happens when it is refused (the own-playback reference should take over).
+- [ ] cpal's PulseAudio client stops a stream playing into a sink while the same
+      connection records that sink's monitor (worked around with a second connection);
+      reduce and report upstream.
 - [ ] Nuschel records nothing from PulseAudio's `module-sine-source`, and its own
       playback is silent while it records the monitor of the sink it plays into.
       Both found in test rigs; check the PulseAudio client's stream setup.

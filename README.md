@@ -18,7 +18,11 @@ Voice uses Mumble's encrypted UDP transport, with automatic fallback to the TLS
 tunnel when UDP is blocked and a force-TCP option. Transmission is by voice activity
 (RNNoise), push-to-talk (in the window, and system-wide where the desktop grants a
 shortcut), or continuous. Capture runs echo cancellation, noise suppression and
-automatic gain in Rust. On Linux Nuschel follows PipeWire's graph upstream from
+automatic gain in Rust. Nuschel's canceller works from a recording of what the
+speakers play (all applications, mono or stereo), time-aligned with the microphone,
+so music and other programs are removed from your microphone too; the recording is
+made only while the microphone is open and never leaves the device (macOS asks for
+system audio permission). On Linux Nuschel follows PipeWire's graph upstream from
 the microphone: a system echo canceller (PipeWire/PulseAudio echo-cancel) anywhere
 in the chain replaces Nuschel's and receives Nuschel's playback as its reference, and
 a noise suppressor (e.g. an RNNoise filter-chain) replaces Nuschel's suppressor; a

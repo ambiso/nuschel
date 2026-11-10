@@ -22,6 +22,10 @@ appeared. Checks:
    source-rnnoise.conf layout: mic → echo-cancel → RNNoise → default source)
    is followed upstream: Nuschel turns off both its echo canceller and its
    noise suppressor and feeds the system canceller its playback.
+6. Nuschel's own canceller in a room on one clock (the speakers looped into
+   the microphone at -37 dB): it records what the speakers play, so both its
+   own playback and another application's sound are removed from the
+   microphone, every run.
 """
 import argparse
 import json
@@ -78,6 +82,17 @@ RNNOISE = """context.modules = [
       audio.position = [ MONO ]
       capture.props = { node.name = "effect_input.rnnoise" node.passive = true target.object = "echo-cancel-source" }
       playback.props = { node.name = "effect_output.rnnoise" media.class = Audio/Source }
+    }
+  }
+]
+"""
+# The room: what the speakers play reaches a microphone source, attenuated.
+ROOM = """context.modules = [
+  { name = libpipewire-module-loopback
+    args = {
+      node.description = "room"
+      capture.props = { node.name = "room.capture" stream.capture.sink = true target.object = "speakers" node.passive = true }
+      playback.props = { node.name = "room.mic" node.description = "Room microphone" media.class = Audio/Source audio.position = [ MONO ] }
     }
   }
 ]
@@ -201,7 +216,7 @@ class Worker:
     count = 0
     logs = Path(tempfile.gettempdir())
 
-    def __init__(self, binary, pipewire, host=None, backend=None, muted=True):
+    def __init__(self, binary, pipewire, host=None, backend=None, muted=True, settings=None):
         env = dict(pipewire.env) | {"PULSE_SERVER": f"unix:{pipewire.runtime}/pulse/native", "PIPEWIRE_DEBUG": "2"}
         if backend:
             env["NUSCHEL_AUDIO_BACKEND"] = backend
@@ -211,7 +226,8 @@ class Worker:
                                         stderr=self.log.open("w"), env=env)
         self.events = []
         threading.Thread(target=self._read, daemon=True).start()
-        self.send({"kind": "configure", "bitrate": 40000, "packet_loss_percent": 5, "settings": {}, "host": host})
+        self.send({"kind": "configure", "bitrate": 40000, "packet_loss_percent": 5, "settings": settings or {},
+                   "host": host})
         self.send({"kind": "set_state", "epoch": 1, "muted": muted, "deafened": False})
 
     def _read(self):
@@ -397,6 +413,64 @@ def check_rnnoise_chain(binary, pipewire):
           "its playback feeds the system canceller, session defaults untouched.", flush=True)
 
 
+def check_room_echo(binary, pipewire, output):
+    """Nuschel's canceller with its reference recorded from the speakers."""
+    env = pipewire.env
+    subprocess.run([str(pipewire.pipewire / "bin/pw-metadata"), "-n", "default", "0",
+                    "default.configured.audio.source", '{ "name": "room.mic" }', "Spa:String:JSON"],
+                   env=env, check=True, capture_output=True, timeout=10)
+    dump = json.loads(subprocess.run([str(pipewire.pipewire / "bin/pw-dump")], env=env, capture_output=True,
+                                     text=True, timeout=10).stdout)
+    room = next(entry["id"] for entry in dump if entry.get("type") == "PipeWire:Interface:Node"
+                and entry["info"]["props"].get("node.name") == "room.capture")
+    subprocess.run([str(pipewire.pipewire / "bin/pw-cli"), "s", str(room), "Props", "{ volume: 0.03 }"],
+                   env=env, check=True, capture_output=True, timeout=10)
+    time.sleep(1)
+    for run in range(3):
+        worker = Worker(binary, pipewire, muted=False)
+        devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
+        assert devices["input"] == "pipewire:room.mic" and devices["echo"]["kind"] == "nuschel", devices
+        worker.ready()
+        worker.send({"kind": "echo_test"})
+        report = worker.wait(lambda e: e["kind"] == "echo_test", "no echo test result", timeout=20)
+        worker.stop()
+        assert report["echo_db"] is not None and report["reduction_db"] >= 30 and report["transmitted"] <= 0.02, \
+            f"run {run}: the canceller did not remove its own playback: {report}"
+    # Another application plays into the speakers; Nuschel plays nothing.
+    music = output / "other-app.wav"
+    with wave.open(str(music), "wb") as file:
+        file.setnchannels(2)
+        file.setsampwidth(2)
+        file.setframerate(48000)
+        frames = bytearray()
+        for n in range(48000 * 12):
+            t = n / 48000
+            left = 0.3 * math.sin(2 * math.pi * 220 * t) * max(0.0, math.sin(2 * math.pi * 2.3 * t))
+            right = 0.3 * math.sin(2 * math.pi * 330 * t) * max(0.0, math.sin(2 * math.pi * 1.7 * t + 1))
+            frames += struct.pack("<hh", int(left * 32767), int(right * 32767))
+        file.writeframes(bytes(frames))
+    levels = {}
+    for mode in ("on", "off"):
+        player = subprocess.Popen([str(pipewire.pipewire / "bin/pw-play"), "--target", "speakers", str(music)],
+                                  env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  start_new_session=True)
+        worker = Worker(binary, pipewire, muted=False, settings={"echo_cancellation": mode})
+        worker.ready()
+        time.sleep(6)
+        mark = len(worker.events)
+        time.sleep(3)
+        window = [e for e in worker.events[mark:] if e["kind"] == "level"]
+        worker.stop()
+        os.killpg(player.pid, signal.SIGTERM)
+        player.wait(timeout=5)
+        loud = sorted(e["level_db"] for e in window)[len(window) // 2:]
+        levels[mode] = (sum(loud) / max(1, len(loud)), sum(e["transmitting"] for e in window) / max(1, len(window)))
+    assert levels["off"][0] - levels["on"][0] >= 20 and levels["on"][1] <= 0.05, \
+        f"another application's sound was not removed: {levels}"
+    print(f"Room on one clock: Nuschel's canceller removed its own playback (30 dB or more, 3 of 3 runs) and "
+          f"another application's stereo sound ({levels['off'][0] - levels['on'][0]:.0f} dB).", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
@@ -426,6 +500,14 @@ def main():
                 pipewire.enable_echo_cancel()
                 pipewire.up(expected=("speakers", "microphone", "echo-cancel-source", "echo-cancel-sink"))
                 check_echo_cancel(binary, pipewire)
+            finally:
+                pipewire.close()
+        if only in (None, "room"):
+            pipewire = PipeWire(args.pipewire, args.wireplumber, args.dbus_daemon, Path(temporary) / "room")
+            try:
+                (pipewire.config / "pipewire/pipewire.conf.d/40-room.conf").write_text(ROOM)
+                pipewire.up(expected=("speakers", "microphone", "room.capture", "room.mic"))
+                check_room_echo(binary, pipewire, args.output)
             finally:
                 pipewire.close()
         if only in (None, "rnnoise"):

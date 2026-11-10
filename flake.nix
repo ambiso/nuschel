@@ -308,6 +308,7 @@
                 <key>LSMinimumSystemVersion</key><string>${macMinimum}</string>
                 <key>NSHighResolutionCapable</key><true/>
                 <key>NSMicrophoneUsageDescription</key><string>Nuschel sends your voice to the people in your channel.</string>
+                <key>NSAudioCaptureUsageDescription</key><string>Nuschel removes what your speakers play from your microphone, so others do not hear it. The sound stays on this Mac.</string>
               </dict>
               </plist>
               PLIST

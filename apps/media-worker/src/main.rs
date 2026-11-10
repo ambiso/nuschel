@@ -5,6 +5,7 @@ mod graph;
 mod jitter;
 mod live;
 mod probe;
+mod reference;
 
 use std::io;
 

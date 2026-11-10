@@ -51,6 +51,8 @@ pub struct CapturePipeline {
     /// ceiling it is held under while the far end plays.
     near_gain: f32,
     gain_ceiling: Option<f32>,
+    reference_channels: usize,
+    render_split: [[f32; FRAME]; 2],
 }
 
 fn stream() -> StreamConfig {
@@ -58,7 +60,20 @@ fn stream() -> StreamConfig {
 }
 
 impl CapturePipeline {
+    #[cfg(test)]
     pub fn new(settings: &AudioSettings, echo_cancellation: bool) -> Self {
+        Self::with_reference(settings, echo_cancellation, 1)
+    }
+
+    /// `reference_channels` (1 or 2): the speakers' channels as recorded.
+    /// AEC3 treats them as mono until they actually differ (stereo music,
+    /// games), then models each speaker's path separately.
+    pub fn with_reference(
+        settings: &AudioSettings,
+        echo_cancellation: bool,
+        reference_channels: usize,
+    ) -> Self {
+        let reference_channels = reference_channels.clamp(1, 2);
         let front = AudioProcessing::builder()
             .config(Config {
                 high_pass_filter: Some(HighPassFilter::default()),
@@ -66,7 +81,7 @@ impl CapturePipeline {
                 ..Default::default()
             })
             .capture_config(stream())
-            .render_config(stream())
+            .render_config(StreamConfig::new(RATE, reference_channels as u16))
             .echo_detector(echo_cancellation)
             .build();
         let gain = settings.automatic_gain.then(|| {
@@ -98,7 +113,13 @@ impl CapturePipeline {
             far_end: false,
             near_gain: 1.,
             gain_ceiling: None,
+            reference_channels,
+            render_split: [[0.; FRAME]; 2],
         }
+    }
+
+    pub fn reference_channels(&self) -> usize {
+        self.reference_channels
     }
 
     /// Tell the chain whether the far end is audible. While echo dominates a
@@ -118,11 +139,33 @@ impl CapturePipeline {
     }
 
     /// Far-end (playback) audio, exactly as handed to the output device.
+    /// One 10 ms frame of what the speakers played, interleaved with
+    /// `reference_channels` channels.
     pub fn render(&mut self, frame: &[f32]) {
-        if self.echo_cancellation && frame.len() == FRAME {
-            let mut sink = [0.; FRAME];
-            let _ = self.front.process_render_f32(&[frame], &mut [&mut sink]);
+        if !self.echo_cancellation || frame.len() != FRAME * self.reference_channels {
+            return;
         }
+        let mut sink = [[0.; FRAME]; 2];
+        if self.reference_channels == 1 {
+            let _ = self.front.process_render_f32(&[frame], &mut [&mut sink[0]]);
+            return;
+        }
+        let [left, right] = &mut self.render_split;
+        for ((&[first, second], l), r) in frame
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(left.iter_mut())
+            .zip(right.iter_mut())
+        {
+            *l = first;
+            *r = second;
+        }
+        let [sink_left, sink_right] = &mut sink;
+        let _ = self.front.process_render_f32(
+            &[&self.render_split[0], &self.render_split[1]],
+            &mut [sink_left, sink_right],
+        );
     }
 
     /// Hint the canceller with the known device buffering, in milliseconds.

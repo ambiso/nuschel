@@ -9,6 +9,7 @@ use crate::{
     dsp::{CapturePipeline, FRAME, RATE},
     jitter::{JitterBuffer, Pull},
     probe::EchoProbe,
+    reference::{self, Clock, Played, ReferenceConverter, Stamper, Step, Timeline},
 };
 use cpal::{
     FromSample, Sample, SampleFormat, SizedSample,
@@ -38,8 +39,6 @@ const RING: usize = 20 * FRAME;
 const ECHO_DELAY_HINT_MS: i32 = 30;
 
 const MAX_SPEAKERS: usize = 64;
-/// Far-end frames waiting for the device; the playback ring holds fewer.
-const FAR_END_FRAMES: usize = RING / FRAME + 2;
 const LEVEL_EVERY: u32 = 10;
 
 enum Event {
@@ -51,10 +50,23 @@ enum Event {
 struct Devices {
     _input: Option<cpal::Stream>,
     _output: cpal::Stream,
+    /// The recording of the output device used as the canceller's reference.
+    _reference: Option<cpal::Stream>,
     capture: Option<Consumer<f32>>,
+    capture_timeline: Timeline,
     playback: Producer<f32>,
     /// Output callbacks that found the ring empty; written by the device thread.
     underruns: Arc<AtomicU32>,
+    /// What the speakers play, for the canceller (while it is in use).
+    reference: Option<Reference>,
+}
+
+/// The canceller's reference stream and how far it has been fed.
+struct Reference {
+    samples: Consumer<f32>,
+    timeline: Timeline,
+    channels: usize,
+    index: u64,
 }
 
 struct Speaker {
@@ -202,10 +214,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut loopback = false;
     let mut looped = VecDeque::<f32>::with_capacity(RING);
     let mut probe: Option<EchoProbe> = None;
-    // Far-end frames queued for playback that the device has not taken yet,
-    // and sample counts into and out of the current playback ring.
-    let mut far_end = VecDeque::<[f32; FRAME]>::with_capacity(FAR_END_FRAMES + 1);
-    let (mut pushed_samples, mut fed_samples) = (0_u64, 0_u64);
+    // Microphone frames processed since the devices opened, and a buffer for
+    // one reference frame (up to two channels).
+    let mut mic_index = 0_u64;
+    let mut reference_frame = [0_f32; 2 * FRAME];
+    let mut far_mono = [0_f32; FRAME];
     // A noise suppressor upstream of the microphone (e.g. RNNoise) replaces ours.
     let mut upstream_noise = false;
     loop {
@@ -216,8 +229,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     let echo =
                         opened.capture.is_some() && matches!(route.echo, EchoSource::Nuschel);
                     upstream_noise = route.noise.is_some();
-                    let mut chain =
-                        CapturePipeline::new(&chain_settings(&settings, upstream_noise), echo);
+                    let channels = opened
+                        .reference
+                        .as_ref()
+                        .map_or(1, |reference| reference.channels);
+                    let mut chain = CapturePipeline::with_reference(
+                        &chain_settings(&settings, upstream_noise),
+                        echo,
+                        channels,
+                    );
                     chain.set_delay_hint(ECHO_DELAY_HINT_MS);
                     pipeline = Some(chain);
                     let message = if muted {
@@ -257,8 +277,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         },
                     )?;
                     devices = Some(opened);
-                    far_end.clear();
-                    (pushed_samples, fed_samples) = (0, 0);
+                    mic_index = 0;
                     last_window = Instant::now();
                     skip_window = true;
                 }
@@ -349,9 +368,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(0);
                 } else if let Some(chain) = pipeline.as_mut() {
                     // Rebuild the chain with the new processing choices on the same route.
-                    let mut rebuilt = CapturePipeline::new(
+                    let mut rebuilt = CapturePipeline::with_reference(
                         &chain_settings(&settings, upstream_noise),
                         chain.echo_cancellation(),
+                        chain.reference_channels(),
                     );
                     rebuilt.set_delay_hint(ECHO_DELAY_HINT_MS);
                     *chain = rebuilt;
@@ -455,14 +475,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if pushed.len() < FRAME {
                 break;
             }
-            // The canceller sees this frame once the device has taken it from
-            // the ring (below), not now: the ring is refilled in bursts.
-            far_end.push_back(mix);
-            pushed_samples += FRAME as u64;
-            if far_end.len() > FAR_END_FRAMES {
-                far_end.pop_front();
+            // With a reference recording, far-end activity is judged from it
+            // (all applications) when it reaches the canceller, below.
+            if open.reference.is_none() {
+                controller.observe_render(&mix);
             }
-            controller.observe_render(&mix);
         }
         if last_window.elapsed() >= WINDOW {
             last_window = Instant::now();
@@ -489,31 +506,61 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )?;
             }
         }
-        // Far end: hand the canceller each frame as the device consumes it, as
-        // WebRTC does from its playout callback, so render and capture reach it
-        // at the pace they happen and its delay estimate holds.
-        let played = pushed_samples - (RING - open.playback.slots()) as u64;
-        while fed_samples + FRAME as u64 <= played {
-            let Some(frame) = far_end.pop_front() else {
-                fed_samples = played;
-                break;
-            };
-            if let Some(chain) = pipeline.as_mut() {
-                chain.render(&frame);
-            }
-            fed_samples += FRAME as u64;
-        }
-        // Capture: process every complete 10 ms frame.
+        // Capture: process every complete 10 ms frame, each after the
+        // reference frames that sounded up to it (see reference.rs).
         let Some(capture) = open.capture.as_mut() else {
             continue;
         };
         while capture.slots() >= FRAME {
-            if capture.pop_entire_slice(&mut capture_frame).is_err() {
-                break;
-            }
             let Some(chain) = pipeline.as_mut() else {
                 break;
             };
+            let mic_time = open.capture_timeline.time_of(mic_index);
+            if let (Some(reference), Some(mic_time)) = (open.reference.as_mut(), mic_time) {
+                let width = FRAME * reference.channels;
+                let mut hold = false;
+                loop {
+                    let available = reference.samples.slots() >= width;
+                    let time = reference.timeline.time_of(reference.index);
+                    match reference::step(time, available, mic_time) {
+                        decision @ (Step::Feed | Step::Drop) => {
+                            let Ok(chunk) = reference.samples.read_chunk(width) else {
+                                break;
+                            };
+                            let (first, second) = chunk.as_slices();
+                            reference_frame[..first.len()].copy_from_slice(first);
+                            reference_frame[first.len()..width].copy_from_slice(second);
+                            chunk.commit_all();
+                            reference.index += FRAME as u64;
+                            if decision == Step::Feed {
+                                let frame = &reference_frame[..width];
+                                chain.render(frame);
+                                for (mono, samples) in far_mono
+                                    .iter_mut()
+                                    .zip(frame.chunks_exact(reference.channels))
+                                {
+                                    *mono = samples.iter().sum::<f32>() / reference.channels as f32;
+                                }
+                                controller.observe_render(&far_mono);
+                            }
+                        }
+                        Step::Later => break,
+                        Step::Wait => {
+                            // The reference lags: hold the microphone briefly
+                            // rather than give the canceller its echo first.
+                            hold = capture.slots() < reference::MAX_HOLD_FRAMES * FRAME;
+                            break;
+                        }
+                    }
+                }
+                if hold {
+                    break;
+                }
+            }
+            if capture.pop_entire_slice(&mut capture_frame).is_err() {
+                break;
+            }
+            mic_index += FRAME as u64;
             let raw = capture_frame;
             chain.set_far_end(controller.far_active());
             let result = chain.process(&mut capture_frame, push_to_talk, controller.guard_gate());
@@ -823,6 +870,9 @@ fn open_host(
     // The microphone opens first: a filter-chain's capture (as in PipeWire's
     // RNNoise configuration) is passive and is linked to its own source only
     // once someone records from the chain.
+    // Every callback stamps its samples on this clock (see reference.rs).
+    let clock = Clock::new();
+    let (capture_stamper, capture_timeline) = reference::stamped();
     let mut capture_consumer = None;
     let input = capture
         .then(|| input_device.clone())
@@ -830,19 +880,36 @@ fn open_host(
         .and_then(|input| {
             let config = input.default_input_config().ok()?;
             let (producer, consumer) = RingBuffer::<f32>::new(RING);
+            let stamp = (capture_stamper, clock);
             let stream = match config.sample_format() {
-                SampleFormat::F32 => {
-                    input_stream::<f32>(&input, stream_config(host, config), tx.clone(), producer)
-                }
-                SampleFormat::I16 => {
-                    input_stream::<i16>(&input, stream_config(host, config), tx.clone(), producer)
-                }
-                SampleFormat::U16 => {
-                    input_stream::<u16>(&input, stream_config(host, config), tx.clone(), producer)
-                }
-                SampleFormat::I32 => {
-                    input_stream::<i32>(&input, stream_config(host, config), tx.clone(), producer)
-                }
+                SampleFormat::F32 => input_stream::<f32>(
+                    &input,
+                    stream_config(host, config),
+                    tx.clone(),
+                    producer,
+                    stamp,
+                ),
+                SampleFormat::I16 => input_stream::<i16>(
+                    &input,
+                    stream_config(host, config),
+                    tx.clone(),
+                    producer,
+                    stamp,
+                ),
+                SampleFormat::U16 => input_stream::<u16>(
+                    &input,
+                    stream_config(host, config),
+                    tx.clone(),
+                    producer,
+                    stamp,
+                ),
+                SampleFormat::I32 => input_stream::<i32>(
+                    &input,
+                    stream_config(host, config),
+                    tx.clone(),
+                    producer,
+                    stamp,
+                ),
                 _ => return None,
             }
             .ok()?;
@@ -907,45 +974,91 @@ fn open_host(
         .map_err(|error| error.to_string())?;
     let (playback, playback_consumer) = RingBuffer::<f32>::new(RING);
     let underruns = Arc::new(AtomicU32::new(0));
+    // What the output callback hands to the device: the reference where the
+    // output device cannot be recorded.
+    let (played_samples, played_consumer) = RingBuffer::<f32>::new(reference::RING_FRAMES);
+    let (played_stamper, played_timeline) = reference::stamped();
+    let played = (
+        Played {
+            samples: played_samples,
+            stamper: played_stamper,
+        },
+        clock,
+    );
     let stream = match config.sample_format() {
         SampleFormat::F32 => output_stream::<f32>(
             &output_device,
             stream_config(host, config),
             tx.clone(),
-            playback_consumer,
-            underruns.clone(),
+            (playback_consumer, underruns.clone()),
+            played,
         ),
         SampleFormat::I16 => output_stream::<i16>(
             &output_device,
             stream_config(host, config),
             tx.clone(),
-            playback_consumer,
-            underruns.clone(),
+            (playback_consumer, underruns.clone()),
+            played,
         ),
         SampleFormat::U16 => output_stream::<u16>(
             &output_device,
             stream_config(host, config),
             tx.clone(),
-            playback_consumer,
-            underruns.clone(),
+            (playback_consumer, underruns.clone()),
+            played,
         ),
         SampleFormat::I32 => output_stream::<i32>(
             &output_device,
             stream_config(host, config),
             tx.clone(),
-            playback_consumer,
-            underruns.clone(),
+            (playback_consumer, underruns.clone()),
+            played,
         ),
         _ => return Err("unsupported output sample format".into()),
     }?;
     stream.play().map_err(|error| error.to_string())?;
+    // Nuschel's canceller needs to know everything the speakers play: record
+    // the output device (all applications) where the system allows it, and
+    // only while the microphone is open.
+    let mut recording = None;
+    let reference = if input.is_some() && matches!(echo, EchoSource::Nuschel) {
+        match record_output(
+            host,
+            &all,
+            &output_device,
+            output_id.as_deref(),
+            tx.clone(),
+            clock,
+        ) {
+            Ok((stream, reference)) => {
+                recording = Some(stream);
+                Some(reference)
+            }
+            Err(error) => {
+                eprintln!(
+                    "output recording unavailable, using Nuschel's playback as the echo reference: {error}"
+                );
+                Some(Reference {
+                    samples: played_consumer,
+                    timeline: played_timeline,
+                    channels: 1,
+                    index: 0,
+                })
+            }
+        }
+    } else {
+        None
+    };
     Ok((
         Devices {
             _input: input,
             _output: stream,
+            _reference: recording,
             capture: capture_consumer,
+            capture_timeline,
             playback,
             underruns,
+            reference,
         },
         Route {
             inputs,
@@ -1040,6 +1153,7 @@ fn input_stream<T>(
     config: cpal::StreamConfig,
     tx: SyncSender<Event>,
     mut ring: Producer<f32>,
+    (mut stamper, clock): (Stamper, Clock),
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample,
@@ -1054,7 +1168,151 @@ where
     device
         .build_input_stream(
             config,
-            move |data: &[T], _| converter.push(data, &mut ring),
+            move |data: &[T], info: &cpal::InputCallbackInfo| {
+                let timestamp = info.timestamp();
+                let latency = timestamp
+                    .callback
+                    .saturating_duration_since(timestamp.capture);
+                stamper.anchor(clock.now_shifted(latency, Duration::ZERO));
+                stamper.advance(converter.push(data, &mut ring));
+            },
+            error_callback(tx),
+            None,
+        )
+        .map_err(|error| error.to_string())
+}
+
+/// Record what an output device plays (all applications), as the echo
+/// canceller's reference: PipeWire captures the sink, PulseAudio records its
+/// monitor source, WASAPI and Core Audio (process tap) record in loopback.
+fn record_output(
+    host: &cpal::Host,
+    all: &[cpal::Device],
+    output: &cpal::Device,
+    output_id: Option<&str>,
+    tx: SyncSender<Event>,
+    clock: Clock,
+) -> Result<(cpal::Stream, Reference), String> {
+    #[cfg(target_os = "linux")]
+    if host.id() == cpal::HostId::Alsa {
+        return Err("ALSA cannot record an output device".into());
+    }
+    #[cfg(target_os = "linux")]
+    let pulse_monitor = (host.id() == cpal::HostId::PulseAudio)
+        .then(|| {
+            let sink = output_id
+                .map(backend_name)
+                .map(str::to_string)
+                .or_else(|| {
+                    resolve_pulse_default(false).map(|(id, _)| backend_name(&id).to_string())
+                })?;
+            let monitor = format!("{sink}.monitor");
+            // A connection of its own: cpal's PulseAudio client stops a stream
+            // playing into a sink while the same connection records its monitor.
+            let separate = cpal::host_from_id(cpal::HostId::PulseAudio).ok()?;
+            let devices: Vec<cpal::Device> = separate.devices().ok()?.collect();
+            devices.into_iter().find(|device| {
+                device.supports_input()
+                    && device_id(device).as_deref().map(backend_name) == Some(monitor.as_str())
+            })
+        })
+        .flatten();
+    // PipeWire: a chosen sink is recorded directly (cpal sets
+    // stream.capture.sink); the default output through cpal's "sink_default".
+    #[cfg(target_os = "linux")]
+    let pipewire_sink = (host.id() == cpal::HostId::PipeWire
+        && output_id
+            .map(backend_name)
+            .is_none_or(|name| name == "output_default"))
+    .then(|| {
+        all.iter()
+            .find(|device| device_id(device).as_deref().map(backend_name) == Some("sink_default"))
+            .cloned()
+    })
+    .flatten();
+    #[cfg(not(target_os = "linux"))]
+    let (pulse_monitor, pipewire_sink): (Option<cpal::Device>, Option<cpal::Device>) = {
+        let _ = (all, output_id);
+        (None, None)
+    };
+    let device = pulse_monitor
+        .or(pipewire_sink)
+        .unwrap_or_else(|| output.clone());
+    // On Linux only a sink (or its monitor) may be recorded here: never risk
+    // treating a microphone as the speakers. Windows and macOS record output
+    // devices in loopback.
+    #[cfg(target_os = "linux")]
+    let config = {
+        let id = device_id(&device).unwrap_or_default();
+        let sink_like = backend_name(&id).ends_with(".monitor")
+            || backend_name(&id) == "sink_default"
+            || device.supports_output();
+        if !sink_like || !device.supports_input() {
+            return Err(format!("{id} cannot be recorded as an output"));
+        }
+        device
+            .default_input_config()
+            .map_err(|error| error.to_string())?
+    };
+    #[cfg(not(target_os = "linux"))]
+    let config = device
+        .default_input_config()
+        .or_else(|_| output.default_output_config())
+        .map_err(|error| error.to_string())?;
+    let channels = usize::from(config.channels());
+    let rate = config.sample_rate();
+    if channels == 0 || channels > 32 || !(8000..=384_000).contains(&rate) {
+        return Err("unsupported output recording format".into());
+    }
+    let mut converter = ReferenceConverter::new(channels, rate);
+    let outputs = converter.outputs();
+    let (mut ring, samples) = RingBuffer::<f32>::new(reference::RING_FRAMES * outputs);
+    let (mut stamper, timeline) = reference::stamped();
+    let format = config.sample_format();
+    let stream_config = stream_config(host, config);
+    let callback = move |values: &mut dyn Iterator<Item = f32>, info: &cpal::InputCallbackInfo| {
+        let timestamp = info.timestamp();
+        let latency = timestamp
+            .callback
+            .saturating_duration_since(timestamp.capture);
+        stamper.anchor(clock.now_shifted(latency, Duration::ZERO));
+        stamper.advance(converter.push(values, &mut ring));
+    };
+    let stream = match format {
+        SampleFormat::F32 => build_recording::<f32>(&device, stream_config, tx, callback),
+        SampleFormat::I16 => build_recording::<i16>(&device, stream_config, tx, callback),
+        SampleFormat::U16 => build_recording::<u16>(&device, stream_config, tx, callback),
+        SampleFormat::I32 => build_recording::<i32>(&device, stream_config, tx, callback),
+        _ => Err("unsupported output recording sample format".into()),
+    }?;
+    stream.play().map_err(|error| error.to_string())?;
+    Ok((
+        stream,
+        Reference {
+            samples,
+            timeline,
+            channels: outputs,
+            index: 0,
+        },
+    ))
+}
+
+fn build_recording<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    tx: SyncSender<Event>,
+    mut callback: impl FnMut(&mut dyn Iterator<Item = f32>, &cpal::InputCallbackInfo) + Send + 'static,
+) -> Result<cpal::Stream, String>
+where
+    T: SizedSample,
+    f32: FromSample<T>,
+{
+    device
+        .build_input_stream(
+            config,
+            move |data: &[T], info: &cpal::InputCallbackInfo| {
+                callback(&mut data.iter().map(|value| f32::from_sample(*value)), info);
+            },
             error_callback(tx),
             None,
         )
@@ -1080,11 +1338,13 @@ impl CaptureConverter {
         }
     }
 
-    fn push<T>(&mut self, data: &[T], ring: &mut Producer<f32>)
+    /// Convert and queue; returns the 48 kHz samples actually queued.
+    fn push<T>(&mut self, data: &[T], ring: &mut Producer<f32>) -> u64
     where
         T: SizedSample,
         f32: FromSample<T>,
     {
+        let mut pushed = 0;
         for chunk in data.chunks_exact(self.channels) {
             let sample = chunk
                 .iter()
@@ -1101,10 +1361,16 @@ impl CaptureConverter {
                 self.accumulator -= u64::from(self.rate);
                 let fraction = 1. - self.accumulator as f32 / RATE as f32;
                 // A full ring means the worker stalled; dropping is better than blocking.
-                let _ = ring.push(self.previous + (sample - self.previous) * fraction);
+                if ring
+                    .push(self.previous + (sample - self.previous) * fraction)
+                    .is_ok()
+                {
+                    pushed += 1;
+                }
             }
             self.previous = sample;
         }
+        pushed
     }
 }
 
@@ -1113,8 +1379,8 @@ fn output_stream<T>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
     tx: SyncSender<Event>,
-    mut ring: Consumer<f32>,
-    underruns: Arc<AtomicU32>,
+    (mut ring, underruns): (Consumer<f32>, Arc<AtomicU32>),
+    (mut played, clock): (Played, Clock),
 ) -> Result<cpal::Stream, String>
 where
     T: SizedSample + FromSample<f32>,
@@ -1128,8 +1394,17 @@ where
     device
         .build_output_stream(
             config,
-            move |data: &mut [T], _| {
-                if converter.pull(data, &mut ring) {
+            move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+                let timestamp = info.timestamp();
+                let ahead = timestamp
+                    .playback
+                    .saturating_duration_since(timestamp.callback);
+                played
+                    .stamper
+                    .anchor(clock.now_shifted(Duration::ZERO, ahead));
+                let (dry, handed) = converter.pull(data, &mut ring, &mut played.samples);
+                played.stamper.advance(handed);
+                if dry {
                     // Lock-free; the worker thread reads and resets it.
                     underruns.fetch_add(1, Ordering::Relaxed);
                 }
@@ -1161,12 +1436,20 @@ impl PlaybackConverter {
         }
     }
 
-    /// Fill a device buffer; returns whether the ring ran dry (silence played).
-    fn pull<T>(&mut self, data: &mut [T], ring: &mut Consumer<f32>) -> bool
+    /// Fill a device buffer, copying each 48 kHz sample it takes (silence
+    /// when the ring ran dry) into `played`. Returns whether the ring ran dry
+    /// and how many samples went into `played`.
+    fn pull<T>(
+        &mut self,
+        data: &mut [T],
+        ring: &mut Consumer<f32>,
+        played: &mut Producer<f32>,
+    ) -> (bool, u64)
     where
         T: SizedSample + FromSample<f32>,
     {
         let mut dry = false;
+        let mut handed = 0;
         for frame in data.chunks_exact_mut(self.channels) {
             let sample = self.previous + (self.next - self.previous) * self.position as f32;
             frame.fill(T::from_sample(sample));
@@ -1178,9 +1461,12 @@ impl PlaybackConverter {
                     dry = true;
                     0.
                 });
+                if played.push(self.next).is_ok() {
+                    handed += 1;
+                }
             }
         }
-        dry
+        (dry, handed)
     }
 }
 
@@ -1252,13 +1538,31 @@ mod tests {
         for _ in 0..10 {
             let _ = playback_in.push_entire_slice(&[0.25; FRAME]);
         }
+        // The reference paths: what the output callback played, and a stereo
+        // recording of the output device, both stamped on the shared clock.
+        let (mut played, mut played_out) = RingBuffer::<f32>::new(reference::RING_FRAMES);
+        let (mut recorded, mut recorded_out) = RingBuffer::<f32>::new(2 * reference::RING_FRAMES);
+        let mut recording = ReferenceConverter::new(2, 44_100);
+        let (mut stamper, _timeline) = reference::stamped();
+        let clock = Clock::new();
+        let device_frames = [0.5_f32; 2 * 441];
         let mut dry = 0;
         let counted = allocation_counter::measure(|| {
             for _ in 0..50 {
-                capture.push(&input, &mut capture_ring);
+                stamper.anchor(clock.now_shifted(Duration::from_millis(5), Duration::ZERO));
+                stamper.advance(capture.push(&input, &mut capture_ring));
                 while capture_out.pop().is_ok() {}
-                dry += usize::from(playback.pull(&mut output, &mut playback_ring));
-                dry += usize::from(resampled.pull(&mut output_u16, &mut playback_ring));
+                let (empty, handed) = playback.pull(&mut output, &mut playback_ring, &mut played);
+                dry += usize::from(empty);
+                stamper.advance(handed);
+                dry += usize::from(
+                    resampled
+                        .pull(&mut output_u16, &mut playback_ring, &mut played)
+                        .0,
+                );
+                while played_out.pop().is_ok() {}
+                recording.push(device_frames.iter().copied(), &mut recorded);
+                while recorded_out.pop().is_ok() {}
             }
         });
         assert_eq!(counted.count_total, 0, "a device callback allocated");

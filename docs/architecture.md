@@ -131,6 +131,21 @@ safety or correct Opus output. Codec and
 DSP SIMD remains confined to the media worker. Native PipeWire or platform processing
 can be reused when it is already working well on the active route.
 
+When Nuschel's own canceller runs, its reference is a recording of the output device,
+not Nuschel's playback buffer (`reference.rs`): PipeWire captures the sink, PulseAudio
+records its monitor (on a connection of its own; see TODO.md), WASAPI and Core Audio
+(process tap, macOS 14.2) record in loopback. Every application's sound is removed
+from the microphone, and the reference is exactly what played, on the device's clock.
+Without such a recording (raw ALSA) the output callback records what it hands to the
+device. The output is recorded only while the microphone is open and Nuschel's
+canceller is in use, inside the media worker, and is never sent anywhere. Each device
+callback stamps its samples on one clock (the worker's epoch, corrected by cpal's
+reported latency); the worker feeds the canceller every reference frame that sounded up
+to 25 ms after the microphone frame it is processing, holding the microphone up to
+40 ms when the recording lags, so the canceller never receives an echo before its
+reference. Up to two reference channels are kept; AEC3 runs mono until they differ
+(stereo music, games) and then models each speaker's path separately.
+
 On Linux, Nuschel recognises PipeWire and PulseAudio echo-cancel nodes, reuses them,
 and routes only its own playback to the paired reference sink. On Windows, the planned
 source is `IAudioEffectsManager` (active stream effects and change notifications) and
