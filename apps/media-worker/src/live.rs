@@ -8,6 +8,7 @@ use crate::{
     adaptive::{Controller, WINDOW},
     dsp::{CapturePipeline, FRAME, RATE},
     jitter::{JitterBuffer, Pull},
+    probe::EchoProbe,
 };
 use cpal::{
     FromSample, Sample, SampleFormat, SizedSample,
@@ -173,26 +174,39 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut capture_frame = [0.; FRAME];
     let mut mix = [0.; FRAME];
     let mut scratch = vec![0.; MAX_PACKET_SAMPLES];
+    // Local test mode (Settings): capture and process, but never encode or send.
+    let mut preview = false;
+    let mut loopback = false;
+    let mut looped = VecDeque::<f32>::with_capacity(RING);
+    let mut probe: Option<EchoProbe> = None;
+    // A noise suppressor upstream of the microphone (e.g. RNNoise) replaces ours.
+    let mut upstream_noise = false;
     loop {
         if devices.is_none() && state_known && !deafened && Instant::now() >= retry_at {
             match open_devices(tx.clone(), !muted, &settings, only_host.as_deref()) {
                 Ok((opened, route)) => {
-                    let echo = match &route.echo {
-                        EchoSource::Nuschel => true,
-                        EchoSource::Upstream(_) | EchoSource::None => false,
-                    };
-                    let mut chain = CapturePipeline::new(&settings, echo);
+                    // Without a microphone the canceller has nothing to do.
+                    let echo =
+                        opened.capture.is_some() && matches!(route.echo, EchoSource::Nuschel);
+                    upstream_noise = route.noise.is_some();
+                    let mut chain =
+                        CapturePipeline::new(&chain_settings(&settings, upstream_noise), echo);
                     chain.set_delay_hint(delay_hint(&controller));
                     pipeline = Some(chain);
                     let message = if muted {
                         "Audio ready · microphone muted".to_string()
                     } else if opened.capture.is_some() {
-                        match &route.echo {
-                            EchoSource::Upstream(name) => {
+                        match (&route.echo, &route.noise) {
+                            (EchoSource::Upstream(name), _) => {
                                 format!("Audio ready · system echo cancellation ({name})")
                             }
-                            EchoSource::Nuschel => "Audio ready · echo cancellation on".into(),
-                            EchoSource::None => "Audio ready".into(),
+                            (_, Some(name)) => {
+                                format!("Audio ready · system noise suppression ({name})")
+                            }
+                            (EchoSource::Nuschel, None) => {
+                                "Audio ready · echo cancellation on".into()
+                            }
+                            (EchoSource::None, None) => "Audio ready".into(),
                         }
                     } else {
                         "Playback ready; microphone unavailable".into()
@@ -205,6 +219,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             input: route.input,
                             output: route.output,
                             echo: route.echo,
+                            noise: route.noise,
                         },
                     )?;
                     emit(
@@ -305,9 +320,41 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(0);
                 } else if let Some(chain) = pipeline.as_mut() {
                     // Rebuild the chain with the new processing choices on the same route.
-                    let mut rebuilt = CapturePipeline::new(&settings, chain.echo_cancellation());
+                    let mut rebuilt = CapturePipeline::new(
+                        &chain_settings(&settings, upstream_noise),
+                        chain.echo_cancellation(),
+                    );
                     rebuilt.set_delay_hint(delay_hint(&controller));
                     *chain = rebuilt;
+                }
+            }
+            Some(Event::Request(LiveMediaRequest::Preview {
+                capture,
+                loopback: play_back,
+            })) => {
+                if state_known && capture == muted && devices.is_some() {
+                    // Opening or closing the microphone needs a new process (see SetState).
+                    emit(
+                        &mut output,
+                        LiveMediaEvent::Status {
+                            ready: false,
+                            message: "Restarting audio…".into(),
+                        },
+                    )?;
+                    std::process::exit(0);
+                }
+                preview = true;
+                muted = !capture;
+                deafened = false;
+                state_known = true;
+                loopback = play_back;
+                if !loopback {
+                    looped.clear();
+                }
+            }
+            Some(Event::Request(LiveMediaRequest::EchoTest)) => {
+                if devices.as_ref().is_some_and(|open| open.capture.is_some()) {
+                    probe = Some(EchoProbe::new());
                 }
             }
             Some(Event::Request(LiveMediaRequest::PushToTalk { active })) => push_to_talk = active,
@@ -363,6 +410,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     *out += sample;
                 }
+            }
+            if loopback {
+                for (out, sample) in mix.iter_mut().zip(looped.drain(..looped.len().min(FRAME))) {
+                    *out += sample;
+                }
+            }
+            if let Some(probe) = probe.as_mut() {
+                probe.render(&mut mix);
             }
             for sample in &mut mix {
                 *sample = sample.clamp(-1., 1.);
@@ -428,9 +483,30 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     LiveMediaEvent::Level {
                         level_db: result.level_db,
                         voice: result.voice,
-                        transmitting: result.transmit && !muted,
+                        // In a preview: whether the gate would transmit.
+                        transmitting: result.transmit && (preview || !muted),
                     },
                 )?;
+            }
+            if let Some(report) = probe
+                .as_mut()
+                .and_then(|probe| probe.observe(&raw, &capture_frame, result.transmit))
+            {
+                probe = None;
+                emit(
+                    &mut output,
+                    LiveMediaEvent::EchoTest {
+                        echo_db: report.echo_db,
+                        reduction_db: report.reduction_db,
+                        transmitted: report.transmitted,
+                    },
+                )?;
+            }
+            if loopback && result.transmit {
+                // Play back what others would hear; never more than 200 ms behind.
+                looped.extend(capture_frame);
+                let excess = looped.len().saturating_sub(RING / 2);
+                looped.drain(..excess);
             }
             if frames_seen.is_multiple_of(200) && chain.echo_cancellation() {
                 let metrics = chain.echo_metrics();
@@ -443,7 +519,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 )?;
             }
-            if muted {
+            if muted || preview {
                 continue;
             }
             if result.transmit {
@@ -529,6 +605,15 @@ struct Route {
     input: Option<String>,
     output: Option<String>,
     echo: EchoSource,
+    noise: Option<String>,
+}
+
+/// The processing Nuschel applies itself: a noise suppressor upstream of the
+/// microphone (e.g. an RNNoise filter-chain) replaces Nuschel's own.
+fn chain_settings(settings: &AudioSettings, upstream_noise: bool) -> AudioSettings {
+    let mut settings = settings.clone();
+    settings.noise_suppression &= !upstream_noise;
+    settings
 }
 
 fn open_devices(
@@ -699,28 +784,48 @@ fn open_host(
         input_id = Some(format!("pipewire:{}", backend_name(&id)));
         input_name = name;
     }
-    let upstream = input_id
+    // Processing that already happens before Nuschel: follow PipeWire's graph
+    // upstream (mic → echo-cancel → RNNoise → default source), falling back to
+    // recognising an echo-cancel source by name (PulseAudio, other systems).
+    #[cfg(target_os = "linux")]
+    let found = input_id
         .as_ref()
-        .is_some_and(|id| is_echo_cancelled(id, &input_name));
+        .and_then(|id| crate::graph::snapshot().map(|graph| graph.upstream(backend_name(id))))
+        .unwrap_or_default();
+    #[cfg(not(target_os = "linux"))]
+    let found = crate::graph::Upstream::default();
+    let upstream_echo = found.echo.clone().or_else(|| {
+        input_id
+            .as_ref()
+            .is_some_and(|id| is_echo_cancelled(id, &input_name))
+            .then(|| input_name.clone())
+    });
     let mode = input_id
         .as_ref()
         .map_or(settings.echo_cancellation, |id| settings.echo_for(id));
-    let echo = if !capture {
-        EchoSource::None
-    } else {
-        match mode {
-            EchoMode::Off => EchoSource::None,
-            EchoMode::On => EchoSource::Nuschel,
-            EchoMode::Auto if upstream => EchoSource::Upstream(input_name.clone()),
-            EchoMode::Auto => EchoSource::Nuschel,
-        }
+    // Reported even without capture, so Settings can explain the route before a test.
+    let echo = match (mode, &upstream_echo) {
+        (EchoMode::Off, _) => EchoSource::None,
+        (EchoMode::On, _) => EchoSource::Nuschel,
+        (EchoMode::Auto, Some(name)) => EchoSource::Upstream(name.clone()),
+        (EchoMode::Auto, None) => EchoSource::Nuschel,
     };
     // With a system canceller, Nuschel's own playback must reach its reference.
     // Only Nuschel's stream is routed; system defaults and other apps are untouched.
-    let reference = if settings.output_device.is_none() && upstream {
-        input_id
-            .as_ref()
-            .and_then(|id| paired_reference(id, &outputs))
+    let reference = if settings.output_device.is_none() && upstream_echo.is_some() {
+        found
+            .reference
+            .as_deref()
+            .and_then(|name| {
+                outputs
+                    .iter()
+                    .find(|device| backend_name(&device.id) == name)
+            })
+            .or_else(|| {
+                input_id
+                    .as_ref()
+                    .and_then(|id| paired_reference(id, &outputs))
+            })
             .map(|device| device.id.clone())
     } else {
         None
@@ -806,6 +911,7 @@ fn open_host(
             input: input_id,
             output: output_id,
             echo,
+            noise: found.noise,
         },
     ))
 }

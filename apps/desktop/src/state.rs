@@ -229,6 +229,8 @@ pub struct AudioInfo {
     pub input: Option<String>,
     pub output: Option<String>,
     pub echo: nuschel_core::audio::EchoSource,
+    /// A noise suppressor upstream of the microphone (Nuschel's own is off).
+    pub noise: Option<String>,
     pub erle_db: Option<f32>,
     pub residual_echo: Option<f32>,
     pub health: AudioHealth,
@@ -482,6 +484,8 @@ pub struct Desktop {
     pub title_drag: bool,
     pub settings: ClientSettings,
     pub settings_open: bool,
+    /// The local audio check, alive while Settings is open.
+    pub preview: Option<crate::preview::PreviewView>,
     pub menu: Option<crate::menus::Menu>,
     pub prompt: Option<crate::menus::Prompt>,
     pub panel: Option<Panel>,
@@ -527,13 +531,15 @@ impl Desktop {
                 &composer,
                 window,
                 |this, _, event, window, cx| match event {
+                    // Shift+Enter has already inserted a newline.
+                    InputEvent::PressEnter { shift: true, .. } => {}
                     InputEvent::PressEnter {
                         secondary: true, ..
                     } => this.send_message(window, cx),
-                    InputEvent::PressEnter {
-                        secondary: false,
-                        shift: false,
-                    } => {
+                    InputEvent::PressEnter { .. } if this.settings.enter_sends => {
+                        this.send_message(window, cx)
+                    }
+                    InputEvent::PressEnter { .. } => {
                         this.composer.update(cx, |input, cx| {
                             input.replace_text_in_range(None, "\n", window, cx)
                         });
@@ -577,6 +583,7 @@ impl Desktop {
             title_drag: false,
             settings,
             settings_open: false,
+            preview: None,
             menu: None,
             prompt: None,
             panel: None,
@@ -1214,6 +1221,42 @@ impl Desktop {
         }
     }
     /// Change preferences, persist them and apply them to live connections.
+    pub fn open_settings(&mut self) {
+        self.settings_open = true;
+        if self.preview.is_none() {
+            self.preview = Some(Default::default());
+            self.backend.start_preview();
+        }
+    }
+    pub fn close_settings(&mut self) {
+        self.settings_open = false;
+        self.recording_ptt = false;
+        self.preview = None;
+        self.backend.stop_preview();
+    }
+    /// Open or close the microphone for the Settings check, or toggle hearing yourself.
+    pub fn set_preview(&mut self, capture: bool, loopback: bool) {
+        if let Some(preview) = &mut self.preview {
+            preview.capture = capture;
+            preview.loopback = loopback && capture;
+            if !capture {
+                preview.level_db = -100.;
+                preview.voice = 0.;
+                preview.transmitting = false;
+            }
+            self.backend.preview(crate::preview::Command::Set {
+                capture,
+                loopback: loopback && capture,
+            });
+        }
+    }
+    pub fn start_echo_test(&mut self) {
+        if let Some(preview) = &mut self.preview {
+            preview.capture = true;
+            preview.echo_test = crate::preview::EchoTestState::Running;
+            self.backend.preview(crate::preview::Command::EchoTest);
+        }
+    }
     pub fn update_settings(&mut self, change: impl FnOnce(&mut ClientSettings)) {
         let mut settings = self.settings.clone();
         change(&mut settings);
@@ -1255,7 +1298,9 @@ impl Desktop {
                 && self.panel.take().is_none()
             {
                 self.form = None;
-                self.settings_open = false;
+                if self.settings_open {
+                    self.close_settings();
+                }
             }
             return true;
         }
@@ -1873,6 +1918,7 @@ impl Desktop {
                     input,
                     output,
                     echo,
+                    noise,
                 } => {
                     if let Some(server) = self
                         .servers
@@ -1884,6 +1930,12 @@ impl Desktop {
                         server.audio.input = input;
                         server.audio.output = output;
                         server.audio.echo = echo;
+                        server.audio.noise = noise;
+                    }
+                }
+                Event::Preview(event) => {
+                    if let Some(preview) = &mut self.preview {
+                        preview.apply(event);
                     }
                 }
                 Event::Echo {

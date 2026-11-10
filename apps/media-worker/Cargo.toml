@@ -24,6 +24,8 @@ cpal = { version = "0.18.2", default-features = false, features = [
   "pipewire",
   "pulseaudio",
 ] }
+# Already linked by cpal's PipeWire host; read here to find upstream processing.
+pipewire = { version = "0.10.1", default-features = false }
 
 [dev-dependencies]
 # Test-only global allocator: proves the device callbacks never allocate.

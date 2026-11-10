@@ -284,6 +284,16 @@ pub enum LiveMediaRequest {
         /// Product of the sender's volume adjustment and the local per-user volume.
         volume: f32,
     },
+    /// Local test mode instead of `SetState`: nothing is ever encoded or sent.
+    /// `capture` opens the microphone; `loopback` plays the processed voice back.
+    /// Changing `capture` needs a new process, as a mute change does.
+    Preview {
+        capture: bool,
+        loopback: bool,
+    },
+    /// Play a speech-like signal and measure how much of it the microphone
+    /// path would transmit. Answered by [`LiveMediaEvent::EchoTest`].
+    EchoTest,
     Shutdown,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -314,6 +324,10 @@ pub enum LiveMediaEvent {
         input: Option<String>,
         output: Option<String>,
         echo: nuschel_core::audio::EchoSource,
+        /// A noise suppressor found upstream of the microphone (e.g. an RNNoise
+        /// filter-chain); Nuschel's own suppressor stays off while it is there.
+        #[serde(default)]
+        noise: Option<String>,
     },
     /// Echo-canceller measurements for the adaptive controller and diagnostics.
     Echo {
@@ -334,6 +348,17 @@ pub enum LiveMediaEvent {
         underruns: u32,
         /// Nuschel's own playback buffer.
         playback_ms: u32,
+    },
+    /// Result of [`LiveMediaRequest::EchoTest`].
+    EchoTest {
+        /// Echo reaching Nuschel relative to the played signal, in dB; `None`
+        /// when nothing rose above the room's noise (headphones, or a system
+        /// canceller already removed it).
+        echo_db: Option<f32>,
+        /// How much Nuschel's processing reduced that echo, in dB.
+        reduction_db: Option<f32>,
+        /// Share of the test during which the voice gate would have transmitted.
+        transmitted: f32,
     },
 }
 

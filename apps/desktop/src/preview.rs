@@ -1,0 +1,246 @@
+// SPDX-License-Identifier: EUPL-1.2
+//! Audio checks in Settings, independent of any server: a media worker of its
+//! own lists devices, meters the microphone, plays the processed voice back and
+//! runs the echo test. It never encodes or sends anything, so testing needs
+//! neither a connection nor unmuting.
+use nuschel_core::audio::{AudioDevice, EchoSource};
+use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
+use nuschel_session::{config::ClientSettings, workers::Media};
+use std::time::Duration;
+use tokio::{
+    sync::{mpsc, watch},
+    time::Instant,
+};
+
+/// An echo test that has not answered by then has failed (no microphone).
+const TEST_DEADLINE: Duration = Duration::from_secs(12);
+
+#[derive(Debug)]
+pub enum Command {
+    /// Open or close the microphone, and play the processed voice back.
+    Set {
+        capture: bool,
+        loopback: bool,
+    },
+    EchoTest,
+}
+
+#[derive(Debug)]
+pub enum Event {
+    Level {
+        level_db: f32,
+        voice: f32,
+        transmitting: bool,
+    },
+    Devices {
+        inputs: Vec<AudioDevice>,
+        outputs: Vec<AudioDevice>,
+        input: Option<String>,
+        output: Option<String>,
+        echo: EchoSource,
+        noise: Option<String>,
+    },
+    Status(String),
+    EchoTest(Result<EchoReport, String>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EchoReport {
+    pub echo_db: Option<f32>,
+    pub reduction_db: Option<f32>,
+    pub transmitted: f32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum EchoTestState {
+    #[default]
+    Idle,
+    Running,
+    Done(EchoReport),
+    Failed(String),
+}
+
+/// What Settings shows about the local audio route.
+#[derive(Clone, Debug, Default)]
+pub struct PreviewView {
+    pub capture: bool,
+    pub loopback: bool,
+    pub level_db: f32,
+    pub voice: f32,
+    pub transmitting: bool,
+    pub inputs: Vec<AudioDevice>,
+    pub outputs: Vec<AudioDevice>,
+    pub input: Option<String>,
+    pub output: Option<String>,
+    pub echo: Option<EchoSource>,
+    pub noise: Option<String>,
+    pub status: Option<String>,
+    pub echo_test: EchoTestState,
+}
+
+impl PreviewView {
+    pub fn apply(&mut self, event: Event) {
+        match event {
+            Event::Level {
+                level_db,
+                voice,
+                transmitting,
+            } => {
+                self.level_db = level_db;
+                self.voice = voice;
+                self.transmitting = transmitting;
+            }
+            Event::Devices {
+                inputs,
+                outputs,
+                input,
+                output,
+                echo,
+                noise,
+            } => {
+                self.inputs = inputs;
+                self.outputs = outputs;
+                self.input = input;
+                self.output = output;
+                self.echo = Some(echo);
+                self.noise = noise;
+            }
+            Event::Status(message) => self.status = Some(message),
+            Event::EchoTest(Ok(report)) => self.echo_test = EchoTestState::Done(report),
+            Event::EchoTest(Err(message)) => self.echo_test = EchoTestState::Failed(message),
+        }
+    }
+}
+
+type Route = (
+    Option<String>,
+    Option<String>,
+    nuschel_core::audio::EchoMode,
+    std::collections::BTreeMap<String, nuschel_core::audio::EchoMode>,
+);
+
+fn route(settings: &ClientSettings) -> Route {
+    let audio = &settings.audio;
+    (
+        audio.input_device.clone(),
+        audio.output_device.clone(),
+        audio.echo_cancellation,
+        audio.device_overrides.clone(),
+    )
+}
+
+fn configure(media: &Media, settings: &ClientSettings) {
+    let _ = media.commands.try_send(LiveMediaRequest::Configure {
+        bitrate: 48_000,
+        packet_loss_percent: 5,
+        settings: settings.audio.clone(),
+        host: None,
+    });
+}
+
+/// Run until `commands` closes (Settings closed).
+pub async fn run(
+    mut commands: mpsc::Receiver<Command>,
+    mut settings: watch::Receiver<ClientSettings>,
+    events: mpsc::Sender<crate::backend::Event>,
+) {
+    let send = |event: Event| {
+        let _ = events.try_send(crate::backend::Event::Preview(event));
+    };
+    let (mut capture, mut loopback) = (false, false);
+    let mut media: Option<Media> = None;
+    let mut retry = Instant::now();
+    let mut applied = route(&settings.borrow());
+    // An echo test waiting for the microphone to open, and its deadline.
+    let mut test_pending = false;
+    let mut test_deadline: Option<Instant> = None;
+    loop {
+        tokio::select! {
+            command = commands.recv() => match command {
+                None => break,
+                Some(Command::Set { capture: wanted, loopback: play_back }) => {
+                    loopback = play_back;
+                    if wanted != capture {
+                        // The microphone opens and closes with a new process.
+                        capture = wanted;
+                        media.take();
+                        retry = Instant::now();
+                    } else if let Some(media) = &media {
+                        let _ = media.commands.try_send(LiveMediaRequest::Preview { capture, loopback });
+                    }
+                }
+                Some(Command::EchoTest) => {
+                    test_deadline = Some(Instant::now() + TEST_DEADLINE);
+                    if !capture {
+                        capture = true;
+                        media.take();
+                        retry = Instant::now();
+                        test_pending = true;
+                    } else if let Some(media) = &media {
+                        let _ = media.commands.try_send(LiveMediaRequest::EchoTest);
+                    } else {
+                        test_pending = true;
+                    }
+                }
+            },
+            changed = settings.changed() => {
+                if changed.is_err() { break; }
+                let current = settings.borrow_and_update().clone();
+                if route(&current) != applied {
+                    applied = route(&current);
+                    media.take();
+                    retry = Instant::now();
+                } else if let Some(media) = &media {
+                    configure(media, &current);
+                }
+            },
+            _ = tokio::time::sleep_until(retry), if media.is_none() => {
+                match Media::start() {
+                    Ok(worker) => {
+                        configure(&worker, &settings.borrow());
+                        let _ = worker.commands.try_send(LiveMediaRequest::Preview { capture, loopback });
+                        media = Some(worker);
+                    }
+                    Err(error) => {
+                        retry = Instant::now() + Duration::from_secs(3);
+                        send(Event::Status(error.to_string()));
+                    }
+                }
+            },
+            _ = async { tokio::time::sleep_until(test_deadline.unwrap_or_else(Instant::now)).await }, if test_deadline.is_some() => {
+                test_deadline = None;
+                test_pending = false;
+                send(Event::EchoTest(Err("The echo test needs a working microphone and speakers.".into())));
+            },
+            event = async { media.as_mut().unwrap().events.recv().await }, if media.is_some() => match event {
+                Some(LiveMediaEvent::Level { level_db, voice, transmitting }) => send(Event::Level { level_db, voice, transmitting }),
+                Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise }) => {
+                    send(Event::Devices { inputs, outputs, input, output, echo, noise });
+                }
+                Some(LiveMediaEvent::EchoTest { echo_db, reduction_db, transmitted }) => {
+                    test_deadline = None;
+                    send(Event::EchoTest(Ok(EchoReport { echo_db, reduction_db, transmitted })));
+                }
+                Some(LiveMediaEvent::Status { ready, message }) => {
+                    if ready {
+                        if std::mem::take(&mut test_pending) && let Some(media) = &media {
+                            let _ = media.commands.try_send(LiveMediaRequest::EchoTest);
+                        }
+                    } else {
+                        media.take();
+                        retry = Instant::now() + Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 });
+                    }
+                    send(Event::Status(message));
+                }
+                Some(_) => {}
+                None => {
+                    media.take();
+                    retry = Instant::now() + Duration::from_secs(1);
+                }
+            },
+        }
+    }
+    if let Some(media) = media {
+        let _ = media.commands.try_send(LiveMediaRequest::Shutdown);
+    }
+}

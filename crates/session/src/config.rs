@@ -202,6 +202,9 @@ pub struct ClientSettings {
     pub local_mutes: std::collections::BTreeSet<String>,
     /// Push-to-talk key in GPUI keystroke notation, e.g. "f13" or "ctrl-space".
     pub push_to_talk_key: Option<String>,
+    /// Enter sends a message and Shift+Enter starts a new line; otherwise
+    /// Enter starts a new line and Ctrl/Cmd+Enter sends.
+    pub enter_sends: bool,
 }
 impl Default for ClientSettings {
     fn default() -> Self {
@@ -212,6 +215,7 @@ impl Default for ClientSettings {
             user_volumes: Default::default(),
             local_mutes: Default::default(),
             push_to_talk_key: None,
+            enter_sends: true,
         }
     }
 }

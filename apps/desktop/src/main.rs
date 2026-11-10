@@ -7,6 +7,7 @@ mod document;
 mod global_ptt;
 mod menus;
 mod panels;
+mod preview;
 mod scrolling;
 mod settings;
 mod state;

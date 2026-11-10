@@ -3,6 +3,7 @@
 use crate::{
     assets::icon,
     dialogs::{Tone, modal, styled_button},
+    preview::{EchoTestState, PreviewView},
     state::{Desktop, ServerView},
     theme::*,
 };
@@ -151,8 +152,8 @@ fn toggle(
         .into_any_element()
 }
 
-fn meter(server: &ServerView) -> AnyElement {
-    let fraction = ((server.audio.level_db + 70.) / 70.).clamp(0., 1.);
+fn meter(preview: &PreviewView) -> AnyElement {
+    let fraction = ((preview.level_db + 70.) / 70.).clamp(0., 1.);
     div()
         .flex()
         .flex_col()
@@ -161,7 +162,7 @@ fn meter(server: &ServerView) -> AnyElement {
             div()
                 .id("input-meter")
                 .role(Role::ProgressIndicator)
-                .aria_label(format!("Microphone level {:.0} dB", server.audio.level_db))
+                .aria_label(format!("Microphone level {:.0} dB", preview.level_db))
                 .h(px(8.))
                 .w_full()
                 .rounded_full()
@@ -172,7 +173,7 @@ fn meter(server: &ServerView) -> AnyElement {
                         .h_full()
                         .w(relative(fraction))
                         .rounded_full()
-                        .bg(color(if server.audio.transmitting {
+                        .bg(color(if preview.transmitting {
                             SUCCESS
                         } else {
                             TEXT_FAINT
@@ -181,20 +182,147 @@ fn meter(server: &ServerView) -> AnyElement {
         )
         .child(
             div().text_xs().text_color(color(TEXT_FAINT)).child(
-                text!(if server.muted {
-                    "Unmute to test your microphone.".to_string()
-                } else if server.audio.transmitting {
-                    format!("Transmitting · speech {:.0}%", server.audio.voice * 100.)
+                text!(if preview.transmitting {
+                    format!(
+                        "Would transmit · speech {:.0}% · nothing is sent while testing",
+                        preview.voice * 100.
+                    )
                 } else {
                     format!(
-                        "Not transmitting · speech {:.0}%",
-                        server.audio.voice * 100.
+                        "Would not transmit · speech {:.0}% · nothing is sent while testing",
+                        preview.voice * 100.
                     )
                 })
                 .with_id("meter-label"),
             ),
         )
         .into_any_element()
+}
+
+/// Microphone and echo checks that need neither a server nor unmuting.
+fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
+    let Some(preview) = this.preview.as_ref() else {
+        return Vec::new();
+    };
+    let (capture, loopback) = (preview.capture, preview.loopback);
+    let running = preview.echo_test == EchoTestState::Running;
+    let mut rows = vec![
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(icon("mic", 18., color(TEXT_MUTED)))
+            .child(
+                div().flex_1().min_w_0().text_sm().child(
+                    text!(if capture {
+                        "Speak to see your level and the voice gate."
+                    } else {
+                        "Check your microphone without joining a channel."
+                    })
+                    .with_id("mic-test-intro"),
+                ),
+            )
+            .child(styled_button(
+                "mic-test",
+                if capture {
+                    "Stop test"
+                } else {
+                    "Test microphone"
+                },
+                if capture {
+                    Tone::Secondary
+                } else {
+                    Tone::Primary
+                },
+                move |this, _, cx| {
+                    this.set_preview(!capture, false);
+                    cx.notify();
+                },
+                cx,
+            ))
+            .into_any_element(),
+    ];
+    if capture {
+        rows.push(meter(preview));
+        rows.push(toggle(
+            "hear-yourself",
+            "Hear yourself",
+            "Plays back what others would hear, after noise suppression and the voice gate. Use headphones.".into(),
+            loopback,
+            Rc::new(move |this, _, _| this.set_preview(true, !loopback)),
+            cx,
+        ));
+    }
+    let verdict = match &preview.echo_test {
+        EchoTestState::Idle => None,
+        EchoTestState::Running => Some((
+            TEXT_MUTED,
+            "Playing a test sound through your speakers for about four seconds…".to_string(),
+        )),
+        EchoTestState::Failed(message) => Some((WARNING, message.clone())),
+        EchoTestState::Done(report) => {
+            let leaked = report.transmitted >= 0.05;
+            let measured = match (report.echo_db, report.reduction_db) {
+                (None, _) => "No echo of the test sound reached Nuschel (headphones, or a system canceller removed it).".to_string(),
+                (Some(echo), Some(reduction)) => format!(
+                    "The test sound reached the microphone {:.0} dB below its level; processing removed another {reduction:.0} dB.",
+                    -echo
+                ),
+                (Some(echo), None) => format!("The test sound reached the microphone {:.0} dB below its level.", -echo),
+            };
+            Some(if leaked {
+                (
+                    WARNING,
+                    format!(
+                        "{measured} The voice gate opened for {:.0}% of it, so others may hear themselves: use headphones, lower the speaker volume, or set echo cancellation to Always on.",
+                        report.transmitted * 100.
+                    ),
+                )
+            } else {
+                (
+                    SUCCESS,
+                    format!(
+                        "{measured} Nothing would have been sent, so others will not hear themselves."
+                    ),
+                )
+            })
+        }
+    };
+    rows.push(
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(icon("volume", 18., color(TEXT_MUTED)))
+            .child(div().flex_1().min_w_0().text_sm().child(
+                text!("Echo test: would others hear themselves?").with_id("echo-test-intro"),
+            ))
+            .child(styled_button(
+                "echo-test",
+                if running { "Testing…" } else { "Test echo" },
+                Tone::Secondary,
+                move |this, _, cx| {
+                    if !running {
+                        this.start_echo_test();
+                    }
+                    cx.notify();
+                },
+                cx,
+            ))
+            .into_any_element(),
+    );
+    if let Some((tone, text)) = verdict {
+        rows.push(
+            div()
+                .id("echo-test-result")
+                .role(Role::Status)
+                .text_xs()
+                .text_color(color(tone))
+                .child(text!(text).with_id("echo-test-text"))
+                .into_any_element(),
+        );
+    }
+    rows
 }
 
 fn device_list(
@@ -430,19 +558,29 @@ pub fn dialog(
                 .into_any_element(),
         );
     }
-    if let Some(server) = server.filter(|server| server.status == crate::state::Status::Connected) {
-        voice.push(meter(server));
-    }
-
-    let input = server.and_then(|server| server.audio.input.clone());
-    let echo_status = server.map(|server| match &server.audio.echo {
+    // The Settings check knows the route even while disconnected or muted.
+    let preview = this.preview.as_ref();
+    let route_echo = preview
+        .and_then(|preview| preview.echo.clone())
+        .or_else(|| server.map(|server| server.audio.echo.clone()));
+    let upstream_noise = preview
+        .filter(|preview| preview.echo.is_some())
+        .map(|preview| preview.noise.clone())
+        .or_else(|| server.map(|server| server.audio.noise.clone()))
+        .flatten();
+    let input = preview
+        .and_then(|preview| preview.input.clone())
+        .or_else(|| server.and_then(|server| server.audio.input.clone()));
+    let erle = server
+        .and_then(|server| server.audio.erle_db)
+        .filter(|erle| *erle >= 1.);
+    let echo_status = route_echo.map(|echo| match echo {
         EchoSource::Upstream(name) => format!("Using system echo cancellation: {name}. Nuschel's canceller is off to avoid doubling it."),
         // ERLE is only meaningful once the far end has played something.
-        EchoSource::Nuschel => match server.audio.erle_db.filter(|erle| *erle >= 1.) {
+        EchoSource::Nuschel => match erle {
             Some(erle) => format!("Nuschel's echo canceller is active · {erle:.0} dB echo reduction"),
             None => "Nuschel's echo canceller is active.".into(),
         },
-        EchoSource::None if server.muted => "Unmute to see how echo is handled on this microphone.".into(),
         EchoSource::None => "Echo cancellation is off for this microphone.".into(),
     });
     let mode = input
@@ -472,7 +610,12 @@ pub fn dialog(
         toggle(
             "noise-suppression",
             "Noise suppression",
-            "RNNoise removes steady background noise.".into(),
+            match &upstream_noise {
+                Some(name) if noise => format!(
+                    "Using system noise suppression: {name}. Nuschel's is off to avoid doubling it."
+                ),
+                _ => "RNNoise removes steady background noise.".into(),
+            },
             noise,
             Rc::new(move |this, _, _| {
                 this.update_settings(|settings| settings.audio.noise_suppression = !noise)
@@ -588,10 +731,33 @@ pub fn dialog(
             .into_any_element(),
     ];
 
-    let devices = match server
-        .filter(|server| !server.audio.inputs.is_empty() || !server.audio.outputs.is_empty())
-    {
-        Some(server) => vec![
+    // Device lists come from the Settings check, or from a live connection.
+    let listed = preview
+        .filter(|preview| !preview.inputs.is_empty() || !preview.outputs.is_empty())
+        .map(|preview| {
+            (
+                preview.inputs.clone(),
+                preview.outputs.clone(),
+                preview.input.clone(),
+                preview.output.clone(),
+            )
+        })
+        .or_else(|| {
+            server
+                .filter(|server| {
+                    !server.audio.inputs.is_empty() || !server.audio.outputs.is_empty()
+                })
+                .map(|server| {
+                    (
+                        server.audio.inputs.clone(),
+                        server.audio.outputs.clone(),
+                        server.audio.input.clone(),
+                        server.audio.output.clone(),
+                    )
+                })
+        });
+    let devices = match listed {
+        Some((inputs, outputs, active_input, active_output)) => vec![
             div()
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
@@ -599,9 +765,9 @@ pub fn dialog(
                 .into_any_element(),
             device_list(
                 "input-devices",
-                &server.audio.inputs,
+                &inputs,
                 audio.input_device.as_deref(),
-                server.audio.input.as_deref(),
+                active_input.as_deref(),
                 Rc::new(|this, device| {
                     this.update_settings(|settings| settings.audio.input_device = device)
                 }),
@@ -614,9 +780,9 @@ pub fn dialog(
                 .into_any_element(),
             device_list(
                 "output-devices",
-                &server.audio.outputs,
+                &outputs,
                 audio.output_device.as_deref(),
-                server.audio.output.as_deref(),
+                active_output.as_deref(),
                 Rc::new(|this, device| {
                     this.update_settings(|settings| settings.audio.output_device = device)
                 }),
@@ -628,8 +794,12 @@ pub fn dialog(
                 .text_sm()
                 .text_color(color(TEXT_MUTED))
                 .child(
-                    text!("Connect to a server to list audio devices.")
-                        .with_id("devices-unavailable"),
+                    text!(
+                        preview
+                            .and_then(|preview| preview.status.clone())
+                            .unwrap_or_else(|| "Looking for audio devices…".into())
+                    )
+                    .with_id("devices-unavailable"),
                 )
                 .into_any_element(),
         ],
@@ -700,8 +870,7 @@ pub fn dialog(
                     "Done",
                     Tone::Primary,
                     |this, _, cx| {
-                        this.settings_open = false;
-                        this.recording_ptt = false;
+                        this.close_settings();
                         cx.notify();
                     },
                     cx,
@@ -714,6 +883,7 @@ pub fn dialog(
                 .flex()
                 .flex_col()
                 .gap_6()
+                .child(section("MICROPHONE TEST", audio_check(this, cx)))
                 .child(section("TRANSMISSION", voice))
                 .child(section("PROCESSING", processing))
                 .child(section("DEVICES", devices))
@@ -727,9 +897,6 @@ pub fn dialog(
         560.,
         content,
         cx,
-        |this| {
-            this.settings_open = false;
-            this.recording_ptt = false;
-        },
+        |this| this.close_settings(),
     )
 }

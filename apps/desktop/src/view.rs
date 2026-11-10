@@ -858,7 +858,7 @@ fn voice_card(
                                     .text_xs()
                                     .text_color(color(WARNING))
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.settings_open = true;
+                                        this.open_settings();
                                         cx.notify();
                                     }))
                                     .child(icon("alert", 12., color(WARNING)))
@@ -975,7 +975,7 @@ fn user_panel(
             TEXT_MUTED,
             None,
             |this, _, cx| {
-                this.settings_open = true;
+                this.open_settings();
                 cx.notify();
             },
             cx,
@@ -1205,7 +1205,9 @@ fn conversation(
                                             nuschel_core::audio::TransmitMode::PushToTalk
                                     });
                                     this.servers[index].suggestion = None;
-                                    this.settings_open = this.settings.push_to_talk_key.is_none();
+                                    if this.settings.push_to_talk_key.is_none() {
+                                        this.open_settings();
+                                    }
                                     cx.notify();
                                 },
                                 cx,

@@ -4821,6 +4821,7 @@ dependencies = [
  "nuschel-core",
  "nuschel-ipc",
  "opus-pure",
+ "pipewire",
  "rtrb",
  "sonora",
 ]

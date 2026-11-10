@@ -107,7 +107,10 @@ pub enum Event {
         input: Option<String>,
         output: Option<String>,
         echo: EchoSource,
+        noise: Option<String>,
     },
+    /// The local audio check in Settings.
+    Preview(crate::preview::Event),
     Echo {
         server: String,
         generation: u64,
@@ -166,6 +169,10 @@ pub struct Backend {
     render_permits: std::sync::Arc<tokio::sync::Semaphore>,
     storage_task: tokio::task::JoinHandle<()>,
     content_task: tokio::task::JoinHandle<()>,
+    preview: Option<(
+        mpsc::Sender<crate::preview::Command>,
+        tokio::task::JoinHandle<()>,
+    )>,
 }
 struct ContentJob {
     server: String,
@@ -218,7 +225,30 @@ impl Backend {
             render_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             storage_task,
             content_task,
+            preview: None,
         }
+    }
+    /// Start the Settings audio check (devices only until the microphone test starts).
+    pub fn start_preview(&mut self) {
+        if self.preview.is_some() {
+            return;
+        }
+        let (commands, receiver) = mpsc::channel(8);
+        let task = self.handle.spawn(crate::preview::run(
+            receiver,
+            self.settings.subscribe(),
+            self.sender.clone(),
+        ));
+        self.preview = Some((commands, task));
+    }
+    pub fn preview(&self, command: crate::preview::Command) {
+        if let Some((commands, _)) = &self.preview {
+            let _ = commands.try_send(command);
+        }
+    }
+    /// Closing the sender lets the task shut its worker down cleanly.
+    pub fn stop_preview(&mut self) {
+        self.preview.take();
     }
     pub fn connect(
         &mut self,
@@ -688,11 +718,11 @@ async fn connect_once(
                 Some(LiveMediaEvent::Level { level_db, voice, transmitting }) => {
                     let _ = events.try_send(Event::AudioLevel { server: id.clone(), generation, level_db, voice, transmitting });
                 },
-                Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo }) => {
+                Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise }) => {
                     if let Some((host, _)) = output.as_deref().and_then(|id| id.split_once(':')) {
                         audio_host.0 = Some(host.to_string());
                     }
-                    let _ = events.send(Event::AudioDevices { server: id.clone(), generation, inputs, outputs, input, output, echo }).await;
+                    let _ = events.send(Event::AudioDevices { server: id.clone(), generation, inputs, outputs, input, output, echo, noise }).await;
                 },
                 Some(LiveMediaEvent::Echo { erle_db, residual_likelihood, .. }) => {
                     let _ = events.try_send(Event::Echo { server: id.clone(), generation, erle_db, residual_likelihood });
@@ -705,6 +735,8 @@ async fn connect_once(
                     if !ready { audio_host.1 = tokio::time::Instant::now() + HOST_PIN; media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 }); }
                     let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message }).await;
                 },
+                // Echo tests run only in the Settings check.
+                Some(LiveMediaEvent::EchoTest { .. }) => {},
                 None => { media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_secs(2); let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message: "Audio worker restarting…".into() }).await; },
             },
         }
