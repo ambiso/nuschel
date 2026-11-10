@@ -108,8 +108,16 @@ class DesktopTest:
         if text:
             self.xdo("type", "--clearmodifiers", "--delay", 1, "--", text)
 
+    def fill_field(self, label, text):
+        x, y = eventually(lambda: self.locate(label), f"field {label!r} not found")
+        self.fill(x, y + 30, text)
+
+    # Icon-only controls in the bottom-left user panel (window 1120x850, no client inset).
+    MUTE = (255, 822)
+    DEAFEN = (295, 822)
+
     def type_message(self, body):
-        self.click(460, 690)
+        self.click_text("Write a message")
         self.xdo("key", "ctrl+a")
         for index, line in enumerate(body.split("\n")):
             if index:
@@ -123,22 +131,70 @@ class DesktopTest:
                        env=self.env, check=True, timeout=10)
         return path
 
+    def ocr_images(self, name):
+        """Binarised variants of a screenshot: dark-theme text becomes black on white.
+        45% separates grey labels from dark panels, 75% white text from accent buttons."""
+        path = self.capture(name)
+        variants = []
+        for threshold in ("45%", "75%"):
+            prepared = self.output / f"{name}-ocr-{threshold[:-1]}.png"
+            subprocess.run(["magick", str(path), "-alpha", "off", "-colorspace", "gray", "-resize", "200%",
+                            "-threshold", threshold, "-negate", str(prepared)], env=self.env, check=True, timeout=10)
+            variants.append(prepared)
+        return variants
+
     def text(self):
-        path = self.capture("current")
         texts = []
-        # Tesseract's single-block mode mistakes the rail for the entire page.
-        # Auto-layout reads chat; a cropped block reads native modal dialogs.
-        for crop, mode in [(None, "3"), ("500x685+310+82", "6")]:
-            source = path
-            if crop:
-                source = self.output / "ocr.png"
-                subprocess.run(["magick", str(path), "-crop", crop, "-alpha", "off",
-                                "-colorspace", "gray", "-negate", "-normalize", "-threshold", "60%",
-                                "-resize", "200%", str(source)], env=self.env, check=True, timeout=10)
-            result = subprocess.run(["tesseract", str(source), "stdout", "--psm", mode],
-                                    env=self.env, capture_output=True, text=True, check=True, timeout=15)
-            texts.append(result.stdout)
+        for prepared in self.ocr_images("current"):
+            for mode in ("11", "3"):
+                result = subprocess.run(["tesseract", str(prepared), "stdout", "--psm", mode],
+                                        env=self.env, capture_output=True, text=True, check=True, timeout=20)
+                texts.append(result.stdout)
         return "\n".join(texts)
+
+    # Channel tree area of the sidebar (window 1120x850).
+    TREE = (72, 90, 320, 790)
+
+    def locate(self, phrase, region=None):
+        """Screen position of a visible label, found with OCR word boxes.
+        Exact word matches anywhere win over substring matches."""
+        wanted = phrase.casefold().split()
+        images = []
+        for prepared in self.ocr_images("locate"):
+            result = subprocess.run(["tesseract", str(prepared), "stdout", "--psm", "11", "tsv"], env=self.env,
+                                    capture_output=True, text=True, check=True, timeout=20)
+            words = []
+            for line in result.stdout.splitlines()[1:]:
+                fields = line.split("\t")
+                if len(fields) == 12 and fields[11].strip():
+                    left, top, width, height = map(int, fields[6:10])
+                    words.append((fields[11].strip(), left // 2, top // 2, width // 2, height // 2))
+            images.append(words)
+        tests = (lambda want, word: word.casefold().strip(".,:;!?()…") == want,
+                 lambda want, word: want in word.casefold())
+        for test in tests:
+            for words in images:
+                for index in range(len(words)):
+                    window = words[index:index + len(wanted)]
+                    if len(window) != len(wanted) or not all(test(want, word) for want, (word, *_) in zip(wanted, window)):
+                        continue
+                    left = window[0][1]
+                    right = window[-1][1] + window[-1][3]
+                    top = min(word[2] for word in window)
+                    bottom = max(word[2] + word[4] for word in window)
+                    x, y = (left + right) // 2, (top + bottom) // 2
+                    if region is None or (region[0] <= x <= region[2] and region[1] <= y <= region[3]):
+                        return x, y
+        return None
+
+    def click_text(self, phrase, count=1, region=None):
+        # Park the pointer so hover tooltips cannot cover labels, and let rows settle.
+        self.xdo("mousemove", "--window", self.window, 700, 400)
+        time.sleep(0.6)
+        x, y = eventually(lambda: self.locate(phrase, region), f"could not find {phrase!r} on screen")
+        self.xdo("mousemove", "--window", self.window, x, y)
+        self.xdo("click", "--repeat", count, "--delay", 100, 1)
+        return x, y
 
     def wait_text(self, value):
         return eventually(lambda: value.casefold() in self.text().casefold(), f"UI did not show {value!r}")
@@ -211,13 +267,14 @@ class DesktopTest:
         initial = self.text()
         assert "Second depth" not in initial and "Third depth" not in initial
         self.capture("channel-browser-default")
-        self.click(104, 174)
+        # Tree rows: 34 px apart from y=142; chevrons at x = 93 + 14 * depth.
+        self.click(107, 176)
         self.wait_text("Second depth")
         assert "Third depth" not in self.text(), "deeper branches opened automatically"
-        self.click(116, 212)
+        self.click(121, 210)
         self.wait_text("Third depth")
-        self.click(104, 174)
-        self.xdo("mousemove", "--window", self.window, 180, 212)
+        self.click(107, 176)
+        self.xdo("mousemove", "--window", self.window, 200, 210)
         self.wait_text("FULLNAMEVISIBLE")
         self.capture("channel-long-name-tooltip")
         self.xdo("mousemove", "--window", self.window, 180, 350)
@@ -227,10 +284,11 @@ class DesktopTest:
         self.capture("channel-browser-wheel")
         assert "Group branch" not in self.text(), "wheel scrolling did not move the channel list"
         # Drag the real scrollbar to the bottom; fixed-height rows must remain reachable.
-        self.xdo("mousemove", "--window", self.window, 273, 300, "mousedown", 1)
-        self.xdo("mousemove", "--window", self.window, 273, 745)
+        self.xdo("mousemove", "--window", self.window, 313, 320, "mousedown", 1)
+        self.xdo("mousemove", "--window", self.window, 313, 480)
+        self.xdo("mousemove", "--window", self.window, 313, 795)
         self.xdo("mouseup", 1)
-        self.wait_text("Scroll row 59")
+        self.wait_text("row 59")
         self.capture("channel-browser-scrollbar")
         terminate(self.app)
         self.app = self.window = None
@@ -245,34 +303,37 @@ class DesktopTest:
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == self.peer.session
                        and event["user"]["channel"] == 2)
         self.start_audio()
+        # Capture checks inject a pure tone; voice activation is covered by DSP unit tests.
+        (self.profile / "config").mkdir(parents=True, exist_ok=True)
+        (self.profile / "config/settings.json").write_text(json.dumps({"audio": {"transmit": "continuous"}}))
         self.start_app()
         self.wait_text("Add a server")
-        self.click(36, 76)
+        self.click_text("Add a server")
         self.wait_text("Hostname or IP address")
-        self.fill(500, 212, "Fixture Mumble")
-        self.fill(500, 311, self.args.host)
-        self.fill(500, 410, str(self.args.port))
-        self.fill(500, 509, "NuschelDesktop")
-        self.fill(500, 608, "not-saved-fixture-password")
-        self.click(710, 725)
+        self.fill_field("SERVER NAME", "Fixture Mumble")
+        self.fill_field("HOSTNAME OR IP", self.args.host)
+        self.fill_field("PORT", str(self.args.port))
+        self.fill_field("USERNAME", "NuschelDesktop")
+        self.fill_field("PASSWORD (OPTIONAL)", "not-saved-fixture-password")
+        self.click_text("Save and connect")
         self.wait_text("Confirm server certificate")
         assert not any(user["name"] == "NuschelDesktop" for user in self.peer.users.values())
         self.capture("certificate")
-        self.click(500, 253)
+        self.click_text("Trust certificate and connect")
         gui = self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschelDesktop")["user"]
         session = gui["session"]
-        self.wait_text("TCP voice")
+        self.wait_text("Connected")
         eventually(lambda: self.pulse_json("sink-inputs"), "desktop playback did not start")
         assert not self.pulse_json("source-outputs"), "muted startup opened a microphone"
         bookmark = json.loads((self.profile / "config/servers.json").read_text())[0]
         assert bookmark["certificate_sha256"] == pin
         assert "not-saved-fixture-password" not in json.dumps(bookmark) and "password" not in bookmark
-        self.click(104, 174)  # Explicitly expand Lobby; only Root starts expanded.
-        self.click(160, 212)  # Browse the nested Development channel.
-        time.sleep(0.5)
+        _, lobby = self.click_text("Lobby", region=self.TREE)  # Browse Lobby, then expand it; only Root starts expanded.
+        self.click(107, lobby)
+        self.click_text("Development", region=self.TREE)  # Browse the nested Development channel.
+        eventually(lambda: self.locate("Development", (320, 40, 1120, 90)), "header did not show Development")
         assert self.peer.users[session]["channel"] == 0, "browsing text moved voice"
-        self.xdo("mousemove", "--window", self.window, 160, 212)
-        self.xdo("click", "--repeat", 2, "--delay", 100, 1)  # Double-click joins voice.
+        self.click_text("Development", count=2, region=self.TREE)  # Double-click joins voice.
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == session
                        and event["user"]["channel"] == 2)
         body = "DESKTOPHISTORYMARKER\n\n```rust\nlet connected = true;\n```"
@@ -287,12 +348,12 @@ class DesktopTest:
         self.capture("chat")
         print("Desktop add/certificate flow, channel tree, independent browsing/join, multiline chat and history passed.", flush=True)
         self.recorded_playback(self.reference.encode_tone(50))
-        self.click(790, 35)
+        self.click(*self.MUTE)
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == session
                        and not event["user"]["self_muted"])
         eventually(lambda: self.pulse_json("source-outputs"), "unmute did not open capture")
         self.captured_audio(session)
-        self.click(790, 35)
+        self.click(*self.MUTE)
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == session
                        and event["user"]["self_muted"])
         eventually(lambda: not self.pulse_json("source-outputs"), "mute left microphone capture open")
@@ -302,13 +363,13 @@ class DesktopTest:
         time.sleep(0.2)
         after = len([event for event in self.peer.events if event["kind"] == "audio" and event["sender"] == session and not event["end"]])
         assert before == after, "muted audio was transmitted"
-        self.click(865, 35)
+        self.click(*self.DEAFEN)
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == session
                        and event["user"]["self_deafened"])
         eventually(lambda: not self.pulse_json("source-outputs") and not self.pulse_json("sink-inputs"),
                    "deafen retained audio streams")
         time.sleep(1.1)
-        self.click(865, 35)
+        self.click(*self.DEAFEN)
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == session
                        and not event["user"]["self_deafened"])
         eventually(lambda: self.pulse_json("sink-inputs"), "undeafen did not restore playback")
@@ -328,7 +389,7 @@ class DesktopTest:
         eventually(lambda: self.pulse_json("sink-inputs"), "audio did not recover after replacing service socket", timeout=30)
         assert self.peer.users[session]["channel"] == 2
         assert not self.pulse_json("source-outputs"), "audio recovery lost mute state"
-        self.click(790, 35)
+        self.click(*self.MUTE)
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == session
                        and not event["user"]["self_muted"])
         eventually(lambda: self.pulse_json("source-outputs"), "capture did not recover")
@@ -340,16 +401,17 @@ class DesktopTest:
         self.peer.wait(lambda event: event["kind"] == "user_removed" and event["session"] == session)
         self.start_app()
         self.wait_text("Disconnected")
-        self.click(104, 174)
-        self.click(160, 212)
+        _, lobby = self.click_text("Lobby", region=self.TREE)
+        self.click(107, lobby)
+        self.click_text("Development", region=self.TREE)
         self.wait_text(marker)
         assert not any(user["name"] == "NuschelDesktop" for user in self.peer.users.values())
         self.capture("offline-history")
-        self.click(970, 35)
+        self.click_text("Connect")
         self.wait_text("Save and connect")
-        self.click(710, 725)
+        self.click_text("Save and connect")
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschelDesktop")
-        self.wait_text("TCP voice")
+        self.wait_text("Connected")
         assert (self.profile / "config/identity.json").read_bytes() == identity
         print("Saved server/certificate/client identity and offline nested-channel history survived restart.", flush=True)
 
