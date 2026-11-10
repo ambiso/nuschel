@@ -2,7 +2,9 @@
 //! System-wide push-to-talk. On Linux the XDG GlobalShortcuts portal binds the
 //! shortcut (the desktop asks the user to confirm it); Windows and macOS use the
 //! platform hotkey APIs. Only press and release notifications cross into Nuschel.
-use tokio::{runtime::Handle, sync::mpsc};
+use tokio::runtime::Handle;
+#[cfg(target_os = "linux")]
+use tokio::sync::mpsc;
 
 #[derive(Debug)]
 pub enum GlobalEvent {
@@ -13,14 +15,30 @@ pub enum GlobalEvent {
     Unavailable(String),
 }
 
+/// The system-wide shortcut for as long as this value lives.
 pub struct GlobalPtt {
-    pub events: mpsc::Receiver<GlobalEvent>,
+    queued: std::collections::VecDeque<GlobalEvent>,
+    #[cfg(target_os = "linux")]
+    events: mpsc::Receiver<GlobalEvent>,
+    #[cfg(target_os = "linux")]
     task: tokio::task::JoinHandle<()>,
+    /// Windows and macOS deliver hotkeys through the platform event loop of the
+    /// thread that registered them, so the manager stays on GPUI's main thread.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    hotkey: Option<(
+        global_hotkey::GlobalHotKeyManager,
+        global_hotkey::hotkey::HotKey,
+    )>,
 }
 
 impl Drop for GlobalPtt {
     fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
         self.task.abort();
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        if let Some((manager, hotkey)) = self.hotkey.take() {
+            let _ = manager.unregister(hotkey);
+        }
     }
 }
 
@@ -44,14 +62,77 @@ pub fn xdg_trigger(key: &str) -> String {
 }
 
 impl GlobalPtt {
+    /// Call on the main (UI) thread.
     pub fn start(handle: &Handle, key: String) -> Self {
-        let (sender, events) = mpsc::channel(16);
-        let task = handle.spawn(async move {
-            if let Err(error) = run(key, sender.clone()).await {
-                let _ = sender.send(GlobalEvent::Unavailable(error)).await;
+        #[cfg(target_os = "linux")]
+        {
+            let (sender, events) = mpsc::channel(16);
+            let task = handle.spawn(async move {
+                if let Err(error) = run(key, sender.clone()).await {
+                    let _ = sender.send(GlobalEvent::Unavailable(error)).await;
+                }
+            });
+            Self {
+                queued: Default::default(),
+                events,
+                task,
             }
-        });
-        Self { events, task }
+        }
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        {
+            let _ = handle;
+            let mut queued = std::collections::VecDeque::new();
+            let hotkey = match register(&key) {
+                Ok(registered) => {
+                    queued.push_back(GlobalEvent::Bound(key));
+                    Some(registered)
+                }
+                Err(error) => {
+                    queued.push_back(GlobalEvent::Unavailable(error));
+                    None
+                }
+            };
+            Self { queued, hotkey }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+        {
+            let _ = (handle, key);
+            Self {
+                queued: [GlobalEvent::Unavailable(
+                    "global shortcuts are not supported on this platform".into(),
+                )]
+                .into(),
+            }
+        }
+    }
+
+    /// The next press, release or status change, without blocking.
+    pub fn try_next(&mut self) -> Option<GlobalEvent> {
+        if let Some(event) = self.queued.pop_front() {
+            return Some(event);
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.events.try_recv().ok()
+        }
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        {
+            use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
+            let (_, hotkey) = self.hotkey.as_ref()?;
+            while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+                if event.id == hotkey.id() {
+                    return Some(match event.state {
+                        HotKeyState::Pressed => GlobalEvent::Pressed,
+                        HotKeyState::Released => GlobalEvent::Released,
+                    });
+                }
+            }
+            None
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+        {
+            None
+        }
     }
 }
 
@@ -106,9 +187,17 @@ async fn run(key: String, sender: mpsc::Sender<GlobalEvent>) -> Result<(), Strin
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-async fn run(key: String, sender: mpsc::Sender<GlobalEvent>) -> Result<(), String> {
-    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
-    let hotkey: HotKey = xdg_trigger(&key)
+fn register(
+    key: &str,
+) -> Result<
+    (
+        global_hotkey::GlobalHotKeyManager,
+        global_hotkey::hotkey::HotKey,
+    ),
+    String,
+> {
+    use global_hotkey::{GlobalHotKeyManager, hotkey::HotKey};
+    let hotkey: HotKey = xdg_trigger(key)
         .replace("CTRL", "Control")
         .replace("LOGO", "Super")
         .parse()
@@ -117,28 +206,7 @@ async fn run(key: String, sender: mpsc::Sender<GlobalEvent>) -> Result<(), Strin
     manager
         .register(hotkey)
         .map_err(|error| error.to_string())?;
-    let _ = sender.send(GlobalEvent::Bound(key)).await;
-    let receiver = GlobalHotKeyEvent::receiver();
-    loop {
-        while let Ok(event) = receiver.try_recv() {
-            if event.id == hotkey.id() {
-                let next = match event.state {
-                    HotKeyState::Pressed => GlobalEvent::Pressed,
-                    HotKeyState::Released => GlobalEvent::Released,
-                };
-                if sender.send(next).await.is_err() {
-                    let _ = manager.unregister(hotkey);
-                    return Ok(());
-                }
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-async fn run(_: String, _: mpsc::Sender<GlobalEvent>) -> Result<(), String> {
-    Err("global shortcuts are not supported on this platform".into())
+    Ok((manager, hotkey))
 }
 
 #[cfg(test)]

@@ -33,6 +33,28 @@ pub struct MessageView {
     /// character count.
     pub measured: std::rc::Rc<std::cell::Cell<f32>>,
 }
+/// Name a text field for screen readers. GPUI-kit inputs expose no role or
+/// name to AT-SPI/UIA/AX unless the state is told what it is.
+pub fn accessible<M: gpui_kit::base::input::InputModeKind>(
+    mut state: gpui_kit::base::input::InputBaseState<M>,
+    label: &str,
+    multiline: bool,
+    secret: bool,
+) -> gpui_kit::base::input::InputBaseState<M> {
+    let role = if multiline {
+        Role::MultilineTextInput
+    } else if secret {
+        Role::PasswordInput
+    } else {
+        Role::TextInput
+    };
+    state.set_accessibility(
+        gpui_kit::base::input::InputAccessibility::new(Some(role))
+            .with_label(Some(label.to_string().into()))
+            .with_value_exposed(!secret),
+    );
+    state
+}
 /// Messages taller than this are collapsed until expanded.
 pub const COLLAPSED_HEIGHT: f32 = 300.;
 impl MessageView {
@@ -490,10 +512,15 @@ impl Desktop {
         cx: &mut Context<Self>,
     ) -> Self {
         let composer = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder("Write a message…")
-                .auto_grow(1, 10)
-                .submit_on_enter(true)
+            accessible(
+                TextareaState::new(window, cx)
+                    .placeholder("Write a message…")
+                    .auto_grow(1, 10)
+                    .submit_on_enter(true),
+                "Message",
+                true,
+                false,
+            )
         });
         let subscription =
             cx.subscribe_in(
@@ -952,29 +979,54 @@ impl Desktop {
         self.form = Some(ServerForm {
             editing: server.map(|server| server.id.clone()),
             name: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Server name")
-                    .default_value(name)
+                accessible(
+                    InputState::new(window, cx)
+                        .placeholder("Server name")
+                        .default_value(name),
+                    "Server name",
+                    false,
+                    false,
+                )
             }),
             host: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Hostname or IP address")
-                    .default_value(host)
+                accessible(
+                    InputState::new(window, cx)
+                        .placeholder("Hostname or IP address")
+                        .default_value(host),
+                    "Server address",
+                    false,
+                    false,
+                )
             }),
             port: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("64738")
-                    .default_value(port)
+                accessible(
+                    InputState::new(window, cx)
+                        .placeholder("64738")
+                        .default_value(port),
+                    "Port",
+                    false,
+                    false,
+                )
             }),
             username: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Your Mumble username")
-                    .default_value(username)
+                accessible(
+                    InputState::new(window, cx)
+                        .placeholder("Your Mumble username")
+                        .default_value(username),
+                    "Username",
+                    false,
+                    false,
+                )
             }),
             password: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Optional; kept only for this connection")
-                    .masked(true)
+                accessible(
+                    InputState::new(window, cx)
+                        .placeholder("Optional; kept only for this connection")
+                        .masked(true),
+                    "Server password",
+                    false,
+                    true,
+                )
             }),
             error: None,
         });
@@ -1249,7 +1301,14 @@ impl Desktop {
         let Some((index, _)) = self.selected_indices() else {
             return;
         };
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search local history"));
+        let input = cx.new(|cx| {
+            accessible(
+                InputState::new(window, cx).placeholder("Search local history"),
+                "Search local history",
+                false,
+                false,
+            )
+        });
         input.update(cx, |input, cx| input.focus(window, cx));
         // Search as you type; replies for older queries are dropped on arrival.
         let changes = cx.subscribe(&input, |this, _, event, cx| {
@@ -1485,7 +1544,7 @@ impl Desktop {
         while let Some(event) = self
             .global_ptt
             .as_mut()
-            .and_then(|(_, global)| global.events.try_recv().ok())
+            .and_then(|(_, global)| global.try_next())
         {
             changed = true;
             match event {

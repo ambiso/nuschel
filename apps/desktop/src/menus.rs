@@ -155,15 +155,22 @@ impl Desktop {
             action,
             PromptAction::ImportCertificate { .. } | PromptAction::ExportCertificate
         );
+        let title: String = title.into();
+        let label = title.clone();
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(initial)
-                .masked(secret)
+            crate::state::accessible(
+                InputState::new(window, cx)
+                    .default_value(initial)
+                    .masked(secret),
+                &label,
+                false,
+                secret,
+            )
         });
         input.update(cx, |input, cx| input.focus(window, cx));
         self.prompt = Some(Prompt {
             server,
-            title: title.into(),
+            title,
             detail: detail.into(),
             confirm,
             danger,
@@ -825,13 +832,38 @@ impl Desktop {
         }) else {
             return;
         };
-        let name = cx.new(|cx| InputState::new(window, cx).default_value(view.name.clone()));
-        let description = cx
-            .new(|cx| InputState::new(window, cx).default_value(strip_tags(&view.description_raw)));
-        let position =
-            cx.new(|cx| InputState::new(window, cx).default_value(view.position.to_string()));
-        let max_users =
-            cx.new(|cx| InputState::new(window, cx).default_value(view.max_users.to_string()));
+        let name = cx.new(|cx| {
+            crate::state::accessible(
+                InputState::new(window, cx).default_value(view.name.clone()),
+                "Channel name",
+                false,
+                false,
+            )
+        });
+        let description = cx.new(|cx| {
+            crate::state::accessible(
+                InputState::new(window, cx).default_value(strip_tags(&view.description_raw)),
+                "Channel description",
+                false,
+                false,
+            )
+        });
+        let position = cx.new(|cx| {
+            crate::state::accessible(
+                InputState::new(window, cx).default_value(view.position.to_string()),
+                "Position",
+                false,
+                false,
+            )
+        });
+        let max_users = cx.new(|cx| {
+            crate::state::accessible(
+                InputState::new(window, cx).default_value(view.max_users.to_string()),
+                "Maximum users",
+                false,
+                false,
+            )
+        });
         if !view.description_raw.is_empty() || view.description.is_none() {
             let id = self.servers[server].id.clone();
             let _ = self.backend.command(

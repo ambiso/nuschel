@@ -105,6 +105,9 @@ pkgs.testers.runNixOSTest {
     client.succeed("su - tester -c 'xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/stock_client.py ${nuschel}/bin --mumble ${pkgs.mumble}/bin/mumble --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschel-stock-artifacts'")
     client.succeed("su - tester -c 'xvfb-run -a -s \"-screen 0 1120x850x24\" ${pkgs.python3}/bin/python3 ${../tests}/desktop_recovery.py ${nuschel}/bin --murmur ${pkgs.murmur}/bin/mumble-server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschel-recovery-artifacts'")
     client.copy_from_machine("/tmp/nuschel-recovery-artifacts", "recovery")
+    # Screen-reader view over AT-SPI: names and roles, and operating Mute without a pointer.
+    client.succeed("su - tester -c '${pkgs.dbus}/bin/dbus-run-session -- xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/accessibility.py ${nuschel}/bin --murmur ${pkgs.murmur}/bin/mumble-server --at-spi ${pkgs.at-spi2-core} --output /tmp/nuschel-a11y-artifacts'")
+    client.copy_from_machine("/tmp/nuschel-a11y-artifacts", "accessibility")
     # Older stock servers use the legacy UDP packet format.
     for version, server_binary, extra in [("1.4", "${legacyServers."1.4"}", ""), ("1.3", "${legacyServers."1.3"}", " --no-listening")]:
         client.succeed(f"su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/with_local_murmur.py {server_binary} ${../tests}/udp_voice.py ${nuschel}/bin --port PORT --opus-library ${pkgs.libopus}/lib/libopus.so'")
