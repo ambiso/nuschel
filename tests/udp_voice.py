@@ -46,7 +46,9 @@ def join(client, channel):
 
 
 def iptables(*arguments):
-    subprocess.run(["iptables", *arguments], check=True)
+    # The server may be reached over IPv4 or IPv6 (the VM network uses both).
+    for tool in ("iptables", "ip6tables"):
+        subprocess.run([tool, *arguments], check=True)
 
 
 def main():

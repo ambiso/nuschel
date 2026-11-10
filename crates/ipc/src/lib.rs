@@ -332,6 +332,67 @@ pub enum LiveMediaEvent {
     },
 }
 
+/// Cost of JSON framing for live voice, which decides whether a binary audio
+/// IPC is worth its extra parsing surface. Run with
+/// `cargo test --release -p nuschel-ipc -- --ignored --nocapture voice_ipc_cost`.
+#[cfg(test)]
+mod voice_ipc_cost {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    #[ignore = "measurement, not a check"]
+    fn voice_ipc_cost() {
+        // A 20 ms Opus voice packet at 40 kb/s is about 100 bytes.
+        let opus: Vec<u8> = (0..100_u8).map(|byte| byte.wrapping_mul(37)).collect();
+        let event = Envelope::new(
+            0,
+            LiveMediaEvent::Packet {
+                epoch: 3,
+                sequence: 123_456,
+                opus: opus.clone(),
+                end: false,
+            },
+        );
+        let request = Envelope::new(
+            0,
+            LiveMediaRequest::Playback {
+                sender: 42,
+                sequence: 123_456,
+                opus,
+                end: false,
+                volume: 1.,
+            },
+        );
+        let rounds = 200_000;
+        let mut bytes = Vec::new();
+        let started = Instant::now();
+        for _ in 0..rounds {
+            bytes.clear();
+            write_frame(&mut bytes, &event).unwrap();
+            let decoded: Envelope<LiveMediaEvent> =
+                read_frame(&mut bytes.as_slice()).unwrap().unwrap();
+            std::hint::black_box(decoded);
+            bytes.clear();
+            write_frame(&mut bytes, &request).unwrap();
+            let decoded: Envelope<LiveMediaRequest> =
+                read_frame(&mut bytes.as_slice()).unwrap().unwrap();
+            std::hint::black_box(decoded);
+        }
+        let per_packet = started.elapsed().as_secs_f64() / rounds as f64;
+        // Each round encodes and decodes one outgoing and one incoming packet;
+        // 50 packets/s each way, with four people talking at once.
+        let per_second = per_packet * 50. * 4.;
+        println!(
+            "JSON voice frame: {} bytes; {:.2} µs to encode and decode one packet each way; \
+             {:.3}% of one core with four simultaneous talkers",
+            bytes.len(),
+            per_packet * 1e6,
+            per_second * 100.
+        );
+    }
+}
+
 #[cfg(test)]
 mod hostile_frames {
     use super::*;

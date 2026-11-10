@@ -93,9 +93,15 @@ impl Speaker {
 
     fn extend(&mut self, samples: &[f32]) {
         let volume = self.volume;
+        // Malformed packets can decode far outside full scale (libopus does the
+        // same); clamp per speaker so one bad stream cannot swamp the mix.
         self.pcm.extend(samples.iter().map(|sample| {
             let value = sample * volume;
-            if value.is_finite() { value } else { 0. }
+            if value.is_finite() {
+                value.clamp(-1., 1.)
+            } else {
+                0.
+            }
         }));
         // Never accumulate more than 200 ms of decoded audio per speaker.
         let excess = self.pcm.len().saturating_sub(RING / 2);
@@ -813,37 +819,62 @@ where
     if channels == 0 || channels > 32 || !(8000..=384_000).contains(&rate) {
         return Err("unsupported input configuration".into());
     }
-    let mut previous = 0.;
-    let mut accumulator = 0_u64;
+    let mut converter = CaptureConverter::new(channels, rate);
     device
         .build_input_stream(
             config,
-            move |data: &[T], _| {
-                for chunk in data.chunks_exact(channels) {
-                    let sample = chunk
-                        .iter()
-                        .map(|value| f32::from_sample(*value))
-                        .sum::<f32>()
-                        / channels as f32;
-                    let sample = if sample.is_finite() {
-                        sample.clamp(-1., 1.)
-                    } else {
-                        0.
-                    };
-                    accumulator += u64::from(RATE);
-                    while accumulator >= u64::from(rate) {
-                        accumulator -= u64::from(rate);
-                        let fraction = 1. - accumulator as f32 / RATE as f32;
-                        // A full ring means the worker stalled; dropping is better than blocking.
-                        let _ = ring.push(previous + (sample - previous) * fraction);
-                    }
-                    previous = sample;
-                }
-            },
+            move |data: &[T], _| converter.push(data, &mut ring),
             error_callback(tx),
             None,
         )
         .map_err(|error| error.to_string())
+}
+
+/// Device-rate, multi-channel capture to 48 kHz mono. Runs on the device
+/// thread: it must not lock, allocate or block (see the tests).
+struct CaptureConverter {
+    channels: usize,
+    rate: u32,
+    previous: f32,
+    accumulator: u64,
+}
+
+impl CaptureConverter {
+    fn new(channels: usize, rate: u32) -> Self {
+        Self {
+            channels,
+            rate,
+            previous: 0.,
+            accumulator: 0,
+        }
+    }
+
+    fn push<T>(&mut self, data: &[T], ring: &mut Producer<f32>)
+    where
+        T: SizedSample,
+        f32: FromSample<T>,
+    {
+        for chunk in data.chunks_exact(self.channels) {
+            let sample = chunk
+                .iter()
+                .map(|value| f32::from_sample(*value))
+                .sum::<f32>()
+                / self.channels as f32;
+            let sample = if sample.is_finite() {
+                sample.clamp(-1., 1.)
+            } else {
+                0.
+            };
+            self.accumulator += u64::from(RATE);
+            while self.accumulator >= u64::from(self.rate) {
+                self.accumulator -= u64::from(self.rate);
+                let fraction = 1. - self.accumulator as f32 / RATE as f32;
+                // A full ring means the worker stalled; dropping is better than blocking.
+                let _ = ring.push(self.previous + (sample - self.previous) * fraction);
+            }
+            self.previous = sample;
+        }
+    }
 }
 
 /// Resample the mixed 48 kHz playback ring to the device. Underruns play silence.
@@ -862,29 +893,12 @@ where
     if channels == 0 || channels > 32 || !(8000..=384_000).contains(&rate) {
         return Err("unsupported output configuration".into());
     }
-    let step = f64::from(RATE) / f64::from(rate);
-    let mut position = 0.;
-    let mut previous = 0.;
-    let mut next = 0.;
+    let mut converter = PlaybackConverter::new(channels, rate);
     device
         .build_output_stream(
             config,
             move |data: &mut [T], _| {
-                let mut dry = false;
-                for frame in data.chunks_exact_mut(channels) {
-                    let sample = previous + (next - previous) * position as f32;
-                    frame.fill(T::from_sample(sample));
-                    position += step;
-                    while position >= 1. {
-                        position -= 1.;
-                        previous = next;
-                        next = ring.pop().unwrap_or_else(|_| {
-                            dry = true;
-                            0.
-                        });
-                    }
-                }
-                if dry {
+                if converter.pull(data, &mut ring) {
                     // Lock-free; the worker thread reads and resets it.
                     underruns.fetch_add(1, Ordering::Relaxed);
                 }
@@ -893,6 +907,50 @@ where
             None,
         )
         .map_err(|error| error.to_string())
+}
+
+/// 48 kHz mono playback to the device's rate and channel count. Runs on the
+/// device thread: it must not lock, allocate or block (see the tests).
+struct PlaybackConverter {
+    channels: usize,
+    step: f64,
+    position: f64,
+    previous: f32,
+    next: f32,
+}
+
+impl PlaybackConverter {
+    fn new(channels: usize, rate: u32) -> Self {
+        Self {
+            channels,
+            step: f64::from(RATE) / f64::from(rate),
+            position: 0.,
+            previous: 0.,
+            next: 0.,
+        }
+    }
+
+    /// Fill a device buffer; returns whether the ring ran dry (silence played).
+    fn pull<T>(&mut self, data: &mut [T], ring: &mut Consumer<f32>) -> bool
+    where
+        T: SizedSample + FromSample<f32>,
+    {
+        let mut dry = false;
+        for frame in data.chunks_exact_mut(self.channels) {
+            let sample = self.previous + (self.next - self.previous) * self.position as f32;
+            frame.fill(T::from_sample(sample));
+            self.position += self.step;
+            while self.position >= 1. {
+                self.position -= 1.;
+                self.previous = self.next;
+                self.next = ring.pop().unwrap_or_else(|_| {
+                    dry = true;
+                    0.
+                });
+            }
+        }
+        dry
+    }
 }
 
 fn stream_config(host: &cpal::Host, supported: cpal::SupportedStreamConfig) -> cpal::StreamConfig {
@@ -917,6 +975,59 @@ mod tests {
             id: id.into(),
             name: name.into(),
         }
+    }
+
+    #[test]
+    fn device_callbacks_never_allocate() {
+        // Typical device shapes: 44.1 kHz stereo i16 capture, 48 kHz 6-channel
+        // f32 playback, and 96 kHz u16 to exercise resampling both ways.
+        let (mut capture_ring, mut capture_out) = RingBuffer::<f32>::new(RING);
+        let (mut playback_in, mut playback_ring) = RingBuffer::<f32>::new(RING);
+        let mut capture = CaptureConverter::new(2, 44_100);
+        let mut playback = PlaybackConverter::new(6, 48_000);
+        let mut resampled = PlaybackConverter::new(1, 96_000);
+        let input = [1234_i16; 2 * 441];
+        let mut output = [0_f32; 6 * 480];
+        let mut output_u16 = [0_u16; 960];
+        for _ in 0..10 {
+            let _ = playback_in.push_entire_slice(&[0.25; FRAME]);
+        }
+        let mut dry = 0;
+        let counted = allocation_counter::measure(|| {
+            for _ in 0..50 {
+                capture.push(&input, &mut capture_ring);
+                while capture_out.pop().is_ok() {}
+                dry += usize::from(playback.pull(&mut output, &mut playback_ring));
+                dry += usize::from(resampled.pull(&mut output_u16, &mut playback_ring));
+            }
+        });
+        assert_eq!(counted.count_total, 0, "a device callback allocated");
+        let control = allocation_counter::measure(|| {
+            std::hint::black_box(vec![0_u8; 64]);
+        });
+        assert!(
+            control.count_total > 0,
+            "the counting allocator is not active"
+        );
+        assert!(dry > 0, "the test should also cover the underrun path");
+        assert!(output.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn capture_resamples_to_48_khz_mono() {
+        let (mut ring, mut out) = RingBuffer::<f32>::new(RING);
+        let mut capture = CaptureConverter::new(2, 44_100);
+        capture.push(&[0.5_f32, -0.5].repeat(4410), &mut ring);
+        assert_eq!(out.slots(), 4800, "100 ms in, 100 ms out");
+        assert!(std::iter::from_fn(|| out.pop().ok()).all(|sample| sample.abs() < 1e-6));
+        let mut loud = CaptureConverter::new(1, 48_000);
+        loud.push(&[f32::NAN, 3.0, -3.0], &mut ring);
+        let values: Vec<f32> = std::iter::from_fn(|| out.pop().ok()).collect();
+        assert_eq!(
+            values,
+            [0., 1., -1.],
+            "non-finite and out-of-range input is sanitised"
+        );
     }
 
     #[test]

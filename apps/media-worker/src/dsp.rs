@@ -438,3 +438,190 @@ mod tests {
         );
     }
 }
+
+/// Quality and cost of the Rust DSP ports on synthetic but realistic input.
+/// Measurements, not checks; run in release:
+/// `cargo test --release -p nuschel-media-worker -- --ignored --nocapture evaluation`.
+#[cfg(test)]
+mod evaluation {
+    use super::*;
+    use opus_pure::{Application, MAX_PACKET_BYTES, MAX_PACKET_SAMPLES, OpusDecoder, OpusEncoder};
+    use std::time::Instant;
+
+    /// A talker: harmonics of a gliding pitch with syllable-rate envelope and pauses.
+    fn talker(samples: usize, pitch: f32, syllables: f32, seed: f32) -> Vec<f32> {
+        let mut phase = 0.;
+        (0..samples)
+            .map(|index| {
+                let t = index as f32 / RATE as f32;
+                let f0 = pitch * (1. + 0.12 * (2. * std::f32::consts::PI * 0.7 * t + seed).sin());
+                phase += f0 / RATE as f32;
+                let syllable = (2. * std::f32::consts::PI * syllables * t + seed)
+                    .sin()
+                    .max(0.);
+                let pause = if (t + seed).rem_euclid(2.3) < 0.4 {
+                    0.
+                } else {
+                    1.
+                };
+                let mut value = 0.;
+                for harmonic in 1..=16 {
+                    let formant = 1. / (1. + ((harmonic as f32 * f0 - 700.) / 500.).powi(2));
+                    value += (2. * std::f32::consts::PI * phase * harmonic as f32).sin()
+                        * (0.3 / harmonic as f32 + formant);
+                }
+                0.08 * syllable * pause * value
+            })
+            .collect()
+    }
+
+    /// A small room: 40 ms to the first reflection, then 64 sparse taps
+    /// decaying over 250 ms (roughly a 0.4 s reverberation time).
+    fn room(signal: &[f32]) -> Vec<f32> {
+        let mut state = 0x2545_f491_u32;
+        let mut random = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as f32 / u32::MAX as f32
+        };
+        let first = RATE as usize * 40 / 1000;
+        let span = RATE as usize / 4;
+        let mut taps = vec![(first, 0.5)];
+        for _ in 0..64 {
+            let offset = (random() * span as f32) as usize;
+            let decay = (-6.9 * offset as f32 / (0.4 * RATE as f32)).exp();
+            taps.push((first + offset, 0.25 * decay * (random() * 2. - 1.)));
+        }
+        let mut out = vec![0.; signal.len()];
+        for (delay, gain) in taps {
+            for (index, sample) in signal.iter().enumerate() {
+                if let Some(slot) = out.get_mut(index + delay) {
+                    *slot += sample * gain;
+                }
+            }
+        }
+        out
+    }
+
+    fn frame_of(signal: &[f32], index: usize) -> [f32; FRAME] {
+        std::array::from_fn(|offset| signal[index * FRAME + offset])
+    }
+
+    fn energy_db(frames: &[[f32; FRAME]]) -> f32 {
+        let energy: f32 = frames.iter().flatten().map(|sample| sample * sample).sum();
+        10. * (energy / (frames.len() * FRAME) as f32).max(1e-12).log10()
+    }
+
+    #[test]
+    #[ignore = "measurement, not a check"]
+    fn evaluation() {
+        let seconds = 12;
+        let total = seconds * RATE as usize;
+        let far = talker(total, 120., 3.1, 0.0);
+        let near = talker(total, 210., 3.7, 1.3);
+        let echo = room(&far);
+        let frames = total / FRAME;
+        // 0–6 s far end only, 6–9 s both talk, 9–12 s near end only.
+        let near_active = |index: usize| index >= 600;
+        let far_active = |index: usize| index < 900;
+        let settings = AudioSettings {
+            noise_suppression: false,
+            automatic_gain: false,
+            transmit: TransmitMode::Continuous,
+            ..Default::default()
+        };
+        let mut aec = CapturePipeline::new(&settings, true);
+        let mut reference = CapturePipeline::new(&settings, true);
+        aec.set_delay_hint(10);
+        let (mut mic_far_only, mut out_far_only) = (Vec::new(), Vec::new());
+        let (mut out_double, mut near_alone) = (Vec::new(), Vec::new());
+        let mut likelihood = Vec::new();
+        for index in 0..frames {
+            let far_frame = if far_active(index) {
+                frame_of(&far, index)
+            } else {
+                [0.; FRAME]
+            };
+            let echo_frame = if far_active(index) || index < 925 {
+                frame_of(&echo, index)
+            } else {
+                [0.; FRAME]
+            };
+            let near_frame = if near_active(index) {
+                frame_of(&near, index)
+            } else {
+                [0.; FRAME]
+            };
+            aec.render(&far_frame);
+            let mut mic: [f32; FRAME] = std::array::from_fn(|i| echo_frame[i] + near_frame[i]);
+            let raw = mic;
+            aec.process(&mut mic, false, false);
+            let mut alone = near_frame;
+            reference.process(&mut alone, false, false);
+            if (300..600).contains(&index) {
+                mic_far_only.push(raw);
+                out_far_only.push(mic);
+            }
+            if (650..900).contains(&index) {
+                out_double.push(mic);
+                near_alone.push(alone);
+            }
+            if index % 100 == 99 {
+                likelihood.push(aec.echo_metrics().residual_likelihood.unwrap_or(f32::NAN));
+            }
+        }
+        let erle = energy_db(&mic_far_only) - energy_db(&out_far_only);
+        let near_loss = energy_db(&near_alone) - energy_db(&out_double);
+        println!("AEC3 (Sonora), reverberant room, 40 ms path:");
+        println!("  echo reduction while only the far end talks (3–6 s): {erle:.1} dB");
+        println!(
+            "  near-end level change during double talk: {:+.1} dB",
+            -near_loss
+        );
+        println!("  reported ERLE: {:?}", aec.echo_metrics().erle_db);
+        println!("  residual-echo likelihood per second: {likelihood:.2?}");
+
+        // CPU cost of the full capture chain and the codec.
+        let full = AudioSettings::default();
+        let mut chain = CapturePipeline::new(&full, true);
+        let started = Instant::now();
+        for index in 0..frames {
+            chain.render(&frame_of(&far, index));
+            let mut mic: [f32; FRAME] =
+                std::array::from_fn(|i| echo[index * FRAME + i] + near[index * FRAME + i]);
+            std::hint::black_box(chain.process(&mut mic, false, false));
+        }
+        let chain_rtf = started.elapsed().as_secs_f64() / seconds as f64;
+        let mut encoder = OpusEncoder::new(48_000, 1, Application::Voip).unwrap();
+        encoder.bitrate_bps = 40_000;
+        encoder.use_inband_fec = true;
+        encoder.packet_loss_perc = 5;
+        let mut decoder = OpusDecoder::new(48_000, 1).unwrap();
+        let mut packet = vec![0; MAX_PACKET_BYTES];
+        let mut decoded = vec![0.; MAX_PACKET_SAMPLES];
+        let (mut encode, mut decode, mut bytes) = (0., 0., 0);
+        for chunk in near.as_chunks::<{ 2 * FRAME }>().0 {
+            let started = Instant::now();
+            let size = encoder.encode(chunk, 2 * FRAME, &mut packet).unwrap();
+            encode += started.elapsed().as_secs_f64();
+            bytes += size;
+            let started = Instant::now();
+            decoder
+                .decode(&packet[..size], MAX_PACKET_SAMPLES, &mut decoded)
+                .unwrap();
+            decode += started.elapsed().as_secs_f64();
+        }
+        println!("CPU, one core (fraction of real time):");
+        println!(
+            "  capture chain (HPF + AEC3 + RNNoise + AGC2): {:.2}%",
+            chain_rtf * 100.
+        );
+        println!(
+            "  opus-pure encode at 40 kb/s with FEC: {:.2}%, decode: {:.3}% per talker ({:.1} kb/s actual)",
+            encode / seconds as f64 * 100.,
+            decode / seconds as f64 * 100.,
+            bytes as f64 * 8. / seconds as f64 / 1000.
+        );
+    }
+}
