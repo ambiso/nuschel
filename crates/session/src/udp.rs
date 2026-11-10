@@ -180,7 +180,10 @@ impl Udp {
             return false;
         }
         self.last_ping = Some(Instant::now());
-        if !self.active() {
+        // Keep the oldest unanswered probe: probes go out every second, so
+        // restarting the clock on each one would never let a probe count as
+        // failed, and the server would keep sending voice by UDP.
+        if !self.active() && self.probe_pending.is_none() {
             self.probe_pending = Some(Instant::now());
         }
         self.send(&voice::encode_ping(version, now_ms)).await
@@ -284,6 +287,37 @@ mod tests {
         assert!(client.send_voice(b"voice").await);
         let (size, _) = server.recv_from(&mut buffer).await.unwrap();
         assert_eq!(server_crypt.decrypt(&buffer[..size]).unwrap(), b"voice");
+    }
+
+    /// Inbound UDP blocked: probes go unanswered once a second, as the session
+    /// sends them. The caller must be told to tunnel within a few seconds, and
+    /// again regularly while UDP stays dead (the server flips back on UDP audio).
+    #[tokio::test(start_paused = true)]
+    async fn unanswered_probes_ask_for_a_tunnel_ping_promptly() {
+        let silent = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut client = Udp::bind(silent.local_addr().unwrap(), false)
+            .await
+            .unwrap();
+        client.set_key(CryptState::new(&[3; 16], &[1; 16], &[2; 16]).unwrap());
+        let mut tunnelled = Vec::new();
+        for second in 0..12 {
+            client
+                .maybe_ping(voice::PROTOBUF_VERSION, second * 1000)
+                .await;
+            if client.probe_failed() {
+                tunnelled.push(second);
+            }
+            tokio::time::advance(Duration::from_secs(1)).await;
+        }
+        assert_eq!(
+            tunnelled.first(),
+            Some(&2),
+            "first tunnel ping too late: {tunnelled:?}"
+        );
+        assert!(
+            tunnelled.len() >= 4,
+            "tunnel pings should repeat while UDP is dead: {tunnelled:?}"
+        );
     }
 
     #[tokio::test]

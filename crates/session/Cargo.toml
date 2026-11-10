@@ -48,5 +48,9 @@ p12-keystore = "0.4"
 sha1 = "0.11"
 rsa = { version = "0.9", default-features = false, features = ["std", "getrandom"] }
 
+[dev-dependencies]
+# Paused-clock tests of the UDP probe timing.
+tokio = { version = "1.54.1", features = ["test-util"] }
+
 [lints]
 workspace = true
