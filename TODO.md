@@ -153,9 +153,11 @@ ServerConfig.
 - [x] Linux→Darwin cross build following `../opendeck-akp05` (pinned SDK,
       cargo-zigbuild, x86_64 + aarch64 slices, `llvm-lipo`). The flake only builds
       natively per system today.
-      Outputs exist (`.#macos-aarch64`, `.#macos-universal`); see the build status in the latest report.
+      `.#macos-aarch64` builds (SDK 14.5, minimum macOS 14.2, checked per binary; cargo-zigbuild
+      is patched to honour MACOSX_DEPLOYMENT_TARGET). Not yet run on a Mac.
 - [x] Windows cross build.
-      `.#windows` via mingw; it found a real `!Send` hotkey bug.
+      `.#windows` via mingw builds; it found a real `!Send` hotkey bug. The workers run under
+      Wine (codec, content, storage IPC); the GUI needs Windows' system ICU, which Wine lacks.
 - [x] Audit GPUI build scripts for cross builds (`xcrun` shader compilation vs
       `runtime_shaders`, `fxc.exe` on Windows).
       Vendored patches: Apple build script checks the target OS; Windows compiles HLSL at run time.
