@@ -6,7 +6,8 @@ and D-Bus daemon. Only virtual nodes exist: WirePlumber's ALSA, Bluetooth and
 camera monitors are disabled, and the test asserts that no hardware node
 appeared. Checks:
 
-1. Playback through the native PipeWire host reaches the speakers.
+1. Playback through the native PipeWire host reaches the speakers, with a
+   raised quantum range (1024..2048, as in virtual machines).
 2. PipeWire restart: the worker reports the failure; a replacement worker
    pinned to PipeWire (as the desktop supervisor does) tries no other audio
    server while PipeWire is down, and plays again once it is back.
@@ -36,7 +37,10 @@ import wave
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mumble_client import ReferenceOpus  # noqa: E402
 
-VIRTUAL_NODES = """context.objects = [
+VIRTUAL_NODES = """# A raised quantum range, as PipeWire applies in virtual machines (and some users
+# configure): Nuschel must fit its buffer request into it.
+context.properties = { default.clock.min-quantum = 1024 default.clock.max-quantum = 2048 }
+context.objects = [
   { factory = adapter
     args = { factory.name = support.null-audio-sink node.name = "speakers" node.description = "Speakers"
              media.class = "Audio/Sink" audio.position = [ FL FR ] object.linger = true

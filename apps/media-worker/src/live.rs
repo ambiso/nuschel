@@ -1018,17 +1018,32 @@ impl PlaybackConverter {
 }
 
 fn stream_config(host: &cpal::Host, supported: cpal::SupportedStreamConfig) -> cpal::StreamConfig {
+    #[cfg(target_os = "linux")]
+    let buffer = device_buffer(supported.buffer_size());
     #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut config: cpal::StreamConfig = supported.into();
     // PulseAudio's default can buffer two seconds. These Linux backends control
     // per-stream buffers, without changing a system device's global settings.
     #[cfg(target_os = "linux")]
     if matches!(host.id(), cpal::HostId::PulseAudio | cpal::HostId::PipeWire) {
-        config.buffer_size = cpal::BufferSize::Fixed(480);
+        config.buffer_size = buffer;
     }
     #[cfg(not(target_os = "linux"))]
     let _ = host;
     config
+}
+
+/// About 10 ms of device frames, within what the device accepts. PipeWire
+/// refuses streams outside its quantum range, which is raised in virtual
+/// machines and by users (e.g. 1024..2048); a fixed request would fail there.
+fn device_buffer(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
+    const WANTED: u32 = 480;
+    match supported {
+        cpal::SupportedBufferSize::Range { min, max } if min <= max => {
+            cpal::BufferSize::Fixed(WANTED.clamp(*min, *max))
+        }
+        _ => cpal::BufferSize::Fixed(WANTED),
+    }
 }
 
 #[cfg(test)]
@@ -1040,6 +1055,19 @@ mod tests {
             id: id.into(),
             name: name.into(),
         }
+    }
+
+    #[test]
+    fn device_buffer_stays_inside_the_supported_range() {
+        use cpal::{BufferSize, SupportedBufferSize};
+        let range = |min, max| SupportedBufferSize::Range { min, max };
+        assert_eq!(device_buffer(&range(64, 8192)), BufferSize::Fixed(480));
+        assert_eq!(device_buffer(&range(1024, 2048)), BufferSize::Fixed(1024));
+        assert_eq!(device_buffer(&range(16, 256)), BufferSize::Fixed(256));
+        assert_eq!(
+            device_buffer(&SupportedBufferSize::Unknown),
+            BufferSize::Fixed(480)
+        );
     }
 
     #[test]
