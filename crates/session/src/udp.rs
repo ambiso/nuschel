@@ -82,6 +82,8 @@ pub struct Udp {
     last_resync_request: Option<Instant>,
     last_ping: Option<Instant>,
     probe_pending: Option<Instant>,
+    /// UDP was answering at the previous `probe_failed` check.
+    was_active: bool,
     pub stats: PingStats,
     pub forced_tcp: bool,
 }
@@ -105,6 +107,7 @@ impl Udp {
             last_resync_request: None,
             last_ping: None,
             probe_pending: None,
+            was_active: false,
             stats: PingStats::default(),
             forced_tcp,
         })
@@ -189,11 +192,19 @@ impl Udp {
         self.send(&voice::encode_ping(version, now_ms)).await
     }
 
-    /// A probe went unanswered: the server may now believe UDP works. The caller
-    /// tunnels a ping over TCP so the server returns to the TCP tunnel.
+    /// Whether the caller should tunnel a ping over TCP now, so the server stops
+    /// sending voice by UDP that never arrives: right when UDP stops answering
+    /// (five seconds without a reply already proves it), and again whenever a
+    /// later probe goes unanswered (the server may have seen it).
     pub fn probe_failed(&mut self) -> bool {
+        let active = self.active();
+        let lost = std::mem::replace(&mut self.was_active, active) && !active;
+        if lost {
+            self.probe_pending = None;
+            return true;
+        }
         match self.probe_pending {
-            Some(sent) if sent.elapsed() > Duration::from_millis(1500) && !self.active() => {
+            Some(sent) if sent.elapsed() > Duration::from_millis(1500) && !active => {
                 self.probe_pending = None;
                 true
             }
@@ -318,6 +329,42 @@ mod tests {
             tunnelled.len() >= 4,
             "tunnel pings should repeat while UDP is dead: {tunnelled:?}"
         );
+    }
+
+    /// UDP worked, then inbound UDP is cut: the tunnel ping must go out on the
+    /// first check after UDP counts as lost, not after another probe cycle.
+    #[tokio::test(start_paused = true)]
+    async fn losing_udp_asks_for_a_tunnel_ping_immediately() {
+        let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut client = Udp::bind(server.local_addr().unwrap(), false)
+            .await
+            .unwrap();
+        let key = [3; 16];
+        let (client_nonce, server_nonce) = ([1; 16], [2; 16]);
+        client.set_key(CryptState::new(&key, &client_nonce, &server_nonce).unwrap());
+        let mut server_crypt = CryptState::new(&key, &server_nonce, &client_nonce).unwrap();
+        assert!(client.maybe_ping(voice::PROTOBUF_VERSION, 1000).await);
+        let mut buffer = [0; MAX_DATAGRAM];
+        let (size, from) = server.recv_from(&mut buffer).await.unwrap();
+        let ping = server_crypt.decrypt(&buffer[..size]).unwrap();
+        server
+            .send_to(&server_crypt.encrypt(&ping), from)
+            .await
+            .unwrap();
+        let size = client.recv(&mut buffer).await.unwrap();
+        client.handle(&buffer[..size], 1001);
+        assert!(client.active());
+        assert!(!client.probe_failed(), "UDP is fine");
+        let mut seconds = 0;
+        while client.active() {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            seconds += 1;
+        }
+        assert!(
+            client.probe_failed(),
+            "no tunnel ping when UDP was lost after {seconds} s"
+        );
+        assert!(!client.probe_failed(), "the loss is reported once");
     }
 
     #[tokio::test]

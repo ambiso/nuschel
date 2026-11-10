@@ -109,7 +109,9 @@ def main():
                 iptables("-I", "INPUT", "-p", "udp", "--sport", str(args.port), "-j", "DROP")
                 try:
                     wait_transport(bob, lambda s: not s["udp_active"], "UDP never deactivated", timeout=25)
-                    time.sleep(2.5)
+                    # The client tunnels a ping as soon as it notices, so the server
+                    # must already be using the TCP tunnel for Bob.
+                    time.sleep(1.0)
                     talk(alice, bob, packets, 100)
                     talk(bob, alice, packets, 100)
                     print("Fallback to TCP while inbound UDP is blocked ok")
