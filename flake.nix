@@ -13,6 +13,9 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
+    # Older stock servers for interoperability tests only (legacy UDP format).
+    nixpkgs-mumble14.url = "github:NixOS/nixpkgs/nixos-22.11";
+    nixpkgs-mumble13.url = "github:NixOS/nixpkgs/nixos-21.05";
   };
 
   outputs =
@@ -23,6 +26,8 @@
       flake-utils,
       rust-overlay,
       advisory-db,
+      nixpkgs-mumble14,
+      nixpkgs-mumble13,
       ...
     }:
     {
@@ -213,6 +218,10 @@
             inherit pkgs;
             nuschel = package;
             module = self.nixosModules.default;
+            legacyServers = {
+              "1.4" = "${nixpkgs-mumble14.legacyPackages.${system}.murmur}/bin/mumble-server";
+              "1.3" = "${nixpkgs-mumble13.legacyPackages.${system}.murmur}/bin/murmurd";
+            };
           };
         };
         devShells.default = craneLib.devShell {

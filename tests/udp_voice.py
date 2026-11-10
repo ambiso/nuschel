@@ -7,6 +7,7 @@ mixed UDP/TCP pair. With --block-udp (VM only, root) it also drops inbound UDP
 mid-call and checks fallback to the TCP tunnel and recovery.
 """
 import argparse
+import socket
 from pathlib import Path
 import subprocess
 import sys
@@ -55,6 +56,7 @@ def main():
     parser.add_argument("--port", type=int, default=64738)
     parser.add_argument("--opus-library", type=Path, required=True)
     parser.add_argument("--block-udp", action="store_true")
+    parser.add_argument("--netem", action="store_true", help="VM only, root: add delay, jitter and loss with tc")
     args = parser.parse_args()
     reference = ReferenceOpus(args.opus_library)
     packets = reference.encode_tone(10)
@@ -84,6 +86,21 @@ def main():
             talk(tcp, alice, packets, 0)
             talk(alice, tcp, packets, 40)
             print("Forced TCP and mixed UDP/TCP relay ok")
+            if args.netem:
+                device = subprocess.run(["ip", "-o", "route", "get", socket.gethostbyname(args.host)],
+                                        capture_output=True, text=True, check=True).stdout.split(" dev ")[1].split()[0]
+                subprocess.run(["tc", "qdisc", "add", "dev", device, "root", "netem", "delay", "40ms", "20ms",
+                                "loss", "5%"], check=True)
+                try:
+                    before = bob.transport.get("good", 0)
+                    many = reference.encode_tone(100)
+                    talk(alice, bob, many, 400)
+                    stats = wait_transport(bob, lambda s: s["good"] > before + 60, "voice did not survive jitter and loss", timeout=30)
+                    assert stats["udp_active"], "UDP was abandoned under moderate loss"
+                    print(f"Lossy network ok: {stats['good'] - before} datagrams, {stats['lost']} lost, {stats['late']} late, "
+                          f"udp ping {stats['udp']['average_ms']:.0f} ms", flush=True)
+                finally:
+                    subprocess.run(["tc", "qdisc", "del", "dev", device, "root"], check=False)
             if args.block_udp:
                 # Drop inbound UDP for Bob's socket only: replies stop, so Bob must
                 # return to the tunnel and tell the server to stop sending UDP.

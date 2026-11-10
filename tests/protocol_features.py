@@ -61,6 +61,16 @@ def openssl_identity(openssl, root, legacy):
     return p12, hashlib.sha1(der).hexdigest()
 
 
+def check_listening(clients, alice, bob, carol, dave, packets):
+    carol.send(kind="listen", channel=2, listen=True)
+    carol.wait(lambda e: e["kind"] == "user" and e["user"]["session"] == carol.session and 2 in e["user"]["listening"])
+    marks = {client.session: len(client.events) for client in clients}
+    speak(dave, packets, 0, 0)
+    assert heard(carol, dave, marks[carol.session]), "listener did not hear the channel"
+    assert not heard(bob, dave, marks[bob.session])
+    print("Channel listening passed.", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
@@ -69,6 +79,7 @@ def main():
     parser.add_argument("--opus-library", type=Path, required=True)
     parser.add_argument("--superuser-password", default="nuschel-super")
     parser.add_argument("--openssl", default="openssl")
+    parser.add_argument("--no-listening", action="store_true", help="server predates channel listeners (1.4)")
     args = parser.parse_args()
     reference = ReferenceOpus(args.opus_library)
     packets = reference.encode_tone(8)
@@ -103,18 +114,16 @@ def main():
             assert not heard(bob, alice, marks[bob.session]) and not heard(carol, alice, marks[carol.session])
             print("Whisper and shout routing isolation passed.", flush=True)
 
-            # Carol listens to Development and hears Dave's normal speech; Bob does not.
-            carol.send(kind="listen", channel=2, listen=True)
-            carol.wait(lambda e: e["kind"] == "user" and e["user"]["session"] == carol.session and 2 in e["user"]["listening"])
-            marks = {client.session: len(client.events) for client in clients}
-            speak(dave, packets, 0, 0)
-            assert heard(carol, dave, marks[carol.session]), "listener did not hear the channel"
-            assert not heard(bob, dave, marks[bob.session])
-            print("Channel listening passed.", flush=True)
-
-            # Permissions: ordinary users may speak in Lobby but cannot kick.
+            # Carol listens to Development and hears Dave's normal speech; Bob does not (1.4+).
+            if args.no_listening:
+                print("Channel listening skipped (server predates Mumble 1.4).", flush=True)
+            else:
+                check_listening(clients, alice, bob, carol, dave, packets)
+            # Permissions: ordinary users may speak in Lobby but cannot kick. Servers
+            # also push permissions on join, so earlier events count too.
             bob.send(kind="permissions", channel=1)
-            event = bob.wait(lambda e: e["kind"] == "permissions" and e["channel"] == 1)
+            event = next((e for e in reversed(bob.events) if e["kind"] == "permissions" and e["channel"] == 1), None) \
+                or bob.wait(lambda e: e["kind"] == "permissions" and e["channel"] == 1)
             assert event["permissions"] & SPEAK
             root_permissions = [e["permissions"] for e in bob.events if e["kind"] == "permissions" and e["channel"] == 0]
             assert not root_permissions or not root_permissions[-1] & KICK

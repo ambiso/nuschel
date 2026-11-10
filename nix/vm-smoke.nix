@@ -2,6 +2,7 @@
   pkgs,
   nuschel,
   module,
+  legacyServers,
 }:
 let
   postgresFixture = pkgs.writeText "nuschel-postgres-test-url" "postgresql:///nuschel?host=/run/postgresql&user=postgres\n";
@@ -56,10 +57,16 @@ pkgs.testers.runNixOSTest {
           pkgs.imagemagick
           pkgs.tesseract
           pkgs.pulseaudio
+          pkgs.mumble
+          pkgs.openssl
+          pkgs.iptables
+          pkgs.iproute2
+          pkgs.procps
         ];
         hardware.graphics.enable = true;
         fonts.packages = [ pkgs.dejavu_fonts ];
-        virtualisation.memorySize = 3072;
+        virtualisation.memorySize = 4096;
+        virtualisation.cores = 2;
         users.users.tester = {
           isNormalUser = true;
           createHome = true;
@@ -74,6 +81,11 @@ pkgs.testers.runNixOSTest {
     server.succeed("${pkgs.python3}/bin/python3 ${../tests/mumble_fixture.py} /var/lib/murmur/murmur.sqlite")
     server.succeed("systemctl start murmur.service")
     server.wait_for_open_port(64738)
+    # A SuperUser password for the administration tests.
+    server.succeed("cp /run/murmur/murmurd.ini /tmp/murmurd.ini && systemctl stop murmur.service")
+    server.succeed("runuser -u murmur -- ${pkgs.murmur}/bin/mumble-server -ini /tmp/murmurd.ini -supw nuschel-super || true")
+    server.succeed("systemctl start murmur.service")
+    server.wait_for_open_port(64738)
     client.wait_for_unit("multi-user.target")
     client.wait_until_succeeds("python3 -c 'import socket; socket.create_connection((\"server\", 64738), timeout=2).close()'")
     client.succeed("nuschel --help")
@@ -84,6 +96,18 @@ pkgs.testers.runNixOSTest {
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/mumble_client.py ${nuschel}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so'")
     client.succeed("su - tester -c 'xvfb-run -a -s \"-screen 0 1120x850x24\" ${pkgs.python3}/bin/python3 ${../tests}/desktop_mumble.py ${nuschel}/bin --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschel-desktop-artifacts'")
     client.copy_from_machine("/tmp/nuschel-desktop-artifacts", "desktop")
+    # Encrypted UDP with forced TCP, a lossy network and blocked inbound UDP (root for tc/iptables).
+    client.succeed("${pkgs.python3}/bin/python3 ${../tests}/udp_voice.py ${nuschel}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so --netem --block-udp")
+    client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/protocol_features.py ${nuschel}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so --openssl ${pkgs.openssl.bin}/bin/openssl'")
+    client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/media_live.py ${nuschel}/bin --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so'")
+    client.succeed("su - tester -c 'xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/stock_client.py ${nuschel}/bin --mumble ${pkgs.mumble}/bin/mumble --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschel-stock-artifacts'")
+    client.succeed("su - tester -c 'xvfb-run -a -s \"-screen 0 1120x850x24\" ${pkgs.python3}/bin/python3 ${../tests}/desktop_recovery.py ${nuschel}/bin --murmur ${pkgs.murmur}/bin/mumble-server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschel-recovery-artifacts'")
+    client.copy_from_machine("/tmp/nuschel-recovery-artifacts", "recovery")
+    # Older stock servers use the legacy UDP packet format.
+    for version, server_binary, extra in [("1.4", "${legacyServers."1.4"}", ""), ("1.3", "${legacyServers."1.3"}", " --no-listening")]:
+        client.succeed(f"su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/with_local_murmur.py {server_binary} ${../tests}/udp_voice.py ${nuschel}/bin --port PORT --opus-library ${pkgs.libopus}/lib/libopus.so'")
+        client.succeed(f"su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/with_local_murmur.py {server_binary} ${../tests}/protocol_features.py ${nuschel}/bin --port PORT --opus-library ${pkgs.libopus}/lib/libopus.so --openssl ${pkgs.openssl.bin}/bin/openssl{extra}'")
+        print(f"Stock Mumble {version}: UDP voice and protocol features passed.")
     database.wait_for_unit("nuschel.service")
     database.succeed("su - postgres -c '${pkgs.python3}/bin/python3 ${../tests/workers.py} ${nuschel}/bin --postgres-url-file ${postgresFixture}'")
   '';
