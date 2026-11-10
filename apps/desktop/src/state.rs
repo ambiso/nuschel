@@ -126,6 +126,8 @@ pub enum TreeRow {
         has_children: bool,
         /// Users hidden inside a collapsed branch, shown as a count.
         hidden_users: usize,
+        /// Someone in that collapsed branch is talking.
+        hidden_talking: bool,
     },
     User {
         session: u32,
@@ -457,6 +459,7 @@ pub struct ServerForm {
     pub port: Entity<InputState>,
     pub username: Entity<InputState>,
     pub password: Entity<InputState>,
+    pub auto_connect: bool,
     pub error: Option<String>,
 }
 
@@ -482,10 +485,14 @@ pub struct Desktop {
     scroll_frame_pending: bool,
     pub error: Option<String>,
     pub title_drag: bool,
+    /// Pointer x and sidebar width where a sidebar resize started, and the live width.
+    pub sidebar_drag: Option<(f32, f32, f32)>,
     pub settings: ClientSettings,
     pub settings_open: bool,
     /// The local audio check, alive while Settings is open.
     pub preview: Option<crate::preview::PreviewView>,
+    /// Whether Nuschel starts at login, read from the system when Settings opens.
+    pub autostart: Option<bool>,
     pub menu: Option<crate::menus::Menu>,
     pub prompt: Option<crate::menus::Prompt>,
     pub panel: Option<Panel>,
@@ -581,9 +588,11 @@ impl Desktop {
             scroll_frame_pending: false,
             error: None,
             title_drag: false,
+            sidebar_drag: None,
             settings,
             settings_open: false,
             preview: None,
+            autostart: None,
             menu: None,
             prompt: None,
             panel: None,
@@ -606,8 +615,15 @@ impl Desktop {
         if !desktop.servers.is_empty() {
             desktop.browse_server(0, window, cx);
         }
-        if let Some(url) = startup {
-            desktop.open_url(url, window, cx);
+        match startup {
+            Some(url) => desktop.open_url(url, window, cx),
+            None => {
+                for index in 0..desktop.servers.len() {
+                    if desktop.servers[index].bookmark.auto_connect {
+                        desktop.connect_as(index, None, true);
+                    }
+                }
+            }
         }
         desktop.sync_global_ptt();
         desktop
@@ -814,20 +830,23 @@ impl Desktop {
                 continue;
             };
             let expanded = self.channel_expanded(server_index, id);
-            let hidden_users = if has_children && !expanded {
+            let hidden = if has_children && !expanded {
                 self.subtree(server_index, id)
                     .into_iter()
                     .filter(|child| *child != id)
-                    .map(|child| users_by_channel.get(&child).map_or(0, Vec::len))
-                    .sum()
+                    .flat_map(|child| users_by_channel.get(&child).cloned().unwrap_or_default())
+                    .collect::<Vec<_>>()
             } else {
-                0
+                Vec::new()
             };
             rows.push(TreeRow::Channel {
                 index,
                 depth,
                 has_children,
-                hidden_users,
+                hidden_users: hidden.len(),
+                hidden_talking: hidden
+                    .iter()
+                    .any(|user| server.talking.contains(&user.session)),
             });
             if let Some(users) = users_by_channel.get_mut(&id) {
                 users.sort_by(|a, b| {
@@ -983,7 +1002,9 @@ impl Desktop {
         let username = server
             .map(|server| server.bookmark.username.clone())
             .unwrap_or_default();
+        let auto_connect = server.is_none_or(|server| server.bookmark.auto_connect);
         self.form = Some(ServerForm {
+            auto_connect,
             editing: server.map(|server| server.id.clone()),
             name: cx.new(|cx| {
                 accessible(
@@ -1072,14 +1093,52 @@ impl Desktop {
         };
         let editing = form.editing.clone();
         let password = form.password.read(cx).value().to_string();
+        bookmark.auto_connect = form.auto_connect;
+        // A new server connects right away; an edited one reconnects only when
+        // it was online and its address, name or password changed.
+        let mut connect = editing.is_none();
         if let Some(previous) = editing
             .as_ref()
             .and_then(|id| self.servers.iter().find(|server| &server.id == id))
         {
             bookmark.id = previous.id.clone();
-            if bookmark.host == previous.bookmark.host && bookmark.port == previous.bookmark.port {
+            bookmark.tokens = previous.bookmark.tokens.clone();
+            let same_address =
+                bookmark.host == previous.bookmark.host && bookmark.port == previous.bookmark.port;
+            if same_address {
                 bookmark.certificate_sha256 = previous.bookmark.certificate_sha256.clone();
                 bookmark.cached_channels = previous.bookmark.cached_channels.clone();
+            }
+            let online = previous.status != Status::Disconnected;
+            let changed = !same_address
+                || bookmark.username != previous.bookmark.username
+                || !password.is_empty();
+            connect = online && changed;
+            if !connect {
+                // Keep the live view (users, history, state); only the saved details change.
+                let index = self
+                    .servers
+                    .iter()
+                    .position(|server| server.id == bookmark.id)
+                    .unwrap_or_default();
+                let server = &mut self.servers[index];
+                server.name = bookmark.name.clone();
+                server.bookmark = bookmark.clone();
+                let bookmarks = self
+                    .servers
+                    .iter()
+                    .map(|server| server.bookmark.clone())
+                    .collect::<Vec<_>>();
+                if let Err(error) = self.profile.save_servers(&bookmarks) {
+                    if let Some(form) = &mut self.form {
+                        form.error = Some(error.to_string());
+                    }
+                    cx.notify();
+                    return;
+                }
+                self.form = None;
+                cx.notify();
+                return;
             }
         }
         let mut bookmarks = self
@@ -1110,24 +1169,37 @@ impl Desktop {
         }
         self.form = None;
         self.browse_server(index, window, cx);
-        self.connect(
-            index,
-            if password.is_empty() {
-                None
-            } else {
-                Some(password)
-            },
-        );
+        if connect {
+            self.connect(
+                index,
+                if password.is_empty() {
+                    None
+                } else {
+                    Some(password)
+                },
+            );
+        }
         cx.notify();
     }
-    fn connect(&mut self, index: usize, password: Option<String>) {
+    pub fn connect(&mut self, index: usize, password: Option<String>) {
+        self.connect_as(index, password, false);
+    }
+    /// Connect self-muted; automatic connections at startup are deafened too,
+    /// so nobody hears a session that began without the user present.
+    fn connect_as(&mut self, index: usize, password: Option<String>, deafened: bool) {
         let server = &mut self.servers[index];
+        let password = password.or_else(|| self.passwords.get(&server.id).cloned());
         if let Some(password) = &password {
             self.passwords.insert(server.id.clone(), password.clone());
         }
-        match self.backend.connect(server.bookmark.clone(), password) {
+        match self
+            .backend
+            .connect(server.bookmark.clone(), password, deafened)
+        {
             Ok(generation) => {
                 server.generation = generation;
+                server.muted = true;
+                server.deafened = deafened;
                 server.status = Status::Connecting;
                 server.security = SessionSecurity::Unknown;
                 server.certificate = None;
@@ -1221,8 +1293,24 @@ impl Desktop {
         }
     }
     /// Change preferences, persist them and apply them to live connections.
+    pub fn sidebar_width(&self) -> f32 {
+        self.sidebar_drag
+            .map_or(self.settings.sidebar_width, |(_, _, width)| width)
+    }
+    pub fn drag_sidebar(&mut self, x: f32) {
+        if let Some((start_x, start_width, width)) = &mut self.sidebar_drag {
+            let range = nuschel_session::config::SIDEBAR_WIDTH;
+            *width = (*start_width + x - *start_x).clamp(*range.start(), *range.end());
+        }
+    }
+    pub fn finish_sidebar_drag(&mut self) {
+        if let Some((_, _, width)) = self.sidebar_drag.take() {
+            self.update_settings(|settings| settings.sidebar_width = width);
+        }
+    }
     pub fn open_settings(&mut self) {
         self.settings_open = true;
+        self.autostart = Some(crate::autostart::enabled());
         if self.preview.is_none() {
             self.preview = Some(Default::default());
             self.backend.start_preview();
@@ -1248,6 +1336,12 @@ impl Desktop {
                 capture,
                 loopback: loopback && capture,
             });
+        }
+    }
+    pub fn set_autostart(&mut self, enable: bool) {
+        match crate::autostart::set(enable) {
+            Ok(()) => self.autostart = Some(crate::autostart::enabled()),
+            Err(error) => self.error = Some(format!("Could not change starting at login: {error}")),
         }
     }
     pub fn start_echo_test(&mut self) {
@@ -2148,6 +2242,23 @@ impl Desktop {
                 server.status = Status::Connected;
                 server.reconnecting = None;
                 server.own_session = Some(session);
+                // Branches where people are open on every connect; anyone who
+                // arrives later in a collapsed branch shows as a count on it.
+                for user in server.users.values() {
+                    let mut current = user.channel;
+                    for _ in 0..server.channels.len() {
+                        let Some(parent) = server
+                            .channels
+                            .iter()
+                            .find(|channel| channel.target == TextTarget::Channel(current))
+                            .and_then(|channel| channel.parent)
+                        else {
+                            break;
+                        };
+                        self.expansion.insert((server.id.clone(), parent), true);
+                        current = parent;
+                    }
+                }
                 self.passwords.remove(&server.id);
                 let path = std::mem::take(&mut server.pending_channel);
                 if !path.is_empty() {

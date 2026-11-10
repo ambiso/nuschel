@@ -32,6 +32,13 @@ pub struct ServerBookmark {
     /// Access tokens grant ACL group membership; sent with every login.
     #[serde(default)]
     pub tokens: Vec<String>,
+    /// Connect when Nuschel starts, self-muted and deafened.
+    #[serde(default = "connect_on_startup")]
+    pub auto_connect: bool,
+}
+
+fn connect_on_startup() -> bool {
+    true
 }
 
 impl ServerBookmark {
@@ -70,6 +77,7 @@ impl ServerBookmark {
             certificate_sha256: None,
             cached_channels: Vec::new(),
             tokens: Vec::new(),
+            auto_connect: true,
         })
     }
 
@@ -205,7 +213,11 @@ pub struct ClientSettings {
     /// Enter sends a message and Shift+Enter starts a new line; otherwise
     /// Enter starts a new line and Ctrl/Cmd+Enter sends.
     pub enter_sends: bool,
+    /// Width of the channel list in logical pixels.
+    pub sidebar_width: f32,
 }
+
+pub const SIDEBAR_WIDTH: std::ops::RangeInclusive<f32> = 200.0..=560.0;
 impl Default for ClientSettings {
     fn default() -> Self {
         Self {
@@ -216,6 +228,7 @@ impl Default for ClientSettings {
             local_mutes: Default::default(),
             push_to_talk_key: None,
             enter_sends: true,
+            sidebar_width: 248.,
         }
     }
 }
@@ -241,6 +254,12 @@ impl ClientSettings {
         {
             self.push_to_talk_key = None;
         }
+        self.sidebar_width = if self.sidebar_width.is_finite() {
+            self.sidebar_width
+                .clamp(*SIDEBAR_WIDTH.start(), *SIDEBAR_WIDTH.end())
+        } else {
+            248.
+        };
         self
     }
     pub fn volume_for(&self, hash: Option<&str>) -> f32 {

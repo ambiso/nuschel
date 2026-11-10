@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 mod assets;
+mod autostart;
 mod backend;
 mod chrome;
 mod dialogs;
@@ -31,6 +32,9 @@ struct Arguments {
     /// Connect on startup: `mumble://[user@]host[:port][/channel/path]`.
     #[arg(value_name = "URL")]
     url: Option<String>,
+    /// Started at login: open minimised.
+    #[arg(long)]
+    autostart: bool,
     #[command(subcommand)]
     command: Option<Action>,
 }
@@ -133,8 +137,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 app_id: Some("org.nuschel.Nuschel".into()),
                 ..Default::default()
             };
+            let minimised = arguments.autostart;
             if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
                 window.set_window_title("Nuschel");
+                if minimised {
+                    window.minimize_window();
+                }
                 cx.new(|cx| {
                     state::Desktop::new(profile, bookmarks, startup, runtime_handle, window, cx)
                 })

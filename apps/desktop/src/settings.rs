@@ -89,7 +89,7 @@ fn segmented(
         .into_any_element()
 }
 
-fn toggle(
+pub fn toggle(
     id: &'static str,
     title: &'static str,
     detail: String,
@@ -805,6 +805,32 @@ pub fn dialog(
         ],
     };
 
+    let autostart = this.autostart.unwrap_or(false);
+    let enter_sends = settings.enter_sends;
+    let general = vec![
+        toggle(
+            "autostart",
+            "Start when you log in",
+            "Opens minimised. Servers set to connect automatically join muted and deafened.".into(),
+            autostart,
+            Rc::new(move |this, _, _| this.set_autostart(!autostart)),
+            cx,
+        ),
+        toggle(
+            "enter-sends",
+            "Enter sends messages",
+            if enter_sends {
+                "Shift+Enter starts a new line.".into()
+            } else {
+                "Enter starts a new line; Ctrl/Cmd+Enter sends.".into()
+            },
+            enter_sends,
+            Rc::new(move |this, _, _| {
+                this.update_settings(|settings| settings.enter_sends = !enter_sends)
+            }),
+            cx,
+        ),
+    ];
     let force_tcp = settings.force_tcp;
     let reconnect = settings.auto_reconnect;
     let network = vec![
@@ -863,7 +889,7 @@ pub fn dialog(
                         .flex_1()
                         .text_xl()
                         .font_weight(FontWeight::BOLD)
-                        .child(text!("Voice & audio").with_id("settings-heading")),
+                        .child(text!("Settings").with_id("settings-heading")),
                 )
                 .child(styled_button(
                     "close-settings",
@@ -888,15 +914,11 @@ pub fn dialog(
                 .child(section("PROCESSING", processing))
                 .child(section("DEVICES", devices))
                 .child(section("NETWORK", network))
+                .child(section("GENERAL", general))
                 .child(section("IDENTITY", identity_section)),
         )
         .into_any_element();
-    modal(
-        "settings-dialog",
-        "Voice and audio settings",
-        560.,
-        content,
-        cx,
-        |this| this.close_settings(),
-    )
+    modal("settings-dialog", "Settings", 560., content, cx, |this| {
+        this.close_settings()
+    })
 }

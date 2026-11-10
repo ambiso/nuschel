@@ -211,7 +211,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                     div()
                         .text_xl()
                         .font_weight(FontWeight::BOLD)
-                        .child(text!(if editing { "Connect to server" } else { "Add a server" }).with_id("dialog-heading")),
+                        .child(text!(if editing { "Server settings" } else { "Add a server" }).with_id("dialog-heading")),
                 )
                 .child(
                     div().text_sm().text_color(color(TEXT_MUTED)).child(
@@ -236,6 +236,18 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                 )
                 .child(field("server-username-field", "Username", &form.username))
                 .child(field("server-password-field", "Password (optional)", &form.password))
+                .child(crate::settings::toggle(
+                    "server-auto-connect",
+                    "Connect when Nuschel starts",
+                    "You join muted and deafened until you unmute.".into(),
+                    form.auto_connect,
+                    std::rc::Rc::new(|this, _, _| {
+                        if let Some(form) = &mut this.form {
+                            form.auto_connect = !form.auto_connect;
+                        }
+                    }),
+                    cx,
+                ))
                 .child(
                     div()
                         .flex()
@@ -276,7 +288,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                     this.form = None;
                     cx.notify();
                 }, cx))
-                .child(styled_button("save-connect", "Save and connect", Tone::Primary, |this, window, cx| this.submit_form(window, cx), cx)),
+                .child(styled_button("save-connect", if editing { "Save" } else { "Add and connect" }, Tone::Primary, |this, window, cx| this.submit_form(window, cx), cx)),
         )
         .into_any_element();
     modal(

@@ -38,6 +38,7 @@ impl Render for Desktop {
             .map(|body| match selected {
                 Some((server, channel)) => body
                     .child(sidebar(self, server, channel, cx))
+                    .child(sidebar_handle(self, cx))
                     .child(conversation(self, server, channel, cx)),
                 None => body.child(dialogs::empty(cx)),
             });
@@ -62,6 +63,25 @@ impl Render for Desktop {
                     cx.notify();
                 }
             }))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                if this.sidebar_drag.is_some() {
+                    if event.pressed_button == Some(MouseButton::Left) {
+                        this.drag_sidebar(f32::from(event.position.x));
+                    } else {
+                        this.finish_sidebar_drag();
+                    }
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.sidebar_drag.is_some() {
+                        this.finish_sidebar_drag();
+                        cx.notify();
+                    }
+                }),
+            )
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 this.modifiers_changed(&event.modifiers);
                 cx.notify();
@@ -233,6 +253,48 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         .into_any_element()
 }
 
+/// The boundary between channels and conversation: drag it to fit long
+/// channel names, double-click to restore the default width.
+fn sidebar_handle(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
+    let width = this.sidebar_width();
+    let active = this.sidebar_drag.is_some();
+    div()
+        .id("sidebar-resize")
+        .role(Role::Splitter)
+        .aria_label("Resize channel list")
+        .w(px(5.))
+        .h_full()
+        .flex_shrink_0()
+        .flex()
+        .justify_center()
+        .bg(color(SIDEBAR))
+        .cursor_col_resize()
+        .group("sidebar-resize")
+        .child(
+            div()
+                .w(px(1.))
+                .h_full()
+                .bg(color(if active { ACCENT } else { BORDER }))
+                .group_hover("sidebar-resize", |style| style.bg(color(ACCENT))),
+        )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                this.sidebar_drag = Some((f32::from(event.position.x), width, width));
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+            if event.click_count() == 2 {
+                this.sidebar_drag = None;
+                this.update_settings(|settings| settings.sidebar_width = 248.);
+                cx.notify();
+            }
+        }))
+        .into_any_element()
+}
+
 fn sidebar(
     this: &Desktop,
     server_index: usize,
@@ -250,13 +312,14 @@ fn sidebar(
                 depth,
                 has_children,
                 hidden_users,
+                hidden_talking,
             } => channel_row(
                 this,
                 server_index,
                 index,
                 depth,
                 has_children,
-                hidden_users,
+                (hidden_users, hidden_talking),
                 index == selected_channel,
                 voice_channel,
                 cx,
@@ -325,8 +388,9 @@ fn sidebar(
                 .into_any_element()
         })
         .collect::<Vec<_>>();
+    let width = this.sidebar_width();
     div()
-        .w(px(248.))
+        .w(px(width))
         .h_full()
         .flex_shrink_0()
         .bg(color(SIDEBAR))
@@ -371,6 +435,18 @@ fn sidebar(
                                 .child(text!(server.status_label()).with_id("connection")),
                         ),
                 )
+                .child(icon_button(
+                    "server-settings",
+                    "cog",
+                    "Server settings",
+                    TEXT_MUTED,
+                    None,
+                    move |this, window, cx| {
+                        this.open_form(Some(server_index), window, cx);
+                        cx.notify();
+                    },
+                    cx,
+                ))
                 .child(
                     div()
                         .on_mouse_down(
@@ -470,7 +546,7 @@ fn channel_row(
     index: usize,
     depth: usize,
     has_children: bool,
-    hidden_users: usize,
+    (hidden_users, hidden_talking): (usize, bool),
     selected: bool,
     voice_channel: Option<u32>,
     cx: &mut Context<Desktop>,
@@ -610,16 +686,56 @@ fn channel_row(
                     .child(icon("link", 14., color(TEXT_FAINT))),
             )
         })
+        // People inside a collapsed branch: a person icon and count, green while one talks.
         .when(hidden_users > 0, |row| {
+            let shade = if hidden_talking {
+                SUCCESS
+            } else {
+                ACCENT_HOVER
+            };
             row.child(
                 div()
+                    .id(("member-count", index))
+                    .aria_label(format!(
+                        "{hidden_users} {} inside",
+                        if hidden_users == 1 {
+                            "person"
+                        } else {
+                            "people"
+                        }
+                    ))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| {
+                            Tooltip(
+                                format!(
+                                    "{hidden_users} {} in collapsed channels",
+                                    if hidden_users == 1 {
+                                        "person"
+                                    } else {
+                                        "people"
+                                    }
+                                )
+                                .into(),
+                            )
+                        })
+                        .into()
+                    })
                     .flex_shrink_0()
-                    .px(px(6.))
+                    .flex()
+                    .items_center()
+                    .gap(px(3.))
+                    .pl(px(5.))
+                    .pr(px(7.))
+                    .py(px(1.))
                     .rounded_full()
-                    .bg(color(ELEVATED))
+                    .bg(tint(shade, 0x2a))
+                    .border_1()
+                    .border_color(tint(shade, 0x66))
                     .text_xs()
-                    .text_color(color(TEXT_MUTED))
-                    .child(text!(hidden_users.to_string()).with_id(("member-count", index))),
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(color(shade))
+                    .child(icon("user", 12., color(shade)))
+                    .child(text!(hidden_users.to_string()).with_id(("member-count-text", index))),
             )
         })
         .into_any_element()
@@ -971,7 +1087,7 @@ fn user_panel(
         .child(icon_button(
             "open-settings",
             "settings",
-            "Voice & audio settings",
+            "Settings",
             TEXT_MUTED,
             None,
             |this, _, cx| {
@@ -1127,9 +1243,18 @@ fn conversation(
                 .when(!connected, |header| {
                     header.child(styled_button(
                         "connect-server",
-                        "Connect",
+                        if server.status == Status::Connecting {
+                            "Connecting…"
+                        } else {
+                            "Connect"
+                        },
                         Tone::Primary,
-                        move |this, window, cx| this.open_form(Some(index), window, cx),
+                        move |this, _, cx| {
+                            if this.servers[index].status == Status::Disconnected {
+                                this.connect(index, None);
+                            }
+                            cx.notify();
+                        },
                         cx,
                     ))
                 })
@@ -1827,9 +1952,16 @@ fn composer(
                 )
                 .child(div().flex_1())
                 // The hints give way (with an ellipsis) in narrow windows.
-                .child(div().min_w_0().truncate().child(
-                    text!("Enter for a new line · Ctrl/Cmd+Enter to send").with_id("composer-hint"),
-                ))
+                .child(
+                    div().min_w_0().truncate().child(
+                        text!(if this.settings.enter_sends {
+                            "Enter to send · Shift+Enter for a new line"
+                        } else {
+                            "Enter for a new line · Ctrl/Cmd+Enter to send"
+                        })
+                        .with_id("composer-hint"),
+                    ),
+                )
                 .child(
                     div().min_w_0().truncate().child(
                         text!(if this.history_enabled {

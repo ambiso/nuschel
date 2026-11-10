@@ -61,7 +61,7 @@ pub enum EchoTestState {
 }
 
 /// What Settings shows about the local audio route.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PreviewView {
     pub capture: bool,
     pub loopback: bool,
@@ -76,6 +76,27 @@ pub struct PreviewView {
     pub noise: Option<String>,
     pub status: Option<String>,
     pub echo_test: EchoTestState,
+}
+
+impl Default for PreviewView {
+    fn default() -> Self {
+        Self {
+            capture: false,
+            loopback: false,
+            // Silence until the first measurement, not a full meter.
+            level_db: -100.,
+            voice: 0.,
+            transmitting: false,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            input: None,
+            output: None,
+            echo: None,
+            noise: None,
+            status: None,
+            echo_test: EchoTestState::Idle,
+        }
+    }
 }
 
 impl PreviewView {

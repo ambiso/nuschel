@@ -14,6 +14,7 @@ const ICONS: &[(&str, &[u8])] = icons!(
     "certificate",
     "chevron-down",
     "chevron-right",
+    "cog",
     "ear",
     "hang-up",
     "hash",

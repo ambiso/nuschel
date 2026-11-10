@@ -250,10 +250,12 @@ impl Backend {
     pub fn stop_preview(&mut self) {
         self.preview.take();
     }
+    /// Connect self-muted; `deafened` also deafens (automatic connections at startup).
     pub fn connect(
         &mut self,
         server: ServerBookmark,
         password: Option<String>,
+        deafened: bool,
     ) -> Result<u64, String> {
         if self.connections.len() >= 8 && !self.connections.contains_key(&server.id) {
             return Err("Disconnect a server before opening another connection (limit: 8).".into());
@@ -268,7 +270,7 @@ impl Backend {
         let task = self.handle.spawn(connection_loop(
             self.profile.clone(),
             server,
-            password,
+            (password, deafened),
             generation,
             receiver,
             self.sender.clone(),
@@ -405,7 +407,7 @@ enum Outcome {
 async fn connection_loop(
     profile: Profile,
     server: ServerBookmark,
-    password: Option<String>,
+    (password, deafened): (Option<String>, bool),
     generation: u64,
     mut commands: mpsc::Receiver<Command>,
     events: mpsc::Sender<Event>,
@@ -415,6 +417,7 @@ async fn connection_loop(
     let id = server.id.clone();
     let mut restore = Restore {
         muted: true,
+        deafened,
         ..Restore::default()
     };
     let mut attempt = 0_u32;
