@@ -170,6 +170,93 @@ fn relocate(from: &Path, to: &Path, directory: bool, report: &mut Migration) -> 
     Ok(())
 }
 
+/// The launcher hashes canonical paths (including Windows' verbatim prefix).
+/// Reconstruct a now-missing tail too, for retries after an interrupted move.
+#[cfg(any(windows, test))]
+fn canonical_worker_path(path: &Path) -> io::Result<std::path::PathBuf> {
+    let mut parent = std::path::absolute(path)?;
+    let mut missing = Vec::new();
+    loop {
+        match parent.canonicalize() {
+            Ok(mut canonical) => {
+                canonical.extend(missing.into_iter().rev());
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let name = parent.file_name().ok_or(error)?.to_owned();
+                missing.push(name);
+                parent.pop();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(all(windows, not(test)))]
+fn retire_windows(old: Option<&Layout>, new: &Layout) -> io::Result<()> {
+    use nuschl_ipc::windows_sandbox::scoped_profile;
+    fn retire_legacy_profile(name: &str, directories: &[std::path::PathBuf]) -> io::Result<()> {
+        use std::{
+            os::windows::process::CommandExt,
+            process::{Command, Stdio},
+        };
+        // The unsafe Win32 adapter remains in a short-lived launch-stage process,
+        // just as it does when starting a sandbox. No unsafe dependency enters
+        // the session library or desktop. These arguments are local paths/names.
+        let worker = crate::workers::sibling("nuschl-storage-worker")?;
+        let mut command = Command::new(worker);
+        command
+            .arg("--retire-nuschel-profile")
+            .arg(name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .creation_flags(0x0800_0000);
+        for directory in directories {
+            command.arg("--writable").arg(directory);
+        }
+        let output = command.output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "could not retire {name}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        Ok(())
+    }
+    let existing =
+        |layout: &Layout| layout.data.exists() || layout.config.join("nuschel-identity").exists();
+    if !old.is_some_and(existing)
+        && !new.keys().exists()
+        && !new.config.join("nuschel-identity").exists()
+    {
+        return Ok(());
+    }
+    if old.is_some() {
+        for kind in ["content", "math", "media", "transfer"] {
+            retire_legacy_profile(&format!("nuschel.{kind}"), &[])?;
+        }
+    }
+    for layout in old.into_iter().chain(std::iter::once(new)) {
+        for (kind, directory) in [
+            ("storage", layout.data.clone()),
+            ("storage", layout.history()),
+            ("crypto", layout.keys()),
+            ("crypto", layout.config.join("nuschel-identity")),
+        ] {
+            let directory = canonical_worker_path(&directory)?;
+            let name = scoped_profile(&format!("nuschel.{kind}"), &directory);
+            // Include the destination on a retry after an interrupted move.
+            let paths = [
+                directory,
+                new.data.clone(),
+                new.config.join("nuschel-identity"),
+            ];
+            retire_legacy_profile(&name, &paths)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,91 +462,4 @@ mod tests {
             b"new state"
         );
     }
-}
-
-/// The launcher hashes canonical paths (including Windows' verbatim prefix).
-/// Reconstruct a now-missing tail too, for retries after an interrupted move.
-#[cfg(any(windows, test))]
-fn canonical_worker_path(path: &Path) -> io::Result<std::path::PathBuf> {
-    let mut parent = std::path::absolute(path)?;
-    let mut missing = Vec::new();
-    loop {
-        match parent.canonicalize() {
-            Ok(mut canonical) => {
-                canonical.extend(missing.into_iter().rev());
-                return Ok(canonical);
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                let name = parent.file_name().ok_or(error)?.to_owned();
-                missing.push(name);
-                parent.pop();
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-#[cfg(all(windows, not(test)))]
-fn retire_windows(old: Option<&Layout>, new: &Layout) -> io::Result<()> {
-    use nuschl_ipc::windows_sandbox::scoped_profile;
-    fn retire_legacy_profile(name: &str, directories: &[std::path::PathBuf]) -> io::Result<()> {
-        use std::{
-            os::windows::process::CommandExt,
-            process::{Command, Stdio},
-        };
-        // The unsafe Win32 adapter remains in a short-lived launch-stage process,
-        // just as it does when starting a sandbox. No unsafe dependency enters
-        // the session library or desktop. These arguments are local paths/names.
-        let worker = crate::workers::sibling("nuschl-storage-worker")?;
-        let mut command = Command::new(worker);
-        command
-            .arg("--retire-nuschel-profile")
-            .arg(name)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .creation_flags(0x0800_0000);
-        for directory in directories {
-            command.arg("--writable").arg(directory);
-        }
-        let output = command.output()?;
-        if !output.status.success() {
-            return Err(io::Error::other(format!(
-                "could not retire {name}: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-        Ok(())
-    }
-    let existing =
-        |layout: &Layout| layout.data.exists() || layout.config.join("nuschel-identity").exists();
-    if !old.is_some_and(existing)
-        && !new.keys().exists()
-        && !new.config.join("nuschel-identity").exists()
-    {
-        return Ok(());
-    }
-    if old.is_some() {
-        for kind in ["content", "math", "media", "transfer"] {
-            retire_legacy_profile(&format!("nuschel.{kind}"), &[])?;
-        }
-    }
-    for layout in old.into_iter().chain(std::iter::once(new)) {
-        for (kind, directory) in [
-            ("storage", layout.data.clone()),
-            ("storage", layout.history()),
-            ("crypto", layout.keys()),
-            ("crypto", layout.config.join("nuschel-identity")),
-        ] {
-            let directory = canonical_worker_path(&directory)?;
-            let name = scoped_profile(&format!("nuschel.{kind}"), &directory);
-            // Include the destination on a retry after an interrupted move.
-            let paths = [
-                directory,
-                new.data.clone(),
-                new.config.join("nuschel-identity"),
-            ];
-            retire_legacy_profile(&name, &paths)?;
-        }
-    }
-    Ok(())
 }
