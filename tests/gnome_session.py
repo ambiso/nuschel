@@ -152,6 +152,15 @@ class GnomeSession:
                       f" p.notify_button(t + 30000, {button}, imports.gi.Clutter.ButtonState.RELEASED); 'ok'")
             time.sleep(0.06)
 
+    def wheel(self, x, y, clicks):
+        """Turn a mouse wheel over (x, y), in one quick spin: negative clicks scroll up, positive down."""
+        self.move(x, y)
+        time.sleep(0.05)
+        direction = "UP" if clicks < 0 else "DOWN"
+        self.eval("const p = global._nuschelPointer; const t = imports.gi.GLib.get_monotonic_time();"
+                  f" for (let i = 0; i < {abs(clicks)}; i++) p.notify_discrete_scroll(t + i * 8000,"
+                  f" imports.gi.Clutter.ScrollDirection.{direction}, imports.gi.Clutter.ScrollSource.WHEEL); 'ok'")
+
     def drag(self, start, end, steps=12):
         self.move(*start)
         self.eval("global._nuschelPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, imports.gi.Clutter.ButtonState.PRESSED); 'ok'")

@@ -74,6 +74,8 @@ pub enum Event {
     History {
         server: String,
         ticket: HistoryTicket,
+        /// The cursor this page was asked for: None is the latest page.
+        before: Option<i64>,
         messages: Vec<RenderedMessage>,
         next_before: Option<i64>,
     },
@@ -1047,6 +1049,7 @@ async fn storage_loop(
                             .send(Event::History {
                                 server,
                                 ticket,
+                                before,
                                 messages,
                                 next_before: page.next_before,
                             })

@@ -23,6 +23,7 @@ impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.apply_composer_acks(window, cx);
         self.reconcile_selection(window, cx);
+        self.settle_timeline();
         let selected = self.selected_indices();
         let title = selected
             .map(|(server, channel)| {
@@ -1158,6 +1159,7 @@ fn conversation(
     let in_this_voice = server
         .voice_channel()
         .is_some_and(|voice| channel.target == TextTarget::Channel(voice));
+    let anchor = this.anchor.frame();
     let mut messages = Vec::new();
     let mut previous: Option<(&str, i64)> = None;
     let mut activity = channel.activity.iter().enumerate().peekable();
@@ -1179,11 +1181,28 @@ fn conversation(
                 .values()
                 .find(|user| user.name == message.author),
         );
-        messages.push(message_row(message, position, grouped, image, cx));
+        let row = message_row(message, position, grouped, image, cx);
+        messages.push(match message.id {
+            Some(id) => anchor.row(id, row),
+            None => row,
+        });
     }
     for (index, line) in activity {
         messages.push(activity_row(line, index));
     }
+    // Prepending happens while the reader looks up the timeline, with no
+    // button or separate mode: the anchor keeper asks once the top is near.
+    let older =
+        (channel.next_before.is_some() && !channel.loading && !this.older_paused).then(|| {
+            let desktop = cx.entity().downgrade();
+            move |cx: &mut App| {
+                let _ = desktop.update(cx, |this, cx| {
+                    if this.load_older() {
+                        cx.notify();
+                    }
+                });
+            }
+        });
     let topic = if !is_channel {
         "Private conversation".to_string()
     } else if in_this_voice {
@@ -1397,156 +1416,241 @@ fn conversation(
             Some(panel) => view.child(panel),
             None => view.child(
                 div()
-                    .id(SharedString::from(format!(
-                        "timeline:{}:{}",
-                        server.id, channel.id
-                    )))
-                    .track_scroll(&this.scroll)
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .px_4()
-                    .py_4()
+                    .flex()
+                    .flex_col()
+                    .child(anchor.keeper(&this.scroll, !this.following, older))
                     .child(
                         div()
-                            .id("timeline-content")
-                            .min_h_full()
-                            .flex()
-                            .flex_col()
-                            .justify_end()
-                            .on_scroll(cx.listener(|this, event, window, cx| {
-                                this.smooth_scroll(false, event, window, cx)
-                            }))
+                            .id(SharedString::from(format!(
+                                "timeline:{}:{}",
+                                server.id, channel.id
+                            )))
+                            .track_scroll(&this.scroll)
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .px_4()
+                            .py_4()
                             .child(
                                 div()
-                                    .pb_4()
+                                    .id("timeline-content")
+                                    .min_h_full()
                                     .flex()
                                     .flex_col()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .size(px(56.))
-                                            .rounded_full()
-                                            .bg(color(ELEVATED))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_color(color(TEXT_MUTED))
-                                            .child(icon(
-                                                if is_channel { "hash" } else { "message" },
-                                                30.,
-                                                color(TEXT_MUTED),
-                                            )),
-                                    )
-                                    .child(
-                                        div().text_2xl().font_weight(FontWeight::BOLD).child(
-                                            text!(format!("Welcome to {}", channel.name))
-                                                .with_id("timeline-heading"),
-                                        ),
-                                    )
-                                    .child(
-                                        div().text_sm().text_color(color(TEXT_MUTED)).child(
-                                            text!(match server.history_source {
-                                                HistorySource::LocalObserved =>
-                                                    "Local history · messages seen on this device",
-                                                HistorySource::ServerArchive => "Server history",
-                                            })
-                                            .with_id("history-source"),
-                                        ),
-                                    )
-                                    .when_some(
-                                        channel.description.as_ref().filter(|_| is_channel),
-                                        |view, description| {
-                                            view.child(
-                                                div()
-                                                    .id("channel-description")
-                                                    .mt_2()
-                                                    .p_3()
-                                                    .rounded(px(8.))
-                                                    .bg(color(SIDEBAR))
-                                                    .flex()
-                                                    .flex_col()
-                                                    .gap_2()
-                                                    .text_sm()
-                                                    .children(document_blocks(description, cx)),
-                                            )
-                                        },
-                                    )
-                                    .when_some(
-                                        server
-                                            .welcome
-                                            .as_ref()
-                                            .filter(|_| is_channel && channel.id == 0),
-                                        |view, welcome| {
-                                            view.child(
-                                                div()
-                                                    .mt_2()
-                                                    .p_3()
-                                                    .rounded(px(8.))
-                                                    .bg(color(SIDEBAR))
-                                                    .border_l_4()
-                                                    .border_color(color(ACCENT))
-                                                    .text_sm()
-                                                    .child(
-                                                        text!(welcome.clone())
-                                                            .with_id("server-welcome"),
-                                                    ),
-                                            )
-                                        },
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .gap_2()
-                                            .when(
-                                                channel.next_before.is_some() && !channel.loading,
-                                                |view| {
-                                                    view.child(styled_button(
-                                                        "older-history",
-                                                        "Load older messages",
-                                                        Tone::Secondary,
-                                                        |this, _, cx| {
-                                                            this.load_older();
-                                                            cx.notify();
-                                                        },
-                                                        cx,
-                                                    ))
-                                                },
-                                            )
-                                            .when(channel.viewing_older, |view| {
-                                                view.child(styled_button(
-                                                    "latest-history",
-                                                    format!(
-                                                        "Jump to latest ({})",
-                                                        channel.new_messages
-                                                    ),
-                                                    Tone::Secondary,
-                                                    |this, _, cx| {
-                                                        this.load_history(None);
-                                                        cx.notify();
-                                                    },
-                                                    cx,
-                                                ))
-                                            })
-                                            .when(channel.loading, |view| {
-                                                view.child(
-                                                    div()
-                                                        .text_sm()
-                                                        .text_color(color(TEXT_FAINT))
-                                                        .child(
-                                                            text!("Loading local history…")
-                                                                .with_id("history-loading"),
-                                                        ),
-                                                )
-                                            }),
-                                    ),
-                            )
-                            .children(messages),
-                    ),
+                                    .justify_end()
+                                    .on_scroll(cx.listener(|this, event, window, cx| {
+                                        this.smooth_scroll(false, event, window, cx)
+                                    }))
+                                    .child(timeline_intro(server, channel, cx))
+                                    .children(messages),
+                            ),
+                    )
+                    .when_some(jump_pill(this, channel, cx), |view, pill| view.child(pill)),
             ),
         })
         .child(composer(this, server, channel.name.clone(), cx))
         .into_any_element()
+}
+
+/// The top of the timeline: older history on its way, or what the
+/// conversation is and where its local history begins.
+fn timeline_intro(
+    server: &ServerView,
+    channel: &crate::state::ChannelView,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let is_channel = matches!(channel.target, TextTarget::Channel(_));
+    let loading = channel.loading.then(|| {
+        let label = if channel.messages.is_empty() {
+            "Loading local history…"
+        } else {
+            "Loading older messages…"
+        };
+        div()
+            .id("history-loading")
+            .role(Role::Status)
+            .aria_label(label)
+            .py_2()
+            .flex()
+            .justify_center()
+            .text_sm()
+            .text_color(color(TEXT_FAINT))
+            .child(text!(label).with_id("history-loading-label"))
+    });
+    if channel.next_before.is_some() {
+        // More above: the welcome would only flash by before the next page.
+        // The indicator's room is kept, so it appears without moving anything.
+        return div()
+            .h(px(40.))
+            .flex()
+            .flex_col()
+            .justify_center()
+            .children(loading)
+            .into_any_element();
+    }
+    div()
+        .pb_4()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .size(px(56.))
+                .rounded_full()
+                .bg(color(ELEVATED))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(color(TEXT_MUTED))
+                .child(icon(
+                    if is_channel { "hash" } else { "message" },
+                    30.,
+                    color(TEXT_MUTED),
+                )),
+        )
+        .child(
+            div()
+                .text_2xl()
+                .font_weight(FontWeight::BOLD)
+                .child(text!(format!("Welcome to {}", channel.name)).with_id("timeline-heading")),
+        )
+        .child(
+            div().text_sm().text_color(color(TEXT_MUTED)).child(
+                text!(match server.history_source {
+                    HistorySource::LocalObserved => "Local history · messages seen on this device",
+                    HistorySource::ServerArchive => "Server history",
+                })
+                .with_id("history-source"),
+            ),
+        )
+        .when_some(
+            channel.description.as_ref().filter(|_| is_channel),
+            |view, description| {
+                view.child(
+                    div()
+                        .id("channel-description")
+                        .mt_2()
+                        .p_3()
+                        .rounded(px(8.))
+                        .bg(color(SIDEBAR))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .text_sm()
+                        .children(document_blocks(description, cx)),
+                )
+            },
+        )
+        .when_some(
+            server
+                .welcome
+                .as_ref()
+                .filter(|_| is_channel && channel.id == 0),
+            |view, welcome| {
+                view.child(
+                    div()
+                        .mt_2()
+                        .p_3()
+                        .rounded(px(8.))
+                        .bg(color(SIDEBAR))
+                        .border_l_4()
+                        .border_color(color(ACCENT))
+                        .text_sm()
+                        .child(text!(welcome.clone()).with_id("server-welcome")),
+                )
+            },
+        )
+        .children(loading)
+        .when(channel.beginning && !channel.loading, |view| {
+            view.child(history_start())
+        })
+        .into_any_element()
+}
+
+/// Where local history starts: nothing older was seen on this device.
+fn history_start() -> AnyElement {
+    let rule = || div().flex_1().h(px(1.)).bg(color(BORDER));
+    div()
+        .id("history-start")
+        // A status, like the activity lines: announced once scrolling reaches it.
+        .role(Role::Status)
+        .aria_label("Beginning of local history")
+        .mt_3()
+        .flex()
+        .items_center()
+        .gap_3()
+        .text_xs()
+        .text_color(color(TEXT_FAINT))
+        .child(rule())
+        .child(text!("Beginning of local history").with_id("history-start-label"))
+        .child(rule())
+        .into_any_element()
+}
+
+/// Floats over the timeline's bottom edge while the reader is scrolled up:
+/// with what has arrived since, or once the latest is far below.
+fn jump_pill(
+    this: &Desktop,
+    channel: &crate::state::ChannelView,
+    cx: &mut Context<Desktop>,
+) -> Option<AnyElement> {
+    let below = this.scroll.max_offset().y + this.scroll.offset().y;
+    let far = below > this.scroll.bounds().size.height * 2.;
+    if this.following || !(channel.new_messages > 0 || far) {
+        return None;
+    }
+    let label = match channel.new_messages {
+        0 => "Jump to latest".to_string(),
+        1 => "1 new message · Jump to latest".to_string(),
+        count => format!("{count} new messages · Jump to latest"),
+    };
+    Some(
+        div()
+            .absolute()
+            .bottom(px(12.))
+            .left_0()
+            .right_0()
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .id("jump-to-latest")
+                    .role(Role::Button)
+                    .aria_label(label.clone())
+                    .tab_index(0)
+                    .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .pl_3()
+                    .pr_4()
+                    .py(px(6.))
+                    .rounded_full()
+                    .bg(color(ACCENT))
+                    .hover(|style| style.bg(color(ACCENT_HOVER)))
+                    .shadow_md()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color(0xffffff))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.jump_to_latest();
+                        cx.notify();
+                    }))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        if activation_key(event) {
+                            this.jump_to_latest();
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    }))
+                    .child(icon("chevron-down", 16., color(0xffffff)))
+                    .child(text!(label).with_id("jump-to-latest-label")),
+            )
+            .into_any_element(),
+    )
 }
 
 fn search_panel(
@@ -1890,7 +1994,8 @@ fn message_row(
                             let before = measured.replace(height);
                             if (before > COLLAPSED_HEIGHT + 1.) != (height > COLLAPSED_HEIGHT + 1.)
                             {
-                                window.refresh();
+                                // A refresh while drawing is dropped; ask for the next frame.
+                                window.on_next_frame(|window, _| window.refresh());
                             }
                         })
                         .id(("message-content", index))

@@ -2,7 +2,7 @@
 use crate::document::Document;
 use crate::{
     backend::{Backend, Event, RenderKey, RenderedMessage},
-    scrolling::SmoothScroll,
+    scrolling::{Anchor, SmoothScroll},
 };
 use gpui_kit::{
     base::input::{InputEvent, InputState, TextareaState},
@@ -57,6 +57,9 @@ pub fn accessible<M: gpui_kit::base::input::InputModeKind>(
 }
 /// Messages taller than this are collapsed until expanded.
 pub const COLLAPSED_HEIGHT: f32 = 300.;
+/// Messages a timeline keeps while its reader is at the bottom; older ones
+/// are dropped and load again from local history on scrolling up.
+pub const MAX_TIMELINE: usize = 1000;
 impl MessageView {
     pub fn has_more(&self) -> bool {
         self.measured.get() > COLLAPSED_HEIGHT + 1.
@@ -148,10 +151,15 @@ pub struct ChannelView {
     pub target: TextTarget,
     pub direct_peer: Option<User>,
     pub storage_key: String,
+    /// One timeline: the latest page, older pages prepended as the reader
+    /// scrolls up, and live messages appended.
     pub messages: Vec<MessageView>,
+    /// Cursor for the next older page, if local history has more.
     pub next_before: Option<i64>,
+    /// The oldest stored message is loaded: there is nothing further up.
+    pub beginning: bool,
     pub loading: bool,
-    pub viewing_older: bool,
+    /// Messages that arrived while the reader was scrolled up.
     pub new_messages: usize,
     /// Joins, moves, moderation and connection gaps; in memory only.
     pub activity: std::collections::VecDeque<ActivityLine>,
@@ -197,8 +205,8 @@ impl ChannelView {
             storage_key: "0".into(),
             messages: Vec::new(),
             next_before: None,
+            beginning: false,
             loading: false,
-            viewing_older: false,
             new_messages: 0,
             activity: Default::default(),
             links: BTreeSet::new(),
@@ -344,7 +352,6 @@ impl ServerView {
                 messages: Vec::new(),
                 next_before: None,
                 loading: false,
-                viewing_older: false,
                 new_messages: 0,
                 ..Default::default()
             })
@@ -485,6 +492,12 @@ pub struct Desktop {
     chat_motion: SmoothScroll,
     channel_motion: SmoothScroll,
     scroll_frame_pending: bool,
+    /// Keeps the timeline still while history is prepended above.
+    pub anchor: Anchor,
+    /// The timeline stays at its newest message; off once the reader scrolls up.
+    pub following: bool,
+    /// Loading older history failed: wait for the reader before trying again.
+    pub older_paused: bool,
     pub error: Option<String>,
     pub title_drag: bool,
     /// Pointer x and sidebar width where a sidebar resize started, and the live width.
@@ -600,6 +613,9 @@ impl Desktop {
             chat_motion: SmoothScroll::default(),
             channel_motion: SmoothScroll::default(),
             scroll_frame_pending: false,
+            anchor: Anchor::default(),
+            following: true,
+            older_paused: false,
             error: None,
             title_drag: false,
             sidebar_drag: None,
@@ -797,6 +813,9 @@ impl Desktop {
             HistorySource::LocalObserved,
         );
         self.chat_motion.cancel();
+        self.anchor.reset();
+        self.following = true;
+        self.older_paused = false;
         self.load_history(None);
         self.scroll.scroll_to_bottom();
         let server = &self.servers[index];
@@ -984,6 +1003,7 @@ impl Desktop {
                 cx.reduce_motion(),
             )
         } else {
+            self.chat_motion.shift(self.anchor.take_shift());
             self.chat_motion.wheel(
                 &self.scroll,
                 event,
@@ -1008,6 +1028,7 @@ impl Desktop {
             if let Some(entity) = entity.upgrade() {
                 entity.update(cx, |this, cx| {
                     this.scroll_frame_pending = false;
+                    this.chat_motion.shift(this.anchor.take_shift());
                     let changed = this.chat_motion.advance(&this.scroll)
                         | this.channel_motion.advance(&this.channel_scroll);
                     if changed {
@@ -1669,7 +1690,6 @@ impl Desktop {
                 messages: Vec::new(),
                 next_before: None,
                 loading: false,
-                viewing_older: false,
                 new_messages: 0,
                 ..Default::default()
             });
@@ -1688,8 +1708,9 @@ impl Desktop {
         let server = &mut self.servers[index];
         let channel = &mut server.channels[channel];
         channel.loading = true;
-        channel.viewing_older = before.is_some();
-        channel.new_messages = 0;
+        if before.is_none() {
+            channel.new_messages = 0;
+        }
         let ticket = self.navigation.browse(
             Conversation {
                 server: server.id.clone(),
@@ -1705,15 +1726,51 @@ impl Desktop {
             before,
         ) {
             channel.loading = false;
+            self.older_paused = true;
             self.error = Some(error);
         }
     }
-    pub fn load_older(&mut self) {
+    /// The page before the oldest loaded message, once the reader nears the
+    /// top. Returns whether one was requested.
+    pub fn load_older(&mut self) -> bool {
         if let Some((server, channel)) = self.selected_indices()
+            && !self.older_paused
             && !self.servers[server].channels[channel].loading
             && let Some(before) = self.servers[server].channels[channel].next_before
         {
             self.load_history(Some(before));
+            return true;
+        }
+        false
+    }
+    /// Before each frame: follow the newest message, or hold still where the
+    /// reader scrolled to, judged by how the offset moved since the last frame.
+    pub fn settle_timeline(&mut self) {
+        let Some((server, channel)) = self.selected_indices() else {
+            return;
+        };
+        if let Some((painted, max)) = self.anchor.painted() {
+            let now = self.scroll.offset().y;
+            if now != painted {
+                // The reader is scrolling again: a failed page may be retried.
+                self.older_paused = false;
+            }
+            self.following = crate::scrolling::follows(self.following, painted, now, max);
+        }
+        if self.following {
+            let channel = &mut self.servers[server].channels[channel];
+            channel.new_messages = 0;
+            // Out of sight above while at the bottom; they load again on scrolling up.
+            channel.trim_oldest(MAX_TIMELINE);
+            self.scroll.scroll_to_bottom();
+        }
+    }
+    pub fn jump_to_latest(&mut self) {
+        self.chat_motion.cancel();
+        self.following = true;
+        self.scroll.scroll_to_bottom();
+        if let Some((server, channel)) = self.selected_indices() {
+            self.servers[server].channels[channel].new_messages = 0;
         }
     }
     fn drain_events(&mut self) -> bool {
@@ -1812,6 +1869,7 @@ impl Desktop {
                         .collect();
                 }
                 Event::HistoryRecovered => {
+                    self.older_paused = false;
                     if self
                         .error
                         .as_deref()
@@ -1822,6 +1880,7 @@ impl Desktop {
                 }
                 Event::HistoryError(error) => {
                     self.error = Some(format!("Local history: {error}"));
+                    self.older_paused = true;
                     for server in &mut self.servers {
                         for channel in &mut server.channels {
                             channel.loading = false;
@@ -1831,6 +1890,7 @@ impl Desktop {
                 Event::History {
                     server,
                     ticket,
+                    before,
                     messages,
                     next_before,
                 } => {
@@ -1844,24 +1904,13 @@ impl Desktop {
                             .find(|entry| entry.id == ticket.conversation.channel)
                     {
                         channel.loading = false;
-                        channel.next_before = next_before;
-                        if !channel.viewing_older {
-                            let newest = messages
-                                .iter()
-                                .filter_map(|message| message.id)
-                                .max()
-                                .unwrap_or(0);
-                            channel
-                                .messages
-                                .retain(|message| message.id.is_none_or(|id| id > newest));
-                        }
-                        for message in messages {
-                            merge_message(channel, message);
-                        }
-                        if channel.messages.len() > 500 {
-                            channel.messages.truncate(500);
-                        }
-                        if !channel.viewing_older {
+                        self.older_paused = false;
+                        tracing::debug!(?before, count = messages.len(), "history page");
+                        channel.take_page(before, messages, next_before);
+                        if before.is_none() {
+                            // A conversation opens at its newest message.
+                            self.anchor.reset();
+                            self.following = true;
                             self.scroll.scroll_to_bottom();
                         }
                     }
@@ -2201,7 +2250,6 @@ impl Desktop {
                             messages: Vec::new(),
                             next_before: None,
                             loading: false,
-                            viewing_older: false,
                             new_messages: 0,
                             ..Default::default()
                         });
@@ -2280,22 +2328,21 @@ impl Desktop {
                         channel.direct_peer = peer;
                         channel.storage_key = storage_key;
                     }
-                    if channel.viewing_older {
-                        channel.new_messages += 1;
+                    let outgoing = message.outgoing;
+                    let added = merge_message(channel, message);
+                    if self.navigation.selection().is_some_and(|selected| {
+                        selected.server == server.id && selected.channel == channel.id
+                    }) {
+                        // Following keeps the newest in view (see settle_timeline);
+                        // sending something of one's own jumps there too.
+                        if outgoing {
+                            self.chat_motion.cancel();
+                            self.following = true;
+                        } else if added && !self.following {
+                            channel.new_messages += 1;
+                        }
                     } else {
-                        let at_bottom = !self.chat_motion.active()
-                            && self.scroll.max_offset().y + self.scroll.offset().y <= px(32.);
-                        merge_message(channel, message);
-                        if at_bottom
-                            && self.navigation.selection().is_some_and(|selected| {
-                                selected.server == server.id && selected.channel == channel.id
-                            })
-                        {
-                            self.scroll.scroll_to_bottom();
-                        }
-                        if channel.messages.len() > 500 {
-                            channel.messages.drain(..channel.messages.len() - 500);
-                        }
+                        channel.trim_oldest(MAX_TIMELINE);
                     }
                 }
             }
@@ -2358,6 +2405,7 @@ impl Desktop {
         let server = &mut self.servers[index];
         match event {
             SessionEvent::PeerCertificate(pin) => {
+                let identity = server.history_identity();
                 server.peer_sha256 = Some(pin.clone());
                 server.security = SessionSecurity::TransportOnly;
                 if server.bookmark.certificate_sha256.is_none() {
@@ -2372,7 +2420,17 @@ impl Desktop {
                         self.error = Some(error.to_string());
                     }
                 }
-                self.load_history(None);
+                // Reconnecting to the same server leaves the timeline (and where
+                // the reader is in it) alone; a new identity has other history.
+                let server = &self.servers[index];
+                if server.history_identity() != identity
+                    && self
+                        .navigation
+                        .selection()
+                        .is_some_and(|selected| selected.server == server.id)
+                {
+                    self.load_history(None);
+                }
             }
             SessionEvent::Connected { session, .. } => {
                 server.channels.retain(|channel| match channel.target {
@@ -2494,7 +2552,6 @@ impl Desktop {
                         messages: Vec::new(),
                         next_before: None,
                         loading: false,
-                        viewing_older: false,
                         new_messages: 0,
                         links: update.links,
                         temporary: update.temporary,
@@ -2662,16 +2719,153 @@ impl Desktop {
         }
     }
 }
-fn merge_message(channel: &mut ChannelView, message: RenderedMessage) {
+/// Returns whether the message is new to this timeline.
+fn merge_message(channel: &mut ChannelView, message: RenderedMessage) -> bool {
     if message
         .id
         .is_some_and(|id| channel.messages.iter().any(|entry| entry.id == Some(id)))
     {
-        return;
+        return false;
     }
     channel.messages.push(message.into());
     // Observation time first: an unsaved message still appears where it arrived.
     channel
         .messages
         .sort_by_key(|message| (message.observed_at_ms, message.id.unwrap_or(i64::MAX)));
+    true
+}
+impl ChannelView {
+    /// Fold a page of local history into the timeline. The latest page
+    /// (`before` is None) starts it over, keeping only what arrived since;
+    /// an older page is prepended if it continues from the oldest loaded
+    /// message. Returns whether the page was used.
+    fn take_page(
+        &mut self,
+        before: Option<i64>,
+        messages: Vec<RenderedMessage>,
+        next_before: Option<i64>,
+    ) -> bool {
+        match before {
+            None => {
+                let newest = messages
+                    .iter()
+                    .filter_map(|message| message.id)
+                    .max()
+                    .unwrap_or(0);
+                self.messages
+                    .retain(|message| message.id.is_none_or(|id| id > newest));
+            }
+            // Trimmed while the page was on its way: the next request
+            // starts from the new oldest message.
+            Some(before) if self.next_before != Some(before) => return false,
+            Some(_) => {}
+        }
+        for message in messages {
+            merge_message(self, message);
+        }
+        self.next_before = next_before;
+        self.beginning = next_before.is_none();
+        true
+    }
+    /// Drop the oldest messages beyond `cap`; they load again from local history.
+    fn trim_oldest(&mut self, cap: usize) {
+        if self.messages.len() <= cap {
+            return;
+        }
+        self.messages.drain(..self.messages.len() - cap);
+        if let Some(oldest) = self.messages.iter().filter_map(|message| message.id).min() {
+            self.next_before = Some(oldest);
+            self.beginning = false;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
+    use super::{ChannelView, RenderedMessage, merge_message};
+
+    fn message(id: Option<i64>, observed_at_ms: i64) -> RenderedMessage {
+        RenderedMessage {
+            id,
+            message: nuschel_core::ChatMessage {
+                server: "server".into(),
+                channel: "2".into(),
+                author: "Ada".into(),
+                observed_at_ms,
+                body: format!("message {id:?}"),
+            },
+            document: nuschel_core::MessageDocument { blocks: Vec::new() },
+            outgoing: false,
+        }
+    }
+
+    fn page(ids: std::ops::RangeInclusive<i64>) -> Vec<RenderedMessage> {
+        ids.map(|id| message(Some(id), id * 1000)).collect()
+    }
+
+    fn ids(channel: &ChannelView) -> Vec<Option<i64>> {
+        channel.messages.iter().map(|message| message.id).collect()
+    }
+
+    #[test]
+    fn older_pages_prepend_to_one_timeline_until_the_beginning() {
+        let mut channel = ChannelView::default();
+        assert!(channel.take_page(None, page(81..=120), Some(81)));
+        assert!(!channel.beginning);
+        // A live message joins the same timeline; its echo from history does not repeat it.
+        assert!(merge_message(&mut channel, message(Some(121), 121_000)));
+        assert!(!merge_message(&mut channel, message(Some(121), 121_000)));
+        assert!(channel.take_page(Some(81), page(41..=80), Some(41)));
+        assert!(channel.take_page(Some(41), page(1..=40), None));
+        assert!(channel.beginning);
+        assert_eq!(channel.next_before, None);
+        assert_eq!(ids(&channel), (1..=121).map(Some).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_page_for_a_stale_cursor_is_dropped() {
+        let mut channel = ChannelView::default();
+        channel.take_page(None, page(81..=120), Some(81));
+        channel.trim_oldest(20);
+        assert_eq!(channel.next_before, Some(101));
+        // Asked for before the trim: it no longer continues the timeline.
+        assert!(!channel.take_page(Some(81), page(41..=80), Some(41)));
+        assert_eq!(ids(&channel), (101..=120).map(Some).collect::<Vec<_>>());
+        assert!(channel.take_page(Some(101), page(61..=100), Some(61)));
+        assert_eq!(channel.messages.len(), 60);
+    }
+
+    #[test]
+    fn the_latest_page_starts_over_but_keeps_what_arrived_since() {
+        let mut channel = ChannelView::default();
+        channel.take_page(None, page(81..=120), Some(81));
+        channel.take_page(Some(81), page(41..=80), Some(41));
+        merge_message(&mut channel, message(Some(121), 121_000));
+        merge_message(&mut channel, message(None, 122_000));
+        // Reopened: the latest page again, with the newer and unsaved messages.
+        channel.take_page(None, page(82..=120), Some(82));
+        assert_eq!(
+            ids(&channel),
+            (82..=121)
+                .map(Some)
+                .chain(std::iter::once(None))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(channel.next_before, Some(82));
+    }
+
+    #[test]
+    fn trimming_drops_only_the_oldest_and_rewinds_the_cursor() {
+        let mut channel = ChannelView::default();
+        channel.take_page(None, page(1..=40), None);
+        assert!(channel.beginning);
+        channel.trim_oldest(40);
+        assert!(channel.beginning, "nothing beyond the cap, nothing dropped");
+        channel.trim_oldest(30);
+        assert_eq!(ids(&channel).first(), Some(&Some(11)));
+        assert_eq!(channel.messages.len(), 30);
+        assert_eq!(channel.next_before, Some(11));
+        assert!(!channel.beginning);
+    }
 }

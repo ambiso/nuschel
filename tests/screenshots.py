@@ -38,6 +38,15 @@ ECHO_TEST_BUTTON = (862, 225)
 SERVER_SETTINGS_BUTTON = (279, 86)
 LOBBY_CHEVRON = (129, 234)
 SIDEBAR_EDGE = (346, 400)
+# Wheel clicks for about one screen of the timeline, and the pill that jumps back down.
+SCROLL_CLICKS = 8
+
+
+def JUMP_TO_LATEST(width, height):
+    """The "Jump to latest" pill, centred over the timeline's bottom edge."""
+    return (width // 2 + 160, height - 112)
+
+
 # The screenshot sent into #Development, and the Lobby row.
 CHAT_IMAGE = (580, 670)
 LOBBY_ROW = (189, 233)
@@ -79,7 +88,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,clipping,viewer,notify,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,clipping,viewer,notify,scroll,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -88,6 +97,10 @@ def main():
         root = Path(temporary)
         port = free_port()
         murmur = Murmur(args.murmur, root, port)
+        if {"all", "scroll"} & set(args.scenes.split(",")):
+            # The scroll scene fills several pages of history quickly; the
+            # stock server otherwise drops text beyond one message a second.
+            murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
         murmur.seed()
         murmur.start()
         bots = []
@@ -172,6 +185,10 @@ def main():
                 # Coordinates are pixels in the window screenshots above.
                 window = shell.window("Nuschel")
                 shell.click(window["x"] - 12 + x, window["y"] - 12 + y, button=button, count=count)
+
+            def wheel(x, y, clicks):
+                window = shell.window("Nuschel")
+                shell.wheel(window["x"] - 12 + x, window["y"] - 12 + y, clicks)
 
             def drag(start, end):
                 window = shell.window("Nuschel")
@@ -322,6 +339,45 @@ def main():
                            and "&lt;b&gt;got a minute&lt;/b&gt;? &amp; more" in note["body"]
                            for note in received), received
                 assert any(note["title"].endswith("in Development") and note["gicon"] for note in received), received
+            if want("scroll"):
+                click(228, 268)  # #Development (other scenes may have opened another conversation)
+                time.sleep(0.6)
+                # Several 40-message pages of local history, paced for the content worker's queue.
+                for n in range(1, 151):
+                    bots[(n // 3) % 2].send(kind="text", channel=2, body=f"History message {n}")
+                    time.sleep(0.05)
+                time.sleep(2.0)
+                # They arrived live; reopened, the conversation starts from its latest page.
+                click(*LOBBY_ROW)
+                time.sleep(0.8)
+                click(228, 268)
+                time.sleep(4.0)
+                shot("21-scroll-latest")
+                timeline = (width // 2 + 160, height // 2)
+                # Up the latest page, short of a screen below its top: nothing loads yet.
+                wheel(*timeline, -5)
+                time.sleep(0.8)
+                # Then to its top: the previous page is on its way (a debug
+                # build takes a moment, rendering each message anew)…
+                wheel(*timeline, -12)
+                time.sleep(0.4)
+                shot("22-scroll-loading")
+                # …and is prepended above without moving what is on screen.
+                time.sleep(4.0)
+                shot("23-scroll-prepended")
+                # Further up until local history begins.
+                for _ in range(6):
+                    wheel(*timeline, -2 * SCROLL_CLICKS)
+                    time.sleep(3.0)
+                shot("24-scroll-beginning")
+                wheel(*timeline, SCROLL_CLICKS)
+                time.sleep(0.6)
+                bots[0].send(kind="text", channel=2, body="A live message while you read older ones")
+                time.sleep(1.2)
+                shot("25-scroll-new-messages")
+                click(*JUMP_TO_LATEST(width, height))
+                time.sleep(1.0)
+                shot("26-scroll-jumped")
             if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)
