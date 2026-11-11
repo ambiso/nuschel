@@ -3028,6 +3028,48 @@ async fn read_control(reader: &mut (impl AsyncRead + Unpin)) -> Result<ControlFr
     })
 }
 
+/// For the `client_messages` libFuzzer target in `fuzz/`: the session's state
+/// fed control frames as a hostile server would send them, with the extension
+/// negotiated. No network and no clock beyond the session's own: the runtime
+/// only awaits the event channel, which is drained after every frame.
+#[doc(hidden)]
+pub mod fuzzing {
+    use super::*;
+
+    thread_local! {
+        static RUNTIME: tokio::runtime::Runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a current-thread runtime");
+    }
+
+    /// Frames as a type byte (Mumble's from 0 to 31, the extension's from 32
+    /// on), a two-byte big-endian length, and the body. A frame the session
+    /// rejects counts as never sent, so later ones still arrive.
+    pub fn run(mut data: &[u8]) {
+        let mut state = State {
+            extension: Some(nuschel::capability::ALL.map(str::to_owned).to_vec()),
+            ..State::default()
+        };
+        let (events, mut received) = mpsc::channel(1 << 16);
+        RUNTIME.with(|runtime| {
+            runtime.block_on(async {
+                while let [kind, high, low, rest @ ..] = data {
+                    let kind = match *kind {
+                        kind @ 0..=31 => u16::from(kind),
+                        other => nuschel::kind::ERROR | u16::from((other - 32) & 0x1f),
+                    };
+                    let length = usize::from(u16::from_be_bytes([*high, *low])).min(rest.len());
+                    let payload = Bytes::copy_from_slice(&rest[..length]);
+                    data = &rest[length..];
+                    let _ = state.handle(ControlFrame { kind, payload }, &events).await;
+                    state.outbound.clear();
+                    while received.try_recv().is_ok() {}
+                }
+            });
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
