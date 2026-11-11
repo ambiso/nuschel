@@ -412,28 +412,30 @@ impl State {
         }
     }
 
+    /// Online connections by account.
+    fn sessions_by_account(&self) -> HashMap<Id, Vec<u32>> {
+        let mut out: HashMap<Id, Vec<u32>> = HashMap::new();
+        for user in self.users.values() {
+            if let Some(account) = user.account {
+                out.entry(account).or_default().push(user.session);
+            }
+        }
+        out
+    }
+
     /// Whether an account can read a channel now: through any of its
     /// connections, or by its persistent identity while offline.
-    fn account_reads(&self, account: &Id, channel: u32) -> bool {
+    fn account_reads(&self, online: &HashMap<Id, Vec<u32>>, account: &Id, channel: u32) -> bool {
         let Some(id) = self.conversation_of_channel(channel) else {
             return false;
         };
-        let mut online = false;
-        for user in self
-            .users
-            .values()
-            .filter(|user| user.account == Some(*account))
-        {
-            online = true;
-            if self.can_read(user.session, &id) {
-                return true;
-            }
-        }
-        !online
-            && self
+        match online.get(account) {
+            Some(sessions) => sessions.iter().any(|session| self.can_read(*session, &id)),
+            None => self
                 .registry
                 .by_account(account)
-                .is_some_and(|registered| self.can_read_offline(registered, channel))
+                .is_some_and(|registered| self.can_read_offline(registered, channel)),
+        }
     }
 
     /// Open and close `since_access` intervals for the accounts a change may
@@ -464,9 +466,10 @@ impl State {
                 .filter_map(|session| self.users.get(session)?.account)
                 .collect()
         };
+        let online = self.sessions_by_account();
         for (channel, id) in channels {
             for account in &accounts {
-                let reads = self.account_reads(account, channel);
+                let reads = self.account_reads(&online, account, channel);
                 self.set_access(id, *account, reads);
             }
         }
@@ -521,8 +524,9 @@ impl State {
             .values()
             .map(|user| user.account)
             .collect();
+        let online = self.sessions_by_account();
         for account in accounts {
-            if self.account_reads(&account, channel) {
+            if self.account_reads(&online, &account, channel) {
                 let intervals = vec![(1, None)];
                 self.conversations
                     .access
