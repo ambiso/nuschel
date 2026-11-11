@@ -1,6 +1,7 @@
 {
   pkgs,
   nuschel,
+  rtcProbe,
   module,
   legacyServers,
 }:
@@ -93,7 +94,7 @@ pkgs.testers.runNixOSTest {
     client.succeed("nuscheld --help")
     # Run as an ordinary user so the sandbox test does not depend on root privileges.
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests/workers.py} ${nuschel}/bin --sandbox-server server'")
-    client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/rtc_probe.py ${nuschel}/bin --opus-library ${pkgs.libopus}/lib/libopus.so'")
+    client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/rtc_probe.py ${nuschel}/bin --probe ${rtcProbe}/bin/nuschel-rtc-probe --opus-library ${pkgs.libopus}/lib/libopus.so'")
     client.succeed("su - tester -c '${pkgs.python3}/bin/python3 ${../tests}/mumble_client.py ${nuschel}/bin --host server --opus-library ${pkgs.libopus}/lib/libopus.so'")
     client.succeed("su - tester -c 'xvfb-run -a -s \"-screen 0 1120x850x24\" ${pkgs.python3}/bin/python3 ${../tests}/desktop_mumble.py ${nuschel}/bin --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${pkgs.libopus}/lib/libopus.so --output /tmp/nuschel-desktop-artifacts'")
     client.copy_from_machine("/tmp/nuschel-desktop-artifacts", "desktop")

@@ -499,6 +499,7 @@
             vm-smoke = import ./nix/vm-smoke.nix {
               inherit pkgs;
               nuschel = package;
+              rtcProbe = rtcPackage;
               module = self.nixosModules.default;
               legacyServers = {
                 "1.4" = "${nixpkgs-mumble14.legacyPackages.${system}.murmur}/bin/mumble-server";
