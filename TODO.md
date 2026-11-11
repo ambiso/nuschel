@@ -75,6 +75,15 @@ Later (reported):
 - [x] Server icons from the server's website favicon (Settings → Server icons).
 - [x] Mute and deafen animate (a slash draws across the icon as it turns red),
       reversing smoothly under rapid clicks.
+- [x] Home Manager module (`homeModules.default`): install, autostart, seed-once
+      initial settings and servers; checked by evaluation and a NixOS VM test.
+- [ ] Declarative settings for Home Manager: a read-only `managed.json` merged at
+      start (managed keys win and show as "set by your system configuration";
+      managed bookmarks keep runtime state such as certificate pins), then
+      `programs.nuschel.settings` / `servers` options.
+- [ ] An invalid `servers.json` stops the app from starting and an invalid
+      `settings.json` is silently replaced by defaults: show an error, keep the
+      file as `*.invalid`, continue.
 - [ ] Proper Windows sandboxing for the workers (AppContainer or a restricted
       token with a low integrity level, no network for content and storage);
       today they only run in a kill-on-close job object.
