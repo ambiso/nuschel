@@ -397,6 +397,7 @@ class DesktopTest:
         self.wait_for("list item", "PEERHISTORYMARKER", partial=True)
         self.capture("chat")
         print("Desktop add/certificate flow, channel tree, independent browsing/join, multiline chat and history passed.", flush=True)
+        self.check_private_reconnect(pin, session)
         self.recorded_playback(self.reference.encode_tone(50))
         self.press("Unmute")
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["session"] == session
@@ -460,6 +461,58 @@ class DesktopTest:
         self.connected()
         assert (self.profile / "data/identity/identity.json").read_bytes() == identity
         print("Saved server/certificate/client identity and offline nested-channel history survived restart.", flush=True)
+
+    def check_private_reconnect(self, pin, session):
+        """Keep one private view open across a recipient's new online session;
+        a different certificate in the old slot must not get the message."""
+        self.click_node(self.wait_for("tree item", "DesktopPeer", partial=True))
+        self.wait_for("list", "Messages with @ DesktopPeer")
+        self.type_message("PRIVATEBEFORERECONNECT")
+        self.xdo("key", "Return")
+        self.peer.wait(lambda e: e["kind"] == "text" and e["body"] == "PRIVATEBEFORERECONNECT")
+        self.peer.close()
+        self.peer = None
+        replacement = Client(self.args.binaries, self.args.host, self.args.port, pin,
+                             "DifferentRecipient", self.root / "replacement-peer")
+        try:
+            # Reuse the same identity, deliberately with a different online
+            # session while the other person occupies a slot on the server.
+            self.peer = Client(self.args.binaries, self.args.host, self.args.port, pin,
+                               "DesktopPeer", self.root / "peer")
+            self.peer.send(kind="join", channel=2)
+            self.wait_for("tree item", "DesktopPeer", partial=True)
+            self.type_message("PRIVATEAFTERRECONNECT")
+            self.xdo("key", "Return")
+            self.peer.wait(lambda e: e["kind"] == "text" and e["body"] == "PRIVATEAFTERRECONNECT")
+            assert not any(e["kind"] == "text" and e.get("body") == "PRIVATEAFTERRECONNECT"
+                           for e in replacement.events), "private text reached another identity"
+        finally:
+            replacement.close()
+        self.peer.close()
+        self.peer = None
+        eventually(lambda: self.absent("tree item", "DesktopPeer", partial=True), "recipient stayed online")
+        self.type_message("PRIVATECOMPOSERKEPT")
+        self.xdo("key", "Return")
+        self.wait_for("push button", "Dismiss notice")
+        self.press("Dismiss notice")
+        eventually(lambda: self.absent("push button", "Dismiss notice"), "notice could not be dismissed")
+        # Sending again still fails, but an idle application must expire the
+        # notice on its own rather than wait for another connection event.
+        self.xdo("key", "Return")
+        self.wait_for("push button", "Dismiss notice")
+        eventually(lambda: self.absent("push button", "Dismiss notice"), "notice never expired", timeout=15)
+        self.peer = Client(self.args.binaries, self.args.host, self.args.port, pin,
+                           "DesktopPeer", self.root / "peer")
+        self.peer.send(kind="join", channel=2)
+        self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["session"] == self.peer.session
+                       and e["user"]["channel"] == 2)
+        self.peer.send(kind="direct", session=session, body="PRIVATEINCOMINGAFTERRECONNECT")
+        eventually(lambda: self.has_message("PRIVATEINCOMINGAFTERRECONNECT"), "incoming private text did not refresh the view")
+        self.xdo("key", "Return")
+        self.peer.wait(lambda e: e["kind"] == "text" and e["body"] == "PRIVATECOMPOSERKEPT")
+        self.capture("private-recipient-reconnected")
+        self.browse_development()
+        print("Private recipient refreshed for send/receive; no recycled-recipient delivery; notice dismissed and expired.", flush=True)
 
     def browse_development(self):
         """Browse Lobby, expand it if it is not, then browse the nested
