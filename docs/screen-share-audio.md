@@ -19,21 +19,24 @@ recapture the call. Keep it local, including its existing all-output coverage.
 
 [TTS and captions](speech.md) are planned. TTS is required to return PCM to the
 owned playback mixer; inference has no audio-device handles. The current
-[WebRTC transport trial](../crates/rtc/src/lib.rs) transports encoded packets,
-with one audio track, optional video, a two-media-section SDP bound and one
-initial offer/answer. It does not integrate screen capture, a second audio
-track, production calling/SFU routing or SFrame. The [sandbox policy](../SECURITY.md)
+[WebRTC transport trial](../crates/rtc/src/lib.rs) transports encoded packets
+on up to two audio tracks (microphone and system audio) and two video tracks
+(camera and screen). A structured description binds each purpose to a unique
+MID and a fresh signaling ID; the caller must authenticate that entire
+description. Track lookup uses the explicit purpose, with separate clocks,
+pacing and bandwidth reserves. Seventeen private encoded-media/signaling tests
+passed, including simultaneous four-track traffic, loss, fairness, tampering
+and replay. There is still only one initial offer/answer: screen capture,
+production authenticated signaling, calling/SFU routing, renegotiation and
+SFrame are not integrated. The [sandbox policy](../SECURITY.md)
 and [media launchers](../crates/ipc/src/host.rs) already separate device/codec
 processing from session credentials. None of those boundaries should be weakened
 for this feature.
 
-First extend authenticated media negotiation to distinguish microphone audio,
-screen-share audio and video, and test the new bounded track model. Increasing
-the SDP limit alone is insufficient: track lookup currently selects by audio or
-video kind. A screen share with microphone audio needs at least three distinct
-media roles; camera plus screen needs another video role. Preserve bounded
-negotiation and scheduling, and define restart/renegotiation behavior before
-opening capture devices.
+Next connect the bounded track model to production authenticated signaling,
+define restart/renegotiation behavior, and implement the capture ownership
+barrier below before opening capture devices. Encoded-media tests do not prove
+safe desktop-audio capture or a usable call flow.
 
 ## Exclusion contract and routing
 
