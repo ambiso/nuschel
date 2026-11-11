@@ -227,6 +227,14 @@ markers and typing. Nuschel never falls back to plain Mumble with a server that
 once offered the extension. Invite links can carry the server's certificate
 fingerprint and policy (`mumble://…?fp=sha256:…&policy=nuschel`).
 
+Nuschel users also have an identity of their own, independent of any server and of
+the Mumble certificate (docs/e2ee.md): a hybrid ML-DSA-65 + Ed25519 root certifying
+each device, kept in a sandboxed crypto worker. Servers with `kt/1` publish it in a
+key-transparency log, as in Signal's automatic key verification. The client pins
+contacts on first use, checks them against the log, shows "verified (same identity as
+on …)" across servers, and flags a changed key or a lying server. Safety numbers allow
+verification in person. End-to-end encryption with MLS builds on this next.
+
 External PostgreSQL URLs and TLS keys come from runtime credential files, not inline
 Nix values. `openFirewall` is off by default. The service uses DynamicUser, a private
 state directory, restricted permissions and systemd hardening. See

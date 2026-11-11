@@ -24,6 +24,7 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | `aes` (OCB2 voice crypto) | Mumble's UDP voice encryption; AES-NI intrinsics | Session authority; fixed-size blocks, keys from the TLS control channel |
 | `rsa` (identity generation only) | Stock Mumble imports only RSA client certificates | Generates the local Mumble client key only; TLS signing uses ring, so the Marvin timing issue (RUSTSEC-2023-0071) in private-key operations never runs on untrusted input; `cargo-deny` confines the crate to `nuschel-session` |
 | `image` decoders (PNG, JPEG, GIF) | Inline images and avatars from untrusted peers | Content worker only, with dimension and allocation limits; the UI receives raw RGBA |
+| `akd` (key transparency) | Auditable key directory; no memory-safe alternative with VRF and audit proofs | Through `nuschel-kt` only, in the crypto worker and `nuscheld`; akd_core turns on ed25519-dalek's `legacy_compatibility` for the whole binary, so `nuschel-kt` checks `s < ℓ` itself and `nuschel-identity` uses libcrux, not ed25519-dalek; akd's verifiers run under `catch_unwind` behind a strict decoder (docs/e2ee.md §5.2) |
 | Global shortcuts (`ashpd` portal; `global-hotkey` on Windows/macOS) | System-wide push-to-talk | Desktop shell; press/release of one bound key only |
 
 The `cargo-deny` wrapper rules enforce ownership for the named top-level dependencies.
@@ -91,6 +92,17 @@ that channels are archived, and their direct messages are not stored by default.
 Unregistered users read no history by default. The client's sticky record
 (`nuschel-policy.json`, per host and port) refuses any weaker answer from a server
 that once negotiated the extension or a capability; only an explicit reset clears it.
+
+The crypto worker owns the identity secrets (docs/e2ee.md, "Phase 3 as
+implemented"): one per profile, sandboxed like the content worker, without network.
+Its keystore and state are sealed under a store key kept in a 0600 file in its own
+directory, a stopgap until the OS keychain. It never logs secrets; the desktop and
+the session see only public keys, statements and verification results. On the
+server, key transparency needs `kt.signing_key_file` and `kt.vrf_secret_file`
+(module: `services.nuschel.kt.*`, through `LoadCredential`, or generated once in the
+state directory). Back both up: a lost VRF secret means a new log, which every client
+that pinned the old one treats as misbehaviour until it is reset. Records behind
+published bindings are never deleted.
 
 The transfer worker (magic-wormhole file offers) is the one worker with network
 access: rendezvous and transit relay, plus only the offered file read-only. The

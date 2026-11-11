@@ -485,51 +485,58 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          independent text-channel subscriptions, retention.
    - [ ] Client side: server history replaces local-only history for such servers;
          the history source label already exists (`HistorySource::ServerArchive`).
-3. **Identity** (persistent, cross-server and multi-device; user, 2026-11-11)
-   - [ ] A user identity independent of any server: an identity root signing key
-         (Ed25519 now, hybrid Ed25519 + ML-DSA-65 when available) certifying
-         per-device keys; each device has its own signing key and an X-Wing
-         (ML-KEM-768 + X25519) key for device linking, history sharing and first
-         contact. Separate from the Mumble RSA certificate.
-   - [x] `crates/identity` (2026-11-11): RFC 10073 composite ML-DSA-65 + Ed25519
-         root and device-signing keys, a separate Ed25519 credential key (compact
-         172-byte MLS credentials), X-Wing device keys, certificates and revocations
-         by key epoch, Signal-style safety numbers and QR payload, SPAKE2 device
-         linking with a PSK-bound HPKE bundle, encrypted keystore and recovery key;
-         vectors and a fuzz target. Not wired into the client yet.
-   - [ ] Crypto worker: OpenMLS `Signer` over the device leaf key, credential
-         validation against rosters from the transparency log, the `DeviceLink*`
-         mailbox, OS keychain for the store key, account and Mumble-certificate
-         binding statements, device-sync key rotation, recovery-key policy and UI.
+3. **Identity and key transparency** (persistent, cross-server and multi-device;
+   user, 2026-11-11) — done without MLS (2026-11-11), see docs/e2ee.md "Phase 3 as
+   implemented": identities are created, published to each server's log, looked up,
+   pinned on first use and verified; key changes and lying servers are detected.
+   - [x] `crates/identity`: RFC 10073 composite ML-DSA-65 + Ed25519 root and
+         device-signing keys, a separate Ed25519 credential key (172-byte MLS
+         credentials), X-Wing device keys, certificates and revocations by key epoch,
+         safety numbers and QR payload, SPAKE2 device linking with a PSK-bound HPKE
+         bundle, encrypted keystore and recovery key; account statements (signed by
+         the device-signing key, naming the server's log id).
+   - [x] `crates/kt`: akd 0.13 behind a swappable interface, signed heads, gossip
+         with evidence, lookup verification, self-monitoring, audits, TOFU
+         assessment, per-epoch stored audit proofs; malicious-server tests.
+   - [x] Crypto worker (`apps/crypto-worker`, sandboxed, no network, one per
+         profile): creates the identity on first need, recovery key offered by default
+         (setting: offer / require / never), sealed keystore and state, signs account
+         statements, renews the device certificate, pins each server's log, audits
+         heads, monitors your own binding, daily schedule, trust per contact.
+   - [x] Server: the log in `kt_records` through the storage worker, `kt/1` with 12
+         `nuschel.v1` messages, descriptor in the hello, signing key and VRF secret
+         as credentials (`services.nuschel.kt.*`), per-type size and rate limits,
+         epochs every 10 s while changes wait, hourly re-signed head.
+   - [x] Client: publishes and monitors after login on `kt/1` servers; profiles show
+         not verified / verified / "verified (same identity as on X)" / identity
+         changed, the 60-digit safety number and "Mark as verified"; a red banner on
+         a contact's key change; a dialog when your own key is misused; identity and
+         recovery key in Settings; `nuschel-cli --identity-dir`.
+   - [x] Trust on first use; a changed key is shown, never silently accepted.
+   - [x] The same identity on every Nuschel server: per-server account statements,
+         so "same identity as on X" cannot be forged by copying a binding.
+   Open:
+   - [ ] The key-change warning inside the direct conversation's timeline (today a
+         banner above it).
+   - [ ] "This wasn't me: revoke" (needs device linking and multi-device publishing;
+         today only a device holding the device-signing key publishes); the
+         `DeviceLink*` mailbox; device-sync key rotation.
+   - [ ] OS keychain for the store key (today a 0600 file in its own directory); QR
+         code rendering (the payload exists).
+   - [ ] Carry head gossip (ready in the worker, not yet transported); `kt_head` in
+         MLS messages.
+   - [ ] A verified contact without a direct conversation is checked by lookup only,
+         so a binding that comes and goes between two lookups is missed.
+   - [ ] Persist the desktop's map of registration numbers to accounts (the
+         worker's is persisted).
+   - [ ] Mumble-certificate binding statements; independent auditors (optional).
    - [ ] deny.toml ignores RUSTSEC-2026-0173 (proc-macro-error2, reachable only under
          libcrux's `cfg(hax)` verification builds): confirm.
-   - [ ] The same identity on every Nuschel server, bound per server in its
-         key-transparency log; verification over the identity root holds everywhere.
-   - [x] `crates/kt` (2026-11-11): key-transparency directory behind a narrow,
-         backend-swappable interface (akd 0.13 today), signed heads, gossip with
-         evidence, client verification of lookups, self-monitoring, audits and TOFU
-         assessment; malicious-server tests; per-epoch stored audit proofs. Not wired.
-   - [ ] Wire KT into the server (KtStore over the storage worker, `nuschel.v1` KT
-         messages, lookup authorisation and rate limits, publish timer and hourly
-         head refresh, VRF secret and head signing key, descriptor in the hello) and
-         the client (crypto worker: pinned descriptor, KnownHeads, the §5.4 schedule,
-         `kt_head` in MLS messages). Nix build of nuschel-kt.
-   - [ ] Trust on first use: pin a contact's identity key on first sight; a changed
-         key is shown, never silently accepted.
-   - [ ] Optional out-of-band verification: safety numbers and QR codes; verified
-         contacts are marked, and the trust follows the identity across servers.
-   - [ ] Key transparency: the server publishes an append-only, auditable key
-         directory (Merkle prefix tree with epochs, e.g. the `akd` crate or the IETF
-         KEYTRANS design); clients check inclusion and consistency proofs, monitor
-         their own key, and verify contacts automatically; independent auditors
-         optional.
-   Design: docs/e2ee.md (identity root → device-signing key → per-device Ed25519 MLS
-   and X-Wing keys; SPAKE2 device linking; 60-digit safety numbers; `akd` key
-   transparency per server; per-sender ordering inside payloads). Spike:
-   spikes/mls (own workspace). **Twelve open questions for the user** are in
-   docs/e2ee.md §10 (recovery key, device-key placement, akd vs KEYTRANS, channel
+   Design: docs/e2ee.md. Spike: spikes/mls (own workspace). **Open questions for the
+   user** are in docs/e2ee.md §10 (device-key placement, akd vs KEYTRANS, channel
    membership, history grants, size cap, voice groups, inactive devices, auditors,
-   release timing, ciphersuite, guests).
+   release timing, ciphersuite, guests); question 1 (recovery key) became a
+   setting, offered by default.
 4. **End-to-end encryption (MLS)**
    - [ ] Wait for the next OpenMLS release before shipping persistent groups:
          0.9.2 pins libcrux crates with RUSTSEC-2026-0329/-0330/-0331 (a hostile
@@ -537,10 +544,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          that is not in the IETF draft; `main` already has both fixed. Prototype
          against 0.9.2 meanwhile.
    - [ ] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, the crypto
-         worker and `nuscheld`; `akd` only in `nuschel-kt`. SECURITY.md: libcrux
-         SIMD `unsafe` in the exceptions table.
-   - [ ] Dedicated crypto worker running OpenMLS + libcrux; state in an encrypted
-         store; key packages published to the server.
+         worker and `nuscheld` (akd, `nuschel-kt` and `nuschel-identity` are
+         already confined). SECURITY.md: libcrux SIMD `unsafe` in the exceptions
+         table.
+   - [ ] OpenMLS + libcrux in the crypto worker (which exists since phase 3, with a
+         sealed state store); key packages published to the server.
    - [ ] Delivery service in the server: ordered handshake messages per group, key
          package directory, welcome delivery.
    - [ ] One MLS group per conversation; membership follows ACL changes; direct
