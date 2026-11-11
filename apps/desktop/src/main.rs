@@ -22,6 +22,7 @@ mod preview;
 mod scrolling;
 mod selection;
 mod settings;
+mod sounds;
 mod state;
 mod theme;
 mod transfer;

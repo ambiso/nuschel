@@ -1551,6 +1551,9 @@ impl Desktop {
             return;
         };
         self.backend.disconnect(&server.id);
+        if server.status == Status::Connected && !server.deafened {
+            self.backend.chime(nuschel_core::audio::Sound::Disconnected);
+        }
         self.passwords.remove(&server.id);
         if let Some(lost) = lost_messages(server) {
             server.notice = Some(lost);
@@ -2691,6 +2694,9 @@ impl Desktop {
                         .iter_mut()
                         .find(|entry| entry.id == server && entry.generation == generation)
                     {
+                        if server.status == Status::Connected && !server.deafened {
+                            self.backend.chime(nuschel_core::audio::Sound::Disconnected);
+                        }
                         server.status = Status::Connecting;
                         server.own_session = None;
                         if let Some(lost) = lost_messages(server) {
@@ -3040,6 +3046,21 @@ impl Desktop {
                                 },
                                 image,
                             });
+                        }
+                    }
+                    if !message.outgoing {
+                        let shown = self.window_active
+                            && self.navigation.selection().is_some_and(|selected| {
+                                selected.server == server.id
+                                    && selected.channel == server.channels[index].id
+                            });
+                        let direct = matches!(target, TextTarget::Direct(_));
+                        let mentioned = crate::notify::mentions(
+                            &message.message.body,
+                            &server.bookmark.username,
+                        );
+                        if let Some(sound) = crate::sounds::message(shown, direct, mentioned) {
+                            self.backend.play_sound(&server.id, sound);
                         }
                     }
                     let channel = &mut server.channels[index];
@@ -3460,6 +3481,14 @@ impl Desktop {
                         );
                     }
                 }
+                if server.status == Status::Connected && Some(user.session) != server.own_session {
+                    let from = server.users.get(&user.session).map(|old| old.channel);
+                    if let Some(sound) =
+                        crate::sounds::movement(server.voice_channel(), from, Some(user.channel))
+                    {
+                        self.backend.play_sound(&server.id, sound);
+                    }
+                }
                 if Some(user.session) == server.own_session {
                     server.muted = user.self_muted;
                     server.deafened = user.self_deafened;
@@ -3478,6 +3507,13 @@ impl Desktop {
                 server.users.insert(user.session, user);
             }
             SessionEvent::UserRemoved(session) => {
+                let from = server.users.get(&session).map(|old| old.channel);
+                if server.status == Status::Connected
+                    && Some(session) != server.own_session
+                    && let Some(sound) = crate::sounds::movement(server.voice_channel(), from, None)
+                {
+                    self.backend.play_sound(&server.id, sound);
+                }
                 server.users.remove(&session);
                 server.talking.remove(&session);
                 server.legacy_voice.remove(&session);

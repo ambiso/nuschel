@@ -199,15 +199,20 @@ fn meter(preview: &PreviewView) -> AnyElement {
         .into_any_element()
 }
 
-/// The dragged value of the sensitivity slider (GPUI drags carry a type).
-struct SensitivityDrag;
+/// The slider being dragged. Every slider hears every drag of this type, so
+/// each one checks that the drag is its own.
+struct SliderDrag(&'static str);
 
-/// Voice activity sensitivity, 0-100 % in 5 % steps (each step is saved).
-fn sensitivity_slider(sensitivity: f32, cx: &mut Context<Desktop>) -> AnyElement {
-    fn set(this: &mut Desktop, value: f32) {
-        let value = (value.clamp(0., 1.) * 20.).round() / 20.;
-        this.update_settings(|settings| settings.audio.vad_sensitivity = value);
-    }
+/// A 0-100 % slider in 5 % steps (each step is saved).
+fn slider(
+    id: &'static str,
+    label: &'static str,
+    value: f32,
+    set: fn(&mut Desktop, f32),
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let step =
+        move |this: &mut Desktop, value: f32| set(this, (value.clamp(0., 1.) * 20.).round() / 20.);
     fn at(bounds: Bounds<Pixels>, position: Point<Pixels>) -> f32 {
         (position.x - bounds.left()) / bounds.size.width.max(px(1.))
     }
@@ -215,9 +220,9 @@ fn sensitivity_slider(sensitivity: f32, cx: &mut Context<Desktop>) -> AnyElement
     let track = Rc::new(std::cell::Cell::new(Bounds::default()));
     let painted = track.clone();
     div()
-        .id("sensitivity")
+        .id(id)
         .role(Role::Slider)
-        .aria_label("Voice activity sensitivity")
+        .aria_label(label)
         .tab_index(0)
         .relative()
         .h(px(20.))
@@ -226,27 +231,29 @@ fn sensitivity_slider(sensitivity: f32, cx: &mut Context<Desktop>) -> AnyElement
         .cursor_pointer()
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
             let value = match event.keystroke.key.as_str() {
-                "left" | "down" => sensitivity - 0.05,
-                "right" | "up" => sensitivity + 0.05,
+                "left" | "down" => value - 0.05,
+                "right" | "up" => value + 0.05,
                 "home" => 0.,
                 "end" => 1.,
                 _ => return,
             };
-            set(this, value);
+            step(this, value);
             cx.notify();
         }))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                set(this, at(track.get(), event.position));
+                step(this, at(track.get(), event.position));
                 cx.notify();
             }),
         )
-        .on_drag(SensitivityDrag, |_, _, _, cx| cx.new(|_| EmptyView))
+        .on_drag(SliderDrag(id), |_, _, _, cx| cx.new(|_| EmptyView))
         .on_drag_move(
-            cx.listener(|this, event: &DragMoveEvent<SensitivityDrag>, _, cx| {
-                set(this, at(event.bounds, event.event.position));
-                cx.notify();
+            cx.listener(move |this, event: &DragMoveEvent<SliderDrag>, _, cx| {
+                if event.drag(cx).0 == id {
+                    step(this, at(event.bounds, event.event.position));
+                    cx.notify();
+                }
             }),
         )
         .child(
@@ -263,7 +270,7 @@ fn sensitivity_slider(sensitivity: f32, cx: &mut Context<Desktop>) -> AnyElement
                 .child(
                     div()
                         .h_full()
-                        .w(relative(sensitivity))
+                        .w(relative(value))
                         .rounded_full()
                         .bg(color(ACCENT)),
                 ),
@@ -271,7 +278,7 @@ fn sensitivity_slider(sensitivity: f32, cx: &mut Context<Desktop>) -> AnyElement
         .child(
             div()
                 .absolute()
-                .left(relative(sensitivity))
+                .left(relative(value))
                 .ml(px(-8.))
                 .size(px(16.))
                 .rounded_full()
@@ -280,6 +287,34 @@ fn sensitivity_slider(sensitivity: f32, cx: &mut Context<Desktop>) -> AnyElement
                 .border_color(color(ACCENT))
                 .shadow_sm(),
         )
+        .into_any_element()
+}
+
+/// A slider under a label that shows its value; `name` is for screen readers.
+fn labelled_slider(
+    id: &'static str,
+    (label, name): (&'static str, &'static str),
+    value: f32,
+    set: fn(&mut Desktop, f32),
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .text_sm()
+                .child(text!(label).with_id((id, 1_usize)))
+                .child(
+                    div()
+                        .text_color(color(TEXT_MUTED))
+                        .child(text!(format!("{:.0}%", value * 100.)).with_id((id, 2_usize))),
+                ),
+        )
+        .child(slider(id, name, value, set, cx))
         .into_any_element()
 }
 
@@ -525,28 +560,13 @@ pub fn dialog(
         cx,
     )];
     if transmit == TransmitMode::VoiceActivity {
-        let sensitivity = audio.vad_sensitivity;
-        voice.push(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .justify_between()
-                        .text_sm()
-                        .child(text!("Sensitivity").with_id("sensitivity-label"))
-                        .child(
-                            div().text_color(color(TEXT_MUTED)).child(
-                                text!(format!("{:.0}%", sensitivity * 100.))
-                                    .with_id("sensitivity-value"),
-                            ),
-                        ),
-                )
-                .child(sensitivity_slider(sensitivity, cx))
-                .into_any_element(),
-        );
+        voice.push(labelled_slider(
+            "sensitivity",
+            ("Sensitivity", "Voice activity sensitivity"),
+            audio.vad_sensitivity,
+            |this, value| this.update_settings(|settings| settings.audio.vad_sensitivity = value),
+            cx,
+        ));
     }
     if transmit == TransmitMode::PushToTalk || settings.push_to_talk_key.is_some() {
         let label = if this.recording_ptt {
@@ -928,6 +948,26 @@ pub fn dialog(
         }),
         cx,
     ));
+    let sound_effects = settings.sound_effects;
+    general.push(toggle(
+        "sound-effects",
+        "Sound effects",
+        "People joining and leaving your channel, mute and deafen, push-to-talk, messages and the connection.".into(),
+        sound_effects,
+        Rc::new(move |this, _, _| {
+            this.update_settings(|settings| settings.sound_effects = !sound_effects)
+        }),
+        cx,
+    ));
+    if sound_effects {
+        general.push(labelled_slider(
+            "sound-volume",
+            ("Volume", "Sound effect volume"),
+            settings.sound_volume,
+            |this, value| this.update_settings(|settings| settings.sound_volume = value),
+            cx,
+        ));
+    }
     if crate::update::supported() {
         use crate::update::UpdateState;
         let check = settings.check_updates;

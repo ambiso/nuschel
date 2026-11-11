@@ -241,6 +241,11 @@ pub struct ClientSettings {
     pub notifications: bool,
     /// Show each server's website icon, fetched over HTTPS from its address.
     pub server_icons: bool,
+    /// Sound effects for your channel, mute and deafen, push-to-talk, messages
+    /// and the connection.
+    pub sound_effects: bool,
+    /// Their volume, from 0 to 1.
+    pub sound_volume: f32,
 }
 
 pub const SIDEBAR_WIDTH: std::ops::RangeInclusive<f32> = 200.0..=560.0;
@@ -258,6 +263,8 @@ impl Default for ClientSettings {
             check_updates: true,
             notifications: true,
             server_icons: true,
+            sound_effects: true,
+            sound_volume: 0.7,
         }
     }
 }
@@ -283,6 +290,11 @@ impl ClientSettings {
         {
             self.push_to_talk_key = None;
         }
+        self.sound_volume = if self.sound_volume.is_finite() {
+            self.sound_volume.clamp(0., 1.)
+        } else {
+            0.7
+        };
         self.sidebar_width = if self.sidebar_width.is_finite() {
             self.sidebar_width
                 .clamp(*SIDEBAR_WIDTH.start(), *SIDEBAR_WIDTH.end())
@@ -828,9 +840,11 @@ mod tests {
         let mut settings = ClientSettings::default();
         settings.user_volumes.insert("abc".into(), 9.);
         settings.local_mutes.insert("def".into());
+        settings.sound_volume = 3.;
         profile.save_settings(&settings).unwrap();
         let loaded = profile.load_settings().unwrap();
         assert_eq!(loaded.volume_for(Some("abc")), 4.);
+        assert_eq!(loaded.sound_volume, 1.);
         assert!(loaded.locally_muted(Some("def")));
         assert_eq!(loaded.volume_for(None), 1.);
         std::fs::remove_dir_all(root).unwrap();

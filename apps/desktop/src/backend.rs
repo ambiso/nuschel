@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The desktop sees typed events; transport, parsing, audio and history run off its thread.
 use nuschel_client::HistoryTicket;
-use nuschel_core::audio::{AudioDevice, EchoSource};
+use nuschel_core::audio::{AudioDevice, EchoSource, Sound, TransmitMode};
 use nuschel_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
 use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
 use nuschel_session::{
@@ -164,6 +164,7 @@ pub enum RenderKey {
 }
 struct Connection {
     commands: mpsc::Sender<Command>,
+    sounds: mpsc::Sender<Sound>,
     task: tokio::task::JoinHandle<()>,
 }
 pub struct Backend {
@@ -373,18 +374,26 @@ impl Backend {
         self.generation += 1;
         let generation = self.generation;
         let (commands, receiver) = mpsc::channel(32);
+        let (sounds, sound_requests) = mpsc::channel(8);
         let id = server.id.clone();
         let task = self.handle.spawn(connection_loop(
             self.profile.clone(),
             server,
             (password, deafened),
             generation,
-            receiver,
+            (receiver, sound_requests),
             self.sender.clone(),
             self.content.clone(),
             (self.settings.subscribe(), self.push_to_talk.subscribe()),
         ));
-        self.connections.insert(id, Connection { commands, task });
+        self.connections.insert(
+            id,
+            Connection {
+                commands,
+                sounds,
+                task,
+            },
+        );
         Ok(generation)
     }
     pub fn command(&self, server: &str, command: Command) -> Result<(), String> {
@@ -486,6 +495,21 @@ impl Backend {
     pub fn apply_settings(&self, settings: ClientSettings) {
         self.settings.send_replace(settings);
     }
+    /// Play a sound effect on this server's media worker (see `connect_once`).
+    pub fn play_sound(&self, server: &str, sound: Sound) {
+        if let Some(connection) = self.connections.get(server) {
+            let _ = connection.sounds.try_send(sound);
+        }
+    }
+    /// Play a sound effect where no connection's worker can, as after a disconnect.
+    pub fn chime(&self, sound: Sound) {
+        let settings = self.settings.borrow();
+        if settings.sound_effects {
+            let audio = settings.audio.clone();
+            self.handle
+                .spawn(chime(audio, settings.sound_volume, None, sound));
+        }
+    }
     pub fn set_push_to_talk(&self, active: bool) {
         self.push_to_talk
             .send_if_modified(|current| std::mem::replace(current, active) != active);
@@ -548,7 +572,7 @@ async fn connection_loop(
     server: ServerBookmark,
     (password, deafened): (Option<String>, bool),
     generation: u64,
-    mut commands: mpsc::Receiver<Command>,
+    (mut commands, mut sounds): (mpsc::Receiver<Command>, mpsc::Receiver<Sound>),
     events: mpsc::Sender<Event>,
     content: mpsc::Sender<ContentJob>,
     (mut settings, mut push_to_talk): (watch::Receiver<ClientSettings>, watch::Receiver<bool>),
@@ -569,7 +593,7 @@ async fn connection_loop(
             &server,
             password.clone(),
             generation,
-            &mut commands,
+            (&mut commands, &mut sounds),
             &events,
             &content,
             (&mut settings, &mut push_to_talk),
@@ -674,7 +698,7 @@ async fn connect_once(
     server: &ServerBookmark,
     password: Option<String>,
     generation: u64,
-    commands: &mut mpsc::Receiver<Command>,
+    (commands, sounds): (&mut mpsc::Receiver<Command>, &mut mpsc::Receiver<Sound>),
     events: &mpsc::Sender<Event>,
     content: &mpsc::Sender<ContentJob>,
     (settings, push_to_talk): (
@@ -735,6 +759,10 @@ async fn connect_once(
     let mut speaking = BTreeMap::<u32, tokio::time::Instant>::new();
     let mut talk_tick = tokio::time::interval(std::time::Duration::from_millis(100));
     talk_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Sound effects for the next worker while this one is being replaced.
+    let mut pending = Vec::<(Sound, tokio::time::Instant)>::new();
+    // Requests from before a reconnection are stale.
+    while sounds.try_recv().is_ok() {}
     loop {
         tokio::select! {
             changed = settings.changed() => {
@@ -755,6 +783,10 @@ async fn connect_once(
                 let active = *push_to_talk.borrow_and_update();
                 if let Some(media) = &media {
                     let _ = media.commands.try_send(LiveMediaRequest::PushToTalk { active });
+                    let current = settings.borrow();
+                    if !muted && current.audio.transmit == TransmitMode::PushToTalk {
+                        play(media, &current, if active { Sound::TalkOn } else { Sound::TalkOff });
+                    }
                 }
             },
             _ = talk_tick.tick(), if !speaking.is_empty() => {
@@ -770,8 +802,17 @@ async fn connect_once(
                 outcome = Some(Outcome::Ended(result));
                 break;
             },
+            Some(sound) = sounds.recv() => {
+                // Only the deafen sound (below) plays while deafened, as in stock Mumble.
+                if deafened { continue; }
+                match &media {
+                    Some(media) => play(media, &settings.borrow(), sound),
+                    None => queue(&mut pending, sound),
+                }
+            },
             Some(command) = commands.recv() => {
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
+                    let cue = crate::sounds::self_state((muted, deafened), (*mute || *deaf, *deaf));
                     muted = *mute || *deaf; deafened = *deaf; capture_epoch += 1;
                     if muted && std::mem::take(&mut transmitting) {
                         // Receivers stop at once, as with stock Mumble, but the terminator is
@@ -786,6 +827,13 @@ async fn connect_once(
                     // no old callback or queued capture can survive a mute transition.
                     media.take();
                     retry_audio = tokio::time::Instant::now();
+                    let current = settings.borrow();
+                    match cue.filter(|_| current.sound_effects) {
+                        // No worker runs while deafened: one that opens only the output plays it.
+                        Some(sound) if deafened => { tokio::spawn(chime(current.audio.clone(), current.sound_volume, pinned_host(&audio_host), sound)); },
+                        Some(sound) => queue(&mut pending, sound),
+                        None => {},
+                    }
                 }
                 if session_commands.send(command).await.is_err() { break; }
             },
@@ -801,6 +849,7 @@ async fn connect_once(
                     audio_enabled = true;
                     bitrate = max_bandwidth.saturating_sub(24_000).clamp(6000, 48_000);
                     retry_audio = tokio::time::Instant::now();
+                    if !deafened { queue(&mut pending, Sound::Connected); }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Connected { session: own_session, max_bandwidth } }).await;
                 },
                 SessionEvent::Audio(packet) => {
@@ -854,6 +903,9 @@ async fn connect_once(
                         configure(&worker, &applied_audio, (bitrate, loss_percent), pinned_host(&audio_host));
                         let _ = worker.commands.try_send(LiveMediaRequest::SetState { epoch: capture_epoch, muted, deafened });
                         let _ = worker.commands.try_send(LiveMediaRequest::PushToTalk { active: *push_to_talk.borrow() });
+                        for (sound, requested) in pending.drain(..) {
+                            if requested.elapsed() < MAX_SOUND_DELAY { play(&worker, &settings.borrow(), sound); }
+                        }
                         media = Some(worker);
                         transmitting = false;
                     },
@@ -1185,6 +1237,59 @@ fn configure(
         settings: audio.clone(),
         host,
     });
+}
+
+/// Sound effects older than this when a worker starts are stale.
+const MAX_SOUND_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Keep a sound effect for the worker that is starting (a few at most).
+fn queue(pending: &mut Vec<(Sound, tokio::time::Instant)>, sound: Sound) {
+    if pending.len() < 4 {
+        pending.push((sound, tokio::time::Instant::now()));
+    }
+}
+
+fn play(media: &Media, settings: &ClientSettings, sound: Sound) {
+    if settings.sound_effects {
+        let _ = media.commands.try_send(LiveMediaRequest::PlaySound {
+            sound,
+            volume: settings.sound_volume,
+        });
+    }
+}
+
+/// Play a sound where no connection's worker can (deafened or disconnected):
+/// a worker that opens only the output plays it and exits.
+async fn chime(
+    audio: nuschel_core::audio::AudioSettings,
+    volume: f32,
+    host: Option<String>,
+    sound: Sound,
+) {
+    let Ok(mut worker) = Media::start() else {
+        return;
+    };
+    configure(&worker, &audio, (48_000, 5), host);
+    let _ = worker.commands.try_send(LiveMediaRequest::SetState {
+        epoch: 0,
+        muted: true,
+        deafened: false,
+    });
+    let _ = worker
+        .commands
+        .try_send(LiveMediaRequest::PlaySound { sound, volume });
+    // Until the sound has played (the longest is 0.8 s), or the devices failed.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(event) = worker.events.recv().await {
+            if let LiveMediaEvent::Status { ready, .. } = event {
+                if ready {
+                    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+                }
+                break;
+            }
+        }
+    })
+    .await;
 }
 
 fn pinned_host(audio_host: &(Option<String>, tokio::time::Instant)) -> Option<String> {
