@@ -11,8 +11,11 @@ offline. End-to-end encryption is being built ([how far it is](#security-and-pri
 Nuschl's own code is memory-safe Rust, and what other people send you is handled in
 sandboxed helper processes.
 
-Nuschl is in early development: version 0.1, no published release yet, and things
-still change. More about the app: [docs/desktop.md](docs/desktop.md).
+Nuschl is in early development, and things still change. Published versions and
+their download files appear on [Releases](https://github.com/ambiso/nuschl/releases).
+[CI builds](https://github.com/ambiso/nuschl/actions/workflows/build.yml) provide
+testing snapshots, independently of release publication.
+More about the app: [docs/desktop.md](docs/desktop.md).
 
 ## Install
 
@@ -50,8 +53,8 @@ bubblewrap (`bwrap`) for its sandbox.
 
 ### Windows
 
-[Releases](https://github.com/ambiso/nuschl/releases) will have a portable zip,
-`nuschl-<version>-windows-x86_64.zip`. Unpack it into a folder of your own (not
+Windows releases use a portable zip, `nuschl-<version>-windows-x86_64.zip`, on the
+[Releases page](https://github.com/ambiso/nuschl/releases). Unpack it into a folder of your own (not
 Program Files) and start `nuschl.exe`. There is no installer yet; Nuschl updates
 itself in that folder.
 
@@ -62,8 +65,8 @@ Windows 11 VM.
 
 ### macOS
 
-[Releases](https://github.com/ambiso/nuschl/releases) will have
-`nuschl-<version>-macos-universal.zip` with `Nuschl.app` (Intel and Apple silicon,
+macOS releases use `nuschl-<version>-macos-universal.zip` on the
+[Releases page](https://github.com/ambiso/nuschl/releases), with `Nuschl.app` (Intel and Apple silicon,
 macOS 14.2 or later). Move it to Applications first, so that it can update itself.
 The app is not notarised for now, so macOS refuses the first start: then open
 **System Settings → Privacy & Security** and choose **Open Anyway** next to the note
@@ -77,10 +80,11 @@ screen readers, and F1 lists the keys.
 
 ### Android, iOS and the web
 
-Planned ([docs/clients.md](docs/clients.md)). The web client has its first parts:
-the relay through which browsers reach servers (TLS runs in the browser, so the relay
-sees only ciphertext) and a NixOS module that serves it from your domain with ACME,
-`nixosModules.web` ([docs/web.md](docs/web.md)).
+Android and iOS remain planned ([docs/clients.md](docs/clients.md)). The web client
+supports text chat and local history. Host it with `nixosModules.web`, which serves
+the app and its relay from your domain with ACME. TLS runs in the browser, so the
+relay sees ciphertext. Browser voice, video and MLS remain unfinished
+([docs/web.md](docs/web.md)).
 
 ## Getting started
 

@@ -1,6 +1,6 @@
 # Nuschl TODO
 
-Current focus: **web client/deployment, server admission/moderation, and WebRTC**
+Current focus: **first release/CI builds, web client/deployment, server admission/moderation, and WebRTC**
 (user, 2026-11-11). The user has now supplied `Xcode_16.2.xip`, removing the
 earlier iOS download blocker; archive verification and installed-guest/Simulator
 feasibility are the next iOS gates, not yet completed.
@@ -12,16 +12,25 @@ change has its own validation.
 
 Current integration checkpoint (2026-11-11):
 
-- Web: legacy text/private chat and IndexedDB implementation/follow-ups integrated;
-  final crate2nix WASM/site rebuild and full browser reload/UI proof in progress.
-  Native tests, stock-Murmur relay tests and both content feature suites passed.
-- Knocking: compatible-server implementation ready on `69ed5405`, 134 tests passed;
-  root review/integration and SDK/UI consumers remain. MLS admission is refused.
-- RTC: RustCrypto provider/certificates and their tested follow-up integrated;
-  2 certificate and 6 transport tests passed. ICE restart has a plan, no implementation.
+- Release: prepare independent downloadable Linux, Windows and universal macOS CI
+  builds plus web artifacts, then publish the first preview once hybrid update
+  verification and packaging pass. Enrolling the production public-key pair and
+  provisioning its CI secret remain operator steps. Do not publish unsigned updates.
+- Web: legacy text/private chat, IndexedDB and crate2nix WASM/site packaging are
+  integrated; native, Node/WASM and real-browser proofs passed against private
+  stock Murmur and compatible Nuschl servers. Hosted deployment remains separate.
+- Knocking: compatible-server implementation integrated through `1f979943`;
+  134 tests passed on the source branch. SDK/UI consumers remain. MLS admission
+  is refused.
+- RTC: RustCrypto provider/certificates and bounded four-track transport integrated;
+  5 signaling and 12 transport tests passed, including simultaneous microphone,
+  system audio, camera and screen packets. Production calling/capture/signaling
+  remain unfinished. ICE restart has a plan, no implementation.
 - Desktop image clipboard/contrast and authenticated Windows VM control integrated;
   combined validation/release checkpoint remains before publishing these changes.
-- Local speech is designed/queued; no runtime or model downloads implemented yet.
+- Local speech: model-cache and isolated CPU Voxtral implementation checkpoints
+  passed private synthetic/silence tests on their source branch; not yet integrated.
+  GPU backends, Kokoro and user-facing controls remain unfinished.
 
 ## Execution order
 
