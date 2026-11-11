@@ -453,7 +453,22 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          KEYTRANS design); clients check inclusion and consistency proofs, monitor
          their own key, and verify contacts automatically; independent auditors
          optional.
+   Design: docs/e2ee.md (identity root → device-signing key → per-device Ed25519 MLS
+   and X-Wing keys; SPAKE2 device linking; 60-digit safety numbers; `akd` key
+   transparency per server; per-sender ordering inside payloads). Spike:
+   spikes/mls (own workspace). **Twelve open questions for the user** are in
+   docs/e2ee.md §10 (recovery key, device-key placement, akd vs KEYTRANS, channel
+   membership, history grants, size cap, voice groups, inactive devices, auditors,
+   release timing, ciphersuite, guests).
 4. **End-to-end encryption (MLS)**
+   - [ ] Wait for the next OpenMLS release before shipping persistent groups:
+         0.9.2 pins libcrux crates with RUSTSEC-2026-0329/-0330/-0331 (a hostile
+         key package can crash the crypto worker) and an X-Wing suite code point
+         that is not in the IETF draft; `main` already has both fixed. Prototype
+         against 0.9.2 meanwhile.
+   - [ ] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, the crypto
+         worker and `nuscheld`; `akd` only in `nuschel-kt`. SECURITY.md: libcrux
+         SIMD `unsafe` in the exceptions table.
    - [ ] Dedicated crypto worker running OpenMLS + libcrux; state in an encrypted
          store; key packages published to the server.
    - [ ] Delivery service in the server: ordered handshake messages per group, key
