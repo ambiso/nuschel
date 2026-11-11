@@ -15,6 +15,7 @@
 //! - [`certificate`]: the signed formats and their issuance.
 //! - [`roster`]: what a verifier accepts ([`VerifiedIdentity`], [`DeviceRoster`]).
 //! - [`safety`]: safety numbers and the QR payload.
+//! - [`link`]: device linking (SPAKE2 short code, X-Wing-sealed bundle).
 //! - [`keystore`]: the encrypted device keystore, recovery key and identity export.
 //! - [`hpke`]: X-Wing HPKE and [`SealedToDevice`].
 //!
@@ -34,6 +35,7 @@ pub mod certificate;
 pub mod hpke;
 pub mod keys;
 pub mod keystore;
+pub mod link;
 pub mod roster;
 pub mod safety;
 
@@ -54,6 +56,10 @@ pub use keys::{
 pub use keystore::{
     DeviceKeystore, DeviceSyncKey, IdentityExport, ImportedIdentity, RecoveryBlob, RecoveryKey,
     StoreKey,
+};
+pub use link::{
+    ExistingAwaitingKeys, ExistingDeviceLink, LinkBundle, LinkCode, LinkDeviceKeys, LinkPake,
+    NewAwaitingBundle, NewDeviceKeys, NewDeviceLink, ProvisionedDevice, ProvisioningBundle,
 };
 pub use roster::{DeviceRoster, VerifiedDevice, VerifiedIdentity};
 pub use safety::{QrComparison, SafetyNumber, SafetyQr};

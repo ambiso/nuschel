@@ -30,6 +30,10 @@ pub(crate) mod kind {
     pub const DEVICE_CREDENTIAL: u8 = 0x03;
     pub const DEVICE_REVOCATION: u8 = 0x04;
     pub const SEALED_TO_DEVICE: u8 = 0x05;
+    pub const LINK_PAKE: u8 = 0x10;
+    pub const LINK_DEVICE_KEYS: u8 = 0x11;
+    pub const LINK_BUNDLE: u8 = 0x12;
+    pub const PROVISIONING_BUNDLE: u8 = 0x13;
     pub const SEALED: u8 = 0x20;
     pub const DEVICE_KEYSTORE: u8 = 0x21;
     pub const ROOT_SECRET: u8 = 0x22;

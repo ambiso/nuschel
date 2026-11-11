@@ -110,6 +110,12 @@ pub(crate) fn hkdf_expand(prk: &[u8; 32], info: &[u8]) -> Zeroizing<[u8; 32]> {
     okm
 }
 
+pub(crate) fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
+    let mut tag = [0u8; 32];
+    libcrux_hmac::hmac(libcrux_hmac::Algorithm::Sha256, key, data, &mut tag);
+    tag
+}
+
 /// ChaCha20-Poly1305 under a key that is used for exactly one message, so the nonce is
 /// fixed at zero. Callers derive the key from a fresh random salt for every message.
 pub(crate) fn seal_once(key: &[u8; 32], aad: &[u8], plaintext: &[u8]) -> Vec<u8> {
@@ -138,6 +144,12 @@ pub(crate) fn open_once(
 fn canonical_point(bytes: &[u8; 32]) -> Option<curve25519_dalek::EdwardsPoint> {
     let point = CompressedEdwardsY(*bytes).decompress()?;
     (point.compress().as_bytes() == bytes).then_some(point)
+}
+
+/// A SPAKE2 element from the peer: canonical, in the prime-order subgroup, not the
+/// identity. (`spake2` 0.4 only decompresses.)
+pub(crate) fn valid_spake2_element(bytes: &[u8; 32]) -> bool {
+    canonical_point(bytes).is_some_and(|p| p.is_torsion_free() && !p.is_small_order())
 }
 
 pub(crate) mod ed25519 {
@@ -460,5 +472,20 @@ mod tests {
             assert!(open_once(&key, b"aad", &broken).is_err());
         }
         assert!(open_once(&key, b"aad", &sealed[..15]).is_err());
+    }
+
+    #[test]
+    fn spake2_elements_must_be_prime_order() {
+        let good = (ED25519_BASEPOINT_POINT * Scalar::from(7u64))
+            .compress()
+            .to_bytes();
+        assert!(valid_spake2_element(&good));
+        for point in EIGHT_TORSION {
+            assert!(!valid_spake2_element(&point.compress().to_bytes()));
+        }
+        let mixed = (ED25519_BASEPOINT_POINT * Scalar::from(7u64) + EIGHT_TORSION[3])
+            .compress()
+            .to_bytes();
+        assert!(!valid_spake2_element(&mixed));
     }
 }

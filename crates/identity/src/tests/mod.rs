@@ -3,6 +3,7 @@
 
 mod formats;
 mod keystore;
+mod linking;
 mod policy;
 
 use crate::{

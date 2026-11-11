@@ -254,6 +254,13 @@ impl DeviceSyncKey {
         Sealed::decode(sealed)?.open(self.key.expose(), Purpose::SyncedData)
     }
 
+    pub(crate) fn duplicate(&self) -> Self {
+        Self {
+            epoch: self.epoch,
+            key: self.key.duplicate(),
+        }
+    }
+
     pub(crate) fn write(&self, writer: &mut Writer) {
         writer.u32(self.epoch);
         writer.bytes(self.key.expose());
@@ -492,6 +499,25 @@ impl DeviceKeystore {
             recovery_blob: None,
             sync_key: None,
         })
+    }
+
+    /// The keystore of a newly linked device.
+    pub fn from_provisioned(
+        device: DeviceKeys,
+        provisioned: crate::ProvisionedDevice,
+    ) -> Result<Self, Error> {
+        let mut store = Self::new(
+            provisioned.identity,
+            device,
+            provisioned.device_certificate,
+            provisioned.device_credential,
+        )?;
+        if let Some(authority) = provisioned.device_signing {
+            store = store.with_device_signing(authority)?;
+        }
+        store.recovery_blob = provisioned.recovery_blob;
+        store.sync_key = provisioned.sync_key;
+        Ok(store)
     }
 
     pub fn with_device_signing(mut self, authority: DeviceSigningAuthority) -> Result<Self, Error> {
