@@ -798,9 +798,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 4. **End-to-end encryption (MLS)** — 4a (delivery service) and 4b (direct
    conversations, multi-device linking) are in (2026-11-11) on OpenMLS 0.9.2 with the
    provisional suite 0x004F and a patch for its vulnerable libcrux pins; see
-   docs/e2ee.md "Phase 4 prototype". End-to-end direct messages are opt-in and
-   experimental (`e2ee_direct_messages`, `nuschel-cli --e2ee`) until the client sends
-   and shows them; the server offers `mls/1` by default.
+   docs/e2ee.md "Phase 4 prototype". End-to-end is a server-level switch
+   (`security = "e2ee"`, capability `e2ee/1`; docs/e2ee.md "Phase 4c and the answers
+   as implemented"); compatible servers offer no `mls/1`.
    - [ ] **Remove the libcrux patch and move to the official OpenMLS release** that
          carries the fixed libcrux crates (hpke-rs-libcrux 0.8, libcrux-kem ≥ 0.0.10,
          libcrux-hmac-drbg ≥ 0.0.2) and the draft's ciphersuite code points, when
@@ -812,20 +812,28 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          accepted that while Nuschel is in early development, so the bump discards
          MLS state instead of migrating it.
    - [ ] The user's answers to docs/e2ee.md §10 (2026-11-11), to implement:
-         - Remove the 1000-device cap (`nuschel_e2ee::MAX_GROUP_DEVICES`, the server's
-           `mls.max_devices`, the client check); bound hostile trees by message size
-           and process limits instead (prevalidate.rs's node bound follows from the
-           input size).
-         - End-to-end is a server-level switch: on an end-to-end server every channel,
+         - [x] Remove the 1000-device cap (`nuschel_e2ee::MAX_GROUP_DEVICES`, the
+           server's `mls.max_devices`, the client check); bound hostile trees by
+           message size and process limits instead (prevalidate.rs's node bound
+           follows from the input size). Done 2026-11-11. Open: today's 2 MiB tree and
+           commit limits cap groups near 1,500 X-Wing devices; raise them with join
+           info and server group state split across frames and records.
+         - [ ] End-to-end is a server-level switch: on an end-to-end server every channel,
            direct message, whisper and shout is end-to-end encrypted (shouts and
            whispers: the sender joins the target's voice group when it sets up the
            voice target); no unencrypted channels, and every Nuschel feature
-           (WebRTC, video, files, several images, typing) is available.
+           (WebRTC, video, files, several images, typing) is available. Done
+           (2026-11-11): `security = "e2ee"` starts, `e2ee/1`, no plaintext text, no
+           `mls/1` on compatible servers. Open: voice, whispers and shouts (SFrame,
+           4e), typing and read markers inside MLS, files.
          - On compatible servers Nuschel clients keep the unencrypted extras
            (history, edits, typing, durable DMs), labelled "not end-to-end
            encrypted" wherever they appear.
-         - Registration required on end-to-end servers; ACLs apply in every case.
-         - The device-signing key on every linked device, phones included.
+         - [x] Registration required on end-to-end servers; ACLs apply in every case.
+           Unregistered connections may register, and otherwise read, write, speak
+           and hear nothing (2026-11-11).
+         - [x] The device-signing key on every linked device, phones included; a
+           bundle without it is refused (2026-11-11).
          - Remove devices inactive for 90 days.
          - History grants to every admitted member by default in `members` channels.
          - Channel membership: subscribers with lazy external joins; every device

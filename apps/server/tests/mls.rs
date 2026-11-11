@@ -40,7 +40,14 @@ use tokio::{
 use tokio_rustls::{TlsConnector, client::TlsStream};
 
 const WAIT: Duration = Duration::from_secs(15);
-const CAPABILITIES: [&str; 5] = ["history/1", "subscribe/1", "typing/1", "kt/1", "mls/1"];
+const CAPABILITIES: [&str; 6] = [
+    "history/1",
+    "subscribe/1",
+    "typing/1",
+    "kt/1",
+    "mls/1",
+    "e2ee/1",
+];
 
 fn now_s() -> u64 {
     std::time::SystemTime::now()
@@ -77,7 +84,7 @@ impl Fixture {
         port: u16,
     ) -> Self {
         let config = Config::from_toml(&format!(
-            "bind = [\"127.0.0.1\"]\nport = {port}\nstate_directory = {:?}\n\
+            "security = \"e2ee\"\nbind = [\"127.0.0.1\"]\nport = {port}\nstate_directory = {:?}\n\
              message_limit = 1000\nmessage_burst = 1000\n\
              [autoban]\nattempts = 0\n[password_hashing]\nmemory_kib = 64\npasses = 1\n\
              [kt]\npublish_interval = 1\n\
@@ -212,6 +219,13 @@ struct Connection {
 
 impl Connection {
     async fn connect(address: SocketAddr, user: &User) -> Self {
+        Self::connect_as(address, user, &CAPABILITIES)
+            .await
+            .expect("admitted")
+    }
+
+    /// A TLS connection offering `alpn`.
+    async fn tls(address: SocketAddr, user: &User, alpn: &[u8]) -> Self {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let mut config = rustls::ClientConfig::builder_with_provider(provider.clone())
             .with_safe_default_protocol_versions()
@@ -223,14 +237,14 @@ impl Connection {
                 PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(user.key.clone())),
             )
             .unwrap();
-        config.alpn_protocols = vec![nuschel::ALPN.to_vec()];
+        config.alpn_protocols = vec![alpn.to_vec()];
         let stream = TcpStream::connect(address).await.unwrap();
         let tls = TlsConnector::from(Arc::new(config))
             .connect(ServerName::try_from("localhost").unwrap(), stream)
             .await
             .unwrap();
         let (reader, writer) = tokio::io::split(tls);
-        let mut connection = Self {
+        Self {
             reader,
             writer,
             buffer: BytesMut::new(),
@@ -238,10 +252,20 @@ impl Connection {
             session: 0,
             log_id: [0; 32],
             capabilities: Vec::new(),
-        };
+        }
+    }
+
+    /// Logs in as a Nuschel client offering `capabilities`; the server's `Reject`
+    /// if it refuses.
+    async fn connect_as(
+        address: SocketAddr,
+        user: &User,
+        capabilities: &[&str],
+    ) -> Result<Self, proto::Reject> {
+        let mut connection = Self::tls(address, user, nuschel::ALPN).await;
         let hello = v1::Hello {
             protocol: nuschel::PROTOCOL,
-            capabilities: CAPABILITIES.iter().map(|c| (*c).to_owned()).collect(),
+            capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
             client_version: String::new(),
@@ -275,12 +299,19 @@ impl Connection {
                 },
             )
             .await;
-        let sync = connection.until(kind::SERVER_SYNC).await;
-        connection.session = proto::ServerSync::decode(sync.payload)
+        let answer = connection
+            .wait(|frame| {
+                matches!(frame.kind, kind::SERVER_SYNC | kind::REJECT).then(|| frame.clone())
+            })
+            .await;
+        if answer.kind == kind::REJECT {
+            return Err(proto::Reject::decode(answer.payload).unwrap());
+        }
+        connection.session = proto::ServerSync::decode(answer.payload)
             .unwrap()
             .session
             .unwrap();
-        connection
+        Ok(connection)
     }
 
     async fn send_bytes(&mut self, frame: &[u8]) {
@@ -893,6 +924,119 @@ async fn a_direct_conversation_through_the_delivery_service() {
         )
         .await;
     assert_eq!(code(&edit), Some(v1::error::Code::Unsupported));
+}
+
+/// End-to-end mode is a server-level switch (docs/e2ee.md §10, answers 7 and 12):
+/// stock clients and Nuschel clients that cannot take part are turned away before
+/// their credentials are read, nothing is sent in plaintext, typing is not offered,
+/// and unregistered connections may register but take no part.
+#[tokio::test]
+async fn the_end_to_end_switch_admits_only_what_can_take_part() {
+    let fixture = Fixture::start().await;
+    let guest = User::new("guest");
+
+    // A stock client (ALPN `mumble` only) is rejected with a reason it can show.
+    let mut stock = Connection::tls(
+        fixture.address(),
+        &guest,
+        nuschel_protocol::nuschel::ALPN_MUMBLE,
+    )
+    .await;
+    let reject = stock.until(kind::REJECT).await;
+    let reject = proto::Reject::decode(reject.payload).unwrap();
+    assert!(
+        reject.reason().contains("requires the Nuschel client"),
+        "{reject:?}"
+    );
+
+    // A Nuschel client without `e2ee/1` (an older one) too, at Authenticate.
+    let old = Connection::connect_as(fixture.address(), &guest, &CAPABILITIES[..5])
+        .await
+        .err()
+        .expect("refused");
+    assert_eq!(old.r#type(), proto::reject::RejectType::WrongVersion);
+    assert!(old.reason().contains("end to end"), "{old:?}");
+    assert_eq!(fixture.running.server.lock().users.len(), 0);
+
+    // An unregistered Nuschel client is admitted: it sees the policy, no typing.
+    let mut g = Connection::connect(fixture.address(), &guest).await;
+    for wanted in ["kt/1", "mls/1", "e2ee/1"] {
+        assert!(
+            g.capabilities.iter().any(|c| c == wanted),
+            "{:?}",
+            g.capabilities
+        );
+    }
+    assert!(!g.capabilities.iter().any(|c| c == "typing/1"));
+    // It may not write anywhere: the lobby's conversation refuses it.
+    let lobby = {
+        let state = fixture.running.server.lock();
+        state.conversation_of_channel(0).unwrap()
+    };
+    let id = request_id();
+    let plain = g
+        .request(
+            nk::CHAT_SEND,
+            &v1::ChatSend {
+                request_id: id,
+                conversation: lobby.to_vec(),
+                idempotency_key: key().to_vec(),
+                format: v1::Format::Text as i32,
+                content: "hello".into(),
+                reply_to: 0,
+            },
+            id,
+        )
+        .await;
+    assert_eq!(code(&plain), Some(v1::error::Code::Unsupported));
+    let id = request_id();
+    let join = g
+        .request(
+            nk::MLS_JOIN_INFO_REQUEST,
+            &v1::MlsJoinInfoRequest {
+                request_id: id,
+                conversation: lobby.to_vec(),
+                tree: false,
+            },
+            id,
+        )
+        .await;
+    assert_eq!(code(&join), Some(v1::error::Code::NotFound));
+    // Stock text is refused with a reason, from anyone.
+    g.send(
+        kind::TEXT_MESSAGE,
+        &proto::TextMessage {
+            channel_id: vec![0],
+            message: "in the clear".into(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let denied = g.until(kind::PERMISSION_DENIED).await;
+    let denied = proto::PermissionDenied::decode(denied.payload).unwrap();
+    assert!(denied.reason().contains("end-to-end"), "{denied:?}");
+
+    // Registration is still possible; a registered account sends no plaintext
+    // either (its conversations are MLS groups).
+    let mut guest = guest;
+    g.register(&mut guest).await;
+    assert_ne!(guest.user_id, 0);
+    let id = request_id();
+    let plain = g
+        .request(
+            nk::CHAT_SEND,
+            &v1::ChatSend {
+                request_id: id,
+                conversation: lobby.to_vec(),
+                idempotency_key: key().to_vec(),
+                format: v1::Format::Text as i32,
+                content: "hello".into(),
+                reply_to: 0,
+            },
+            id,
+        )
+        .await;
+    assert_eq!(code(&plain), Some(v1::error::Code::Unsupported));
 }
 
 #[tokio::test]

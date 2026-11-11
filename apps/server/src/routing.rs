@@ -135,10 +135,17 @@ impl State {
             Ordering::Relaxed,
         );
         let max_bandwidth = u64::from(self.settings.config.max_bandwidth / 8);
+        // On an end-to-end server unregistered connections take no part, voice
+        // included (docs/e2ee.md §10, answer 12).
+        let registered_only = self.end_to_end();
         let Some(user) = self.users.get_mut(&speaker) else {
             return;
         };
-        if user.mute || user.suppress || user.self_mute {
+        if user.mute
+            || user.suppress
+            || user.self_mute
+            || (registered_only && user.account.is_none())
+        {
             return;
         }
         if !user.voice.bandwidth.add_frame(
@@ -191,6 +198,9 @@ impl State {
                 continue;
             };
             if !loopback && (receiver.session == speaker || user.deaf || user.self_deaf) {
+                continue;
+            }
+            if registered_only && user.account.is_none() {
                 continue;
             }
             let protobuf = relay::uses_protobuf(user.info.version);

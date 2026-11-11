@@ -296,10 +296,10 @@ pub struct ClientSettings {
     /// Whether a recovery key is offered when the Nuschel identity is created
     /// (docs/e2ee.md §10, question 1: offered and skippable by default).
     pub recovery_key: nuschel_ipc::crypto::RecoveryPolicy,
-    /// End-to-end encrypted direct messages (experimental): upload key packages
-    /// and create end-to-end groups for direct conversations on `mls/1` servers.
-    /// Off until the client sends and shows them; once a conversation has a group
-    /// the server takes no plaintext there.
+    /// No longer used: end-to-end encryption is a server-level switch (`e2ee/1`,
+    /// docs/e2ee.md §10), not a client setting. Still read, so settings files that
+    /// carry it keep loading; never written.
+    #[serde(skip_serializing)]
     pub e2ee_direct_messages: bool,
     /// Which witnesses every server's key-transparency log must be cosigned by,
     /// and what happens without them (docs/e2ee.md §5.9). The built-in project

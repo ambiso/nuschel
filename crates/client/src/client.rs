@@ -1602,7 +1602,7 @@ impl Client {
                 let history = capabilities
                     .iter()
                     .any(|capability| capability == "history/1");
-                server.mls = capabilities.iter().any(|capability| capability == "mls/1");
+                server.mls = capabilities.iter().any(|capability| capability == "e2ee/1");
                 server.capabilities = capabilities;
                 if !server.has_mumble_voice() {
                     server.audio_status =

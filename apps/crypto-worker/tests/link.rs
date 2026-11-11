@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Device linking in the worker (docs/e2ee.md §3.4): the four steps between two
-//! workers, the linked device holding the same identity and the device-signing key,
-//! and what is refused (a wrong code, a second join, linking without the key).
+//! workers, the linked device holding the same identity and the device-signing key
+//! (every linked device, phones included, can link others: docs/e2ee.md §10, answer
+//! 2), and what is refused (a wrong code, a second join, linking without the key).
 mod common;
 
 use common::*;
@@ -12,6 +13,41 @@ fn view(response: CryptoResponse) -> IdentityView {
         CryptoResponse::Identity(view) => view,
         other => panic!("{other:?}"),
     }
+}
+
+/// Links `new` (no identity yet) to `existing`; the new device's view.
+fn link(existing: &mut Client, new: &mut Client) -> IdentityView {
+    let (code, pake) = offer(existing);
+    let CryptoResponse::LinkJoin { pake, device_keys } = join(new, &code, &pake) else {
+        panic!()
+    };
+    let CryptoResponse::LinkBundle(bundle) =
+        existing.ask(CryptoRequest::LinkApprove { pake, device_keys })
+    else {
+        panic!()
+    };
+    view(new.ask(CryptoRequest::LinkComplete { bundle }))
+}
+
+#[test]
+fn a_linked_phone_links_the_next_device() {
+    let mut laptop = Client::new();
+    let own = view(laptop.ask(CryptoRequest::CreateIdentity {
+        device_name: "laptop".into(),
+        recovery: RecoveryPolicy::Never,
+    }));
+    let mut phone = Client::new();
+    let phone_view = link(&mut laptop, &mut phone);
+    assert!(
+        phone_view.can_link,
+        "the phone holds the device-signing key"
+    );
+    // The laptop is gone; the phone adds a tablet on its own.
+    drop(laptop);
+    let mut tablet = Client::new();
+    let tablet_view = link(&mut phone, &mut tablet);
+    assert_eq!(tablet_view.fingerprint, own.fingerprint);
+    assert!(tablet_view.can_link);
 }
 
 fn offer(existing: &mut Client) -> (String, Vec<u8>) {

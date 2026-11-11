@@ -104,7 +104,9 @@ pub struct ServerState {
     pub bookmark: ServerBookmark,
     pub history_source: HistorySource,
     pub security: SessionSecurity,
-    /// The server negotiated `mls/1` (end-to-end-encrypted direct conversations).
+    /// An end-to-end server (`e2ee/1`, docs/e2ee.md §10): every conversation is an
+    /// MLS group. Without it there is no end-to-end encryption, and the extension's
+    /// extras are labelled "not end-to-end encrypted".
     pub mls: bool,
     /// Channels in display order, then direct conversations.
     pub channels: Vec<ConversationState>,

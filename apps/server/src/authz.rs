@@ -879,8 +879,10 @@ impl State {
 
     // ---- conversations (docs/extension.md §5) ----
 
+    /// Unregistered users read history (`history.guests = "full"`); never on an
+    /// end-to-end server, where they take no part (docs/e2ee.md §10, answer 12).
     fn guests_read(&self) -> bool {
-        self.settings.config.history.guests == GuestHistory::Full
+        self.settings.config.history.guests == GuestHistory::Full && !self.end_to_end()
     }
 
     /// `can_read`: Enter on the channel, being in it or listening to it, with
@@ -945,6 +947,8 @@ impl State {
             return false;
         };
         match self.conversations.kind(id) {
+            // Unregistered users write nowhere on an end-to-end server.
+            Some(Kind::Channel(_)) if user.account.is_none() && self.end_to_end() => false,
             Some(Kind::Channel(channel)) => self.has(session, channel, perm::TEXT_MESSAGE),
             Some(Kind::Direct(a, b)) => {
                 let Some(me) = user.account.filter(|me| *me == a || *me == b) else {

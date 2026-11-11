@@ -57,13 +57,14 @@ pub const SUITE_KEM_PUBLIC_KEY_LEN: usize = 1216;
 /// (private use, docs/e2ee.md §3.3).
 pub const CREDENTIAL_TYPE: u16 = nuschel_identity::MLS_CREDENTIAL_TYPE;
 
-/// End-to-end channels are capped at this many member devices (docs/e2ee.md §6.7,
-/// open question 6; the document's recommendation, as a constant).
-pub const MAX_GROUP_DEVICES: usize = 1000;
-
 /// Devices not seen for this long are removed from groups, and commits are kept at
-/// least this long (the catch-up window, docs/e2ee.md §6.3, open question 8).
+/// least this long (the catch-up window, docs/e2ee.md §6.3; the user's answer to
+/// open question 8).
 pub const INACTIVE_DEVICE_DAYS: u64 = 90;
+
+/// A device that has not opened a channel for this long leaves its group
+/// (subscriber membership, docs/e2ee.md §6.2; the user's answer to open question 4).
+pub const UNOPENED_CHANNEL_DAYS: u64 = 30;
 
 /// What went wrong, as text for logs and the user; never contains secrets.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]

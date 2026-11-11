@@ -291,31 +291,53 @@ pub fn key_package(bytes: &[u8]) -> Result<KeyPackageFacts, Malformed> {
     })
 }
 
-/// Leaves of a ratchet tree in index order (`None`: blank).
-pub type TreeLeaves = Vec<Option<LeafFacts>>;
+/// The leaves of a ratchet tree: how many leaf positions it has, and the present
+/// (non-blank) ones with their index, in index order. Blank leaves are not stored, so
+/// what the parser keeps is never larger than the input: a present leaf takes more
+/// than a kilobyte of it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TreeLeaves {
+    pub width: u32,
+    pub present: Vec<(u32, LeafFacts)>,
+}
+
+impl TreeLeaves {
+    /// Present leaves.
+    pub fn len(&self) -> usize {
+        self.present.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.present.is_empty()
+    }
+}
 
 /// A ratchet tree (RFC 9420 §12.4.3.3 `optional<Node> ratchet_tree<V>`): every leaf
 /// and parent node, so no short key can be planted in a tree a member will encrypt
 /// to. Leaves sit at even positions, parents at odd ones.
+///
+/// There is no member cap (docs/e2ee.md §6.7, the user's answer to open question
+/// 6): the input's size bounds the work. Every node takes at least one byte (its
+/// presence flag), so the walk is linear in the input, and only present leaves are
+/// kept. What bounds a hostile tree is the message size limit of whoever hands it
+/// over (`nuschel_protocol::nuschel::MAX_MLS_TREE_BYTES`) and the process's limits.
 pub fn ratchet_tree(bytes: &[u8]) -> Result<TreeLeaves, Malformed> {
     let mut outer = Reader::new(bytes);
     let mut nodes = outer.vector()?;
     outer.finish()?;
-    let mut leaves = Vec::new();
+    let mut leaves = TreeLeaves::default();
     let mut position = 0usize;
     while !nodes.is_empty() {
         let present = nodes.u8()?;
         let is_leaf = position.is_multiple_of(2);
+        let leaf_index =
+            u32::try_from(position / 2).map_err(|_| Malformed::TooMany("tree nodes"))?;
         match present {
-            0 => {
-                if is_leaf {
-                    leaves.push(None);
-                }
-            }
+            0 => {}
             1 => {
                 let node_type = nodes.u8()?;
                 match (node_type, is_leaf) {
-                    (1, true) => leaves.push(Some(leaf_node(&mut nodes)?)),
+                    (1, true) => leaves.present.push((leaf_index, leaf_node(&mut nodes)?)),
                     (2, false) => {
                         nodes.exact("parent encryption key", SUITE_KEM_PUBLIC_KEY_LEN)?;
                         nodes.opaque()?; // parent hash
@@ -329,11 +351,10 @@ pub fn ratchet_tree(bytes: &[u8]) -> Result<TreeLeaves, Malformed> {
             }
             _ => return Err(Malformed::Value("optional")),
         }
-        position += 1;
-        // A tree of more than 2^20 nodes is far above the 1000-device cap.
-        if position > 1 << 20 {
-            return Err(Malformed::TooMany("tree nodes"));
+        if is_leaf {
+            leaves.width = leaf_index + 1;
         }
+        position += 1;
     }
     Ok(leaves)
 }
@@ -462,6 +483,27 @@ mod tests {
         );
         assert_eq!(Reader::new(&[0xc0; 8]).varint(), Err(Malformed::VarInt));
         assert_eq!(Reader::new(&[0x41]).varint(), Err(Malformed::Truncated));
+    }
+
+    #[test]
+    fn a_tree_costs_what_its_input_does() {
+        // 100,000 blank nodes (a varint length, then one byte each): no member cap,
+        // and nothing kept for blank leaves.
+        let count = 100_000usize;
+        let mut tree = vec![
+            0x80 | (count >> 24) as u8,
+            (count >> 16) as u8,
+            (count >> 8) as u8,
+            count as u8,
+        ];
+        tree.extend(std::iter::repeat_n(0u8, count));
+        let leaves = ratchet_tree(&tree).unwrap();
+        assert!(leaves.is_empty());
+        assert_eq!(leaves.width as usize, count / 2);
+        // A node type in a blank's place is refused, not skipped.
+        let last = tree.len() - 1;
+        tree[last] = 1;
+        assert!(ratchet_tree(&tree).is_err());
     }
 
     #[test]

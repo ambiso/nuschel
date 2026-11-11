@@ -40,9 +40,11 @@ fn worker_present() -> bool {
         .exists()
 }
 
-async fn server(directory: &Path) -> Running {
+/// An end-to-end server (`security = "e2ee"`), or a compatible one.
+async fn server(directory: &Path, e2ee: bool) -> Running {
+    let security = if e2ee { "e2ee" } else { "compatible" };
     let config = Config::from_toml(&format!(
-        "bind = [\"127.0.0.1\"]\nport = 0\nstate_directory = {directory:?}\n\
+        "security = {security:?}\nbind = [\"127.0.0.1\"]\nport = 0\nstate_directory = {directory:?}\n\
          message_limit = 1000\nmessage_burst = 1000\n\
          [autoban]\nattempts = 0\n[password_hashing]\nmemory_kib = 64\npasses = 1\n\
          [kt]\npublish_interval = 1\n",
@@ -67,17 +69,6 @@ struct Cli {
 
 impl Cli {
     async fn spawn(server: &Running, name: &str, profile: &Path, identity: Option<&Path>) -> Self {
-        Self::spawn_with(server, name, profile, identity, true).await
-    }
-
-    /// `e2ee`: opt in to end-to-end direct messages (`--e2ee`).
-    async fn spawn_with(
-        server: &Running,
-        name: &str,
-        profile: &Path,
-        identity: Option<&Path>,
-        e2ee: bool,
-    ) -> Self {
         let address = server.addresses[0];
         let mut command = Command::new(cli());
         command
@@ -98,9 +89,6 @@ impl Cli {
             .kill_on_drop(true);
         if let Some(identity) = identity {
             command.arg("--identity-dir").arg(identity);
-            if e2ee {
-                command.arg("--e2ee");
-            }
         }
         let mut child = command.spawn().expect("nuschel-cli starts");
         let input = child.stdin.take().unwrap();
@@ -243,7 +231,7 @@ async fn two_devices_exchange_direct_messages_through_nuscheld() {
         panic!("build nuschel-crypto-worker first: cargo build -p nuschel-crypto-worker");
     }
     let state = tempfile::tempdir().unwrap();
-    let running = server(state.path()).await;
+    let running = server(state.path(), true).await;
     let directories: Vec<tempfile::TempDir> =
         (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
     let (alice_profile, alice_identity) = (directories[0].path(), directories[1].path());
@@ -304,56 +292,51 @@ async fn two_devices_exchange_direct_messages_through_nuscheld() {
     alice.quit().await;
 }
 
-/// End-to-end direct messages are opt-in (experimental): a device without the
-/// opt-in uploads no key packages and creates no groups, so nobody can turn its
-/// plaintext direct conversations into ones the server refuses plaintext for.
+/// End-to-end encryption is a server-level switch (docs/e2ee.md §10, answer 7): a
+/// compatible server offers no MLS, so a device uploads no key packages and creates
+/// no groups there, and its direct conversations are plaintext (which the client
+/// labels "not end-to-end encrypted").
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn without_the_opt_in_direct_messages_stay_plaintext() {
+async fn a_compatible_server_has_no_end_to_end_encryption() {
     if !worker_present() {
         panic!("build nuschel-crypto-worker first: cargo build -p nuschel-crypto-worker");
     }
     let state = tempfile::tempdir().unwrap();
-    let running = server(state.path()).await;
+    let running = server(state.path(), false).await;
     let directories: Vec<tempfile::TempDir> =
         (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
     let (alice_profile, alice_identity) = (directories[0].path(), directories[1].path());
     let (bob_profile, bob_identity) = (directories[2].path(), directories[3].path());
-    let alice_id = Cli::register(&running, "alice", alice_profile).await;
+    let _alice_id = Cli::register(&running, "alice", alice_profile).await;
     let bob_id = Cli::register(&running, "bob", bob_profile).await;
 
-    let mut bob = Cli::spawn_with(&running, "bob", bob_profile, Some(bob_identity), false).await;
+    let bob = Cli::spawn(&running, "bob", bob_profile, Some(bob_identity)).await;
     let mut alice = Cli::spawn(&running, "alice", alice_profile, Some(alice_identity)).await;
-    alice.key_packages_uploaded().await;
 
-    // Bob has not opted in: he creates no group...
-    bob.send(json!({"kind":"e2ee_open", "user_id":alice_id}))
+    // No end-to-end conversations here...
+    alice
+        .send(json!({"kind":"e2ee_open", "user_id":bob_id}))
         .await;
-    let refused = bob
-        .wait("the opt-in refusal", |event| {
+    let refused = alice
+        .wait("the refusal", |event| {
             (event["kind"] == "e2ee_failed").then(|| event["reason"].clone())
         })
         .await;
     assert!(
-        refused.as_str().unwrap().contains("turned off"),
+        refused.as_str().unwrap().contains("not end-to-end"),
         "{refused}"
     );
-    // ...and has no key packages, so Alice cannot put him into one.
-    alice
-        .send(json!({"kind":"e2ee_open", "user_id":bob_id}))
-        .await;
-    alice
-        .wait("the failed creation", |event| {
-            (event["kind"] == "e2ee_failed").then_some(())
-        })
-        .await;
-    assert!(
-        !bob.backlog
-            .iter()
-            .any(|event| event["kind"] == "e2ee_key_packages"),
-        "no key packages without the opt-in"
-    );
+    // ...and no key packages, so nobody can put a device into a group.
+    for cli in [&alice, &bob] {
+        assert!(
+            !cli.backlog
+                .iter()
+                .any(|event| event["kind"] == "e2ee_key_packages"),
+            "no key packages on a compatible server"
+        );
+    }
 
-    // The direct conversation stays plaintext and keeps working.
+    // The direct conversation is plaintext and works.
     alice
         .send(json!({"kind":"open_direct", "request_id":11, "user_id":bob_id}))
         .await;
@@ -367,7 +350,7 @@ async fn without_the_opt_in_direct_messages_stay_plaintext() {
     alice
         .send(
             json!({"kind":"chat_send", "request_id":12, "conversation":conversation,
-            "content":"still in the clear"}),
+            "content":"in the clear, as labelled"}),
         )
         .await;
     alice

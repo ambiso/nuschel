@@ -803,24 +803,17 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
     .await;
     let negotiated = negotiated.expect("negotiated");
     assert!(negotiated.nuschel);
+    // A compatible server has no end-to-end encryption: no `mls/1`, no `e2ee/1`.
     assert_eq!(
         negotiated.capabilities,
-        [
-            "history/1",
-            "subscribe/1",
-            "typing/1",
-            "kt/1",
-            "mls/1",
-            "kt-witness/1",
-            "share/1",
-            "privacy/1"
-        ]
+        ["history/1", "subscribe/1", "typing/1", "kt/1", "kt-witness/1", "share/1", "privacy/1"]
     );
     // The key-transparency log comes with `kt/1`.
     assert_eq!(negotiated.kt_log.len(), 71);
     let policy = negotiated.policy.unwrap();
     assert_eq!(policy.guests, v1::policy::Guests::None as i32);
     assert_eq!(policy.retention_days, 0, "forever by default");
+    assert_eq!(policy.mode, v1::policy::Mode::Compatible as i32);
     {
         let state = fixture.running.server.lock();
         let user = state.users.get(&session.session).unwrap();
@@ -834,13 +827,14 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
 
 #[tokio::test]
 async fn a_record_the_server_no_longer_meets_fails_before_authenticating() {
-    // A server that dropped `mls/1` (docs/e2ee.md §7.1).
-    let fixture = Fixture::start("[mls]\nenabled = false").await;
+    // An end-to-end server that became a compatible one (docs/e2ee.md §7.1): it
+    // no longer offers `mls/1` and `e2ee/1`.
+    let fixture = Fixture::start("").await;
     let mut wanting = options(fixture.address(), &fixture.running.fingerprint, "Alice", 0);
-    wanting.required = requirement(true, &["mls/1"]);
+    wanting.required = requirement(true, &["mls/1", "e2ee/1"]);
     let error = Session::spawn(wanting).failure().await;
     assert!(
-        matches!(&error, SessionError::Downgrade(text) if text.contains("mls/1")),
+        matches!(&error, SessionError::Downgrade(text) if text.contains("e2ee/1, mls/1")),
         "{error:?}"
     );
     assert!(!error.transient(), "no automatic retry, never a fallback");

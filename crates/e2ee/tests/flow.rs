@@ -293,7 +293,8 @@ fn a_short_xwing_key_in_a_key_package_is_refused_before_libcrux() {
 fn trees_with_short_keys_are_refused() {
     let (_alice, _bob, ds, _group) = pair();
     let (_, tree) = ds.join_info().unwrap();
-    assert_eq!(prevalidate::ratchet_tree(&tree).unwrap().len(), 2);
+    let leaves = prevalidate::ratchet_tree(&tree).unwrap();
+    assert_eq!((leaves.len(), leaves.width), (2, 2));
     // The first leaf's encryption key: after the tree's length prefix (2 or 4
     // bytes), the presence byte and the node type, its own 2-byte length (1216).
     let mut broken = tree.clone();

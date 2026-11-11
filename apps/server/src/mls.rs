@@ -1146,7 +1146,6 @@ impl Service {
                 identities.push(roster.identity);
             }
         }
-        let max_devices = self.config.max_devices as usize;
         let loaded = self.groups.get_mut(group_id).ok_or((Code::NotFound, 0))?;
         if loaded.pending.is_some() {
             return Err((Code::Busy, 500));
@@ -1199,7 +1198,7 @@ impl Service {
             credential_identity(&member.credential)
                 .is_none_or(|(identity, _)| !identities.contains(&identity))
         });
-        if strangers || outcome.members.len() > max_devices {
+        if strangers {
             roll_back(loaded);
             return Err(malformed("a member outside the conversation"));
         }
@@ -1400,8 +1399,14 @@ fn device_id(bytes: &[u8]) -> Result<Device, Failure> {
 }
 
 impl State {
-    /// Whether the conversation has (or is getting) an MLS group: plaintext,
-    /// edits and deletions are refused for it (docs/e2ee.md §7.2).
+    /// The server is in end-to-end mode: every conversation is an MLS group (or
+    /// becomes one), and plaintext, plaintext edits and deletions, and stock text
+    /// are refused (docs/e2ee.md §7.2, §10). The delivery service runs exactly then.
+    pub fn end_to_end(&self) -> bool {
+        self.mls.is_some()
+    }
+
+    /// Whether the conversation has (or is getting) an MLS group.
     pub fn mls_group(&self, conversation: &Id) -> bool {
         self.mls
             .as_ref()

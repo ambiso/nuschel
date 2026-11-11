@@ -214,7 +214,7 @@ impl Fixture {
             Instant::now(),
         );
         user.extension = Some(Box::new(Extension::new(
-            server_capabilities(true, true),
+            server_capabilities(true, true, false),
             &config,
             Instant::now(),
         )));

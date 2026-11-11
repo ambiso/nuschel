@@ -6,8 +6,10 @@
 //!   messages between the devices; the server's linking mailbox comes later. The
 //!   state between steps is kept in memory only: a link takes a minute, and a crash
 //!   simply means starting over with a new code.
-//! - **What the bundle carries** besides the identity: the device-signing key (every
-//!   linked desktop may link others, open question 2's default), the recovery blob
+//! - **What the bundle carries** besides the identity: the device-signing key, which
+//!   every linked device holds, phones included (docs/e2ee.md §10, the user's answer
+//!   2: "you need to be able to add new devices from any device"; a bundle without
+//!   it is refused), the recovery blob
 //!   and device-sync key if this device has them, and as application data (JSON) the
 //!   identity's known device certificates, the pinned logs with our accounts and
 //!   account statements, and the identities verified out of band. The new device
@@ -328,6 +330,15 @@ impl Worker {
         let provisioned = awaiting
             .receive_bundle(&device, &bundle, self.now() / 1000)
             .map_err(|_| "the bundle does not come from this link session")?;
+        // Every linked device can link others (docs/e2ee.md §10, answer 2): a device
+        // that could not would leave the user stuck once the others are gone.
+        if provisioned.device_signing.is_none() {
+            return Err(
+                "the bundle carries no device-signing key, so this device could not link \
+                 others; link it from a device that has one"
+                    .into(),
+            );
+        }
         let data: LinkData = if provisioned.application_data.is_empty() {
             LinkData::default()
         } else {

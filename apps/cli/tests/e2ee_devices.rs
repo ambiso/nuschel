@@ -42,7 +42,7 @@ fn worker_present() -> bool {
 
 async fn server(directory: &Path) -> Running {
     let config = Config::from_toml(&format!(
-        "bind = [\"127.0.0.1\"]\nport = 0\nstate_directory = {directory:?}\n\
+        "security = \"e2ee\"\nbind = [\"127.0.0.1\"]\nport = 0\nstate_directory = {directory:?}\n\
          message_limit = 1000\nmessage_burst = 1000\n\
          [autoban]\nattempts = 0\n[password_hashing]\nmemory_kib = 64\npasses = 1\n\
          [kt]\npublish_interval = 1\n",
@@ -120,7 +120,7 @@ impl Cli {
     ) -> Self {
         let mut command = Self::command(server, name, profile);
         if let Some(identity) = identity {
-            command.arg("--identity-dir").arg(identity).arg("--e2ee");
+            command.arg("--identity-dir").arg(identity);
         }
         command.args(extra);
         let mut cli = Self::start(name, command);

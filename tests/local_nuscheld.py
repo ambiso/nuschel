@@ -21,6 +21,9 @@ class Nuscheld:
 
     def __init__(self, binaries, root, port, extra=""):
         self.binaries, self.root, self.port = Path(binaries), Path(root), port
+        # "compatible" for seeding (stock clients create the channels); a test may
+        # switch to "e2ee" afterwards: the state carries over.
+        self.security = "compatible"
         self.config = self.root / "nuscheld.toml"
         self.password = self.root / "superuser-password"
         self.password.write_text(self.SUPERUSER_PASSWORD)
@@ -31,7 +34,7 @@ class Nuscheld:
 
     def write_config(self, message_limit, message_burst):
         self.config.write_text(
-            f'security = "compatible"\nbind = ["127.0.0.1"]\nport = {self.port}\n'
+            f'security = "{self.security}"\nbind = ["127.0.0.1"]\nport = {self.port}\n'
             f'state_directory = "{self.root / "state"}"\n'
             f'superuser_password_file = "{self.password}"\n'
             'welcome_text = "Welcome to the <b>Nuschel</b> test server."\n'

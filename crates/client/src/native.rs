@@ -962,7 +962,6 @@ async fn connect_once(
                 crypto: crypto.clone(),
                 device_name: device_name(),
                 recovery: settings.borrow().recovery_key,
-                e2ee_direct: settings.borrow().e2ee_direct_messages,
                 witnessing: settings.borrow().key_transparency.clone(),
             }),
         },

@@ -36,15 +36,19 @@ pub mod capability {
     /// MLS (docs/e2ee.md §6): the delivery service, key packages, Welcome
     /// mailboxes. Needs `kt/1`; sticky like every capability.
     pub const MLS: &str = "mls/1";
-    /// Witnessed key transparency (docs/e2ee.md §5.9): checkpoints of the
-    /// server's epoch log with cosignatures attached to heads, and `reg:` and
-    /// `name:` labels. Needs `kt/1`; sticky like every capability.
+    /// End-to-end mode (docs/e2ee.md §10, answer 7): a server-level switch. Every
+    /// conversation is an MLS group and the server takes no plaintext text; needs
+    /// `mls/1` and `kt/1`. Sticky like every capability, so a server that offered
+    /// it cannot quietly become a compatible one. Without it there is no end-to-end
+    /// encryption at all, and the extension's extras are plaintext.
+    pub const E2EE: &str = "e2ee/1";
+    /// Witnessed key transparency; needs `kt/1` (docs/witness.md).
     pub const KT_WITNESS: &str = "kt-witness/1";
     /// Share links (docs/web.md): tokens that open a channel.
     pub const SHARE: &str = "share/1";
     pub const PRIVACY: &str = "privacy/1";
-    pub const ALL: [&str; 8] = [
-        HISTORY, SUBSCRIBE, TYPING, KT, MLS, KT_WITNESS, SHARE, PRIVACY,
+    pub const ALL: [&str; 9] = [
+        HISTORY, SUBSCRIBE, TYPING, KT, MLS, E2EE, KT_WITNESS, SHARE, PRIVACY,
     ];
 }
 

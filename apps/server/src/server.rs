@@ -656,9 +656,11 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         None
     };
     let kt_log = state.kt.as_ref().map(|kt| kt.descriptor.clone());
-    // The MLS delivery service needs key transparency (credentials are checked
-    // against it); its own storage worker too.
-    let mls_service = match (&state.kt, settings.config.mls.enabled) {
+    // End-to-end mode runs the MLS delivery service, which needs key transparency
+    // (credentials are checked against it; the settings require it), on its own
+    // storage worker.
+    let e2ee = settings.config.security == crate::config::Security::E2ee;
+    let mls_service = match (&state.kt, e2ee) {
         (Some(kt), true) => {
             let (handle, service) = mls::open(
                 &settings.config.mls,
@@ -672,6 +674,15 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         _ => None,
     };
     let mls_offered = mls_service.is_some();
+    if e2ee {
+        // Said plainly, so nobody believes more is protected than is (TODO.md,
+        // phase 4; docs/server.md, "Security mode").
+        tracing::warn!(
+            "end-to-end mode: stock clients are refused and text travels only in MLS \
+             groups, but voice, whispers and shouts are not end-to-end encrypted yet \
+             (SFrame, phase 4e), and read markers are still visible to the server"
+        );
+    }
     if state
         .registry
         .users
@@ -743,7 +754,7 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
                 mls_offered,
             )),
         ),
-        capabilities: extension::server_capabilities(kt_log.is_some(), mls_offered),
+        capabilities: extension::server_capabilities(kt_log.is_some(), mls_offered, e2ee),
         shutdown: Notify::new(),
         login_failures: Mutex::new(HashMap::new()),
     });

@@ -24,10 +24,18 @@ pub enum TlsVersion {
 #[serde(rename_all = "snake_case")]
 pub enum Security {
     /// Stock Mumble clients are admitted; there is no end-to-end encryption.
+    /// Nuschel clients get the extension's unencrypted extras (server history,
+    /// edits, typing, durable direct messages), which they label "not end-to-end
+    /// encrypted".
     #[default]
     Compatible,
-    /// End-to-end encrypted conversations; refuses stock clients. Not
-    /// implemented yet: the server refuses to start in this mode.
+    /// End-to-end encryption is a server-level switch (docs/e2ee.md §10, answers
+    /// 7 and 12): stock clients are turned away at the connection stage, every
+    /// conversation is an MLS group (`mls/1`, which needs key transparency), the
+    /// server takes no plaintext text, and unregistered connections take no part
+    /// (they may only register). What is not end-to-end encrypted yet (voice,
+    /// whispers and shouts until SFrame, phase 4e) is logged at start and listed
+    /// in docs/server.md.
     E2ee,
 }
 
@@ -337,18 +345,17 @@ impl Default for Kt {
     }
 }
 
-/// The MLS delivery service (`mls/1`, docs/e2ee.md §6.3). Offered only with key
-/// transparency, which credentials are checked against.
+/// The MLS delivery service (`mls/1`, docs/e2ee.md §6.3). It runs exactly when the
+/// server is in end-to-end mode (`security = "e2ee"`), which needs key
+/// transparency: credentials are checked against it. There is no member cap
+/// (docs/e2ee.md §6.7): message size limits and process limits bound a group.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Mls {
-    pub enabled: bool,
     /// Key-package claims per account and minute.
     pub claims_per_minute: u32,
     /// Key-package uploads per account and minute.
     pub uploads_per_minute: u32,
-    /// Member devices per group (docs/e2ee.md §6.7, open question 6).
-    pub max_devices: u32,
     /// Welcomes older than this are dropped from the mailbox (the catch-up window,
     /// docs/e2ee.md §6.3).
     pub welcome_days: u32,
@@ -357,10 +364,8 @@ pub struct Mls {
 impl Default for Mls {
     fn default() -> Self {
         Self {
-            enabled: true,
             claims_per_minute: 30,
             uploads_per_minute: 10,
-            max_devices: nuschel_e2ee::MAX_GROUP_DEVICES as u32,
             welcome_days: nuschel_e2ee::INACTIVE_DEVICE_DAYS as u32,
         }
     }
@@ -634,10 +639,10 @@ impl Config {
 
     /// Validate and resolve. Fails rather than starting with surprising behaviour.
     pub fn settings(self) -> Result<Settings, ConfigError> {
-        if self.security == Security::E2ee {
+        if self.security == Security::E2ee && !self.kt.enabled {
             return Err(ConfigError::Invalid(
-                "security = \"e2ee\" is not implemented yet; this server would have no \
-                 end-to-end encryption. Use security = \"compatible\" until it is."
+                "security = \"e2ee\" needs key transparency ([kt] enabled = true): every \
+                 member's credential is checked against it"
                     .into(),
             ));
         }
@@ -736,16 +741,8 @@ impl Config {
             )));
         }
         let mls = &self.mls;
-        if mls.claims_per_minute == 0
-            || mls.uploads_per_minute == 0
-            || mls.welcome_days == 0
-            || mls.max_devices == 0
-            || mls.max_devices as usize > nuschel_e2ee::MAX_GROUP_DEVICES
-        {
-            return Err(ConfigError::Invalid(format!(
-                "mls limits must be nonzero, and mls.max_devices at most {}",
-                nuschel_e2ee::MAX_GROUP_DEVICES
-            )));
+        if mls.claims_per_minute == 0 || mls.uploads_per_minute == 0 || mls.welcome_days == 0 {
+            return Err(ConfigError::Invalid("mls limits must be nonzero".into()));
         }
         if self.max_queued_bytes < 64 * 1024 {
             return Err(ConfigError::Invalid(
@@ -843,13 +840,21 @@ mod tests {
     }
 
     #[test]
-    fn unknown_keys_and_e2ee_are_refused() {
+    fn unknown_keys_are_refused_and_e2ee_needs_key_transparency() {
         assert!(Config::from_toml("prot = 1").is_err());
-        let error = Config::from_toml("security = \"e2ee\"")
+        let e2ee = Config::from_toml("security = \"e2ee\"")
+            .unwrap()
+            .settings()
+            .unwrap();
+        assert_eq!(e2ee.config.security, Security::E2ee);
+        let error = Config::from_toml("security = \"e2ee\"\n[kt]\nenabled = false")
             .unwrap()
             .settings()
             .unwrap_err();
-        assert!(error.to_string().contains("not implemented"));
+        assert!(error.to_string().contains("key transparency"));
+        // The member cap and the switch are gone (docs/e2ee.md §6.7, §10).
+        assert!(Config::from_toml("[mls]\nmax_devices = 1000").is_err());
+        assert!(Config::from_toml("[mls]\nenabled = true").is_err());
         assert!(
             Config::from_toml("timeout = 0")
                 .unwrap()
@@ -881,16 +886,12 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("credential"));
         let mls = Config::default().mls;
-        assert!(mls.enabled);
-        assert_eq!((mls.max_devices, mls.welcome_days), (1000, 90));
-        for bad in ["[mls]\nmax_devices = 1001", "[mls]\nclaims_per_minute = 0"] {
-            assert!(Config::from_toml(bad).unwrap().settings().is_err(), "{bad}");
-        }
+        assert_eq!(mls.welcome_days, 90);
         assert!(
-            !Config::from_toml("[mls]\nenabled = false")
+            Config::from_toml("[mls]\nclaims_per_minute = 0")
                 .unwrap()
-                .mls
-                .enabled
+                .settings()
+                .is_err()
         );
         let members = Config::from_toml("[kt]\nhistory = \"members\"").unwrap();
         assert_eq!(members.kt.history, KtHistoryAccess::Members);

@@ -125,12 +125,26 @@ impl Negotiation {
     }
 
     /// At `Authenticate`: why a Nuschel client is refused under the
-    /// minimum-version policy at `now` (Unix seconds), if it is. Stock
-    /// connections never are: the security mode decides about them.
+    /// minimum-version policy at `now` (Unix seconds), or because it cannot take
+    /// part in an end-to-end server (it did not agree on `e2ee/1`), if it is.
+    /// Stock connections never are: the security mode decides about them.
     pub fn refusal(&self, settings: &Settings, now: i64) -> Option<String> {
-        let Self::Agreed { client, .. } = self else {
+        let Self::Agreed {
+            client,
+            capabilities,
+        } = self
+        else {
             return None;
         };
+        if settings.config.security == crate::config::Security::E2ee
+            && !capabilities.has(capability::E2EE)
+        {
+            return Some(
+                "This server encrypts every conversation end to end. Update Nuschel to \
+                 connect."
+                    .into(),
+            );
+        }
         let minimum = settings.minimum_client?;
         (now >= settings.minimum_client_from.unwrap_or(0)
             && version::below(client.as_ref(), minimum))
@@ -215,12 +229,17 @@ impl Extension {
 /// What this server offers: everything, `kt/1` only with a key-transparency log,
 /// and `mls/1` only with `kt/1` and the delivery service (credentials are checked
 /// against key transparency).
-pub fn server_capabilities(kt: bool, mls: bool) -> Capabilities {
+///
+/// In end-to-end mode `typing/1` is not offered: typing indicators are protected
+/// content (docs/e2ee.md §2) and travel only inside MLS, which is not built yet.
+pub fn server_capabilities(kt: bool, mls: bool, e2ee: bool) -> Capabilities {
     Capabilities::from_names(
         capability::ALL
             .into_iter()
             .filter(|name| kt || (*name != capability::KT && *name != capability::KT_WITNESS))
-            .filter(|name| *name != capability::MLS || (kt && mls)),
+            .filter(|name| *name != capability::MLS || (kt && mls))
+            .filter(|name| *name != capability::E2EE || (kt && mls && e2ee))
+            .filter(|name| !e2ee || *name != capability::TYPING),
     )
 }
 
@@ -228,15 +247,20 @@ pub fn server_capabilities(kt: bool, mls: bool) -> Capabilities {
 /// the descriptor of its key-transparency log if it has one.
 pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>, mls: bool) -> v1::Hello {
     let history = &settings.config.history;
+    let e2ee = settings.config.security == crate::config::Security::E2ee;
     let (retention_days, live_only) = crate::retention::wire(history.default_retention());
     v1::Hello {
         protocol: nuschel::PROTOCOL,
-        capabilities: server_capabilities(kt_log.is_some(), mls).names(),
+        capabilities: server_capabilities(kt_log.is_some(), mls, e2ee).names(),
         kt_log: kt_log.map(<[u8]>::to_vec).unwrap_or_default(),
         client_version: String::new(),
         relay_only: false,
         policy: Some(v1::Policy {
-            mode: v1::policy::Mode::Compatible as i32,
+            mode: if e2ee {
+                v1::policy::Mode::E2ee
+            } else {
+                v1::policy::Mode::Compatible
+            } as i32,
             minimum_client: settings.minimum_client.unwrap_or(0),
             recommended_client: settings.recommended_client.unwrap_or(0),
             retention_days,
@@ -284,7 +308,7 @@ mod tests {
 
     #[test]
     fn the_extension_needs_alpn_and_a_hello() {
-        let server = server_capabilities(true, true);
+        let server = server_capabilities(true, true, false);
         // ALPN without a hello fails closed.
         assert_eq!(
             Negotiation::from_alpn(Some(nuschel::ALPN)).freeze(),
@@ -335,7 +359,7 @@ mod tests {
             negotiation
                 .version(
                     &hello_body_from(&["history/1"], client_version),
-                    server_capabilities(true, true),
+                    server_capabilities(true, true, false),
                 )
                 .unwrap();
             negotiation
@@ -362,7 +386,7 @@ mod tests {
         stock
             .version(
                 &hello_body_from(&[], "0.0.1"),
-                server_capabilities(true, true),
+                server_capabilities(true, true, false),
             )
             .unwrap();
         assert_eq!(stock.refusal(&graced, i64::MAX), None);
@@ -383,8 +407,11 @@ mod tests {
     #[test]
     fn at_most_sixteen_requests_are_in_flight_and_ids_are_unique() {
         let config = Config::default();
-        let mut extension =
-            Extension::new(server_capabilities(true, true), &config, Instant::now());
+        let mut extension = Extension::new(
+            server_capabilities(true, true, false),
+            &config,
+            Instant::now(),
+        );
         for id in 0..16 {
             extension.begin(id).unwrap();
         }

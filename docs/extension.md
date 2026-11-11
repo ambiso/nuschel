@@ -29,10 +29,18 @@ Goals, in priority order:
   Murmur ignores ALPN; a Nuschel server selects `nuschel/1`. A server in end-to-end
   mode rejects a client that did not offer it with a `Reject` stock clients can show
   ("This server requires the Nuschel client") and closes without parsing or logging
-  the stock client's `Authenticate`.
+  the stock client's `Authenticate`. **End-to-end mode is a server-level switch**
+  (docs/e2ee.md §10, answer 7), announced as the capability `e2ee/1` (with `mls/1`
+  and `kt/1`, and `Policy.mode = E2EE`): every conversation is an MLS group, the
+  server takes no plaintext, and unregistered connections take no part. A Nuschel
+  client that does not agree on `e2ee/1` is refused at `Authenticate`
+  (`WrongVersion`, "This server encrypts every conversation end to end. Update
+  Nuschel to connect."). Without `e2ee/1` (compatible mode) there is no end-to-end
+  encryption at all: no `mls/1`, and the extension's extras are plaintext, which
+  Nuschel labels "not end-to-end encrypted".
 - After TLS both sides send `Version`. A Nuschel peer adds field 7200 holding a
   `NuschelHello`: protocol version, capabilities (`history/1`, `subscribe/1`,
-  `typing/1`, `files/1`, `mls/1`, `kt/1`; at most 32, each ASCII
+  `typing/1`, `files/1`, `mls/1`, `kt/1`, `e2ee/1`; at most 32, each ASCII
   `[a-z0-9-]+/[0-9]+` up to 64 bytes, unknown ones ignored), and the server's policy
   (mode, minimum and recommended client versions, retention).
 - **The extension is on if and only if ALPN selected `nuschel/1` and both hellos are
@@ -109,19 +117,20 @@ separate protobuf package (`nuschel.v1`) in `crates/protocol`.
 - Voice, channel and user state stay Mumble messages. Video and screen sharing are
   not carried on this connection (see docs/architecture.md, WebRTC).
 
-Message types are reserved in ranges, one per feature:
+**Message type registry** (2026-11-11). Each feature keeps to its range, so work on
+several features never collides:
 
-| Range | Feature |
+| Range | Use |
 | --- | --- |
-| 0x4E00–0x4E13 | Chat, history, subscriptions, typing, direct conversations (`history/1`, `subscribe/1`, `typing/1`) |
+| 0x4E00–0x4E13 | Chat, history, subscriptions, read markers, typing, direct conversations, channel settings (`history/1`, `subscribe/1`, `typing/1`) |
 | 0x4E14–0x4E1F | Key transparency (`kt/1`) |
-| 0x4E20–0x4E2C | MLS (`mls/1`) |
-| 0x4E2D–0x4E2F, 0x4E80–0x4E8F | MLS channels |
-| 0x4E30–0x4E35 | Key-transparency witnesses (`kt-witness/1`); none used yet, the witnessed data travels in fields of the `kt/1` replies |
+| 0x4E20–0x4E2C | MLS delivery service (`mls/1`, phases 4a–4b) |
+| 0x4E2D–0x4E2F, 0x4E80–0x4E8F | MLS channels (phase 4c: server-driven membership, external joins, committer selection, activity) |
+| 0x4E30–0x4E35 | Key-transparency witnesses |
 | 0x4E36 | Connection address privacy (`privacy/1`) |
 | 0x4E40–0x4E5F | Files (`files/1`) |
 | 0x4E60–0x4E67 | Knocking |
-| 0x4E68–0x4E7F | Spam holds and moderation queue |
+| 0x4E68–0x4E7F | Spam holds and the moderation queue |
 | 0x4E90–0x4E97 | Share links (`share/1`, docs/web.md); 0x4E94–0x4E97 reserved |
 
 ## 3. Identifiers
@@ -503,8 +512,16 @@ the wire definition):
   `KtHistory.label` asks for the requester's own `reg:` or `name:` history (anyone
   else's is `not_found`). Lookup replies are now at most 1.5 MiB, status replies
   74 KiB.
-- **MLS** (`mls/1`, docs/e2ee.md "Phase 4 prototype"): needs `kt/1`
-  (a client refuses `mls/1` without it); messages `0x4E20`–`0x4E2C` (key package upload,
+- **End-to-end mode** (`e2ee/1`, docs/e2ee.md §10): offered exactly by servers with
+  `security = "e2ee"`, which also offer `mls/1` and `kt/1` and not `typing/1` (typing
+  indicators are protected content and wait for MLS); a client refuses `e2ee/1`
+  without `mls/1`. Sticky like every capability. In that mode the server refuses
+  `ChatSend`, `ChatEdit`, `ChatDelete` (`unsupported`) and stock `TextMessage`
+  (`PermissionDenied`, "This server only carries end-to-end encrypted messages."),
+  and unregistered connections may register but read, write, speak and hear
+  nothing.
+- **MLS** (`mls/1`, docs/e2ee.md "Phase 4 prototype"): only on end-to-end servers;
+  needs `kt/1` (a client refuses `mls/1` without it); messages `0x4E20`–`0x4E2C` (key package upload,
   status and claim; `MlsCommit` with an optional group init, `MlsAck`, `MlsSend`;
   Welcome push, fetch and acknowledgement; join info), `Error` code `STALE_EPOCH` with
   the group's `epoch` and the conversation's `head`, and the row formats

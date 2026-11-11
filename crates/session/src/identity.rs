@@ -191,13 +191,7 @@ pub struct IdentitySetup {
     /// This device's name in its certificate, if the identity is created now.
     pub device_name: String,
     pub recovery: RecoveryPolicy,
-    /// End-to-end encrypted direct messages (experimental, opt-in): upload key
-    /// packages and create groups on `mls/1` servers. Off, nobody can put this
-    /// device into a group, so plaintext direct conversations keep working;
-    /// groups joined earlier keep working either way.
-    pub e2ee_direct: bool,
-    /// The witnesses to require of key-transparency logs (`key_transparency` in
-    /// the settings; docs/e2ee.md §5.9).
+    /// Required key-transparency witnesses (docs/e2ee.md §5.9).
     pub witnessing: KeyTransparencySettings,
 }
 
@@ -282,8 +276,6 @@ pub struct Driver {
 pub struct MlsLink {
     pub commands: mpsc::Receiver<crate::mls::MlsCommand>,
     pub pushes: mpsc::Receiver<(u16, bytes::Bytes)>,
-    /// [`IdentitySetup::e2ee_direct`].
-    pub enabled: bool,
 }
 
 pub(crate) struct Context {
@@ -300,10 +292,8 @@ pub(crate) struct Context {
     publication_pending: bool,
     /// Our identity exists (created on first need).
     identity_ready: bool,
-    /// End-to-end conversations, with `mls/1`.
+    /// End-to-end conversations, on an end-to-end server (`e2ee/1`).
     pub(crate) mls: Option<crate::mls::MlsState>,
-    /// Key packages and new groups (opt-in, [`IdentitySetup::e2ee_direct`]).
-    pub(crate) mls_enabled: bool,
     /// `kt-witness/1`: replies carry witnessed checkpoints, and our number and name
     /// labels are monitored.
     witness: bool,
@@ -945,9 +935,9 @@ pub async fn drive(driver: Driver) {
         witness,
         witnessing,
     } = driver;
-    let (mut mls_commands, mut pushes, mls_enabled) = match mls {
-        Some(link) => (Some(link.commands), Some(link.pushes), link.enabled),
-        None => (None, None, false),
+    let (mut mls_commands, mut pushes) = match mls {
+        Some(link) => (Some(link.commands), Some(link.pushes)),
+        None => (None, None),
     };
     let mut context = Context {
         crypto,
@@ -962,7 +952,6 @@ pub async fn drive(driver: Driver) {
         publication_pending: false,
         identity_ready: false,
         mls: None,
-        mls_enabled,
         witness,
         witnessing,
         registration: None,
@@ -1072,9 +1061,8 @@ pub async fn drive(driver: Driver) {
                             context.mls_start().await
                         }
                         Ok(()) => {
-                            let enabled = context.mls_enabled;
                             if let Some(mls) = context.mls.as_mut() {
-                                mls.hourly(enabled);
+                                mls.hourly();
                             }
                             Ok(())
                         }

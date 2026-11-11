@@ -23,7 +23,7 @@ use crate::prevalidate::{self, ContentType, WireFormat};
 use crate::provider::{
     MemberInfo, Provider, binding_of, key_package_in, member_info, message_in, serialize, tree_in,
 };
-use crate::{ConversationBinding, Error, MAX_GROUP_DEVICES, SUITE, guard, mls};
+use crate::{ConversationBinding, Error, SUITE, guard, mls};
 use openmls::messages::group_info::VerifiableGroupInfo;
 use openmls::prelude::*;
 use openmls_traits::OpenMlsProvider;
@@ -128,10 +128,7 @@ impl DeliveryGroup {
         server: &[u8; 32],
         conversation: &[u8; 16],
     ) -> Result<(Self, Vec<MemberInfo>), Error> {
-        let leaves = prevalidate::ratchet_tree(tree)?;
-        if leaves.len() > MAX_GROUP_DEVICES {
-            return Err(Error::Invalid("too many members"));
-        }
+        prevalidate::ratchet_tree(tree)?;
         guard(|| {
             let provider = Provider::new()?;
             let info = verifiable_group_info(group_info)?;
@@ -357,10 +354,7 @@ impl DeliveryGroup {
             .map_err(mls)?;
         // Every key a member could later encrypt to, and every leaf's credential type.
         let tree = serialize(&self.public.export_ratchet_tree())?;
-        let leaves = prevalidate::ratchet_tree(&tree)?;
-        if leaves.iter().flatten().count() > MAX_GROUP_DEVICES {
-            return Err(Error::Invalid("too many members"));
-        }
+        prevalidate::ratchet_tree(&tree)?;
         if binding_of(self.public.group_context()) != Some(self.binding) {
             return Err(Error::Invalid(
                 "the commit changed the conversation binding",

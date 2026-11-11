@@ -811,10 +811,12 @@ pub async fn run(
         let mut kt = kt_descriptor.zip(options.crypto).map(|(descriptor, setup)| KtLink {
             descriptor,
             setup,
+            // End-to-end is a server-level switch (`e2ee/1`): on a compatible server
+            // there is none, even if it offers `mls/1`.
             mls: state
                 .extension
                 .as_ref()
-                .is_some_and(|capabilities| capabilities.iter().any(|c| c == nuschel::capability::MLS)),
+                .is_some_and(|capabilities| capabilities.iter().any(|c| c == nuschel::capability::E2EE)),
             witness: state.extension.as_ref().is_some_and(|capabilities| {
                 capabilities
                     .iter()
@@ -892,7 +894,7 @@ pub async fn run(
                             match kt.as_ref().and_then(|link| link.running.as_ref()).and_then(|running| running.mls_commands.as_ref()) {
                                 Some(commands) => { let _ = commands.try_send(command); }
                                 None => emit(&events, SessionEvent::Mls(crate::mls::MlsEvent::Failed(
-                                    "This server offers no end-to-end encryption (mls/1).".into()))).await?,
+                                    "This server is not end-to-end encrypted (it is a compatible server).".into()))).await?,
                             }
                         }
                         Command::SelectVoiceTarget(id) => state.voice_target = id.min(30),
@@ -989,7 +991,6 @@ impl KtLink {
                 Some(crate::identity::MlsLink {
                     commands: commands_rx,
                     pushes: pushes_rx,
-                    enabled: self.setup.e2ee_direct,
                 }),
             )
         } else {
@@ -3320,9 +3321,16 @@ fn negotiate(nuschel: bool, version: &[u8]) -> Result<Negotiated, Error> {
         ));
     }
     // MLS credentials are checked against key transparency: never one without it.
-    if capabilities.iter().any(|c| c == nuschel::capability::MLS) && !kt {
+    let mls = capabilities.iter().any(|c| c == nuschel::capability::MLS);
+    if mls && !kt {
         return Err(Error::Protocol(
             "the server offers end-to-end encryption without key transparency".into(),
+        ));
+    }
+    // An end-to-end server without MLS could carry nothing: fail closed.
+    if capabilities.iter().any(|c| c == nuschel::capability::E2EE) && !mls {
+        return Err(Error::Protocol(
+            "the server says it encrypts end to end but offers no MLS".into(),
         ));
     }
     Ok(Negotiated {

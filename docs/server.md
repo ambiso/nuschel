@@ -27,11 +27,26 @@ Every configuration key is optional; names and defaults follow murmur.ini
 `--database-url-file`, `--tls-certificate-file`/`--tls-key-file`, `--password-file`,
 `--superuser-password-file`, and `--ephemeral` (state in memory only).
 
-- **Security mode.** `security = "compatible"` admits stock clients; Nuschel clients
-  can still use end-to-end encrypted direct conversations (`mls/1`, opt-in on the
-  client while experimental). `"e2ee"`, which rejects stock clients at the connection
-  stage, is not implemented yet: the server refuses to start with it, so nobody
-  believes stock clients are kept out.
+- **Security mode** (a server-level switch, docs/e2ee.md §10, answer 7).
+  `security = "compatible"` (the default for now) admits stock clients and has no
+  end-to-end encryption at all; Nuschel clients get the extension's plaintext extras
+  (server history, edits, typing, durable direct messages) and label them "not
+  end-to-end encrypted". `security = "e2ee"` needs key transparency (`[kt]`, on by
+  default) and:
+  - turns stock clients away at the connection stage (a `Reject` they can show,
+    their `Authenticate` never read), and Nuschel clients that do not agree on
+    `e2ee/1` at `Authenticate` (`WrongVersion`);
+  - runs the MLS delivery service (`mls/1`): every conversation is an MLS group;
+  - refuses plaintext: `ChatSend`, `ChatEdit` and `ChatDelete` (`unsupported`) and
+    stock `TextMessage` (`PermissionDenied`); `typing/1` is not offered;
+  - admits unregistered connections only to register: they read, write, speak and
+    hear nothing (ACLs apply to everyone as usual).
+
+  **Not end-to-end encrypted yet in this mode**, as the server logs at start: voice,
+  whispers and shouts (SFrame with MLS keys, phase 4e); read markers (they become
+  self blobs); files are not offered. Switching a server between the modes keeps its
+  state; clients remember `e2ee/1` (sticky), so a server that drops back to
+  compatible mode is refused by clients that knew it as end-to-end.
 - **Secrets** come from files: `password_file`, `superuser_password_file`,
   `database_url_file`, `private_key`, `kt.signing_key_file`, `kt.vrf_secret_file`.
   The NixOS module passes them through systemd `LoadCredential`
@@ -101,10 +116,10 @@ Every configuration key is optional; names and defaults follow murmur.ini
   for the fan-out budget. Counts only, no names or addresses
   (`journalctl -u nuschel | grep statistics`).
 - **End-to-end encryption** (`[mls]`, docs/e2ee.md "Phase 4
-  prototype"): with key transparency on, the server offers `mls/1` and runs the MLS
-  delivery service (`enabled`, `claims_per_minute` 30, `uploads_per_minute` 10,
-  `max_devices` 1000, `welcome_days` 90). `security = "e2ee"` (rejecting stock clients)
-  is still refused at start.
+  prototype"): in end-to-end mode the server offers `mls/1` and runs the MLS delivery
+  service (`claims_per_minute` 30, `uploads_per_minute` 10, `welcome_days` 90). There
+  is no member cap (the user's decision, docs/e2ee.md §6.7): message size limits bound
+  a group.
 - **History** (`[history]`): kept forever by default (`retention = "forever"`; or
   `"none"`, not archived, or a number of days; channels may set their own, see
   Retention below, never more than `max_retention_days`); guests read

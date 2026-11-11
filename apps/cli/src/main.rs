@@ -72,10 +72,6 @@ struct Arguments {
     /// key transparency (`kt/1`). The worker runs in its sandbox, beside this binary.
     #[arg(long)]
     identity_dir: Option<PathBuf>,
-    /// End-to-end encrypted direct messages (experimental, with --identity-dir on
-    /// `mls/1` servers): upload key packages and let `e2ee_open` create groups.
-    #[arg(long)]
-    e2ee: bool,
     /// Require this key-transparency witness (a C2SP verifier key from
     /// `nuschel-witness vkey`) of every server; repeatable (docs/witness.md).
     #[arg(long = "kt-witness")]
@@ -553,7 +549,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ),
             device_name: format!("{} (nuschel-cli)", args.username),
             recovery: nuschel_ipc::crypto::RecoveryPolicy::Never,
-            e2ee_direct: args.e2ee,
             witnessing: nuschel_ipc::crypto::KeyTransparencySettings {
                 witnesses: args
                     .kt_witnesses

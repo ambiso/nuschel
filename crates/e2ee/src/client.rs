@@ -18,7 +18,7 @@ use crate::provider::{
     Provider, binding_in, binding_of, capabilities, group_context_extensions, join_config,
     key_package_in, member_info, message_in, serialize, tree_in, wire_policy,
 };
-use crate::{CREDENTIAL_TYPE, ConversationBinding, Error, MAX_GROUP_DEVICES, SUITE, guard, mls};
+use crate::{CREDENTIAL_TYPE, ConversationBinding, Error, SUITE, guard, mls};
 use nuschel_identity::{DeviceCredential, DeviceKeys};
 use openmls::prelude::*;
 use openmls_traits::OpenMlsProvider;
@@ -131,19 +131,13 @@ pub struct Client {
 }
 
 fn members_of_tree(bytes: &[u8]) -> Result<Vec<MemberInfo>, Error> {
-    let leaves = prevalidate::ratchet_tree(bytes)?;
-    if leaves.iter().flatten().count() > MAX_GROUP_DEVICES {
-        return Err(Error::Invalid("too many members"));
-    }
-    Ok(leaves
+    Ok(prevalidate::ratchet_tree(bytes)?
+        .present
         .into_iter()
-        .enumerate()
-        .filter_map(|(index, leaf)| {
-            leaf.map(|leaf| MemberInfo {
-                index: index as u32,
-                credential: leaf.credential,
-                signature_key: leaf.signature_key.to_vec(),
-            })
+        .map(|(index, leaf)| MemberInfo {
+            index,
+            credential: leaf.credential,
+            signature_key: leaf.signature_key.to_vec(),
         })
         .collect())
 }

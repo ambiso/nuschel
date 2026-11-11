@@ -21,7 +21,7 @@ from mumble_client import Client, certificate_pin
 
 
 def connect(args, pin, name, profile, identity=None):
-    extra = ["--identity-dir", str(identity), "--e2ee"] if identity else []
+    extra = ["--identity-dir", str(identity)] if identity else []
     return Client(args.binaries, args.host, args.port, pin, name, profile, extra)
 
 
@@ -76,7 +76,8 @@ def first_phase(args, pin, root, token):
 
     bob = connect(args, pin, bob_name, root / "bob", root / "bob-identity")
     negotiated = next(event for event in bob.events if event["kind"] == "negotiated")
-    assert "mls/1" in negotiated["capabilities"], negotiated
+    # An end-to-end server (`security = "e2ee"`): the switch is `e2ee/1`.
+    assert {"mls/1", "e2ee/1"} <= set(negotiated["capabilities"]), negotiated
     key_packages(bob)
     alice = connect(args, pin, alice_name, root / "alice", root / "alice-identity")
     key_packages(alice)

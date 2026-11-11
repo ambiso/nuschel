@@ -6,9 +6,10 @@ MLS) is implemented: `nuschel-identity`, `nuschel-kt`, the crypto worker
 `nuschel-session` and the desktop; "Phase 3 as implemented" at the end lists what the
 implementation settled. Phases 4a (delivery service) and 4b (direct conversations) are
 implemented on OpenMLS 0.9.2 with a patch for its vulnerable libcrux pins and the
-provisional suite code point; end-to-end direct messages are opt-in until the client
-shows them. "Phase 4 prototype" at the end describes it, and how to move to the
-OpenMLS release with the draft's code points (§1.1, §1.4). It covers roadmap phases 3
+provisional suite code point; end-to-end mode is a server-level switch
+(`security = "e2ee"`, `e2ee/1`). "Phase 4 prototype" at the end describes it, and how
+to move to the OpenMLS release with the draft's code points (§1.1, §1.4); "Phase 4c
+and the answers as implemented" covers the user's answers to §10 and channels. It covers roadmap phases 3
 (identity, key transparency) and 4 (MLS) in TODO.md, "Nuschel server", and builds on
 the framing, identifiers and policies of [docs/extension.md](extension.md). Claims
 marked *(spike)* are checked by tests in [`spikes/mls`](../spikes/mls), a standalone
@@ -1031,9 +1032,15 @@ Consequences:
 - The server batches ACL-driven changes into one task and names one committer.
 - Channel membership is subscribers, not every possible reader (§6.2).
 - **No size cap** (user, 2026-11-11): "MLS is designed to handle large groups". The
-  prototype's 1000-device cap (`MAX_GROUP_DEVICES`) is to be removed; what bounds a
-  hostile tree is the message size limit and the crypto worker's process limits, not a
-  member count.
+  prototype's 1000-device cap is gone (`MAX_GROUP_DEVICES`, `mls.max_devices` and the
+  client's check). What bounds a hostile tree is the message size limit and the
+  process limits, not a member count: prevalidation's work is linear in its input
+  (every node takes at least one byte, and only present leaves are kept, so what it
+  keeps is never larger than the input). With today's limits (a tree or commit of
+  2 MiB, `nuschel::MAX_MLS_TREE_BYTES`, `MAX_MLS_HANDSHAKE_BYTES`; 8 MiB control
+  frames) the practical ceiling is around 1,500 X-Wing devices per group; larger
+  groups need those limits raised and the join info and the server's group state
+  split across frames and records (listed in "What remains").
 
 ### 6.8 Files
 
@@ -1501,12 +1508,11 @@ Where §6–§10 left room, with the reason:
     with an old cursor. It stands in for the log-structured store of §8.3, which remains
     to be written (whole-file rewrites leave old ciphertext on disk until the weekly
     re-keying of §8.3 exists).
-12. **Open questions** (§10), taken as recommended where it cost nothing: the 1000-device
-    cap is `nuschel_e2ee::MAX_GROUP_DEVICES`, enforced by the server and the client; the
-    90-day bound is `INACTIVE_DEVICE_DAYS` (commits stay in the stream: retention and
-    `--erase-user` never tombstone `MLS_HANDSHAKE` rows; removing inactive devices is not
-    implemented); the device-signing key goes to every linked device (question 2's
-    default: every desktop).
+12. **Open questions** (§10), now answered by the user and implemented as described
+    in "Phase 4c and the answers as implemented": no member cap; the 90-day bound is
+    `INACTIVE_DEVICE_DAYS` (commits stay in the stream: retention and `--erase-user`
+    never tombstone `MLS_HANDSHAKE` rows); the device-signing key goes to every linked
+    device, phones included, and a bundle without it is refused.
 13. **Linking and several devices per identity.** The provisioning bundle carries the
     device-signing key, the recovery blob and device-sync key if present, and as
     application data the identity's device certificates, every pinned server (log
@@ -1537,13 +1543,11 @@ Where §6–§10 left room, with the reason:
     changed the X-Wing key derivation and code that is not ours to maintain, for groups
     that break at the bump anyway. Prevalidation and `catch_unwind` stay: a planted short
     key would no longer crash anyone, but it would still break every later commit.
-16. **Opt-in end-to-end direct messages.** The desktop does not send or show
-    end-to-end messages yet (the client SDK will), and the server refuses plaintext in
-    a conversation that has a group. So group creation is behind
-    `ClientSettings.e2ee_direct_messages` (off by default; `nuschel-cli --e2ee`):
-    without it the session uploads no key packages and creates no groups, so nobody
-    can add the device to a group and its direct conversations stay plaintext. Groups
-    joined earlier keep working. The server offers `mls/1` by default.
+16. **Superseded: opt-in end-to-end direct messages.** The prototype put group
+    creation behind `ClientSettings.e2ee_direct_messages` and offered `mls/1` on
+    compatible servers. End-to-end is now a server-level switch (§10, answer 7):
+    `mls/1` exists only on end-to-end servers (`e2ee/1`), where every conversation is a
+    group, and the setting is ignored (still read, so settings files keep loading).
 17. **Main's server rules.** Every MLS permission decision goes through `authz.rs`
     (`Action::MlsUpload`, `MlsClaim`, `MlsCommit`, `MlsSend`, `MlsMailbox`,
     `MlsJoinInfo`), and MLS commits are exempt from retention and the erase in the one
@@ -1554,8 +1558,8 @@ Where §6–§10 left room, with the reason:
 `apps/server/src/mls.rs`, built like the key-transparency task: requests are authorised
 under the state lock and processed in one task that owns the groups, through
 nuschel-e2ee only; answers go out under the lock. It runs only with `kt/1` and
-`[mls] enabled` (default on; `claims_per_minute` 30, `uploads_per_minute` 10,
-`max_devices` 1000 capped at the group limit, `welcome_days` 90).
+`security = "e2ee"` (`claims_per_minute` 30, `uploads_per_minute` 10, `welcome_days`
+90).
 
 - **Key packages.** An upload is refused (`NOT_FOUND`) until the account has a
   published KT binding; each package's credential must name the bound identity and
@@ -1696,3 +1700,50 @@ libcrux-kem and libcrux-hmac-drbg):
 - The server is trusted for availability only, as designed: it can withhold Welcomes
   or drop messages (shown as gaps), and the lock turns amber; it cannot add a device
   the identity's KT roster does not list without blocking the conversation.
+
+## Phase 4c and the answers as implemented (2026-11-11)
+
+The user's answers to §10 (above), and what the code does with them.
+
+### End-to-end is a server-level switch (answers 7 and 12)
+
+- **`security = "e2ee"`** starts now (it used to be refused). It needs key
+  transparency, runs the delivery service and offers the capability **`e2ee/1`** with
+  `mls/1` and `kt/1` (and `Policy.mode = E2EE`). `mls/1` exists only in this mode: a
+  compatible server has no end-to-end encryption at all, which is what "a server is
+  either legacy/Mumble-compatible or a Nuschel server where everything is end-to-end
+  encrypted" asks for. `e2ee/1` is sticky like every capability, so a server that
+  falls back to compatible mode is refused by clients that knew it as end-to-end
+  (§7.1), and a client refuses `e2ee/1` without `mls/1`.
+- **Who takes part.** Stock clients are rejected at the connection stage, before their
+  `Authenticate` is read; Nuschel clients that do not agree on `e2ee/1` (older ones)
+  at `Authenticate` with `WrongVersion`. Unregistered connections are admitted so that
+  people can register (self-registration is a stock Mumble flow), but take no part:
+  no reading (`history.guests` is ignored), no writing, and the server routes no
+  voice from or to them. ACLs apply to everyone as before.
+- **No plaintext.** `ChatSend`, `ChatEdit`, `ChatDelete` and stock `TextMessage` are
+  refused in every conversation; text travels only as MLS application messages, in
+  channels too (below). `typing/1` is not offered: typing indicators are protected
+  content (§2) and become MLS messages later.
+- **Not end-to-end encrypted yet** on such a server, said in the server's log at start,
+  in docs/server.md and in the client's labels: voice, whispers and shouts (SFrame
+  with MLS exporter keys, 4e; the voice badge stays "transport only"), read markers
+  (still `ReadMarker` seqs; self blobs, §3.7), and files are not offered.
+- **Compatible servers.** Nuschel clients keep the extension's extras (server history,
+  edits, typing, durable direct messages) and label them "not end-to-end encrypted".
+- The client follows the server: `ClientSettings.e2ee_direct_messages` and
+  `nuschel-cli --e2ee` are gone (the setting is still read, never written).
+
+### No size cap (answer 6)
+
+`MAX_GROUP_DEVICES`, `[mls] max_devices` and the worker's check are removed;
+prevalidation is linear in its input and keeps only present leaves (§6.7 says what
+bounds a group today).
+
+### The device-signing key on every linked device (answer 2)
+
+The provisioning bundle always carries the device-signing key, and a new device
+refuses a bundle without it, so every linked device (phones included) can link the
+next one; `apps/crypto-worker/tests/link.rs` links a tablet from a phone after the
+laptop is gone. A stolen unlocked device can therefore add devices until it is revoked;
+that stays visible in key transparency, to self-monitoring and to contacts.

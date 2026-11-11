@@ -1518,6 +1518,18 @@ impl State {
         if self.rate_limited(source) {
             return;
         }
+        // An end-to-end server carries text only inside MLS groups (docs/e2ee.md
+        // §10, answer 7); only Nuschel clients get this far, and they never send
+        // plaintext there.
+        if self.end_to_end() {
+            self.deny_with(
+                source,
+                DenyType::Text,
+                Some("This server only carries end-to-end encrypted messages."),
+                None,
+            );
+            return;
+        }
         match text::check(&message.message, self.text_limits()) {
             Err(text::TooLong) => {
                 self.deny_type(source, DenyType::TextTooLong);
@@ -1612,12 +1624,6 @@ impl State {
                 if let Some(peer) = self.users.get(session).and_then(|user| user.account)
                     && peer != sender
                     && self.allowed(source, Action::SendDirect { peer: &peer })
-                    // An end-to-end conversation never stores plaintext; the
-                    // message still arrives live, outside it.
-                    && !self
-                        .conversations
-                        .direct(sender, peer)
-                        .is_some_and(|id| self.mls_group(&id))
                 {
                     directs.insert(peer);
                 }

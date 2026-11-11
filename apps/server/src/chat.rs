@@ -338,8 +338,8 @@ impl State {
 
     fn chat_send(&mut self, session: u32, message: v1::ChatSend) -> Result<(), Failure> {
         let id = conversation(&message.conversation)?;
-        // An end-to-end conversation never takes plaintext (docs/e2ee.md §7.2).
-        if self.mls_group(&id) {
+        // An end-to-end server never takes plaintext (docs/e2ee.md §7.2, §10).
+        if self.end_to_end() {
             return Err(fail(Code::Unsupported));
         }
         let key = nuschel::id(&message.idempotency_key).ok_or(fail(Code::Malformed))?;
@@ -407,7 +407,7 @@ impl State {
     fn chat_edit(&mut self, session: u32, message: v1::ChatEdit) -> Result<(), Failure> {
         let id = conversation(&message.conversation)?;
         // Edits in end-to-end conversations are envelopes inside MLS.
-        if self.mls_group(&id) {
+        if self.end_to_end() {
             return Err(fail(Code::Unsupported));
         }
         if message.format != v1::Format::Text as i32 || message.content.is_empty() {
@@ -469,7 +469,7 @@ impl State {
         let id = conversation(&message.conversation)?;
         // Deletions in end-to-end conversations are envelopes inside MLS, and a
         // commit row must never become a tombstone (docs/e2ee.md §6.3).
-        if self.mls_group(&id) {
+        if self.end_to_end() {
             return Err(fail(Code::Unsupported));
         }
         self.text_limited(session)?;
