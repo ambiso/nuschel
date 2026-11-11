@@ -743,8 +743,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          - The device-signing key on every linked device, phones included.
          - Remove devices inactive for 90 days.
          - History grants to every admitted member by default in `members` channels.
-         - Channel membership mode: pending the user's answer (recommendation:
-           subscribers with lazy external joins).
+         - Channel membership: subscribers with lazy external joins; every device
+           with `can_read` still gets the channel's latest `seq` (unread, activity)
+           without being a member.
+         - Voice: one MLS group per voice channel of the devices present or
+           listening (SFrame keys from it).
+         - Key transparency witnesses: the other servers a client uses witness each
+           other, plus one project-run auditor enabled by default once the user
+           deploys it (built now, switched on by its key and endpoint); configurable
+           in global settings and Home Manager; a NixOS module to deploy it. Design
+           in docs/reviews/2026-11-11-key-transparency.md (in progress).
    - [x] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, which only the
          crypto worker and `nuscheld` link; no advisory ignores (patched instead).
          SECURITY.md: libcrux SIMD `unsafe` in the exceptions table.

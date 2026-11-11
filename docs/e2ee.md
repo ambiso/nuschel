@@ -1176,15 +1176,17 @@ on flash become unreadable once the old key is gone from the OS credential store
 ### Answers (user, 2026-11-11)
 
 1. **Recovery key:** skippable; offered by default (as implemented).
-2. **Device-signing key:** on every linked device, phones included ("probably all
-   devices should be able to add new devices"). A stolen unlocked device can then add
+2. **Device-signing key:** on every linked device, phones included ("you need to be
+   able to add new devices from any device"). A stolen unlocked device can then add
    devices until revoked; that stays visible (KT, self-monitoring, contacts see a new
    device).
 3. **Key transparency backend:** akd. Follow-up: witnessing across federated servers
    (docs/reviews/2026-11-11-key-transparency.md).
-4. **Channel membership:** explained to the user (subscribers with lazy external
-   joins versus every device with `can_read`); answer pending, the recommendation
-   stands meanwhile.
+4. **Channel membership:** subscribers with lazy external joins. But a device that
+   may read a channel must still learn that messages were sent there, so it knows
+   where conversations happen: the server tells every device with `can_read` the
+   channel's latest `seq` (unread counts, activity) without it being a member; the
+   content arrives once the device joins (history grants, answer 5).
 5. **History grants:** `members` channels grant history to every admitted member
    automatically; this is the default setting.
 6. **Size cap:** none. MLS commits scale logarithmically; the cost is the tree a joiner
@@ -1194,12 +1196,15 @@ on flash become unreadable once the old key is gone from the OS credential store
    or a Nuschel server where everything is end-to-end encrypted and every Nuschel
    feature is available (WebRTC, video, files, several images per message, typing,
    …). Shouts and whispers are therefore encrypted too: a device joins a target
-   channel's voice group as a sender when it sets up the voice target. Voice groups per
-   channel of present devices were explained to the user; recommendation stands.
+   channel's voice group as a sender when it sets up the voice target. Voice: one MLS
+   group per voice channel of exactly the devices present or listening (confirmed).
 8. **Inactive devices:** removed after 90 days.
-9. **Auditors:** the user would like every Nuschel server a client is connected to to
-   act as an auditor/witness; being worked out in the key-transparency review (the
-   client chooses witnesses; the single-server case needs a default witness set).
+9. **Auditors:** every Nuschel server a client is connected to acts as a witness for
+   the others (the client chooses witnesses, never the witnessed server), plus **one
+   project-run auditor, enabled by default**. The user will deploy it later, so
+   everything is built to switch on once its key and endpoint exist; it is
+   configurable in the client's global settings and the Home Manager module, and
+   deployable with a NixOS module. Protocol: docs/reviews/2026-11-11-key-transparency.md.
 10. **Release timing:** decided earlier: ship on OpenMLS 0.9.2 with the libcrux patch;
     breaking changes are acceptable during early development.
 11. **Ciphersuite:** the draft's AES-128-GCM X-Wing suite
