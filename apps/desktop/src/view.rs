@@ -6,6 +6,7 @@ use crate::{
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
     menus::MenuTarget,
     names,
+    scrolling::Focus,
     selection::{self, BlockText, Caret, HoveredLink, SelectionArea, TextBox, Texts},
     state::{COLLAPSED_HEIGHT, ChannelRow, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
@@ -51,7 +52,7 @@ impl Render for Desktop {
                 Some((server, channel)) => body
                     .child(sidebar(self, server, channel, cx))
                     .child(sidebar_handle(self, cx))
-                    .child(conversation(self, server, channel, cx)),
+                    .child(conversation(self, server, channel, window, cx)),
                 None => body.child(dialogs::empty(cx)),
             });
         let content = div()
@@ -1373,10 +1374,18 @@ impl Desktop {
     }
 }
 
+/// An entry of the timeline: an activity line, or a message (which may share
+/// the previous message's header).
+enum Entry {
+    Activity(usize),
+    Message { position: usize, grouped: bool },
+}
+
 fn conversation(
     this: &Desktop,
     index: usize,
     channel_index: usize,
+    window: &Window,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let server = &this.servers[index];
@@ -1387,35 +1396,73 @@ fn conversation(
         .voice_channel()
         .is_some_and(|voice| channel.target == TextTarget::Channel(voice));
     let anchor = this.anchor.frame();
-    let mut messages = Vec::new();
+    // The timeline in order: activity lines among the messages, by time.
+    let mut entries = Vec::with_capacity(channel.messages.len() + channel.activity.len());
     let mut previous: Option<(&str, i64)> = None;
     let mut activity = channel.activity.iter().enumerate().peekable();
     for (position, message) in channel.messages.iter().enumerate() {
-        while let Some((index, line)) =
+        while let Some((index, _)) =
             activity.next_if(|(_, line)| line.observed_at_ms <= message.observed_at_ms)
         {
-            messages.push(activity_row(line, index));
+            entries.push(Entry::Activity(index));
             previous = None;
         }
         let grouped = previous.is_some_and(|(author, at)| {
             author == message.author && message.observed_at_ms.saturating_sub(at) < GROUP_MS
         });
         previous = Some((&message.author, message.observed_at_ms));
-        let author = names::author(
-            &message.author,
-            server.users.values(),
-            channel.direct_peer.as_ref(),
-        );
-        let row = message_row(this, server, channel, position, author, grouped, cx);
-        let row = crate::search::mark_jumped(this, message.id, row);
-        messages.push(match message.id {
-            Some(id) => anchor.row(id, row),
-            None => row,
-        });
+        entries.push(Entry::Message { position, grouped });
     }
-    for (index, line) in activity {
-        messages.push(activity_row(line, index));
-    }
+    entries.extend(activity.map(|(index, _)| Entry::Activity(index)));
+    // Only what is near the viewport is laid out, the welcome first.
+    let height = |entry: &Entry| match *entry {
+        Entry::Activity(index) => &channel.activity[index].height,
+        Entry::Message { position, .. } => &channel.messages[position].height,
+    };
+    let heights: Vec<Pixels> = std::iter::once(this.anchor.intro())
+        .chain(entries.iter().map(height))
+        .map(|height| height.get())
+        .collect();
+    // A search result waiting to be revealed is laid out wherever it is;
+    // otherwise the newest, or below the timeline's top padding.
+    let revealing = this.anchor.revealing().and_then(|id| {
+        entries.iter().position(|entry| {
+            matches!(*entry, Entry::Message { position, .. } if channel.messages[position].id == Some(id))
+        })
+    });
+    let focus = match revealing {
+        Some(entry) => Focus::Entry(entry + 1),
+        None if this.following => Focus::Newest,
+        None => Focus::Offset(-this.scroll.offset().y - px(16.)),
+    };
+    let shown = crate::scrolling::shown(&heights, focus, window.viewport_size().height);
+    let rows: Vec<AnyElement> = shown
+        .range
+        .clone()
+        .map(|index| {
+            let Some(entry) = index.checked_sub(1).map(|entry| &entries[entry]) else {
+                let intro = timeline_intro(this, server, channel, cx);
+                return anchor.row(None, this.anchor.intro(), intro);
+            };
+            match *entry {
+                Entry::Activity(index) => {
+                    let line = &channel.activity[index];
+                    anchor.row(None, &line.height, activity_row(line, index))
+                }
+                Entry::Message { position, grouped } => {
+                    let message = &channel.messages[position];
+                    let author = names::author(
+                        &message.author,
+                        server.users.values(),
+                        channel.direct_peer.as_ref(),
+                    );
+                    let row = message_row(this, server, channel, position, author, grouped, cx);
+                    let row = crate::search::mark_jumped(this, message.id, row);
+                    anchor.row(message.id, &message.height, row)
+                }
+            }
+        })
+        .collect();
     // Prepending happens while the reader looks up the timeline, with no
     // button or separate mode: the anchor keeper asks once the top is near.
     let older =
@@ -1658,6 +1705,9 @@ fn conversation(
                     .flex()
                     .flex_col()
                     .child(anchor.keeper(&this.scroll, !this.following, older))
+                    .when_some(this.text.selection, |view, selection| {
+                        view.child(selection::timeline_handlers(cx.weak_entity(), selection))
+                    })
                     .child(
                         div()
                             .id(SharedString::from(format!(
@@ -1691,8 +1741,9 @@ fn conversation(
                                     .on_scroll(cx.listener(|this, event, window, cx| {
                                         this.smooth_scroll(false, event, window, cx)
                                     }))
-                                    .child(timeline_intro(this, server, channel, cx))
-                                    .children(messages),
+                                    .child(div().flex_shrink_0().h(shown.above))
+                                    .children(rows)
+                                    .child(div().flex_shrink_0().h(shown.below)),
                             ),
                     )
                     .when_some(jump_pill(this, channel, cx), |view, pill| view.child(pill)),

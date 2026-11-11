@@ -763,17 +763,68 @@ fn names_target(text: &str, url: &str) -> bool {
     bare(text) == bare(url)
 }
 
+/// While text is selected, any press clears the selection (one on text starts
+/// another, see [`SelectionArea`]), and releasing the button ends a drag. With
+/// the timeline, not its messages: those holding the selection's ends may be
+/// scrolled out of what is laid out.
+pub fn timeline_handlers(
+    desktop: WeakEntity<Desktop>,
+    selection: TextSelection,
+) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |_, _, window, _| {
+            let clear = desktop.clone();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
+                if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                    let _ = clear.update(cx, |this, cx| {
+                        if this.text.selection.take().is_some() {
+                            cx.notify();
+                        }
+                    });
+                }
+            });
+            if !selection.dragging {
+                return;
+            }
+            // The drag ends; what is selected is also the primary selection,
+            // for middle-click paste.
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                    return;
+                }
+                let _ = desktop.update(cx, |this, cx| {
+                    let Some(selection) = this
+                        .text
+                        .selection
+                        .as_mut()
+                        .filter(|selection| selection.dragging)
+                    else {
+                        return;
+                    };
+                    selection.dragging = false;
+                    this.text.scrolling = None;
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                    if let Some(text) = this.selected_text() {
+                        cx.write_to_primary(ClipboardItem::new_string(text));
+                    }
+                    cx.notify();
+                });
+            });
+        },
+    )
+    .absolute()
+    .size_0()
+}
+
 /// Wraps a message's blocks: a press on its text starts a selection (a double
 /// click takes a word, a triple click a line), dragging extends it, into
-/// other messages too, and any other press clears it. A click on a link
-/// without dragging opens it.
+/// other messages too, and any other press clears it (see
+/// [`timeline_handlers`]). A click on a link without dragging opens it.
 pub struct SelectionArea {
     desktop: WeakEntity<Desktop>,
     message: Order,
-    /// Whether some of the selection is in this message, whether the
-    /// selection starts or ends in it, and whether its button is down.
-    selected: bool,
-    end: bool,
+    /// Whether the selection's button is down.
     dragging: bool,
     candidate: Rc<Cell<Option<Candidate>>>,
     /// The block and link under the pointer, if in this message.
@@ -795,10 +846,6 @@ impl SelectionArea {
         Self {
             desktop,
             message,
-            selected: selection.is_some_and(|selection| selection.carets(message).is_some()),
-            end: selection.is_some_and(|selection| {
-                selection.origin.0.message == message || selection.head.message == message
-            }),
             dragging: selection.is_some_and(|selection| selection.dragging),
             candidate: state.candidate.clone(),
             hovered,
@@ -945,19 +992,6 @@ impl Element for SelectionArea {
             self.track_links(hitboxes, window);
         }
         let message = self.message;
-        if self.selected || self.end {
-            // Any press clears the selection; one on text starts another below.
-            let desktop = self.desktop.clone();
-            window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
-                if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
-                    let _ = desktop.update(cx, |this, cx| {
-                        if this.text.selection.take().is_some() {
-                            cx.notify();
-                        }
-                    });
-                }
-            });
-        }
         if self.dragging {
             // This message offers its caret nearest the pointer; the nearest
             // message's wins, and the head moves there once per move.
@@ -993,33 +1027,6 @@ impl Element for SelectionArea {
                 };
                 let _ = desktop.update(cx, |this, cx| {
                     this.drag_to(best.place, event.position, window, cx)
-                });
-            });
-        }
-        if self.end {
-            // The drag ends; what is selected is also the primary selection,
-            // for middle-click paste.
-            let desktop = self.desktop.clone();
-            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
-                    return;
-                }
-                let _ = desktop.update(cx, |this, cx| {
-                    let Some(selection) = this
-                        .text
-                        .selection
-                        .as_mut()
-                        .filter(|selection| selection.dragging)
-                    else {
-                        return;
-                    };
-                    selection.dragging = false;
-                    this.text.scrolling = None;
-                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                    if let Some(text) = this.selected_text() {
-                        cx.write_to_primary(ClipboardItem::new_string(text));
-                    }
-                    cx.notify();
                 });
             });
         }

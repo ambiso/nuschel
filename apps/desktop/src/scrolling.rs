@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Ease discrete wheel steps; leave precise touchpad motion to the platform.
-//! Keep a timeline's messages still while history grows above them.
+//! Keep a timeline's messages still while history grows above them, and lay
+//! out only the part of it near the viewport.
 use gpui_kit::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, Pixels, ScrollDelta, ScrollEvent, ScrollHandle, Styled, Window, canvas, px,
 };
 use std::{
     cell::{Cell, RefCell},
+    ops::Range,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -127,6 +129,75 @@ pub fn near_top(offset: Pixels, viewport: Pixels) -> bool {
     -offset < viewport.max(px(200.))
 }
 
+/// A timeline entry's height as last laid out; zero until it has been.
+pub type Height = Rc<Cell<Pixels>>;
+
+/// The entries of a timeline to lay out: those within a margin of the
+/// viewport. The rest keep their room, by the heights they last had.
+#[derive(Debug, PartialEq)]
+pub struct Shown {
+    pub range: Range<usize>,
+    pub above: Pixels,
+    pub below: Pixels,
+}
+
+/// Where the viewport is, for [`shown`].
+pub enum Focus {
+    /// Following the newest entries.
+    Newest,
+    /// Its top this far below the first entry.
+    Offset(Pixels),
+    /// About to bring this entry a third of the way down (see [`Anchor::reveal`]).
+    Entry(usize),
+}
+
+/// Which entries, of `heights` (zero for those never laid out), lie near a
+/// viewport `viewport` tall at `focus`. Laying out every message on every
+/// frame would cost each frame (and each step of a window resize, which
+/// wraps them all again) time in proportion to history.
+pub fn shown(heights: &[Pixels], focus: Focus, viewport: Pixels) -> Shown {
+    // Those never laid out count as tall as the average of those that were.
+    let known = heights.iter().filter(|height| **height > px(0.));
+    let (sum, count) = known.fold((px(0.), 0.), |(sum, count), height| {
+        (sum + *height, count + 1.)
+    });
+    let estimate = if count > 0. { sum / count } else { px(48.) };
+    let heights: Vec<Pixels> = heights
+        .iter()
+        .map(|height| if *height > px(0.) { *height } else { estimate })
+        .collect();
+    // A screen either side: corrections by the anchor stay within what is laid out.
+    let margin = viewport.max(px(400.));
+    let total: Pixels = heights.iter().sum();
+    let top = match focus {
+        Focus::Newest => total - viewport,
+        Focus::Offset(top) => top,
+        Focus::Entry(index) => heights.iter().take(index).sum::<Pixels>() - viewport / 3.,
+    };
+    let (from, to) = (top - margin, top + viewport + margin);
+    let last = heights.len().saturating_sub(1);
+    let (mut start, mut above, mut y) = (None, total, px(0.));
+    let mut end = heights.len();
+    for (index, height) in heights.iter().enumerate() {
+        if start.is_none() && (y + *height > from || index == last) {
+            start = Some(index);
+            above = y;
+        }
+        if start.is_some() && y >= to {
+            end = index;
+            break;
+        }
+        y += *height;
+    }
+    let start = start.unwrap_or(heights.len());
+    let laid_out: Pixels = heights[start..end].iter().sum();
+    Shown {
+        range: start..end,
+        above,
+        below: total - above - laid_out,
+    }
+}
+
 /// Scroll anchoring, as browsers do it: the first message in view keeps its
 /// place on screen while pages are prepended, or rows above it change height.
 /// Positions come from the finished layout before the timeline scrolls, so
@@ -148,6 +219,8 @@ struct AnchorState {
     /// offset this frame set for it.
     reveal: Cell<Option<i64>>,
     revealed: Cell<Option<Pixels>>,
+    /// The height of what precedes the entries: the conversation's welcome.
+    intro: Height,
 }
 
 impl Anchor {
@@ -157,12 +230,22 @@ impl Anchor {
         self.0.painted.set(None);
         self.0.shifted.set(px(0.));
         self.0.reveal.set(None);
+        self.0.intro.set(px(0.));
     }
 
     /// Scroll message `id` a third of the way down the viewport once it is
     /// laid out (a search result opening it).
     pub fn reveal(&self, id: i64) {
         self.0.reveal.set(Some(id));
+    }
+
+    /// The message waiting to be brought into view, which has to be laid out.
+    pub fn revealing(&self) -> Option<i64> {
+        self.0.reveal.get()
+    }
+
+    pub fn intro(&self) -> &Height {
+        &self.0.intro
     }
 
     pub fn painted(&self) -> Option<(Pixels, Pixels)> {
@@ -188,10 +271,12 @@ pub struct AnchorFrame {
 }
 
 impl AnchorFrame {
-    /// A stored message row, in timeline order, that can serve as the anchor.
-    pub fn row(&self, id: i64, child: AnyElement) -> AnyElement {
+    /// A timeline entry, in order, whose laid-out height goes into `height`;
+    /// with the `id` of a stored message it can serve as the anchor.
+    pub fn row(&self, id: Option<i64>, height: &Height, child: AnyElement) -> AnyElement {
         Row {
             id,
+            height: height.clone(),
             rows: self.rows.clone(),
             child,
         }
@@ -270,9 +355,11 @@ impl AnchorFrame {
     }
 }
 
-/// Lays its child out unchanged and notes where, for [`AnchorFrame::keeper`].
+/// Lays its child out unchanged and notes where, for [`AnchorFrame::keeper`],
+/// and how tall, for [`shown`].
 struct Row {
-    id: i64,
+    id: Option<i64>,
+    height: Height,
     rows: Rc<RefCell<Vec<(i64, LayoutId)>>>,
     child: AnyElement,
 }
@@ -305,7 +392,9 @@ impl Element for Row {
         cx: &mut App,
     ) -> (LayoutId, ()) {
         let layout = self.child.request_layout(window, cx);
-        self.rows.borrow_mut().push((self.id, layout));
+        if let Some(id) = self.id {
+            self.rows.borrow_mut().push((id, layout));
+        }
         (layout, ())
     }
 
@@ -313,11 +402,12 @@ impl Element for Row {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.height.set(bounds.size.height);
         self.child.prepaint(window, cx);
     }
 
@@ -337,8 +427,52 @@ impl Element for Row {
 
 #[cfg(test)]
 mod tests {
-    use super::{follows, near_top};
+    use super::{Focus, Shown, follows, near_top, shown};
     use gpui_kit::px;
+
+    #[test]
+    fn only_entries_near_the_viewport_are_laid_out() {
+        // A hundred entries 50 tall, in a viewport of 400 (so a margin of 400).
+        let heights = vec![px(50.); 100];
+        // Following: the last 800 of 5000.
+        assert_eq!(
+            shown(&heights, Focus::Newest, px(400.)),
+            Shown {
+                range: 84..100,
+                above: px(4200.),
+                below: px(0.)
+            }
+        );
+        // Scrolled to 2000: from 1600 to 2800.
+        assert_eq!(
+            shown(&heights, Focus::Offset(px(2000.)), px(400.)),
+            Shown {
+                range: 32..56,
+                above: px(1600.),
+                below: px(2200.)
+            }
+        );
+        // At the top, and with less than a screen, everything from the start.
+        assert_eq!(
+            shown(&heights, Focus::Offset(px(0.)), px(400.)).range,
+            0..16
+        );
+        assert_eq!(shown(&heights[..5], Focus::Newest, px(400.)).range, 0..5);
+        // A search result to reveal: it and a screen around it, wherever it is.
+        let around = shown(&heights, Focus::Entry(50), px(300.));
+        assert!(around.range.contains(&50) && around.range.len() < 30);
+        // Past the end, still the last entry rather than nothing.
+        assert_eq!(
+            shown(&heights, Focus::Offset(px(9000.)), px(400.)).range,
+            99..100
+        );
+        assert_eq!(shown(&[], Focus::Newest, px(400.)).range, 0..0);
+        // Entries never laid out (an older page just loaded) count as the average.
+        let mut prepended = vec![px(0.); 20];
+        prepended.extend([px(100.), px(20.)]);
+        let below = shown(&prepended, Focus::Offset(px(0.)), px(400.));
+        assert_eq!((below.range, below.below), (0..14, px(480.)));
+    }
 
     #[test]
     fn scrolling_up_stops_following_and_reaching_the_bottom_resumes_it() {

@@ -40,6 +40,9 @@ pub struct MessageView {
     pub measured: std::rc::Rc<std::cell::Cell<f32>>,
     /// A file offered with this message (transfer.rs shows it as a card).
     pub offer: Option<nuschel_core::transfer::Offer>,
+    /// The row's height when last laid out, for the room it keeps while
+    /// scrolled out of view.
+    pub height: crate::scrolling::Height,
 }
 /// Name a text field for screen readers. GPUI-kit inputs expose no role or
 /// name to AT-SPI/UIA/AX unless the state is told what it is.
@@ -91,6 +94,7 @@ impl From<RenderedMessage> for MessageView {
                 None
             },
             measured: Default::default(),
+            height: Default::default(),
             document: message.document.into(),
             expanded: false,
             offer,
@@ -204,6 +208,7 @@ pub struct ActivityLine {
     pub observed_at_ms: i64,
     pub text: String,
     pub warning: bool,
+    pub height: crate::scrolling::Height,
 }
 pub const MAX_ACTIVITY: usize = 200;
 impl Default for ChannelView {
@@ -217,6 +222,7 @@ impl ChannelView {
             observed_at_ms,
             text,
             warning,
+            height: Default::default(),
         });
         while self.activity.len() > MAX_ACTIVITY {
             self.activity.pop_front();
