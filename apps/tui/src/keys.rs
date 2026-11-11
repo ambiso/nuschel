@@ -185,7 +185,7 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
             KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.paste_image_after_key()
+                self.paste_image()
             }
             KeyCode::Enter if alt || key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.composer.insert("\n");

@@ -6,6 +6,7 @@
 //! readers and pipes (`--plain`). Over SSH voice is off unless asked for.
 mod app;
 mod clipboard;
+mod clipboard_backend;
 mod document;
 mod graphics;
 mod input;
