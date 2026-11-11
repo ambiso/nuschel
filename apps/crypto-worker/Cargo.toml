@@ -1,0 +1,34 @@
+[package]
+name = "nuschel-crypto-worker"
+description = "Isolated process that owns Nuschel's identity secrets and checks key transparency"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "nuschel-crypto-worker"
+path = "src/main.rs"
+
+[dependencies]
+nuschel-identity.workspace = true
+nuschel-ipc.workspace = true
+nuschel-kt.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+zeroize = "1.9.1"
+
+[dev-dependencies]
+# Loopback tests: nuscheld, the real client session and this worker in its sandbox.
+nuscheld = { path = "../server" }
+nuschel-session.workspace = true
+nuschel-protocol.workspace = true
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+
+[lints]
+workspace = true

@@ -5796,6 +5796,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschel-crypto-worker"
+version = "0.1.0"
+dependencies = [
+ "nuschel-identity",
+ "nuschel-ipc",
+ "nuschel-kt",
+ "nuschel-protocol",
+ "nuschel-session",
+ "nuscheld",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "nuschel-identity"
 version = "0.1.0"
 dependencies = [
