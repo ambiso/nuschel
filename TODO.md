@@ -506,6 +506,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          are refused with WrongVersion (they cannot fetch blobs by hash and have no
          Opus). Not done: a live metrics endpoint (`nuscheld admin` works offline).
    - [ ] Chat in the stock-client VM check (needs typing into the stock window).
+   - [ ] `stock_client.py` in `vm-server` fails under heavy host load ("too few
+         packets from the stock client: 0" at load ~47 on 24 cores): it waits at most
+         40 s for the stock GUI to open its microphone; wait for the first voice
+         packet instead of a fixed deadline.
    - [ ] Review deviations: permission checks inline per handler (one engine) rather
          than one `authorize()` module; one mutex instead of an actor.
    - [ ] TLS listener (rustls), certificate and password authentication, user
