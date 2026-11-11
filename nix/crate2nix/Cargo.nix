@@ -123,6 +123,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschel-kt" = rec {
+      packageId = "nuschel-kt";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschel-kt";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschel-media-worker" = rec {
       packageId = "nuschel-media-worker";
       build = internal.buildRustCrateWithFeatures {
@@ -868,6 +878,148 @@ rec {
           "std" = [ "memchr?/std" ];
         };
         resolvedDefaultFeatures = [ "default" "perf-literal" "std" ];
+      };
+      "akd" = rec {
+        crateName = "akd";
+        version = "0.13.0";
+        edition = "2021";
+        sha256 = "1cipqrz6n9jiakf9bi4rsxnd5scclz9wi35fpk7hvvwimp0q3pb5";
+        authors = [
+          "akd contributors"
+        ];
+        dependencies = [
+          {
+            name = "akd_core";
+            packageId = "akd_core";
+            usesDefaultFeatures = false;
+            features = [ "vrf" ];
+          }
+          {
+            name = "async-recursion";
+            packageId = "async-recursion";
+          }
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "dashmap";
+            packageId = "dashmap";
+          }
+          {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
+            name = "log";
+            packageId = "log";
+            features = [ "kv_unstable" ];
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "sync" "time" "rt" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "rt" "sync" "time" "macros" ];
+          }
+        ];
+        features = {
+          "bench" = [ "experimental" "public_tests" "tokio/rt-multi-thread" ];
+          "default" = [ "public_auditing" "parallel_vrf" "preload_history" "greedy_lookup_preload" "experimental" ];
+          "experimental" = [ "akd_core/experimental" ];
+          "parallel_vrf" = [ "akd_core/parallel_vrf" ];
+          "public_auditing" = [ "dep:protobuf" "akd_core/protobuf" ];
+          "public_tests" = [ "rand" "dep:colored" "dep:once_cell" "serde_serialization" "akd_core/public_tests" "akd_core/rand" "dep:paste" ];
+          "rand" = [ "dep:rand" ];
+          "serde_serialization" = [ "dep:serde" "akd_core/serde_serialization" ];
+          "tracing" = [ "dep:tracing" ];
+          "tracing_instrument" = [ "tracing/attributes" ];
+          "whatsapp_v1" = [ "akd_core/whatsapp_v1" ];
+        };
+        resolvedDefaultFeatures = [ "experimental" "parallel_vrf" ];
+      };
+      "akd_core" = rec {
+        crateName = "akd_core";
+        version = "0.13.0";
+        edition = "2021";
+        sha256 = "0gq58mw1qjb64hvigs5lgvw3kf9dwbpsam0khh95jm37qly54mnf";
+        build = "src/build.rs";
+        authors = [
+          "akd contributors"
+        ];
+        dependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "blake3";
+            packageId = "blake3";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "curve25519-dalek";
+            packageId = "curve25519-dalek 4.1.3";
+            optional = true;
+          }
+          {
+            name = "ed25519-dalek";
+            packageId = "ed25519-dalek";
+            optional = true;
+            features = [ "digest" "legacy_compatibility" ];
+          }
+          {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
+            name = "protobuf";
+            packageId = "protobuf";
+            optional = true;
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            features = [ "rt" ];
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "protobuf-codegen";
+            packageId = "protobuf-codegen";
+          }
+          {
+            name = "protobuf-parse";
+            packageId = "protobuf-parse";
+          }
+        ];
+        features = {
+          "bench" = [ "parallel_vrf" "experimental" "vrf" "tokio/rt-multi-thread" ];
+          "curve25519-dalek" = [ "dep:curve25519-dalek" ];
+          "default" = [ "vrf" "experimental" ];
+          "ed25519-dalek" = [ "dep:ed25519-dalek" ];
+          "experimental" = [ "dep:blake3" ];
+          "parallel_vrf" = [ "tokio" ];
+          "protobuf" = [ "dep:protobuf" ];
+          "public_tests" = [ "dep:paste" ];
+          "rand" = [ "dep:rand" ];
+          "serde_serialization" = [ "dep:serde" "dep:serde_bytes" "ed25519-dalek/serde" ];
+          "tokio" = [ "dep:tokio" ];
+          "vrf" = [ "ed25519-dalek" "curve25519-dalek" ];
+          "whatsapp_v1" = [ "dep:blake3" ];
+        };
+        resolvedDefaultFeatures = [ "curve25519-dalek" "ed25519-dalek" "experimental" "parallel_vrf" "protobuf" "tokio" "vrf" ];
       };
       "aligned" = rec {
         crateName = "aligned";
@@ -1771,7 +1923,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             features = [ "fs" "net" "std" ];
           }
@@ -1906,7 +2058,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (target."unix" or false);
             features = [ "std" "fs" "process" ];
@@ -1986,7 +2138,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (target."unix" or false);
             features = [ "process" "std" ];
@@ -3041,6 +3193,54 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
+      "blake3" = rec {
+        crateName = "blake3";
+        version = "1.8.7";
+        edition = "2024";
+        sha256 = "1bi7m95sggkkcmlyiykflbb37v84cgzkm283r1yrfxhzq57lb7kd";
+        authors = [
+          "Jack O'Connor <oconnor663@gmail.com>"
+          "Samuel Neves"
+        ];
+        dependencies = [
+          {
+            name = "arrayvec";
+            packageId = "arrayvec";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "constant_time_eq";
+            packageId = "constant_time_eq";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "cpufeatures";
+            packageId = "cpufeatures 0.3.1";
+            target = { target, features }: (("x86" == target."arch" or null) || ("x86_64" == target."arch" or null));
+          }
+        ];
+        buildDependencies = [
+          {
+            name = "cc";
+            packageId = "cc";
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+          "digest" = [ "dep:digest" ];
+          "mmap" = [ "std" "dep:memmap2" ];
+          "rayon" = [ "dep:rayon-core" ];
+          "serde" = [ "dep:serde" ];
+          "std" = [ "constant_time_eq/std" ];
+          "traits-preview" = [ "dep:digest" ];
+          "zeroize" = [ "dep:zeroize" "arrayvec/zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "pure" ];
+      };
       "block" = rec {
         crateName = "block";
         version = "0.1.6";
@@ -3392,7 +3592,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             features = [ "event" "fs" "pipe" "std" ];
           }
@@ -3406,7 +3606,7 @@ rec {
         devDependencies = [
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             features = [ "net" ];
           }
@@ -3437,7 +3637,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             features = [ "std" ];
           }
@@ -3492,7 +3692,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (!(target."windows" or false));
             features = [ "fs" "process" "termios" "time" ];
           }
@@ -3543,7 +3743,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (!(target."windows" or false));
             features = [ "fs" ];
           }
@@ -4701,6 +4901,18 @@ rec {
           }
         ];
 
+      };
+      "constant_time_eq" = rec {
+        crateName = "constant_time_eq";
+        version = "0.4.2";
+        edition = "2024";
+        sha256 = "16zamq60dq80k3rqlzh9j9cpjhishmh924lnwbplgrnmkkvfylix";
+        authors = [
+          "Cesar Eduardo Barros <cesarb@cesarb.eti.br>"
+        ];
+        features = {
+          "default" = [ "std" ];
+        };
       };
       "convert_case" = rec {
         crateName = "convert_case";
@@ -6041,6 +6253,12 @@ rec {
             target = { target, features }: ((!("fiat" == target."curve25519_dalek_backend" or null)) && (!("serial" == target."curve25519_dalek_backend" or null)) && ("x86_64" == target."arch" or null));
           }
           {
+            name = "digest";
+            packageId = "digest 0.10.7";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
             name = "fiat-crypto";
             packageId = "fiat-crypto 0.2.9";
             usesDefaultFeatures = false;
@@ -6089,7 +6307,7 @@ rec {
           "serde" = [ "dep:serde" ];
           "zeroize" = [ "dep:zeroize" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "precomputed-tables" "rand_core" "zeroize" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "digest" "legacy_compatibility" "precomputed-tables" "rand_core" "zeroize" ];
       };
       "curve25519-dalek 5.0.0" = rec {
         crateName = "curve25519-dalek";
@@ -6269,6 +6487,44 @@ rec {
           }
         ];
 
+      };
+      "dashmap" = rec {
+        crateName = "dashmap";
+        version = "5.5.3";
+        edition = "2018";
+        sha256 = "0miqnlxi501vfbv6mw5jbmzgnj0wjrch3p4abvpd59s9v30lg1wp";
+        authors = [
+          "Acrimon <joel.wejdenstal@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "hashbrown";
+            packageId = "hashbrown 0.14.5";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "lock_api";
+            packageId = "lock_api";
+          }
+          {
+            name = "once_cell";
+            packageId = "once_cell";
+          }
+          {
+            name = "parking_lot_core";
+            packageId = "parking_lot_core";
+          }
+        ];
+        features = {
+          "arbitrary" = [ "dep:arbitrary" ];
+          "inline" = [ "hashbrown/inline-more" ];
+          "rayon" = [ "dep:rayon" ];
+          "serde" = [ "dep:serde" ];
+        };
       };
       "dasp_sample" = rec {
         crateName = "dasp_sample";
@@ -7382,6 +7638,122 @@ rec {
           "std" = [ "alloc" "elliptic-curve/std" ];
         };
         resolvedDefaultFeatures = [ "algorithm" "alloc" "default" "der" "digest" "getrandom" "pem" "pkcs8" "spki" "std" ];
+      };
+      "ed25519" = rec {
+        crateName = "ed25519";
+        version = "2.2.3";
+        edition = "2021";
+        sha256 = "0lydzdf26zbn82g7xfczcac9d7mzm3qgx934ijjrd5hjpjx32m8i";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "pkcs8";
+            packageId = "pkcs8 0.10.2";
+            optional = true;
+          }
+          {
+            name = "signature";
+            packageId = "signature 2.2.0";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "alloc" = [ "pkcs8?/alloc" ];
+          "default" = [ "std" ];
+          "pem" = [ "alloc" "pkcs8/pem" ];
+          "pkcs8" = [ "dep:pkcs8" ];
+          "serde" = [ "dep:serde" ];
+          "serde_bytes" = [ "serde" "dep:serde_bytes" ];
+          "std" = [ "pkcs8?/std" "signature/std" ];
+          "zeroize" = [ "dep:zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "std" ];
+      };
+      "ed25519-dalek" = rec {
+        crateName = "ed25519-dalek";
+        version = "2.2.0";
+        edition = "2021";
+        sha256 = "1agcwij1z687hg26ngzwhnmpz29b2w56m8z1ap3pvrnfh709drvh";
+        libName = "ed25519_dalek";
+        authors = [
+          "isis lovecruft <isis@patternsinthevoid.net>"
+          "Tony Arcieri <bascule@gmail.com>"
+          "Michael Rosenberg <michael@mrosenberg.pub>"
+        ];
+        dependencies = [
+          {
+            name = "curve25519-dalek";
+            packageId = "curve25519-dalek 4.1.3";
+            usesDefaultFeatures = false;
+            features = [ "digest" ];
+          }
+          {
+            name = "ed25519";
+            packageId = "ed25519";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.10.9";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "signature";
+            packageId = "signature 2.2.0";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "curve25519-dalek";
+            packageId = "curve25519-dalek 4.1.3";
+            usesDefaultFeatures = false;
+            features = [ "digest" "rand_core" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "curve25519-dalek/alloc" "ed25519/alloc" "serde?/alloc" "zeroize/alloc" ];
+          "asm" = [ "sha2/asm" ];
+          "batch" = [ "alloc" "merlin" "rand_core" ];
+          "default" = [ "fast" "std" "zeroize" ];
+          "digest" = [ "signature/digest" ];
+          "fast" = [ "curve25519-dalek/precomputed-tables" ];
+          "legacy_compatibility" = [ "curve25519-dalek/legacy_compatibility" ];
+          "merlin" = [ "dep:merlin" ];
+          "pem" = [ "alloc" "ed25519/pem" "pkcs8" ];
+          "pkcs8" = [ "ed25519/pkcs8" ];
+          "rand_core" = [ "dep:rand_core" ];
+          "serde" = [ "dep:serde" "ed25519/serde" ];
+          "signature" = [ "dep:signature" ];
+          "std" = [ "alloc" "ed25519/std" "serde?/std" "sha2/std" ];
+          "zeroize" = [ "dep:zeroize" "curve25519-dalek/zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" "digest" "fast" "legacy_compatibility" "signature" "std" "zeroize" ];
       };
       "either" = rec {
         crateName = "either";
@@ -8727,7 +9099,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             target = { target, features }: (!(target."windows" or false));
             features = [ "fs" "time" ];
           }
@@ -9239,7 +9611,7 @@ rec {
         dependencies = [
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (!(target."windows" or false));
             features = [ "system" ];
@@ -11547,7 +11919,7 @@ rec {
           }
           {
             name = "which";
-            packageId = "which";
+            packageId = "which 8.0.6";
             target = { target, features }: ("windows" == target."os" or null);
           }
         ];
@@ -12710,6 +13082,24 @@ rec {
         features = {
           "zeroize" = [ "digest/zeroize" ];
         };
+      };
+      "home" = rec {
+        crateName = "home";
+        version = "0.5.12";
+        edition = "2024";
+        sha256 = "13bjyzgx6q9srnfvl43dvmhn93qc8mh5w7cylk2g13sj3i3pyqnc";
+        authors = [
+          "Brian Anderson <andersrb@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Win32_Foundation" "Win32_UI_Shell" "Win32_System_Com" ];
+          }
+        ];
+
       };
       "hpke-rs" = rec {
         crateName = "hpke-rs";
@@ -14832,7 +15222,7 @@ rec {
           "rustc-std-workspace-core" = [ "dep:rustc-std-workspace-core" ];
           "use_std" = [ "std" ];
         };
-        resolvedDefaultFeatures = [ "default" "std" ];
+        resolvedDefaultFeatures = [ "default" "extra_traits" "std" ];
       };
       "libcrux-aead" = rec {
         crateName = "libcrux-aead";
@@ -15783,7 +16173,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             features = [ "std" "fs" "process" "time" "pipe" ];
           }
         ];
@@ -15927,7 +16317,7 @@ rec {
         };
         resolvedDefaultFeatures = [ "ctor" "default" ];
       };
-      "linux-raw-sys" = rec {
+      "linux-raw-sys 0.12.1" = rec {
         crateName = "linux-raw-sys";
         version = "0.12.1";
         edition = "2021";
@@ -15942,6 +16332,23 @@ rec {
           "rustc-dep-of-std" = [ "core" "no_std" ];
         };
         resolvedDefaultFeatures = [ "auxvec" "elf" "errno" "general" "if_ether" "ioctl" "net" "netlink" "no_std" "prctl" "system" "xdp" ];
+      };
+      "linux-raw-sys 0.4.15" = rec {
+        crateName = "linux-raw-sys";
+        version = "0.4.15";
+        edition = "2021";
+        sha256 = "1aq7r2g7786hyxhv40spzf2nhag5xbw2axxc1k8z5k1dsgdm4v6j";
+        libName = "linux_raw_sys";
+        authors = [
+          "Dan Gohman <dev@sunfishcode.online>"
+        ];
+        features = {
+          "compiler_builtins" = [ "dep:compiler_builtins" ];
+          "core" = [ "dep:core" ];
+          "default" = [ "std" "general" "errno" ];
+          "rustc-dep-of-std" = [ "core" "compiler_builtins" "no_std" ];
+        };
+        resolvedDefaultFeatures = [ "elf" "errno" "general" "ioctl" "no_std" ];
       };
       "litemap" = rec {
         crateName = "litemap";
@@ -16011,6 +16418,20 @@ rec {
             optional = true;
             usesDefaultFeatures = false;
           }
+          {
+            name = "value-bag";
+            packageId = "value-bag";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "inline-i128" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "value-bag";
+            packageId = "value-bag";
+            features = [ "test" ];
+          }
         ];
         features = {
           "kv_serde" = [ "kv_std" "value-bag/serde" "serde" ];
@@ -16027,7 +16448,7 @@ rec {
           "sval_ref" = [ "dep:sval_ref" ];
           "value-bag" = [ "dep:value-bag" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "serde" "serde_core" "std" ];
+        resolvedDefaultFeatures = [ "alloc" "kv" "kv_unstable" "serde" "serde_core" "std" "value-bag" ];
       };
       "loop9" = rec {
         crateName = "loop9";
@@ -18653,6 +19074,76 @@ rec {
             name = "win32job";
             packageId = "win32job";
             target = { target, features }: (target."windows" or false);
+          }
+        ];
+
+      };
+      "nuschel-kt" = rec {
+        crateName = "nuschel-kt";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/kt; };
+        libName = "nuschel_kt";
+        dependencies = [
+          {
+            name = "akd";
+            packageId = "akd";
+            usesDefaultFeatures = false;
+            features = [ "experimental" "parallel_vrf" ];
+          }
+          {
+            name = "akd_core";
+            packageId = "akd_core";
+            usesDefaultFeatures = false;
+            features = [ "vrf" "experimental" "protobuf" ];
+          }
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "blake3";
+            packageId = "blake3";
+            usesDefaultFeatures = false;
+            features = [ "pure" ];
+          }
+          {
+            name = "ed25519-dalek";
+            packageId = "ed25519-dalek";
+            usesDefaultFeatures = false;
+            features = [ "std" "zeroize" ];
+          }
+          {
+            name = "nuschel-identity";
+            packageId = "nuschel-identity";
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.10.9";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "rt" "sync" ];
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "macros" "rt" "rt-multi-thread" ];
           }
         ];
 
@@ -23731,7 +24222,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             features = [ "std" "fs" "process" "time" "pipe" ];
           }
         ];
@@ -24125,7 +24616,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: ((target."unix" or false) || ("fuchsia" == target."os" or null) || ("vxworks" == target."os" or null));
             features = [ "event" "fs" "pipe" "process" "std" "time" ];
@@ -24901,6 +25392,139 @@ rec {
           "default" = [ "std" ];
           "std" = [ "prost/std" ];
         };
+      };
+      "protobuf" = rec {
+        crateName = "protobuf";
+        version = "3.7.2";
+        edition = "2021";
+        sha256 = "1x4riz4znnjsqpdxnhxj0aq8rfivmbv4hfqmd3gbbn77v96isnnn";
+        authors = [
+          "Stepan Koltsov <stepan.koltsov@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "once_cell";
+            packageId = "once_cell";
+          }
+          {
+            name = "protobuf-support";
+            packageId = "protobuf-support";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 1.0.69";
+          }
+        ];
+        features = {
+          "bytes" = [ "dep:bytes" ];
+          "with-bytes" = [ "bytes" ];
+        };
+        resolvedDefaultFeatures = [ "default" ];
+      };
+      "protobuf-codegen" = rec {
+        crateName = "protobuf-codegen";
+        version = "3.7.2";
+        edition = "2021";
+        crateBin = [];
+        sha256 = "1kjaakqk0595akxdhv68w23zw136hw0h0kxkyg9bn500bj17cfax";
+        libName = "protobuf_codegen";
+        authors = [
+          "Stepan Koltsov <stepan.koltsov@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "once_cell";
+            packageId = "once_cell";
+          }
+          {
+            name = "protobuf";
+            packageId = "protobuf";
+          }
+          {
+            name = "protobuf-parse";
+            packageId = "protobuf-parse";
+          }
+          {
+            name = "regex";
+            packageId = "regex";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 1.0.69";
+          }
+        ];
+
+      };
+      "protobuf-parse" = rec {
+        crateName = "protobuf-parse";
+        version = "3.7.2";
+        edition = "2021";
+        crateBin = [];
+        sha256 = "0wy9pnfrsk2iz2ghhvzdpp0riklrm6p8dvdfxr4d7wb04hgsmbml";
+        libName = "protobuf_parse";
+        authors = [
+          "Stepan Koltsov <stepan.koltsov@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "anyhow";
+            packageId = "anyhow";
+          }
+          {
+            name = "indexmap";
+            packageId = "indexmap";
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "protobuf";
+            packageId = "protobuf";
+          }
+          {
+            name = "protobuf-support";
+            packageId = "protobuf-support";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 1.0.69";
+          }
+          {
+            name = "which";
+            packageId = "which 4.4.2";
+          }
+        ];
+
+      };
+      "protobuf-support" = rec {
+        crateName = "protobuf-support";
+        version = "3.7.2";
+        edition = "2021";
+        sha256 = "1mnpn2q96bxm2vidh86m5p2x5z0z8rgfyixk1wlgjiqa3vrw4diy";
+        libName = "protobuf_support";
+        authors = [
+          "Stepan Koltsov <stepan.koltsov@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "thiserror";
+            packageId = "thiserror 1.0.69";
+          }
+        ];
+
       };
       "pulldown-cmark" = rec {
         crateName = "pulldown-cmark";
@@ -26817,7 +27441,118 @@ rec {
         ];
 
       };
-      "rustix" = rec {
+      "rustix 0.38.44" = rec {
+        crateName = "rustix";
+        version = "0.38.44";
+        edition = "2021";
+        sha256 = "0m61v0h15lf5rrnbjhcb9306bgqrhskrqv7i1n0939dsw8dbrdgx";
+        authors = [
+          "Dan Gohman <dev@sunfishcode.online>"
+          "Jakub Konka <kubkon@jakubkonka.com>"
+        ];
+        dependencies = [
+          {
+            name = "bitflags";
+            packageId = "bitflags 2.13.2";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "errno";
+            packageId = "errno";
+            rename = "libc_errno";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: ((!(target."rustix_use_libc" or false)) && (!(target."miri" or false)) && ("linux" == target."os" or null) && (("little" == target."endian" or null) || ("s390x" == target."arch" or null)) && (("arm" == target."arch" or null) || (("aarch64" == target."arch" or null) && ("64" == target."pointer_width" or null)) || ("riscv64" == target."arch" or null) || ((target."rustix_use_experimental_asm" or false) && ("powerpc64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("s390x" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips32r6" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64r6" == target."arch" or null)) || ("x86" == target."arch" or null) || (("x86_64" == target."arch" or null) && ("64" == target."pointer_width" or null))));
+          }
+          {
+            name = "errno";
+            packageId = "errno";
+            rename = "libc_errno";
+            usesDefaultFeatures = false;
+            target = { target, features }: ((!(target."windows" or false)) && ((target."rustix_use_libc" or false) || (target."miri" or false) || (!(("linux" == target."os" or null) && (("little" == target."endian" or null) || ("s390x" == target."arch" or null)) && (("arm" == target."arch" or null) || (("aarch64" == target."arch" or null) && ("64" == target."pointer_width" or null)) || ("riscv64" == target."arch" or null) || ((target."rustix_use_experimental_asm" or false) && ("powerpc64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("s390x" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips32r6" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64r6" == target."arch" or null)) || ("x86" == target."arch" or null) || (("x86_64" == target."arch" or null) && ("64" == target."pointer_width" or null)))))));
+          }
+          {
+            name = "errno";
+            packageId = "errno";
+            rename = "libc_errno";
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+            optional = true;
+            usesDefaultFeatures = false;
+            target = { target, features }: ((!(target."rustix_use_libc" or false)) && (!(target."miri" or false)) && ("linux" == target."os" or null) && (("little" == target."endian" or null) || ("s390x" == target."arch" or null)) && (("arm" == target."arch" or null) || (("aarch64" == target."arch" or null) && ("64" == target."pointer_width" or null)) || ("riscv64" == target."arch" or null) || ((target."rustix_use_experimental_asm" or false) && ("powerpc64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("s390x" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips32r6" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64r6" == target."arch" or null)) || ("x86" == target."arch" or null) || (("x86_64" == target."arch" or null) && ("64" == target."pointer_width" or null))));
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+            usesDefaultFeatures = false;
+            target = { target, features }: ((!(target."windows" or false)) && ((target."rustix_use_libc" or false) || (target."miri" or false) || (!(("linux" == target."os" or null) && (("little" == target."endian" or null) || ("s390x" == target."arch" or null)) && (("arm" == target."arch" or null) || (("aarch64" == target."arch" or null) && ("64" == target."pointer_width" or null)) || ("riscv64" == target."arch" or null) || ((target."rustix_use_experimental_asm" or false) && ("powerpc64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("s390x" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips32r6" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64r6" == target."arch" or null)) || ("x86" == target."arch" or null) || (("x86_64" == target."arch" or null) && ("64" == target."pointer_width" or null)))))));
+          }
+          {
+            name = "linux-raw-sys";
+            packageId = "linux-raw-sys 0.4.15";
+            usesDefaultFeatures = false;
+            target = { target, features }: ((("android" == target."os" or null) || ("linux" == target."os" or null)) && ((target."rustix_use_libc" or false) || (target."miri" or false) || (!(("linux" == target."os" or null) && (("little" == target."endian" or null) || ("s390x" == target."arch" or null)) && (("arm" == target."arch" or null) || (("aarch64" == target."arch" or null) && ("64" == target."pointer_width" or null)) || ("riscv64" == target."arch" or null) || ((target."rustix_use_experimental_asm" or false) && ("powerpc64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("s390x" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips32r6" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64r6" == target."arch" or null)) || ("x86" == target."arch" or null) || (("x86_64" == target."arch" or null) && ("64" == target."pointer_width" or null)))))));
+            features = [ "general" "ioctl" "no_std" ];
+          }
+          {
+            name = "linux-raw-sys";
+            packageId = "linux-raw-sys 0.4.15";
+            usesDefaultFeatures = false;
+            target = { target, features }: ((!(target."rustix_use_libc" or false)) && (!(target."miri" or false)) && ("linux" == target."os" or null) && (("little" == target."endian" or null) || ("s390x" == target."arch" or null)) && (("arm" == target."arch" or null) || (("aarch64" == target."arch" or null) && ("64" == target."pointer_width" or null)) || ("riscv64" == target."arch" or null) || ((target."rustix_use_experimental_asm" or false) && ("powerpc64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("s390x" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips32r6" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64r6" == target."arch" or null)) || ("x86" == target."arch" or null) || (("x86_64" == target."arch" or null) && ("64" == target."pointer_width" or null))));
+            features = [ "general" "errno" "ioctl" "no_std" "elf" ];
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.59.0";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Win32_Foundation" "Win32_Networking_WinSock" "Win32_NetworkManagement_IpHelper" "Win32_System_Threading" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "errno";
+            packageId = "errno";
+            rename = "libc_errno";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+        ];
+        features = {
+          "all-apis" = [ "event" "fs" "io_uring" "mm" "mount" "net" "param" "pipe" "process" "procfs" "pty" "rand" "runtime" "shm" "stdio" "system" "termios" "thread" "time" ];
+          "compiler_builtins" = [ "dep:compiler_builtins" ];
+          "core" = [ "dep:core" ];
+          "default" = [ "std" "use-libc-auxv" ];
+          "io_uring" = [ "event" "fs" "net" "linux-raw-sys/io_uring" ];
+          "itoa" = [ "dep:itoa" ];
+          "libc" = [ "dep:libc" ];
+          "libc-extra-traits" = [ "libc?/extra_traits" ];
+          "libc_errno" = [ "dep:libc_errno" ];
+          "linux_latest" = [ "linux_4_11" ];
+          "net" = [ "linux-raw-sys/net" "linux-raw-sys/netlink" "linux-raw-sys/if_ether" "linux-raw-sys/xdp" ];
+          "once_cell" = [ "dep:once_cell" ];
+          "param" = [ "fs" ];
+          "process" = [ "linux-raw-sys/prctl" ];
+          "procfs" = [ "once_cell" "itoa" "fs" ];
+          "pty" = [ "itoa" "fs" ];
+          "runtime" = [ "linux-raw-sys/prctl" ];
+          "rustc-dep-of-std" = [ "core" "rustc-std-workspace-alloc" "compiler_builtins" "linux-raw-sys/rustc-dep-of-std" "bitflags/rustc-dep-of-std" "compiler_builtins?/rustc-dep-of-std" ];
+          "rustc-std-workspace-alloc" = [ "dep:rustc-std-workspace-alloc" ];
+          "shm" = [ "fs" ];
+          "std" = [ "bitflags/std" "alloc" "libc?/std" "libc_errno?/std" "libc-extra-traits" ];
+          "system" = [ "linux-raw-sys/system" ];
+          "thread" = [ "linux-raw-sys/prctl" ];
+          "use-libc" = [ "libc_errno" "libc" "libc-extra-traits" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "fs" "libc-extra-traits" "std" ];
+      };
+      "rustix 1.1.6" = rec {
         crateName = "rustix";
         version = "1.1.6";
         edition = "2021";
@@ -26869,14 +27604,14 @@ rec {
           }
           {
             name = "linux-raw-sys";
-            packageId = "linux-raw-sys";
+            packageId = "linux-raw-sys 0.12.1";
             usesDefaultFeatures = false;
             target = { target, features }: ((("linux" == target."os" or null) || ("android" == target."os" or null)) && ((target."rustix_use_libc" or false) || (target."miri" or false) || (!(("linux" == target."os" or null) && (("little" == target."endian" or null) || (("s390x" == target."arch" or null) || ("powerpc" == target."arch" or null))) && (("arm" == target."arch" or null) || (("aarch64" == target."arch" or null) && ("64" == target."pointer_width" or null)) || ("riscv64" == target."arch" or null) || ((target."rustix_use_experimental_asm" or false) && ("powerpc" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("powerpc64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("s390x" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips32r6" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64r6" == target."arch" or null)) || ("x86" == target."arch" or null) || (("x86_64" == target."arch" or null) && ("64" == target."pointer_width" or null)))))));
             features = [ "general" "ioctl" "no_std" ];
           }
           {
             name = "linux-raw-sys";
-            packageId = "linux-raw-sys";
+            packageId = "linux-raw-sys 0.12.1";
             usesDefaultFeatures = false;
             target = { target, features }: ((!(target."rustix_use_libc" or false)) && (!(target."miri" or false)) && ("linux" == target."os" or null) && (("little" == target."endian" or null) || (("s390x" == target."arch" or null) || ("powerpc" == target."arch" or null))) && (("arm" == target."arch" or null) || (("aarch64" == target."arch" or null) && ("64" == target."pointer_width" or null)) || ("riscv64" == target."arch" or null) || ((target."rustix_use_experimental_asm" or false) && ("powerpc" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("powerpc64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("s390x" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips32r6" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64" == target."arch" or null)) || ((target."rustix_use_experimental_asm" or false) && ("mips64r6" == target."arch" or null)) || ("x86" == target."arch" or null) || (("x86_64" == target."arch" or null) && ("64" == target."pointer_width" or null))));
             features = [ "auxvec" "general" "errno" "ioctl" "no_std" "elf" ];
@@ -26940,7 +27675,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             features = [ "alloc" "fs" ];
           }
@@ -26948,7 +27683,7 @@ rec {
         devDependencies = [
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             features = [ "std" ];
           }
@@ -31118,7 +31853,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             target = { target, features }: ((target."unix" or false) || ("wasi" == target."os" or null));
             features = [ "fs" ];
           }
@@ -33379,6 +34114,31 @@ rec {
         };
         resolvedDefaultFeatures = [ "alloc" "std" ];
       };
+      "value-bag" = rec {
+        crateName = "value-bag";
+        version = "1.14.1";
+        edition = "2021";
+        sha256 = "04g5rg7d993a7aasj3s7q3qnwnl1i9n30w9bj3yyr4m756rzz697";
+        libName = "value_bag";
+        authors = [
+          "Ashley Mannix <ashleymannix@live.com.au>"
+        ];
+        features = {
+          "alloc" = [ "value-bag-sval2?/alloc" "value-bag-serde1?/alloc" ];
+          "error" = [ "std" "error-core" ];
+          "inline-str-l" = [ "inline-str" ];
+          "owned" = [ "alloc" "value-bag-serde1?/owned" ];
+          "serde" = [ "serde1" ];
+          "serde1" = [ "alloc" "value-bag-serde1" "value-bag-sval2?/serde1" ];
+          "std" = [ "alloc" "error-core" "value-bag-sval2?/std" "value-bag-serde1?/std" ];
+          "sval" = [ "sval2" ];
+          "sval2" = [ "value-bag-sval2" ];
+          "test" = [ "std" ];
+          "value-bag-serde1" = [ "dep:value-bag-serde1" ];
+          "value-bag-sval2" = [ "dep:value-bag-sval2" ];
+        };
+        resolvedDefaultFeatures = [ "inline-i128" ];
+      };
       "vcpkg" = rec {
         crateName = "vcpkg";
         version = "0.2.15";
@@ -33790,7 +34550,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             features = [ "event" "fs" "net" "process" ];
           }
           {
@@ -33849,7 +34609,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             features = [ "event" ];
           }
           {
@@ -33880,7 +34640,7 @@ rec {
         dependencies = [
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             features = [ "shm" ];
           }
           {
@@ -35573,7 +36333,41 @@ rec {
         };
         resolvedDefaultFeatures = [ "std" "web" ];
       };
-      "which" = rec {
+      "which 4.4.2" = rec {
+        crateName = "which";
+        version = "4.4.2";
+        edition = "2021";
+        sha256 = "1ixzmx3svsv5hbdvd8vdhd3qwvf6ns8jdpif1wmwsy10k90j9fl7";
+        authors = [
+          "Harry Fei <tiziyuanfang@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "either";
+            packageId = "either";
+          }
+          {
+            name = "home";
+            packageId = "home";
+            target = { target, features }: ((target."windows" or false) || (target."unix" or false) || ("redox" == target."os" or null));
+          }
+          {
+            name = "once_cell";
+            packageId = "once_cell";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 0.38.44";
+            usesDefaultFeatures = false;
+            features = [ "fs" "std" ];
+          }
+        ];
+        features = {
+          "regex" = [ "dep:regex" ];
+        };
+      };
+      "which 8.0.6" = rec {
         crateName = "which";
         version = "8.0.6";
         edition = "2021";
@@ -40022,7 +40816,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_LibraryLoader" "Win32_System_Performance" "Win32_System_SystemServices" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "Win32_UI_WindowsAndMessaging" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_LibraryLoader" "Win32_System_Performance" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "Win32_UI_WindowsAndMessaging" "default" ];
       };
       "windows-sys 0.61.2" = rec {
         crateName = "windows-sys";
@@ -40894,7 +41688,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             features = [ "std" "event" "fs" "net" "system" ];
           }
@@ -41206,7 +42000,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (("android" == target."os" or null) || ("linux" == target."os" or null) || ("macos" == target."os" or null) || ("hurd" == target."os" or null));
             features = [ "fs" "std" ];
@@ -41689,7 +42483,7 @@ rec {
           }
           {
             name = "rustix";
-            packageId = "rustix";
+            packageId = "rustix 1.1.6";
             usesDefaultFeatures = false;
             target = { target, features }: (target."unix" or false);
             features = [ "net" "process" "std" ];
