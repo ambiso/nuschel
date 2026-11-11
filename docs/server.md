@@ -46,7 +46,9 @@ Every configuration key is optional; names and defaults follow murmur.ini
   `publish_interval` (10 s) and `refresh_interval` (an hour) pace epochs and re-signed
   heads; `history = "contacts"` (default) or `"members"` says who may fetch an
   account's history besides its owner.
-- **History** (`[history]`): kept forever by default (`retention_days`); guests read
+- **History** (`[history]`): kept forever by default (`retention = "forever"`; or
+  `"none"`, not archived, or a number of days; channels may set their own, see
+  Retention below, never more than `max_retention_days`); guests read
   none (`guests = "none"`); stock clients are told in the welcome text and when they
   enter a channel with history (`notify_stock_clients`); stock senders' direct
   messages are not stored (`archive_stock_direct_messages`); `edit_limit`,
@@ -198,6 +200,22 @@ descriptor exhaustion.
   messages are stored as `legacy_html` (`State::text_message`).
 - **Pages** go to the history reader through a bounded queue; the result is clipped
   again if `authz_epoch` moved and dropped if `can_read` no longer holds.
+- **Retention** (retention.rs, docs/extension.md §6): each conversation keeps its
+  own retention (`history_retention`, set by `ChannelSettings` with Write on the
+  channel and kept by a deleted channel's archive) or the server default, capped by
+  `max_retention_days`. A shortening needs `confirm_expiry` and applies to existing
+  messages. Every hour a task on its own storage worker tombstones expired rows,
+  conversation by conversation in batches of 1,000, so neither chat writes nor
+  pages queue behind it and no single statement holds SQLite's write lock for long;
+  pages hide content past the retention immediately. What may expire is one
+  predicate (`nuschel_ipc::server::expirable` and the worker's `expirable!` SQL),
+  the hook where records the server must keep (MLS commits) are exempted. A
+  live-only ("none") conversation stores no rows: its messages are acknowledged and
+  delivered, and only its highest `seq` is recorded (`history_heads`). Expired and
+  erased text is overwritten in SQLite (`secure_delete`); **PostgreSQL** keeps the
+  old row versions until VACUUM reclaims them (autovacuum does so eventually; run
+  `VACUUM history_messages` after an erasure or a retention change to be sure), and
+  backups keep whatever they captured.
 - **Key transparency** (kt.rs): `kt/1` requests are authorised under the lock (own
   account for publications, registered targets for lookups, the owner and contacts
   for histories, per-type rate limits) and queued to one task, which owns nuschel-kt's

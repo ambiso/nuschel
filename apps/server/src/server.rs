@@ -407,6 +407,11 @@ async fn load_history(state: &mut State, history: &StorageHandle) -> Result<(), 
             state.conversations.set_head(id, head);
         }
     }
+    for stored in history.history_retentions().await.ok_or_else(unavailable)? {
+        if let Some(id) = conversations::parse(&stored.conversation) {
+            state.conversations.retention.insert(id, stored.retention);
+        }
+    }
     for access in history.history_access().await.ok_or_else(unavailable)? {
         if let (Some(id), Some(account)) = (
             conversations::parse(&access.conversation),
@@ -667,9 +672,11 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         history_reads,
         receivers,
     ));
-    if settings.config.history.retention_days > 0 {
-        tasks.push(tokio::spawn(expire(server.clone())));
-    }
+    // Retention on its own worker, started at the first expiry that has work.
+    tasks.push(tokio::spawn(crate::retention::run(
+        server.clone(),
+        storage::start(backend.clone()),
+    )));
     if let Some(service) = kt_service {
         tasks.push(tokio::spawn(service.run(server.clone())));
     }
@@ -679,24 +686,6 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         fingerprint,
         tasks,
     })
-}
-
-/// Retention (docs/extension.md §6): hourly, messages older than the
-/// configured days become tombstones without content.
-async fn expire(server: Arc<Server>) {
-    let days = i64::from(server.settings.config.history.retention_days);
-    let mut tick = tokio::time::interval(Duration::from_secs(3600));
-    loop {
-        tick.tick().await;
-        let now = crate::chat::now_ms();
-        server
-            .lock()
-            .history
-            .write(nuschel_ipc::server::ServerStorageRequest::HistoryExpire {
-                before_ms: now.saturating_sub(days.saturating_mul(86_400_000)),
-                deleted_ms: now,
-            });
-    }
 }
 
 /// A rate limiter for unencrypted pings: per address prefix and global, and

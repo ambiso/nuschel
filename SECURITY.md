@@ -85,8 +85,11 @@ lives in the storage worker, which then also holds the database credential; unde
 reach the service only through `LoadCredential`; the module refuses store paths.
 
 The extension (docs/extension.md): logs never contain message text or idempotency
-keys. An edited message's old text is overwritten in SQLite (`secure_delete`); in
-PostgreSQL old row versions remain until VACUUM. Erasing a user removes their
+keys. An edited, deleted, expired or erased message's old text is overwritten in
+SQLite (`secure_delete`); in PostgreSQL old row versions remain until VACUUM.
+Retention is forever unless the server or a channel says otherwise; a shorter
+retention needs an explicit confirmation and then applies to existing messages,
+and live-only ("none") conversations store nothing but their highest `seq`. Erasing a user removes their
 messages on the server, not copies clients already hold. Stock clients are told
 that channels are archived, and their direct messages are not stored by default.
 Unregistered users read no history by default. The client's sticky record

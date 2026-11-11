@@ -237,12 +237,32 @@ async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::err
                 .await
                 .map(Response::Count),
             Request::HistoryExpire {
+                conversation,
                 before_ms,
                 deleted_ms,
+                limit,
             } => store
-                .history_expire(before_ms, deleted_ms)
+                .history_expire(&conversation, before_ms, deleted_ms, limit)
                 .await
                 .map(Response::Count),
+            Request::HistoryCountExpirable {
+                conversation,
+                before_ms,
+            } => store
+                .history_count_expirable(&conversation, before_ms)
+                .await
+                .map(Response::Count),
+            Request::HistorySetRetention {
+                conversation,
+                retention,
+            } => done(store.history_set_retention(&conversation, retention).await),
+            Request::HistoryRetentions { after } => store
+                .history_retentions(after.as_deref())
+                .await
+                .map(Response::Retentions),
+            Request::HistoryAdvance { conversation, seq } => {
+                done(store.history_advance(&conversation, seq).await)
+            }
             Request::HistoryHeads { after } => store
                 .history_heads(after.as_deref())
                 .await

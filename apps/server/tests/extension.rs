@@ -1315,7 +1315,8 @@ async fn since_access_shows_only_what_was_said_while_the_reader_had_access() {
         .request(NuschelRequest::ChannelSettings(v1::ChannelSettings {
             request_id: request_id(),
             channel,
-            visibility: v1::Visibility::SinceAccess as i32,
+            visibility: Some(v1::Visibility::SinceAccess as i32),
+            ..Default::default()
         }))
         .await;
     assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
@@ -1803,6 +1804,295 @@ async fn the_operator_erases_a_users_messages() {
     assert!(page.messages[0].content.is_empty() && page.messages[0].deleted_ms > 0);
     assert_eq!(page.messages[0].delete_reason, 3);
     assert_eq!(page.messages[1].content, "stays");
+}
+
+// ---- §6 retention ----
+
+/// `ChannelSettings` with only a retention.
+fn retention_settings(channel: u32, kind: v1::retention::Kind, confirm: bool) -> NuschelRequest {
+    NuschelRequest::ChannelSettings(v1::ChannelSettings {
+        request_id: request_id(),
+        channel,
+        retention: Some(v1::Retention { kind: Some(kind) }),
+        confirm_expiry: confirm,
+        ..Default::default()
+    })
+}
+
+impl Session {
+    /// The next `ChannelInfo` for `channel`.
+    async fn channel_info(&mut self, channel: u32) -> v1::ChannelInfo {
+        self.wait(|event| match event {
+            SessionEvent::ChannelInfo { channel: id, info } if *id == channel => Some(info.clone()),
+            _ => None,
+        })
+        .await
+    }
+}
+
+/// Make a stored message look `days` old.
+fn backdate(fixture: &Fixture, conversation: &[u8; 16], seq: u64, days: i64) {
+    let mut store = fixture.store.lock().unwrap();
+    let row = store
+        .history
+        .messages
+        .get_mut(&(nuscheld::conversations::hex(conversation), seq))
+        .unwrap();
+    row.sent_ms -= days * 86_400_000;
+}
+
+#[tokio::test]
+async fn channel_retention_needs_write_and_shortening_needs_confirmation() {
+    use v1::retention::Kind;
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let bob_id = bob.register().await;
+    let (channel, conversation) = fixture.add_channel(
+        "Kept",
+        vec![entry("", Some(bob_id), perm::WRITE, 0)],
+        vec![],
+    );
+    let old = alice.send(conversation, "old words").await;
+    let recent = alice.send(conversation, "recent words").await;
+    backdate(&fixture, &conversation, old, 10);
+    // Forever by default, and shown per channel.
+    let info = {
+        let state = fixture.running.server.lock();
+        state.channel_info(state.channels.get(channel).unwrap())
+    };
+    assert_eq!(
+        (info.retention_days, info.live_only, info.own_retention),
+        (0, false, false)
+    );
+    // Without Write it is the uniform error.
+    let refused = alice
+        .request(retention_settings(channel, Kind::Days(7), true))
+        .await;
+    assert_eq!(error_code(&refused), Some(v1::error::Code::NotFound));
+    // Shortening removes stored messages: refused until confirmed.
+    let unconfirmed = bob
+        .request(retention_settings(channel, Kind::Days(7), false))
+        .await;
+    assert_eq!(
+        error_code(&unconfirmed),
+        Some(v1::error::Code::ConfirmationRequired)
+    );
+    assert_eq!(
+        fixture.running.server.lock().retention(&conversation),
+        nuschel_ipc::server::Retention::Forever,
+        "nothing changed"
+    );
+    let done = bob
+        .request(retention_settings(channel, Kind::Days(7), true))
+        .await;
+    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    let info = alice.channel_info(channel).await;
+    assert_eq!(
+        (info.retention_days, info.live_only, info.own_retention),
+        (7, false, true)
+    );
+    // Older messages are not served at once, before the expiry runs.
+    let page = alice.page(conversation, latest(), 10).await;
+    assert_eq!(seqs(&page), [old, recent]);
+    assert!(page.messages[0].content.is_empty() && page.messages[0].deleted_ms > 0);
+    assert_eq!(page.messages[0].delete_reason, 2, "expired");
+    assert_eq!(page.messages[1].content, "recent words");
+    // The expiry tombstones them in storage.
+    let server = &fixture.running.server;
+    let expired = nuscheld::retention::expire_now(server, &server.storage).await;
+    assert_eq!(expired, Some(1));
+    {
+        let store = fixture.store.lock().unwrap();
+        let rows = &store.history.messages;
+        let hex = nuscheld::conversations::hex(&conversation);
+        assert_eq!(rows[&(hex.clone(), old)].content, "");
+        assert_eq!(rows[&(hex.clone(), old)].delete_reason, Some(2));
+        assert_eq!(rows[&(hex, recent)].content, "recent words");
+    }
+    assert_eq!(
+        nuscheld::retention::expire_now(server, &server.storage).await,
+        Some(0)
+    );
+    // Keeping more needs no confirmation; back to the server's default.
+    let done = bob
+        .request(retention_settings(channel, Kind::Forever(true), false))
+        .await;
+    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    let done = bob
+        .request(retention_settings(
+            channel,
+            Kind::ServerDefault(true),
+            false,
+        ))
+        .await;
+    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    // Malformed: zero days.
+    let malformed = bob
+        .request(retention_settings(channel, Kind::Days(0), true))
+        .await;
+    assert_eq!(error_code(&malformed), Some(v1::error::Code::Malformed));
+    // A channel's own retention survives a restart, and so does its archive's.
+    let done = bob
+        .request(retention_settings(channel, Kind::Days(30), true))
+        .await;
+    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    // Synchronise with the history writer before restarting.
+    alice.send(conversation, "sync").await;
+    drop((alice, bob));
+    let fixture = fixture.restart("").await;
+    let state = fixture.running.server.lock();
+    assert_eq!(
+        state.retention(&conversation),
+        nuschel_ipc::server::Retention::Days(30)
+    );
+}
+
+#[tokio::test]
+async fn live_only_channels_deliver_without_storing() {
+    use v1::retention::Kind;
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let bob_id = bob.register().await;
+    let (channel, conversation) = fixture.add_channel(
+        "Live",
+        vec![entry("", Some(bob_id), perm::WRITE, 0)],
+        vec![],
+    );
+    let before = alice.send(conversation, "said before").await;
+    let done = bob
+        .request(retention_settings(channel, Kind::LiveOnly(true), true))
+        .await;
+    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    let info = alice.channel_info(channel).await;
+    assert!(info.live_only && info.own_retention);
+    bob.subscribe(&[conversation]).await;
+    // Acknowledged with the next seq and delivered live, but not stored.
+    let seq = alice.send(conversation, "live words").await;
+    assert_eq!(seq, before + 1);
+    let chat = bob.chat().await;
+    assert_eq!(chat.message.unwrap().content, "live words");
+    let hex = nuscheld::conversations::hex(&conversation);
+    {
+        let store = fixture.store.lock().unwrap();
+        assert!(
+            store
+                .history
+                .messages
+                .values()
+                .all(|row| row.content != "live words")
+        );
+    }
+    // No pages, not even of what was kept before; no edits.
+    let page = alice.page(conversation, latest(), 10).await;
+    assert!(page.messages.is_empty() && !page.more_before);
+    assert_eq!(page.head, seq);
+    let edit = alice
+        .request(NuschelRequest::Edit(v1::ChatEdit {
+            request_id: request_id(),
+            conversation: conversation.to_vec(),
+            target: seq,
+            format: v1::Format::Text as i32,
+            content: "changed".into(),
+        }))
+        .await;
+    assert_eq!(error_code(&edit), Some(v1::error::Code::NotFound));
+    // Stock clients entering it are told; a stock sender's text is not kept.
+    let mut carol = Raw::login(fixture.address(), "Carol").await;
+    carol
+        .send(
+            kind::USER_STATE,
+            &proto::UserState {
+                channel_id: Some(channel),
+                ..Default::default()
+            },
+        )
+        .await;
+    let notice = carol.text().await;
+    assert!(
+        notice.message.contains("not archived"),
+        "{}",
+        notice.message
+    );
+    carol
+        .send(
+            kind::TEXT_MESSAGE,
+            &proto::TextMessage {
+                channel_id: vec![channel],
+                message: "stock live words".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+    let chat = bob.chat().await;
+    let message = chat.message.unwrap();
+    assert_eq!(
+        (message.seq, message.content.as_str()),
+        (seq + 1, "stock live words")
+    );
+    // What was stored before expires.
+    alice.send(conversation, "sync").await;
+    let server = &fixture.running.server;
+    assert_eq!(
+        nuscheld::retention::expire_now(server, &server.storage).await,
+        Some(1)
+    );
+    {
+        let store = fixture.store.lock().unwrap();
+        assert_eq!(store.history.messages[&(hex.clone(), before)].content, "");
+        assert!(
+            store
+                .history
+                .messages
+                .values()
+                .all(|row| !row.content.contains("live words"))
+        );
+    }
+    // Sequence numbers are never reused after a restart.
+    drop((alice, bob, carol));
+    let fixture = fixture.restart("").await;
+    let head = fixture
+        .running
+        .server
+        .lock()
+        .conversations
+        .head(&conversation);
+    assert_eq!(head, seq + 2);
+}
+
+#[tokio::test]
+async fn the_server_default_and_maximum_retention() {
+    let fixture = Fixture::start("[history]\nretention = \"none\"").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let root = alice.conversations[&0];
+    let policy = {
+        let state = fixture.running.server.lock();
+        state.channel_info(state.channels.get(0).unwrap())
+    };
+    assert!(policy.live_only && !policy.own_retention);
+    alice.send(root, "not kept").await;
+    alice.send(root, "sync").await;
+    assert!(fixture.store.lock().unwrap().history.messages.is_empty());
+    let mut carol = Raw::connect(fixture.address(), &[]).await;
+    carol.version(None).await;
+    carol.authenticate("Carol").await;
+    let sync =
+        proto::ServerSync::decode(carol.until(kind::SERVER_SYNC).await.unwrap().payload).unwrap();
+    assert!(sync.welcome_text.unwrap().contains("not archived"));
+    drop((alice, carol));
+    // A maximum caps channels that keep more.
+    let fixture = fixture.restart("[history]\nmax_retention_days = 30").await;
+    let mut state = fixture.running.server.lock();
+    state.set_retention(root, Some(nuschel_ipc::server::Retention::Forever));
+    assert_eq!(
+        state.retention(&root),
+        nuschel_ipc::server::Retention::Days(30)
+    );
+    let info = state.channel_info(state.channels.get(0).unwrap());
+    assert_eq!((info.retention_days, info.own_retention), (30, true));
 }
 
 #[tokio::test]

@@ -346,6 +346,9 @@ impl State {
         };
         let (account, user_id, name) = self.author(session);
         let seq = self.conversations.next_seq(id);
+        // Unregistered senders have no durable identity to scope a key to, and
+        // a live-only conversation stores none.
+        let keyed = account.filter(|_| !self.live_only(&id));
         let row = StoredMessage {
             conversation: hex(&id),
             seq,
@@ -356,16 +359,15 @@ impl State {
             format: v1::Format::Text as u8,
             reply_to: (message.reply_to > 0).then_some(message.reply_to),
             sent_ms: now_ms(),
-            // Unregistered senders have no durable identity to scope a key to.
-            idempotency_key: account.map(|_| crate::tls::hex(&key)),
-            body_hash: account
+            idempotency_key: keyed.map(|_| crate::tls::hex(&key)),
+            body_hash: keyed
                 .map(|_| body_hash(&id, message.format, message.reply_to, &message.content)),
             content: message.content,
             ..StoredMessage::default()
         };
         let wire = self.wire_message(row.clone());
         self.history.store(
-            Request::HistoryAppend { message: row },
+            self.append_or_advance(row),
             Done::Request {
                 session,
                 request_id: message.request_id,
@@ -393,9 +395,11 @@ impl State {
         }
         self.text_limited(session)?;
         let (account, user_id, name) = self.author(session);
-        // Unregistered authors cannot edit; only while they may still post.
+        // Unregistered authors cannot edit; only while they may still post,
+        // and not where nothing is stored.
         let account = account.ok_or(fail(Code::NotFound))?;
         if !self.can_write(session, &id)
+            || self.live_only(&id)
             || message.target == 0
             || message.target > self.conversations.head(&id)
         {
@@ -547,9 +551,11 @@ impl State {
                 message,
                 fallback,
             } => match response {
+                // Stored, or a live-only conversation's seq recorded.
                 Some(Response::Appended {
                     duplicate: false, ..
-                }) => self.deliver(
+                })
+                | Some(Response::Done) => self.deliver(
                     &conversation,
                     Delivery::Message {
                         message,
@@ -678,7 +684,7 @@ impl State {
         };
         let message = self.wire_message(row.clone());
         self.history.store(
-            Request::HistoryAppend { message: row },
+            self.append_or_advance(row),
             Done::Stock {
                 source,
                 conversation: id,
@@ -686,6 +692,20 @@ impl State {
                 fallback: fallback.clone(),
             },
         );
+    }
+
+    /// Store a new message, or in a live-only conversation only record its
+    /// seq (so it is never reused) and keep nothing else.
+    fn append_or_advance(&self, row: StoredMessage) -> Request {
+        let live_only = parse(&row.conversation).is_some_and(|id| self.live_only(&id));
+        if live_only {
+            Request::HistoryAdvance {
+                conversation: row.conversation,
+                seq: row.seq,
+            }
+        } else {
+            Request::HistoryAppend { message: row }
+        }
     }
 
     // ---- §6 history ----
@@ -718,6 +738,21 @@ impl State {
         }
         if !self.can_read(session, &id) {
             return Err(fail(Code::NotFound));
+        }
+        if self.live_only(&id) {
+            // Not archived: no pages, even of what was kept before.
+            self.send(
+                session,
+                kind::HISTORY_PAGE,
+                &v1::HistoryPage {
+                    request_id: message.request_id,
+                    conversation: id.to_vec(),
+                    head: self.conversations.head(&id),
+                    ..Default::default()
+                },
+            );
+            self.end_request(session, message.request_id);
+            return Ok(());
         }
         let (ranges, clipped) = self.visible_ranges(session, &id);
         let read = Read {
@@ -765,6 +800,10 @@ impl State {
             self.visible_ranges(session, &id)
         };
         let visible = |seq: u64| ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&seq));
+        // Past the conversation's retention nothing is served, whether or not
+        // the hourly expiry has reached it yet (and none at all if live-only).
+        let now = now_ms();
+        let cutoff = self.retention(&id).cutoff_ms(now);
         let before = page.rows.len();
         let mut bytes = 0;
         let messages: Vec<v1::Message> = page
@@ -773,12 +812,20 @@ impl State {
             .filter(|row| visible(row.seq))
             .map(|row| {
                 // An event about a message the reader may not see says nothing.
-                let row = match row.target {
+                let mut row = match row.target {
                     Some(target) if !visible(target) => {
                         StoredMessage::void(&row.conversation, row.seq, row.sent_ms)
                     }
                     _ => row,
                 };
+                if cutoff.is_some_and(|cutoff| row.sent_ms < cutoff)
+                    && nuschel_ipc::server::expirable(&row)
+                {
+                    row.content.clear();
+                    row.reply_to = None;
+                    row.deleted_ms = Some(now);
+                    row.delete_reason = Some(2);
+                }
                 bytes += row.content.len() as u64;
                 self.wire_message(row)
             })
@@ -1062,13 +1109,16 @@ impl State {
 
     /// A channel's extension properties for Nuschel connections.
     pub fn channel_info(&self, channel: &crate::state::Channel) -> v1::ChannelInfo {
+        let (retention_days, live_only) = self.wire_retention(&channel.conversation_id);
         v1::ChannelInfo {
             conversation: channel.conversation_id.to_vec(),
             visibility: match channel.history_visibility {
                 HistoryVisibility::Members => v1::Visibility::Members,
                 HistoryVisibility::SinceAccess => v1::Visibility::SinceAccess,
             } as i32,
-            retention_days: self.settings.config.history.retention_days,
+            retention_days,
+            live_only,
+            own_retention: self.own_retention(&channel.conversation_id).is_some(),
         }
     }
 
@@ -1098,32 +1148,65 @@ impl State {
         message: v1::ChannelSettings,
     ) -> Result<(), Failure> {
         self.extension_limited(session, |extension| &mut extension.requests)?;
-        if self.channels.get(message.channel).is_none()
-            || !self.has(session, message.channel, perm::WRITE)
-        {
-            return Err(fail(Code::NotFound));
-        }
-        let visibility = match v1::Visibility::try_from(message.visibility) {
-            Ok(v1::Visibility::Members) => HistoryVisibility::Members,
-            Ok(v1::Visibility::SinceAccess) => HistoryVisibility::SinceAccess,
-            Err(_) => return Err(fail(Code::Malformed)),
-        };
-        let changed = self
+        let channel = message.channel;
+        let Some(conversation) = self
             .channels
-            .get_mut(message.channel)
-            .is_some_and(|channel| {
+            .get(channel)
+            .map(|channel| channel.conversation_id)
+            .filter(|_| self.has(session, channel, perm::WRITE))
+        else {
+            return Err(fail(Code::NotFound));
+        };
+        let visibility = match message.visibility.map(v1::Visibility::try_from) {
+            None => None,
+            Some(Ok(v1::Visibility::Members)) => Some(HistoryVisibility::Members),
+            Some(Ok(v1::Visibility::SinceAccess)) => Some(HistoryVisibility::SinceAccess),
+            Some(Err(_)) => return Err(fail(Code::Malformed)),
+        };
+        let retention = match &message.retention {
+            None => None,
+            Some(setting) => {
+                Some(crate::retention::from_wire(setting).ok_or(fail(Code::Malformed))?)
+            }
+        };
+        // Shortening removes what is stored now: the client must have said so
+        // to the person changing it (docs/extension.md §6).
+        if let Some(own) = retention
+            && self
+                .retention_with(own)
+                .shorter_than(self.retention(&conversation))
+            && !message.confirm_expiry
+        {
+            return Err(fail(Code::ConfirmationRequired));
+        }
+        let mut changed = false;
+        if let Some(visibility) = visibility
+            && self.channels.get_mut(channel).is_some_and(|channel| {
                 std::mem::replace(&mut channel.history_visibility, visibility) != visibility
-            });
-        if changed {
+            })
+        {
             if visibility == HistoryVisibility::SinceAccess {
-                self.begin_since_access(message.channel);
+                self.begin_since_access(channel);
             }
             // Pages in flight recompute what their readers may see.
             self.authz_epoch += 1;
-            self.persist_channel(message.channel);
-            tracing::info!(actor = %self.log_name(session), channel = message.channel, ?visibility, "changed history visibility");
+            self.persist_channel(channel);
+            tracing::info!(actor = %self.log_name(session), channel, ?visibility, "changed history visibility");
+            changed = true;
+        }
+        if let Some(own) = retention
+            && self.own_retention(&conversation) != own
+        {
+            let kept = self.set_retention(conversation, own);
+            tracing::info!(actor = %self.log_name(session), channel, retention = ?own, effective = ?self.retention(&conversation), "changed channel retention");
+            if kept {
+                self.retention_changed(channel);
+            }
+            changed = true;
+        }
+        if changed {
             self.broadcast_channel_state(&proto::ChannelState {
-                channel_id: Some(message.channel),
+                channel_id: Some(channel),
                 ..Default::default()
             });
         }

@@ -10,9 +10,10 @@ use bytes::Bytes;
 use nuschel_ipc::{
     Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
     server::{
-        HISTORY_LOAD_PAGE, MessageKind, SeqRows, ServerSnapshot, ServerStorageRequest as Request,
-        ServerStorageResponse as Response, StoredAccess, StoredBan, StoredChannel, StoredDirect,
-        StoredMessage, StoredUser, USER_PAGE,
+        HISTORY_LOAD_PAGE, MessageKind, Retention, SeqRows, ServerSnapshot,
+        ServerStorageRequest as Request, ServerStorageResponse as Response, StoredAccess,
+        StoredBan, StoredChannel, StoredDirect, StoredMessage, StoredRetention, StoredUser,
+        USER_PAGE, expirable,
     },
     write_frame,
 };
@@ -123,6 +124,19 @@ impl StorageHandle {
                     access.start,
                 )
             },
+        )
+        .await
+    }
+
+    /// Conversations with their own retention.
+    pub async fn history_retentions(&self) -> Option<Vec<StoredRetention>> {
+        self.pages(
+            |after| Request::HistoryRetentions { after },
+            |response| match response {
+                Response::Retentions(page) => Some(page),
+                _ => None,
+            },
+            |stored| stored.conversation.clone(),
         )
         .await
     }
@@ -394,6 +408,9 @@ pub struct MemoryHistory {
     markers: BTreeMap<(String, String), u64>,
     /// (conversation, account, key) → seq and body hash: the unique index.
     keys: std::collections::HashMap<(String, String, String), (u64, Option<String>)>,
+    /// Conversations' own retention, and live-only conversations' heads.
+    retention: BTreeMap<String, Retention>,
+    heads: BTreeMap<String, u64>,
 }
 
 struct MemoryRows<'a>(&'a BTreeMap<(String, u64), StoredMessage>);
@@ -468,6 +485,13 @@ impl MemoryHistory {
                     && row.deleted_ms.is_none()
                     && author.is_none_or(|author| row.author_account.as_deref() == Some(author))
             })
+    }
+
+    /// One conversation's rows, oldest first.
+    fn conversation(&mut self, conversation: &str) -> impl Iterator<Item = &mut StoredMessage> {
+        self.messages
+            .range_mut((conversation.to_owned(), 0)..=(conversation.to_owned(), u64::MAX))
+            .map(|(_, row)| row)
     }
 
     fn tombstone(row: &mut StoredMessage, deleted_ms: i64, reason: u32) {
@@ -554,6 +578,8 @@ impl MemoryHistory {
                 }
             },
             Request::HistoryPurge { conversation } => {
+                self.retention.remove(&conversation);
+                self.heads.remove(&conversation);
                 self.messages.retain(|(id, _), _| *id != conversation);
                 self.keys.retain(|(id, _, _), _| *id != conversation);
                 self.access.retain(|(id, _, _), _| *id != conversation);
@@ -599,9 +625,7 @@ impl MemoryHistory {
             } => {
                 let mut count = 0;
                 for row in self.messages.values_mut().filter(|row| {
-                    row.kind == MessageKind::Message
-                        && row.deleted_ms.is_none()
-                        && row.author_account.as_deref() == Some(account.as_str())
+                    expirable(row) && row.author_account.as_deref() == Some(account.as_str())
                 }) {
                     Self::tombstone(row, deleted_ms, 3);
                     count += 1;
@@ -609,23 +633,64 @@ impl MemoryHistory {
                 Response::Count(count)
             }
             Request::HistoryExpire {
+                conversation,
                 before_ms,
                 deleted_ms,
+                limit,
             } => {
                 let mut count = 0;
-                for row in self.messages.values_mut().filter(|row| {
-                    row.kind == MessageKind::Message
-                        && row.deleted_ms.is_none()
-                        && row.sent_ms < before_ms
-                }) {
+                for row in self
+                    .conversation(&conversation)
+                    .filter(|row| expirable(row) && row.sent_ms < before_ms)
+                    .take(limit as usize)
+                {
                     Self::tombstone(row, deleted_ms, 2);
                     count += 1;
                 }
                 Response::Count(count)
             }
+            Request::HistoryCountExpirable {
+                conversation,
+                before_ms,
+            } => Response::Count(
+                self.conversation(&conversation)
+                    .filter(|row| expirable(row) && row.sent_ms < before_ms)
+                    .count() as u64,
+            ),
+            Request::HistorySetRetention {
+                conversation,
+                retention,
+            } => {
+                match retention {
+                    Some(retention) => self.retention.insert(conversation, retention),
+                    None => self.retention.remove(&conversation),
+                };
+                Response::Done
+            }
+            Request::HistoryRetentions { after } => Response::Retentions(
+                self.retention
+                    .iter()
+                    .filter(|(id, _)| after.as_ref().is_none_or(|after| *id > after))
+                    .take(HISTORY_LOAD_PAGE as usize)
+                    .map(|(conversation, retention)| StoredRetention {
+                        conversation: conversation.clone(),
+                        retention: *retention,
+                    })
+                    .collect(),
+            ),
+            Request::HistoryAdvance { conversation, seq } => {
+                let head = self.heads.entry(conversation).or_insert(0);
+                *head = (*head).max(seq);
+                Response::Done
+            }
             Request::HistoryHeads { after } => {
                 let mut heads = BTreeMap::<String, u64>::new();
-                for (conversation, seq) in self.messages.keys() {
+                for (conversation, seq) in self
+                    .messages
+                    .keys()
+                    .map(|(id, seq)| (id, seq))
+                    .chain(self.heads.iter())
+                {
                     if after.as_ref().is_none_or(|after| conversation > after) {
                         let head = heads.entry(conversation.clone()).or_insert(0);
                         *head = (*head).max(*seq);

@@ -499,7 +499,7 @@ fn send_initial_state(state: &mut State, session: u32, channel: u32, crypt: Cryp
             });
         }
         welcome.push_str(&crate::handlers::retention_text(
-            config.history.retention_days,
+            config.history.default_retention(),
         ));
     }
     state.send(

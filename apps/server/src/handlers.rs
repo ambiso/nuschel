@@ -782,10 +782,14 @@ impl State {
     /// (docs/extension.md §9).
     pub fn retention_notice(&mut self, session: u32, channel: u32) {
         let history = &self.settings.config.history;
+        let Some(id) = self.conversation_of_channel(channel) else {
+            return;
+        };
+        // Channels with history, and those that keep something else than the
+        // welcome text said (retention.rs).
+        let retention = self.retention(&id);
         if !history.notify_stock_clients
-            || self
-                .conversation_of_channel(channel)
-                .is_none_or(|id| self.conversations.head(&id) == 0)
+            || (self.conversations.head(&id) == 0 && retention == history.default_retention())
         {
             return;
         }
@@ -796,7 +800,7 @@ impl State {
         {
             return;
         }
-        let text = retention_text(history.retention_days);
+        let text = crate::retention::notice(retention, true);
         self.text_to(session, &text);
     }
 
@@ -2260,14 +2264,6 @@ pub fn bounded_tokens(tokens: &[String]) -> Vec<[u8; 32]> {
 }
 
 /// What stock clients are told about retention (docs/extension.md §9).
-pub fn retention_text(days: u32) -> String {
-    let kept = match days {
-        0 => "kept without a time limit".to_owned(),
-        1 => "kept for 1 day".to_owned(),
-        days => format!("kept for {days} days"),
-    };
-    format!(
-        "Text in this server's channels is {kept}, and people who join a channel later can \
-         read it. Some users of this server receive messages without being shown in the channel."
-    )
+pub fn retention_text(retention: nuschel_ipc::server::Retention) -> String {
+    crate::retention::notice(retention, false)
 }

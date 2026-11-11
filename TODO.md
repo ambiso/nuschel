@@ -488,8 +488,15 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [ ] Desktop: direct messages as durable direct conversations; edit and delete UI
          (events are ignored today); typing indicators; write fetched server pages
          into the local cache.
-   - [ ] Server: per-channel and "none" retention; history rate limits per address
-         prefix; a PostgreSQL unit test (only the VM covers it).
+   - [ ] Desktop: show each channel's retention (`ChannelInfo.retention_days`,
+         `live_only`, `own_retention`) and offer it in channel settings to users with
+         Write: say what a shortening removes ("messages older than N days", all for
+         live-only) and send `confirm_expiry` only after the user agreed; drop
+         expired content from the local cache too.
+   - [x] Server: per-channel and "none" retention (forever by default; a shortening
+         needs confirmation and applies to existing messages; `max_retention_days`).
+   - [ ] Server: history rate limits per address prefix; a PostgreSQL unit test (only
+         the VM covers it).
    - [ ] Capability negotiation in the Mumble handshake (extension message range or
          `Version` fields) and a protocol version with a minimum-version policy.
    - [ ] Persistent history: server message ids, network pagination with ACL checks

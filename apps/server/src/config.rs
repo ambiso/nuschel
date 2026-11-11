@@ -72,13 +72,36 @@ pub enum GuestHistory {
     Full,
 }
 
+/// `history.retention`: `"forever"`, `"none"` or a number of days.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum RetentionSetting {
+    Days(u32),
+    Word(RetentionWord),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetentionWord {
+    Forever,
+    /// Not archived: live delivery only.
+    None,
+}
+
 /// Persistent history for Nuschel clients (docs/extension.md §4–§9).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct History {
     pub guests: GuestHistory,
-    /// Days messages are kept; 0 keeps them forever.
+    /// How long conversations keep messages unless a channel sets its own:
+    /// `"forever"` (the default, user decision), `"none"` (not archived) or
+    /// days. See [`History::default_retention`].
+    pub retention: Option<RetentionSetting>,
+    /// The older spelling: days, 0 keeps messages forever.
     pub retention_days: u32,
+    /// The most any conversation may keep, in days, whatever its channel says
+    /// (0: no maximum).
+    pub max_retention_days: u32,
     /// How often one message may be edited.
     pub edit_limit: u32,
     /// Users with Write on a channel may delete other people's messages there.
@@ -100,7 +123,9 @@ impl Default for History {
     fn default() -> Self {
         Self {
             guests: GuestHistory::None,
+            retention: None,
             retention_days: 0,
+            max_retention_days: 0,
             edit_limit: 20,
             moderators_delete: true,
             archive_stock_direct_messages: false,
@@ -109,6 +134,35 @@ impl Default for History {
             page_bytes_per_minute: 16 * 1024 * 1024,
             minimum_client: None,
             recommended_client: None,
+        }
+    }
+}
+
+impl History {
+    /// The server's default retention (docs/extension.md §6), within
+    /// `max_retention_days`.
+    pub fn default_retention(&self) -> nuschel_ipc::server::Retention {
+        use nuschel_ipc::server::Retention;
+        let days = |days: u32| match days {
+            0 => Retention::Forever,
+            days => Retention::Days(days.min(nuschel_ipc::server::MAX_RETENTION_DAYS)),
+        };
+        let configured = match self.retention {
+            Some(RetentionSetting::Word(RetentionWord::Forever)) => Retention::Forever,
+            Some(RetentionSetting::Word(RetentionWord::None)) => Retention::None,
+            Some(RetentionSetting::Days(value)) => days(value),
+            None => days(self.retention_days),
+        };
+        configured.min(self.maximum_retention())
+    }
+
+    /// `max_retention_days` as a retention (forever when unset).
+    pub fn maximum_retention(&self) -> nuschel_ipc::server::Retention {
+        match self.max_retention_days {
+            0 => nuschel_ipc::server::Retention::Forever,
+            days => nuschel_ipc::server::Retention::Days(
+                days.min(nuschel_ipc::server::MAX_RETENTION_DAYS),
+            ),
         }
     }
 }
@@ -431,6 +485,17 @@ impl Config {
                 )));
             }
         }
+        let history = &self.history;
+        if history.retention.is_some() && history.retention_days != 0 {
+            return Err(ConfigError::Invalid(
+                "set history.retention or history.retention_days, not both".into(),
+            ));
+        }
+        if history.retention == Some(RetentionSetting::Days(0)) {
+            return Err(ConfigError::Invalid(
+                "history.retention = 0 is ambiguous; use \"forever\" or \"none\"".into(),
+            ));
+        }
         if self.max_queued_bytes < 64 * 1024 {
             return Err(ConfigError::Invalid(
                 "max_queued_bytes must be at least 64 KiB".into(),
@@ -538,6 +603,46 @@ mod tests {
         assert!(error.to_string().contains("credential"));
         let members = Config::from_toml("[kt]\nhistory = \"members\"").unwrap();
         assert_eq!(members.kt.history, KtHistoryAccess::Members);
+    }
+
+    #[test]
+    fn retention_is_forever_by_default_and_explicit_otherwise() {
+        use nuschel_ipc::server::Retention;
+        let retention = |text: &str| {
+            Config::from_toml(text)
+                .map_err(|error| error.to_string())
+                .and_then(|config| config.settings().map_err(|error| error.to_string()))
+                .map(|settings| settings.config.history.default_retention())
+        };
+        assert_eq!(retention(""), Ok(Retention::Forever));
+        assert_eq!(
+            retention("[history]\nretention = \"forever\""),
+            Ok(Retention::Forever)
+        );
+        assert_eq!(
+            retention("[history]\nretention = \"none\""),
+            Ok(Retention::None)
+        );
+        assert_eq!(
+            retention("[history]\nretention = 30"),
+            Ok(Retention::Days(30))
+        );
+        assert_eq!(
+            retention("[history]\nretention_days = 7"),
+            Ok(Retention::Days(7))
+        );
+        // The maximum caps the default.
+        assert_eq!(
+            retention("[history]\nmax_retention_days = 90"),
+            Ok(Retention::Days(90))
+        );
+        assert_eq!(
+            retention("[history]\nretention = \"none\"\nmax_retention_days = 90"),
+            Ok(Retention::None)
+        );
+        assert!(retention("[history]\nretention = 0").is_err());
+        assert!(retention("[history]\nretention = \"never\"").is_err());
+        assert!(retention("[history]\nretention = 3\nretention_days = 3").is_err());
     }
 
     #[test]

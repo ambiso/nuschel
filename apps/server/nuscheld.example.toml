@@ -102,8 +102,13 @@ passes = 2
 # read no history ("none") or the same as registered users ("full"); everyone
 # sees live messages.
 guests = "none"
-# Days messages are kept; 0 keeps them forever.
-retention_days = 0
+# How long messages are kept unless a channel sets its own (ChannelSettings,
+# Write on the channel): "forever" (the default), "none" (not archived: live
+# delivery only) or a number of days. Shortening it removes older messages
+# within the hour. (`retention_days`, with 0 for forever, is the older spelling.)
+retention = "forever"
+# The most any channel may keep, in days; 0 is no maximum.
+max_retention_days = 0
 edit_limit = 20
 # Users with Write on a channel may delete other people's messages there.
 moderators_delete = true

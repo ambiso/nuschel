@@ -169,6 +169,83 @@ impl StoredMessage {
     }
 }
 
+/// How long a conversation's messages are kept (docs/extension.md §6). The
+/// server default is forever (user decision); shorter retention is an explicit
+/// server or channel setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Retention {
+    #[default]
+    Forever,
+    /// Messages older than this many days (at least 1) become tombstones.
+    Days(u32),
+    /// Not archived: live delivery only; nothing is stored and no history
+    /// pages are served.
+    None,
+}
+
+/// The longest finite retention, in days (100 years); longer is forever.
+pub const MAX_RETENTION_DAYS: u32 = 36_500;
+
+impl Retention {
+    /// How much it keeps, for comparisons: none < days < forever.
+    fn rank(self) -> (u8, u32) {
+        match self {
+            Self::None => (0, 0),
+            Self::Days(days) => (1, days),
+            Self::Forever => (2, 0),
+        }
+    }
+
+    /// Whether changing from `before` to this removes messages `before` kept.
+    pub fn shorter_than(self, before: Self) -> bool {
+        self.rank() < before.rank()
+    }
+
+    /// The tighter of two retentions (a channel's, capped by the server's maximum).
+    pub fn min(self, other: Self) -> Self {
+        if self.shorter_than(other) {
+            self
+        } else {
+            other
+        }
+    }
+
+    /// Messages sent before this (Unix milliseconds) are expired; `None` keeps everything.
+    pub fn cutoff_ms(self, now_ms: i64) -> Option<i64> {
+        match self {
+            Self::Forever => None,
+            Self::Days(days) => {
+                Some(now_ms.saturating_sub(i64::from(days).saturating_mul(86_400_000)))
+            }
+            Self::None => Some(now_ms),
+        }
+    }
+}
+
+/// A conversation's own retention, overriding the server default. Kept per
+/// conversation, so a deleted channel's archive keeps its channel's setting.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredRetention {
+    pub conversation: String,
+    pub retention: Retention,
+}
+
+/// Rows one `HistoryExpire` tombstones at most, so a large expiry never holds
+/// the database's write lock for long; the server repeats until fewer come back.
+pub const EXPIRE_BATCH: u32 = 1000;
+
+/// Whether retention and the operator's erase may turn this row into a
+/// tombstone: live messages. **The hook for records the server must keep**:
+/// a kind that must survive (MLS commits within their catch-up window,
+/// docs/e2ee.md §6.3) is excluded here, in the storage worker's
+/// `expirable!` SQL predicate (crates/storage/src/server/history.rs), which
+/// must say the same.
+pub fn expirable(row: &StoredMessage) -> bool {
+    row.kind == MessageKind::Message && row.deleted_ms.is_none()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Anchor {
@@ -444,12 +521,38 @@ pub enum ServerStorageRequest {
         account: String,
         deleted_ms: i64,
     },
-    /// Tombstone messages sent before `before_ms` (retention): `Count`.
+    /// Tombstone at most `limit` expirable messages of one conversation sent
+    /// before `before_ms` (retention): `Count`.
     HistoryExpire {
+        conversation: String,
         before_ms: i64,
         deleted_ms: i64,
+        limit: u32,
     },
-    /// Conversations with history and their highest seq, in pages.
+    /// Expirable messages of one conversation sent before `before_ms`: `Count`
+    /// (what shortening its retention would remove).
+    HistoryCountExpirable {
+        conversation: String,
+        before_ms: i64,
+    },
+    /// Set (`Some`) or clear (`None`: the server default) a conversation's
+    /// own retention.
+    HistorySetRetention {
+        conversation: String,
+        retention: Option<Retention>,
+    },
+    /// Conversations with their own retention, in pages (`Retentions`).
+    HistoryRetentions {
+        after: Option<String>,
+    },
+    /// Record that a live-only conversation used `seq` without storing it,
+    /// so sequence numbers are never reused after a restart.
+    HistoryAdvance {
+        conversation: String,
+        seq: u64,
+    },
+    /// Conversations with history (or a live-only head) and their highest
+    /// seq, in pages.
     HistoryHeads {
         after: Option<String>,
     },
@@ -520,6 +623,7 @@ pub enum ServerStorageResponse {
     Directs(Vec<StoredDirect>),
     Access(Vec<StoredAccess>),
     ReadMarkers(Vec<(String, u64)>),
+    Retentions(Vec<StoredRetention>),
     Page(StoredPage),
     KtValues(Vec<Option<String>>),
     KtRecords(Vec<(String, String)>),

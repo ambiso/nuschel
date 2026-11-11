@@ -187,6 +187,7 @@ pub fn server_capabilities(kt: bool) -> Capabilities {
 /// the descriptor of its key-transparency log if it has one.
 pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>) -> v1::Hello {
     let history = &settings.config.history;
+    let (retention_days, live_only) = crate::retention::wire(history.default_retention());
     v1::Hello {
         protocol: nuschel::PROTOCOL,
         capabilities: server_capabilities(kt_log.is_some()).names(),
@@ -195,12 +196,13 @@ pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>) -> v1::Hello {
             mode: v1::policy::Mode::Compatible as i32,
             minimum_client: settings.minimum_client.unwrap_or(0),
             recommended_client: settings.recommended_client.unwrap_or(0),
-            retention_days: history.retention_days,
+            retention_days,
             guests: match history.guests {
                 GuestHistory::None => v1::policy::Guests::None,
                 GuestHistory::Full => v1::policy::Guests::Full,
             } as i32,
             edit_limit: history.edit_limit,
+            live_only,
         }),
     }
 }

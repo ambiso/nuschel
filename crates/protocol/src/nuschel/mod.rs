@@ -172,6 +172,9 @@ pub fn detail(code: Code) -> &'static str {
         Code::DuplicateRequest => "This request is already in progress.",
         Code::TooManyRequests => "Too many requests are in progress.",
         Code::LimitReached => "This message cannot be edited any more.",
+        Code::ConfirmationRequired => {
+            "This change removes stored messages; confirm it to go ahead."
+        }
     }
 }
 
@@ -403,6 +406,7 @@ mod tests {
                 conversation: vec![7; 16],
                 visibility: v1::Visibility::SinceAccess as i32,
                 retention_days: 0,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -414,8 +418,7 @@ mod tests {
 
     #[test]
     fn every_error_has_a_fixed_detail() {
-        for code in 0..=10 {
-            let code = Code::try_from(code).unwrap();
+        for code in (0..=12).filter_map(|code| Code::try_from(code).ok()) {
             assert!(!detail(code).is_empty());
             assert_eq!(error(1, code, 0).detail, detail(code));
         }

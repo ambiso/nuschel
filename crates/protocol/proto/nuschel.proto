@@ -39,11 +39,14 @@ message Policy {
   // advisory, never a security control.
   uint64 minimum_client = 2;
   uint64 recommended_client = 3;
-  // 0 keeps history forever.
+  // The server's default retention: 0 keeps history forever (unless
+  // `live_only`). Channels may set their own (`ChannelInfo`).
   uint32 retention_days = 4;
   Guests guests = 5;
   // How often one message may be edited.
   uint32 edit_limit = 6;
+  // The default is "none": not archived, live delivery only.
+  bool live_only = 8;
 }
 
 // Decodes only the extension field of a `Version` frame (other fields are
@@ -57,8 +60,26 @@ message ChannelInfo {
   // 16 random bytes, never reused.
   bytes conversation = 1;
   Visibility visibility = 2;
-  // 0 keeps history forever.
+  // What the channel keeps (its own retention or the server default, within
+  // the server's maximum): 0 keeps history forever, unless `live_only`.
   uint32 retention_days = 3;
+  // Not archived: live delivery only, nothing stored, no history pages.
+  bool live_only = 4;
+  // The channel sets its own retention (otherwise it follows the server's).
+  bool own_retention = 5;
+}
+
+// A channel's retention in `ChannelSettings`.
+message Retention {
+  oneof kind {
+    // Follow the server's default.
+    bool server_default = 1;
+    bool forever = 2;
+    // 1 to 36500.
+    uint32 days = 3;
+    // Not archived: live delivery only.
+    bool live_only = 4;
+  }
 }
 
 message ChannelStateExtension {
@@ -102,6 +123,10 @@ message Error {
     TOO_MANY_REQUESTS = 9;
     // The edit limit was reached.
     LIMIT_REACHED = 10;
+    // (11 is reserved for `mls/1`.) The change removes stored messages (a
+    // shorter retention): the client must show that and resend it with
+    // `confirm_expiry`.
+    CONFIRMATION_REQUIRED = 12;
   }
   uint64 request_id = 1;
   Code code = 2;
@@ -290,11 +315,18 @@ message DirectList {
   repeated Direct directs = 2;
 }
 
-// 0x4E12 -> Done or Error. Needs Write on the channel.
+// 0x4E12 -> Done or Error. Needs Write on the channel. Absent fields keep
+// the channel's current setting.
 message ChannelSettings {
   uint64 request_id = 1;
   uint32 channel = 2;
-  Visibility visibility = 3;
+  optional Visibility visibility = 3;
+  Retention retention = 4;
+  // Needed when `retention` keeps less than the channel keeps now: messages
+  // older than the new retention (all of them for live-only) become tombstones
+  // within the hour and are no longer served at once. Without it the answer is
+  // `CONFIRMATION_REQUIRED` and nothing changes.
+  bool confirm_expiry = 5;
 }
 
 // 0x4E13, success without a payload.

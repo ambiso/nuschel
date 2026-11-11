@@ -14,7 +14,7 @@ use crate::{
     config::GuestHistory,
     state::{Registered, State},
 };
-use nuschel_ipc::server::{HistoryVisibility, ServerStorageRequest as Request};
+use nuschel_ipc::server::{HistoryVisibility, Retention, ServerStorageRequest as Request};
 use nuschel_protocol::nuschel::{self, kind, v1};
 use std::collections::{BTreeSet, HashMap};
 
@@ -66,11 +66,19 @@ pub struct Conversations {
     pub access: HashMap<Id, HashMap<Id, Intervals>>,
     /// Read markers of accounts that are online: account → conversation → seq.
     pub markers: HashMap<Id, HashMap<Id, u64>>,
+    /// Conversations' own retention (a channel's setting, kept by its archive);
+    /// the others follow the server default (retention.rs).
+    pub retention: HashMap<Id, Retention>,
 }
 
 impl Conversations {
     pub fn kind(&self, id: &Id) -> Option<Kind> {
         self.kinds.get(id).copied()
+    }
+
+    /// Every known conversation.
+    pub fn ids(&self) -> impl Iterator<Item = &Id> {
+        self.kinds.keys()
     }
 
     pub fn head(&self, id: &Id) -> u64 {
@@ -108,6 +116,7 @@ impl Conversations {
         self.kinds.remove(id);
         self.heads.remove(id);
         self.access.remove(id);
+        self.retention.remove(id);
         for markers in self.markers.values_mut() {
             markers.remove(id);
         }

@@ -244,9 +244,41 @@ stock client would silently erase (or, for a deny, open) it.
   A live edit event carries the new content, only to readers who may see the target. Stock clients see neither: a "removed" message stays
   on their screens and in their logs, and the UI says so to moderators.
 - **Retention:** per server and per channel (keep forever, N days, or none); the
-  default is forever (user decision). Expired messages become tombstones without
-  content, so `seq` ranges stay explicit. Implemented: a server-wide number of days
-  (checked hourly); per-channel retention and "none" are not.
+  default is forever (user decision: "we don't want people to lose data because of
+  such a setting being too low by default"), and shorter retention is an explicit
+  setting. Expired messages become tombstones without content, so `seq` ranges stay
+  explicit.
+  - The server default is `history.retention` (`"forever"`, `"none"` or days); a
+    channel may set its own with `ChannelSettings`, which needs Write on the channel
+    like the visibility setting. It is a channel property outside the Mumble
+    permission bitmask (no new ACL bit, which a stock ACL editor would silently drop,
+    §5). `history.max_retention_days` caps every conversation, so an operator with a
+    legal maximum is never overridden by a channel. Direct conversations follow the
+    server default.
+  - The setting belongs to the conversation, so a deleted channel's archive keeps
+    its channel's retention; a temporary channel's goes with its history.
+  - **Shortening applies to existing messages**: the new retention is what the
+    server keeps, and older messages become tombstones within the hour (expiry runs
+    hourly) and are not served from the moment of the change. So that nobody does
+    this by accident, a change that keeps less than before is refused with
+    `CONFIRMATION_REQUIRED` unless it carries `confirm_expiry`; clients show what will
+    be removed ("messages older than N days", or all of them for "none") and ask
+    before sending it. Keeping more needs no confirmation, but cannot bring back
+    what already expired.
+  - **"None"** means not archived: live delivery only. Messages are acknowledged
+    and delivered with a `seq` as usual, but nothing is stored except the
+    conversation's highest `seq` (so sequence numbers are never reused after a
+    restart); there are no history pages (an empty page), no idempotency across
+    reconnects, and no edits. Switching a channel to "none" expires what it stored
+    before.
+  - Retention is visible per channel in `ChannelInfo` (days or live-only, and
+    whether the channel sets its own), and the server default in the hello's policy.
+    Stock clients are told in the archive notice (§9).
+  - Expiry never removes records the server must keep: one predicate decides what
+    may expire (`nuschel_ipc::server::expirable` and its SQL twin), where MLS
+    commits within their catch-up window (docs/e2ee.md §6.3) will be exempted.
+    Expired text is overwritten in SQLite (`secure_delete`); PostgreSQL keeps old row
+    versions until VACUUM, as for edits.
 - **Search** stays client-side (over pages the client has fetched and stored),
   consistent for plaintext and encrypted conversations; a server-side search for
   plaintext servers can be added later as a separate capability.
@@ -296,7 +328,10 @@ people who join later, or that invisible subscribers receive them; Mumble shows 
 in a channel and who listens. On a server in compatible mode:
 
 - Stock clients are told, in the welcome text and when entering an archived channel,
-  that text is retained and for how long; retention is visible per channel.
+  that text is retained and for how long; retention is visible per channel. The
+  welcome text gives the server default; entering a channel that keeps something else
+  (another number of days, or not archived at all) says so, and so does a change of
+  the channel's retention to stock users in it.
 - Direct messages from stock senders are not archived by default
   (`history.archive_stock_direct_messages` stores those between two accounts).
 - Operators get tools to erase a user's messages (and must, for GDPR requests):
@@ -345,8 +380,11 @@ the wire definition):
   `HistoryRequest`, `HistoryPage`, `Subscribe`, `Subscribed`, `Unsubscribe`,
   `Unsubscribed`, `ChatEdit`, `ChatDelete`, `ReadMarker`, `Typing`, `OpenDirect`,
   `DirectOpened`, `ListDirect`, `DirectList`, `ChannelSettings`, `Done`. Field 7200 of
-  `ChannelState` carries a channel's conversation id, visibility and retention, to
-  Nuschel connections only.
+  `ChannelState` carries a channel's conversation id, visibility and retention
+  (`retention_days`, 0 for forever; `live_only`; `own_retention`), to Nuschel
+  connections only. `ChannelSettings` changes only what it carries: an optional
+  visibility and an optional `Retention` (server default, forever, 1–36,500 days or
+  live-only), with `confirm_expiry` for a shortening.
 - **Capabilities**: `history/1` covers sending, history, edits, deletions, read
   markers, direct conversations and channel settings; `subscribe/1` and `typing/1` are
   separate. The client's sticky record keeps `nuschel/1` and every negotiated
@@ -355,7 +393,8 @@ the wire definition):
   1 moderator, 2 expired, 3 erased by the operator.
 - **Errors**: `unsupported`, `malformed`, `not_found` (also "not allowed"),
   `too_large`, `rate_limited`, `idempotency_conflict`, `busy`, `duplicate_request`,
-  `too_many_requests`, `limit_reached`, each with one fixed detail string.
+  `too_many_requests`, `limit_reached`, `confirmation_required` (12; 11 is reserved
+  for `mls/1`), each with one fixed detail string.
 - **Limits**: `ChatSend`/`ChatEdit` text ≤ 64 KiB (and the stock copy within the
   server's text limit), stored stock HTML ≤ 1 MiB, ≤ 64 conversations per
   `Subscribe`, ≤ 256 subscriptions per connection and 1,024 per account, ≤ 1,024

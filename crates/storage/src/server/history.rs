@@ -8,9 +8,20 @@
 use super::{MAX_NAME, ServerStore, too_long};
 use crate::{Error, Pool};
 use nuschel_ipc::server::{
-    HISTORY_LOAD_PAGE, MessageKind, PageQuery, SeqRows, ServerStorageResponse as Response,
-    StoredAccess, StoredDirect, StoredMessage, StoredPage,
+    HISTORY_LOAD_PAGE, MAX_RETENTION_DAYS, MessageKind, PageQuery, Retention, SeqRows,
+    ServerStorageResponse as Response, StoredAccess, StoredDirect, StoredMessage, StoredPage,
+    StoredRetention,
 };
+
+/// The rows retention and the operator's erase may tombstone, as an SQL
+/// predicate: live messages. It must say what `nuschel_ipc::server::expirable`
+/// says; that is **the hook for records the server must keep** (MLS commits
+/// within their catch-up window, docs/e2ee.md §6.3, are excluded in both).
+macro_rules! expirable {
+    () => {
+        "kind = 0 AND deleted_ms IS NULL"
+    };
+}
 
 /// Message text the worker stores, whatever the server sends.
 const MAX_CONTENT: usize = 1024 * 1024;
@@ -262,7 +273,8 @@ impl ServerStore {
                 return Ok(outcome);
             }
             sqlx::query(
-                "UPDATE history_messages SET content = $3, format = $4, edited_ms = $5, edits = edits + 1 WHERE conversation = $1 AND seq = $2",
+                // Never revive a row that expired or was erased meanwhile.
+                "UPDATE history_messages SET content = $3, format = $4, edited_ms = $5, edits = edits + 1 WHERE conversation = $1 AND seq = $2 AND deleted_ms IS NULL",
             )
             .bind(&event.conversation)
             .bind(signed(target)?)
@@ -335,6 +347,8 @@ impl ServerStore {
                 "DELETE FROM history_messages WHERE conversation = $1",
                 "DELETE FROM history_access WHERE conversation = $1",
                 "DELETE FROM history_read_markers WHERE conversation = $1",
+                "DELETE FROM history_retention WHERE conversation = $1",
+                "DELETE FROM history_heads WHERE conversation = $1",
             ] {
                 sqlx::query(statement)
                     .bind(conversation)
@@ -440,7 +454,11 @@ impl ServerStore {
     /// Tombstone every message by `account` (the operator's erase).
     pub async fn history_erase(&self, account: &str, deleted_ms: i64) -> Result<u64, Error> {
         too_long(account, MAX_ID)?;
-        let statement = "UPDATE history_messages SET content = '', reply_to = NULL, deleted_ms = $2, delete_reason = 3 WHERE kind = 0 AND deleted_ms IS NULL AND author_account = $1";
+        let statement = concat!(
+            "UPDATE history_messages SET content = '', reply_to = NULL, deleted_ms = $2, delete_reason = 3 WHERE ",
+            expirable!(),
+            " AND author_account = $1"
+        );
         with_pool!(&self.pool, |pool| {
             Ok(sqlx::query(statement)
                 .bind(account)
@@ -451,23 +469,147 @@ impl ServerStore {
         })
     }
 
-    /// Tombstone messages sent before `before_ms` (retention).
-    pub async fn history_expire(&self, before_ms: i64, deleted_ms: i64) -> Result<u64, Error> {
-        let statement = "UPDATE history_messages SET content = '', reply_to = NULL, deleted_ms = $2, delete_reason = 2 WHERE kind = 0 AND deleted_ms IS NULL AND sent_ms < $1";
+    /// Tombstone at most `limit` expirable messages of one conversation sent
+    /// before `before_ms` (retention), oldest first. Content is overwritten in
+    /// place (`secure_delete` on SQLite; PostgreSQL keeps old row versions until
+    /// VACUUM, see docs/server.md).
+    pub async fn history_expire(
+        &self,
+        conversation: &str,
+        before_ms: i64,
+        deleted_ms: i64,
+        limit: u32,
+    ) -> Result<u64, Error> {
+        too_long(conversation, MAX_ID)?;
+        let statement = concat!(
+            "UPDATE history_messages SET content = '', reply_to = NULL, deleted_ms = $3, delete_reason = 2 \
+             WHERE conversation = $1 AND seq IN (SELECT seq FROM history_messages WHERE conversation = $4 AND ",
+            expirable!(),
+            " AND sent_ms < $2 ORDER BY seq LIMIT $5)"
+        );
         with_pool!(&self.pool, |pool| {
             Ok(sqlx::query(statement)
+                .bind(conversation)
                 .bind(before_ms)
                 .bind(deleted_ms)
+                .bind(conversation)
+                .bind(i64::from(limit))
                 .execute(pool)
                 .await?
                 .rows_affected())
         })
     }
 
+    /// Expirable messages of one conversation sent before `before_ms`.
+    pub async fn history_count_expirable(
+        &self,
+        conversation: &str,
+        before_ms: i64,
+    ) -> Result<u64, Error> {
+        too_long(conversation, MAX_ID)?;
+        let statement = concat!(
+            "SELECT COUNT(*) FROM history_messages WHERE conversation = $1 AND ",
+            expirable!(),
+            " AND sent_ms < $2"
+        );
+        let count: i64 = with_pool!(&self.pool, |pool| {
+            sqlx::query_scalar(statement)
+                .bind(conversation)
+                .bind(before_ms)
+                .fetch_one(pool)
+                .await?
+        });
+        Ok(unsigned(count))
+    }
+
+    /// Set or clear (`None`: the server default) a conversation's retention.
+    pub async fn history_set_retention(
+        &self,
+        conversation: &str,
+        retention: Option<Retention>,
+    ) -> Result<(), Error> {
+        too_long(conversation, MAX_ID)?;
+        let row = retention.map(|retention| match retention {
+            Retention::Forever => ("forever", None),
+            Retention::Days(days) => ("days", Some(i64::from(days.clamp(1, MAX_RETENTION_DAYS)))),
+            Retention::None => ("none", None),
+        });
+        with_pool!(&self.pool, |pool| {
+            match row {
+                None => {
+                    sqlx::query("DELETE FROM history_retention WHERE conversation = $1")
+                        .bind(conversation)
+                        .execute(pool)
+                        .await?;
+                }
+                Some((mode, days)) => {
+                    sqlx::query(
+                        "INSERT INTO history_retention (conversation, mode, days) VALUES ($1, $2, $3) \
+                         ON CONFLICT (conversation) DO UPDATE SET mode = excluded.mode, days = excluded.days",
+                    )
+                    .bind(conversation)
+                    .bind(mode)
+                    .bind(days)
+                    .execute(pool)
+                    .await?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    pub async fn history_retentions(
+        &self,
+        after: Option<&str>,
+    ) -> Result<Vec<StoredRetention>, Error> {
+        let rows: Vec<(String, String, Option<i64>)> = with_pool!(&self.pool, |pool| {
+            sqlx::query_as(
+                "SELECT conversation, mode, days FROM history_retention WHERE conversation > $1 ORDER BY conversation LIMIT $2",
+            )
+            .bind(after.unwrap_or(""))
+            .bind(i64::from(HISTORY_LOAD_PAGE))
+            .fetch_all(pool)
+            .await?
+        });
+        Ok(rows
+            .into_iter()
+            .map(|(conversation, mode, days)| StoredRetention {
+                conversation,
+                retention: match (mode.as_str(), days) {
+                    ("none", _) => Retention::None,
+                    ("days", Some(days)) => Retention::Days(
+                        u32::try_from(days.clamp(1, i64::from(MAX_RETENTION_DAYS))).unwrap_or(1),
+                    ),
+                    // Anything unreadable keeps messages rather than losing them.
+                    _ => Retention::Forever,
+                },
+            })
+            .collect())
+    }
+
+    /// Raise a live-only conversation's recorded head.
+    pub async fn history_advance(&self, conversation: &str, seq: u64) -> Result<(), Error> {
+        too_long(conversation, MAX_ID)?;
+        with_pool!(&self.pool, |pool| {
+            sqlx::query(
+                "INSERT INTO history_heads (conversation, head) VALUES ($1, $2) \
+                 ON CONFLICT (conversation) DO UPDATE SET head = CASE WHEN excluded.head > history_heads.head THEN excluded.head ELSE history_heads.head END",
+            )
+            .bind(conversation)
+            .bind(signed(seq)?)
+            .execute(pool)
+            .await?;
+            Ok(())
+        })
+    }
+
     pub async fn history_heads(&self, after: Option<&str>) -> Result<Vec<(String, u64)>, Error> {
         let rows: Vec<(String, i64)> = with_pool!(&self.pool, |pool| {
+            // Stored rows, and the heads of live-only conversations.
             sqlx::query_as(
-                "SELECT conversation, MAX(seq) FROM history_messages WHERE conversation > $1 GROUP BY conversation ORDER BY conversation LIMIT $2",
+                "SELECT conversation, MAX(seq) FROM (SELECT conversation, seq FROM history_messages \
+                 UNION ALL SELECT conversation, head AS seq FROM history_heads) AS heads \
+                 WHERE conversation > $1 GROUP BY conversation ORDER BY conversation LIMIT $2",
             )
             .bind(after.unwrap_or(""))
             .bind(i64::from(HISTORY_LOAD_PAGE))
@@ -698,6 +840,105 @@ mod tests {
         assert_eq!(store.history_erase(&account, 5).await?, 4);
         store.history_purge(&"c".repeat(32)).await?;
         assert!(store.history_heads(None).await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retention_expires_in_batches_and_keeps_live_only_heads() -> Result<(), Error> {
+        let directory = tempfile::tempdir().map_err(|_| Error::InvalidMessage)?;
+        let store = ServerStore::open(&directory.path().join("server.sqlite3")).await?;
+        let conversation = "c".repeat(32);
+        let other = "d".repeat(32);
+        for seq in 1..=5 {
+            store
+                .history_append(&row(seq, &format!("m{seq}"), None))
+                .await?;
+        }
+        store
+            .history_append(&StoredMessage {
+                conversation: other.clone(),
+                ..row(1, "elsewhere", None)
+            })
+            .await?;
+        // Rows 1..=3 were sent before 1004; only expirable ones count.
+        assert_eq!(store.history_count_expirable(&conversation, 1004).await?, 3);
+        assert_eq!(store.history_expire(&conversation, 1004, 9, 2).await?, 2);
+        assert_eq!(store.history_expire(&conversation, 1004, 9, 2).await?, 1);
+        assert_eq!(store.history_expire(&conversation, 1004, 9, 2).await?, 0);
+        let page = store
+            .history_page(&query(Anchor::After(0), 10, vec![(1, u64::MAX)]))
+            .await?;
+        let expired: Vec<_> = page
+            .rows
+            .iter()
+            .map(|row| (row.content.as_str(), row.delete_reason))
+            .collect();
+        assert_eq!(
+            expired,
+            [
+                ("", Some(2)),
+                ("", Some(2)),
+                ("", Some(2)),
+                ("m4", None),
+                ("m5", None)
+            ]
+        );
+        // An expired message cannot be edited back to life.
+        let edit = StoredMessage {
+            seq: 6,
+            kind: MessageKind::Edit,
+            target: Some(1),
+            ..row(6, "", None)
+        };
+        assert!(matches!(
+            store
+                .history_edit(1, &"a".repeat(32), 1, "revived", 5, &edit)
+                .await?,
+            Response::Missing
+        ));
+        // Other conversations are untouched.
+        assert_eq!(store.history_count_expirable(&other, i64::MAX).await?, 1);
+        // Retention per conversation, set, replaced and cleared.
+        store
+            .history_set_retention(&conversation, Some(Retention::Days(7)))
+            .await?;
+        store
+            .history_set_retention(&other, Some(Retention::None))
+            .await?;
+        store
+            .history_set_retention(&conversation, Some(Retention::Days(30)))
+            .await?;
+        assert_eq!(
+            store.history_retentions(None).await?,
+            [
+                StoredRetention {
+                    conversation: conversation.clone(),
+                    retention: Retention::Days(30)
+                },
+                StoredRetention {
+                    conversation: other.clone(),
+                    retention: Retention::None
+                },
+            ]
+        );
+        store.history_set_retention(&conversation, None).await?;
+        assert_eq!(store.history_retentions(None).await?.len(), 1);
+        // A live-only conversation's head counts, and only goes up.
+        let live = "e".repeat(32);
+        store.history_advance(&live, 9).await?;
+        store.history_advance(&live, 4).await?;
+        store.history_advance(&other, 3).await?;
+        assert_eq!(
+            store.history_heads(None).await?,
+            [
+                (conversation.clone(), 6),
+                (other.clone(), 3),
+                (live.clone(), 9)
+            ]
+        );
+        store.history_purge(&other).await?;
+        assert_eq!(store.history_retentions(None).await?.len(), 0);
+        assert_eq!(store.history_heads(None).await?.len(), 2);
         Ok(())
     }
 }
