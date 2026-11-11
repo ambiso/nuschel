@@ -1,0 +1,259 @@
+// SPDX-License-Identifier: EUPL-1.2
+import {context,sameContext,sameDestination,validPacket,FRAME,RATE,MAX_PENDING,MAX_PCM} from "./audio-protocol.js";
+
+// The UI owns this adapter; the codec worker receives only PCM/Opus, local
+// epochs and speaker numbers. No SDK client, identity, endpoint or key crosses.
+export class BrowserAudio {
+  constructor({onPacket=()=>{},onReady=()=>{},onState=()=>{}}={}) {
+    this.onPacket=onPacket;this.onReady=onReady;this.onState=onState;
+    this.voice=null;this.ctx=null;this.worker=null;this.stream=null;this.source=null;
+    this.workerReady=false;this.nodesReady=false;this.disposed=false;
+    this.epoch="0";this.revision=0;this.job=0;this.intent=0;this.consent=null;
+    this.localBlocked=false;this.localDeaf=false;this.pendingCapture=null;this.captureFailed=-1;
+    this.encodeJobs=new Map();this.decodeJobs=new Set();this.playbackJobs=new Set();
+    this.sequence=0n;this.baseSequence=0n;this.txPending=0;this.lastReady="";
+    this.lastProgress=0;this.initializing=null;this.applied={};this.phase="idle";
+  }
+  status(phase,message="") {
+    this.phase=phase;
+    this.onState({phase,message,processing:{...this.applied},microphone:Boolean(this.stream&&this.captureEnabled()),
+      playback:Boolean(this.playbackEnabled()),contextState:this.ctx?.state||"closed"});
+  }
+  captureEnabled() {
+    return Boolean(this.voice?.joined&&!this.voice.muted&&!this.voice.deafened&&!this.localBlocked&&!this.localDeaf&&
+      this.consent&&sameDestination(this.consent,this.voice)&&!this.awaitingUnmute&&
+      this.workerReady&&this.nodesReady&&this.ctx?.state==="running");
+  }
+  playbackEnabled() {
+    return Boolean(this.voice?.joined&&!this.voice.deafened&&!this.localDeaf&&this.workerReady&&this.nodesReady&&this.ctx?.state==="running");
+  }
+  // MUST be invoked directly by a trusted Join/Enable audio/Unmute gesture,
+  // before awaiting a server command. Permission acquisition is never implicit.
+  activateGesture({microphone=false}={}) {
+    if(this.disposed)return Promise.reject(new Error("Audio is closed."));
+    if(!globalThis.isSecureContext||!globalThis.AudioContext||!globalThis.AudioWorkletNode) {
+      this.status("unavailable","Voice requires HTTPS, Web Audio and AudioWorklet support.");
+      return Promise.resolve(false);
+    }
+    try {
+      if(!this.ctx) {
+        this.ctx=new AudioContext({sampleRate:RATE,latencyHint:"interactive"});
+        if(this.ctx.sampleRate!==RATE)throw new Error("This browser cannot provide a 48 kHz audio context.");
+        this.ctx.onstatechange=()=>{
+          if(this.ctx?.state!=="running") {
+            this.stopCapture(true);this.resetMedia();this.status("suspended","Enable audio to resume playback and microphone use.");
+          } else {this.applyPolicy();this.status(this.stream?"capturing":"listening");}
+        };
+      }
+      // Keep this call synchronous with the gesture for Safari/mobile autoplay.
+      const resumed=this.ctx.resume();
+      if(microphone&&this.voice?.joined) {
+        this.intent++;this.captureFailed=-1;this.consent=context(this.voice);
+        this.awaitingUnmute=Boolean(this.localBlocked||this.voice.muted||this.voice.deafened);
+        this.unmuteGeneration=this.voice.voice_generation;
+        this.localBlocked=false;this.localDeaf=false;
+        // Start permission acquisition in the same gesture, but never enable
+        // captured PCM until the authoritative join/unmute state also permits it.
+        this.acquireCapture();
+      }
+      if(!this.initializing)this.initializing=this.initialize().catch(error=>{
+        this.fail(error);throw error;
+      });
+      return Promise.all([resumed,this.initializing]).then(()=>{
+        this.applyPolicy();return true;
+      }).catch(error=>{this.status("unavailable",String(error?.message||error));return false;});
+    } catch(error) {this.fail(error);return Promise.resolve(false);}
+  }
+  async initialize() {
+    if(!this.workletLoaded) {
+      await this.ctx.audioWorklet.addModule(new URL("./audio-worklet.js",import.meta.url));
+      this.workletLoaded=true;
+    }
+    if(this.disposed)return;
+    this.captureNode=new AudioWorkletNode(this.ctx,"nuschl-capture",{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[1],channelCount:1,channelCountMode:"explicit"});
+    this.playbackNode=new AudioWorkletNode(this.ctx,"nuschl-playback",{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[1]});
+    this.output=this.ctx.createGain();this.output.gain.value=0;
+    this.captureNode.connect(this.ctx.destination); // processor emits zeros only
+    this.playbackNode.connect(this.output).connect(this.ctx.destination);
+    this.captureNode.port.onmessage=({data})=>this.captureFrame(data);
+    this.playbackNode.port.onmessage=({data})=>{
+      if(data?.kind==="queued"&&data.epoch===this.epoch)this.playbackJobs.delete(data.job);
+    };
+    this.nodesReady=true;
+    this.worker=new Worker(new URL("./audio-codec.worker.js",import.meta.url),{type:"module",name:"nuschl-audio-codecs"});
+    const worker=this.worker;
+    this.worker.onerror=()=>{if(this.worker===worker)this.fail(new Error("The isolated audio codec worker failed. Enable audio to retry."));};
+    this.worker.onmessage=({data})=>{if(this.worker===worker)this.workerMessage(data);};
+    this.lastProgress=performance.now();
+    this.watchdog=setInterval(()=>{
+      if(this.worker&&performance.now()-this.lastProgress>(this.workerReady?2500:15000))this.fail(new Error("The audio codec worker stopped responding."));
+    },500);
+    this.resetMedia();
+  }
+  syncVoice(value) {
+    const next=context(value);
+    const old=this.voice;
+    const incoming=next?{...next,joined:value.joined===true,muted:value.muted!==false,
+      deafened:value.deafened!==false,can_transmit:value.can_transmit===true}:null;
+    if(!sameDestination(old,incoming)) {
+      this.stopCapture(true);this.localBlocked=false;this.localDeaf=false;this.sequence=0n;
+    }
+    if(this.awaitingUnmute&&incoming&&!incoming.muted&&!incoming.deafened&&incoming.voice_generation!==this.unmuteGeneration)this.awaitingUnmute=false;
+    this.voice=incoming;
+    if(!incoming?.joined||incoming.muted||incoming.deafened) {
+      // A permission request initiated by this explicit unmute may finish while
+      // waiting for its acknowledgment. It remains disabled and time bounded.
+      if(!this.awaitingUnmute)this.stopCapture(true);
+    }
+    const changed=!sameContext(old,incoming)||old?.channel_id!==incoming?.channel_id||old?.joined!==incoming?.joined||old?.muted!==incoming?.muted||old?.deafened!==incoming?.deafened;
+    if(changed)this.resetMedia();
+    this.applyPolicy();
+    if(!incoming)this.status("idle");
+  }
+  setLocalPolicy({muted=false,deafened=false}={}) {
+    if(!muted&&!deafened)return; // only authoritative state/gesture can reopen
+    if(this.voice?.can_transmit&&!this.localBlocked)this.sendTerminator();
+    this.localBlocked=true;this.localDeaf=Boolean(deafened);
+    this.stopCapture(true);this.resetMedia();this.applyPolicy();
+    this.status(deafened?"deafened":"muted");
+  }
+  async acquireCapture() {
+    if(this.pendingCapture||!this.consent||this.captureFailed===this.intent||!this.voice?.joined)return;
+    if(!navigator.mediaDevices?.getUserMedia){this.status("unavailable","Microphone capture is unavailable.");return;}
+    const intent=this.intent,destination={...this.consent};
+    this.status("permission-pending","Allow microphone access to speak.");
+    this.pendingCapture=navigator.mediaDevices.getUserMedia({video:false,audio:{sampleRate:{ideal:RATE},channelCount:{ideal:1},echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
+    try {
+      const stream=await this.pendingCapture;
+      if(this.disposed||intent!==this.intent||!sameDestination(destination,this.voice)||!this.consent) {
+        for(const track of stream.getTracks())track.stop();return;
+      }
+      this.stream=stream;
+      for(const track of stream.getAudioTracks()) {
+        track.enabled=false;
+        track.onended=()=>{this.stopCapture(true);this.resetMedia();this.reportReady();this.status("device-ended","The microphone disconnected. Unmute to choose it again.");};
+        track.onmute=()=>{this.resetMedia();this.reportReady();this.status("device-muted","The microphone is temporarily unavailable.");};
+        track.onunmute=()=>{this.applyPolicy();};
+      }
+      const settings=stream.getAudioTracks()[0]?.getSettings()||{};
+      this.applied={echoCancellation:settings.echoCancellation??"unknown",noiseSuppression:settings.noiseSuppression??"unknown",autoGainControl:settings.autoGainControl??"unknown",sampleRate:settings.sampleRate??"unknown"};
+      this.applyPolicy();
+      clearTimeout(this.permissionHold);
+      this.permissionHold=setTimeout(()=>{
+        if(this.stream===stream&&!this.captureEnabled()){this.stopCapture(true);this.reportReady();this.status("muted","The microphone is muted. Unmute to retry.");}
+      },5000);
+    } catch(error) {
+      if(intent===this.intent){this.captureFailed=intent;this.status(error?.name==="NotAllowedError"?"denied":"unavailable",String(error?.message||error));}
+    } finally {
+      this.pendingCapture=null;
+      if(this.consent&&!this.stream&&intent!==this.intent)this.acquireCapture();
+    }
+  }
+  stopCapture(clearConsent) {
+    if(clearConsent){this.intent++;this.consent=null;this.awaitingUnmute=false;}
+    clearTimeout(this.permissionHold);
+    this.source?.disconnect();this.source=null;
+    if(this.stream)for(const track of this.stream.getTracks()){track.onended=null;track.onmute=null;track.onunmute=null;track.stop();}
+    this.stream=null;
+    if(this.captureNode)this.captureNode.port.postMessage({kind:"configure",epoch:this.epoch,enabled:false});
+  }
+  resetMedia() {
+    this.epoch=String(++this.revision);this.baseSequence=this.sequence;
+    this.encodeJobs.clear();this.decodeJobs.clear();this.playbackJobs.clear();
+    if(this.output)this.output.gain.setValueAtTime(0,this.ctx.currentTime);
+    this.worker?.postMessage({kind:"configure",epoch:this.epoch,capture:false});
+    this.captureNode?.port.postMessage({kind:"configure",epoch:this.epoch,enabled:false});
+    this.playbackNode?.port.postMessage({kind:"configure",epoch:this.epoch,enabled:this.playbackEnabled()});
+    this.playbackRunning=this.playbackEnabled();
+    this.captureRunning=false;
+  }
+  applyPolicy() {
+    if(this.disposed)return;
+    const capture=this.captureEnabled()&&Boolean(this.stream)&&!this.stream.getAudioTracks().some(t=>t.muted||t.readyState!=="live");
+    if(capture!==Boolean(this.captureRunning)) {
+      this.captureRunning=capture;
+      for(const track of this.stream?.getAudioTracks()||[])track.enabled=capture;
+      if(capture&&!this.source){this.source=this.ctx.createMediaStreamSource(this.stream);this.source.connect(this.captureNode);}
+      this.worker?.postMessage({kind:"configure",epoch:this.epoch,capture});
+      this.captureNode?.port.postMessage({kind:"configure",epoch:this.epoch,enabled:capture});
+    }
+    const playback=this.playbackEnabled();
+    if(playback!==this.playbackRunning) {
+      this.playbackRunning=playback;
+      this.playbackNode?.port.postMessage({kind:"configure",epoch:this.epoch,enabled:playback});
+    }
+    if(this.output)this.output.gain.setValueAtTime(playback?1:0,this.ctx.currentTime);
+    this.reportReady();
+    if(this.consent&&!this.stream&&!this.pendingCapture&&!this.awaitingUnmute)this.acquireCapture();
+  }
+  reportReady() {
+    if(!this.voice)return;
+    const ready={server_id:this.voice.server_id,connection_generation:this.voice.connection_generation,
+      voice_generation:this.voice.voice_generation,capture:Boolean(this.captureRunning),playback:this.playbackEnabled()};
+    const encoded=JSON.stringify(ready);if(encoded===this.lastReady)return;this.lastReady=encoded;
+    let result;try{result=this.onReady(ready);}catch(error){result=Promise.reject(error);}
+    Promise.resolve(result).catch(()=>this.status("transport-error","The voice connection is unavailable."));
+  }
+  captureFrame(data) {
+    if(data?.kind!=="capture"||data.epoch!==this.epoch)return;
+    const credit=()=>this.captureNode?.port.postMessage({kind:"credit",epoch:data.epoch});
+    if(!this.captureRunning||!this.voice?.can_transmit||this.encodeJobs.size>=2||this.txPending>=2||
+        !(data.samples instanceof Float32Array)||data.samples.length!==FRAME||!Number.isSafeInteger(data.frame)||data.frame<0){credit();return;}
+    const job=++this.job;
+    this.encodeJobs.set(job,{context:{...this.voice},started:performance.now(),sequence:this.baseSequence+BigInt(data.frame)*2n});
+    this.worker.postMessage({kind:"encode",epoch:this.epoch,job,samples:data.samples},[data.samples.buffer]);
+  }
+  receive(packet) {
+    if(!this.playbackEnabled()||!validPacket(packet,this.voice)||this.decodeJobs.size>=MAX_PENDING||this.playbackJobs.size>=MAX_PENDING)return false;
+    const job=++this.job;this.decodeJobs.add(job);
+    // Never transfer a buffer owned by the session/TLS worker: the SDK bridge
+    // already supplies a copy, and this final slice makes ownership explicit.
+    const opus=packet.opus.slice();
+    this.worker.postMessage({kind:"decode",epoch:this.epoch,job,speaker:packet.speaker,sequence:packet.sequence,opus,end:packet.end,volume:packet.volume},[opus.buffer]);
+    return true;
+  }
+  workerMessage(data) {
+    this.lastProgress=performance.now();
+    if(data?.kind==="ready"){this.workerReady=true;this.resetMedia();this.applyPolicy();this.status("listening");return;}
+    if(!data||data.epoch!==this.epoch)return;
+    if(data.kind==="encoded"||data.kind==="media-error"&&data.operation==="encode") {
+      const frame=this.encodeJobs.get(data.job);this.encodeJobs.delete(data.job);
+      this.captureNode?.port.postMessage({kind:"credit",epoch:this.epoch});
+      if(frame&&data.kind==="encoded"&&this.captureRunning&&this.voice?.can_transmit&&!this.localBlocked&&
+          sameContext(frame.context,this.voice)&&performance.now()-frame.started<=120&&data.opus instanceof Uint8Array&&data.opus.length<=960) {
+        this.sendPacket(frame.sequence,data.opus,false);
+      }
+    } else if(data.kind==="decoded"||data.kind==="media-error"&&data.operation==="decode") {
+      const pending=this.decodeJobs.delete(data.job);
+      if(pending&&data.kind==="decoded"&&this.playbackEnabled()&&this.playbackJobs.size<MAX_PENDING&&
+          data.samples instanceof Float32Array&&data.samples.length>0&&data.samples.length<=MAX_PCM&&
+          Number.isInteger(data.speaker)&&data.speaker>=0&&data.speaker<=0xffffffff&&
+          Number.isFinite(data.volume)&&data.volume>=0&&data.volume<=4) {
+        this.playbackJobs.add(data.job);
+        this.playbackNode.port.postMessage({kind:"playback",epoch:this.epoch,job:data.job,speaker:data.speaker,samples:data.samples,volume:data.volume},[data.samples.buffer]);
+      }
+    }
+  }
+  sendPacket(sequence,opus,end) {
+    if(!this.voice||sequence<0n||sequence>=(1n<<64n))return;
+    this.sequence=sequence+2n;this.txPending++;
+    const packet={server_id:this.voice.server_id,connection_generation:this.voice.connection_generation,
+      voice_generation:this.voice.voice_generation,sequence:String(sequence),opus,end};
+    let result;try{result=this.onPacket(packet);}catch(error){result=Promise.reject(error);}
+    Promise.resolve(result).catch(()=>this.status("transport-error","Voice could not be sent.")).finally(()=>this.txPending--);
+  }
+  sendTerminator(){this.sendPacket(this.sequence,new Uint8Array([0xf8,0xff,0xfe]),true);}
+  fail(error) {
+    this.stopCapture(true);this.workerReady=false;this.worker?.terminate();this.worker=null;
+    clearInterval(this.watchdog);this.resetMedia();this.reportReady();
+    this.captureNode?.disconnect();this.playbackNode?.disconnect();this.output?.disconnect();
+    this.captureNode=null;this.playbackNode=null;this.output=null;this.nodesReady=false;this.initializing=null;
+    this.status("error",String(error?.message||error));
+  }
+  async dispose() {
+    this.stopCapture(true);this.workerReady=false;this.resetMedia();this.reportReady();this.disposed=true;
+    clearInterval(this.watchdog);this.worker?.terminate();this.worker=null;
+    this.captureNode?.disconnect();this.playbackNode?.disconnect();this.output?.disconnect();
+    if(this.ctx){this.ctx.onstatechange=null;await this.ctx.close();}this.ctx=null;
+  }
+}
