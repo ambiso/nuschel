@@ -51,6 +51,7 @@ struct Shared {
     inputs: RefCell<VecDeque<Input>>,
     connections: RefCell<HashMap<String, Connection>>,
     generation: Cell<u64>,
+    anonymous_namespace: String,
     wake: RefCell<Option<js_sys::Function>>,
     audio_wake: RefCell<Option<js_sys::Function>>,
     talking: RefCell<HashMap<(String, u64, u32), f64>>,
@@ -92,6 +93,7 @@ impl Shared {
         let mut inputs = self.inputs.borrow_mut();
         let old_inputs = inputs.len();
         let mut audio_changed = false;
+        let mut storage_changed = false;
         for event in events {
             let server = server.to_owned();
             inputs.push_back(match event {
@@ -175,12 +177,16 @@ impl Shared {
                             .map(|hash| format!("direct:{hash}"))
                             .unwrap_or_else(|| {
                                 format!(
-                                    "direct:{generation}:{id}:{}",
+                                    "direct:{}:{generation}:{id}:{}",
+                                    self.anonymous_namespace,
                                     peer.as_ref().map(|peer| peer.instance).unwrap_or(0)
                                 )
                             }),
                         TextTarget::DirectConversation(_) => continue,
                     };
+                    // A successful append queues browser I/O before it can produce
+                    // an Input. It still needs a wake to drain storage_requests.
+                    storage_changed = true;
                     let message = IncomingMessage::plain(
                         None,
                         ChatMessage {
@@ -229,7 +235,7 @@ impl Shared {
                 }
             });
         }
-        let changed = old_inputs != inputs.len();
+        let changed = storage_changed || old_inputs != inputs.len();
         drop(inputs);
         if changed {
             self.wake();
@@ -434,12 +440,24 @@ impl WebClient {
     /// A client whose connections go through the relay at `relay`
     /// (`wss://<web host>/relay`).
     #[wasm_bindgen(constructor)]
-    pub fn new(relay: String) -> WebClient {
+    pub fn new(relay: String) -> Result<WebClient, JsValue> {
+        // Anonymous presence counters are process-local. Never attach persisted
+        // private history to a new peer just because counters repeat after reload.
+        let mut namespace = [0; 16];
+        rustls::crypto::ring::default_provider()
+            .secure_random
+            .fill(&mut namespace)
+            .map_err(|_| {
+                JsValue::from_str(
+                    "Secure randomness is unavailable; the browser client cannot start.",
+                )
+            })?;
         let shared = Rc::new(Shared {
             relay,
             inputs: RefCell::new(VecDeque::new()),
             connections: RefCell::new(HashMap::new()),
             generation: Cell::new(0),
+            anonymous_namespace: crate::session::hex(&namespace),
             wake: RefCell::new(None),
             audio_wake: RefCell::new(None),
             talking: RefCell::new(HashMap::new()),
@@ -453,7 +471,7 @@ impl WebClient {
             Vec::new(),
             Preferences::default(),
         );
-        WebClient { client, shared }
+        Ok(WebClient { client, shared })
     }
 
     /// Called whenever something arrived; then call `poll()`.

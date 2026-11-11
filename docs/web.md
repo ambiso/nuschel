@@ -222,6 +222,10 @@ IndexedDB saves observed messages by default, scoped to the server address and
 verified certificate, plus saved server bookmarks. Opaque Rust storage tickets
 bind asynchronous replies to their original conversation, connection and server
 certificate. A stale response cannot populate a replacement connection's history.
+Peers without a certificate additionally use a random 128-bit per-client cache
+namespace: repeated process/session counters after reload cannot reattribute an
+old anonymous private conversation. Retained anonymous rows are not deleted, but
+are not automatically attached to a later unauthenticated peer.
 This is local observed history, including on a compatible Nuschl server; it is
 not a promise of that server's entire archive. Passwords are supplied for a
 connection and are not written to IndexedDB.
@@ -236,9 +240,14 @@ previous one through shared SDK policy. `toggle_mute(index)` and
 mute/suppression and acknowledgement are additional gates and cannot undo a newer
 local mute/deaf choice. An explicit self-state change remains capture-blocked
 until a subsequent matching own self-state observation; absent/default false
-fields and unrelated sparse channel updates do not count as that acknowledgement. This slice alone is not a finished browser call UI:
-separate audio-worker/controller integration, browser permission and device UX,
-and exact-package synthetic playback/capture tests must also pass.
+fields and unrelated sparse channel updates do not count as that acknowledgement.
+Stock Murmur silently rate-limits these controls alongside text and Version
+messages. The session retries only the latest desired state at intervals of at
+least 1.1 seconds, with at most five automatic retries. An exhausted retry budget
+produces a notice and keeps capture blocked; a timeout never grants permission.
+The call UI invokes audio gestures before awaiting commands and serializes mute
+and deafen controls until the shared SDK's matching local-intent snapshot arrives.
+A newer gesture cannot silently restore an old capture stream.
 
 The worker posts `state.voice` as `null` or:
 
@@ -264,12 +273,17 @@ state changes only on transitions and expires after one second without packets;
 idle timer ticks do not redraw the UI. The main-thread message handler must route
 `voice_packet` directly to the audio controller without replacing Svelte state.
 
-`remove_server(index)`, `dismiss_notice(index)` and
+`remove_server(index)`, `edit_server(index,…)`, `dismiss_notice(index)` and
 `connect_with_password(index,password)` complement existing bookmark addition,
 certificate acceptance, legacy channel/private chat and paging APIs. Server
 snapshots expose own channel, local mute/deaf, per-user observed voice state,
-permissions and actually negotiated capabilities; unsupported actions must remain
-absent or visibly disabled in presentation.
+permissions and actually negotiated capabilities; unsupported actions remain
+absent or visibly disabled in presentation. `stop_audio()` mutes/deafens and
+revokes the local media route while keeping chat connected. A bookmark edit
+replaces the old connection and invalidates its route. The composer clears only
+on the shared SDK's `Sent` update for the same conversation and unchanged body,
+so a delayed send does not erase a newer draft. On legacy Mumble this means the
+session accepted the send, not an authenticated recipient delivery receipt.
 
 Still unsupported: modern extension negotiation/server archives/edit/delete,
 read receipts/typing sync, a persistent per-device client-certificate identity,
@@ -289,3 +303,23 @@ fixtures, with an optional installed Murmur fixture. No public servers or host
 microphone/speaker devices are used. The focused worker test runs with
 `node --experimental-vm-modules --test tests/web_voice_transport.mjs`; it covers
 actual Worker command routing with a deterministic SDK facade, not real codecs.
+
+The built Svelte app is also tested under the NixOS module's CSP and permissions
+policy, with Chromium at 320/360/390-pixel phone, tablet, landscape and desktop
+viewports (`tests/web_responsive.mjs`). These are layout/interaction tests with a
+synthetic SDK and disabled device access; they do not certify a physical mobile
+browser, on-screen keyboard, Safari or Firefox.
+
+`tests/web_voice_transport_real.py` runs actual packaged WASM through a private
+relay and stock Murmur (1.4 legacy and 1.5 protobuf voice framing). Its optional
+`--site`, `--wrapper` and `--output` run `tests/web_voice_ui.mjs` against the exact
+Nix-built App/SDK/codec/worklet. The confined browser uses an owned synthetic tone
+WAV, private profile/runtime, no host sound/video devices or session sockets,
+explicit pinned test fonts and an AudioContext null sink. This proves real UI
+join acknowledgement, explicit capture, Opus interchange and finite worklet PCM,
+deafen silence, listening without capture, rapid mute/deafen controls, incoming
+IndexedDB text/newlines, composer acknowledgement and chat retained after stopping
+audio. An audio-only interval also counts packets against state snapshots; audio
+must not serialize the full timeline for each packet. See
+[the audio boundary and platform limitations](browser-audio.md). Hardware audio,
+physical mobile browser behavior and audio quality still require separate tests.

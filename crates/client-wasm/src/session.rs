@@ -93,6 +93,15 @@ const PING_MS: f64 = 10_000.0;
 /// Plaintext waiting to be framed; a server sending more is cut off.
 const MAX_BUFFER: usize = 16 * 1024 * 1024;
 const MAX_EVENTS: usize = 512;
+// Stock Murmur shares a burst-5, sustained-1/s bucket across self-state,
+// Version and text. Rejected controls are silently discarded, so retry the
+// latest intent without ever treating a timeout as an acknowledgement.
+const SELF_RETRY_MS: f64 = 1100.0;
+const SELF_RETRIES: u8 = 5;
+struct SelfRetry {
+    after: f64,
+    remaining: u8,
+}
 
 fn next_user_instance() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -195,6 +204,8 @@ pub struct Session {
     desired_muted: bool,
     desired_deafened: bool,
     self_change_pending: bool,
+    now_ms: f64,
+    self_retry: Option<SelfRetry>,
 }
 
 impl Session {
@@ -248,6 +259,8 @@ impl Session {
             desired_muted: true,
             desired_deafened: true,
             self_change_pending: false,
+            now_ms: 0.0,
+            self_retry: None,
         })
     }
 
@@ -294,6 +307,26 @@ impl Session {
 
     /// Keep the session alive; `now_ms` is any monotonic clock.
     pub fn tick(&mut self, now_ms: f64) {
+        if !now_ms.is_finite() || now_ms < self.now_ms {
+            return;
+        }
+        self.now_ms = now_ms;
+        if self.phase == Phase::LoggedIn
+            && self
+                .self_retry
+                .as_ref()
+                .is_some_and(|retry| now_ms >= retry.after)
+        {
+            let retry = self.self_retry.as_mut().expect("checked");
+            if retry.remaining == 0 {
+                self.self_retry = None;
+                self.events.push_back(Event::Server(ServerEvent::Notice("The server has not confirmed the microphone settings. The microphone stays muted; toggle mute to retry.".into())));
+            } else {
+                retry.remaining -= 1;
+                retry.after = now_ms + SELF_RETRY_MS;
+                self.send_self();
+            }
+        }
         if self.phase == Phase::LoggedIn && now_ms - self.last_ping >= PING_MS {
             self.last_ping = now_ms;
             self.send(kind::PING, &proto::Ping::default());
@@ -319,14 +352,24 @@ impl Session {
     pub fn set_self(&mut self, muted: bool, deafened: bool) {
         self.desired_muted = muted || deafened;
         self.desired_deafened = deafened;
-        if let Some(session) = self.own_session() {
+        if self.own_session().is_some() {
             self.self_change_pending = true;
+            self.self_retry = Some(SelfRetry {
+                after: self.now_ms + SELF_RETRY_MS,
+                remaining: SELF_RETRIES,
+            });
+            self.send_self();
+        }
+    }
+
+    fn send_self(&mut self) {
+        if let Some(session) = self.own_session() {
             self.send(
                 kind::USER_STATE,
                 &proto::UserState {
                     session: Some(session),
                     self_mute: Some(self.desired_muted),
-                    self_deaf: Some(deafened),
+                    self_deaf: Some(self.desired_deafened),
                     ..Default::default()
                 },
             );
@@ -839,6 +882,7 @@ impl Session {
                         == (self.desired_muted, self.desired_deafened)
                 {
                     self.self_change_pending = false;
+                    self.self_retry = None;
                 }
                 let user = user.clone();
                 self.events
@@ -895,6 +939,82 @@ mod tests {
             },
         );
         s
+    }
+
+    #[test]
+    fn unacknowledged_self_state_retries_are_bounded_and_fail_closed() {
+        let mut s = voice_session();
+        s.set_self(false, false);
+        for tick in 1..=7 {
+            s.tick(tick as f64 * SELF_RETRY_MS);
+            assert!(s.voice_policy().0);
+        }
+        let notices = s
+            .take_events()
+            .iter()
+            .filter(|event| matches!(event, Event::Server(ServerEvent::Notice(_))))
+            .count();
+        assert_eq!(notices, 1);
+        assert!(s.self_retry.is_none());
+        s.tick(100_000.0);
+        assert!(
+            !s.take_events()
+                .iter()
+                .any(|event| matches!(event, Event::Server(ServerEvent::Notice(_))))
+        );
+        assert!(s.voice_policy().0);
+    }
+
+    #[test]
+    fn retries_keep_latest_intent_and_only_matching_self_ack_stops_them() {
+        let mut s = voice_session();
+        s.set_self(false, false);
+        s.set_self(true, true);
+        s.set_self(false, false);
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                self_mute: Some(true),
+                self_deaf: Some(true),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        s.tick(SELF_RETRY_MS);
+        assert!(s.self_retry.is_some());
+        assert!(s.voice_policy().0);
+        assert_eq!((s.desired_muted, s.desired_deafened), (false, false));
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                self_deaf: Some(false),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert!(s.self_retry.is_some());
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                self_mute: Some(false),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert!(s.self_retry.is_none());
+        assert_eq!(s.voice_policy(), (false, false));
+        s.tick(100_000.0);
+        assert!(
+            !s.take_events()
+                .iter()
+                .any(|event| matches!(event, Event::Server(ServerEvent::Notice(_))))
+        );
     }
 
     #[test]

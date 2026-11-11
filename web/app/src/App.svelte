@@ -12,7 +12,7 @@
   let showAdd = $state(false), editingIndex = $state(null), showSettings = $state(false), drawer = $state(false), mobile = $state(false);
   let body = $state(""), expanded = $state(new Map()), search = $state(""), showSearch = $state(false);
   let messagesElement = $state(), composerElement = $state(), navigationButton = $state(), searchElement = $state();
-  let settings = $state(appearance(null)), voice = $state(null), audioState = $state(null), capabilities = $state([]);
+  let settings = $state(appearance(null)), voice = $state(null), audioState = $state(null), audioActionPending = $state(null), capabilities = $state([]);
   let serverScroll = $state(), channelScroll = $state(), serverUnread = $state({above:false,below:false}), channelUnread = $state({above:false,below:false});
   let membersOpen = $state(false);
   let lastChannelPointer = "";
@@ -52,6 +52,9 @@
     return new Promise((resolve, reject) => {
       if (!worker) { reject("The client is still starting."); return; }
       if (requests.size >= 128) { reject("The client is busy. Try again shortly."); return; }
+      if (["connect","connect_with_password","disconnect","remove_server","edit_server"].includes(method) && servers[args[0]]?.id === voice?.server_id) {
+        audio?.syncVoice(null); voice = null; audioActionPending = null;
+      }
       const id = ++requestId;
       const timer = setTimeout(() => { requests.delete(id); reject("The browser worker did not respond. Retry or reload to reconnect."); },15000);
       requests.set(id, { resolve:value => {clearTimeout(timer);resolve(value);}, reject:reason => {clearTimeout(timer);reject(reason);} });
@@ -111,6 +114,10 @@
         servers = data.servers; timeline = data.timeline;
         voice = data.voice || null;
         audio.syncVoice(voice);
+        if (audioActionPending) {
+          const state=servers.find(server=>server.id===audioActionPending.server);
+          if (!voice || !state || (state.muted===audioActionPending.muted && state.deafened===audioActionPending.deafened)) audioActionPending=null;
+        }
         for (const update of data.updates || []) {
           if (update.kind === "error") error = update.message;
           if (update.kind === "sent") {
@@ -169,20 +176,22 @@
     void activateAudio({microphone:false}); void act("join", selectedIndex, channel);
   }
   function toggleMicrophone() {
-    if (voiceIndex < 0 || !voice?.joined) return;
+    if (voiceIndex < 0 || !voice?.joined || audioActionPending) return;
+    audioActionPending={server:voice.server_id,muted:!microphoneMuted,deafened:false};
     if (microphoneMuted) void activateAudio({microphone:true});
     else audio?.setLocalPolicy({muted:true});
-    void act("toggle_mute",voiceIndex);
+    void command("toggle_mute",voiceIndex).catch(reason=>{audioActionPending=null;error=String(reason);});
   }
   function togglePlayback() {
-    if (voiceIndex < 0 || !voice?.joined) return;
+    if (voiceIndex < 0 || !voice?.joined || audioActionPending) return;
+    audioActionPending={server:voice.server_id,muted:true,deafened:!playbackDeafened};
     if (playbackDeafened) void activateAudio({microphone:false});
     else audio?.setLocalPolicy({muted:true,deafened:true});
-    void act("toggle_deaf",voiceIndex);
+    void command("toggle_deaf",voiceIndex).catch(reason=>{audioActionPending=null;error=String(reason);});
   }
   function stopAudio() {
     audio?.setLocalPolicy({muted:true,deafened:true}); audio?.syncVoice(null);
-    voice = null; void act("stop_audio");
+    voice = null; audioActionPending=null; void act("stop_audio");
   }
   function toggle(row) { const next = new Map(expanded); next.set(`${selected.id}:${row.id}`, !row.open); expanded = next; }
   async function older() {
@@ -276,9 +285,9 @@
       <section class="voice-bar" aria-label="Voice controls">
         <div class="voice-description"><strong>{voiceChannel?.name || "Voice channel"}</strong><small>{voiceServer?.name} · {voiceStatus}</small></div>
         <div class="voice-actions">
-          <button class:pressed={microphoneMuted} class="icon-button" disabled={!voice.joined} aria-label={microphoneMuted ? "Unmute microphone" : "Mute microphone"} aria-pressed={microphoneMuted} title={microphoneMuted ? "Unmute microphone" : "Mute microphone"} onclick={toggleMicrophone}>{@render icon(microphoneMuted ? "muted" : "mic")}</button>
-          <button class:pressed={playbackDeafened} class="icon-button" disabled={!voice.joined} aria-label={playbackDeafened ? "Enable sound" : "Deafen"} aria-pressed={playbackDeafened} title={playbackDeafened ? "Enable sound" : "Deafen (also mutes microphone)"} onclick={togglePlayback}>{@render icon("headphones")}</button>
-          {#if !voice.deafened && audioState?.contextState !== "running"}<button class="text-button" onclick={() => activateAudio({microphone:false})}>Enable audio</button>{/if}
+          <button class:pressed={microphoneMuted} class="icon-button" disabled={!voice.joined || !!audioActionPending} aria-label={microphoneMuted ? "Unmute microphone" : "Mute microphone"} aria-pressed={microphoneMuted} title={microphoneMuted ? "Unmute microphone" : "Mute microphone"} onclick={toggleMicrophone}>{@render icon(microphoneMuted ? "muted" : "mic")}</button>
+          <button class:pressed={playbackDeafened} class="icon-button" disabled={!voice.joined || !!audioActionPending} aria-label={playbackDeafened ? "Enable sound" : "Deafen"} aria-pressed={playbackDeafened} title={playbackDeafened ? "Enable sound" : "Deafen (also mutes microphone)"} onclick={togglePlayback}>{@render icon("headphones")}</button>
+          {#if !voice.deafened && (audioState?.contextState !== "running" || audioState?.phase === "deafened")}<button class="text-button" onclick={() => activateAudio({microphone:false})}>Enable audio</button>{/if}
           <button class="icon-button" aria-label="Stop audio" title="Stop audio; stay connected for chat" onclick={stopAudio}>{@render icon("leave")}</button>
         </div>
       </section>

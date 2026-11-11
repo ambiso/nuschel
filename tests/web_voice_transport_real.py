@@ -14,7 +14,12 @@ def main():
     parser.add_argument("--sdk", required=True, type=Path)
     parser.add_argument("--murmur", required=True, type=Path)
     parser.add_argument("--node", default="node")
+    parser.add_argument("--site",type=Path,help="also test the exact packaged App UI with a confined synthetic-audio browser")
+    parser.add_argument("--wrapper",type=Path,help="required with --site: owned confined Chromium wrapper")
+    parser.add_argument("--output",type=Path,help="required with --site: disk-backed proof directory")
     args = parser.parse_args()
+    if args.site and not (args.wrapper and args.output):
+        parser.error("--site requires --wrapper and --output")
     with tempfile.TemporaryDirectory(prefix="voice-transport-") as temporary:
         root = Path(temporary)
         murmur = Murmur(args.murmur, root, free_port())
@@ -32,6 +37,9 @@ def main():
                         return probe.connect_ex(("127.0.0.1", port)) == 0
                 eventually(listening, "relay startup failed")
                 subprocess.run([args.node, str(Path(__file__).with_suffix(".mjs")), str(args.sdk), f"ws://127.0.0.1:{port}/relay", "127.0.0.1", str(murmur.port)], check=True, timeout=90)
+                if args.site:
+                    args.output.mkdir(parents=True,exist_ok=True)
+                    subprocess.run([args.node,str(Path(__file__).with_name("web_voice_ui.mjs")),str(args.site),f"ws://127.0.0.1:{port}/relay",str(murmur.port),str(args.wrapper),str(args.output)],check=True,timeout=150)
                 assert "voice-wasm-one" not in (root / "relay.log").read_text()
             finally:
                 relay.terminate()

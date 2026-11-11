@@ -60,6 +60,15 @@ try {
   assert.deepEqual(received[0].opus,[0xf8,0xff,0xfe]);
   assert.equal(received[0].speaker,own.own_session);
   assert.throws(()=>send(a,"9007199254740993"),/Old voice/);
+  // Anonymous private peers have no stable authenticated identity. Persisted
+  // rows must use a per-client random namespace, not just restartable counters.
+  a.send_text("anonymous namespace one");a.poll();
+  const first=JSON.parse(a.storage_requests()).find(op=>op.kind==="append"&&op.message.body==="anonymous namespace one");
+  assert.match(first.message.channel,/^direct:[a-f0-9]{32}:\d+:\d+:\d+$/);
+  b.open_direct(bi,own.own_session);b.send_text("anonymous namespace two");b.poll();
+  const second=JSON.parse(b.storage_requests()).find(op=>op.kind==="append"&&op.message.body==="anonymous namespace two");
+  assert.match(second.message.channel,/^direct:[a-f0-9]{32}:\d+:\d+:\d+$/);
+  assert.notEqual(first.message.channel.split(":")[1],second.message.channel.split(":")[1]);
   const stale=context(view(a));
   a.toggle_mute(ai);
   assert.equal(view(a).muted,true);
@@ -74,5 +83,5 @@ try {
   assert.equal(JSON.parse(a.bookmarks())[0].username,"voice-wasm-renamed");
   a.disconnect(ai);a.poll();assert.equal(view(a),null);
   assert.throws(()=>a.audio_ready(JSON.stringify({...stale,capture:true,playback:true})),/Stale/);
-  console.log(JSON.stringify({passed:true,transport:"TLS UDPTunnel",actual_wasm:sdk,received_packets:received.length,sequence:received[0].sequence,checks:["startup mute","join acknowledgment","readiness gate","private text browsing preserves route","stock Murmur Opus interchange","duplicate rejection","mute stale-work rejection","deaf implies mute","stop audio preserves chat","bookmark identity replacement","disconnect revocation"]}));
+  console.log(JSON.stringify({passed:true,transport:"TLS UDPTunnel",actual_wasm:sdk,received_packets:received.length,sequence:received[0].sequence,checks:["startup mute","join acknowledgment","readiness gate","private text browsing preserves route","stock Murmur Opus interchange","duplicate rejection","mute stale-work rejection","deaf implies mute","stop audio preserves chat","bookmark identity replacement","anonymous private-cache namespaces","disconnect revocation"]}));
 } finally {clearInterval(timer);a.disconnect(ai);b.disconnect(bi);}

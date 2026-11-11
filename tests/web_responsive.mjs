@@ -13,7 +13,7 @@ const { chromium } = await import(pathToFileURL(process.env.NUSCHL_PLAYWRIGHT ||
 const directory = resolve(site), out = resolve(output);
 await mkdir(out, { recursive:true });
 const types = {".html":"text/html", ".js":"text/javascript", ".wasm":"application/wasm", ".css":"text/css", ".svg":"image/svg+xml"};
-const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws://127.0.0.1:*; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+let csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const server = createServer(async (req, res) => {
   try {
     const pathname=decodeURIComponent(new URL(req.url,"http://127.0.0.1").pathname);
@@ -22,12 +22,13 @@ const server = createServer(async (req, res) => {
     assert.ok(path === directory || path.startsWith(directory + sep));
     const target = extname(mounted) ? path : resolve(path, "index.html");
     const bytes = await readFile(target);
-    res.writeHead(200, {"Content-Type":types[extname(target)] || "application/octet-stream", "Content-Security-Policy":csp, "Referrer-Policy":"no-referrer"});
+    res.writeHead(200, {"Content-Type":types[extname(target)] || "application/octet-stream", "Content-Security-Policy":csp, "Referrer-Policy":"no-referrer","Cross-Origin-Opener-Policy":"same-origin","Permissions-Policy":"camera=(), geolocation=(), microphone=(self)"});
     res.end(bytes);
   } catch { res.writeHead(404); res.end(); }
 });
 await new Promise((done) => server.listen(0,"127.0.0.1",done));
 const origin = `http://127.0.0.1:${server.address().port}`;
+csp=csp.replace("connect-src 'self'",`connect-src 'self' ${origin.replace("http:","ws:")}`);
 const channels = [{id:0,parent:null,name:"Root"}, {id:1,parent:0,name:"lounge"}, {id:2,parent:1,name:"Deeply nested discussion"}, {id:3,parent:0,name:"A very long channel name with plenty of words that must never push the chat out of view"}, ...Array.from({length:40},(_,i)=>({id:i+4,parent:0,name:`Channel ${i+4}`,unread_count:i===39 ? 2:0}))];
 const messages = [
   {serial:"1",author:"Ada Lovelace",at_ms:1700000000000,outgoing:false,document:{blocks:[{kind:"text",text:"A little closer, from anywhere.\n\nNewlines stay exactly where you put them."}]}},
@@ -66,6 +67,14 @@ try {
             if (data.method === "toggle_mute") { const s=state.servers[index];s.muted=!s.muted;s.deafened=false;state.voice={...state.voice,muted:s.muted,deafened:false,voice_generation:String(Number(state.voice.voice_generation)+1)}; }
             if (data.method === "toggle_deaf") { const s=state.servers[index];s.deafened=!s.deafened;s.muted=true;state.voice={...state.voice,muted:true,deafened:s.deafened,voice_generation:String(Number(state.voice.voice_generation)+1)}; }
             if (data.method === "stop_audio") state.voice=null;
+            if (data.method === "send_text") {
+              const body=data.args[0],server=state.timeline.server,channel=state.timeline.channel;
+              state.timeline.sending=true;
+              window.__ackLastSend=()=>{
+                state.timeline.sending=false;
+                this.onmessage?.({data:{...structuredClone(state),updates:[{kind:"sent",server,channel,body}]}});
+              };
+            }
             this.onmessage?.({data:{kind:"result",id:data.id}});
             this.onmessage?.({data:structuredClone(state)});
           });
@@ -118,6 +127,17 @@ try {
     await page.getByRole("button",{name:"Deafen",exact:true}).click();
     await page.getByRole("button",{name:"Enable sound",exact:true}).click();
     await page.getByRole("button",{name:"Unmute microphone",exact:true}).waitFor();
+    if (name === "desktop") {
+      const composer=page.getByLabel("Message",{exact:true});
+      await composer.fill("Queued message");await page.getByRole("button",{name:"Send",exact:true}).click();
+      assert.equal(await composer.inputValue(),"Queued message","queueing cleared composer before SDK Sent");
+      await composer.fill("A new draft typed while sending");await page.evaluate(()=>window.__ackLastSend());
+      assert.equal(await composer.inputValue(),"A new draft typed while sending","old Sent erased newer draft");
+      await composer.fill("Clear only this acknowledged body");await page.getByRole("button",{name:"Send",exact:true}).click();
+      assert.equal(await composer.inputValue(),"Clear only this acknowledged body");
+      await page.evaluate(()=>window.__ackLastSend());
+      await page.waitForFunction(()=>document.querySelector("#message").value === "");
+    }
     // Changing conversations preserves independent drafts.
     await page.getByLabel("Message",{exact:true}).fill("A draft in lounge\nsecond line");
     const navigate=async(label)=>{if(width<=760)await page.getByRole("button",{name:"Open navigation",exact:true}).click();await page.getByRole("button",{name:label,exact:true}).click();};
