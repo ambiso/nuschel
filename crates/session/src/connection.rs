@@ -22,6 +22,7 @@ use nuschel_protocol::{
 use prost::Message;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
@@ -32,6 +33,11 @@ use tokio::{
 
 pub use crate::model::{Channel, ServerLimits, TextTarget, User};
 pub use nuschel_legacy_html::{escape_html, legacy_body, text_html};
+
+fn next_user_instance() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Wire message types (Mumble's TCP control protocol).
 mod kind {
@@ -1034,7 +1040,6 @@ struct State {
     tcp_ping: PingStats,
     /// Control messages produced while handling a frame or command, flushed by the loop.
     outbound: Vec<(u16, Vec<u8>)>,
-    user_instance: u64,
     channels: BTreeMap<u32, Channel>,
     users: BTreeMap<u32, User>,
     own_session: Option<u32>,
@@ -1074,7 +1079,6 @@ impl Default for State {
             udp: None,
             tcp_ping: PingStats::default(),
             outbound: Vec::new(),
-            user_instance: 0,
             channels: BTreeMap::new(),
             users: BTreeMap::new(),
             own_session: None,
@@ -2129,7 +2133,13 @@ impl State {
                 if !self.users.get(&id).is_some_and(|user| {
                     expected_peer.is_none_or(|instance| instance == user.instance)
                 }) {
-                    return emit(events, SessionEvent::Notice("The recipient disconnected or changed. Open a new private conversation.".into())).await;
+                    return emit(
+                        events,
+                        SessionEvent::Notice(
+                            nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into(),
+                        ),
+                    )
+                    .await;
                 }
                 message.session.push(id);
             }
@@ -2886,10 +2896,6 @@ impl State {
         if !known && self.users.len() >= MAX_USERS {
             return self.notice_once(events, USERS_NOTICE).await;
         }
-        if !known {
-            self.user_instance += 1;
-        }
-        let instance = self.user_instance;
         let own = Some(session) == self.own_session;
         let actor = update
             .actor
@@ -2902,7 +2908,10 @@ impl State {
         let mut log = Vec::new();
         let user = self.users.entry(session).or_insert_with(|| User {
             session,
-            instance,
+            // A new transport may reuse both Mumble's session number and the
+            // order in which users arrive. Old queued private sends must still
+            // fail their presence check after that reconnect.
+            instance: next_user_instance(),
             name: format!("User {session}"),
             ..Default::default()
         });
@@ -2941,6 +2950,14 @@ impl State {
             user.recording = value;
         }
         if let Some(value) = update.hash {
+            if user
+                .certificate_hash
+                .as_deref()
+                .filter(|old| !old.is_empty())
+                .is_some_and(|old| !old.eq_ignore_ascii_case(&value))
+            {
+                user.instance = next_user_instance();
+            }
             user.certificate_hash = Some(bounded(value, 128));
         }
         if let Some(hash) = &update.comment_hash {
@@ -3512,6 +3529,50 @@ mod tests {
         assert_eq!(user.name, "Ada");
         assert_eq!(user.channel, 5);
         assert!(user.self_muted);
+    }
+
+    #[tokio::test]
+    async fn private_presence_tokens_survive_neither_reconnect_nor_identity_replacement() {
+        let (tx, mut rx) = mpsc::channel(32);
+        let mut first = State::default();
+        let mut second = State::default();
+        let update = |hash: &str| proto::UserState {
+            session: Some(4),
+            hash: Some(hash.into()),
+            ..Default::default()
+        };
+        first.user_state(update("abc"), &tx).await.unwrap();
+        let before = first.users[&4].instance;
+        // A wholly new control session reusing every server-side identifier.
+        second.user_state(update("abc"), &tx).await.unwrap();
+        assert_ne!(before, second.users[&4].instance);
+        first.user_state(update("abc"), &tx).await.unwrap();
+        assert_eq!(before, first.users[&4].instance);
+        // A changed identity is not merely another presence update.
+        first.user_state(update("different"), &tx).await.unwrap();
+        assert_ne!(before, first.users[&4].instance);
+        let current = first.users[&4].instance;
+        first.outbound.clear();
+        first
+            .send_text(
+                Outgoing {
+                    target: TextTarget::Direct(4),
+                    expected_peer: Some(before),
+                    wire: "private".into(),
+                    body: "private".into(),
+                    html: false,
+                    chat: None,
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(
+            first.outbound.is_empty(),
+            "never send to the replacement identity"
+        );
+        assert_eq!(current, first.users[&4].instance);
+        assert!(drain(&mut rx).await.iter().any(|event| matches!(event, SessionEvent::Notice(note) if note == nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE)));
     }
 
     #[tokio::test]

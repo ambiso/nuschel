@@ -1882,6 +1882,7 @@ fn conversation(
         .when_some(
             server.notice.clone().or_else(|| this.error.clone()),
             |view, notice| {
+                let from_server = server.notice.is_some();
                 view.child(
                     div()
                         .mx_4()
@@ -1902,7 +1903,21 @@ fn conversation(
                             div()
                                 .flex_1()
                                 .child(text!(notice).with_id("connection-notice")),
-                        ),
+                        )
+                        .child(styled_button(
+                            "dismiss-connection-notice",
+                            "Dismiss notice",
+                            Tone::Ghost,
+                            move |this, _, cx| {
+                                if from_server {
+                                    this.client.servers[index].dismiss_notice();
+                                } else {
+                                    this.error = None;
+                                }
+                                cx.notify();
+                            },
+                            cx,
+                        )),
                 )
             },
         )

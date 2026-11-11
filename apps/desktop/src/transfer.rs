@@ -465,18 +465,17 @@ impl Desktop {
             .servers
             .iter_mut()
             .find(|server| server.id == outgoing.server)?;
-        let channel = server
+        let position = server
             .channels
             .iter()
-            .find(|channel| channel.id == outgoing.channel)?;
+            .position(|channel| channel.id == outgoing.channel)?;
         if server.status != Status::Connected {
             return Some(false);
         }
         let message = format_offer(&offer);
-        let (target, expected_peer) = (
-            channel.target.clone(),
-            channel.direct_peer.as_ref().map(|peer| peer.instance),
-        );
+        let Ok((target, expected_peer)) = server.message_target(position) else {
+            return Some(false);
+        };
         let command = if server
             .limits
             .as_ref()

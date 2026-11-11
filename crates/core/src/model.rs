@@ -71,6 +71,8 @@ pub struct Channel {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct User {
+    /// A process-local presence token, never reused across reconnects. A
+    /// certificate hash identifies the same person after a new presence.
     pub instance: u64,
     pub session: u32,
     pub name: String,
@@ -94,6 +96,10 @@ pub struct User {
     pub texture_hash: Option<String>,
     pub listening: BTreeSet<u32>,
 }
+
+/// A failed private send. Clear it when that recipient becomes available again.
+pub const RECIPIENT_UNAVAILABLE_NOTICE: &str =
+    "This recipient is no longer available. Your message was not sent.";
 
 impl User {
     /// Bytes of server-provided comment and avatar held for this user.

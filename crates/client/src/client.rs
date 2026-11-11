@@ -188,8 +188,22 @@ impl Client {
 
     /// The platform's monotonic clock, in milliseconds (typing indicators,
     /// edits waiting for their message).
-    pub fn set_time(&mut self, now_ms: u64) {
+    pub fn set_time(&mut self, now_ms: u64) -> bool {
         self.now_ms = now_ms;
+        let mut expired_any = false;
+        for server in &mut self.servers {
+            if server
+                .notice_expires
+                .as_ref()
+                .is_some_and(|(_, until)| now_ms >= *until)
+                && let Some((expired, _)) = server.notice_expires.take()
+                && server.notice.as_ref() == Some(&expired)
+            {
+                server.notice = None;
+                expired_any = true;
+            }
+        }
+        expired_any
     }
 
     /// What changed since the last call.
@@ -502,9 +516,15 @@ impl Client {
             server.notice = Some("Connect before sending a message.".into());
             return Err(SendError::Refused);
         }
+        let (target, expected_peer) = match server.message_target(channel) {
+            Ok(target) => target,
+            Err(reason) => {
+                server.notice = Some(reason.into());
+                server.notice_expires = Some((reason.into(), self.now_ms.saturating_add(10_000)));
+                return Err(SendError::Refused);
+            }
+        };
         let channel = &server.channels[channel];
-        let expected_peer = channel.direct_peer.as_ref().map(|peer| peer.instance);
-        let target = channel.target.clone();
         let pending = PendingSend {
             conversation: Conversation {
                 server: server.id.clone(),
@@ -1380,6 +1400,11 @@ impl Client {
         } else {
             channel.timeline.trim_oldest(MAX_TIMELINE);
         }
+        if direct
+            && server.notice.as_deref() == Some(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE)
+        {
+            server.dismiss_notice();
+        }
     }
 
     fn server_event(&mut self, index: usize, event: ServerEvent) {
@@ -1769,7 +1794,30 @@ impl Client {
                         channel: user.channel,
                     }));
                 }
+                let arrived = user.clone();
                 server.users.insert(user.session, user);
+                for position in 0..server.channels.len() {
+                    let channel = &server.channels[position];
+                    let same = channel.direct_peer.as_ref().is_some_and(|old| {
+                        (old.instance == arrived.instance && old.session == arrived.session)
+                            || old
+                                .certificate_hash
+                                .as_deref()
+                                .filter(|hash| !hash.is_empty())
+                                .is_some_and(|hash| {
+                                    arrived
+                                        .certificate_hash
+                                        .as_deref()
+                                        .is_some_and(|current| current.eq_ignore_ascii_case(hash))
+                                })
+                    }) || arrived
+                        .certificate_hash
+                        .as_deref()
+                        .is_some_and(|hash| channel.storage_key == format!("direct:{hash}"));
+                    if same {
+                        server.refresh_direct(position);
+                    }
+                }
             }
             ServerEvent::UserRemoved(session) => {
                 let from = server.users.get(&session).map(|old| old.channel);
@@ -1784,6 +1832,7 @@ impl Client {
                 server.legacy_voice.remove(&session);
             }
             ServerEvent::Notice(message) | ServerEvent::PermissionDenied(message) => {
+                server.notice_expires = Some((message.clone(), self.now_ms.saturating_add(10_000)));
                 server.notice = Some(message);
                 if self
                     .sending
@@ -2014,6 +2063,105 @@ mod tests {
         client.settle();
         client.take_updates();
         (client, recorder, id)
+    }
+
+    #[test]
+    fn private_sending_refreshes_an_online_recipient_without_reopening_the_view() {
+        let (mut client, recorder, _id) = connected();
+        let peer = User {
+            session: 4,
+            instance: 10,
+            certificate_hash: Some("abc".into()),
+            ..Default::default()
+        };
+        client.servers[0].users.insert(4, peer.clone());
+        let channel = client.open_direct(0, 4).unwrap();
+        client.open(0, channel).unwrap();
+        client.servers[0].users.remove(&4);
+        client.servers[0].users.insert(
+            9,
+            User {
+                session: 9,
+                instance: 11,
+                ..peer
+            },
+        );
+        client.send_text("still here".into()).unwrap();
+        assert!(recorder.requests.lock().unwrap().iter().any(|(_, request)| matches!(request,
+            Request::SendText { target: TextTarget::Direct(9), expected_peer: Some(11), body } if body == "still here")));
+        assert_eq!(client.navigation.selection().unwrap().channel, channel);
+    }
+
+    #[test]
+    fn private_send_notices_expire_and_newer_errors_are_preserved() {
+        let (mut client, _, id) = connected();
+        client.set_time(100);
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Notice(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into()),
+        });
+        assert!(client.servers[0].has_temporary_notice());
+        assert!(!client.set_time(10_099));
+        assert!(client.set_time(10_100));
+        assert!(client.servers[0].notice.is_none());
+        client.handle(Input::Server {
+            server: id,
+            generation: 1,
+            event: ServerEvent::Notice("old transient".into()),
+        });
+        client.servers[0].notice = Some("a newer problem".into());
+        client.set_time(20_100);
+        assert_eq!(client.servers[0].notice.as_deref(), Some("a newer problem"));
+        client.servers[0].dismiss_notice();
+        assert!(client.servers[0].notice.is_none());
+        assert!(!client.servers[0].has_temporary_notice());
+    }
+
+    #[test]
+    fn receiving_refreshes_the_existing_private_view_and_clears_its_failure_notice() {
+        let (mut client, _, id) = connected();
+        let old = User {
+            session: 4,
+            instance: 10,
+            certificate_hash: Some("abc".into()),
+            ..Default::default()
+        };
+        client.servers[0].users.insert(4, old.clone());
+        let channel = client.open_direct(0, 4).unwrap();
+        client.open(0, channel).unwrap();
+        client.servers[0].notice = Some(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
+        let current = User {
+            session: 9,
+            instance: 11,
+            ..old
+        };
+        client.servers[0].users.remove(&4);
+        client.servers[0].users.insert(9, current.clone());
+        let mut incoming = message(&id, 0, "I am here", 1);
+        if let Input::Message {
+            target,
+            storage_key,
+            peer,
+            ..
+        } = &mut incoming
+        {
+            *target = TextTarget::Direct(9);
+            *storage_key = "direct:abc".into();
+            *peer = Some(current);
+        }
+        client.handle(incoming);
+        let position = client.servers[0]
+            .channels
+            .iter()
+            .position(|c| c.id == channel)
+            .unwrap();
+        assert_eq!(
+            client.servers[0].message_target(position),
+            Ok((TextTarget::Direct(9), Some(11)))
+        );
+        assert!(client.servers[0].notice.is_none());
+        assert_eq!(client.navigation.selection().unwrap().channel, channel);
     }
 
     fn message(id: &str, channel: u32, body: &str, at: i64) -> Input {

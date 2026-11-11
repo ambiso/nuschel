@@ -185,7 +185,8 @@ pub struct ServerForm {
 struct Outgoing {
     /// The conversation, by server id and channel.
     key: (String, u32),
-    target: (TextTarget, Option<u64>),
+    /// Freeze identity while an image is prepared; the online session may change.
+    context: (String, Option<u64>),
     text: String,
     attachments: Vec<Attachment>,
     /// The server's image and text limits.
@@ -1509,6 +1510,7 @@ impl Desktop {
         if let Err(nuschel_client::SendError::TooLong) = self.client.send_text(body) {
             self.error = Some("Message exceeds 256 KiB.".into());
         }
+        self.expire_typing(cx);
         cx.notify();
     }
     /// What the open conversation's composer has attached.
@@ -1847,12 +1849,19 @@ impl Desktop {
             cx.notify();
             return;
         }
-        let channel = &server.channels[channel];
+        if let Err(reason) = server.message_target(channel) {
+            self.attach_note = Some((key, reason.into()));
+            cx.notify();
+            return;
+        }
         self.outgoing.push_back(Outgoing {
             key: key.clone(),
-            target: (
-                channel.target.clone(),
-                channel.direct_peer.as_ref().map(|peer| peer.instance),
+            context: (
+                server.channels[channel].storage_key.clone(),
+                server.channels[channel]
+                    .direct_peer
+                    .as_ref()
+                    .map(|peer| peer.instance),
             ),
             text,
             attachments: self.attachments.remove(&key).unwrap_or_default(),
@@ -1868,14 +1877,64 @@ impl Desktop {
     /// Hand sent messages whose images are all prepared to the connection,
     /// in order, then offer their files.
     fn flush_outgoing(&mut self, cx: &mut Context<Self>) {
-        while self
-            .outgoing
-            .front()
-            .is_some_and(|batch| batch.attachments.iter().all(Attachment::ready))
+        let mut remaining = self.outgoing.len();
+        while remaining > 0
+            && self
+                .outgoing
+                .front()
+                .is_some_and(|batch| batch.attachments.iter().all(Attachment::ready))
         {
+            remaining -= 1;
             let Some(batch) = self.outgoing.pop_front() else {
                 break;
             };
+            let resolved = self
+                .client
+                .servers
+                .iter_mut()
+                .find(|server| server.id == batch.key.0)
+                .filter(|server| server.status == Status::Connected)
+                .and_then(|server| {
+                    server
+                        .channels
+                        .iter()
+                        .position(|channel| channel.id == batch.key.1)
+                        .map(|position| {
+                            let target = server.message_target(position)?;
+                            let channel = &server.channels[position];
+                            if channel.is_direct()
+                                && channel.storage_key != batch.context.0
+                                && channel.direct_peer.as_ref().map(|peer| peer.instance)
+                                    != batch.context.1
+                            {
+                                return Err(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE);
+                            }
+                            Ok(target)
+                        })
+                });
+            let (target, expected_peer) = match resolved {
+                Some(Ok(target)) => target,
+                Some(Err(reason)) => {
+                    self.attach_note = Some((batch.key.clone(), reason.into()));
+                    self.outgoing.push_back(batch);
+                    continue;
+                }
+                None => {
+                    self.attach_note = Some((
+                        batch.key.clone(),
+                        "Waiting for this conversation to reconnect.".into(),
+                    ));
+                    self.outgoing.push_back(batch);
+                    continue;
+                }
+            };
+            if self
+                .attach_note
+                .as_ref()
+                .is_some_and(|(key, _)| *key == batch.key)
+            {
+                self.attach_note = None;
+            }
             let mut images = Vec::new();
             let mut files = Vec::new();
             for attachment in batch.attachments {
@@ -1888,7 +1947,6 @@ impl Desktop {
                     Attachment::File { path, .. } => files.push(path),
                 }
             }
-            let (target, expected_peer) = batch.target;
             let text = (!batch.text.trim().is_empty()).then_some(batch.text);
             let command = if images.is_empty() {
                 text.map(|body| Command::SendText {
@@ -2052,6 +2110,7 @@ impl Desktop {
         self.client.settle();
         self.apply_updates(cx);
         self.expire_typing(cx);
+        self.flush_outgoing(cx);
     }
     /// Follow what the client says changed.
     pub fn apply_updates(&mut self, cx: &mut Context<Self>) {

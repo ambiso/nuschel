@@ -22,18 +22,18 @@ impl Desktop {
         self.client.composing(!empty && self.editing.is_none());
     }
 
-    /// Indicators fade on their own: while any is shown, look again each
-    /// second and drop those that are over.
+    /// Typing indicators and temporary notices fade even on an idle connection.
     pub fn expire_typing(&mut self, cx: &mut Context<Self>) {
         if self.typing_timer {
             return;
         }
         let any = |this: &Self| {
             this.client.servers.iter().any(|server| {
-                server
-                    .channels
-                    .iter()
-                    .any(|channel| !channel.typing.is_empty())
+                server.has_temporary_notice()
+                    || server
+                        .channels
+                        .iter()
+                        .any(|channel| !channel.typing.is_empty())
             })
         };
         if !any(self) {
@@ -44,11 +44,17 @@ impl Desktop {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let more = this.update(cx, |this, cx| {
-                    this.client.set_time(crate::state::monotonic_ms());
+                    let expired_notice = this.client.set_time(crate::state::monotonic_ms());
                     let (changed, more) = this.client.expire_typing();
-                    if changed {
+                    if changed || expired_notice {
                         cx.notify();
                     }
+                    let more = more
+                        || this
+                            .client
+                            .servers
+                            .iter()
+                            .any(|server| server.has_temporary_notice());
                     this.typing_timer = more;
                     more
                 });

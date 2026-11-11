@@ -17,6 +17,12 @@ Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 
 Reported while testing (2026-11-10/11):
 
+- [x] Private conversations refresh their online recipient automatically on send,
+      receive and presence changes, using the same certificate identity rather than
+      a recycled session number. Queued images/files resolve the current presence
+      before sending. Private-send failures clear on recovery; temporary notices
+      expire after ten seconds and have an accessible Dismiss button (2026-11-11).
+
 - [ ] Code blocks: a copy-to-clipboard button. (In progress.)
 - [ ] Message text is selectable; right-click a message for Copy message (and Copy
       image / Save image as for images). (In progress.)

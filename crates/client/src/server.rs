@@ -119,6 +119,7 @@ pub struct ServerState {
     pub muted: bool,
     pub deafened: bool,
     pub notice: Option<String>,
+    pub(crate) notice_expires: Option<(String, u64)>,
     pub audio_status: String,
     pub welcome: Option<String>,
     pub certificate: Option<CertificatePrompt>,
@@ -203,6 +204,7 @@ impl ServerState {
             muted: true,
             deafened: false,
             notice: None,
+            notice_expires: None,
             audio_status: "Audio disconnected".into(),
             welcome: None,
             certificate: None,
@@ -539,6 +541,89 @@ impl ServerState {
         }
     }
 
+    /// Refresh a legacy private conversation from current presence. Only a
+    /// certificate identity, or the very same live presence, can retarget it;
+    /// names and recycled session/account numbers are not sufficient.
+    pub fn refresh_direct(&mut self, position: usize) -> bool {
+        let Some(channel) = self.channels.get(position) else {
+            return false;
+        };
+        if !matches!(channel.target, TextTarget::Direct(_)) {
+            return false;
+        }
+        let previous = channel.direct_peer.as_ref();
+        let hash = previous
+            .and_then(|peer| peer.certificate_hash.as_deref())
+            .filter(|hash| !hash.is_empty())
+            .or_else(|| {
+                channel
+                    .storage_key
+                    .strip_prefix("direct:")
+                    .filter(|key| !key.starts_with("pending:") && !key.is_empty())
+            });
+        let matches = |peer: &&User| match hash {
+            Some(hash) => peer
+                .certificate_hash
+                .as_deref()
+                .is_some_and(|current| current.eq_ignore_ascii_case(hash)),
+            None => previous
+                .is_some_and(|old| old.session == peer.session && old.instance == peer.instance),
+        };
+        let peer = previous
+            .and_then(|old| self.users.get(&old.session))
+            .filter(matches)
+            .or_else(|| self.users.values().find(matches))
+            .cloned();
+        let Some(peer) = peer else {
+            return false;
+        };
+        let channel = &mut self.channels[position];
+        channel.target = TextTarget::Direct(peer.session);
+        if channel.storage_key.starts_with("direct:pending:")
+            && let Some(hash) = peer
+                .certificate_hash
+                .as_ref()
+                .filter(|hash| !hash.is_empty())
+        {
+            channel.storage_key = format!("direct:{hash}");
+        }
+        channel.direct_peer = Some(peer);
+        if self.notice.as_deref() == Some(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE) {
+            self.dismiss_notice();
+        }
+        true
+    }
+
+    /// Resolve at the moment of sending, including batches whose image worker
+    /// took time. Keep the session's final presence-token check in place too.
+    pub fn message_target(
+        &mut self,
+        position: usize,
+    ) -> Result<(TextTarget, Option<u64>), &'static str> {
+        if position >= self.channels.len() {
+            return Err("This conversation is no longer available.");
+        }
+        if matches!(self.channels[position].target, TextTarget::Direct(_))
+            && !self.refresh_direct(position)
+        {
+            return Err(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE);
+        }
+        let channel = &self.channels[position];
+        Ok((
+            channel.target.clone(),
+            channel.direct_peer.as_ref().map(|peer| peer.instance),
+        ))
+    }
+
+    pub fn dismiss_notice(&mut self) {
+        self.notice = None;
+        self.notice_expires = None;
+    }
+
+    pub fn has_temporary_notice(&self) -> bool {
+        self.notice_expires.is_some()
+    }
+
     /// A stock direct message arrived for a conversation not shown yet
     /// (`storage_key` as local history keeps it): its new timeline's index.
     pub fn received_direct(
@@ -799,5 +884,88 @@ mod tests {
             channel.map(|channel| channel.storage_key.as_str()),
             Some("direct:abc")
         );
+    }
+
+    #[test]
+    fn a_private_conversation_follows_the_same_certificate_but_not_a_reused_session() {
+        let (mut server, _) = server(false, false, false);
+        let old = User {
+            session: 4,
+            instance: 10,
+            certificate_hash: Some("abc".into()),
+            ..Default::default()
+        };
+        let id = server.stock_direct_view(&old, "Bob");
+        let position = server.channels.iter().position(|c| c.id == id).unwrap();
+        // Someone else takes the old session number, even using Bob's name.
+        server.users.insert(
+            4,
+            User {
+                session: 4,
+                instance: 11,
+                name: "Bob".into(),
+                certificate_hash: Some("other".into()),
+                ..Default::default()
+            },
+        );
+        assert!(server.message_target(position).is_err());
+        // Bob is still online under a different session; sending finds him.
+        server.users.insert(
+            9,
+            User {
+                session: 9,
+                instance: 12,
+                certificate_hash: Some("abc".into()),
+                ..Default::default()
+            },
+        );
+        server.notice = Some(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
+        assert_eq!(
+            server.message_target(position),
+            Ok((TextTarget::Direct(9), Some(12)))
+        );
+        assert!(server.notice.is_none());
+        assert_eq!(server.channels[position].id, id);
+        assert_eq!(server.channels[position].storage_key, "direct:abc");
+    }
+
+    #[test]
+    fn an_anonymous_private_recipient_must_keep_the_same_presence() {
+        let (mut server, _) = server(false, false, false);
+        let old = User {
+            session: 4,
+            instance: 10,
+            name: "Bob".into(),
+            ..Default::default()
+        };
+        let id = server.stock_direct_view(&old, "Bob");
+        let position = server.channels.iter().position(|c| c.id == id).unwrap();
+        server.users.insert(4, old.clone());
+        assert_eq!(
+            server.message_target(position),
+            Ok((TextTarget::Direct(4), Some(10)))
+        );
+        server.users.insert(
+            4,
+            User {
+                instance: 11,
+                ..old.clone()
+            },
+        );
+        assert!(server.message_target(position).is_err());
+        // Learning the certificate of the original live presence promotes its
+        // history key, without making the user open another conversation.
+        server.users.insert(
+            4,
+            User {
+                certificate_hash: Some("abc".into()),
+                ..old
+            },
+        );
+        assert_eq!(
+            server.message_target(position),
+            Ok((TextTarget::Direct(4), Some(10)))
+        );
+        assert_eq!(server.channels[position].storage_key, "direct:abc");
     }
 }
