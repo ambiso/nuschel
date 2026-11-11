@@ -213,6 +213,9 @@ class GnomeSession:
                       ".create_virtual_device(imports.gi.Clutter.InputDeviceType.POINTER_DEVICE);"
                       "global._nuschelKeyboard = imports.gi.Clutter.get_default_backend().get_default_seat()"
                       ".create_virtual_device(imports.gi.Clutter.InputDeviceType.KEYBOARD_DEVICE); 'ok'")
+            # Events from a device the seat has not added yet are lost (the
+            # accessibility test's first key, Ctrl+V, often was).
+            time.sleep(0.5)
             self.pointer_ready = True
 
     def move(self, x, y):
