@@ -130,8 +130,9 @@ pub use types::{
     AccountId, DirectoryValue, Label, MAX_NAME_BYTES, MAX_VALUE_DATA, MAX_VALUE_ENCODED,
 };
 pub use values::{
-    AccountBinding, FORMAT_ACCOUNT_BINDING_V1, FORMAT_NAME_BINDING_V1, MAX_ROSTER_ENTRIES,
-    NameBinding, RosterCommitment, ValueError, roster_for_binding,
+    AccountBinding, FORMAT_ACCOUNT_BINDING_V1, FORMAT_ACCOUNT_BINDING_V2, FORMAT_NAME_BINDING_V1,
+    IdentityRecord, MAX_ROSTER_ENTRIES, NameBinding, RosterCommitment, ValueError, VerifiedAccount,
+    roster_for_binding, verify_account_record,
 };
 pub use verify::{
     MonitorCheckpoint, MonitorReport, VerifiedEntry, VerifiedHistory, monitor_own, verify_audit,

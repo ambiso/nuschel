@@ -394,6 +394,93 @@ async fn a_real_identity_roster_is_checked_against_the_log() {
 }
 
 #[tokio::test]
+async fn an_account_record_needs_the_identitys_statement_for_this_account_and_log() {
+    let now_s = T0 / 1000;
+    let validity = Validity::starting_at(now_s, 86_400 * 365).unwrap();
+    let identity =
+        NewIdentity::create(&DisplayName::new("desktop").unwrap(), validity, now_s).unwrap();
+    let dir = open().await;
+    let descriptor = dir.descriptor().clone();
+    let log_id = descriptor.log_id();
+    let signing_cert = identity.device_signing.certificate().clone();
+    let devices = vec![identity.device_certificate.clone()];
+    let roster = RosterCommitment::compute(&signing_cert, &devices, &[]).unwrap();
+    let statement = identity
+        .device_signing
+        .sign_account(log_id.0, account(7).0, now_s)
+        .unwrap();
+    let binding =
+        AccountBinding::with_statement(identity.root.public_key().clone(), roster, &statement);
+    let value = binding.to_value();
+    assert_eq!(value.format(), FORMAT_ACCOUNT_BINDING_V2);
+    assert_eq!(value.data().len(), 2050);
+    assert_eq!(AccountBinding::from_value(&value).unwrap(), binding);
+    dir.publish(vec![(acct(7), value)], T0 + 1).await.unwrap();
+    let (_, entry) =
+        verify_lookup(&descriptor, &acct(7), &dir.lookup(&acct(7)).await.unwrap()).unwrap();
+    let binding = AccountBinding::from_value(&entry.value).unwrap();
+    let record = IdentityRecord {
+        device_signing: signing_cert.clone(),
+        devices: devices.clone(),
+        revocations: Vec::new(),
+        statement: statement.clone(),
+    };
+    let verified = verify_account_record(&binding, &record, log_id, account(7)).unwrap();
+    assert_eq!(verified.identity, identity.root.fingerprint());
+    assert_eq!(verified.roster.active_devices(now_s + 1).len(), 1);
+
+    // The record for another account, or for another log, is refused: the server cannot
+    // present this identity as one of its other accounts.
+    assert!(matches!(
+        verify_account_record(&binding, &record, log_id, account(8)),
+        Err(KtError::InvalidRecord(_))
+    ));
+    let elsewhere = identity
+        .device_signing
+        .sign_account([0x77; 32], account(7).0, now_s)
+        .unwrap();
+    let foreign =
+        AccountBinding::with_statement(identity.root.public_key().clone(), roster, &elsewhere);
+    let mut copied = record.clone();
+    copied.statement = elsewhere;
+    assert!(matches!(
+        verify_account_record(&foreign, &copied, log_id, account(7)),
+        Err(KtError::InvalidRecord(_))
+    ));
+    // A statement other than the committed one does not match the log.
+    let resigned = identity
+        .device_signing
+        .sign_account(log_id.0, account(7).0, now_s + 1)
+        .unwrap();
+    let mut swapped = record.clone();
+    swapped.statement = resigned;
+    assert_eq!(
+        verify_account_record(&binding, &swapped, log_id, account(7)).unwrap_err(),
+        KtError::RosterMismatch
+    );
+    // A statement signed by another identity under this root's binding fails.
+    let other = NewIdentity::create(&DisplayName::new("x").unwrap(), validity, now_s).unwrap();
+    let theirs = other
+        .device_signing
+        .sign_account(log_id.0, account(7).0, now_s)
+        .unwrap();
+    let forged =
+        AccountBinding::with_statement(identity.root.public_key().clone(), roster, &theirs);
+    let mut forged_record = record.clone();
+    forged_record.statement = theirs;
+    assert!(matches!(
+        verify_account_record(&forged, &forged_record, log_id, account(7)),
+        Err(KtError::InvalidRecord(_))
+    ));
+    // A format 1 binding has no statement, so it never establishes an account.
+    let v1 = AccountBinding::new(identity.root.public_key().clone(), roster);
+    assert!(matches!(
+        verify_account_record(&v1, &record, log_id, account(7)),
+        Err(KtError::InvalidRecord(_))
+    ));
+}
+
+#[tokio::test]
 async fn messages_round_trip_and_have_the_documented_sizes() {
     let dir = open().await;
     let descriptor = dir.descriptor().clone();
