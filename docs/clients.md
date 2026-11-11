@@ -193,7 +193,8 @@ Left, in the order they should move:
 - **Search**: requests, scopes, results and jumps go through the client; the
   highlight of a jumped-to message is each UI's.
 - **The driver** is `native.rs` and its media supervisor (`native/media.rs`); split
-  the rest into connection, content and storage before the mobile work.
+  the pieces needed by mobile into connection, content and storage adapters as
+  that work needs them; completing every SDK feature is not an iOS prerequisite.
 - **Bindings**: wasm-bindgen in `crates/client-wasm` (docs/web.md): `WebClient`
   wraps `Client`, servers and updates come out as JSON, and a browser `Platform`
   connects through the web relay with TLS in WebAssembly (login, channels and users
@@ -366,7 +367,17 @@ High-quality video without transcoding, so servers stay cheap:
 
 1. The SDK extraction, with the desktop moved onto it (done).
 2. The terminal client (done: `apps/tui`).
-3. Android, then iOS.
-4. The web client, the tunnel relay and the NixOS module for the web host and share
-   links.
-5. Video, with the WebRTC work.
+3. Finish and push the verified Nuschel → Nuschl rename.
+4. **iOS first** (user priority, 2026-11-11): SwiftUI over UniFFI. Start with the
+   bindings and iOS build/app foundation; implement the server/channel/chat view
+   and the iOS audio adapter in parallel. The first usable milestone is text and
+   voice against private Mumble and compatible Nuschl servers on a physical phone,
+   with bookmarks, local history and reconnects. Then harden background audio,
+   routes, interruptions, accessibility and distribution. Review the in-process
+   codec/content boundary explicitly, preferring memory-safe code and OS services.
+5. Authenticated per-device Nuschl sessions before simultaneous linked desktop/phone
+   logins; do not clone private device keys. Optional recovery and preferences sync
+   follow their own prerequisites and do not block the initial iOS client.
+6. Android and the rest of the browser client; the browser relay, SDK foundation and
+   web-host module already exist. Additional MLS history features and video/SFrame
+   are separate tracks, not prerequisites for the first iOS client.

@@ -320,7 +320,9 @@ access. The storage worker must not get live MLS private keys.
 
 ## Mobile and browser adapters
 
-Mobile and web are future targets with open renderer choices. Core and client state
+The client choices are SwiftUI + UniFFI for iOS, Compose + UniFFI for Android, and
+Svelte + WASM for the browser (docs/clients.md). iOS is the first mobile priority.
+Core and client state
 must compile for WebAssembly without GPUI, Tokio's native sockets, SQLite, or CPAL.
 Native mobile adapters must handle microphone permissions, audio-session changes,
 interruptions, background execution, and platform call integration.

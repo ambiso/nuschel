@@ -1,10 +1,50 @@
 # Nuschl TODO
 
-Current focus: **integrate and verify the resumed work before the nuschl rename.**
+Current focus: **finish rename verification, then prioritize the iOS app**
+(user, 2026-11-11).
 The desktop and server support stock Mumble interoperability; shared multi-server
 audio, key-transparency witnesses, the browser foundation and experimental MLS
 text/history are implemented. Live WebRTC/video, SFrame and the remaining encrypted
-history proofs are later work. The rename waits for a quiet, verified tree.
+history proofs are later work. The source rename and profile migration are committed;
+final package and VM verification is running before the push.
+
+## Execution order
+
+1. **Finish the rename checkpoint:** remaining Nix checks, server VM and universal
+   macOS app packaging; retain the passing native, migration, accessibility, browser,
+   cross-build and other VM results. Push the verified rename before new feature work.
+2. **iOS is the first implementation track after that checkpoint**, ahead of Android,
+   completing the browser UI, video/SFrame and additional encrypted-history features.
+   Swift + SwiftUI over the shared Rust SDK through UniFFI remains the chosen approach.
+   Build a small usable client, rather than requiring every remaining SDK feature first:
+   - [ ] Swift bindings for connect/disconnect, bookmarks, channel/user snapshots,
+         text/history and mute/deafen/join-voice commands; an iOS Rust build and a
+         minimal simulator/device app that exercises the bindings.
+   - [ ] SwiftUI server list, channel tree, chat and connection/error states, using
+         SDK state and preserving multiline text. Keep local history by default.
+   - [ ] iOS audio adapter and codec/isolation review, permissions, capture/playback,
+         platform echo cancellation, route changes and interruption/reconnect handling.
+         Do not copy the desktop subprocess topology or automatically allow its
+         unsafe dependencies in-process; prefer memory-safe implementations and OS
+         services, and explicitly review remaining mobile exceptions.
+   - [ ] First usable milestone: a physical iPhone joins a private legacy Mumble
+         server and a compatible Nuschl server, exchanges text and voice, and
+         reconnects without losing bookmarks or local history.
+   - [ ] Background/locked-phone audio, Bluetooth/headset routes, call integration,
+         accessibility and a reproducible device build/signing/testing workflow.
+3. **Desktop + phone with one linked identity:** authenticated per-device server
+   sessions must avoid the current ghost kick before enabling simultaneous linked
+   logins or synced auto-connect. This can follow the initial iOS client; it does
+   not block testing with a separate device account/certificate. Never clone private
+   device keys or MLS state.
+4. **Follow-on tracks:** optional recovery and encrypted preference sync, remaining
+   MLS history proofs, Android, full browser UI, and video/SFrame. Their safety
+   requirements remain, but they do not gate the first iOS client.
+
+Dependency path: rename → shared bindings/build foundation → SwiftUI and iOS audio
+in parallel → on-device voice/chat → mobile reliability. Per-device server sessions
+join that path before linked desktop/phone use; recovery/sync and production MLS
+history remain separate dependencies for their own features.
 
 Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 
@@ -1013,10 +1053,12 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         administration (ACLs, bans, moving people), whisper and push-to-talk (a
         terminal has no key-up), Settings beyond the command line, image alt text
         (the content worker keeps none).
-  - [ ] **Android**: Kotlin + Compose over UniFFI; full protocol natively; workers as
-        `isolatedProcess` services; platform echo cancellation; foreground service.
-  - [ ] **iOS**: Swift + SwiftUI over UniFFI; workers in-process behind the same
-        boundary (no subprocesses on iOS); CallKit, background audio, push extension.
+  - [ ] **iOS — next after the rename:** Swift + SwiftUI over UniFFI; staged
+        milestones are in "Execution order" above. Review mobile processing and
+        codec boundaries; CallKit, background audio, push extension.
+  - [ ] **Android — after the initial iOS client**: Kotlin + Compose over UniFFI;
+        full protocol natively; workers as `isolatedProcess` services; platform
+        echo cancellation; foreground service.
   - [ ] **Web** (Svelte, SDK in WASM in a Web Worker), served from one domain the
         user hosts (others may host it), so one cross-server identity lives in the
         browser; Signal-like version requirements apply. Reaches Mumble and Nuschl
