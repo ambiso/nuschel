@@ -38,6 +38,29 @@ impl std::fmt::Debug for CryptState {
     }
 }
 
+/// The key and nonces a server sends in `CryptSetup`. `Debug` never shows them.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CryptSetupParts {
+    pub key: [u8; BLOCK],
+    pub client_nonce: [u8; BLOCK],
+    pub server_nonce: [u8; BLOCK],
+}
+
+impl std::fmt::Debug for CryptSetupParts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CryptSetupParts { .. }")
+    }
+}
+
+/// Compare without an early exit (tags and the forged-block check).
+fn equal_constant_time(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .fold(0, |difference, (x, y)| difference | (x ^ y))
+            == 0
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum CryptError {
     /// A key or nonce did not have the 16-byte AES block size.
@@ -66,21 +89,63 @@ fn times3(block: &Block) -> Block {
 }
 
 impl CryptState {
-    /// Named from the client's side: the client encrypts with `client_nonce` and
-    /// decrypts with `server_nonce`. A server passes them the other way round.
-    pub fn new(key: &[u8], client_nonce: &[u8], server_nonce: &[u8]) -> Result<Self, CryptError> {
+    fn new(key: &[u8], encrypt_iv: &[u8], decrypt_iv: &[u8]) -> Result<Self, CryptError> {
         let key: &Block = key.try_into().map_err(|_| CryptError::InvalidLength)?;
         Ok(Self {
             cipher: Aes128::new(GenericArray::from_slice(key)),
-            encrypt_iv: client_nonce
+            encrypt_iv: encrypt_iv
                 .try_into()
                 .map_err(|_| CryptError::InvalidLength)?,
-            decrypt_iv: server_nonce
+            decrypt_iv: decrypt_iv
                 .try_into()
                 .map_err(|_| CryptError::InvalidLength)?,
             decrypt_history: [0; 256],
             stats: CryptStats::default(),
         })
+    }
+
+    /// The client's state from a server's `CryptSetup`: it encrypts with the
+    /// client nonce and decrypts with the server nonce. Both role constructors
+    /// take the fields in the same order, so swapping roles cannot silently
+    /// make both directions share one nonce stream.
+    pub fn client(
+        key: &[u8],
+        client_nonce: &[u8],
+        server_nonce: &[u8],
+    ) -> Result<Self, CryptError> {
+        Self::new(key, client_nonce, server_nonce)
+    }
+
+    /// The server's state for the `CryptSetup` it sent.
+    pub fn server(
+        key: &[u8],
+        client_nonce: &[u8],
+        server_nonce: &[u8],
+    ) -> Result<Self, CryptError> {
+        Self::new(key, server_nonce, client_nonce)
+    }
+
+    /// A fresh server state from 48 bytes of OS randomness, and the parts to
+    /// send in `CryptSetup`, so what is kept and what is sent cannot diverge.
+    pub fn generate_server(random: [u8; 48]) -> (Self, CryptSetupParts) {
+        let mut parts = CryptSetupParts {
+            key: [0; BLOCK],
+            client_nonce: [0; BLOCK],
+            server_nonce: [0; BLOCK],
+        };
+        parts.key.copy_from_slice(&random[..BLOCK]);
+        parts
+            .client_nonce
+            .copy_from_slice(&random[BLOCK..2 * BLOCK]);
+        parts.server_nonce.copy_from_slice(&random[2 * BLOCK..]);
+        let state = Self {
+            cipher: Aes128::new(GenericArray::from_slice(&parts.key)),
+            encrypt_iv: parts.server_nonce,
+            decrypt_iv: parts.client_nonce,
+            decrypt_history: [0; 256],
+            stats: CryptStats::default(),
+        };
+        (state, parts)
     }
 
     /// The server resynchronised our receive nonce.
@@ -198,7 +263,7 @@ impl CryptState {
         let plain = &mut out[..packet.len() - HEADER];
         let iv = self.decrypt_iv;
         let tag = self.ocb_decrypt(&packet[HEADER..], plain, &iv);
-        if tag.is_none_or(|tag| tag[..3] != packet[1..HEADER]) {
+        if tag.is_none_or(|tag| !equal_constant_time(&tag[..3], &packet[1..HEADER])) {
             self.decrypt_iv = saved;
             return None;
         }
@@ -281,7 +346,7 @@ impl CryptState {
         out[..encrypted.len()].copy_from_slice(&tmp[..encrypted.len()]);
         // XEX* countermeasure: a forged final block would equal delta ^ len.
         // `len` only affects the last byte, so compare all others.
-        let forged = tmp[..BLOCK - 1] == delta[..BLOCK - 1];
+        let forged = equal_constant_time(&tmp[..BLOCK - 1], &delta[..BLOCK - 1]);
         delta = times3(&delta);
         let tag = self.aes_encrypt(&xor(&delta, &checksum));
         (!forged).then_some(tag)
@@ -316,7 +381,7 @@ mod tests {
     #[test]
     fn matches_ocb2_draft_test_vectors_used_by_mumble() {
         // draft-krovetz-ocb-00, also asserted by Mumble's TestCrypt.
-        let state = CryptState::new(&KEY, &KEY, &KEY).unwrap();
+        let state = CryptState::client(&KEY, &KEY, &KEY).unwrap();
         let tag = state.ocb_encrypt(&[], &mut [], &KEY);
         assert_eq!(
             tag,
@@ -355,9 +420,28 @@ mod tests {
         let client_nonce = [7; BLOCK];
         let server_nonce = [9; BLOCK];
         (
-            CryptState::new(&KEY, &client_nonce, &server_nonce).unwrap(),
-            CryptState::new(&KEY, &server_nonce, &client_nonce).unwrap(),
+            CryptState::client(&KEY, &client_nonce, &server_nonce).unwrap(),
+            CryptState::server(&KEY, &client_nonce, &server_nonce).unwrap(),
         )
+    }
+
+    #[test]
+    fn generated_server_state_talks_to_the_client_it_describes() {
+        let random: [u8; 48] = std::array::from_fn(|index| (index as u8).wrapping_mul(7));
+        let (mut server, parts) = CryptState::generate_server(random);
+        assert_eq!(format!("{parts:?}"), "CryptSetupParts { .. }");
+        let mut client =
+            CryptState::client(&parts.key, &parts.client_nonce, &parts.server_nonce).unwrap();
+        assert_eq!(
+            server.decrypt(&client.encrypt(b"up")).as_deref(),
+            Some(&b"up"[..])
+        );
+        assert_eq!(
+            client.decrypt(&server.encrypt(b"down")).as_deref(),
+            Some(&b"down"[..])
+        );
+        // The two directions use different nonces.
+        assert_ne!(client.encrypt_iv(), server.encrypt_iv());
     }
 
     #[test]

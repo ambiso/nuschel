@@ -10,6 +10,7 @@ pub mod voice;
 
 pub mod control {
     include!(concat!(env!("OUT_DIR"), "/mumble_proto.rs"));
+    mod redacted;
 }
 
 pub mod udp {
@@ -17,7 +18,8 @@ pub mod udp {
 }
 
 pub const HEADER_BYTES: usize = 6;
-pub const MAX_CONTROL_BYTES: usize = 8 * 1024 * 1024;
+/// Stock Mumble rejects control frames above this body size (`Connection.cpp`).
+pub const MAX_CONTROL_BYTES: usize = 0x7f_ffff;
 
 /// Control message types: the first two bytes of a frame header.
 pub mod kind {
@@ -53,15 +55,18 @@ pub mod kind {
 }
 
 /// A complete control frame (header and protobuf body) in one buffer, so a
-/// broadcast encodes once and shares the bytes.
-pub fn encode_control(kind: u16, message: &impl prost::Message) -> Bytes {
+/// broadcast encodes once and shares the bytes. `None` if the body would exceed
+/// what stock clients accept.
+pub fn encode_control(kind: u16, message: &impl prost::Message) -> Option<Bytes> {
     let length = message.encoded_len();
+    if length > MAX_CONTROL_BYTES {
+        return None;
+    }
     let mut buffer = BytesMut::with_capacity(HEADER_BYTES + length);
     buffer.extend_from_slice(&kind.to_be_bytes());
     buffer.extend_from_slice(&(length as u32).to_be_bytes());
-    // Encoding into a buffer with enough capacity cannot fail.
-    let _ = message.encode(&mut buffer);
-    buffer.freeze()
+    message.encode(&mut buffer).ok()?;
+    Some(buffer.freeze())
 }
 
 /// A tunneled voice datagram as a `UDPTunnel` frame (raw bytes, not protobuf).
@@ -83,19 +88,34 @@ pub struct ControlFrame {
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum Error {
-    #[error("Mumble control frame exceeds {MAX_CONTROL_BYTES} bytes")]
+    #[error("Mumble control frame exceeds its size limit")]
     TooLarge,
+    #[error("unexpected Mumble control message type {0}")]
+    Unexpected(u16),
 }
 
 /// Decode incrementally without allocating the advertised payload size.
 /// The transport adapter must also bound its read buffer and apply a read timeout.
 pub fn decode_control(buffer: &mut BytesMut) -> Result<Option<ControlFrame>, Error> {
+    decode_control_limited(buffer, |_| Some(MAX_CONTROL_BYTES))
+}
+
+/// Like [`decode_control`], with the body limit chosen per message type from
+/// the header, before any of the body is waited for: `None` means the type is
+/// not accepted at all (for example before authentication).
+pub fn decode_control_limited(
+    buffer: &mut BytesMut,
+    limit: impl FnOnce(u16) -> Option<usize>,
+) -> Result<Option<ControlFrame>, Error> {
     if buffer.len() < HEADER_BYTES {
         return Ok(None);
     }
     let kind = u16::from_be_bytes([buffer[0], buffer[1]]);
     let size = u32::from_be_bytes([buffer[2], buffer[3], buffer[4], buffer[5]]) as usize;
-    if size > MAX_CONTROL_BYTES {
+    let Some(limit) = limit(kind) else {
+        return Err(Error::Unexpected(kind));
+    };
+    if size > limit.min(MAX_CONTROL_BYTES) {
         return Err(Error::TooLarge);
     }
     if buffer.len() < HEADER_BYTES + size {
@@ -139,6 +159,77 @@ mod tests {
     fn rejects_an_oversized_header_without_waiting_for_its_body() {
         let mut buffer = BytesMut::from(&[0, 1, 255, 255, 255, 255][..]);
         assert_eq!(decode_control(&mut buffer), Err(Error::TooLarge));
+        // 0x800000 is one byte more than stock Mumble accepts.
+        let mut buffer = BytesMut::from(&[0, 1, 0, 0x80, 0, 0][..]);
+        assert_eq!(decode_control(&mut buffer), Err(Error::TooLarge));
+    }
+
+    #[test]
+    fn per_type_limits_apply_before_the_body_arrives() {
+        let limit = |kind| match kind {
+            kind::VERSION => Some(4),
+            _ => None,
+        };
+        let mut buffer = BytesMut::from(&[0, 0, 0, 0, 0, 5][..]);
+        assert_eq!(
+            decode_control_limited(&mut buffer, limit),
+            Err(Error::TooLarge)
+        );
+        let mut buffer = BytesMut::from(&[0, 13, 0, 0, 0, 0][..]);
+        assert_eq!(
+            decode_control_limited(&mut buffer, limit),
+            Err(Error::Unexpected(13))
+        );
+        let mut buffer = BytesMut::from(&[0, 0, 0, 0, 0, 1, 9][..]);
+        assert_eq!(
+            decode_control_limited(&mut buffer, limit),
+            Ok(Some(ControlFrame {
+                kind: 0,
+                payload: Bytes::from_static(&[9])
+            }))
+        );
+    }
+
+    #[test]
+    fn secrets_are_redacted_in_debug_output() {
+        let authenticate = control::Authenticate {
+            username: Some("alice".into()),
+            password: Some("hunter2".into()),
+            tokens: vec!["channel-secret".into()],
+            ..Default::default()
+        };
+        let crypt = control::CryptSetup {
+            key: Some(vec![0xab; 16]),
+            client_nonce: Some(vec![0xcd; 16]),
+            server_nonce: Some(vec![0xef; 16]),
+        };
+        let state = control::UserState {
+            temporary_access_tokens: vec!["temporary-secret".into()],
+            comment: Some("private words".into()),
+            ..Default::default()
+        };
+        let text = control::TextMessage {
+            message: "message body".into(),
+            ..Default::default()
+        };
+        let acl = control::acl::ChanAcl {
+            group: Some("#token-secret".into()),
+            ..Default::default()
+        };
+        let printed = format!("{authenticate:?} {crypt:?} {state:?} {text:?} {acl:?}");
+        for secret in [
+            "hunter2",
+            "channel-secret",
+            "171",
+            "ab, ab",
+            "temporary-secret",
+            "private words",
+            "message body",
+            "token-secret",
+        ] {
+            assert!(!printed.contains(secret), "{secret} leaked: {printed}");
+        }
+        assert!(printed.contains("alice"));
     }
 }
 
@@ -179,7 +270,7 @@ mod hostile_input {
     #[test]
     fn crypt_state_rejects_random_datagrams() {
         let mut rng = Rng(42);
-        let mut state = crypt::CryptState::new(&[7; 16], &[1; 16], &[2; 16]).unwrap();
+        let mut state = crypt::CryptState::client(&[7; 16], &[1; 16], &[2; 16]).unwrap();
         for _ in 0..20_000 {
             assert!(state.decrypt(&rng.bytes(200)).is_none());
         }

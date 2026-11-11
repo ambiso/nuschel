@@ -125,7 +125,11 @@ fn parse_protobuf_audio(mut data: &[u8]) -> Option<Audio<'_>> {
         let tag = read_leb128(&mut data)?;
         let (field, wire) = (tag >> 3, tag & 7);
         match (field, wire) {
-            (1, 0) => audio.target = u8::try_from(read_leb128(&mut data)?).ok().filter(|t| *t < 32)?,
+            (1, 0) => {
+                audio.target = u8::try_from(read_leb128(&mut data)?)
+                    .ok()
+                    .filter(|t| *t < 32)?
+            }
             (4, 0) => audio.frame_number = read_leb128(&mut data)?,
             (5, 2) => audio.opus = read_bytes(&mut data)?,
             (6, 2) => {
@@ -172,7 +176,9 @@ fn parse_protobuf_audio(mut data: &[u8]) -> Option<Audio<'_>> {
 }
 
 /// What one receiver gets: the sender, the receiver's context and volume
-/// adjustment (1.0 means none), and whether positional data is passed on.
+/// adjustment (1.0 means none), and whether positional data is passed on. The
+/// caller sets `positional` only when sender and receiver share a plugin
+/// context: positional data reveals a player's in-game location.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Delivery {
     pub sender: u32,
@@ -249,12 +255,30 @@ pub struct ServerInfo {
     pub max_bandwidth: u32,
 }
 
+/// Decides whether an unencrypted ping is answered: the server's per-prefix and
+/// global rate limits and its amplification policy. Taken as an argument so a
+/// caller cannot forget it.
+pub trait PingBudget {
+    fn allow(&mut self, request_length: usize, reply_length: usize) -> bool;
+}
+
+/// Shortest protobuf info ping answered. Stock 1.5 clients send a randomised
+/// timestamp, so their requests are almost always 12 to 14 bytes; shorter ones
+/// would let three bytes reflect into about seventeen.
+pub const MIN_PROTOBUF_INFO_PING: usize = 12;
+
 /// Answer an unencrypted ping from someone without a session: the legacy
 /// 12-byte request (four zero bytes and an opaque 8-byte timestamp) gets the
-/// 24-byte reply; a protobuf ping asking for extended information gets a
-/// protobuf reply. Anything else returns `None`.
-pub fn answer_info_ping(request: &[u8], info: ServerInfo, out: &mut [u8; 64]) -> Option<usize> {
-    if request.len() == 12 && request[..4] == [0; 4] {
+/// 24-byte reply; a protobuf ping of at least [`MIN_PROTOBUF_INFO_PING`] bytes
+/// asking for extended information gets a protobuf reply. A reply is never more
+/// than twice the request, and only sent if `budget` allows it.
+pub fn answer_info_ping(
+    request: &[u8],
+    info: ServerInfo,
+    budget: &mut impl PingBudget,
+    out: &mut [u8; 64],
+) -> Option<usize> {
+    let length = if request.len() == 12 && request[..4] == [0; 4] {
         let legacy = ((info.version >> 48) as u32) << 16
             | (((info.version >> 32) & 0xffff) as u32).min(255) << 8
             | (((info.version >> 16) & 0xffff) as u32).min(255);
@@ -263,28 +287,43 @@ pub fn answer_info_ping(request: &[u8], info: ServerInfo, out: &mut [u8; 64]) ->
         out[12..16].copy_from_slice(&info.users.to_be_bytes());
         out[16..20].copy_from_slice(&info.max_users.to_be_bytes());
         out[20..24].copy_from_slice(&info.max_bandwidth.to_be_bytes());
-        return Some(24);
-    }
-    let (&1, body) = request.split_first()? else {
-        return None;
+        24
+    } else {
+        let (&1, body) = request.split_first()? else {
+            return None;
+        };
+        if request.len() < MIN_PROTOBUF_INFO_PING {
+            return None;
+        }
+        let ping = udp::Ping::decode(body).ok()?;
+        if !ping.request_extended_information {
+            return None;
+        }
+        let mut reply = udp::Ping {
+            timestamp: ping.timestamp,
+            request_extended_information: false,
+            server_version_v2: info.version,
+            user_count: info.users,
+            max_user_count: info.max_users,
+            max_bandwidth_per_user: info.max_bandwidth,
+        };
+        // The reply echoes the client's (randomised) timestamp, so it is about
+        // sixteen bytes longer than the request; drop the least useful fields
+        // until it fits twice the request. The version must stay: it is what
+        // marks a reply as carrying server information.
+        if 1 + reply.encoded_len() > 2 * request.len() {
+            reply.max_bandwidth_per_user = 0;
+        }
+        if 1 + reply.encoded_len() > 2 * request.len() {
+            reply.max_user_count = 0;
+        }
+        out[0] = 1;
+        let mut rest = &mut out[1..];
+        let before = rest.len();
+        reply.encode(&mut rest).ok()?;
+        1 + before - rest.len()
     };
-    let ping = udp::Ping::decode(body).ok()?;
-    if !ping.request_extended_information {
-        return None;
-    }
-    let reply = udp::Ping {
-        timestamp: ping.timestamp,
-        request_extended_information: false,
-        server_version_v2: info.version,
-        user_count: info.users,
-        max_user_count: info.max_users,
-        max_bandwidth_per_user: info.max_bandwidth,
-    };
-    out[0] = 1;
-    let mut rest = &mut out[1..];
-    let before = rest.len();
-    reply.encode(&mut rest).ok()?;
-    Some(1 + before - rest.len())
+    (length <= 2 * request.len() && budget.allow(request.len(), length)).then_some(length)
 }
 
 struct Writer<'a> {
@@ -410,7 +449,12 @@ mod tests {
             panic!("not audio");
         };
         assert_eq!(
-            (audio.target, audio.frame_number, audio.opus, audio.terminator),
+            (
+                audio.target,
+                audio.frame_number,
+                audio.opus,
+                audio.terminator
+            ),
             (5, 128, &[0xf8, 0xff, 0xfe][..], true)
         );
         assert_eq!(audio.positional, Some(POSITION));
@@ -472,7 +516,10 @@ mod tests {
         let mut out = [0; 1024];
         let length = encode(true, &audio, delivery(Context::Normal), &mut out).unwrap();
         let decoded = crate::voice::decode_voice(&out[..length]).unwrap();
-        assert_eq!((decoded.sender, decoded.sequence, decoded.end), (300, 10, false));
+        assert_eq!(
+            (decoded.sender, decoded.sequence, decoded.end),
+            (300, 10, false)
+        );
         assert_eq!(decoded.opus, [0xaa, 0xbb]);
     }
 
@@ -503,6 +550,13 @@ mod tests {
         assert_eq!(parse(true, &[2, 0]), None);
     }
 
+    struct Unlimited;
+    impl PingBudget for Unlimited {
+        fn allow(&mut self, _: usize, _: usize) -> bool {
+            true
+        }
+    }
+
     #[test]
     fn server_browser_pings() {
         let info = ServerInfo {
@@ -513,23 +567,50 @@ mod tests {
         };
         let mut out = [0; 64];
         let request = [0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8];
-        assert_eq!(answer_info_ping(&request, info, &mut out), Some(24));
+        assert_eq!(
+            answer_info_ping(&request, info, &mut Unlimited, &mut out),
+            Some(24)
+        );
         assert_eq!(&out[..4], &[0, 1, 5, 0]);
         assert_eq!(&out[4..12], &request[4..]);
         assert_eq!(&out[12..16], &3_u32.to_be_bytes());
         let mut request = vec![1];
         udp::Ping {
-            timestamp: 9,
+            timestamp: 0x1234_5678_9abc_def0,
             request_extended_information: true,
             ..Default::default()
         }
         .encode(&mut request)
         .unwrap();
-        let length = answer_info_ping(&request, info, &mut out).unwrap();
+        assert!(request.len() >= MIN_PROTOBUF_INFO_PING);
+        let length = answer_info_ping(&request, info, &mut Unlimited, &mut out).unwrap();
+        assert!(length <= 2 * request.len());
         let reply = udp::Ping::decode(&out[1..length]).unwrap();
-        assert_eq!((reply.timestamp, reply.user_count, reply.server_version_v2), (9, 3, PROTOBUF_VERSION));
+        assert_eq!(
+            (reply.timestamp, reply.user_count, reply.server_version_v2),
+            (0x1234_5678_9abc_def0, 3, PROTOBUF_VERSION)
+        );
+        // Three bytes asking for information (the 6x reflection) get nothing.
+        assert_eq!(
+            answer_info_ping(&[1, 0x10, 1], info, &mut Unlimited, &mut out),
+            None
+        );
         // A connectivity ping without the request is not answered unencrypted.
-        assert_eq!(answer_info_ping(&[1, 8, 9], info, &mut out), None);
+        assert_eq!(
+            answer_info_ping(&[1, 8, 9], info, &mut Unlimited, &mut out),
+            None
+        );
+        // The budget has the last word.
+        struct Closed;
+        impl PingBudget for Closed {
+            fn allow(&mut self, _: usize, _: usize) -> bool {
+                false
+            }
+        }
+        assert_eq!(
+            answer_info_ping(&[0; 12], info, &mut Closed, &mut out),
+            None
+        );
     }
 
     #[test]
@@ -557,13 +638,17 @@ mod tests {
             for protobuf in [false, true] {
                 if let Some(Datagram::Audio(audio)) = parse(protobuf, &bytes) {
                     for target in [false, true] {
-                        if let Some(length) = encode(target, &audio, delivery(Context::Shout), &mut out) {
+                        if let Some(length) =
+                            encode(target, &audio, delivery(Context::Shout), &mut out)
+                        {
                             assert!(length <= MAX_PLAIN);
                         }
                     }
                 }
             }
-            let _ = answer_info_ping(&bytes, info, &mut info_out);
+            if let Some(length) = answer_info_ping(&bytes, info, &mut Unlimited, &mut info_out) {
+                assert!(length <= 2 * bytes.len());
+            }
         }
     }
 
@@ -578,7 +663,13 @@ mod tests {
             terminator: false,
         };
         let mut out = [0; 2048];
-        assert_eq!(encode(false, &audio, delivery(Context::Normal), &mut out), None);
-        assert_eq!(encode(true, &audio, delivery(Context::Normal), &mut out), None);
+        assert_eq!(
+            encode(false, &audio, delivery(Context::Normal), &mut out),
+            None
+        );
+        assert_eq!(
+            encode(true, &audio, delivery(Context::Normal), &mut out),
+            None
+        );
     }
 }

@@ -1577,7 +1577,7 @@ impl State {
                 match (setup.key, setup.client_nonce, setup.server_nonce) {
                     (Some(key), Some(client_nonce), Some(server_nonce)) => {
                         if let Some(udp) = self.udp.as_mut() {
-                            let crypt = CryptState::new(&key, &client_nonce, &server_nonce)
+                            let crypt = CryptState::client(&key, &client_nonce, &server_nonce)
                                 .map_err(|_| Error::Protocol("invalid UDP key".into()))?;
                             udp.set_key(crypt);
                         }

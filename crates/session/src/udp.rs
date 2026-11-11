@@ -272,8 +272,8 @@ mod tests {
             .unwrap();
         let key = [3; 16];
         let (client_nonce, server_nonce) = ([1; 16], [2; 16]);
-        client.set_key(CryptState::new(&key, &client_nonce, &server_nonce).unwrap());
-        let mut server_crypt = CryptState::new(&key, &server_nonce, &client_nonce).unwrap();
+        client.set_key(CryptState::client(&key, &client_nonce, &server_nonce).unwrap());
+        let mut server_crypt = CryptState::server(&key, &client_nonce, &server_nonce).unwrap();
         assert!(!client.send_voice(b"early").await, "no UDP before a reply");
         assert!(client.maybe_ping(voice::PROTOBUF_VERSION, 1000).await);
         let mut buffer = [0; MAX_DATAGRAM];
@@ -309,7 +309,7 @@ mod tests {
         let mut client = Udp::bind(silent.local_addr().unwrap(), false)
             .await
             .unwrap();
-        client.set_key(CryptState::new(&[3; 16], &[1; 16], &[2; 16]).unwrap());
+        client.set_key(CryptState::client(&[3; 16], &[1; 16], &[2; 16]).unwrap());
         let mut tunnelled = Vec::new();
         for second in 0..12 {
             client
@@ -341,8 +341,8 @@ mod tests {
             .unwrap();
         let key = [3; 16];
         let (client_nonce, server_nonce) = ([1; 16], [2; 16]);
-        client.set_key(CryptState::new(&key, &client_nonce, &server_nonce).unwrap());
-        let mut server_crypt = CryptState::new(&key, &server_nonce, &client_nonce).unwrap();
+        client.set_key(CryptState::client(&key, &client_nonce, &server_nonce).unwrap());
+        let mut server_crypt = CryptState::server(&key, &client_nonce, &server_nonce).unwrap();
         assert!(client.maybe_ping(voice::PROTOBUF_VERSION, 1000).await);
         let mut buffer = [0; MAX_DATAGRAM];
         let (size, from) = server.recv_from(&mut buffer).await.unwrap();
@@ -371,7 +371,7 @@ mod tests {
     async fn forced_tcp_never_uses_udp() {
         let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let mut client = Udp::bind(server.local_addr().unwrap(), true).await.unwrap();
-        client.set_key(CryptState::new(&[0; 16], &[0; 16], &[0; 16]).unwrap());
+        client.set_key(CryptState::client(&[0; 16], &[0; 16], &[0; 16]).unwrap());
         assert!(!client.maybe_ping(0, 1).await);
         assert!(!client.send_voice(b"x").await);
     }
