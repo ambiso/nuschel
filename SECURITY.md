@@ -74,6 +74,10 @@ dedicated `history/` subfolder. The updater refuses a signed manifest whose rele
 time or version is older than the newest it has accepted; a client that never saw a
 newer manifest can still be offered an older one, and withheld releases go unnoticed.
 
+`nuscheld admin` administers the server offline, through the storage worker, with
+no network interface; an operator lock (a `flock` beside a SQLite file, an advisory
+lock on PostgreSQL) keeps it and a running server from sharing a database.
+
 `nuscheld` is the network-facing process: it holds the TLS key (ring) and hashes
 passwords with argon2id (RustCrypto), under a concurrency limit and a per-account
 limit on failed guesses. Client certificates are accepted self-signed (Mumble's

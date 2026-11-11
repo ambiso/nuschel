@@ -148,6 +148,8 @@ pub struct Opened {
 
 /// Take the operator lock and load the state.
 pub async fn open(settings: &Settings, backend: Backend) -> Result<Opened> {
+    // A new database file is created owner-only, as the server creates it.
+    server::prepare_files(settings, &backend)?;
     let storage = storage::start_locked(backend);
     server::hold_operator_lock(&storage).await?;
     let counters = Arc::new(Counters::default());
@@ -257,6 +259,7 @@ pub async fn run(settings: Settings, backend: Backend, command: Admin) -> Result
 
 async fn check(settings: &Settings, backend: Backend) -> Result<()> {
     println!("configuration accepted");
+    server::prepare_files(settings, &backend)?;
     let storage = storage::start_locked(backend);
     match server::hold_operator_lock(&storage).await {
         Ok(()) => {

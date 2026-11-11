@@ -335,7 +335,8 @@ in a channel and who listens. On a server in compatible mode:
 - Direct messages from stock senders are not archived by default
   (`history.archive_stock_direct_messages` stores those between two accounts).
 - Operators get tools to erase a user's messages (and must, for GDPR requests):
-  `nuscheld --erase-user NAME` turns them into tombstones. Copies already on clients
+  `nuscheld admin history erase-user NAME --yes` (or the older `nuscheld
+  --erase-user NAME`) turns them into tombstones. Copies already on clients
   (Nuschel caches, stock clients' logs) remain.
 
 ## 10. What the server can see

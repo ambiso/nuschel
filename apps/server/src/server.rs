@@ -330,7 +330,7 @@ fn build_channels(
 /// Create the state directory owner-only and, for SQLite, the database file
 /// owner-only before the worker opens it (CVE-2012-0863: a world-readable
 /// Murmur database).
-fn prepare_files(settings: &Settings, backend: &Backend) -> io::Result<()> {
+pub fn prepare_files(settings: &Settings, backend: &Backend) -> io::Result<()> {
     let directory = &settings.config.state_directory;
     if !directory.exists() {
         let mut builder = std::fs::DirBuilder::new();
