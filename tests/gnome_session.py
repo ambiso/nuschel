@@ -14,6 +14,7 @@ real desktop portal, so applications reach it exactly as on a GNOME desktop.
 import ast
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -34,9 +35,10 @@ def find_gnome_shell():
 class GnomeSession:
     DISPLAY = "nuschl-wl"
 
-    def __init__(self, shell=None, width=1440, height=900, log=None, portals=()):
+    def __init__(self, shell=None, width=1440, height=900, log=None, portals=(), xwayland=False):
         self.shell = Path(shell) if shell else find_gnome_shell()
         self.portals = [Path(package) for package in portals]
+        self.xwayland = xwayland
         self.width, self.height = width, height
         # Wayland socket paths are limited to 108 bytes, so keep this short.
         self.runtime = Path(tempfile.mkdtemp(prefix="nwl-", dir=os.environ.get("NUSCHL_WL_TMP", "/tmp")))
@@ -49,7 +51,7 @@ class GnomeSession:
 
     def environment(self):
         env = {key: value for key, value in os.environ.items()
-               if key not in {"WAYLAND_DISPLAY", "DISPLAY", "DBUS_SESSION_BUS_ADDRESS"}}
+               if key not in {"WAYLAND_DISPLAY", "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"}}
         env.update(XDG_RUNTIME_DIR=str(self.runtime), XDG_CONFIG_HOME=str(self.home / "config"),
                    XDG_DATA_HOME=str(self.home / "data"), XDG_CACHE_HOME=str(self.home / "cache"),
                    XDG_STATE_HOME=str(self.home / "state"))
@@ -70,12 +72,22 @@ class GnomeSession:
         env = self.environment()
         env.update(WAYLAND_DISPLAY=self.DISPLAY, DBUS_SESSION_BUS_ADDRESS=self.bus,
                    XDG_SESSION_TYPE="wayland", XDG_CURRENT_DESKTOP="GNOME")
+        if self.xwayland:
+            # Only the X server created by THIS compositor is allowed. Never
+            # fall back to the caller's DISPLAY or authority (e.g. host :0).
+            display = self.eval("imports.gi.GLib.getenv('DISPLAY')")
+            authority = Path(self.eval("imports.gi.GLib.getenv('XAUTHORITY')"))
+            if (not re.fullmatch(r":[0-9]+(?:\.[0-9]+)?", display)
+                    or not authority.resolve().is_relative_to(self.runtime.resolve())
+                    or not authority.is_file()):
+                raise RuntimeError("the private compositor did not export an owned XWayland display/authority")
+            env.update(DISPLAY=display, XAUTHORITY=str(authority))
         return env
 
     def start(self):
         bus_file = self.runtime / "bus-address"
         command = (f"echo \"$DBUS_SESSION_BUS_ADDRESS\" > {bus_file}; exec env -u WAYLAND_DISPLAY {self.shell} --headless --wayland "
-                   f"--no-x11 --virtual-monitor {self.width}x{self.height} --wayland-display {self.DISPLAY} --unsafe-mode")
+                   f"{'' if self.xwayland else '--no-x11 '}--virtual-monitor {self.width}x{self.height} --wayland-display {self.DISPLAY} --unsafe-mode")
         self.process = subprocess.Popen(["dbus-run-session", "--", "bash", "-c", command], env=self.environment(),
                                         stdout=self.log or subprocess.DEVNULL, stderr=subprocess.STDOUT,
                                         start_new_session=True)

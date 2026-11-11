@@ -237,6 +237,10 @@ def main():
     p.add_argument("--at-spi", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--fixture-only", action="store_true")
+    p.add_argument("--permissive-focus", action="store_true", help="baseline diagnostics only: permit compositor focus stealing")
+    p.add_argument("--xwayland", action="store_true", help="enable only the private compositor's owned XWayland bridge")
+    p.add_argument("--expect-unavailable", action="store_true", help="prove pure-Wayland capability refusal without a popup")
+    p.add_argument("--wayland-info", type=Path, default=shutil.which("wayland-info"))
     p.add_argument("--second-paste", choices=["control-v", "command", "deferred-control-v"], default="control-v",
                    help="alternate modes isolate terminal modifier/focus failures; diagnostic only")
     args = p.parse_args()
@@ -251,9 +255,23 @@ def main():
         murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
         murmur.seed()
         murmur.start()
-        shell = GnomeSession(width=1440, height=1000, log=(args.output / "gnome.log").open("w"))
+        shell = GnomeSession(width=1440, height=1000, log=(args.output / "gnome.log").open("w"), xwayland=args.xwayland)
         try:
             shell.start()
+            shell.eval("global._nuschlFocusTrace=[]; global.display.connect('notify::focus-window',()=>{"
+                       "const w=global.display.focus_window; global._nuschlFocusTrace.push({"
+                       "at:imports.gi.GLib.get_monotonic_time(), title:w?.get_title()||null,"
+                       "app:w?.get_wm_class()||null,pid:w?.get_pid()||null});}); 'ok'")
+            shell.eval("global._nuschlWindowTrace=[]; global.display.connect('window-created',(_,w)=>{"
+                       "global._nuschlWindowTrace.push({at:imports.gi.GLib.get_monotonic_time(),"
+                       "title:w.get_title(),app:w.get_wm_class(),pid:w.get_pid()});}); 'ok'")
+            focus_policy = "smart" if args.permissive_focus else "strict"
+            shell.eval("new imports.gi.Gio.Settings({schema_id:'org.gnome.desktop.wm.preferences'})"
+                       f".set_string('focus-new-windows',{json.dumps(focus_policy)}); 'ok'")
+            actual_policy = shell.eval("new imports.gi.Gio.Settings({schema_id:'org.gnome.desktop.wm.preferences'})"
+                                       ".get_string('focus-new-windows')")
+            assert actual_policy == focus_policy
+            (args.output / "focus-policy.json").write_text(json.dumps({"focus-new-windows": actual_policy}))
             env = shell.app_environment() | {"HOME": str(shell.home), "GSETTINGS_BACKEND": "memory",
                                              "NUSCHL_AUDIO_BACKEND": "pulseaudio", "PULSE_SERVER": "unix:/nonexistent-nuschl-test-audio"}
             env.pop("NO_AT_BRIDGE", None)
@@ -267,6 +285,13 @@ def main():
                 env.pop(key, None)
             os.environ.clear()
             os.environ.update(env)
+            if args.xwayland:
+                (args.output / "private-xwayland.json").write_text(json.dumps({key: env[key] for key in ("DISPLAY", "XAUTHORITY")}))
+            assert args.wayland_info, "pass --wayland-info or run with nixpkgs#wayland-utils"
+            registry_info = subprocess.check_output([str(args.wayland_info)], env=env, timeout=10).decode()
+            (args.output / "wayland-info.txt").write_text(registry_info)
+            globals_ = sorted(set(re.findall(r"interface: '([^']+)'", registry_info)))
+            (args.output / "wayland-globals.json").write_text(json.dumps(globals_, indent=2))
 
             def spawn(command, env, log):
                 proc = subprocess.Popen(command, env=env, stdout=(args.output / log).open("w"),
@@ -336,22 +361,46 @@ def main():
             shot("01-connected")
             if args.fixture_only:
                 reads = []
-                for _ in range(2):
+                for index in range(2):
+                    # Distinct content proves the bridge is fresh, not a stale
+                    # X selection cached from the first Wayland publication.
+                    png(fixture, colors=[tuple((c + index*37) % 256 for c in color) for color in COLORS])
+                    publish_clipboard()
                     started = time.monotonic()
+                    window_start = int(shell.eval("global._nuschlWindowTrace.length"))
+                    targets = None
+                    if args.xwayland:
+                        # PNG is already published before the lazy X server's
+                        # first connection. Do not re-copy after this probe.
+                        target_probe = subprocess.run([shutil.which("xclip"), "-selection", "clipboard", "-target", "TARGETS", "-out"],
+                                                      env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+                        targets = dict(status=target_probe.returncode, types=target_probe.stdout.decode("ascii", "replace"))
+                        time.sleep(0.1)
                     try:
-                        got = subprocess.run([shutil.which("wl-paste"), "--type", "image/png", "--no-newline"],
+                        command = ([shutil.which("xclip"), "-selection", "clipboard", "-target", "image/png", "-out"]
+                                   if args.xwayland else [shutil.which("wl-paste"), "--type", "image/png", "--no-newline"])
+                        got = subprocess.run(command,
                                              env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
                         reads.append(dict(seconds=time.monotonic()-started, status=got.returncode,
-                                          exact=got.stdout == fixture.read_bytes(), stderr=got.stderr.decode("utf8", "replace")))
+                                          exact=got.stdout == fixture.read_bytes(), sha256=hashlib.sha256(got.stdout).hexdigest(),
+                                          stderr=got.stderr.decode("utf8", "replace"),
+                                          target_probe=targets,
+                                          windows=json.loads(shell.eval(f"JSON.stringify(global._nuschlWindowTrace.slice({window_start}))")),
+                                          focus=shell.eval("global.display.focus_window?.get_title()||''")))
                     except subprocess.TimeoutExpired:
                         reads.append(dict(seconds=time.monotonic()-started, timeout=True))
                 (args.output / "standalone-clipboard.json").write_text(json.dumps(reads, indent=2))
+                if args.xwayland:
+                    assert all(r.get("exact") and r["status"] == 0 and not r["windows"] and r["focus"] == TITLE for r in reads), reads
+                    assert reads[0]["sha256"] != reads[1]["sha256"], "bridge test did not use distinct images"
                 print("Private terminal/clipboard fixture ready; media features NOT tested.", flush=True)
                 return
 
             proof = {"terminal": args.kind, "capabilities": json.loads((capture / "capabilities.json").read_text()), "wire_images": [], "screens": []}
             proof["second_paste"] = args.second_paste
-            proof["acceptance"] = args.second_paste == "control-v"
+            proof["focus_policy"] = actual_policy
+            proof["wayland_globals"] = globals_
+            proof["acceptance"] = args.second_paste == "control-v" and not args.permissive_focus and not args.expect_unavailable
 
             def acknowledged(caption=None):
                 eventually(lambda: "Image sent to the server." in screen(capture), "send acknowledgment did not clear the attachment")
@@ -372,40 +421,57 @@ def main():
             eventually(lambda: "frac" in screen(capture), "formula source fallback disappeared")
             proof["formula_graphics"] = graphics(capture)
             shot("02-code-formula")
-            shell.key("Escape")
-            shell.type("/paste-image")
-            shell.key("Return")
-            eventually(lambda: "Clipboard image attached" in screen(capture), "explicit /paste-image did not attach a PNG")
-            shell.key("Return")
-            proof["wire_images"].append(received_image(peer, fixture, args.output / "received-command.png"))
-            acknowledged()
-            shot("02b-command-acknowledged")
-            shell.key("Escape")
-            caption = "Caption from native terminal"
-            shell.type(caption)
-            publish_clipboard()
-            if args.second_paste == "command":
-                shell.chord("Control_L", "u")
+            clip_window_start = int(shell.eval("global._nuschlWindowTrace.length"))
+            if args.expect_unavailable:
+                for shortcut in (False, True):
+                    shell.key("Escape")
+                    if shortcut:
+                        shell.chord("Control_L", "v")
+                    else:
+                        shell.type("/paste-image")
+                        shell.key("Return")
+                    eventually(lambda: any(word in screen(capture).splitlines()[-2].lower()
+                                           for word in ("unsupported", "not supported", "unavailable", "data-control", "focus-free")),
+                               "missing focus-free clipboard capability did not produce a clear refusal")
+                    assert "timed out" not in screen(capture).splitlines()[-2].lower()
+                proof["clipboard_unavailable"] = True
+            else:
+                shell.key("Escape")
                 shell.type("/paste-image")
                 shell.key("Return")
-            elif args.second_paste == "deferred-control-v":
-                pid = int((capture / "child.pid").read_text())
-                assert str(profile).encode() in Path(f"/proc/{pid}/cmdline").read_bytes(), "diagnostic TUI process is no longer current"
-                os.kill(pid, signal.SIGSTOP)
-                try:
-                    shell.chord("Control_L", "v")
-                    time.sleep(0.3)
-                finally:
-                    os.kill(pid, signal.SIGCONT)
-            else:
-                shell.chord("Control_L", "v")
-            eventually(lambda: "Clipboard image attached" in screen(capture), "Ctrl+V did not attach a PNG")
-            if args.second_paste == "command":
+                eventually(lambda: "Clipboard image attached" in screen(capture), "explicit /paste-image did not attach a PNG")
+                shell.key("Return")
+                proof["wire_images"].append(received_image(peer, fixture, args.output / "received-command.png"))
+                acknowledged()
+                shot("02b-command-acknowledged")
+                shell.key("Escape")
+                caption = "Caption from native terminal"
                 shell.type(caption)
-            shell.key("Return")
-            proof["wire_images"].append(received_image(peer, fixture, args.output / "received-control-v.png", caption))
-            acknowledged(caption)
-            shot("02c-caption-acknowledged")
+                png(fixture, colors=[(20, 180, 220), (220, 40, 180), (230, 120, 20), (80, 20, 220)])
+                publish_clipboard()
+                if args.second_paste == "command":
+                    shell.chord("Control_L", "u")
+                    shell.type("/paste-image")
+                    shell.key("Return")
+                elif args.second_paste == "deferred-control-v":
+                    pid = int((capture / "child.pid").read_text())
+                    assert str(profile).encode() in Path(f"/proc/{pid}/cmdline").read_bytes(), "diagnostic TUI process is no longer current"
+                    os.kill(pid, signal.SIGSTOP)
+                    try:
+                        shell.chord("Control_L", "v")
+                        time.sleep(0.3)
+                    finally:
+                        os.kill(pid, signal.SIGCONT)
+                else:
+                    shell.chord("Control_L", "v")
+                eventually(lambda: "Clipboard image attached" in screen(capture), "Ctrl+V did not attach a PNG")
+                if args.second_paste == "command":
+                    shell.type(caption)
+                shell.key("Return")
+                proof["wire_images"].append(received_image(peer, fixture, args.output / "received-control-v.png", caption))
+                acknowledged(caption)
+                assert proof["wire_images"][0]["rgba_sha256"] != proof["wire_images"][1]["rgba_sha256"], "second paste was not fresh content"
+                shot("02c-caption-acknowledged")
             proof["graphics"] = graphics(capture)
             # Bring a known image in last, independently of the outgoing path.
             image = base64.b64encode(png(root / "incoming.png").read_bytes()).decode()
@@ -455,10 +521,22 @@ def main():
             assert "\x1bP" not in plain.output, "plain fallback emitted graphics"
             (args.output / "plain.txt").write_text(plain.output)
             proof["plain_fallback"] = True
+            focus_trace = json.loads(shell.eval("JSON.stringify(global._nuschlFocusTrace)"))
+            helper_windows = json.loads(shell.eval(f"JSON.stringify(global._nuschlWindowTrace.slice({clip_window_start}))"))
+            proof["focus_trace"] = focus_trace
+            proof["helper_windows"] = helper_windows
+            if not args.permissive_focus:
+                assert all(entry["title"] == TITLE for entry in focus_trace), f"a helper stole focus: {focus_trace}"
+                assert not helper_windows, f"clipboard opened helper windows: {helper_windows}"
             (args.output / "proof.json").write_text(json.dumps(proof, indent=2))
-            print(f"Native {args.kind}: two pixel-exact pasted images, formula graphics, resize, inert controls and plain fallback passed."
-                  + (f" DIAGNOSTIC {args.second_paste}: ordinary Ctrl+V acceptance NOT proved." if not proof["acceptance"] else ""), flush=True)
+            print(f"Native {args.kind}: formula graphics, receive rendering, resize, inert controls and plain fallback passed. "
+                  + ("Pure-Wayland clipboard unavailability refused without helper windows."
+                     if args.expect_unavailable else "Two fresh pixel-exact pasted images acknowledged. "
+                     + (f"DIAGNOSTIC {args.second_paste}: strict ordinary Ctrl+V acceptance NOT proved." if not proof["acceptance"] else "Strict ordinary Ctrl+V acceptance passed.")), flush=True)
         finally:
+            if shell.process and shell.process.poll() is None:
+                (args.output / "focus-trace.json").write_text(shell.eval("JSON.stringify(global._nuschlFocusTrace||[])"))
+                (args.output / "window-trace.json").write_text(shell.eval("JSON.stringify(global._nuschlWindowTrace||[])"))
             if plain:
                 plain.close("/quit\r")
             if app and app.poll() is None:
