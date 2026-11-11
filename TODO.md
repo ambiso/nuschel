@@ -25,7 +25,13 @@ Reported while testing (2026-11-10/11):
       scheme allowlist, deceptive-anchor tooltip, libFuzzer targets. (In progress.)
 - [x] Paste images into the composer (Ctrl+V): re-encoded in the sandboxed content
       worker to fit the server's image limit, sent like stock Mumble.
-- [ ] Drag and drop of image files; an attachment preview before sending.
+- [x] Attachment tray: paste, paperclip or drop images and files; Enter sends text and
+      images (one image per message, paced under the server's rate limit: Murmur
+      drops excess messages silently) and hands files to the transfer.
+- [ ] Text is held silently while that server's images are still being prepared;
+      say so. A per-bookmark rate-limit override. WebP/HEIC go as files for now.
+- [ ] Report upstream: GPUI only drops files on a hovered element, and typing clears
+      hover (Nuschel now accepts drops by position).
 - [x] Emoji picker on Ctrl+. / Ctrl+; (GNOME's chooser is GTK-only), in colour on
       Linux via a one-line GPUI patch (vendor/gpui-pre-wgpu).
 - [ ] Colour emoji in messages: text runs that are emoji should use the colour emoji
