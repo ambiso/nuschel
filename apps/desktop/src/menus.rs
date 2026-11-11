@@ -219,7 +219,7 @@ impl Desktop {
                         return;
                     };
                     let _ = this.update(cx, |this, cx| {
-                        let result = this.profile.export_identity(&password).and_then(|bytes| write_private(&path, &bytes).map_err(|error| error.to_string()));
+                        let result = this.profile.export_identity_to(&path, &password);
                         this.identity_status = Some(match result {
                             Ok(()) => format!("Exported to {}. Import it in Mumble via Configure → Certificate Wizard.", path.display()),
                             Err(error) => format!("Export failed: {error}"),
@@ -960,20 +960,6 @@ impl Desktop {
             (None, None) => {}
         }
     }
-}
-
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()
 }
 
 fn push_context_actions(

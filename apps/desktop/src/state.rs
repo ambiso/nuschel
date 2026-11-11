@@ -2320,6 +2320,17 @@ impl Desktop {
                         .find(|entry| entry.id == server && entry.generation == generation)
                         && let Some(image) = Document::from(document).first_image()
                     {
+                        // A server cycling texture hashes must not grow the cache
+                        // without bound: past 1024, keep only avatars in use.
+                        if server.avatars.len() >= 1024 {
+                            let used: BTreeSet<_> = server
+                                .users
+                                .values()
+                                .filter_map(|user| user.texture_hash.clone())
+                                .collect();
+                            server.avatars.retain(|hash, _| used.contains(hash));
+                            server.avatar_requests.clear();
+                        }
                         server.avatars.insert(hash, image);
                     }
                 }
@@ -2907,6 +2918,7 @@ impl Desktop {
             }
             SessionEvent::ChannelRemoved(id) => {
                 server.expansion.remove(&id);
+                server.permissions.remove(&id);
                 let cached = server.bookmark.cached_channels.len();
                 server
                     .bookmark

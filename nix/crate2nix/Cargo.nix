@@ -10669,7 +10669,7 @@ rec {
         crateName = "gpui-pre-wgpu";
         version = "0.3.11";
         edition = "2024";
-        sha256 = "0ggra1mz6nlfi15956rqk74d5q9cazsms41zxadhq2qsvr9g6711";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/gpui-pre-wgpu; };
         libName = "gpui_wgpu";
         libPath = "src/gpui_wgpu.rs";
         dependencies = [
@@ -16223,6 +16223,10 @@ rec {
         ];
         devDependencies = [
           {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
             name = "tokio";
             packageId = "tokio";
             features = [ "macros" "rt" ];
@@ -16282,6 +16286,7 @@ rec {
           {
             name = "semver";
             packageId = "semver";
+            features = [ "serde" ];
           }
           {
             name = "serde";
