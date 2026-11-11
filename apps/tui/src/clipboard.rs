@@ -11,6 +11,10 @@ use tokio::{io::AsyncReadExt, process::Command, sync::oneshot};
 
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 const DEADLINE: Duration = Duration::from_secs(3);
+// Mutter's wl-paste fallback surface cannot gain focus while the triggering
+// modifier gesture is still active. Keep the UI responsive and let it settle.
+const KEY_GESTURE_SETTLE: Duration = Duration::from_millis(250);
+const RETRY_GAP: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Destination {
@@ -153,6 +157,14 @@ impl Drop for Clipboard {
 
 impl App {
     pub fn paste_image(&mut self) {
+        self.start_paste_image(Duration::ZERO);
+    }
+
+    pub fn paste_image_after_key(&mut self) {
+        self.start_paste_image(KEY_GESTURE_SETTLE);
+    }
+
+    fn start_paste_image(&mut self, settle: Duration) {
         if self.options.ssh {
             return self.warn("Image paste over SSH needs terminal-mediated image MIME support; the remote machine's OS clipboard is not read.");
         }
@@ -182,6 +194,9 @@ impl App {
         self.clipboard.pending = Some((destination, answer));
         self.clipboard.task = Some(tokio::spawn(async move {
             let result = async {
+                if !settle.is_zero() {
+                    tokio::time::sleep(settle).await;
+                }
                 let worker = nuschl_client::native::content_worker()
                     .ok_or("The content worker is missing; the image was not attached.")?;
                 let bytes = read_local_png().await?;
@@ -363,19 +378,48 @@ impl App {
 
 async fn read_local_png() -> Result<Vec<u8>, String> {
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        return png_from("wl-paste", &["--type", "image/png", "--no-newline"]).await;
+        return retry_timeout(|| png_from("wl-paste", &["--type", "image/png", "--no-newline"]))
+            .await
+            .map_err(ReadError::message);
     }
     if std::env::var_os("DISPLAY").is_some() {
         return png_from(
             "xclip",
             &["-selection", "clipboard", "-target", "image/png", "-out"],
         )
-        .await;
+        .await
+        .map_err(ReadError::message);
     }
     Err("No local Wayland or X11 display is available.".into())
 }
 
-async fn png_from(program: &str, arguments: &[&str]) -> Result<Vec<u8>, String> {
+#[derive(Debug, PartialEq, Eq)]
+enum ReadError {
+    Timeout,
+    Other(String),
+}
+
+impl ReadError {
+    fn message(self) -> String {
+        match self { Self::Timeout => "The clipboard read timed out (the compositor may have refused the helper's focus). Try /paste-image after releasing the shortcut.".into(), Self::Other(reason) => reason }
+    }
+}
+
+async fn retry_timeout<F, Fut>(mut read: F) -> Result<Vec<u8>, ReadError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, ReadError>>,
+{
+    match read().await {
+        Err(ReadError::Timeout) => {
+            tokio::time::sleep(RETRY_GAP).await;
+            read().await
+        }
+        other => other,
+    }
+}
+
+async fn png_from(program: &str, arguments: &[&str]) -> Result<Vec<u8>, ReadError> {
     let mut child = Command::new(program)
         .args(arguments)
         .stdin(Stdio::null())
@@ -384,12 +428,14 @@ async fn png_from(program: &str, arguments: &[&str]) -> Result<Vec<u8>, String> 
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| {
-            format!("{program} is unavailable; install it to read PNG clipboard images.")
+            ReadError::Other(format!(
+                "{program} is unavailable; install it to read PNG clipboard images."
+            ))
         })?;
     let mut output = child
         .stdout
         .take()
-        .ok_or("Clipboard helper has no output.")?;
+        .ok_or_else(|| ReadError::Other("Clipboard helper has no output.".into()))?;
     let result = tokio::time::timeout(DEADLINE, async {
         let mut bytes = Vec::new();
         (&mut output)
@@ -406,10 +452,52 @@ async fn png_from(program: &str, arguments: &[&str]) -> Result<Vec<u8>, String> 
         }
         Ok(bytes)
     })
-    .await
-    .unwrap_or_else(|_| Err("The clipboard read timed out.".into()));
+    .await;
+    let result = match result {
+        Ok(result) => result.map_err(ReadError::Other),
+        Err(_) => Err(ReadError::Timeout),
+    };
     if result.is_err() {
         let _ = child.kill().await;
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn transient_timeout_gets_one_fresh_attempt_but_rejections_do_not() {
+        let mut attempts = 0;
+        let result = retry_timeout(|| {
+            attempts += 1;
+            std::future::ready(if attempts == 1 {
+                Err(ReadError::Timeout)
+            } else {
+                Ok(vec![1, 2])
+            })
+        })
+        .await;
+        assert_eq!(result, Ok(vec![1, 2]));
+        assert_eq!(attempts, 2);
+        let mut attempts = 0;
+        let result = retry_timeout(|| {
+            attempts += 1;
+            std::future::ready(Err(ReadError::Other("not PNG".into())))
+        })
+        .await;
+        assert_eq!(result, Err(ReadError::Other("not PNG".into())));
+        assert_eq!(attempts, 1);
+    }
+    #[tokio::test]
+    async fn repeated_timeouts_remain_bounded_to_two_attempts() {
+        let mut attempts = 0;
+        let result = retry_timeout(|| {
+            attempts += 1;
+            std::future::ready(Err(ReadError::Timeout))
+        })
+        .await;
+        assert_eq!(result, Err(ReadError::Timeout));
+        assert_eq!(attempts, 2);
+    }
 }
