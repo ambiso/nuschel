@@ -171,6 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .run(move |cx| {
             gpui_kit::init(cx);
             appearance::bind_keys(cx);
+            shortcuts::bind_text_editing(cx);
             #[cfg(feature = "frame-timing")]
             frame_timing::init();
             cx.on_window_closed(|cx, _| {

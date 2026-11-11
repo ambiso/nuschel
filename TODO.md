@@ -127,6 +127,9 @@ Later (reported):
       present someone else's: group by server, never merge by name; linking by hash
       must say which servers vouch for it. Nuschel servers with end-to-end
       identities can do better.
+- [x] Emacs-style word deletion in every text field (user, 2026-11-11): Ctrl+W deletes
+      the word before the cursor, Alt+D the word after it (not on macOS, where
+      Option+D types a character), beside Ctrl+Backspace and Ctrl+Delete.
 - [x] Keyboard shortcuts (Settings → Shortcuts): push to talk, toggle mute, toggle
       deafen, push to mute; in the window and system-wide through the GlobalShortcuts
       portal (tested end to end on GNOME), Windows and macOS hotkeys (compiled only).

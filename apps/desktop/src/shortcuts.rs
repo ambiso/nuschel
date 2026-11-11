@@ -29,6 +29,22 @@ pub fn label(action: ShortcutAction) -> &'static str {
 /// (in-app actions have defaults, so a missing entry means the default).
 pub const UNSET: &str = "none";
 
+/// Emacs-style word deletion in every text field, as GTK's and readline's:
+/// Ctrl+W deletes the word before the cursor, Alt+D the word after it. They add
+/// to the fields' own Ctrl+Backspace and Ctrl+Delete (Option+Backspace and
+/// Option+Delete on macOS, where Option+D types "∂" and so stays a character).
+pub fn bind_text_editing(cx: &mut gpui_kit::App) {
+    use gpui_kit::{
+        KeyBinding,
+        base::input::{DeleteToNextWordEnd, DeleteToPreviousWordStart},
+    };
+    const INPUT: Option<&str> = Some("Input");
+    cx.bind_keys([KeyBinding::new("ctrl-w", DeleteToPreviousWordStart, INPUT)]);
+    if !cfg!(target_os = "macos") {
+        cx.bind_keys([KeyBinding::new("alt-d", DeleteToNextWordEnd, INPUT)]);
+    }
+}
+
 /// An in-app action's key when the settings name none: Ctrl+K, Ctrl+F and
 /// Ctrl+Shift+F (Cmd on macOS). Voice actions have no default.
 fn default_binding(action: ShortcutAction) -> Option<&'static str> {

@@ -239,6 +239,7 @@ class AccessibilityTest:
             self.check_shortcuts(nuschel)
             if self.shell:
                 self.check_attachments(nuschel)
+                self.check_word_deletion(nuschel, peer)
                 # Ctrl+K: the switcher's field names the result count and the
                 # highlighted result; the results are options of a list box.
                 self.shell.chord("Control_L", "k")
@@ -293,6 +294,25 @@ class AccessibilityTest:
         eventually(lambda: not any(name == "Remove Pasted image 1" for _, _, _, name in snapshot(nuschel)),
                    "the image stayed after Remove", timeout=10)
         print("A pasted image showed in the tray as a named item and was removed through AT-SPI.", flush=True)
+
+    def check_word_deletion(self, nuschel, peer):
+        """Ctrl+W deletes the word before the cursor, Alt+D the word after it."""
+        composer = self.find(snapshot(nuschel), "entry", "Message")
+        composer.call("Component", "GrabFocus")
+        time.sleep(0.5)
+        self.shell.type("alpha beta gamma delta")
+        time.sleep(0.3)
+        self.shell.chord("Control_L", "w")  # "alpha beta gamma "
+        time.sleep(0.3)
+        self.shell.key("Home")
+        time.sleep(0.3)
+        self.shell.chord("Alt_L", "d")  # " beta gamma "
+        time.sleep(0.3)
+        self.shell.key("Return")
+        event = peer.wait(lambda event: event["kind"] == "text" and not event["outgoing"]
+                          and "beta" in event["body"], timeout=10)
+        assert event["body"].strip() == "beta gamma", event["body"]
+        print("Ctrl+W and Alt+D deleted the word before and after the cursor.", flush=True)
 
     def check_shortcuts(self, nuschel):
         self.find(snapshot(nuschel), "push button", "Settings").call("Action", "DoAction", "i", "0")
