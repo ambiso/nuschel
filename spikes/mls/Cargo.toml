@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: EUPL-1.2
+# Spike: OpenMLS with the libcrux provider (docs/e2ee.md). Its own workspace, outside
+# the default build and the crate2nix graph, like fuzz/:
+#   CARGO_TARGET_DIR=... cargo test -j 4   (from this directory)
+[package]
+name = "nuschel-mls-spike"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "EUPL-1.2"
+publish = false
+
+[dependencies]
+openmls = { version = "=0.9.2", features = ["libcrux-provider", "draft-ietf-mls-pq-ciphersuites"] }
+openmls_libcrux_crypto = { version = "=0.4.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_traits = { version = "=0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+openmls_memory_storage = { version = "=0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
+zeroize = "1.8"
+# ML-DSA-65 for the hybrid identity keys (feature `mldsa`, src/identity.rs).
+libcrux-ml-dsa = { version = "=0.0.11", optional = true, default-features = false, features = ["std", "mldsa65"] }
+
+[features]
+default = ["mldsa"]
+# Hybrid Ed25519 + ML-DSA-65 identity keys (src/identity.rs).
+mldsa = ["dep:libcrux-ml-dsa"]
+
+# The workspace's release profile, for comparable binary sizes.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[workspace]
+members = ["."]
