@@ -9,7 +9,7 @@ The test runs the actual GPUI client under Xvfb against a stock Mumble server,
 with synthetic audio on a private PulseAudio daemon. It never opens the host microphone.
 Screenshots are copied into the test result.
 
-The iOS environment experiment is documented in [ios-vm.md](../docs/ios-vm.md).
+The iOS app track is cancelled/deferred by the user; its stopped environment experiment is documented in [ios-vm.md](../docs/ios-vm.md).
 `just ios-preflight` checks this Linux host without downloading VM media;
 `just ios-vm-check` runs the host-side tooling tests. Guest inspection is bounded
 and uses a dedicated loopback SSH identity. Host KVM access and installed SDK/runtime
@@ -86,13 +86,18 @@ except forwards into host loopback (the harness on 10.0.2.100:80, a test Murmur 
 10.0.2.100:64738). Keep its state directory (`$NUSCHL_WINDOWS_VM_DIR`, default
 `~/vms/nuschl-windows`) out of backups and off a RAM-backed `/tmp`.
 
+The harness uses per-boot authentication for jobs, results and fixture downloads.
+Use `Get-NuschlTestFile` inside the guest; bare fixture URLs no longer work. Existing
+guests are refreshed without reinstalling; details and validation are in
+[windows-vm.md](../docs/windows-vm.md).
+
 ### Windows worker sandbox
 
 `crates/sandbox-windows/tests/confinement.rs` checks every worker's AppContainer from
 the inside (docs/windows-sandbox.md). Cross-build it with the workers
 (`cargo test --target x86_64-pc-windows-gnu -p nuschl-sandbox-windows --test
 confinement --no-run`), copy the test executable and the six worker executables
-into one folder in the guest (`windows_vm.py push`, then `Invoke-WebRequest`), and
+into one folder in the guest (`windows_vm.py push`, then `Get-NuschlTestFile -Name NAME -OutFile PATH`), and
 run `confinement.exe --workers <folder>` there. It starts itself through
 `nuschl_ipc::host`'s real commands as each worker kind; inside, it must fail to read
 a file it creates in Documents, list or write the profile, `C:\Users\Public` or the

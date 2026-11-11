@@ -1,22 +1,52 @@
 # Nuschl TODO
 
-Current focus: **iOS, starting with a Linux-hosted macOS/Xcode/Simulator proof**
-(user, 2026-11-11).
+Current focus: **web client/deployment, server admission/moderation, and WebRTC**
+(user, 2026-11-11). The iOS app track was cancelled after Apple account/download
+access failed; do not resume it or acquire further Apple materials automatically.
 The desktop and server support stock Mumble interoperability; shared multi-server
 audio, key-transparency witnesses, the browser foundation and experimental MLS
-text/history are implemented. Live WebRTC/video, SFrame and the remaining encrypted
-history proofs are later work. The rename, profile migration and build-cache cleanup
-are complete; package, cross-build and all four VM checks have passed.
+text/history are implemented. The rename and build-cache cleanup are complete.
+Historical package/cross-build/VM verification remains recorded below; each new
+change has its own validation.
 
 ## Execution order
 
-1. **Rename checkpoint — verified:** native, migration, accessibility, browser,
-   Windows, universal macOS app, all eight Nix checks and all four VM suites passed.
-   Build-cache cleanup is complete. The checkpoint is pushed as `f0116b77`.
-2. **iOS is the first implementation track after that checkpoint**, ahead of Android,
-   completing the browser UI, video/SFrame and additional encrypted-history features.
-   Swift + SwiftUI over the shared Rust SDK through UniFFI remains the chosen approach.
-   Build a small usable client, rather than requiring every remaining SDK feature first:
+1. **Verified foundation:** rename checkpoint `f0116b77` and audited fixes
+   `15320136` are pushed. Build-cache cleanup is complete.
+2. **Web:** package the real WASM SDK and Svelte UI through crate2nix and locked npm
+   dependencies; worker-isolated chat, server/channel navigation and default local
+   IndexedDB history; then negotiated server archives, identity, voice and browser
+   interoperability. Keep certificate and invite policy checks fail closed.
+3. **Server admission/moderation:** knocking and temporary permission/history fences;
+   reports, spam holds and durable moderation decisions; administrative follow-ups.
+   One owner controls shared protocol/server authorization changes before assigning
+   callers. Experimental E2EE must refuse unsupported admission rather than leak
+   earlier history or keys.
+4. **WebRTC/video:** remove the remaining AWS-LC certificate dependency where
+   feasible, then ICE/re-negotiation, authenticated signaling and relay-only
+   privacy, calling/SFU/media adapters, and SFrame. Transport/codec tests do not
+   establish a usable video-call product.
+5. **Independent safety and desktop fixes:** native image clipboard and contrast,
+   authenticated Windows test control, persistence/resource limits and remaining
+   recovery/accessibility coverage. Parallelize only disjoint files and APIs.
+6. **Linked devices/recovery:** authenticated per-device server sessions before
+   concurrent linked logins or synced auto-connect; optional passkey/recovery-key/
+   skip flows and preferences vault retain their requirements. Android remains
+   future work. No private device-key or MLS-state cloning.
+
+Dependency path: shared protocol/authorization → server handlers → shared SDK
+commands/events → desktop/web controls. Web build/worker storage and RTC encoded-media
+transport can progress independently until signaling integration. Moderation and
+knocking share server authorization/history code and must be serialized there.
+
+## Deferred iOS plan
+
+Cancelled by the user on 2026-11-11 ("Okay no iOS app then"). Preserve the following
+milestones as reference, not active assignments. The experiment demonstrated
+Sonoma Recovery 14.6.1/23G93 x86_64 boot and basic GUI rendering over KVM, not an
+installed macOS/Xcode/Simulator environment. Experiment processes were stopped;
+media/evidence remain on disk. No further Apple acquisition or development is queued.
+
    - [ ] **Linux-hosted macOS VM first** (user, 2026-11-11): no owned Apple
          hardware or paid macOS runner is a development prerequisite. Evaluate
          Docker-OSX/QEMU-KVM with a disk-backed image, pinned guest/Xcode/SDK versions
@@ -27,8 +57,8 @@ are complete; package, cross-build and all four VM checks have passed.
    - [x] **Host feasibility tooling** (`tests/ios_vm.py`, `docs/ios-vm.md`): host and
          confined cached-container KVM creation, disk/RAM budgets and immutable
          registry metadata checks passed; 14 host-side regression tests passed.
-         `just ios-preflight` and `just ios-vm-check` expose the checks. No macOS/Xcode
-         media was acquired or guest booted. Guest graphics, SwiftUI rendering,
+         `just ios-preflight` and `just ios-vm-check` expose the checks. A later bounded experiment acquired official signed recovery media and booted
+         Recovery only. Installed macOS/Xcode, SwiftUI rendering,
          XCTest and Rust-library linking remain unproven in the milestone above.
    - [ ] Swift bindings for connect/disconnect, bookmarks, channel/user snapshots,
          text/history and mute/deafen/join-voice commands; an iOS Rust build and a
@@ -49,20 +79,9 @@ are complete; package, cross-build and all four VM checks have passed.
          Physical-device audio, Bluetooth, battery and background checks remain
          separate validation work, potentially with external testers; acquiring a
          Mac or iPhone must not gate the SDK, UI or simulator milestones.
-3. **Desktop + phone with one linked identity:** authenticated per-device server
-   sessions must avoid the current ghost kick before enabling simultaneous linked
-   logins or synced auto-connect. This can follow the initial iOS client; it does
-   not block testing with a separate device account/certificate. Never clone private
-   device keys or MLS state.
-4. **Follow-on tracks:** optional recovery and encrypted preference sync, remaining
-   MLS history proofs, Android, full browser UI, and video/SFrame. Their safety
-   requirements remain, but they do not gate the first iOS client.
-
-Dependency path: Linux-hosted macOS/graphics/Simulator proof → shared bindings/build
-foundation → SwiftUI and iOS audio in parallel → Simulator voice/chat → mobile
-reliability and physical-device validation. Per-device server sessions
-join that path before linked desktop/phone use; recovery/sync and production MLS
-history remain separate dependencies for their own features.
+The earlier SwiftUI/UniFFI choice remains historical context if the user explicitly
+reopens this track. Simulator/SwiftUI/XCTest/Rust linkage and physical-device audio
+were never proven.
 
 Full source/test audit (2026-11-11): [findings, evidence and conflict ownership](docs/todo-audit.md).
 Checked implementation and checked runtime coverage are separate claims; untested
@@ -1121,8 +1140,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         administration (ACLs, bans, moving people), whisper and push-to-talk (a
         terminal has no key-up), Settings beyond the command line, image alt text
         (the content worker keeps none).
-  - [ ] **iOS — next after the rename:** Swift + SwiftUI over UniFFI; staged
-        milestones are in "Execution order" above. Review mobile processing and
+  - [ ] **iOS — cancelled/deferred by the user:** Swift + SwiftUI over UniFFI; staged
+        milestones are retained in "Deferred iOS plan" above. Review mobile processing and
         codec boundaries; CallKit, background audio, push extension.
   - [ ] **Android — after the initial iOS client**: Kotlin + Compose over UniFFI;
         full protocol natively; workers as `isolatedProcess` services; platform
