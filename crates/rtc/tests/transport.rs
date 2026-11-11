@@ -158,7 +158,7 @@ impl Pair {
 }
 
 fn video() -> Arc<[u8]> {
-    Arc::from(include_bytes!("../../../tests/fixtures/rtc-keyframe.vp8").as_slice())
+    Arc::from(include_bytes!("fixtures/rtc-keyframe.vp8").as_slice())
 }
 
 #[test]

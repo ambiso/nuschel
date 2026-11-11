@@ -12,7 +12,7 @@ use str0m_proto::crypto::dtls::DtlsCert;
 
 struct CertificateKey {
     key: SigningKey,
-    public: p256::EncodedPoint,
+    public: p256::Sec1Point,
 }
 
 impl PublicKeyData for CertificateKey {
@@ -41,7 +41,7 @@ impl rcgen::SigningKey for CertificateKey {
 pub(super) fn generate() -> Option<DtlsCert> {
     // Return failure rather than panicking if the system CSPRNG is unavailable.
     let key = SigningKey::try_generate().ok()?;
-    let public = key.verifying_key().to_encoded_point(false);
+    let public = key.verifying_key().to_sec1_point(false);
     let signer = CertificateKey { key, public };
 
     let mut params = CertificateParams::new(Vec::<String>::new()).ok()?;
@@ -76,29 +76,27 @@ pub(super) fn generate() -> Option<DtlsCert> {
 mod tests {
     use super::*;
     use p256::ecdsa::{VerifyingKey, signature::Verifier};
-    use p256::pkcs8::{
-        DecodePrivateKey,
-        der::{Decode, Encode},
-    };
+    use p256::pkcs8::DecodePrivateKey;
     use x509_cert::Certificate;
+    use x509_cert::der::{Decode, Encode};
 
     #[test]
     fn certificate_is_p256_with_a_valid_self_signature_and_matching_pkcs8_key() {
         let generated = generate().expect("system entropy and certificate generation");
         let certificate = Certificate::from_der(&generated.certificate).expect("X.509 DER");
         assert_eq!(
-            certificate.signature_algorithm.oid.to_string(),
+            certificate.signature_algorithm().oid.to_string(),
             "1.2.840.10045.4.3.2"
         );
         assert_eq!(
-            certificate.tbs_certificate.signature,
-            certificate.signature_algorithm
+            certificate.tbs_certificate().signature(),
+            certificate.signature_algorithm()
         );
         assert_eq!(
-            certificate.tbs_certificate.issuer,
-            certificate.tbs_certificate.subject
+            certificate.tbs_certificate().issuer(),
+            certificate.tbs_certificate().subject()
         );
-        let subject_key = &certificate.tbs_certificate.subject_public_key_info;
+        let subject_key = certificate.tbs_certificate().subject_public_key_info();
         assert_eq!(subject_key.algorithm.oid.to_string(), "1.2.840.10045.2.1");
         let verifying =
             VerifyingKey::from_sec1_bytes(subject_key.subject_public_key.as_bytes().unwrap())
@@ -107,9 +105,9 @@ mod tests {
             SigningKey::from_pkcs8_der(&generated.private_key).expect("PKCS#8 P-256 private key");
         assert_eq!(signing.verifying_key(), &verifying);
 
-        let signature = Signature::from_der(certificate.signature.as_bytes().unwrap())
+        let signature = Signature::from_der(certificate.signature().as_bytes().unwrap())
             .expect("DER ECDSA signature");
-        let mut signed = certificate.tbs_certificate.to_der().unwrap();
+        let mut signed = certificate.tbs_certificate().to_der().unwrap();
         verifying
             .verify(&signed, &signature)
             .expect("valid self-signature");
@@ -123,12 +121,12 @@ mod tests {
         let b = generate().unwrap();
         let parsed_a = Certificate::from_der(&a.certificate).unwrap();
         let parsed_b = Certificate::from_der(&b.certificate).unwrap();
-        let serial_a = parsed_a.tbs_certificate.serial_number.as_bytes();
-        let serial_b = parsed_b.tbs_certificate.serial_number.as_bytes();
+        let serial_a = parsed_a.tbs_certificate().serial_number().as_bytes();
+        let serial_b = parsed_b.tbs_certificate().serial_number().as_bytes();
         assert_ne!(serial_a, serial_b);
         assert!(serial_a.len() <= 20 && serial_a.iter().any(|byte| *byte != 0));
         assert!(serial_b.len() <= 20 && serial_b.iter().any(|byte| *byte != 0));
-        assert_ne!(a.private_key, b.private_key);
+        assert!(a.private_key != b.private_key);
         assert_ne!(a.certificate, b.certificate);
     }
 }
