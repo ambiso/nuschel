@@ -1,6 +1,6 @@
 # The web host (docs/web.md): the web client's static files, the share-link
 # landing page, the app-link files for Android and iOS, and the tunnel relay
-# behind nginx, on one virtual host with ACME. `services.nuschel-web`.
+# behind nginx, on one virtual host with ACME. `services.nuschl-web`.
 { self }:
 {
   config,
@@ -9,21 +9,21 @@
   ...
 }:
 let
-  cfg = config.services.nuschel-web;
+  cfg = config.services.nuschl-web;
   toml = pkgs.formats.toml { };
   json = pkgs.formats.json { };
   system = pkgs.stdenv.hostPlatform.system;
-  defaultInstallUrl = "https://github.com/ambiso/nuschel/releases/latest";
+  defaultInstallUrl = "https://github.com/ambiso/nuschl/releases/latest";
   https = cfg.forceSSL || cfg.enableACME;
   origin = "${if https then "https" else "http"}://${cfg.hostName}";
-  socketDirectory = "/run/nuschel-web-relay";
+  socketDirectory = "/run/nuschl-web-relay";
   socket = "${socketDirectory}/relay.sock";
   # The site with this host's install link.
   site =
     if cfg.installUrl == defaultInstallUrl then
       cfg.package
     else
-      pkgs.runCommand "nuschel-web-site-configured" { } ''
+      pkgs.runCommand "nuschl-web-site-configured" { } ''
         cp -R ${cfg.package} "$out"
         chmod -R u+w "$out"
         for page in "$out"/*.html; do
@@ -48,7 +48,7 @@ let
       components = [ { "/" = "/join/*"; } ];
     }) cfg.appLinks.apple;
   };
-  relayConfig = toml.generate "nuschel-web-relay.toml" (
+  relayConfig = toml.generate "nuschl-web-relay.toml" (
     {
       listen = "unix:${socket}";
       ports = cfg.relay.ports;
@@ -99,11 +99,12 @@ let
   ];
 in
 {
-  options.services.nuschel-web = {
-    enable = lib.mkEnableOption "the Nuschel web host: web client, share links and tunnel relay";
+  imports = [ (lib.mkRenamedOptionModule [ "services" "nuschel-web" ] [ "services" "nuschl-web" ]) ];
+  options.services.nuschl-web = {
+    enable = lib.mkEnableOption "the Nuschl web host: web client, share links and tunnel relay";
     hostName = lib.mkOption {
       type = lib.types.str;
-      example = "web.nuschel.example";
+      example = "web.nuschl.example";
       description = ''
         The virtual host (a domain or subdomain). Browsers keep the web client's
         identity per origin, so keep one host name for good.
@@ -122,13 +123,13 @@ in
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${system}.web-site;
-      defaultText = lib.literalExpression "inputs.nuschel.packages.\${pkgs.stdenv.hostPlatform.system}.web-site";
+      defaultText = lib.literalExpression "inputs.nuschl.packages.\${pkgs.stdenv.hostPlatform.system}.web-site";
       description = "The static files: the web client and the share-link landing page (join.html).";
     };
     installUrl = lib.mkOption {
       type = lib.types.str;
       default = defaultInstallUrl;
-      description = "Where \"Get Nuschel\" leads.";
+      description = "Where \"Get Nuschl\" leads.";
     };
     appLinks = {
       android = lib.mkOption {
@@ -137,11 +138,13 @@ in
             options = {
               package = lib.mkOption {
                 type = lib.types.str;
-                example = "org.nuschel.android";
+                example = "org.nuschl.android";
               };
               certificateFingerprints = lib.mkOption {
                 type = lib.types.listOf lib.types.str;
-                example = [ "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A8:8A:04:96:B2:3F:CF:44:E5" ];
+                example = [
+                  "14:6D:E9:83:C5:73:06:50:D8:EE:B9:95:2F:34:FC:64:16:A0:83:42:E6:1D:BE:A8:8A:04:96:B2:3F:CF:44:E5"
+                ];
                 description = "SHA-256 fingerprints of the app's signing certificates.";
               };
             };
@@ -153,7 +156,7 @@ in
       apple = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
-        example = [ "ABCDE12345.org.nuschel.Nuschel" ];
+        example = [ "ABCDE12345.org.nuschl.Nuschl" ];
         description = "iOS app ids (team id and bundle id) that open this host's /join/ links (/.well-known/apple-app-site-association).";
       };
     };
@@ -161,12 +164,12 @@ in
       enable = lib.mkOption {
         type = lib.types.bool;
         default = true;
-        description = "The tunnel relay at /relay, through which the web client reaches Mumble and Nuschel servers.";
+        description = "The tunnel relay at /relay, through which the web client reaches Mumble and Nuschl servers.";
       };
       package = lib.mkOption {
         type = lib.types.package;
         default = self.packages.${system}.web-relay;
-        defaultText = lib.literalExpression "inputs.nuschel.packages.\${pkgs.stdenv.hostPlatform.system}.web-relay";
+        defaultText = lib.literalExpression "inputs.nuschl.packages.\${pkgs.stdenv.hostPlatform.system}.web-relay";
       };
       ports = lib.mkOption {
         type = lib.types.listOf lib.types.str;
@@ -204,7 +207,7 @@ in
           client_tunnels = 8;
           bytes_per_second = 262144;
         };
-        description = "Further nuschel-web-relay.toml settings (apps/web-relay/src/config.rs).";
+        description = "Further nuschl-web-relay.toml settings (apps/web-relay/src/config.rs).";
       };
     };
   };
@@ -258,29 +261,29 @@ in
     # A system user (not a dynamic one: nginx must share its group to reach the
     # socket). It owns nothing but the socket's directory.
     users.users = lib.mkIf cfg.relay.enable {
-      nuschel-web-relay = {
+      nuschl-web-relay = {
         isSystemUser = true;
-        group = "nuschel-web-relay";
+        group = "nuschl-web-relay";
       };
-      ${config.services.nginx.user}.extraGroups = [ "nuschel-web-relay" ];
+      ${config.services.nginx.user}.extraGroups = [ "nuschl-web-relay" ];
     };
-    users.groups.nuschel-web-relay = lib.mkIf cfg.relay.enable { };
+    users.groups.nuschl-web-relay = lib.mkIf cfg.relay.enable { };
 
-    systemd.services.nuschel-web-relay = lib.mkIf cfg.relay.enable {
-      description = "Nuschel web client tunnel relay";
+    systemd.services.nuschl-web-relay = lib.mkIf cfg.relay.enable {
+      description = "Nuschl web client tunnel relay";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
       before = [ "nginx.service" ];
       restartTriggers = [ relayConfig ];
       serviceConfig = {
         ExecStart = lib.escapeShellArgs [
-          "${cfg.relay.package}/bin/nuschel-web-relay"
+          "${cfg.relay.package}/bin/nuschl-web-relay"
           "--config"
           relayConfig
         ];
-        User = "nuschel-web-relay";
-        Group = "nuschel-web-relay";
-        RuntimeDirectory = "nuschel-web-relay";
+        User = "nuschl-web-relay";
+        Group = "nuschl-web-relay";
+        RuntimeDirectory = "nuschl-web-relay";
         RuntimeDirectoryMode = "0750";
         UMask = "0007";
         Restart = "on-failure";

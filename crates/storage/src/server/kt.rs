@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The key-transparency table (docs/e2ee.md §5.2): an ordered key-value store
-//! with atomic batches for nuschel-kt's directory and `nuscheld`'s records
+//! with atomic batches for nuschl-kt's directory and `nuschld`'s records
 //! behind each binding. Keys and values are opaque bytes (base64 on the IPC);
 //! the worker bounds their sizes and counts but never interprets them.
 use super::ServerStore;
 use crate::BeginWrite as _;
 use crate::{Error, Pool};
 use base64::Engine as _;
-use nuschel_ipc::server::{MAX_KT_KEY_BYTES, MAX_KT_RECORDS, MAX_KT_VALUE_BYTES};
+use nuschl_ipc::server::{MAX_KT_KEY_BYTES, MAX_KT_RECORDS, MAX_KT_VALUE_BYTES};
 
 fn decode(text: &str, limit: usize) -> Result<Vec<u8>, Error> {
     // Base64 is 4/3 of the bytes; refuse before decoding anything larger.
@@ -115,7 +115,7 @@ impl ServerStore {
         with_pool!(&self.pool, |pool| {
             let mut transaction = pool.begin_write().await?;
             for (key, value) in &records {
-                // An empty value deletes the key (nuschel-kt never writes one).
+                // An empty value deletes the key (nuschl-kt never writes one).
                 if value.is_empty() {
                     sqlx::query("DELETE FROM kt_records WHERE key = $1")
                         .bind(key)

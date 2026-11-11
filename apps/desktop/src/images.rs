@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! GPUI keeps every `RenderImage` it has drawn in the window's texture atlas
-//! until `Window::drop_image`. Images Nuschel decodes itself (message images,
+//! until `Window::drop_image`. Images Nuschl decodes itself (message images,
 //! avatars, the viewer's large version) are tracked here and released once
 //! nothing but the tracker holds them.
 use gpui_kit::{RenderImage, Window};

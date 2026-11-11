@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Managed configuration as a user and a screen reader meet it (Home Manager VM).
 
-Starts Nuschel with the user's own profile, where managed.json (written by
-programs.nuschel.settings and .servers) sets "enter_sends": false, F13 for push
+Starts Nuschl with the user's own profile, where managed.json (written by
+programs.nuschl.settings and .servers) sets "enter_sends": false, F13 for push
 to talk and a server named "Managed", while settings.json says "enter_sends":
 true. A private accessibility bus and registry are started as in
 tests/accessibility.py, and the checks are that:
@@ -49,11 +49,11 @@ def press(node):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("nuschel", type=Path, help="the nuschel executable")
+    parser.add_argument("nuschl", type=Path, help="the nuschl executable")
     parser.add_argument("--at-spi", type=Path, required=True, help="at-spi2-core package (bus launcher, registry)")
-    parser.add_argument("--config", type=Path, required=True, help="Nuschel's configuration folder")
+    parser.add_argument("--config", type=Path, required=True, help="Nuschl's configuration folder")
     args = parser.parse_args()
-    root = Path(tempfile.mkdtemp(prefix="nuschel-managed-"))
+    root = Path(tempfile.mkdtemp(prefix="nuschl-managed-"))
     processes = []
 
     def spawn(command, env, log):
@@ -84,20 +84,20 @@ def main():
 
         settings_file = args.config / "settings.json"
         assert json.loads(settings_file.read_text())["enter_sends"] is True, "expected settings.json's own value"
-        app = spawn([str(args.nuschel)], env, "desktop.log")
+        app = spawn([str(args.nuschl)], env, "desktop.log")
 
         def application():
             assert app.poll() is None, (root / "desktop.log").read_text()[-3000:]
-            return next((node for node in registry.children() if node.name.lower() == "nuschel"), None)
-        nuschel = eventually(application, "Nuschel did not register with the accessibility registry", timeout=60)
+            return next((node for node in registry.children() if node.name.lower() == "nuschl"), None)
+        nuschl = eventually(application, "Nuschl did not register with the accessibility registry", timeout=60)
 
         def node(role, name):
-            return next((node for _, node, r, n in snapshot(nuschel) if r == role and n == name), None)
+            return next((node for _, node, r, n in snapshot(nuschl) if r == role and n == name), None)
         press(eventually(lambda: node("push button", "Settings"), "no Settings button", timeout=60))
 
         def managed(role, name):
             """The control in a group marked as set by the system, and the group's text."""
-            nodes = snapshot(nuschel)
+            nodes = snapshot(nuschl)
             for index, (depth, _, group_role, group_name) in enumerate(nodes):
                 if group_name == NOTE and group_role != "label":
                     below = list(takewhile(lambda entry: entry[0] > depth, nodes[index + 1:]))
@@ -119,7 +119,7 @@ def main():
         print("Settings: Enter sends messages and the push-to-talk key show as set by the system "
               "configuration, and clicking Clear changes nothing.", flush=True)
 
-        press(find(snapshot(nuschel), "radio button", "Push to talk"))
+        press(find(snapshot(nuschl), "radio button", "Push to talk"))
 
         def saved():
             settings = json.loads(settings_file.read_text())
@@ -129,18 +129,18 @@ def main():
         assert "push-to-talk" not in settings.get("shortcuts", {}), f"a managed key was saved: {settings}"
         print("Another setting changed and was saved; settings.json kept its own values under managed keys.",
               flush=True)
-        press(find(snapshot(nuschel), "push button", "Done"))
+        press(find(snapshot(nuschl), "push button", "Done"))
 
-        server = eventually(lambda: next((node for _, node, role, name in snapshot(nuschel)
+        server = eventually(lambda: next((node for _, node, role, name in snapshot(nuschl)
                                           if role == "push button" and name.startswith("Managed;")), None),
                             "the managed server is not listed", timeout=10)
         press(server)
         eventually(lambda: node("label", "Managed"), "the managed server was not selected", timeout=10)
-        press(find(snapshot(nuschel), "push button", "Server settings"))
+        press(find(snapshot(nuschl), "push button", "Server settings"))
         names = eventually(lambda: (lambda names: names if SERVER_NOTE in names else None)(
-            {name for _, _, _, name in snapshot(nuschel)}), "the managed server's form has no note", timeout=10)
+            {name for _, _, _, name in snapshot(nuschl)}), "the managed server's form has no note", timeout=10)
         assert "Remove saved server" not in names, "a managed server can be removed"
-        press(find(snapshot(nuschel), "push button", "Cancel"))
+        press(find(snapshot(nuschl), "push button", "Cancel"))
         print("The managed server is listed; its form says so and offers no removal.", flush=True)
     except BaseException:
         for log in ("desktop.log", "bus-launcher.log", "registry.log"):

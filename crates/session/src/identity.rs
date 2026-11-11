@@ -12,7 +12,7 @@
 //!   and repeats the schedule of §5.4 every day. It answers [`IdentityCommand`]s from
 //!   the frontend with [`IdentityEvent`]s.
 use crate::Error;
-use nuschel_ipc::{
+use nuschl_ipc::{
     Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
     crypto::{
         ContactView, CryptoRequest, CryptoResponse, CryptoServer, HeadOutcome, IdentityView,
@@ -20,7 +20,7 @@ use nuschel_ipc::{
     },
     write_frame,
 };
-use nuschel_protocol::nuschel::{
+use nuschl_protocol::nuschl::{
     kind,
     v1::{self, error::Code},
 };
@@ -62,16 +62,16 @@ struct Running {
     child: Child,
     input: ChildStdin,
     output: ChildStdout,
-    _containment: nuschel_ipc::host::Containment,
+    _containment: nuschl_ipc::host::Containment,
 }
 
 impl CryptoHandle {
-    /// The worker in its sandbox (`nuschel_ipc::host::crypto_sandbox_command`), on
+    /// The worker in its sandbox (`nuschl_ipc::host::crypto_sandbox_command`), on
     /// `directory`, which is created owner-only.
     pub fn start(executable: PathBuf, directory: PathBuf) -> Self {
         Self::start_with(Box::new(move || {
             create_private_directory(&directory)?;
-            nuschel_ipc::host::crypto_sandbox_command(&executable, &directory)
+            nuschl_ipc::host::crypto_sandbox_command(&executable, &directory)
                 .map_err(|error| std::io::Error::other(error.to_string()))
         }))
     }
@@ -146,7 +146,7 @@ fn start(spawn: &Spawn) -> Result<Running, Error> {
         .kill_on_drop(true)
         .spawn()?;
     let containment =
-        nuschel_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
+        nuschl_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
     let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
         return Err(Error::Worker("crypto worker pipes missing".into()));
     };
@@ -349,7 +349,7 @@ impl Context {
             }
             if kind == kind::ERROR {
                 let error = v1::Error::decode(payload)
-                    .map_err(|_| Error::Protocol("invalid Nuschel error".into()))?;
+                    .map_err(|_| Error::Protocol("invalid Nuschl error".into()))?;
                 return Ok(Reply::Error(error));
             }
             return Ok(Reply::Frame(kind, payload));
@@ -790,7 +790,7 @@ impl Context {
             let check_history = direct
                 || matches!(
                     view.state,
-                    nuschel_ipc::crypto::ContactState::Verified { .. }
+                    nuschl_ipc::crypto::ContactState::Verified { .. }
                 );
             let account = view.account.clone();
             self.emit(IdentityEvent::Contact { user_id, view }).await;

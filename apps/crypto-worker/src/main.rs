@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! `nuschel-crypto-worker --data DIR`: serves `nuschel_ipc::crypto` requests on
+//! `nuschl-crypto-worker --data DIR`: serves `nuschl_ipc::crypto` requests on
 //! stdin/stdout until stdin closes. Started by the session in its sandbox
-//! (`nuschel_ipc::host::crypto_sandbox_command`); never logs secrets, and logs
+//! (`nuschl_ipc::host::crypto_sandbox_command`); never logs secrets, and logs
 //! nothing at all on stdout.
-use nuschel_crypto_worker::{KeySource, Store, Worker};
-use nuschel_ipc::{
+use nuschl_crypto_worker::{KeySource, Store, Worker};
+use nuschl_ipc::{
     Envelope,
     crypto::{CryptoRequest, CryptoResponse},
     read_frame, write_frame,
@@ -17,13 +17,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(argument) = arguments.next() {
         match argument.to_str() {
             Some("--data") => data = arguments.next().map(PathBuf::from),
-            _ => return Err("usage: nuschel-crypto-worker --data DIR".into()),
+            _ => return Err("usage: nuschl-crypto-worker --data DIR".into()),
         }
     }
-    let data = data.ok_or("usage: nuschel-crypto-worker --data DIR")?;
+    let data = data.ok_or("usage: nuschl-crypto-worker --data DIR")?;
     // Two threads for OpenMLS's TreeKEM work: one per CPU would not fit the
     // sandbox's address-space limit (crates/ipc host.rs) on a large machine.
-    nuschel_e2ee::limit_threads(2);
+    nuschl_e2ee::limit_threads(2);
     let store = Store::open(&data, KeySource::File(data.join("store.key")))?;
     let mut worker = Worker::open(store)?;
     let mut input = io::stdin().lock();
@@ -38,11 +38,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 fn main() -> ExitCode {
     // On Windows, the launch stage starts this worker again in its AppContainer.
     #[cfg(windows)]
-    nuschel_sandbox_windows::launch_if_requested();
+    nuschl_sandbox_windows::launch_if_requested();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("nuschel-crypto-worker: {error}");
+            eprintln!("nuschl-crypto-worker: {error}");
             ExitCode::FAILURE
         }
     }

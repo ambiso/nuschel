@@ -3,17 +3,17 @@
 //! conversation between two identities through the `DeliveryGroup`, epoch fencing,
 //! hostile key packages, and a channel with external joins and the server's
 //! removals (docs/e2ee.md §6.2).
-use nuschel_e2ee::client::{Client, Incoming, ValidKeyPackage};
-use nuschel_e2ee::ds::{DeliveryGroup, DsError, ServerSigner, check_key_package};
-use nuschel_e2ee::prevalidate::{self, Malformed};
-use nuschel_e2ee::{ConversationBinding, Error, SUITE_KEM_PUBLIC_KEY_LEN};
-use nuschel_identity::{DisplayName, NewIdentity, Validity};
+use nuschl_e2ee::client::{Client, Incoming, ValidKeyPackage};
+use nuschl_e2ee::ds::{DeliveryGroup, DsError, ServerSigner, check_key_package};
+use nuschl_e2ee::prevalidate::{self, Malformed};
+use nuschl_e2ee::{ConversationBinding, Error, SUITE_KEM_PUBLIC_KEY_LEN};
+use nuschl_identity::{DisplayName, NewIdentity, Validity};
 use std::sync::LazyLock;
 
 const SERVER: [u8; 32] = [7; 32];
 const CONVERSATION: [u8; 16] = [1; 16];
 
-/// The server's external-sender key (its head-signing key in nuscheld).
+/// The server's external-sender key (its head-signing key in nuschld).
 static SIGNER: LazyLock<ServerSigner> = LazyLock::new(|| ServerSigner::generate().unwrap());
 
 fn server_key() -> [u8; 32] {
@@ -305,7 +305,7 @@ fn a_short_xwing_key_in_a_key_package_is_refused_before_libcrux() {
             let crypto = openmls_traits::OpenMlsProvider::crypto(&provider);
             openmls_traits::crypto::OpenMlsCrypto::hpke_seal(
                 crypto,
-                nuschel_e2ee::SUITE.hpke_config(),
+                nuschl_e2ee::SUITE.hpke_config(),
                 package.hpke_init_key().as_slice(),
                 b"info",
                 b"aad",

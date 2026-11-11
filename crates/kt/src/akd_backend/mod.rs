@@ -3,7 +3,7 @@
 //!
 //! Configuration: akd's current configuration (`ExperimentalConfiguration`, the one
 //! akd's main branch deploys; WhatsApp's v1 configuration exists only for WhatsApp's
-//! deployed tree) with the domain label `nuschel-kt/v1 akd`, so no hash of this log can
+//! deployed tree) with the domain label `nuschl-kt/v1 akd`, so no hash of this log can
 //! be confused with another application's. Hash: BLAKE3 (portable Rust build). VRF:
 //! ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381), akd's only VRF. Value commitments are
 //! keyed by a hash of the VRF secret key.
@@ -36,18 +36,18 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use zeroize::Zeroizing;
 
-/// The domain separator of every hash in a Nuschel akd log.
+/// The domain separator of every hash in a Nuschl akd log.
 #[derive(Clone)]
-pub struct NuschelDomain;
+pub struct NuschlDomain;
 
-impl akd::DomainLabel for NuschelDomain {
+impl akd::DomainLabel for NuschlDomain {
     fn domain_label() -> &'static [u8] {
-        b"nuschel-kt/v1 akd"
+        b"nuschl-kt/v1 akd"
     }
 }
 
 /// The akd configuration of suite 1.
-pub type AkdConfig = akd::ExperimentalConfiguration<NuschelDomain>;
+pub type AkdConfig = akd::ExperimentalConfiguration<NuschlDomain>;
 
 pub(crate) fn check_suite_params(params: &[u8]) -> Result<(), DecodeError> {
     // Decompresses the point and rejects small-order keys.

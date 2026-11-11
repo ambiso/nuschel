@@ -8,7 +8,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_protocol::crypt::CryptState;
+use nuschl_protocol::crypt::CryptState;
 
 fuzz_target!(|data: &[u8]| {
     let (mut server, parts) = CryptState::generate_server([9; 48]);

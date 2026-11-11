@@ -9,8 +9,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_content::{ContentRenderer, bare_urls, math};
-use nuschel_core::{ContentBlock, EMBED};
+use nuschl_content::{ContentRenderer, bare_urls, math};
+use nuschl_core::{ContentBlock, EMBED};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 thread_local! {

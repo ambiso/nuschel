@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-session"
+name = "nuschl-session"
 description = "Native Mumble client sessions and worker supervision"
 version.workspace = true
 edition.workspace = true
@@ -8,10 +8,10 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-nuschel-core = { workspace = true, features = ["uuid"] }
-nuschel-ipc.workspace = true
-nuschel-legacy-html.workspace = true
-nuschel-protocol.workspace = true
+nuschl-core = { workspace = true, features = ["uuid"] }
+nuschl-ipc.workspace = true
+nuschl-legacy-html.workspace = true
+nuschl-protocol.workspace = true
 bytes = "1.12.1"
 prost = "0.14.4"
 thiserror = "2.0.21"
@@ -48,8 +48,12 @@ sha1 = "0.11"
 rsa = { version = "0.9", default-features = false, features = ["std", "getrandom"] }
 
 [dev-dependencies]
+tempfile = "3.27.0"
 # Paused-clock tests of the UDP probe timing.
 tokio = { version = "1.54.1", features = ["test-util"] }
 
 [lints]
 workspace = true
+
+[target."cfg(windows)".dependencies]
+nuschl-sandbox-windows.workspace = true

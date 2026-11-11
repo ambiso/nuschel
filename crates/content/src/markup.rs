@@ -26,7 +26,7 @@ use html5ever::{
     tokenizer::{BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer},
 };
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
-use nuschel_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, Span, Style, TextRole};
+use nuschl_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, Span, Style, TextRole};
 use std::{borrow::Cow, cell::RefCell};
 
 /// Links per message, and the longest link target kept.
@@ -87,7 +87,7 @@ pub fn link_target(raw: &str) -> Option<String> {
     let url = url.trim();
     (url.len() <= MAX_URL_BYTES
         && !url.contains(char::is_whitespace)
-        && nuschel_core::allowed_link(url))
+        && nuschl_core::allowed_link(url))
     .then(|| url.to_owned())
 }
 
@@ -1045,7 +1045,7 @@ pub(crate) fn expand(pieces: Vec<Piece>, formulas: usize) -> Vec<ContentBlock> {
 mod tests {
     use super::{MAX_LINKS, MAX_URL_BYTES};
     use crate::{ContentRenderer, Error};
-    use nuschel_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument, Style, TextRole};
+    use nuschl_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument, Style, TextRole};
 
     /// (visible text, [(linked text, url)]) of each text block; neighbouring
     /// spans of one link (differently styled) count as one.

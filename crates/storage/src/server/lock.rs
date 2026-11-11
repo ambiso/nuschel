@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The operator lock: a running `nuscheld` (its state worker) and `nuscheld
+//! The operator lock: a running `nuschld` (its state worker) and `nuschld
 //! admin` each hold it for as long as they use the database, because both keep
 //! the server state in memory and write it back; two of them on one database
 //! would overwrite each other. It is taken before the database is opened, so a
@@ -13,7 +13,7 @@ use crate::Error;
 use sqlx::{Connection, PgConnection, sqlite::SqliteConnectOptions};
 use std::{path::Path, str::FromStr};
 
-/// `pg_try_advisory_lock` key: "nuscheld" in ASCII.
+/// `pg_try_advisory_lock` key: "nuschld" in ASCII.
 const ADVISORY_KEY: i64 = 0x6e75_7363_6865_6c64;
 
 /// Held until dropped (or the process ends).
@@ -42,7 +42,7 @@ impl OperatorLock {
             Ok(file) => file,
             Err(error) => {
                 eprintln!(
-                    "nuschel-storage-worker: cannot open {}: {error}; continuing without the operator lock",
+                    "nuschl-storage-worker: cannot open {}: {error}; continuing without the operator lock",
                     name.display()
                 );
                 return Ok(Some(Self::Unlocked));
@@ -55,7 +55,7 @@ impl OperatorLock {
                 // Refusing to start on a file system without locks would cost
                 // availability; say so instead.
                 eprintln!(
-                    "nuschel-storage-worker: cannot lock {}: {error}; continuing without the operator lock",
+                    "nuschl-storage-worker: cannot lock {}: {error}; continuing without the operator lock",
                     name.display()
                 );
                 Ok(Some(Self::Unlocked))

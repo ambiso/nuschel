@@ -6,8 +6,8 @@ the minimum required capabilities. Even memory-safe code needs input/resource li
 panics, excessive allocations, infinite loops, and corrupted output remain possible.
 
 All first-party crates inherit `unsafe_code = "forbid"`, except the Windows sandbox
-adapter `nuschel-sandbox-windows` (below). This is an enforced rule for
-Nuschel source, not a claim about the entire dependency graph. A safe API around a C
+adapter `nuschl-sandbox-windows` (below). This is an enforced rule for
+Nuschl source, not a claim about the entire dependency graph. A safe API around a C
 library does not make its implementation memory-safe. A Rust port with unchecked SIMD
 or raw pointers also needs review. Dependency changes must include that assessment.
 
@@ -18,18 +18,18 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | GPUI and graphics/font/window backends | Native desktop rendering and accessibility | Desktop shell only; never parse message HTML in the renderer |
 | CPAL and OS audio bindings | Access to PipeWire/PulseAudio/CoreAudio/WASAPI | Media worker; device handles and audio only |
 | Codec and DSP SIMD in Rust dependencies | Optimized processing still contains unsafe internals | Media worker; no session credentials, arbitrary files, or network |
-| SQLx SQLite backend | Native SQLite provides transactional local history | Storage worker; one database directory, parameterized operations; extension loading and deserialization disabled. `nuscheld --import-murmur` has the worker read an untrusted Murmur file confined by Landlock to that file: read-only and immutable, `query_only`, `trusted_schema` off, cell size checks, a heap limit, `quick_check`, no WAL files, ordinary tables only, every column capped, fixed statements |
+| SQLx SQLite backend | Native SQLite provides transactional local history | Storage worker; one database directory, parameterized operations; extension loading and deserialization disabled. `nuschld --import-murmur` has the worker read an untrusted Murmur file confined by Landlock to that file: read-only and immutable, `query_only`, `trusted_schema` off, cell size checks, a heap limit, `quick_check`, no WAL files, ordinary tables only, every column capped, fixed statements |
 | SQLx PostgreSQL backend | Server persistence on a managed database | Storage worker; database credentials and a scoped database connection |
 | TLS crypto provider | Cryptographic implementation and CPU-specific acceleration | Session/server authority; bounded protocol framing and reviewed provider |
 | OS sandbox/process APIs | Establish restricted worker execution | Small supervisor adapter; prefer safe Rust wrappers (`win32job` for Windows job objects) |
-| `nuschel-sandbox-windows` (Win32 calls via `windows-sys`) | No maintained safe wrapper creates AppContainer processes with an explicit handle list and job limits (docs/windows-sandbox.md) | The workers' own launch stage only, before any input is read (`cargo-deny` allows only the six workers to depend on it). Each Win32 function is one trait method whose `# Safety` is Microsoft's documented contract (cross-checked with ReactOS); unsafe calls only in `os.rs`, one per block with a `SAFETY:` argument, behind guards that release what Windows allocates exactly once; pure logic in unsafe-free modules; no `as` casts. The launch steps run under Miri (Linux and Windows targets) against a mock of Win32 that fails every call in turn; an independent review found and fixed the issues listed in docs/windows-sandbox.md |
+| `nuschl-sandbox-windows` (Win32 calls via `windows-sys`) | No maintained safe wrapper creates AppContainer processes with an explicit handle list and job limits (docs/windows-sandbox.md) | The workers' own launch stage only, before any input is read (`cargo-deny` allows only the six workers to depend on it). Each Win32 function is one trait method whose `# Safety` is Microsoft's documented contract (cross-checked with ReactOS); unsafe calls only in `os.rs`, one per block with a `SAFETY:` argument, behind guards that release what Windows allocates exactly once; pure logic in unsafe-free modules; no `as` casts. The launch steps run under Miri (Linux and Windows targets) against a mock of Win32 that fails every call in turn; an independent review found and fixed the issues listed in docs/windows-sandbox.md |
 | `aes` (OCB2 voice crypto) | Mumble's UDP voice encryption; AES-NI intrinsics | Session authority; fixed-size blocks, keys from the TLS control channel |
-| `rsa` (identity generation only) | Stock Mumble imports only RSA client certificates | Generates the local Mumble client key only; TLS signing uses ring, so the Marvin timing issue (RUSTSEC-2023-0071) in private-key operations never runs on untrusted input; `cargo-deny` confines the crate to `nuschel-session` |
+| `rsa` (identity generation only) | Stock Mumble imports only RSA client certificates | Generates the local Mumble client key only; TLS signing uses ring, so the Marvin timing issue (RUSTSEC-2023-0071) in private-key operations never runs on untrusted input; `cargo-deny` confines the crate to `nuschl-session` |
 | `image` decoders (PNG, JPEG, GIF) | Inline images and avatars from untrusted peers | Content worker only, with dimension and allocation limits; the UI receives raw RGBA |
-| `akd` (key transparency) | Auditable key directory; no memory-safe alternative with VRF and audit proofs | Through `nuschel-kt` only, in the crypto worker and `nuscheld`; akd_core turns on ed25519-dalek's `legacy_compatibility` for the whole binary, so `nuschel-kt` checks `s < ℓ` itself and `nuschel-identity` uses libcrux, not ed25519-dalek; akd's verifiers run under `catch_unwind` behind a strict decoder (docs/e2ee.md §5.2) |
-| libcrux (SIMD intrinsics) and OpenMLS's `rayon` | Post-quantum MLS (X-Wing HPKE, ML-KEM) has no memory-safe alternative in Rust; openmls and tls_codec themselves have no `unsafe` | Through `nuschel-e2ee` only (cargo-deny), in the crypto worker and `nuscheld`; every key package, tree and message is checked structurally before OpenMLS sees it (OpenMLS 0.9.2's provider is patched onto the fixed libcrux-kem 0.0.10 and libcrux-hmac-drbg 0.0.2, RUSTSEC-2026-0329/-0330/-0331, vendor/*/NUSCHEL-PATCH.md) and OpenMLS calls run under `catch_unwind` (docs/e2ee.md "Phase 4 prototype") |
+| `akd` (key transparency) | Auditable key directory; no memory-safe alternative with VRF and audit proofs | Through `nuschl-kt` only, in the crypto worker and `nuschld`; akd_core turns on ed25519-dalek's `legacy_compatibility` for the whole binary, so `nuschl-kt` checks `s < ℓ` itself and `nuschl-identity` uses libcrux, not ed25519-dalek; akd's verifiers run under `catch_unwind` behind a strict decoder (docs/e2ee.md §5.2) |
+| libcrux (SIMD intrinsics) and OpenMLS's `rayon` | Post-quantum MLS (X-Wing HPKE, ML-KEM) has no memory-safe alternative in Rust; openmls and tls_codec themselves have no `unsafe` | Through `nuschl-e2ee` only (cargo-deny), in the crypto worker and `nuschld`; every key package, tree and message is checked structurally before OpenMLS sees it (OpenMLS 0.9.2's provider is patched onto the fixed libcrux-kem 0.0.10 and libcrux-hmac-drbg 0.0.2, RUSTSEC-2026-0329/-0330/-0331, vendor/*/NUSCHEL-PATCH.md) and OpenMLS calls run under `catch_unwind` (docs/e2ee.md "Phase 4 prototype") |
 | Global shortcuts (`ashpd` portal; `global-hotkey` on Windows/macOS) | System-wide push-to-talk | Desktop shell; press/release of one bound key only |
-| Typst (`typst`, `typst-render`) | Typesetting LaTeX formulas; Typst is a scripting language with file, package, plugin and data access | Math worker only; formulas reach it as math markup from Nuschel's own converter, checked to contain no code; a world with one file and no packages, clock or system fonts; a library without `read`, `plugin`, `image`, the data loaders, `eval` and `std`; limits and a deadline per formula (docs/math.md) |
+| Typst (`typst`, `typst-render`) | Typesetting LaTeX formulas; Typst is a scripting language with file, package, plugin and data access | Math worker only; formulas reach it as math markup from Nuschl's own converter, checked to contain no code; a world with one file and no packages, clock or system fonts; a library without `read`, `plugin`, `image`, the data loaders, `eval` and `std`; limits and a deadline per formula (docs/math.md) |
 | `psm` (assembly, through `stacker`) | Typst's evaluator grows its stack on deep recursion | Only through `stacker` and `typst-eval`, in the math worker |
 
 The `cargo-deny` wrapper rules enforce ownership for the named top-level dependencies.
@@ -73,7 +73,7 @@ have an address-space limit. Media restarts remount recreated audio sockets.
 
 An authorized audio service socket is a capability to that service's API; filesystem
 and network namespaces do not restrict every operation an audio daemon exposes. Trusted
-Nuschel code creates/changes only its own streams. The sandbox is not an audio-protocol
+Nuschl code creates/changes only its own streams. The sandbox is not an audio-protocol
 firewall or a claim that a compromised audio daemon cannot act outside it.
 
 Against a hostile server the session keeps budgets: 4,096 channels, 16,384 users and
@@ -86,18 +86,18 @@ platform the storage worker's writable folder is a dedicated `history/` folder (
 time or version is older than the newest it has accepted; a client that never saw a
 newer manifest can still be offered an older one, and withheld releases go unnoticed.
 
-`nuscheld admin` administers the server offline, through the storage worker, with
+`nuschld admin` administers the server offline, through the storage worker, with
 no network interface; an operator lock (a `flock` beside a SQLite file, an advisory
 lock on PostgreSQL) keeps it and a running server from sharing a database.
 
-`nuscheld` is the network-facing process: it holds the TLS key (ring) and hashes
+`nuschld` is the network-facing process: it holds the TLS key (ring) and hashes
 passwords with argon2id (RustCrypto), under a concurrency limit and a per-account
 limit on failed guesses. Client certificates are accepted self-signed (Mumble's
 identity is the certificate hash) but the TLS signature proving possession of the key
 is always verified. Unauthenticated UDP pings are answered no larger than the request
 by default (`allow_ping_amplification` permits up to 2×, rate-limited). Its state
 lives in the storage worker, which then also holds the database credential; under
-`nuscheld` that worker runs without bwrap, confined by the systemd unit. Secrets
+`nuschld` that worker runs without bwrap, confined by the systemd unit. Secrets
 reach the service only through `LoadCredential`; the module refuses store paths.
 
 The extension (docs/extension.md): logs never contain message text or idempotency
@@ -109,7 +109,7 @@ and live-only ("none") conversations store nothing but their highest `seq`. Eras
 messages on the server, not copies clients already hold. Stock clients are told
 that channels are archived, and their direct messages are not stored by default.
 Unregistered users read no history by default. The client's sticky record
-(`nuschel-policy.json`, per host and port) refuses any weaker answer from a server
+(`nuschl-policy.json`, per host and port) refuses any weaker answer from a server
 that once negotiated the extension or a capability; only an explicit reset clears it.
 
 The crypto worker owns the identity secrets (docs/e2ee.md, "Phase 3 as
@@ -118,18 +118,18 @@ Its keystore and state are sealed under a store key kept in a 0600 file in its o
 folder (`keys/` in the data folder), a stopgap until the OS keychain. It never logs secrets; the desktop and
 the session see only public keys, statements and verification results. On the
 server, key transparency needs `kt.signing_key_file` and `kt.vrf_secret_file`
-(module: `services.nuschel.kt.*`, through `LoadCredential`, or generated once in the
+(module: `services.nuschl.kt.*`, through `LoadCredential`, or generated once in the
 state directory). Back both up: a lost VRF secret means a new log, which every client
 that pinned the old one treats as misbehaviour until it is reset. Records behind
 published bindings are never deleted.
 
-`nuschel-witness` (docs/witness.md) holds the key clients trust to vouch for every
+`nuschl-witness` (docs/witness.md) holds the key clients trust to vouch for every
 server's log: an ML-DSA-44 seed from `LoadCredential` or generated once (0600) in its
-state directory; back it up. It parses submissions with nuschel-kt's strict decoder
+state directory; back it up. It parses submissions with nuschl-kt's strict decoder
 (bounded bodies, per-origin and enrolment rate limits) and runs akd's verifiers as
 the clients do; its only outbound connections are enrolment checks to the
 submitted origin's `host:port`, never to private or loopback addresses unless
-configured. `nuscheld`'s submissions verify every cosignature against the configured
+configured. `nuschld`'s submissions verify every cosignature against the configured
 key before serving it.
 
 The transfer worker (magic-wormhole file offers) is the one worker with network
@@ -147,7 +147,7 @@ workers; offers/downloads can be started again under the new policy. Configured
 servers and relays still see the client's connection address. Legacy Mumble
 servers cannot enforce address redaction for other clients.
 
-The shared `nuschel_core::network::PeerPolicy` applies before gathering or dialing;
+The shared `nuschl_core::network::PeerPolicy` applies before gathering or dialing;
 future RTC adapters must use it before ICE and advertise relay candidates only
 in this mode. The standalone RTC probe uses two explicitly bound loopback sockets
 and is not an application call path. Downloads stream back to the
@@ -191,7 +191,7 @@ writes to the home directory. Neither test has run on macOS yet.
 
 Windows workers run in AppContainers, each in a job object of its own
 (docs/windows-sandbox.md). A worker executable is its own launch stage: started with
-`--nuschel-sandbox` and a policy (`crates/ipc/src/host.rs`), it creates or reuses the
+`--nuschl-sandbox` and a policy (`crates/ipc/src/host.rs`), it creates or reuses the
 worker kind's AppContainer profile, grants it its directories, and starts itself
 again inside it, suspended, then assigned to a job, then resumed; it waits and passes
 on the exit code. It reads no untrusted input, and it refuses (exit 125) rather than
@@ -233,20 +233,20 @@ Windows' microphone privacy setting; no physical hardware has been tested.
 
 ## Where secrets live
 
-Nuschel's folders (`crates/session/src/layout.rs`; on Linux the XDG Base Directory
+Nuschl's folders (`crates/session/src/layout.rs`; on Linux the XDG Base Directory
 ones, see docs/desktop.md) keep secrets out of the configuration folder, which people keep
 in dotfiles repositories, and give each persistent worker one folder with nothing
 else in it. Folders are created 0700, files 0600.
 
 | What | Where (Linux) | Reached by |
 | --- | --- | --- |
-| Mumble certificate and private key, with lock and import backups | `$XDG_DATA_HOME/nuschel/identity/` | the main process only (TLS client authentication is in-process) |
-| End-to-end keys: sealed keystore, state, store key | `$XDG_DATA_HOME/nuschel/keys/` | the crypto worker only; the main process starts it on that folder and sees public keys only |
-| Local history (SQLite) | `$XDG_DATA_HOME/nuschel/history/` | the storage worker only |
-| Servers' security records (`nuschel-policy.json`) | `$XDG_DATA_HOME/nuschel/` | the main process only |
-| Settings, bookmarks with accepted certificate pins and access tokens, `managed.json` | `$XDG_CONFIG_HOME/nuschel/` | the main process only |
-| Last channels, update check state | `$XDG_STATE_HOME/nuschel/` | the main process only |
-| Channel trees and server icons (server-controlled, bounded when read) | `$XDG_CACHE_HOME/nuschel/` | the main process only |
+| Mumble certificate and private key, with lock and import backups | `$XDG_DATA_HOME/nuschl/identity/` | the main process only (TLS client authentication is in-process) |
+| End-to-end keys: sealed keystore, state, store key | `$XDG_DATA_HOME/nuschl/keys/` | the crypto worker only; the main process starts it on that folder and sees public keys only |
+| Local history (SQLite) | `$XDG_DATA_HOME/nuschl/history/` | the storage worker only |
+| Servers' security records (`nuschl-policy.json`) | `$XDG_DATA_HOME/nuschl/` | the main process only |
+| Settings, bookmarks with accepted certificate pins and access tokens, `managed.json` | `$XDG_CONFIG_HOME/nuschl/` | the main process only |
+| Last channels, update check state | `$XDG_STATE_HOME/nuschl/` | the main process only |
+| Channel trees and server icons (server-controlled, bounded when read) | `$XDG_CACHE_HOME/nuschl/` | the main process only |
 
 The content, math, media and transfer workers get none of these folders. The storage
 and crypto workers' folders are siblings, so neither reaches the other's, the
@@ -277,12 +277,12 @@ lock is the main lock cut down) give hostile input to every parser that takes it
 | --- | --- |
 | `html`, `legacy_html` | legacy HTML and plain messages into documents; text into the copy for stock clients and back |
 | `images`, `favicon` | avatars, website icons, `data:` and pasted images through the content worker's decoders; a website's page through the icon lookup |
-| `control_frames`, `server_messages`, `extension_messages`, `kt_messages` | frames and Mumble, extension and `kt/1` messages from several connections into nuscheld's state; the crypto worker's IPC |
+| `control_frames`, `server_messages`, `extension_messages`, `kt_messages` | frames and Mumble, extension and `kt/1` messages from several connections into nuschld's state; the crypto worker's IPC |
 | `client_messages` | a hostile server's frames into the client session's state |
 | `relay`, `crypt`, `voice`, `voice_playback` | voice: the server's relay, OCB2 decryption, the client's decoding, the media worker's jitter buffer and Opus decoder |
 | `identity`, `kt` | identity and key-transparency encodings and verifiers |
 | `kt_witness` | witnessing's formats: C2SP signed notes, checkpoints and verifier keys, `WitnessedHead` through the client's check, the auditor's `AddEpochs` through its check and its state files |
-| `transfer_offer`, `mumble_url`, `policy_file` | file offers in messages, `mumble://` links and invites, `nuschel-policy.json` |
+| `transfer_offer`, `mumble_url`, `policy_file` | file offers in messages, `mumble://` links and invites, `nuschl-policy.json` |
 | `math`, `math_tokens` | LaTeX through the converter, its check, Typst and the rasteriser; message text through the formula grammar (tokens are the bytes typed, never from code, the text unchanged) |
 
 `just fuzz <target> [seconds] [libFuzzer flags]` runs one in the flake's fuzz shell
@@ -307,6 +307,6 @@ size accepted.
 - Bound pending requests and terminate/reap stuck workers; never silently restart forever.
 - Exercise content parsing with hostile inputs and test native codec interoperability.
 - Verify workers cannot read an unrelated file or make a network connection.
-- Test route/device churn and ensure recovery touches only Nuschel-owned resources.
+- Test route/device churn and ensure recovery touches only Nuschl-owned resources.
 - Run dependency license, source, vulnerability, and unsoundness checks.
 - Preserve third-party notices and review dependency exceptions before distribution.

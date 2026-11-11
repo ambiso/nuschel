@@ -250,9 +250,9 @@ def main():
     parser.add_argument("--hostile-packets", type=int, default=5000)
     args = parser.parse_args()
     reference = ReferenceOpus(args.opus_library)
-    check_quality(args.binaries / "nuschel-media-worker", reference)
-    check_decoder_modes(args.binaries / "nuschel-media-worker", reference)
-    check_hostile_packets(args.binaries / "nuschel-media-worker", reference, args.hostile_packets)
+    check_quality(args.binaries / "nuschl-media-worker", reference)
+    check_decoder_modes(args.binaries / "nuschl-media-worker", reference)
+    check_hostile_packets(args.binaries / "nuschl-media-worker", reference, args.hostile_packets)
 
 
 if __name__ == "__main__":

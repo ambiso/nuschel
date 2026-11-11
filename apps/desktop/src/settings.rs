@@ -8,8 +8,8 @@ use crate::{
     theme::*,
 };
 use gpui_kit::{prelude::*, *};
-use nuschel_core::audio::{AudioDevice, EchoMode, EchoSource, TransmitMode};
-use nuschel_session::config::ShortcutAction;
+use nuschl_core::audio::{AudioDevice, EchoMode, EchoSource, TransmitMode};
+use nuschl_session::config::ShortcutAction;
 use std::rc::Rc;
 
 pub type Action = Rc<dyn Fn(&mut Desktop, &mut Window, &mut Context<Desktop>)>;
@@ -419,7 +419,7 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
         EchoTestState::Done(report) => {
             let leaked = report.transmitted >= 0.05;
             let measured = match (report.echo_db, report.reduction_db) {
-                (None, _) => "No echo of the test sound reached Nuschel (headphones, or a system canceller removed it).".to_string(),
+                (None, _) => "No echo of the test sound reached Nuschl (headphones, or a system canceller removed it).".to_string(),
                 (Some(echo), Some(reduction)) => format!(
                     "The test sound reached the microphone {:.0} dB below its level; processing removed another {reduction:.0} dB.",
                     -echo
@@ -650,16 +650,16 @@ pub fn dialog(
         .and_then(|server| server.audio.erle_db)
         .filter(|erle| *erle >= 1.);
     let echo_status = route_echo.map(|echo| match echo {
-        EchoSource::Upstream(name) => format!("Using system echo cancellation: {name}. Nuschel's canceller is off to avoid doubling it."),
+        EchoSource::Upstream(name) => format!("Using system echo cancellation: {name}. Nuschl's canceller is off to avoid doubling it."),
         // ERLE is only meaningful once the far end has played something.
-        EchoSource::Nuschel => {
+        EchoSource::Nuschl => {
             let heard = match &reference {
                 Some(output) => format!("It removes everything {output} plays."),
-                None => "It removes only Nuschel's own playback: other applications' sound cannot be recorded here.".into(),
+                None => "It removes only Nuschl's own playback: other applications' sound cannot be recorded here.".into(),
             };
             match erle {
-                Some(erle) => format!("Nuschel's echo canceller is active · {erle:.0} dB echo reduction. {heard}"),
-                None => format!("Nuschel's echo canceller is active. {heard}"),
+                Some(erle) => format!("Nuschl's echo canceller is active · {erle:.0} dB echo reduction. {heard}"),
+                None => format!("Nuschl's echo canceller is active. {heard}"),
             }
         }
         EchoSource::None => "Echo cancellation is off for this microphone.".into(),
@@ -696,7 +696,7 @@ pub fn dialog(
                 "Noise suppression",
                 match &upstream_noise {
                     Some(name) if noise => format!(
-                        "Using system noise suppression: {name}. Nuschel's is off to avoid doubling it."
+                        "Using system noise suppression: {name}. Nuschl's is off to avoid doubling it."
                     ),
                     _ => "RNNoise removes steady background noise.".into(),
                 },
@@ -908,7 +908,7 @@ pub fn dialog(
             let status = preview.and_then(|preview| preview.status.clone());
             let line = match &status {
                 Some(status) if status.starts_with("Audio reconnecting") => {
-                    "No sound system is reachable (PipeWire, PulseAudio or a sound card). Nuschel keeps trying.".to_string()
+                    "No sound system is reachable (PipeWire, PulseAudio or a sound card). Nuschl keeps trying.".to_string()
                 }
                 Some(status) => status.clone(),
                 None => "Looking for audio devices…".into(),
@@ -979,7 +979,7 @@ pub fn dialog(
         "notifications",
         "Desktop notifications",
         if cfg!(target_os = "linux") {
-            "Direct messages, your voice channel and mentions of your name, while Nuschel is not in front."
+            "Direct messages, your voice channel and mentions of your name, while Nuschl is not in front."
         } else {
             "Not available on this system yet."
         }
@@ -1018,7 +1018,7 @@ pub fn dialog(
         toggle(
             "send-typing",
             "Show when you are typing",
-            "On Nuschel servers, people who can read the conversation see that you are typing a \
+            "On Nuschl servers, people who can read the conversation see that you are typing a \
              message. Stock Mumble servers have no typing indicators."
                 .into(),
             send_typing,
@@ -1056,7 +1056,7 @@ pub fn dialog(
             "friend-notifications",
             "Notify when friends connect",
             if cfg!(target_os = "linux") {
-                "When someone you added as a friend comes online while Nuschel is not in front."
+                "When someone you added as a friend comes online while Nuschl is not in front."
             } else {
                 "Not available on this system yet."
             }
@@ -1086,12 +1086,12 @@ pub fn dialog(
             ),
         ));
         let status = match &this.update {
-            UpdateState::Idle => format!("Nuschel {}", env!("CARGO_PKG_VERSION")),
+            UpdateState::Idle => format!("Nuschl {}", env!("CARGO_PKG_VERSION")),
             UpdateState::Checking => "Checking…".into(),
             UpdateState::UpToDate => {
-                format!("Nuschel {} is up to date.", env!("CARGO_PKG_VERSION"))
+                format!("Nuschl {} is up to date.", env!("CARGO_PKG_VERSION"))
             }
-            UpdateState::Available(update) => format!("Nuschel {} is available.", update.version),
+            UpdateState::Available(update) => format!("Nuschl {} is available.", update.version),
             UpdateState::Installing { .. } => "Installing the update…".into(),
             UpdateState::Installed => "Update installed; restart to use it.".into(),
             UpdateState::Failed(error) => format!("Update failed: {error}"),
@@ -1235,9 +1235,9 @@ fn shortcut_description(action: ShortcutAction) -> &'static str {
         ShortcutAction::ToggleMute => "Same as the microphone button.",
         ShortcutAction::ToggleDeafen => "Same as the headphones button.",
         ShortcutAction::PushToMute => "Hold to silence yourself while transmitting.",
-        ShortcutAction::Find => "Jump to any channel, person or conversation. Only in Nuschel.",
-        ShortcutAction::Search => "Search the open conversation's messages. Only in Nuschel.",
-        ShortcutAction::SearchAll => "Search messages on every server. Only in Nuschel.",
+        ShortcutAction::Find => "Jump to any channel, person or conversation. Only in Nuschl.",
+        ShortcutAction::Search => "Search the open conversation's messages. Only in Nuschl.",
+        ShortcutAction::SearchAll => "Search messages on every server. Only in Nuschl.",
     }
 }
 
@@ -1266,7 +1266,7 @@ fn shortcut_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
             } else if let Some(system) = system {
                 match system.get(&action) {
                     Some(trigger) => format!("System-wide: {trigger}"),
-                    None => "Only while Nuschel is focused: the desktop did not grant it.".into(),
+                    None => "Only while Nuschl is focused: the desktop did not grant it.".into(),
                 }
             } else {
                 shortcut_description(action).into()

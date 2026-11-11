@@ -1,4 +1,4 @@
--- The Nuschel extension's history (docs/extension.md §3–§7).
+-- The Nuschl extension's history (docs/extension.md §3–§7).
 -- Immutable 128-bit account ids; registration numbers are only aliases.
 ALTER TABLE users ADD COLUMN account TEXT;
 CREATE UNIQUE INDEX users_account ON users (account);

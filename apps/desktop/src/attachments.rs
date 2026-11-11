@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn paths_go_as_images_or_files_judged_by_their_first_bytes() {
-        let directory = std::env::temp_dir().join(format!("nuschel-attach-{}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!("nuschl-attach-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let write = |name: &str, bytes: &[u8]| {
             let path = directory.join(name);

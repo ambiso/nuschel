@@ -6,7 +6,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_protocol::tunnel::{self, Frame};
+use nuschl_protocol::tunnel::{self, Frame};
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(frame) = tunnel::decode(data) {

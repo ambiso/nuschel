@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Reads a Murmur (mumble-server) SQLite database for `nuscheld
+//! Reads a Murmur (mumble-server) SQLite database for `nuschld
 //! --import-murmur`. The file is untrusted: it is opened read-only and
 //! immutable (no journal, WAL or shared-memory files are looked at, and WAL
 //! files are refused), with `query_only`, `trusted_schema = OFF`, cell size
@@ -9,13 +9,13 @@
 //! reads no content) and every value decoded by its actual SQLite type, so a
 //! malformed row (text where Murmur writes integers, invalid UTF-8, an
 //! oversized blob) is skipped and reported instead of failing the import.
-//! Interpretation and validation happen in `nuscheld` (apps/server/src/murmur.rs).
+//! Interpretation and validation happen in `nuschld` (apps/server/src/murmur.rs).
 //!
 //! Two layouts exist. `ServerDB.cpp` (Murmur 1.2.4 to 1.5, schema versions 6
 //! to 9) and the database layer of Murmur 1.6 (schema 10 and later, other
 //! table and column names, ACLs referring to groups by id). Both are reduced
-//! to the same rows ([`nuschel_ipc::murmur`]).
-use nuschel_ipc::murmur::{
+//! to the same rows ([`nuschl_ipc::murmur`]).
+use nuschl_ipc::murmur::{
     MAX_BLOB_BYTES, MAX_ROWS, MurmurAcl, MurmurBan, MurmurChannel, MurmurFrame, MurmurGroup,
     MurmurHeader, MurmurListener, MurmurUser, encode_blob,
 };
@@ -1066,7 +1066,7 @@ pub async fn read(path: &Path, server: i64, emit: &mut Emit<'_>) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_ipc::murmur::MurmurDump;
+    use nuschl_ipc::murmur::MurmurDump;
 
     #[test]
     fn group_strings_round_trip_through_the_16_modifiers() {
@@ -1117,7 +1117,7 @@ mod tests {
     }
 
     /// Murmur 1.5's schema with Murmur's own statements: everything is read,
-    /// malformed rows become notes. The result is the input of nuscheld's
+    /// malformed rows become notes. The result is the input of nuschld's
     /// import test (tests/fixtures/murmur-1.5.json; `UPDATE_FIXTURES=1`
     /// rewrites it).
     #[tokio::test]
@@ -1157,7 +1157,7 @@ mod tests {
         assert_eq!(
             eve.texture
                 .as_deref()
-                .and_then(nuschel_ipc::murmur::decode_blob)
+                .and_then(nuschl_ipc::murmur::decode_blob)
                 .map(|t| t.len()),
             Some(16)
         );
@@ -1195,7 +1195,7 @@ mod tests {
                 dump.notes
             );
         }
-        // The fixture nuscheld's import test reads.
+        // The fixture nuschld's import test reads.
         let json = dump.to_json();
         let golden = fixture_path("murmur-1.5.json");
         if std::env::var_os("UPDATE_FIXTURES").is_some() {

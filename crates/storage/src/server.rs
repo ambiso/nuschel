@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! `nuscheld`'s persistent state: channels, ACLs, groups, links, registered
+//! `nuschld`'s persistent state: channels, ACLs, groups, links, registered
 //! users (with comments and avatars) and bans. Only the storage worker links
 //! this; the server sends typed requests and never SQL. Statements bind every
 //! value and work on both SQLite and PostgreSQL.
 use crate::BeginWrite as _;
 use crate::{Error, Pool};
-use nuschel_ipc::server::{
+use nuschl_ipc::server::{
     HistoryVisibility, ServerSnapshot, StoredAcl, StoredBan, StoredChannel, StoredGroup,
     StoredUser, USER_PAGE,
 };
@@ -24,7 +24,7 @@ mod lock;
 pub use lock::OperatorLock;
 
 /// Its own migrations table, so a database can also hold the history schema.
-const MIGRATIONS_TABLE: &str = "_nuscheld_migrations";
+const MIGRATIONS_TABLE: &str = "_nuschld_migrations";
 
 /// Upper bounds the worker enforces on what it stores, whatever the server sends.
 pub(crate) const MAX_NAME: usize = 1024;

@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-transfer-worker"
+name = "nuschl-transfer-worker"
 description = "Isolated magic-wormhole file transfer process"
 version.workspace = true
 edition.workspace = true
@@ -14,12 +14,12 @@ base64 = "0.22"
 blocking = "1.7"
 futures = "0.3.12"
 magic-wormhole = { version = "0.8.1", default-features = false, features = ["transfer"] }
-nuschel-ipc.workspace = true
+nuschl-ipc.workspace = true
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschel_ipc::windows_sandbox).
+# AppContainer (nuschl_ipc::windows_sandbox).
 [target.'cfg(windows)'.dependencies]
-nuschel-sandbox-windows.workspace = true
+nuschl-sandbox-windows.workspace = true
 
 [lints]
 workspace = true

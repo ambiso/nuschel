@@ -3,16 +3,16 @@
 pseudo-terminals: Ada uses the full screen (a small VT100 emulator reads
 what it draws), Andi the plain lines a screen reader reads. They connect,
 trust the certificate on first use, join a channel, send and receive; on a
-Nuschel server they also register, edit, see each other typing, delete,
+Nuschl server they also register, edit, see each other typing, delete,
 search and write directly. Voice is off (--no-audio), as over SSH.
 
-    cargo build -p nuschel-tui -p nuscheld -p nuschel-cli -p nuschel-content-worker \\
-        -p nuschel-storage-worker -p nuschel-crypto-worker
-    python3 tests/with_local_nuscheld.py <binaries> tests/tui_loopback.py <binaries> --port PORT
+    cargo build -p nuschl-tui -p nuschld -p nuschl-cli -p nuschl-content-worker \\
+        -p nuschl-storage-worker -p nuschl-crypto-worker
+    python3 tests/with_local_nuschld.py <binaries> tests/tui_loopback.py <binaries> --port PORT
     python3 tests/with_local_murmur.py <mumble-server> tests/tui_loopback.py <binaries> --port PORT --stock
 
 <binaries> is the cargo target folder (target/debug): the workers are found
-beside nuschel-tui there. Only loopback, temporary profiles and temporary
+beside nuschl-tui there. Only loopback, temporary profiles and temporary
 HOME and XDG folders are used.
 """
 
@@ -261,9 +261,9 @@ def main():
     args = parser.parse_args()
     global SCREENS
     SCREENS = args.screens
-    tui = str((args.binaries / "nuschel-tui").resolve())
+    tui = str((args.binaries / "nuschl-tui").resolve())
     url = f"{args.host}:{args.port}"
-    with tempfile.TemporaryDirectory(prefix="nuschel-tui-loopback-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-tui-loopback-") as temporary:
         root = Path(temporary)
         env = environment(root)
         common = ["--no-audio", "--opener", "/bin/true"]

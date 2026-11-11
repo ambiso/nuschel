@@ -1,4 +1,4 @@
-# nuscheld configuration. Every key is optional; the values shown are the defaults.
+# nuschld configuration. Every key is optional; the values shown are the defaults.
 # Names follow murmur.ini where Murmur has an equivalent.
 
 # "compatible" admits stock Mumble clients and has no end-to-end encryption.
@@ -13,14 +13,14 @@ port = 64738
 # Generated certificate and the default database are kept here.
 state_directory = "."
 # SQLite database, relative to state_directory.
-database = "nuscheld.sqlite3"
+database = "nuschld.sqlite3"
 # Or a file containing a sqlite: or postgresql:// URL, read only by the storage worker:
-# database_url_file = "/run/credentials/nuscheld.service/database-url"
+# database_url_file = "/run/credentials/nuschld.service/database-url"
 
 # PEM certificate chain and key. Without them a self-signed certificate is generated
 # once and kept in state_directory (clients pin it, so keep it across restarts).
-# certificate = "/etc/nuscheld/certificate.pem"
-# private_key = "/etc/nuscheld/private-key.pem"
+# certificate = "/etc/nuschld/certificate.pem"
+# private_key = "/etc/nuschld/private-key.pem"
 # SIGHUP loads both again (a renewed certificate); if they do not load, the current
 # one stays. "1.3" refuses TLS 1.2, where client certificates travel in the clear;
 # Mumble clients built against OpenSSL before 1.1.1 cannot connect then.
@@ -38,15 +38,15 @@ obfuscate = false
 # The root channel's name; empty shows "Root".
 registered_name = ""
 welcome_text = ""
-# welcome_text_file = "/etc/nuscheld/welcome.html"
+# welcome_text_file = "/etc/nuschld/welcome.html"
 
 # Password for unregistered users (registered users log in with their own).
 # Keep secrets in files: password_file is read at startup.
 password = ""
-# password_file = "/run/credentials/nuscheld.service/server-password"
+# password_file = "/run/credentials/nuschld.service/server-password"
 # The SuperUser account (user 0) has no password until one is set here or with
-# `nuscheld --set-superuser-password`; without one it cannot log in.
-# superuser_password_file = "/run/credentials/nuscheld.service/superuser-password"
+# `nuschld --set-superuser-password`; without one it cannot log in.
+# superuser_password_file = "/run/credentials/nuschld.service/superuser-password"
 
 max_users = 1000
 max_users_per_channel = 0
@@ -121,7 +121,7 @@ memory_kib = 19456
 passes = 2
 
 [history]
-# Persistent history for Nuschel clients (docs/extension.md). Unregistered users
+# Persistent history for Nuschl clients (docs/extension.md). Unregistered users
 # read no history ("none") or the same as registered users ("full"); everyone
 # sees live messages.
 guests = "none"
@@ -147,7 +147,7 @@ network_pages_per_minute = 600
 network_page_bytes_per_minute = 67108864
 # Networks exempt from the per-network limits, such as ["10.0.0.0/8"].
 unlimited_networks = []
-# Nuschel client versions (self-reported; stock Mumble clients are never refused
+# Nuschl client versions (self-reported; stock Mumble clients are never refused
 # for theirs). Older clients than recommended_client suggest an update; older
 # than minimum_client are refused, from minimum_client_from (a date, midnight
 # UTC) on if set, until then warned with the date.
@@ -157,15 +157,15 @@ unlimited_networks = []
 
 [kt]
 # Key transparency (docs/e2ee.md §5): a verifiable directory of the identities
-# bound to accounts, which Nuschel clients check (`kt/1`).
+# bound to accounts, which Nuschl clients check (`kt/1`).
 enabled = true
 # The head-signing key (the server's identity key, which clients pin) and the
 # VRF secret: files with 32 random bytes or 64 hex digits, passed as credentials
 # (never from the Nix store). Without them both are generated once in
 # state_directory (kt-signing.key, kt-vrf.key); keep them, a log can never
 # change its VRF secret.
-# signing_key_file = "/run/credentials/nuscheld.service/kt-signing-key"
-# vrf_secret_file = "/run/credentials/nuscheld.service/kt-vrf-secret"
+# signing_key_file = "/run/credentials/nuschld.service/kt-signing-key"
+# vrf_secret_file = "/run/credentials/nuschld.service/kt-vrf-secret"
 # Seconds between epochs while bindings wait, and between re-signed heads.
 publish_interval = 10
 refresh_interval = 3600
@@ -179,18 +179,18 @@ history = "contacts"
 # (host:port, lower case), each an origin of the epoch log the witnesses cosign.
 # Without one, nothing is submitted.
 origins = []
-# Submit to Nuschel's built-in witnesses (the project auditor, once deployed).
+# Submit to Nuschl's built-in witnesses (the project auditor, once deployed).
 default_witnesses = true
 # Seconds between submissions while new epochs wait, and between refreshes of an
 # unchanged checkpoint's cosignatures.
 witness_interval = 60
 witness_refresh_interval = 3600
-# More witnesses (`nuschel-witness vkey` gives the key):
+# More witnesses (`nuschl-witness vkey` gives the key):
 # [[kt.witnesses]]
-# key = "witness.example.org/nuschel-kt+5d32ee69+BuajLAZT…"
+# key = "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…"
 # url = "https://witness.example.org"
 
 [share_links]
 # Share links (`share/1`, docs/web.md): the web host this server's links point at,
-# one running services.nuschel-web. Empty: the one each client is set to use.
+# one running services.nuschl-web. Empty: the one each client is set to use.
 # web_host = "web.example.org"

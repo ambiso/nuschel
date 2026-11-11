@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! `nuscheld`: a Mumble-compatible server (protocol 1.5, with the legacy UDP
+//! `nuschld`: a Mumble-compatible server (protocol 1.5, with the legacy UDP
 //! format for older clients). Voice is routed without decoding; state is kept
 //! in memory and written through to the storage worker. See docs/server.md.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]

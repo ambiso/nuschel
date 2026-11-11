@@ -6,7 +6,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_kt::*;
+use nuschl_kt::*;
 
 fuzz_target!(|data: &[u8]| {
     let Some((&selector, input)) = data.split_first() else {

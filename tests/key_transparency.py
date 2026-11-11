@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Key transparency against a running nuscheld (docs/e2ee.md §5): two clients with
+"""Key transparency against a running nuschld (docs/e2ee.md §5): two clients with
 their own crypto workers register, publish their identities and find them in the
 server's log, see the same safety number, verify each other, and a new identity
 of one of them shows up as a change the other must accept.
 
     python3 tests/key_transparency.py <binaries> --host 127.0.0.1 --port PORT
 
-The binaries directory holds nuschel-cli and nuschel-crypto-worker (which runs in
+The binaries directory holds nuschl-cli and nuschl-crypto-worker (which runs in
 its bubblewrap sandbox where bwrap and prlimit are on PATH).
 """
 import argparse
@@ -53,7 +53,7 @@ def main():
     parser.add_argument("--port", type=int, default=64738)
     args = parser.parse_args()
     token = secrets.token_hex(3)
-    with tempfile.TemporaryDirectory(prefix="nuschel-kt-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-kt-") as temporary:
         root = Path(temporary)
         pin = certificate_pin(args.binaries, args.host, args.port, root / "probe")
         alice_name, bob_name = f"Alice{token}", f"Bob{token}"

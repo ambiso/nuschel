@@ -3,7 +3,7 @@
 
 use std::{ffi::OsString, io, path::Path, process::Stdio, time::Duration};
 
-use nuschel_core::MessageDocument;
+use nuschl_core::MessageDocument;
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -324,7 +324,7 @@ async fn read_reply(
 
 /// OS containment applied to a worker after it starts, held for its lifetime.
 /// On Windows this is a job object that kills the worker's launch stage when
-/// Nuschel lets go of it (including when Nuschel itself exits); the launch
+/// Nuschl lets go of it (including when Nuschl itself exits); the launch
 /// stage's own job then ends the confined worker. Elsewhere the launch
 /// command already carries the confinement.
 pub struct Containment {
@@ -350,7 +350,7 @@ pub fn contain(_: &tokio::process::Child) -> Result<Containment, Error> {
 }
 
 /// Long-lived SQLite helper: its history folder (`Profile::history_dir`,
-/// `$XDG_DATA_HOME/nuschel/history`, which holds nothing else) is writable at
+/// `$XDG_DATA_HOME/nuschl/history`, which holds nothing else) is writable at
 /// `/data`; network and the rest of the home directory are absent. The trusted
 /// supervisor chooses the path.
 #[cfg(target_os = "linux")]
@@ -365,7 +365,7 @@ pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Co
 }
 
 /// The crypto worker: its own folder (`Profile::keys_dir`,
-/// `$XDG_DATA_HOME/nuschel/keys`: the sealed keystore, its state and, for now,
+/// `$XDG_DATA_HOME/nuschl/keys`: the sealed keystore, its state and, for now,
 /// the store key file) is writable at `/data`; no network, no home, no D-Bus,
 /// and not the history or the Mumble identity beside it. The trusted
 /// supervisor chooses the folder.
@@ -422,7 +422,7 @@ pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
         "PULSE_SERVER",
         "unix:/run/audio/pulse/native",
     ]);
-    for name in ["PULSE_SOURCE", "PULSE_SINK", "NUSCHEL_AUDIO_BACKEND"] {
+    for name in ["PULSE_SOURCE", "PULSE_SINK", "NUSCHL_AUDIO_BACKEND"] {
         if let Some(value) = std::env::var_os(name) {
             command.arg("--setenv").arg(name).arg(value);
         }
@@ -651,7 +651,7 @@ pub fn transfer_sandbox_command(executable: &Path, file: Option<&Path>) -> Resul
 /// Windows: each worker runs in its own AppContainer (no capabilities unless
 /// listed: no network, no access to the user's files) inside a job object,
 /// started by its own executable's launch stage (see
-/// [`crate::windows_sandbox`] and `nuschel-sandbox-windows`). The launch
+/// [`crate::windows_sandbox`] and `nuschl-sandbox-windows`). The launch
 /// stage itself runs with an empty environment apart from Windows' own
 /// directories, without a console window, inside the kill-on-close job of
 /// [`contain`]; it refuses to start a worker it cannot confine, as Linux
@@ -691,7 +691,7 @@ mod windows_policies {
     /// they are not even given what Windows grants every AppContainer.
     pub fn content(cpu_seconds: u64) -> Policy {
         Policy {
-            profile: "nuschel.content".into(),
+            profile: "nuschl.content".into(),
             less_privileged: true,
             memory: CONTENT,
             cpu_seconds: Some(cpu_seconds),
@@ -705,7 +705,7 @@ mod windows_policies {
     /// restarted when it runs out), as on Linux.
     pub fn math() -> Policy {
         Policy {
-            profile: "nuschel.math".into(),
+            profile: "nuschl.math".into(),
             less_privileged: true,
             memory: CONTENT,
             cpu_seconds: Some(120),
@@ -716,7 +716,7 @@ mod windows_policies {
     /// Only the history folder (`Profile::history_dir`), read and write.
     pub fn storage(directory: &Path) -> Policy {
         Policy {
-            profile: scoped_profile("nuschel.storage", directory),
+            profile: scoped_profile("nuschl.storage", directory),
             less_privileged: true,
             writable: vec![directory.to_owned()],
             memory: PERSISTENT,
@@ -728,7 +728,7 @@ mod windows_policies {
     /// store key), read and write.
     pub fn crypto(directory: &Path) -> Policy {
         Policy {
-            profile: scoped_profile("nuschel.crypto", directory),
+            profile: scoped_profile("nuschl.crypto", directory),
             less_privileged: true,
             writable: vec![directory.to_owned()],
             memory: PERSISTENT,
@@ -741,7 +741,7 @@ mod windows_policies {
     /// COM, which WASAPI needs, refuses a less privileged one.
     pub fn media() -> Policy {
         Policy {
-            profile: "nuschel.media".into(),
+            profile: "nuschl.media".into(),
             capabilities: vec!["microphone".into()],
             memory: PERSISTENT,
             ..Policy::default()
@@ -755,7 +755,7 @@ mod windows_policies {
     /// AppContainer: Winsock refuses a less privileged one.
     pub fn transfer(file: Option<&Path>) -> Policy {
         Policy {
-            profile: "nuschel.transfer".into(),
+            profile: "nuschl.transfer".into(),
             capabilities: vec!["internetClient".into(), "privateNetworkClientServer".into()],
             file: file.map(Path::to_owned),
             memory: PERSISTENT,
@@ -933,23 +933,23 @@ mod tests {
         use std::path::Path;
         // Profile::history_dir and keys_dir on Windows: siblings in the
         // local data folder.
-        let history = Path::new(r"C:\Users\a\AppData\Local\Nuschel\Nuschel\data\history");
-        let crypto = Path::new(r"C:\Users\a\AppData\Local\Nuschel\Nuschel\data\keys");
+        let history = Path::new(r"C:\Users\a\AppData\Local\Nuschl\Nuschl\data\history");
+        let crypto = Path::new(r"C:\Users\a\AppData\Local\Nuschl\Nuschl\data\keys");
         let offer = Path::new(r"C:\Users\a\Documents\offer.zip");
         let content = policy::content(7);
-        assert_eq!(content.profile, "nuschel.content");
+        assert_eq!(content.profile, "nuschl.content");
         assert_eq!(content.cpu_seconds, Some(7));
         assert_eq!(content.memory, windows_limits::CONTENT);
         let math = policy::math();
-        assert_eq!(math.profile, "nuschel.math");
+        assert_eq!(math.profile, "nuschl.math");
         assert_eq!(math.cpu_seconds, Some(120));
         assert_eq!(math.memory, windows_limits::CONTENT);
         let storage = policy::storage(history);
         assert_eq!(storage.writable, [history]);
-        assert!(storage.profile.starts_with("nuschel.storage."));
+        assert!(storage.profile.starts_with("nuschl.storage."));
         let keys = policy::crypto(crypto);
         assert_eq!(keys.writable, [crypto]);
-        assert!(keys.profile.starts_with("nuschel.crypto."));
+        assert!(keys.profile.starts_with("nuschl.crypto."));
         assert_ne!(keys.profile, policy::crypto(history).profile);
         // Not the container earlier versions granted the whole data folder.
         assert_ne!(
@@ -966,7 +966,7 @@ mod tests {
             // Only transfers reach the network; only storage and crypto get
             // a directory; every worker has a memory limit.
             let network = policy.capabilities.iter().any(|c| c.contains("Client"));
-            assert_eq!(network, policy.profile == "nuschel.transfer", "{policy:?}");
+            assert_eq!(network, policy.profile == "nuschl.transfer", "{policy:?}");
             let directories = !policy.writable.is_empty();
             assert_eq!(
                 directories,
@@ -1008,7 +1008,7 @@ mod tests {
         assert!(!run(
             seatbelt::CONTENT,
             "/usr/bin/touch",
-            &[&format!("{home}/nuschel-sandbox-escape")]
+            &[&format!("{home}/nuschl-sandbox-escape")]
         ));
     }
 }

@@ -4,20 +4,20 @@
 mod common;
 
 use common::*;
-use nuschel_kt::witness::auditor::{AddEpochs, AddError, LogState, add_epochs};
-use nuschel_kt::witness::note::{Cosigner, Note};
-use nuschel_kt::witness::{Checkpoint, origin};
-use nuschel_kt::{
+use nuschl_kt::witness::auditor::{AddEpochs, AddError, LogState, add_epochs};
+use nuschl_kt::witness::note::{Cosigner, Note};
+use nuschl_kt::witness::{Checkpoint, origin};
+use nuschl_kt::{
     Directory, KtError, MemoryStore, SignedHead, WitnessOutcome, WitnessPolicy, WitnessedHead,
     check_witnessed, verify_head,
 };
 use std::sync::Arc;
 
-const ORIGIN: &str = "chat.example.org:64738/nuschel-kt/v1";
+const ORIGIN: &str = "chat.example.org:64738/nuschl-kt/v1";
 const HOUR: u64 = 3600 * 1000;
 
 fn auditor() -> Cosigner {
-    Cosigner::from_seed("witness.example.org/nuschel-kt", &[0x77; 32]).unwrap()
+    Cosigner::from_seed("witness.example.org/nuschl-kt", &[0x77; 32]).unwrap()
 }
 
 fn policy(auditor: &Cosigner) -> WitnessPolicy {
@@ -249,7 +249,7 @@ async fn the_auditor_refuses_what_does_not_check_out() {
     ));
     // Another origin in the checkpoint than in the request.
     let mut moved = request.clone();
-    moved.origin = "elsewhere.example:1/nuschel-kt/v1".into();
+    moved.origin = "elsewhere.example:1/nuschl-kt/v1".into();
     assert!(matches!(
         add_epochs(None, &moved),
         Err(AddError::Malformed(_))
@@ -348,7 +348,7 @@ async fn stale_and_re_signed_heads_are_refused() {
         .unwrap();
     // ...but freezes Bob at epoch 1 by signing its old head again with a fresh time.
     let resigned = SignedHead::sign(
-        &nuschel_kt::Ed25519HeadSigner::from_seed(&SIGNER_SEED),
+        &nuschl_kt::Ed25519HeadSigner::from_seed(&SIGNER_SEED),
         frozen.log_id,
         frozen.epoch,
         frozen.root,
@@ -393,7 +393,7 @@ async fn checkpoints_for_another_origin_or_tampered_proofs_are_refused() {
     assert!(matches!(
         check_witnessed(
             server.descriptor(),
-            "alias.example.org:64738/nuschel-kt/v1",
+            "alias.example.org:64738/nuschl-kt/v1",
             &verified,
             &attached,
             &policy,

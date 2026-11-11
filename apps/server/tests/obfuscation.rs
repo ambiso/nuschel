@@ -3,8 +3,8 @@
 //! binary: the log is captured with a thread-local subscriber, which tests on
 //! other threads (with callsites cached as disabled) would interfere with.
 use bytes::BytesMut;
-use nuschel_protocol::{control as proto, decode_control, encode_control, kind};
-use nuscheld::{
+use nuschl_protocol::{control as proto, decode_control, encode_control, kind};
+use nuschld::{
     config::Config,
     server::start,
     storage::{Backend, MemoryStore},

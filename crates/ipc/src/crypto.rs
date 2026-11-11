@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Between the session and the crypto worker (`nuschel-crypto-worker`, docs/e2ee.md
+//! Between the session and the crypto worker (`nuschl-crypto-worker`, docs/e2ee.md
 //! §8.1), which owns every identity secret: the identity root while it is being set
 //! up, the device-signing key, the device keys, the encrypted keystore, the
 //! key-transparency state (pinned logs, known heads, self-monitoring) and trust on
@@ -134,14 +134,14 @@ pub enum RecoveryPolicy {
 /// Which witnesses the client requires of every server's key-transparency log
 /// (docs/e2ee.md §5.9, `key_transparency` in settings.json and managed.json).
 /// The crypto worker combines it with the built-in witnesses
-/// (`nuschel_kt::DEFAULT_WITNESSES`, empty until the project auditor is
+/// (`nuschl_kt::DEFAULT_WITNESSES`, empty until the project auditor is
 /// deployed): while the result is empty, nothing is required and nothing changes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyTransparencySettings {
     /// Require the built-in witnesses.
     pub default_witnesses: bool,
-    /// More witnesses (C2SP verifier keys from `nuschel-witness vkey`), or
+    /// More witnesses (C2SP verifier keys from `nuschl-witness vkey`), or
     /// built-in ones with `enabled: false` to turn them off.
     pub witnesses: Vec<WitnessSetting>,
     /// How many of the enabled witnesses must have cosigned; unset: all of them.
@@ -566,7 +566,7 @@ pub enum CryptoRequest {
     },
 
     // ---- Device linking (docs/e2ee.md §3.4) ----
-    // nuschel-identity's protocol; the caller relays the messages between the two
+    // nuschl-identity's protocol; the caller relays the messages between the two
     // devices (out of band for now; the server's linking mailbox comes later). The
     // state between steps lives in the worker's memory only.
     /// On a device with the device-signing key: a fresh code to show and the first

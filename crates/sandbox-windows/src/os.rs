@@ -220,7 +220,7 @@ impl Sid {
 
 /// The SID of AppContainer profile `name`, creating the profile if needed.
 pub(crate) fn app_container_sid<A: Api>(api: &A, name: &WideCString) -> io::Result<Sid> {
-    let display = WideCString::from_str("Nuschel worker")?;
+    let display = WideCString::from_str("Nuschl worker")?;
     let mut sid: PSID = ptr::null_mut();
     // SAFETY: `name` and `display` are NUL-terminated (WideCString) and
     // borrowed across the call; `sid` is a local PSID, aligned and valid for
@@ -249,6 +249,31 @@ pub(crate) fn app_container_sid<A: Api>(api: &A, name: &WideCString) -> io::Resu
     let owned = unsafe { OsMemory::new(api, sid, Free::Sid) };
     // SAFETY: `owned` holds the SID Windows returned and outlives the copy.
     unsafe { Sid::copy_from(api, owned.as_ptr()) }
+}
+
+/// Derive an existing profile's SID without creating a profile.
+pub(crate) fn existing_container_sid<A: Api>(api: &A, name: &WideCString) -> io::Result<Sid> {
+    let mut sid = ptr::null_mut();
+    // SAFETY: name is NUL-terminated, sid is valid for one write.
+    let result = unsafe {
+        api.derive_app_container_sid_from_app_container_name(name.as_ptr(), &raw mut sid)
+    };
+    if result < 0 {
+        return Err(hresult_error(result));
+    }
+    // SAFETY: success returns a caller-owned SID, released with FreeSid.
+    let owned = unsafe { OsMemory::new(api, sid, Free::Sid) };
+    // SAFETY: the guard owns the valid SID through the copy.
+    unsafe { Sid::copy_from(api, owned.as_ptr()) }
+}
+
+pub(crate) fn delete_container<A: Api>(api: &A, name: &WideCString) -> io::Result<()> {
+    // SAFETY: name is a valid NUL-terminated string, borrowed through the call.
+    let result = unsafe { api.delete_app_container_profile(name.as_ptr()) };
+    if result < 0 {
+        return Err(hresult_error(result));
+    }
+    Ok(())
 }
 
 /// A capability's SID: the well-known ones Windows' firewall checks for
@@ -585,6 +610,44 @@ pub(crate) fn grant<A: Api>(
         return Err(invalid("the DACL does not hold the grant after writing it"));
     }
     Ok(true)
+}
+
+/// Revoke one retired worker's grants, preserving every other principal.
+pub(crate) fn revoke<A: Api>(
+    api: &A,
+    path: &WideCString,
+    sid: &Sid,
+    directory: bool,
+) -> io::Result<()> {
+    let file = open_itself(
+        api,
+        path,
+        if directory {
+            Grant::Directory
+        } else {
+            Grant::Executable
+        },
+    )?;
+    let current = read_dacl(api, &file)?
+        .ok_or_else(|| invalid("cannot retire a worker grant from a NULL DACL"))?;
+    let bytes = current.bytes();
+    let updated = crate::plan::without_allowed_sid(&bytes, &sid.bytes())?;
+    if updated == bytes {
+        return Ok(());
+    }
+    let updated = AclBuffer::from_bytes(&updated);
+    // SAFETY: file has WRITE_DAC; updated is a valid aligned ACL, read only.
+    let error = unsafe { api.set_security_info(file.raw(), updated.as_ptr()) };
+    if error != ERROR_SUCCESS {
+        return Err(win32_error(error));
+    }
+    let written = read_dacl(api, &file)?
+        .ok_or_else(|| invalid("the DACL went away"))?
+        .bytes();
+    if crate::plan::without_allowed_sid(&written, &sid.bytes())? != written {
+        return Err(invalid("the retired worker still has a grant"));
+    }
+    Ok(())
 }
 
 /// Marks a handle this process holds inheritable, as a handle list requires.

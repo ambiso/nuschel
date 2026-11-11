@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 use clap::Parser;
-use nuscheld::{
+use nuschld::{
     config::{Config, Settings},
     server, storage,
 };
 use std::{io::Read, net::IpAddr, path::PathBuf, process::ExitCode};
 
 #[derive(Parser)]
-#[command(version, about = "Nuschel's Mumble-compatible server")]
+#[command(version, about = "Nuschl's Mumble-compatible server")]
 struct Arguments {
-    /// TOML configuration file (see nuscheld.example.toml).
+    /// TOML configuration file (see nuschld.example.toml).
     #[arg(long)]
     config: Option<PathBuf>,
     /// Replaces `bind` from the configuration.
@@ -72,7 +72,7 @@ enum Command {
     /// Operator commands on the database, with the server stopped
     /// (docs/server.md, "Administration").
     #[command(subcommand)]
-    Admin(nuscheld::admin::Admin),
+    Admin(nuschld::admin::Admin),
 }
 
 fn settings(arguments: &Arguments) -> Result<Settings, Box<dyn std::error::Error>> {
@@ -129,7 +129,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         server::default_backend(&settings)?
     };
     if let Some(Command::Admin(command)) = arguments.command {
-        return nuscheld::admin::run(settings, backend, command).await;
+        return nuschld::admin::run(settings, backend, command).await;
     }
     if arguments.set_superuser_password {
         let mut password = String::new();
@@ -151,12 +151,12 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         if arguments.ephemeral {
             return Err("--import-murmur needs persistent state, not --ephemeral".into());
         }
-        let options = nuscheld::murmur::Options {
+        let options = nuschld::murmur::Options {
             path: path.clone(),
             server_id: arguments.murmur_server_id,
             replace_existing: arguments.replace_existing,
         };
-        let report = nuscheld::murmur::import(&settings, backend, &options).await?;
+        let report = nuschld::murmur::import(&settings, backend, &options).await?;
         print!("{}", report.render());
         return Ok(());
     }
@@ -200,7 +200,7 @@ fn main() -> ExitCode {
     let arguments = Arguments::parse();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("NUSCHELD_LOG")
+            tracing_subscriber::EnvFilter::try_from_env("NUSCHLD_LOG")
                 // akd reports every proof and preload at info.
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,akd=warn")),
         )
@@ -213,14 +213,14 @@ fn main() -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("nuscheld: {error}");
+            eprintln!("nuschld: {error}");
             return ExitCode::FAILURE;
         }
     };
     match runtime.block_on(run(arguments)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("nuscheld: {error}");
+            eprintln!("nuschld: {error}");
             ExitCode::FAILURE
         }
     }

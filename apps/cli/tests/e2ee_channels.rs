@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! End-to-end-encrypted channels (phase 4c, docs/e2ee.md §6.2) between
-//! `nuschel-cli` processes and `nuscheld` on loopback: lazy external joins, several
+//! `nuschl-cli` processes and `nuschld` on loopback: lazy external joins, several
 //! devices of one person, activity for readers who are not members, an ACL change
 //! that removes a member, and a device removed after 90 days without being seen
 //! (the server's clock is moved). Build the crypto worker first:
-//! `cargo build -p nuschel-crypto-worker`.
+//! `cargo build -p nuschl-crypto-worker`.
 mod common;
 
 use common::*;
-use nuscheld::{
+use nuschld::{
     acl::{AclEntry, perm},
     conversations::Scope,
     server::Running,
@@ -133,7 +133,7 @@ async fn bob_with_two_devices(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_people_and_four_devices_in_an_encrypted_channel() {
     if !worker_present() {
-        panic!("build nuschel-crypto-worker first: cargo build -p nuschel-crypto-worker");
+        panic!("build nuschl-crypto-worker first: cargo build -p nuschl-crypto-worker");
     }
     let state = tempfile::tempdir().unwrap();
     let running = server(state.path()).await;
@@ -264,7 +264,7 @@ async fn three_people_and_four_devices_in_an_encrypted_channel() {
                     members.len() == 3
                         && members
                             .iter()
-                            .all(|member| member["device_name"] != "carol (nuschel-cli)")
+                            .all(|member| member["device_name"] != "carol (nuschl-cli)")
                 }))
             .then(|| event.clone())
         })
@@ -279,7 +279,7 @@ async fn three_people_and_four_devices_in_an_encrypted_channel() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|member| member["device_name"] != "carol (nuschel-cli)"),
+            .all(|member| member["device_name"] != "carol (nuschl-cli)"),
         "{removed}"
     );
     phone.channel_view(&conversation, 3).await;
@@ -306,7 +306,7 @@ async fn three_people_and_four_devices_in_an_encrypted_channel() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_device_unseen_for_90_days_is_removed() {
     if !worker_present() {
-        panic!("build nuschel-crypto-worker first: cargo build -p nuschel-crypto-worker");
+        panic!("build nuschl-crypto-worker first: cargo build -p nuschl-crypto-worker");
     }
     let state = tempfile::tempdir().unwrap();
     let running = server(state.path()).await;
@@ -378,7 +378,7 @@ async fn a_device_unseen_for_90_days_is_removed() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|member| member["device_name"] != "bob (nuschel-cli)"),
+            .all(|member| member["device_name"] != "bob (nuschl-cli)"),
         "{removed}"
     );
     alice.sent(&conversation, "two of us now").await;

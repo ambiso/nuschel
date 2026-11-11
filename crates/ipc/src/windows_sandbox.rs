@@ -5,7 +5,7 @@
 //! that then becomes it, as bwrap and `sandbox-exec` do. Instead the supervisor
 //! starts the worker executable with [`LAUNCH_FLAG`], this policy and `--`
 //! before the worker's own arguments. That first process (the launch stage,
-//! `nuschel-sandbox-windows`) does not touch untrusted input: it creates the
+//! `nuschl-sandbox-windows`) does not touch untrusted input: it creates the
 //! AppContainer, grants it its directories, and starts the same executable
 //! again inside it, in a job object, with the worker arguments only. It then
 //! waits and exits with the worker's exit code, so the supervisor's process
@@ -17,7 +17,7 @@
 use std::{ffi::OsString, path::PathBuf};
 
 /// First argument of a worker started through its launch stage.
-pub const LAUNCH_FLAG: &str = "--nuschel-sandbox";
+pub const LAUNCH_FLAG: &str = "--nuschl-sandbox";
 
 /// Appended to the worker's arguments when [`Policy::file`] is set: the
 /// inherited handle of that file, opened read-only by the launch stage.
@@ -148,7 +148,7 @@ fn valid_profile(name: &str) -> bool {
 }
 
 /// A stable profile name for `kind` confined to `directory`, so that two
-/// Nuschel profiles' storage or crypto workers never share a container (each
+/// Nuschl profiles' storage or crypto workers never share a container (each
 /// container may open only the directories granted to it). FNV-1a over the
 /// path's UTF-8 form; collisions only merge two containers' grants.
 pub fn scoped_profile(kind: &str, directory: &std::path::Path) -> String {
@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn policy_round_trips_through_arguments() {
         let policy = Policy {
-            profile: "nuschel.transfer".into(),
+            profile: "nuschl.transfer".into(),
             capabilities: vec!["internetClient".into(), "privateNetworkClientServer".into()],
             writable: vec![PathBuf::from(r"C:\Users\a b\history"), "--".into()],
             file: Some(r"C:\Users\a\Documents\offer.zip".into()),
@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn malformed_policies_are_refused() {
         let parse = |arguments: &[&str]| Policy::parse(arguments.iter().map(OsString::from));
-        assert!(parse(&[LAUNCH_FLAG, "--profile", "nuschel.content"]).is_err());
+        assert!(parse(&[LAUNCH_FLAG, "--profile", "nuschl.content"]).is_err());
         assert!(parse(&[LAUNCH_FLAG, "--"]).is_err());
         assert!(parse(&[LAUNCH_FLAG, "--profile", "a\\b", "--"]).is_err());
         assert!(parse(&[LAUNCH_FLAG, "--profile", "a", "--memory", "lots", "--"]).is_err());
@@ -250,19 +250,19 @@ mod tests {
             assert!(parse(&arguments).is_err(), "{repeated:?}");
         }
         assert!(parse(&[LAUNCH_FLAG, "--profile", &"a".repeat(65), "--"]).is_err());
-        assert!(parse(&[LAUNCH_FLAG, "--profile", "nuschel.content", "--"]).is_ok());
+        assert!(parse(&[LAUNCH_FLAG, "--profile", "nuschl.content", "--"]).is_ok());
     }
 
     #[test]
     fn scoped_profiles_are_stable_and_distinct() {
-        let a = scoped_profile("nuschel.crypto", std::path::Path::new(r"C:\Users\a\crypto"));
-        let b = scoped_profile("nuschel.crypto", std::path::Path::new(r"C:\Users\b\crypto"));
-        let suffix = a.strip_prefix("nuschel.crypto.").unwrap();
+        let a = scoped_profile("nuschl.crypto", std::path::Path::new(r"C:\Users\a\crypto"));
+        let b = scoped_profile("nuschl.crypto", std::path::Path::new(r"C:\Users\b\crypto"));
+        let suffix = a.strip_prefix("nuschl.crypto.").unwrap();
         assert!(suffix.len() == 16 && suffix.bytes().all(|b| b.is_ascii_hexdigit()));
         assert_ne!(a, b);
         assert_eq!(
             a,
-            scoped_profile("nuschel.crypto", std::path::Path::new(r"C:\USERS\A\Crypto"))
+            scoped_profile("nuschl.crypto", std::path::Path::new(r"C:\USERS\A\Crypto"))
         );
         assert!(valid_profile(&a), "{a}");
     }

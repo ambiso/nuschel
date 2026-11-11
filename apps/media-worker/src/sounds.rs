@@ -11,7 +11,7 @@
 //! is above 7 kHz. Each sound is scaled to a loudness rather than an
 //! amplitude, so the set is matched by construction.
 use crate::dsp::RATE;
-use nuschel_core::audio::Sound;
+use nuschl_core::audio::Sound;
 use std::{
     f64::consts::{PI, TAU},
     time::{Duration, Instant},
@@ -544,12 +544,12 @@ mod tests {
         assert!(effects.voices.iter().all(Option::is_none));
     }
 
-    /// `NUSCHEL_SOUNDS_DIR=/tmp/sounds cargo test -p nuschel-media-worker --
+    /// `NUSCHL_SOUNDS_DIR=/tmp/sounds cargo test -p nuschl-media-worker --
     /// --ignored write_sounds` writes 48 kHz 16-bit WAV files to listen to.
     #[test]
     #[ignore = "writes files"]
     fn write_sounds() {
-        let directory = std::path::PathBuf::from(std::env::var("NUSCHEL_SOUNDS_DIR").unwrap());
+        let directory = std::path::PathBuf::from(std::env::var("NUSCHL_SOUNDS_DIR").unwrap());
         std::fs::create_dir_all(&directory).unwrap();
         let effects = Effects::new();
         for (sound, samples) in Sound::ALL.iter().zip(&effects.sounds) {

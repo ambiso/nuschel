@@ -5,19 +5,19 @@
 //! are keyed by the VRF secret, and the tree's shape depends only on its labels. A
 //! change in any encoding, in akd's hashing or in the configuration changes the file.
 //! Regenerate deliberately with
-//! `NUSCHEL_KT_WRITE_VECTORS=1 cargo test -p nuschel-kt --test vectors`.
+//! `NUSCHL_KT_WRITE_VECTORS=1 cargo test -p nuschl-kt --test vectors`.
 
 mod common;
 
 use common::*;
-use nuschel_kt::*;
+use nuschl_kt::*;
 use std::collections::BTreeMap;
 
 const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors/kt-v1.txt");
 
 const HEADER: &str = "\
-# nuschel-kt known-answer vectors, format version 1.
-# Suite 1: akd 0.13 (ExperimentalConfiguration, domain label \"nuschel-kt/v1 akd\"),
+# nuschl-kt known-answer vectors, format version 1.
+# Suite 1: akd 0.13 (ExperimentalConfiguration, domain label \"nuschl-kt/v1 akd\"),
 # BLAKE3, ECVRF-EDWARDS25519-SHA512-TAI; heads signed with Ed25519.
 # Values are hex unless the key ends in a number field (version, epoch).
 # Log: signing key seed 11..11, VRF secret 22..22, opened at 1790000000000 ms.
@@ -25,7 +25,7 @@ const HEADER: &str = "\
 #   roster 01..), name \"alice\" -> account 1. Epoch 2 (t+2000): acct 1 -> roster 02..
 #   (a device change). Epoch 3 (t+3000): acct 3 -> binding(root 3, roster 01..).
 # A fork under the same keys publishes acct 1 -> root 666 in epoch 2 instead.
-# Regenerate: NUSCHEL_KT_WRITE_VECTORS=1 cargo test -p nuschel-kt --test vectors
+# Regenerate: NUSCHL_KT_WRITE_VECTORS=1 cargo test -p nuschl-kt --test vectors
 ";
 
 async fn generate() -> Vec<(String, String)> {
@@ -140,7 +140,7 @@ fn parse(text: &str) -> BTreeMap<String, String> {
 #[tokio::test]
 async fn vectors_are_reproducible() {
     let rendered = render(&generate().await);
-    if std::env::var_os("NUSCHEL_KT_WRITE_VECTORS").is_some() {
+    if std::env::var_os("NUSCHL_KT_WRITE_VECTORS").is_some() {
         std::fs::write(PATH, &rendered).unwrap();
     }
     let on_disk = std::fs::read_to_string(PATH).expect("vectors file");

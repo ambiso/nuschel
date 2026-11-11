@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The Nuschel extension's negotiation (docs/extension.md §1): it is on if and
-//! only if ALPN selected `nuschel/1` and both hellos are present; the client's
+//! The Nuschl extension's negotiation (docs/extension.md §1): it is on if and
+//! only if ALPN selected `nuschl/1` and both hellos are present; the client's
 //! hello is accepted once, before `Authenticate`, and the capability set is
 //! then frozen for the connection. Anything else fails closed.
 use crate::{
     config::{Config, GuestHistory, Settings},
     limits::{ByteBucket, LeakyBucket},
 };
-use nuschel_protocol::{
+use nuschl_protocol::{
     control as proto,
-    nuschel::{self, Id, capability, v1, version},
+    nuschl::{self, Id, capability, v1, version},
 };
 use std::{
     collections::{BTreeSet, HashMap},
@@ -50,17 +50,17 @@ impl Capabilities {
     }
 }
 
-/// ALPN selected `nuschel/1` but the client sent no hello before `Authenticate`.
+/// ALPN selected `nuschl/1` but the client sent no hello before `Authenticate`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MissingHello;
 
 /// What a connection has negotiated before authenticating.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Negotiation {
-    /// No `nuschel/1` ALPN: a stock connection; field 7200 is ignored.
+    /// No `nuschl/1` ALPN: a stock connection; field 7200 is ignored.
     #[default]
     Stock,
-    /// ALPN selected `nuschel/1`, but the client's hello has not arrived.
+    /// ALPN selected `nuschl/1`, but the client's hello has not arrived.
     Offered,
     /// Both hellos are present; frozen.
     Agreed {
@@ -73,7 +73,7 @@ pub enum Negotiation {
 
 impl Negotiation {
     pub fn from_alpn(alpn: Option<&[u8]>) -> Self {
-        if alpn == Some(nuschel::ALPN) {
+        if alpn == Some(nuschl::ALPN) {
             Self::Offered
         } else {
             Self::Stock
@@ -82,16 +82,12 @@ impl Negotiation {
 
     /// Apply a `Version` received before authentication. Only the first hello
     /// counts; later ones cannot change the capabilities. `Err` closes the
-    /// connection (a malformed hello on a `nuschel/1` connection).
-    pub fn version(
-        &mut self,
-        body: &[u8],
-        server: Capabilities,
-    ) -> Result<(), nuschel::HelloError> {
+    /// connection (a malformed hello on a `nuschl/1` connection).
+    pub fn version(&mut self, body: &[u8], server: Capabilities) -> Result<(), nuschl::HelloError> {
         if *self != Self::Offered {
             return Ok(());
         }
-        if let Some(hello) = nuschel::hello(body)? {
+        if let Some(hello) = nuschl::hello(body)? {
             let theirs = Capabilities::from_names(hello.capabilities.iter().map(String::as_str));
             *self = Self::Agreed {
                 capabilities: Capabilities(theirs.0 & server.0),
@@ -115,7 +111,7 @@ impl Negotiation {
     }
 
     /// At `Authenticate`: the extension's capabilities, `Ok(None)` for a stock
-    /// connection, or `Err` when ALPN said `nuschel/1` but no hello came.
+    /// connection, or `Err` when ALPN said `nuschl/1` but no hello came.
     pub fn freeze(&self) -> Result<Option<Capabilities>, MissingHello> {
         match self {
             Self::Stock => Ok(None),
@@ -124,7 +120,7 @@ impl Negotiation {
         }
     }
 
-    /// At `Authenticate`: why a Nuschel client is refused under the
+    /// At `Authenticate`: why a Nuschl client is refused under the
     /// minimum-version policy at `now` (Unix seconds), or because it cannot take
     /// part in an end-to-end server (it did not agree on `e2ee/1`), if it is.
     /// Stock connections never are: the security mode decides about them.
@@ -141,7 +137,7 @@ impl Negotiation {
             && !capabilities.has(capability::E2EE)
         {
             return Some(
-                "This server encrypts every conversation end to end. Update Nuschel to \
+                "This server encrypts every conversation end to end. Update Nuschl to \
                  connect."
                     .into(),
             );
@@ -161,7 +157,7 @@ pub struct Extension {
     pub capabilities: Capabilities,
     /// Never send this user's address to another connected client.
     pub relay_only: bool,
-    /// Request ids in flight; at most [`nuschel::MAX_OUTSTANDING`].
+    /// Request ids in flight; at most [`nuschl::MAX_OUTSTANDING`].
     pub outstanding: Vec<u64>,
     pub subscriptions: BTreeSet<Id>,
     /// History pages, and their bytes.
@@ -215,7 +211,7 @@ impl Extension {
         if self.outstanding.contains(&request_id) {
             return Err(v1::error::Code::DuplicateRequest);
         }
-        if self.outstanding.len() >= nuschel::MAX_OUTSTANDING {
+        if self.outstanding.len() >= nuschl::MAX_OUTSTANDING {
             return Err(v1::error::Code::TooManyRequests);
         }
         self.outstanding.push(request_id);
@@ -244,14 +240,14 @@ pub fn server_capabilities(kt: bool, mls: bool, e2ee: bool) -> Capabilities {
     )
 }
 
-/// The server's hello, sent in its `Version` to `nuschel/1` connections, with
+/// The server's hello, sent in its `Version` to `nuschl/1` connections, with
 /// the descriptor of its key-transparency log if it has one.
 pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>, mls: bool) -> v1::Hello {
     let history = &settings.config.history;
     let e2ee = settings.config.security == crate::config::Security::E2ee;
     let (retention_days, live_only) = crate::retention::wire(history.default_retention());
     v1::Hello {
-        protocol: nuschel::PROTOCOL,
+        protocol: nuschl::PROTOCOL,
         capabilities: server_capabilities(kt_log.is_some(), mls, e2ee).names(),
         kt_log: kt_log.map(<[u8]>::to_vec).unwrap_or_default(),
         client_version: String::new(),
@@ -282,13 +278,13 @@ pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>, mls: bool) -> v1
 
 /// The server's `Version`, with or without the hello.
 pub fn version_frame(version: &proto::Version, hello: Option<&v1::Hello>) -> bytes::Bytes {
-    nuschel::version_frame(version, hello).unwrap_or_default()
+    nuschl::version_frame(version, hello).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_protocol::HEADER_BYTES;
+    use nuschl_protocol::HEADER_BYTES;
 
     fn hello_body(capabilities: &[&str]) -> Vec<u8> {
         hello_body_from(capabilities, "")
@@ -296,14 +292,14 @@ mod tests {
 
     fn hello_body_from(capabilities: &[&str], client_version: &str) -> Vec<u8> {
         let hello = v1::Hello {
-            protocol: nuschel::PROTOCOL,
+            protocol: nuschl::PROTOCOL,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
             client_version: client_version.into(),
             relay_only: false,
         };
-        nuschel::version_frame(&proto::Version::default(), Some(&hello)).unwrap()[HEADER_BYTES..]
+        nuschl::version_frame(&proto::Version::default(), Some(&hello)).unwrap()[HEADER_BYTES..]
             .to_vec()
     }
 
@@ -312,18 +308,18 @@ mod tests {
         let server = server_capabilities(true, true, false);
         // ALPN without a hello fails closed.
         assert_eq!(
-            Negotiation::from_alpn(Some(nuschel::ALPN)).freeze(),
+            Negotiation::from_alpn(Some(nuschl::ALPN)).freeze(),
             Err(MissingHello)
         );
         // A hello without ALPN is ignored: a stock connection.
         let mut stock = Negotiation::from_alpn(None);
         stock.version(&hello_body(&["history/1"]), server).unwrap();
         assert_eq!(stock.freeze(), Ok(None));
-        let mut mumble = Negotiation::from_alpn(Some(nuschel::ALPN_MUMBLE));
+        let mut mumble = Negotiation::from_alpn(Some(nuschl::ALPN_MUMBLE));
         mumble.version(&hello_body(&["history/1"]), server).unwrap();
         assert_eq!(mumble.freeze(), Ok(None));
         // Both: the intersection, frozen at the first hello.
-        let mut agreed = Negotiation::from_alpn(Some(nuschel::ALPN));
+        let mut agreed = Negotiation::from_alpn(Some(nuschl::ALPN));
         agreed
             .version(&hello_body(&["history/1", "unknown/3"]), server)
             .unwrap();
@@ -336,19 +332,19 @@ mod tests {
         let frozen = agreed.freeze().unwrap().unwrap();
         assert!(frozen.has("history/1"));
         assert!(!frozen.has("typing/1"), "later hellos change nothing");
-        // A plain Version on a nuschel/1 connection leaves it waiting.
-        let mut waiting = Negotiation::from_alpn(Some(nuschel::ALPN));
+        // A plain Version on a nuschl/1 connection leaves it waiting.
+        let mut waiting = Negotiation::from_alpn(Some(nuschl::ALPN));
         waiting
             .version(&proto::Version::default().encode_to_vec(), server)
             .unwrap();
         assert_eq!(waiting.freeze(), Err(MissingHello));
         // A malformed hello is an error.
-        let mut bad = Negotiation::from_alpn(Some(nuschel::ALPN));
+        let mut bad = Negotiation::from_alpn(Some(nuschl::ALPN));
         assert!(bad.version(&hello_body(&["BAD"]), server).is_err());
     }
 
     #[test]
-    fn old_nuschel_clients_are_refused_from_the_date_and_stock_clients_never() {
+    fn old_nuschl_clients_are_refused_from_the_date_and_stock_clients_never() {
         let settings = |extra: &str| {
             Config::from_toml(&format!("[history]\n{extra}"))
                 .unwrap()
@@ -356,7 +352,7 @@ mod tests {
                 .unwrap()
         };
         let agreed = |client_version: &str| {
-            let mut negotiation = Negotiation::from_alpn(Some(nuschel::ALPN));
+            let mut negotiation = Negotiation::from_alpn(Some(nuschl::ALPN));
             negotiation
                 .version(
                     &hello_body_from(&["history/1"], client_version),
@@ -374,7 +370,7 @@ mod tests {
         );
         assert_eq!(
             old.refusal(&graced, 86_400).as_deref(),
-            Some("This server requires Nuschel 0.3.0 or newer. Update Nuschel to connect.")
+            Some("This server requires Nuschl 0.3.0 or newer. Update Nuschl to connect.")
         );
         assert_eq!(agreed("0.3.0").refusal(&graced, 86_400), None);
         assert_eq!(agreed("0.10.0").refusal(&graced, 86_400), None);

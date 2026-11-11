@@ -2,7 +2,7 @@
 //! Log in to a Mumble server through the relay, with TLS on this side
 //! (the loopback test and the vm-web check).
 use clap::Parser;
-use nuschel_web_relay::probe::{self, Probe};
+use nuschl_web_relay::probe::{self, Probe};
 
 #[derive(Parser)]
 #[command(version)]

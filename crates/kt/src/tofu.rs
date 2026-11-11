@@ -10,7 +10,7 @@
 use crate::error::{ErrorClass, KtError};
 use crate::values::AccountBinding;
 use crate::verify::{VerifiedEntry, VerifiedHistory};
-use nuschel_identity::IdentityFingerprint;
+use nuschl_identity::IdentityFingerprint;
 
 /// The kind of conversation a result is shown in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

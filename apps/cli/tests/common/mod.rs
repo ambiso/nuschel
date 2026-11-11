@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! `nuschel-cli` processes against an in-process `nuscheld` on loopback, for the
+//! `nuschl-cli` processes against an in-process `nuschld` on loopback, for the
 //! end-to-end tests (each test binary uses what it needs).
 #![allow(dead_code)]
-use nuscheld::{
+use nuschld::{
     config::Config,
     server::{Running, start},
     storage::{Backend, MemoryStore},
@@ -24,13 +24,13 @@ use tokio::{
 pub const WAIT: Duration = Duration::from_secs(60);
 
 pub fn cli() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_nuschel-cli"))
+    PathBuf::from(env!("CARGO_BIN_EXE_nuschl-cli"))
 }
 
 pub fn worker_present() -> bool {
     cli()
         .with_file_name(format!(
-            "nuschel-crypto-worker{}",
+            "nuschl-crypto-worker{}",
             std::env::consts::EXE_SUFFIX
         ))
         .exists()
@@ -88,7 +88,7 @@ impl Cli {
     }
 
     pub fn start(name: &str, mut command: Command) -> Self {
-        let mut child = command.spawn().expect("nuschel-cli starts");
+        let mut child = command.spawn().expect("nuschl-cli starts");
         let input = child.stdin.take().unwrap();
         let output = child.stdout.take().unwrap();
         let (sender, events) = mpsc::unbounded_channel();

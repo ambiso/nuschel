@@ -11,7 +11,7 @@
 //!   uint8  version = 1;
 //!   uint32 key_index;           // which history key
 //!   opaque nonce[12];
-//!   opaque credential[172];     // the sender's Nuschel device credential
+//!   opaque credential[172];     // the sender's Nuschl device credential
 //!   uint32 ciphertext<0..2^17>; // ChaCha20-Poly1305(key, nonce, envelope; aad)
 //!   opaque signature[64];       // leaf key over 0xff || label || everything above
 //! } ArchiveRecord;
@@ -40,14 +40,14 @@
 //! ```
 use crate::provider::Provider;
 use crate::{Error, guard, mls};
-use nuschel_identity::{DeviceCredential, DeviceKeys};
+use nuschl_identity::{DeviceCredential, DeviceKeys};
 use openmls::prelude::{AeadType, SignatureScheme};
 use openmls_traits::OpenMlsProvider;
 use openmls_traits::crypto::OpenMlsCrypto;
 use openmls_traits::random::OpenMlsRand;
 
 const VERSION: u8 = 1;
-const LABEL: &[u8] = b"nuschel/archive/v1";
+const LABEL: &[u8] = b"nuschl/archive/v1";
 const NONCE: usize = 12;
 const CREDENTIAL: usize = 172;
 const SIGNATURE: usize = 64;
@@ -116,7 +116,7 @@ pub fn seal_archive(
 ) -> Result<Vec<u8>, Error> {
     let credential = credential.encode();
     if credential.len() != CREDENTIAL {
-        return Err(Error::Invalid("not a Nuschel device credential"));
+        return Err(Error::Invalid("not a Nuschl device credential"));
     }
     guard(|| {
         let provider = Provider::new()?;
@@ -215,7 +215,7 @@ pub fn open_archive(
         return Err(Error::Invalid("another history key"));
     }
     let credential = DeviceCredential::decode(parsed.credential)
-        .map_err(|_| Error::Invalid("not a Nuschel device credential"))?;
+        .map_err(|_| Error::Invalid("not a Nuschl device credential"))?;
     let signature_key = credential.leaf_key().as_bytes().to_vec();
     guard(|| {
         let provider = Provider::new()?;
@@ -353,7 +353,7 @@ pub fn decode_grant(bytes: &[u8]) -> Result<(Vec<HistoryKey>, u32, bool, u64), E
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_identity::{DisplayName, NewIdentity, Validity};
+    use nuschl_identity::{DisplayName, NewIdentity, Validity};
 
     #[test]
     fn bounded_grants_reach_every_retained_key_without_truncation() {

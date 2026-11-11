@@ -1,6 +1,6 @@
 [package]
-name = "nuschel-rtc"
-description = "Bounded, socket-independent WebRTC transport for Nuschel media"
+name = "nuschl-rtc"
+description = "Bounded, socket-independent WebRTC transport for Nuschl media"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

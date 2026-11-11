@@ -34,10 +34,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-/// ALPN for the Nuschel extension (docs/extension.md); `mumble` is accepted too,
+/// ALPN for the Nuschl extension (docs/extension.md); `mumble` is accepted too,
 /// because rustls refuses a client whose offer shares nothing with ours. Stock
 /// clients offer no ALPN at all.
-use nuschel_protocol::nuschel::{ALPN as ALPN_NUSCHEL, ALPN_MUMBLE};
+use nuschl_protocol::nuschl::{ALPN as ALPN_NUSCHL, ALPN_MUMBLE};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {
@@ -145,7 +145,7 @@ impl Identity {
         if certificate.exists() && key.exists() {
             return Self::load(&certificate, &key);
         }
-        let generated = rcgen::generate_simple_self_signed(vec!["Nuschel server".into()])
+        let generated = rcgen::generate_simple_self_signed(vec!["Nuschl server".into()])
             .map_err(|error| TlsError::Generate(error.to_string()))?;
         write_atomically(
             &key,
@@ -456,7 +456,7 @@ pub fn server_config(
     let mut config = builder
         .with_client_cert_verifier(Arc::new(AnyClientCertificate(provider)))
         .with_cert_resolver(certificates.clone());
-    config.alpn_protocols = vec![ALPN_NUSCHEL.to_vec(), ALPN_MUMBLE.to_vec()];
+    config.alpn_protocols = vec![ALPN_NUSCHL.to_vec(), ALPN_MUMBLE.to_vec()];
     // Session resumption would let a client skip presenting its certificate.
     config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
     config.send_tls13_tickets = 0;

@@ -2,7 +2,7 @@
 
 `rtc-keyframe.vp8` is a single 160x120 VP8 keyframe, generated locally from FFmpeg's
 `testsrc2` pattern. It contains no camera capture or third-party video. It is part of
-Nuschel's EUPL-1.2 test material.
+Nuschl's EUPL-1.2 test material.
 
 Generation:
 

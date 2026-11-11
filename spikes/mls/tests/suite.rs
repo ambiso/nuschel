@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Task 1.1: the libcrux provider and the hybrid post-quantum ciphersuite.
 
-use nuschel_mls_spike::*;
+use nuschl_mls_spike::*;
 use openmls::prelude::*;
 use openmls_libcrux_crypto::CryptoProvider;
 use openmls_traits::crypto::OpenMlsCrypto;

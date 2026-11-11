@@ -2,12 +2,12 @@
 //! The MLS delivery service (`mls/1`, docs/e2ee.md §6.3).
 //!
 //! - **Groups.** One per conversation (generation 0 for now). The service task owns
-//!   each group's public state (nuschel-e2ee's `DeliveryGroup`, OpenMLS's
+//!   each group's public state (nuschl-e2ee's `DeliveryGroup`, OpenMLS's
 //!   `PublicGroup`), validates commits (structure and every key first, then
 //!   signatures and proposal rules, the new tree, the committer's GroupInfo, that
 //!   the Welcome goes to exactly the added key packages) and accepts one commit per
 //!   epoch. All MLS work happens in the task, never under the state lock, and all
-//!   of it goes through nuschel-e2ee (prevalidation, `catch_unwind`).
+//!   of it goes through nuschl-e2ee (prevalidation, `catch_unwind`).
 //! - **One stream.** Commits and application messages are history rows of the
 //!   conversation (formats `MLS_HANDSHAKE`, `MLS_APPLICATION`; the message as base64
 //!   in `content`), so their `seq` is assigned under the state lock with everything
@@ -38,7 +38,7 @@
 //!   seen and opened each channel (`MlsOpened`, sends and commits), against a clock
 //!   tests can move ([`MlsHandle::advance_clock`]).
 //! - **Persistence** is the server's key-value table (`kt_records`) through its own
-//!   storage worker, under uppercase prefixes (nuschel-kt uses lowercase ones, the
+//!   storage worker, under uppercase prefixes (nuschl-kt uses lowercase ones, the
 //!   key-transparency module `R` and `C`):
 //!
 //!   | Key | Value |
@@ -78,20 +78,20 @@ use crate::{
     storage::StorageHandle,
 };
 use base64::Engine as _;
-use nuschel_e2ee::{
+use nuschl_e2ee::{
     INACTIVE_DEVICE_DAYS, UNOPENED_CHANNEL_DAYS,
     ds::{DeliveryGroup, DsError, ServerSigner, check_key_package},
     prevalidate::{self, ContentType, WireFormat},
 };
-use nuschel_identity::{DeviceCertificate, DeviceCredential, IdentityFingerprint};
-use nuschel_ipc::server::{
+use nuschl_identity::{DeviceCertificate, DeviceCredential, IdentityFingerprint};
+use nuschl_ipc::server::{
     Anchor, MessageKind, PageQuery, ServerStorageRequest as Request,
     ServerStorageResponse as Response, StoredMessage,
 };
-use nuschel_kt::KtStore;
-use nuschel_protocol::{
+use nuschl_kt::KtStore;
+use nuschl_protocol::{
     ControlFrame,
-    nuschel::{
+    nuschl::{
         self, MAX_MLS_APPLICATION_BYTES, MAX_MLS_DEVICE_PACKAGES, MAX_MLS_GROUP_INFO_BYTES,
         MAX_MLS_HANDSHAKE_BYTES, MAX_MLS_KEY_PACKAGE_BYTES, MAX_MLS_TREE_BYTES,
         MAX_MLS_UPLOAD_PACKAGES, MAX_MLS_WELCOME_BYTES, MAX_MLS_WELCOMES, is_mls_format, kind,
@@ -190,7 +190,7 @@ fn key(prefix: u8, parts: &[&[u8]]) -> Vec<u8> {
 
 /// The group id of a conversation's group (generation 0).
 pub fn group_id(conversation: &Id) -> Vec<u8> {
-    nuschel_e2ee::binding::group_id(conversation, 0)
+    nuschl_e2ee::binding::group_id(conversation, 0)
 }
 
 // ---- the state's end ----
@@ -336,7 +336,7 @@ impl MlsHandle {
                 .keys()
                 .filter(|(owner, _)| *owner == account)
                 .count();
-            if devices >= nuschel::MAX_KT_DEVICES {
+            if devices >= nuschl::MAX_KT_DEVICES {
                 return;
             }
         }
@@ -542,7 +542,7 @@ struct Loaded {
 
 impl Loaded {
     fn channel(&self) -> bool {
-        self.group.binding().kind == nuschel_e2ee::ConversationKind::Channel
+        self.group.binding().kind == nuschl_e2ee::ConversationKind::Channel
     }
 }
 
@@ -583,7 +583,7 @@ pub struct Service {
     config: MlsConfig,
 }
 
-fn store_failure(_: nuschel_kt::StoreError) -> Failure {
+fn store_failure(_: nuschl_kt::StoreError) -> Failure {
     (Code::Busy, 1000)
 }
 
@@ -601,7 +601,7 @@ pub async fn open(
     signer: ServerSigner,
 ) -> Result<(MlsHandle, Service), crate::server::StartError> {
     let failed =
-        |error: nuschel_kt::StoreError| crate::server::StartError::Storage(format!("mls: {error}"));
+        |error: nuschl_kt::StoreError| crate::server::StartError::Storage(format!("mls: {error}"));
     let store = StorageKt::new(storage.clone());
     resolve_pending(&store, &storage)
         .await
@@ -920,9 +920,9 @@ async fn find_commit_row(
         let query = PageQuery {
             conversation: hex(conversation),
             anchor: Anchor::After(anchor),
-            limit: nuschel::MAX_PAGE_MESSAGES as u32,
+            limit: nuschl::MAX_PAGE_MESSAGES as u32,
             ranges: vec![(1, u64::MAX)],
-            max_bytes: nuschel::MAX_PAGE_BYTES as u32,
+            max_bytes: nuschl::MAX_PAGE_BYTES as u32,
         };
         let page = match history.request(Request::HistoryPage { query }).await {
             Some(Response::Page(page)) => page,
@@ -1047,7 +1047,7 @@ impl Service {
         };
         // The server checked the record under the identity's root before keeping it.
         let Ok(signing) =
-            nuschel_identity::DeviceSigningCertificate::decode(&record.device_signing_certificate)
+            nuschl_identity::DeviceSigningCertificate::decode(&record.device_signing_certificate)
         else {
             return Ok(None);
         };
@@ -1059,7 +1059,7 @@ impl Service {
             .collect();
         let mut revoked = HashMap::new();
         for bytes in &record.revocations {
-            if let Ok(revocation) = nuschel_identity::DeviceRevocation::decode(bytes) {
+            if let Ok(revocation) = nuschl_identity::DeviceRevocation::decode(bytes) {
                 let through = revoked
                     .entry(*revocation.device_id().as_bytes())
                     .or_insert(0);
@@ -1330,7 +1330,7 @@ impl Service {
         let group_id = group_id(&conversation);
         let hash = sha256(&[&commit.commit]);
         let key_bytes: [u8; 16] =
-            nuschel::id(&commit.idempotency_key).ok_or_else(|| malformed("idempotency key"))?;
+            nuschl::id(&commit.idempotency_key).ok_or_else(|| malformed("idempotency key"))?;
         let exists = self.load(&group_id).await?;
         let created = match (&commit.create, exists) {
             (Some(_), true) => {
@@ -1535,7 +1535,7 @@ impl Service {
         // Who the members are now: the removed go, the added come with their
         // accounts (the Welcome's recipients, or the committer for itself).
         let previous_members = loaded.members.clone();
-        let device_of = |member: &nuschel_e2ee::ds::Member| {
+        let device_of = |member: &nuschl_e2ee::ds::Member| {
             credential_identity(&member.credential).map(|(_, c)| *c.device_id().as_bytes())
         };
         for member in &outcome.removed {
@@ -1718,7 +1718,7 @@ impl Service {
             commit_seq: loaded.commit_seq,
             accounts: accounts
                 .into_iter()
-                .take(nuschel::MAX_MLS_JOIN_ACCOUNTS)
+                .take(nuschl::MAX_MLS_JOIN_ACCOUNTS)
                 .map(|account| account.to_vec())
                 .collect(),
         }))
@@ -1728,11 +1728,11 @@ impl Service {
 // ---- handlers ----
 
 fn conversation_id(bytes: &[u8]) -> Result<Id, Failure> {
-    nuschel::id(bytes).ok_or((Code::Malformed, 0))
+    nuschl::id(bytes).ok_or((Code::Malformed, 0))
 }
 
 fn device_id(bytes: &[u8]) -> Result<Device, Failure> {
-    nuschel::id(bytes).ok_or((Code::Malformed, 0))
+    nuschl::id(bytes).ok_or((Code::Malformed, 0))
 }
 
 impl State {
@@ -1819,7 +1819,7 @@ impl State {
                 let request_id = message.request_id;
                 self.deferred(session, request_id, |state| {
                     let account = state.mls_account(session)?;
-                    let target = nuschel::id(&message.account).ok_or((Code::Malformed, 0))?;
+                    let target = nuschl::id(&message.account).ok_or((Code::Malformed, 0))?;
                     // One's own devices, and direct-conversation partners only.
                     state.authorize(session, Action::MlsClaim { account: &target })?;
                     let mls = state.mls.as_mut().ok_or((Code::Unsupported, 0))?;
@@ -1929,7 +1929,7 @@ impl State {
 
     fn mls_commit(&mut self, session: u32, message: v1::MlsCommit) -> Result<(), Failure> {
         let conversation = conversation_id(&message.conversation)?;
-        nuschel::id(&message.idempotency_key).ok_or((Code::Malformed, 0))?;
+        nuschl::id(&message.idempotency_key).ok_or((Code::Malformed, 0))?;
         if message.commit.len() > MAX_MLS_HANDSHAKE_BYTES
             || message.group_info.len() > MAX_MLS_GROUP_INFO_BYTES
             || message.welcome.len() > MAX_MLS_WELCOME_BYTES
@@ -1999,7 +1999,7 @@ impl State {
 
     fn mls_send(&mut self, session: u32, message: v1::MlsSend) -> Result<(), Failure> {
         let conversation = conversation_id(&message.conversation)?;
-        let key = nuschel::id(&message.idempotency_key).ok_or((Code::Malformed, 0))?;
+        let key = nuschl::id(&message.idempotency_key).ok_or((Code::Malformed, 0))?;
         if message.message.len() > MAX_MLS_APPLICATION_BYTES {
             return Err((Code::TooLarge, 0));
         }
@@ -2027,7 +2027,7 @@ impl State {
             self.send(
                 session,
                 kind::ERROR,
-                &nuschel::stale_epoch(message.request_id, cache.epoch, head),
+                &nuschl::stale_epoch(message.request_id, cache.epoch, head),
             );
             self.end_request(session, message.request_id);
             return Ok(());
@@ -2113,7 +2113,7 @@ impl State {
                 self.end_request(session, request_id);
             }
             Reply::Ack(mut ack) => {
-                if let Some(conversation) = nuschel::id(&ack.conversation) {
+                if let Some(conversation) = nuschl::id(&ack.conversation) {
                     self.mls_commit_ended(&conversation);
                 }
                 ack.request_id = request_id;
@@ -2129,7 +2129,7 @@ impl State {
                 self.send(
                     session,
                     kind::ERROR,
-                    &nuschel::stale_epoch(request_id, epoch, head),
+                    &nuschl::stale_epoch(request_id, epoch, head),
                 );
                 self.end_request(session, request_id);
             }
@@ -2473,9 +2473,9 @@ impl State {
     pub fn mls_stored(
         &mut self,
         stored: Stored,
-        response: Option<nuschel_ipc::server::ServerStorageResponse>,
+        response: Option<nuschl_ipc::server::ServerStorageResponse>,
     ) {
-        use nuschel_ipc::server::ServerStorageResponse as Response;
+        use nuschl_ipc::server::ServerStorageResponse as Response;
         let Stored {
             session,
             request_id,
@@ -2735,10 +2735,10 @@ mod tests {
         for device in 0..20u8 {
             handle.listen(u32::from(device) + 1, account, [device; 16], |_| true);
         }
-        assert_eq!(handle.listeners.len(), nuschel::MAX_KT_DEVICES);
+        assert_eq!(handle.listeners.len(), nuschl::MAX_KT_DEVICES);
         // Entries of gone connections make room again.
         handle.listen(99, account, [99; 16], |session| session > 4);
-        assert_eq!(handle.listeners.len(), nuschel::MAX_KT_DEVICES - 3);
+        assert_eq!(handle.listeners.len(), nuschl::MAX_KT_DEVICES - 3);
         for session in 1..=99 {
             handle.disconnected(session);
         }

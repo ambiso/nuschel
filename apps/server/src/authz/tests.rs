@@ -17,12 +17,12 @@ use crate::{
     storage::StorageHandle,
 };
 use bytes::Bytes;
-use nuschel_ipc::server::HistoryVisibility;
-use nuschel_protocol::{
+use nuschl_ipc::server::HistoryVisibility;
+use nuschl_protocol::{
     ControlFrame, control as proto,
     crypt::CryptState,
     kind,
-    nuschel::{self, v1},
+    nuschl::{self, v1},
 };
 use proto::permission_denied::DenyType;
 use std::{collections::HashMap, net::SocketAddr, path::Path, sync::Arc, time::Instant};
@@ -89,7 +89,7 @@ impl Fixture {
             Arc::new(Counters::default()),
         );
         state.initialise_root();
-        state.kt = Some(KtHandle::detached(vec![0; 71], nuschel_kt::LogId([7; 32])));
+        state.kt = Some(KtHandle::detached(vec![0; 71], nuschl_kt::LogId([7; 32])));
         state
             .channels
             .get_mut(0)
@@ -178,7 +178,7 @@ impl Fixture {
         fixture
     }
 
-    /// A Nuschel connection in `channel`.
+    /// A Nuschl connection in `channel`.
     fn connect(
         &mut self,
         name: &str,
@@ -1232,12 +1232,12 @@ fn temporary_tokens_do_not_outlive_their_message() {
 }
 
 /// A stock client's direct message is archived in the accounts' direct
-/// conversation only if the sender may write to it as a Nuschel client would:
+/// conversation only if the sender may write to it as a Nuschl client would:
 /// TextMessage in the channel of each of the peer's connections. Before, the
 /// stock path checked only the connection it named and then delivered the
 /// stored message to all of the account's connections.
 #[test]
-fn stock_direct_messages_are_archived_only_where_a_nuschel_send_would_be() {
+fn stock_direct_messages_are_archived_only_where_a_nuschl_send_would_be() {
     let mut config = Config::default();
     config.history.archive_stock_direct_messages = true;
     let mut f = Fixture::new(config);
@@ -1319,7 +1319,7 @@ fn key_transparency_histories_are_checked_again_when_answered() {
     assert!(
         f.received(registered)
             .iter()
-            .any(|(kind, _)| *kind == nuschel::kind::KT_HISTORY_REPLY)
+            .any(|(kind, _)| *kind == nuschl::kind::KT_HISTORY_REPLY)
     );
     // Authorised, then the owner leaves before the answer arrives.
     f.state.enter_channel(owner, OWNED, &mut moved);
@@ -1329,11 +1329,11 @@ fn key_transparency_histories_are_checked_again_when_answered() {
     assert!(
         !frames
             .iter()
-            .any(|(kind, _)| *kind == nuschel::kind::KT_HISTORY_REPLY)
+            .any(|(kind, _)| *kind == nuschl::kind::KT_HISTORY_REPLY)
     );
     let error = frames
         .iter()
-        .find(|(kind, _)| *kind == nuschel::kind::ERROR)
+        .find(|(kind, _)| *kind == nuschl::kind::ERROR)
         .and_then(|(_, payload)| <v1::Error as prost::Message>::decode(payload.clone()).ok())
         .expect("an error");
     assert_eq!(error.request_id, 8);

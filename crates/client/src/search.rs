@@ -6,7 +6,7 @@
 //! field and the list, and asks for the result's page
 //! ([`Client::show_message`]).
 use crate::{Client, Conversation, model::TextTarget, names, server::ServerState, timeline::Page};
-use nuschel_core::{HistoryEntry, search::Query};
+use nuschl_core::{HistoryEntry, search::Query};
 use std::{collections::HashMap, ops::Range};
 
 /// Servers one search covers (the storage worker's limit).
@@ -28,7 +28,7 @@ pub struct Hit {
     pub server: String,
     /// The conversation's storage key on that server.
     pub storage_key: String,
-    /// Its local row id, and its seq on a Nuschel server (whose timeline
+    /// Its local row id, and its seq on a Nuschl server (whose timeline
     /// counts in seqs).
     pub id: i64,
     pub seq: Option<i64>,
@@ -149,7 +149,7 @@ impl Client {
         out
     }
 
-    /// Where stored message `id` (`seq` on a Nuschel server) of conversation
+    /// Where stored message `id` (`seq` on a Nuschl server) of conversation
     /// `storage_key` on server `index` is now. Fails with what to tell the
     /// user.
     pub fn locate(

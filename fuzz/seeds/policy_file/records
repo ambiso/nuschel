@@ -1,6 +1,6 @@
 {
   "example.org:64738": {
-    "nuschel": true,
+    "nuschl": true,
     "capabilities": [
       "history/1",
       "typing/1"

@@ -1,6 +1,6 @@
 [package]
-name = "nuschel-client-wasm"
-description = "The client SDK for browsers: wasm-bindgen bindings, and TLS to Mumble and Nuschel servers through the web relay's tunnel"
+name = "nuschl-client-wasm"
+description = "The client SDK for browsers: wasm-bindgen bindings, and TLS to Mumble and Nuschl servers through the web relay's tunnel"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,9 +14,9 @@ crate-type = ["cdylib", "rlib"]
 workspace = true
 
 [dependencies]
-nuschel-client = { workspace = true, default-features = false }
-nuschel-core.workspace = true
-nuschel-protocol.workspace = true
+nuschl-client = { workspace = true, default-features = false }
+nuschl-core.workspace = true
+nuschl-protocol.workspace = true
 bytes = "1.12.1"
 prost = "0.14.4"
 # TLS runs here, in the browser: the relay only forwards ciphertext.
@@ -50,9 +50,9 @@ web-sys = { version = "0.3.107", features = [
 ] }
 
 # The session through the real relay to a TLS Mumble server on loopback (and to
-# Murmur with NUSCHEL_TEST_MURMUR), natively.
+# Murmur with NUSCHL_TEST_MURMUR), natively.
 [dev-dependencies]
-nuschel-web-relay = { path = "../../apps/web-relay", version = "0.1.0" }
+nuschl-web-relay = { path = "../../apps/web-relay", version = "0.1.0" }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 tempfile = "3.27.0"

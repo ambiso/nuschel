@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Task 1.3: OpenMLS state in our own encrypted, transactional store.
 
-use nuschel_mls_spike::ds::DeliveryService;
-use nuschel_mls_spike::pins::ConversationPins;
-use nuschel_mls_spike::sim::Client;
-use nuschel_mls_spike::store::{EncryptedStore, StoreError, census};
-use nuschel_mls_spike::*;
+use nuschl_mls_spike::ds::DeliveryService;
+use nuschl_mls_spike::pins::ConversationPins;
+use nuschl_mls_spike::sim::Client;
+use nuschl_mls_spike::store::{EncryptedStore, StoreError, census};
+use nuschl_mls_spike::*;
 use openmls::prelude::*;
 use openmls_traits::OpenMlsProvider;
 
@@ -90,7 +90,7 @@ fn encrypted_store_survives_a_restart() {
 
     // Restart: the crypto worker rebuilds OpenMLS state from the encrypted store.
     let storage = bob_store.load().unwrap();
-    bob.device.provider = NuschelProvider::with_storage(storage);
+    bob.device.provider = NuschlProvider::with_storage(storage);
     bob.group = Some(
         MlsGroup::load(bob.device.provider.storage(), &id)
             .unwrap()

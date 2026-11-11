@@ -1,30 +1,30 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! `nuschel-witness`: the project auditor for Nuschel's key transparency
+//! `nuschl-witness`: the project auditor for Nuschl's key transparency
 //! (docs/witness.md, docs/e2ee.md §5.9).
 //!
-//! Servers submit their akd epochs over HTTP (`POST /nuschel-kt/v1/add-epochs`, a
-//! `nuschel_kt::witness::auditor::AddEpochs` in nuschel-kt's strict encoding). The
+//! Servers submit their akd epochs over HTTP (`POST /nuschl-kt/v1/add-epochs`, a
+//! `nuschl_kt::witness::auditor::AddEpochs` in nuschl-kt's strict encoding). The
 //! auditor checks every append-only proof from the epoch it holds, appends the
 //! epochs to its copy of the server's epoch log, and cosigns the checkpoint with its
 //! ML-DSA-44 key if the result is the server's checkpoint. It keeps one small state
 //! file per origin and never cosigns two logs for one origin, or an older checkpoint
 //! after a newer one.
 //!
-//! - **Enrolment.** The first submission for an origin `<host>:<port>/nuschel-kt/v1`
+//! - **Enrolment.** The first submission for an origin `<host>:<port>/nuschl-kt/v1`
 //!   is accepted only if the server at `host:port` announces the same log in its
-//!   Nuschel hello (`kt_log`), as seen from the network, the way ACME checks a name.
+//!   Nuschl hello (`kt_log`), as seen from the network, the way ACME checks a name.
 //!   Private and loopback addresses are refused unless configured.
 //! - **Plain HTTP.** TLS comes from a reverse proxy (the NixOS module's nginx with
 //!   ACME); the listener defaults to loopback.
 //! - **Limits.** Request bodies up to `max_request_bytes`, submissions per origin and
 //!   minute, enrolments per minute, `max_logs` origins, 64 connections at once,
 //!   timeouts on every read.
-//! - **Monitoring.** `GET /nuschel-kt/v1/checkpoints/<hex SHA-256 of the origin>` is the
-//!   newest checkpoint it cosigned for the origin; `GET /nuschel-kt/v1/vkey` its key.
+//! - **Monitoring.** `GET /nuschl-kt/v1/checkpoints/<hex SHA-256 of the origin>` is the
+//!   newest checkpoint it cosigned for the origin; `GET /nuschl-kt/v1/vkey` its key.
 
-use nuschel_kt::witness::auditor::{AddEpochs, AddError, LogState, add_epochs};
-use nuschel_kt::witness::note::{Cosigner, Note};
-use nuschel_kt::witness::{ORIGIN_SUFFIX, note};
+use nuschl_kt::witness::auditor::{AddEpochs, AddError, LogState, add_epochs};
+use nuschl_kt::witness::note::{Cosigner, Note};
+use nuschl_kt::witness::{ORIGIN_SUFFIX, note};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io;
@@ -40,9 +40,9 @@ use tokio::time::timeout;
 use zeroize::Zeroizing;
 
 /// The path servers submit to, below the witness's URL.
-pub const ADD_EPOCHS_PATH: &str = "/nuschel-kt/v1/add-epochs";
-const VKEY_PATH: &str = "/nuschel-kt/v1/vkey";
-const CHECKPOINTS_PATH: &str = "/nuschel-kt/v1/checkpoints/";
+pub const ADD_EPOCHS_PATH: &str = "/nuschl-kt/v1/add-epochs";
+const VKEY_PATH: &str = "/nuschl-kt/v1/vkey";
+const CHECKPOINTS_PATH: &str = "/nuschl-kt/v1/checkpoints/";
 const MAX_HEAD_BYTES: usize = 8 * 1024;
 const MAX_CONNECTIONS: usize = 64;
 const HEAD_TIMEOUT: Duration = Duration::from_secs(10);
@@ -55,7 +55,7 @@ const MAX_VERSION_FRAME: usize = 64 * 1024;
 #[derive(Clone, Debug)]
 pub struct Config {
     /// The cosigner name, as clients configure it (a schema-less URL is customary,
-    /// for example `witness.example.org/nuschel-kt`).
+    /// for example `witness.example.org/nuschl-kt`).
     pub name: String,
     /// The ML-DSA-44 seed: 32 bytes or 64 hex digits. Without it one is generated
     /// once in the state directory (`witness.key`).
@@ -289,7 +289,7 @@ impl Witness {
         };
         let origin = request.origin.clone();
         if !origin.ends_with(ORIGIN_SUFFIX) {
-            return Response::text(400, "the origin must end in /nuschel-kt/v1\n");
+            return Response::text(400, "the origin must end in /nuschl-kt/v1\n");
         }
         if self.limited(&origin) {
             return Response::text(429, "too many submissions for this origin\n");
@@ -393,7 +393,7 @@ impl Witness {
     }
 
     /// The enrolment check: the server at the origin's `host:port` must announce
-    /// this log in its Nuschel hello.
+    /// this log in its Nuschl hello.
     async fn enrol(&self, origin: &str, descriptor: &[u8]) -> Result<(), Response> {
         let refused = |status, text: String| {
             tracing::info!(%origin, reason = %text, "refused to enrol a log");
@@ -418,7 +418,7 @@ impl Witness {
         }
     }
 
-    /// Connects to `host:port` as a Nuschel client and returns the `kt_log` its hello
+    /// Connects to `host:port` as a Nuschl client and returns the `kt_log` its hello
     /// announces.
     async fn announced_log(&self, host: &str, port: u16) -> io::Result<Vec<u8>> {
         let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
@@ -433,20 +433,20 @@ impl Witness {
             .map_err(|_| io::Error::other("not a host name"))?;
         let connector = tokio_rustls::TlsConnector::from(self.tls.clone());
         let mut tls = connector.connect(name, stream).await?;
-        let mut header = [0u8; nuschel_protocol::HEADER_BYTES];
+        let mut header = [0u8; nuschl_protocol::HEADER_BYTES];
         tls.read_exact(&mut header).await?;
         let kind = u16::from_be_bytes([header[0], header[1]]);
         let length = u32::from_be_bytes([header[2], header[3], header[4], header[5]]) as usize;
-        if kind != nuschel_protocol::kind::VERSION || length > MAX_VERSION_FRAME {
+        if kind != nuschl_protocol::kind::VERSION || length > MAX_VERSION_FRAME {
             return Err(io::Error::other(
                 "the server did not start with its version",
             ));
         }
         let mut body = vec![0; length];
         tls.read_exact(&mut body).await?;
-        let hello = nuschel_protocol::nuschel::hello(&body)
-            .map_err(|_| io::Error::other("a malformed Nuschel hello"))?
-            .ok_or_else(|| io::Error::other("not a Nuschel server"))?;
+        let hello = nuschl_protocol::nuschl::hello(&body)
+            .map_err(|_| io::Error::other("a malformed Nuschl hello"))?
+            .ok_or_else(|| io::Error::other("not a Nuschl server"))?;
         if hello.kt_log.is_empty() {
             return Err(io::Error::other("the server offers no key transparency"));
         }
@@ -540,7 +540,7 @@ fn tls_config() -> io::Result<Arc<rustls::ClientConfig>> {
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(AnyCertificate(provider)))
         .with_no_client_auth();
-    config.alpn_protocols = vec![nuschel_protocol::nuschel::ALPN.to_vec()];
+    config.alpn_protocols = vec![nuschl_protocol::nuschl::ALPN.to_vec()];
     Ok(Arc::new(config))
 }
 
@@ -656,7 +656,7 @@ async fn handle(witness: &Witness, stream: &mut TcpStream) -> Response {
     };
     let path = request.path.split('?').next().unwrap_or_default();
     match (request.method.as_str(), path) {
-        ("GET", "/") => Response::text(200, format!("nuschel-witness\n{}\n", witness.vkey)),
+        ("GET", "/") => Response::text(200, format!("nuschl-witness\n{}\n", witness.vkey)),
         ("GET", VKEY_PATH) => Response::text(200, format!("{}\n", witness.vkey)),
         ("GET", path) if path.starts_with(CHECKPOINTS_PATH) => {
             let stem = &path[CHECKPOINTS_PATH.len()..];
@@ -744,7 +744,7 @@ pub async fn start(config: Config) -> io::Result<Running> {
         .count();
     let listener = TcpListener::bind(config.listen).await?;
     let address = listener.local_addr()?;
-    tracing::info!(%address, %vkey, logs, "nuschel-witness listening");
+    tracing::info!(%address, %vkey, logs, "nuschl-witness listening");
     let witness = Arc::new(Witness {
         enrolments: std::sync::Mutex::new(Bucket::full(config.enrolments_per_minute)),
         config,

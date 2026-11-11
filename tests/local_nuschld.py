@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nuschel's server (nuscheld) on 127.0.0.1 with the stock fixture's channels.
+"""Nuschl's server (nuschld) on 127.0.0.1 with the stock fixture's channels.
 
 The same channel tree and SuperUser password as local_murmur.py, so the client
 scripts run unchanged against both servers. Channels are created over the
@@ -16,18 +16,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from local_murmur import CHANNELS, eventually, free_port  # noqa: E402,F401
 
 
-class Nuscheld:
-    SUPERUSER_PASSWORD = "nuschel-super"
+class Nuschld:
+    SUPERUSER_PASSWORD = "nuschl-super"
 
     def __init__(self, binaries, root, port, extra=""):
         self.binaries, self.root, self.port = Path(binaries), Path(root), port
         # "compatible" for seeding (stock clients create the channels); a test may
         # switch to "e2ee" afterwards: the state carries over.
         self.security = "compatible"
-        self.config = self.root / "nuscheld.toml"
+        self.config = self.root / "nuschld.toml"
         self.password = self.root / "superuser-password"
         self.password.write_text(self.SUPERUSER_PASSWORD)
-        self.log = self.root / "nuscheld.log"
+        self.log = self.root / "nuschld.log"
         self.extra = extra
         self.process = None
         self.write_config(message_limit=1, message_burst=5)
@@ -37,7 +37,7 @@ class Nuscheld:
             f'security = "{self.security}"\nbind = ["127.0.0.1"]\nport = {self.port}\n'
             f'state_directory = "{self.root / "state"}"\n'
             f'superuser_password_file = "{self.password}"\n'
-            'welcome_text = "Welcome to the <b>Nuschel</b> test server."\n'
+            'welcome_text = "Welcome to the <b>Nuschl</b> test server."\n'
             'max_bandwidth = 72000\nmax_users = 50\n'
             f"message_limit = {message_limit}\nmessage_burst = {message_burst}\n"
             f"{self.extra}\n"
@@ -47,13 +47,13 @@ class Nuscheld:
 
     def start(self):
         self.process = subprocess.Popen(
-            [str(self.binaries / "nuscheld"), "--config", str(self.config)],
+            [str(self.binaries / "nuschld"), "--config", str(self.config)],
             stdout=subprocess.DEVNULL, stderr=self.log.open("a"), start_new_session=True)
-        eventually(self.listening, f"nuscheld did not start: {self.log.read_text()[-2000:]}")
+        eventually(self.listening, f"nuschld did not start: {self.log.read_text()[-2000:]}")
 
     def listening(self):
         if self.process.poll() is not None:
-            raise AssertionError(f"nuscheld exited: {self.log.read_text()[-2000:]}")
+            raise AssertionError(f"nuschld exited: {self.log.read_text()[-2000:]}")
         import socket
         try:
             socket.create_connection(("127.0.0.1", self.port), timeout=0.5).close()

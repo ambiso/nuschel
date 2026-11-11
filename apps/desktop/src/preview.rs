@@ -3,9 +3,9 @@
 //! own lists devices, meters the microphone, plays the processed voice back and
 //! runs the echo test. It never encodes or sends anything, so testing needs
 //! neither a connection nor unmuting.
-use nuschel_core::audio::{AudioDevice, AudioSettings, EchoSource};
-use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
-use nuschel_session::{config::ClientSettings, workers::Media};
+use nuschl_core::audio::{AudioDevice, AudioSettings, EchoSource};
+use nuschl_ipc::{LiveMediaEvent, LiveMediaRequest};
+use nuschl_session::{config::ClientSettings, workers::Media};
 use std::time::Duration;
 use tokio::{
     sync::{mpsc, watch},
@@ -76,7 +76,7 @@ pub struct PreviewView {
     pub output: Option<String>,
     pub echo: Option<EchoSource>,
     pub noise: Option<String>,
-    /// The output Nuschel's canceller records (`None`: its own playback only).
+    /// The output Nuschl's canceller records (`None`: its own playback only).
     pub reference: Option<String>,
     pub status: Option<String>,
     pub echo_test: EchoTestState,

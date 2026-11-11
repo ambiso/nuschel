@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Hostile text through the copy stock Mumble clients receive
-//! (`nuschel-legacy-html`, made by nuscheld for every Nuschel message and by the
+//! (`nuschl-legacy-html`, made by nuschld for every Nuschl message and by the
 //! client on stock servers), and that copy back through the content worker as
-//! another Nuschel client reads it. The copy may contain only escaped text,
+//! another Nuschl client reads it. The copy may contain only escaped text,
 //! `<br/>` and links with an allowed scheme whose text is their target; it
 //! must read back as exactly the input, and as the same text and links once
 //! made inert again.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_content::{ContentRenderer, MAX_LINKS, MAX_URL_BYTES};
-use nuschel_core::EMBED;
-use nuschel_legacy_html::{legacy_body, text_html};
+use nuschl_content::{ContentRenderer, MAX_LINKS, MAX_URL_BYTES};
+use nuschl_core::EMBED;
+use nuschl_legacy_html::{legacy_body, text_html};
 
 thread_local! {
     static RENDERER: ContentRenderer = ContentRenderer::default();
@@ -56,7 +56,7 @@ fn read(html: &str) -> (String, Vec<String>) {
         let (href, after) = after.split_once("\">").expect("a closed href");
         let (label, after) = after.split_once("</a>").expect("a closed link");
         let (href, label) = (unescape(href), unescape(label));
-        assert!(nuschel_core::allowed_link(&href), "{href:?}");
+        assert!(nuschl_core::allowed_link(&href), "{href:?}");
         assert!(!href.contains(|c: char| c.is_whitespace() || c.is_control()));
         // Its text is the target, apart from the scheme a www. address gets.
         let expected = if label
@@ -101,7 +101,7 @@ fuzz_target!(|data: &[u8]| {
     } else {
         assert_eq!(body, html);
     }
-    // Another Nuschel client reads the copy: the same text, and the same
+    // Another Nuschl client reads the copy: the same text, and the same
     // links (as far as the content worker keeps links).
     RENDERER.with(|renderer| {
         let Ok(stored) = renderer.legacy_plain_text(&html) else {

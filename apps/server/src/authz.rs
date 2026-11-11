@@ -29,8 +29,8 @@ use crate::{
     conversations::{Id, Kind},
     state::{Registered, State, User},
 };
-use nuschel_ipc::server::HistoryVisibility;
-use nuschel_protocol::{control as proto, kind, nuschel::v1::error::Code};
+use nuschl_ipc::server::HistoryVisibility;
+use nuschl_protocol::{control as proto, kind, nuschl::v1::error::Code};
 use proto::permission_denied::DenyType;
 use std::{cell::RefCell, collections::HashMap};
 
@@ -783,7 +783,7 @@ impl State {
     /// from Murmur, a `UserState` with `listening_channel_remove` (no actor);
     /// the user also gets a `PermissionDenied` for Listen in that channel
     /// (stock clients log "You were denied Listen privileges in …"), whose
-    /// reason Nuschel shows: listening stopped, the permission was removed.
+    /// reason Nuschl shows: listening stopped, the permission was removed.
     /// A registered user's remembered listener is forgotten too.
     pub fn revoke_listeners(&mut self) {
         if self.listeners_epoch == self.authz_epoch {

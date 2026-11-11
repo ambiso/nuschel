@@ -9,14 +9,14 @@ use gpui_kit::{
     base::input::{InputEvent, InputState, TextareaState},
     *,
 };
-use nuschel_client::{
+use nuschl_client::{
     Client, Conversation, SessionSecurity, Update,
     native::{Driver, Event, Native},
     platform::RenderKey,
     timeline::MAX_TIMELINE,
 };
-use nuschel_core::MAX_CONTENT_BYTES;
-use nuschel_session::{
+use nuschl_core::MAX_CONTENT_BYTES;
+use nuschl_session::{
     config::{
         ClientSettings, Loaded, ManagedSettings, MumbleUrl, Profile, ServerBookmark, ShortcutAction,
     },
@@ -96,12 +96,12 @@ pub fn local_time(milliseconds: i64) -> String {
         format!("{} {time}", when.strftime("%Y-%m-%d"))
     }
 }
-pub use nuschel_client::{
+pub use nuschl_client::{
     conversation::{ActivityLine, ConversationState as ChannelView},
     server::{CertificatePrompt, ServerState, Status},
     tree::{ChannelRow, TreeRow},
 };
-/// A server as the client knows it (`nuschel_client::server`).
+/// A server as the client knows it (`nuschl_client::server`).
 pub type ServerView = ServerState;
 /// What only drawing needs of a server, beside the client's state of it:
 /// images for the GPU, rendered descriptions and comments, which runs of
@@ -110,7 +110,7 @@ pub type ServerView = ServerState;
 #[derive(Default)]
 pub struct ServerUi {
     /// End-to-end state of direct conversations, by the peer's registration number.
-    pub e2ee: BTreeMap<u32, nuschel_ipc::crypto::ConversationView>,
+    pub e2ee: BTreeMap<u32, nuschl_ipc::crypto::ConversationView>,
     /// Rendered user comments keyed by session, with the raw HTML they came from.
     pub comments: BTreeMap<u32, (String, Document)>,
     /// Decoded avatars by texture hash.
@@ -248,7 +248,7 @@ pub struct Desktop {
     pub appearance: crate::appearance::Appearance,
     /// The local audio check, alive while Settings is open.
     pub preview: Option<crate::preview::PreviewView>,
-    /// Whether Nuschel starts at login, read from the system when Settings opens.
+    /// Whether Nuschl starts at login, read from the system when Settings opens.
     pub autostart: Option<bool>,
     pub update: crate::update::UpdateState,
     /// Desktop notifications, and whether the window has focus.
@@ -269,7 +269,7 @@ pub struct Desktop {
     /// The rail's talk rings and listening badges (voice.rs).
     pub voice_motion: crate::voice::Motion,
     /// "Speak on two servers?" is being asked.
-    pub second_server: Option<nuschel_client::SecondServer>,
+    pub second_server: Option<nuschl_client::SecondServer>,
     pub menu: Option<crate::menus::Menu>,
     /// Message text: its selection, the message a menu is for, copy feedback.
     pub text: crate::selection::TextState,
@@ -285,7 +285,7 @@ pub struct Desktop {
     /// (and Escape) only through a focused element.
     pub window_focus: FocusHandle,
     pub identity_status: Option<String>,
-    /// The Nuschel identity, as the crypto worker last reported it (Settings).
+    /// The Nuschl identity, as the crypto worker last reported it (Settings).
     pub own_identity: crate::identity::OwnIdentity,
     pub search: Option<crate::search::SearchView>,
     /// The message a search result opened, highlighted for a moment.
@@ -439,7 +439,7 @@ impl Desktop {
         let client = Client::new(
             Box::new(driver.clone()),
             bookmarks,
-            nuschel_client::native::preferences(&settings),
+            nuschl_client::native::preferences(&settings),
         );
         let (services, mut service_events) = Services::new(handle.clone(), driver.settings());
         // The desktop's own services report apart from the driver.
@@ -623,16 +623,16 @@ impl Desktop {
         }
     }
     /// A share link as text: on the server's web host, else the one in the
-    /// settings, else the project's; with none, the app's own `nuschel://` link.
+    /// settings, else the project's; with none, the app's own `nuschl://` link.
     pub fn share_url(
         &self,
-        link: &nuschel_core::share::ShareLink,
+        link: &nuschl_core::share::ShareLink,
         server_host: Option<&str>,
     ) -> String {
         let configured = Some(self.settings.share_web_host.trim()).filter(|host| !host.is_empty());
         match server_host
             .or(configured)
-            .or(nuschel_core::share::PROJECT_WEB_HOST)
+            .or(nuschl_core::share::PROJECT_WEB_HOST)
         {
             Some(host) => link.web_url(host),
             None => link.app_url(),
@@ -694,7 +694,7 @@ impl Desktop {
     /// conversation with an end-to-end group shows its own state; anything else the
     /// server's transport state. Chat encryption never turns the server badge green.
     pub fn conversation_lock(&self, index: usize) -> (SessionSecurity, String) {
-        use nuschel_ipc::crypto::Lock;
+        use nuschl_ipc::crypto::Lock;
         let server = &self.client.servers[index];
         if let Some((selected, channel)) = self.selected_indices()
             && selected == index
@@ -1160,7 +1160,7 @@ impl Desktop {
         });
         if let Some(link) = &link {
             bookmark.certificate_sha256 = link.certificate_sha256.clone();
-            if link.require_nuschel
+            if link.require_nuschl
                 && let Err(error) = self
                     .profile
                     .policy()
@@ -1374,7 +1374,7 @@ impl Desktop {
     }
     pub fn drag_sidebar(&mut self, x: f32) {
         if let Some((start_x, start_width, width)) = &mut self.sidebar_drag {
-            let range = nuschel_session::config::SIDEBAR_WIDTH;
+            let range = nuschl_session::config::SIDEBAR_WIDTH;
             *width = (*start_width + x - *start_x).clamp(*range.start(), *range.end());
         }
     }
@@ -1387,7 +1387,7 @@ impl Desktop {
         self.settings_open = true;
         self.autostart = Some(crate::autostart::enabled());
         self.driver
-            .identity(nuschel_ipc::crypto::CryptoRequest::Identity);
+            .identity(nuschl_ipc::crypto::CryptoRequest::Identity);
         if self.preview.is_none() {
             self.preview = Some(Default::default());
             self.services.start_preview();
@@ -1426,7 +1426,7 @@ impl Desktop {
         if !self.settings.server_icons {
             return;
         }
-        let now = nuschel_session::connection::now_ms();
+        let now = nuschl_session::connection::now_ms();
         for server in &self.client.servers {
             let bookmark = &server.bookmark;
             let wait = if bookmark.icon.is_some() { 30 } else { 7 } * DAY_MS;
@@ -1473,7 +1473,7 @@ impl Desktop {
             self.error = Some(format!("Could not save settings: {error}"));
         }
         self.driver.apply_settings(settings.clone());
-        self.client.preferences = nuschel_client::native::preferences(&settings);
+        self.client.preferences = nuschl_client::native::preferences(&settings);
         self.settings = settings;
         self.sync_global_shortcuts();
     }
@@ -1622,7 +1622,7 @@ impl Desktop {
             return self.send_attachments(window, cx);
         }
         let body = self.composer.read(cx).value().to_string();
-        if let Err(nuschel_client::SendError::TooLong) = self.client.send_text(body) {
+        if let Err(nuschl_client::SendError::TooLong) = self.client.send_text(body) {
             self.error = Some("Message exceeds 256 KiB.".into());
         }
         self.expire_typing(cx);
@@ -1853,7 +1853,7 @@ impl Desktop {
     fn prepared(
         &mut self,
         id: u64,
-        result: Result<nuschel_ipc::EncodedImage, String>,
+        result: Result<nuschl_ipc::EncodedImage, String>,
         cx: &mut Context<Self>,
     ) {
         // In a composer's tray, or in a sent message waiting for it.
@@ -1878,7 +1878,7 @@ impl Desktop {
             return;
         };
         let thumbnail = result.and_then(|encoded| match encoded.thumbnail {
-            nuschel_core::ContentBlock::Image {
+            nuschl_core::ContentBlock::Image {
                 width,
                 height,
                 rgba,
@@ -1954,7 +1954,7 @@ impl Desktop {
             tray.iter()
                 .any(|attachment| matches!(attachment, Attachment::Image { .. }))
         });
-        let text_length = nuschel_session::connection::legacy_body(&text, limits.0).len();
+        let text_length = nuschl_session::connection::legacy_body(&text, limits.0).len();
         let note = if server.status != Status::Connected {
             Some("Connect before sending.".to_owned())
         } else if images && !limits.0 {
@@ -2045,7 +2045,7 @@ impl Desktop {
                                     && channel.direct_peer.as_ref().map(|peer| peer.instance)
                                         != batch.context.1)
                             {
-                                return Err(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE);
+                                return Err(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE);
                             }
                             Ok(target)
                         })
@@ -2094,8 +2094,7 @@ impl Desktop {
                 })
             } else {
                 let (image_limit, message_limit) = batch.limits;
-                let caption =
-                    text.map(|text| nuschel_session::connection::legacy_body(&text, true));
+                let caption = text.map(|text| nuschl_session::connection::legacy_body(&text, true));
                 let html =
                     crate::attachments::messages(caption, images, image_limit, message_limit);
                 Some(Command::SendHtml {
@@ -2137,13 +2136,13 @@ impl Desktop {
             if mls {
                 self.run(
                     index,
-                    nuschel_session::connection::Command::Mls(
-                        nuschel_session::mls::MlsCommand::OpenDirect { user_id },
+                    nuschl_session::connection::Command::Mls(
+                        nuschl_session::mls::MlsCommand::OpenDirect { user_id },
                     ),
                 );
             }
         }
-        // On a Nuschel server, between registered accounts, the server's
+        // On a Nuschl server, between registered accounts, the server's
         // conversation opens once the server names it; otherwise the stock
         // path's opens now.
         if let Some(id) = self.client.open_direct(index, session) {
@@ -2281,12 +2280,12 @@ impl Desktop {
                     self.older_paused = false;
                     match page {
                         // A conversation opens at its newest message.
-                        nuschel_client::timeline::Page::Before(None) => {
+                        nuschl_client::timeline::Page::Before(None) => {
                             self.anchor.reset();
                             self.scroll.scroll_to_bottom();
                         }
                         // A search result's message, highlighted.
-                        nuschel_client::timeline::Page::Around(_) if used => {
+                        nuschl_client::timeline::Page::Around(_) if used => {
                             self.anchor.reset();
                             self.reveal_jumped(cx);
                         }
@@ -2416,7 +2415,7 @@ impl Desktop {
     }
     /// End-to-end conversations on a server, as the session reports them
     /// (docs/e2ee.md §7.4): their lock state, and what went wrong.
-    fn mls_event(&mut self, server: &str, generation: u64, event: nuschel_session::mls::MlsEvent) {
+    fn mls_event(&mut self, server: &str, generation: u64, event: nuschl_session::mls::MlsEvent) {
         let Some(index) = self
             .client
             .servers
@@ -2426,7 +2425,7 @@ impl Desktop {
             return;
         };
         match event {
-            nuschel_session::mls::MlsEvent::Conversation {
+            nuschl_session::mls::MlsEvent::Conversation {
                 view,
                 peer: Some(peer),
             } => {
@@ -2437,8 +2436,8 @@ impl Desktop {
                     ui.e2ee.insert(peer, view);
                 }
             }
-            nuschel_session::mls::MlsEvent::Failed(reason)
-            | nuschel_session::mls::MlsEvent::NotSent { reason, .. } => {
+            nuschl_session::mls::MlsEvent::Failed(reason)
+            | nuschl_session::mls::MlsEvent::NotSent { reason, .. } => {
                 self.client.servers[index].notice = Some(reason);
             }
             _ => {}
@@ -2450,7 +2449,7 @@ impl Desktop {
         &mut self,
         server: &str,
         generation: u64,
-        event: nuschel_session::identity::IdentityEvent,
+        event: nuschl_session::identity::IdentityEvent,
     ) {
         let Some(index) = self
             .client
@@ -2460,7 +2459,7 @@ impl Desktop {
         else {
             return;
         };
-        if let nuschel_session::identity::IdentityEvent::Own(view) = &event {
+        if let nuschl_session::identity::IdentityEvent::Own(view) = &event {
             self.own_identity.view = Some(view.clone());
         }
         let Some(ui) = self.ui.get_mut(server) else {
@@ -2494,8 +2493,8 @@ impl Desktop {
                     .iter_mut()
                     .find(|entry| entry.id == server)
                 {
-                    server.bookmark.icon_checked_ms = nuschel_session::connection::now_ms();
-                    if let Some(nuschel_core::ContentBlock::Image {
+                    server.bookmark.icon_checked_ms = nuschl_session::connection::now_ms();
+                    if let Some(nuschl_core::ContentBlock::Image {
                         width,
                         height,
                         rgba,
@@ -2505,7 +2504,7 @@ impl Desktop {
                         if let Some(ui) = self.ui.get_mut(&server.id) {
                             ui.icon = crate::document::render_image(width, height, &rgba);
                         }
-                        server.bookmark.icon = Some(nuschel_session::config::ServerIcon {
+                        server.bookmark.icon = Some(nuschl_session::config::ServerIcon {
                             width,
                             height,
                             rgba,
@@ -2517,7 +2516,7 @@ impl Desktop {
             ServiceEvent::Viewed { request, document } => {
                 let image = document.and_then(|document| {
                     document.blocks.into_iter().find_map(|block| match block {
-                        nuschel_core::ContentBlock::Image {
+                        nuschl_core::ContentBlock::Image {
                             width,
                             height,
                             rgba,
@@ -2657,11 +2656,11 @@ impl Desktop {
 #[cfg(test)]
 mod server_writes_tests {
     use super::ServerWrites;
-    use nuschel_session::config::{Profile, ServerBookmark};
+    use nuschl_session::config::{Profile, ServerBookmark};
 
     #[test]
     fn an_older_snapshot_never_overwrites_a_newer_one() {
-        let root = std::env::temp_dir().join(format!("nuschel-writes-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("nuschl-writes-{}", std::process::id()));
         let profile = Profile::open(Some(root.clone())).unwrap();
         let server = |name| ServerBookmark::new(name, "localhost", 64738, "andi").unwrap();
         let writes = ServerWrites::default();

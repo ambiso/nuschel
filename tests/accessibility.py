@@ -2,7 +2,7 @@
 """Screen-reader view of the desktop client over AT-SPI (Linux).
 
 Starts a private accessibility bus and registry inside the current D-Bus
-session (or a private GNOME Shell with --gnome-shell), connects Nuschel to a
+session (or a private GNOME Shell with --gnome-shell), connects Nuschl to a
 loopback stock Mumble server, then reads the accessibility tree exactly as
 Orca would and checks that:
 
@@ -221,7 +221,7 @@ class AccessibilityTest:
             (profile / "config/servers.json").write_text(json.dumps([dict(
                 id=str(uuid.uuid4()), name="Accessible server", host="127.0.0.1", port=port, username="Andi",
                 certificate_sha256=pin)]))
-            app = self.spawn([str(self.args.binaries / "nuschel"), "--profile-dir", str(profile),
+            app = self.spawn([str(self.args.binaries / "nuschl"), "--profile-dir", str(profile),
                               f"mumble://Andi@127.0.0.1:{port}/Lobby/Development"],
                              env, "desktop.log")
             desktop = peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "Andi"
@@ -230,11 +230,11 @@ class AccessibilityTest:
             def application():
                 assert app.poll() is None, (self.root / "desktop.log").read_text()[-3000:]
                 for node in registry.children():
-                    if node.name.lower() == "nuschel":
+                    if node.name.lower() == "nuschl":
                         return node
                 return None
             try:
-                nuschel = eventually(application, "Nuschel did not register with the accessibility registry",
+                nuschl = eventually(application, "Nuschl did not register with the accessibility registry",
                                      timeout=45)
             except AssertionError as error:
                 names = [node.name for node in registry.children()]
@@ -250,11 +250,11 @@ class AccessibilityTest:
                 # input focus, and without it nothing in the window is focused
                 # for AT-SPI (GrabFocus below would focus nothing a screen
                 # reader can see). Focus it as a window manager would.
-                subprocess.run(["xdotool", "search", "--sync", "--onlyvisible", "--name", "^Nuschel",
+                subprocess.run(["xdotool", "search", "--sync", "--onlyvisible", "--name", "^Nuschl",
                                 "windowfocus", "--sync"], env=env, check=True, timeout=30)
 
             def ready():
-                nodes = snapshot(nuschel)
+                nodes = snapshot(nuschl)
                 names = {name for _, _, _, name in nodes}
                 # The voice controls come once the desktop knows it joined, which
                 # can be after the server has told the peer.
@@ -273,16 +273,16 @@ class AccessibilityTest:
             peer.wait(lambda e: e["kind"] == "user" and e["user"]["session"] == desktop["session"]
                       and not e["user"]["self_muted"], timeout=15)
             eventually(lambda: any(role == "push button" and name == "Mute"
-                                   for _, _, role, name in snapshot(nuschel)),
+                                   for _, _, role, name in snapshot(nuschl)),
                        "the button did not change to Mute", timeout=10)
             eventually(lambda: "Talking on Accessible server #Development" in
-                       {name for _, _, _, name in snapshot(nuschel)}, "the voice card did not say Talking", timeout=10)
+                       {name for _, _, _, name in snapshot(nuschl)}, "the voice card did not say Talking", timeout=10)
             print("Unmuted through the AT-SPI Action interface; the server saw it and the button became Mute.",
                   flush=True)
-            self.check_shortcuts(nuschel)
+            self.check_shortcuts(nuschl)
             if self.shell:
-                self.check_attachments(nuschel)
-                self.check_word_deletion(nuschel, peer)
+                self.check_attachments(nuschl)
+                self.check_word_deletion(nuschl, peer)
                 # Ctrl+K: the switcher's field names the result count and the
                 # highlighted result; the results are options of a list box.
                 self.shell.chord("Control_L", "k")
@@ -290,7 +290,7 @@ class AccessibilityTest:
                 self.shell.type("dev")
 
                 def switcher():
-                    nodes = snapshot(nuschel)
+                    nodes = snapshot(nuschl)
                     fields = [name for _, _, role, name in nodes
                               if role in ("text", "entry") and name.startswith("Find a channel or person: ")]
                     return (nodes, fields[0]) if fields and "1 result" in fields[0] else None
@@ -303,28 +303,28 @@ class AccessibilityTest:
                 self.find(nodes, "dialog", "Quick switcher")
                 self.shell.key("Escape")
                 print(f"Switcher announced through its field: {field!r}; options: {options}.", flush=True)
-            self.check_math(nuschel, peer)
-            self.check_timeline(nuschel, peer)
+            self.check_math(nuschl, peer)
+            self.check_timeline(nuschl, peer)
         finally:
             if peer:
                 peer.close()
             murmur.stop()
 
-    def check_attachments(self, nuschel):
+    def check_attachments(self, nuschl):
         """Paste an image into the composer; remove it again through AT-SPI."""
         image = self.root / "pasted.png"
         image.write_bytes(PNG)
         self.shell.eval("const [, data] = imports.gi.GLib.file_get_contents(%s);"
                         " imports.gi.St.Clipboard.get_default().set_content(imports.gi.St.ClipboardType.CLIPBOARD,"
                         " 'image/png', new imports.gi.GLib.Bytes(data)); 'ok'" % json.dumps(str(image)))
-        nodes = snapshot(nuschel)
+        nodes = snapshot(nuschl)
         composer = next(node for _, node, role, name in nodes if role in ("text", "entry") and name == "Message")
         composer.call("Component", "GrabFocus")
         time.sleep(0.5)
         self.shell.chord("Control_L", "v")
 
         def attached():
-            nodes = snapshot(nuschel)
+            nodes = snapshot(nuschl)
             return nodes if any(role == "list item" and name == "Image Pasted image 1"
                                 for _, _, role, name in nodes) else None
         nodes = eventually(attached, "the pasted image is not in the composer's tray", timeout=30)
@@ -334,13 +334,13 @@ class AccessibilityTest:
         assert not unnamed, f"interactive elements without a name: {unnamed}"
         remove = self.find(nodes, "push button", "Remove Pasted image 1")
         assert remove.call("Action", "DoAction", "i", "0")[0] is not False
-        eventually(lambda: not any(name == "Remove Pasted image 1" for _, _, _, name in snapshot(nuschel)),
+        eventually(lambda: not any(name == "Remove Pasted image 1" for _, _, _, name in snapshot(nuschl)),
                    "the image stayed after Remove", timeout=10)
         print("A pasted image showed in the tray as a named item and was removed through AT-SPI.", flush=True)
 
-    def check_word_deletion(self, nuschel, peer):
+    def check_word_deletion(self, nuschl, peer):
         """Ctrl+W deletes the word before the cursor, Alt+D the word after it."""
-        composer = self.find(snapshot(nuschel), "entry", "Message")
+        composer = self.find(snapshot(nuschl), "entry", "Message")
         composer.call("Component", "GrabFocus")
         time.sleep(0.5)
         self.shell.type("alpha beta gamma delta")
@@ -357,19 +357,19 @@ class AccessibilityTest:
         assert event["body"].strip() == "beta gamma", event["body"]
         print("Ctrl+W and Alt+D deleted the word before and after the cursor.", flush=True)
 
-    def check_shortcuts(self, nuschel):
-        self.find(snapshot(nuschel), "push button", "Settings").call("Action", "DoAction", "i", "0")
+    def check_shortcuts(self, nuschl):
+        self.find(snapshot(nuschl), "push button", "Settings").call("Action", "DoAction", "i", "0")
         actions = ("Push to talk", "Toggle mute", "Toggle deafen", "Push to mute")
 
         def rows():
-            nodes = snapshot(nuschel)
+            nodes = snapshot(nuschl)
             names = {name for _, _, _, name in nodes}
             return nodes if all(f"Record {action} shortcut" in names for action in actions) else None
         nodes = eventually(rows, "the shortcut rows did not appear in Settings", timeout=15)
         self.write_tree(nodes, "settings-tree.txt")
         for action in actions:
             assert any(name == f"{action} shortcut" for _, _, _, name in nodes), f"no group for {action}"
-        # Settings → Privacy: whether others see that you type (Nuschel servers).
+        # Settings → Privacy: whether others see that you type (Nuschl servers).
         typing = [role for _, _, role, name in nodes if name == "Show when you are typing"]
         assert typing and typing[0] in INTERACTIVE | {"check box", "switch"}, \
             f"the typing setting is not a named control: {typing}"
@@ -379,7 +379,7 @@ class AccessibilityTest:
         self.find(nodes, "push button", "Record Toggle mute shortcut").call("Action", "DoAction", "i", "0")
 
         def recording():
-            nodes = snapshot(nuschel)
+            nodes = snapshot(nuschl)
             cancel = [node for _, node, role, name in nodes
                       if role == "push button" and name == "Cancel recording Toggle mute shortcut"]
             # The prompt is a label inside a status, which a screen reader announces.
@@ -390,31 +390,31 @@ class AccessibilityTest:
             return cancel[0] if cancel and announced else None
         cancel = eventually(recording, "recording a shortcut was not announced", timeout=10)
         cancel.call("Action", "DoAction", "i", "0")
-        eventually(lambda: any(name == "Record Toggle mute shortcut" for _, _, _, name in snapshot(nuschel)),
+        eventually(lambda: any(name == "Record Toggle mute shortcut" for _, _, _, name in snapshot(nuschl)),
                    "cancelling did not restore the Record button", timeout=10)
-        self.find(snapshot(nuschel), "push button", "Done").call("Action", "DoAction", "i", "0")
-        eventually(lambda: not any(name == "Done" for _, _, _, name in snapshot(nuschel)),
+        self.find(snapshot(nuschl), "push button", "Done").call("Action", "DoAction", "i", "0")
+        eventually(lambda: not any(name == "Done" for _, _, _, name in snapshot(nuschl)),
                    "Settings did not close", timeout=10)
         print("Settings: every shortcut row has a named Record button; recording is announced as a status.",
               flush=True)
 
-    def check_math(self, nuschel, peer):
+    def check_math(self, nuschl, peer):
         """Formulas are math nodes named by their LaTeX source, as typed."""
         peer.send(kind="text", channel=2, body="The area is $\\pi r^2$, so\n$$\\sum_{i=1}^n i$$")
 
         def formulas():
-            nodes = snapshot(nuschel)
+            nodes = snapshot(nuschl)
             found = {name for _, _, role, name in nodes if role == "math"}
             return (nodes, found) if {"$\\pi r^2$", "$$\\sum_{i=1}^n i$$"} <= found else None
         nodes, found = eventually(formulas, "the formulas are not math nodes named by their source", timeout=20)
         self.write_tree(nodes, "math-tree.txt")
         print(f"Formulas are math nodes named by their source: {sorted(found)}.", flush=True)
 
-    def check_timeline(self, nuschel, peer):
+    def check_timeline(self, nuschl, peer):
         """A long conversation: every loaded message is a list item a screen
         reader reads, the oldest screens above the viewport included, and
         moving to it scrolls it into view."""
-        timeline = self.find(snapshot(nuschel), "list", "Messages in #Development")
+        timeline = self.find(snapshot(nuschl), "list", "Messages in #Development")
         for n in range(1, HISTORY + 1):
             # Every fifth is two lines, so the rows differ in height.
             body = f"History message {n}" + ("\nwith a second line" * (n % 5 == 0))
@@ -429,14 +429,14 @@ class AccessibilityTest:
             if name != newest:
                 newest, deadline = name, time.monotonic() + 60
             if time.monotonic() > deadline:
-                names = [name for _, _, _, name in snapshot(nuschel)]
+                names = [name for _, _, _, name in snapshot(nuschl)]
                 arrived = {int(match[1]) for name in names
                            if (match := re.match(r"Ada Lovelace: History message (\d+)\b", name))}
                 notices = [name for name in names if "overloaded" in name]
                 raise AssertionError(f"the long conversation stopped arriving: {len(arrived)} of {HISTORY} "
                                      f"messages, the newest {newest!r}; notices: {notices}")
             time.sleep(0.5)
-        nodes = snapshot(nuschel)
+        nodes = snapshot(nuschl)
         self.write_tree(nodes, "timeline-tree.txt")
         seen = sorted({int(match[1]) for _, _, _, name in nodes
                        if (match := re.search(r"\bHistory message (\d+)\b", name))})
@@ -496,7 +496,7 @@ class AccessibilityTest:
 
             def link_status(number):
                 return any(role == "status bar" and name.startswith(f"Link {number} of 2: https://example.org/")
-                           for _, _, role, name in snapshot(nuschel))
+                           for _, _, role, name in snapshot(nuschl))
             self.shell.key("Tab")
             eventually(lambda: link_status(1), "Tab did not reach the first link", timeout=10)
             self.shell.key("Tab")
@@ -505,7 +505,7 @@ class AccessibilityTest:
             eventually(lambda: link_status(1), "Shift+Tab did not go back to the first link", timeout=10)
             assert newest.focused, "the message lost focus while Tab walked its links"
             self.shell.type("x")
-            composer = self.find(snapshot(nuschel), "entry", "Message")
+            composer = self.find(snapshot(nuschl), "entry", "Message")
             eventually(lambda: composer.focused, "typing in the timeline did not move to the composer", timeout=10)
             # Sent from there: the letter reached the composer.
             self.shell.key("Return")
@@ -545,9 +545,9 @@ class AccessibilityTest:
                              f"{sorted({(r, n) for _, _, r, n in nodes if r != 'label'})}")
 
     def check_tree(self, nodes):
-        assert any(role == "frame" and name == "Nuschel" for _, _, role, name in nodes), "no Nuschel frame"
+        assert any(role == "frame" and name == "Nuschl" for _, _, role, name in nodes), "no Nuschl frame"
         if self.args.gnome_shell:
-            # GNOME has no server-side decorations, so Nuschel draws (and must name) its own.
+            # GNOME has no server-side decorations, so Nuschl draws (and must name) its own.
             for button in ("Minimize", "Close"):
                 self.find(nodes, "push button", button)
             assert any(role == "push button" and name in ("Maximize", "Restore") for _, _, role, name in nodes)
@@ -592,7 +592,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path(tempfile.gettempdir()))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="nuschel-a11y-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-a11y-") as temporary:
         test = AccessibilityTest(args, Path(temporary))
         try:
             test.run()

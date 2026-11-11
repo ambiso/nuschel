@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Nuschel's System theme follows the desktop's light or dark preference live.
+"""Nuschl's System theme follows the desktop's light or dark preference live.
 
 Development aid, like screenshots.py: a private headless GNOME Shell and a
 fake XDG settings portal (org.freedesktop.portal.Settings, color-scheme only)
-on its private session bus switch from dark to light and back while Nuschel
+on its private session bus switch from dark to light and back while Nuschl
 runs; the window's background is checked after each switch. The portal needs
 dbus-next:
 
@@ -90,7 +90,7 @@ def main():
     from gnome_session import GnomeSession
     from local_murmur import eventually
 
-    output = args.output or Path(tempfile.mkdtemp(prefix="nuschel-system-theme-"))
+    output = args.output or Path(tempfile.mkdtemp(prefix="nuschl-system-theme-"))
     output.mkdir(parents=True, exist_ok=True)
     shell = GnomeSession(args.gnome_shell, 1100, 760, log=(output / "gnome-shell.log").open("w"))
     app = portal = None
@@ -101,17 +101,17 @@ def main():
                                   env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                   stderr=(output / "portal.log").open("w"))
         assert portal.stdout.readline().strip() == "ready", "the fake portal did not start"
-        profile = Path(tempfile.mkdtemp(prefix="nuschel-system-theme-profile-"))
+        profile = Path(tempfile.mkdtemp(prefix="nuschl-system-theme-profile-"))
         (profile / "config").mkdir()
         (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": "system"}}))
-        app = subprocess.Popen([str(args.binaries / "nuschel"), "--profile-dir", str(profile)], env=env,
+        app = subprocess.Popen([str(args.binaries / "nuschl"), "--profile-dir", str(profile)], env=env,
                                stdout=(output / "desktop.log").open("w"), stderr=subprocess.STDOUT)
-        eventually(lambda: shell.window("Nuschel"), "Nuschel window did not appear")
-        shell.place("Nuschel", 40, 40, 960, 640)
+        eventually(lambda: shell.window("Nuschl"), "Nuschl window did not appear")
+        shell.place("Nuschl", 40, 40, 960, 640)
         time.sleep(3)
 
         def background(name):
-            window = shell.window("Nuschel")
+            window = shell.window("Nuschl")
             path = shell.screenshot(output / f"{name}.png",
                                     crop=(window["x"], window["y"], window["width"], window["height"]))
             print(path, flush=True)

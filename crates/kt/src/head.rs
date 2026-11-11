@@ -9,7 +9,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 /// Domain separation for head signatures.
-const HEAD_CONTEXT: &[u8] = b"nuschel-kt/v1 signed head\0";
+const HEAD_CONTEXT: &[u8] = b"nuschl-kt/v1 signed head\0";
 /// Largest epoch a head may name (one epoch every 10 s lasts 89 million years). Keeps
 /// every version and epoch comparison far from integer overflow.
 pub const MAX_EPOCH: u64 = 1 << 48;
@@ -28,7 +28,7 @@ pub const HEAD_BYTES: usize = 2 + 32 + 8 + 32 + 8 + 2 + 64;
 ///   uint64 epoch;              // <= 2^48
 ///   opaque root[32];           // the backend's root hash at `epoch`
 ///   uint64 issued_at_ms;       // Unix time of signing
-///   opaque signature<0..64>;   // u16 length; over "nuschel-kt/v1 signed head\0" || all fields above
+///   opaque signature<0..64>;   // u16 length; over "nuschl-kt/v1 signed head\0" || all fields above
 /// } SignedHead;                // 148 bytes with Ed25519
 /// ```
 ///

@@ -27,7 +27,7 @@ pub const VERSION: u8 = 1;
 /// A chat body (UTF-8, as typed) is at most 64 KiB; other kinds get some room.
 pub const MAX_BODY: usize = 64 * 1024 + 1024;
 const FIXED: usize = 1 + 1 + 16 + 8 + 32 + 32 + 16 + 8 + 1 + 4;
-const HASH_CONTEXT: &[u8] = b"nuschel/envelope/v1";
+const HASH_CONTEXT: &[u8] = b"nuschl/envelope/v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
-// A GUI program on Windows: without this, starting Nuschel from Explorer, the
+// A GUI program on Windows: without this, starting Nuschl from Explorer, the
 // Start menu or the Run key (autostart) opens an empty console window as well.
-// Command-line use goes through nuschel-cli.
+// Command-line use goes through nuschl-cli.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 mod appearance;
 mod assets;
@@ -52,15 +52,15 @@ use gpui_kit::{
     AppContext, Bounds, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions, point, px,
     size,
 };
-use nuschel_session::config::Profile;
+use nuschl_session::config::Profile;
 
 #[derive(Parser)]
-#[command(version, about = "Nuschel GPUI desktop foundation")]
+#[command(version, about = "Nuschl GPUI desktop foundation")]
 struct Arguments {
     #[arg(long, global = true)]
     profile_dir: Option<PathBuf>,
     /// Connect on startup: `mumble://[user@]host[:port][/channel/path]`, or a
-    /// share link (`nuschel://join/<token>#…`, `https://<web host>/join/…`).
+    /// share link (`nuschl://join/<token>#…`, `https://<web host>/join/…`).
     #[arg(value_name = "URL")]
     url: Option<String>,
     /// Started at login: open minimised.
@@ -107,7 +107,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "nuschel=info".into()),
+                .unwrap_or_else(|_| "nuschl=info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -121,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         arguments,
     }) = arguments.command
     {
-        let mut command = nuschel_ipc::host::content_sandbox_command(&executable, &arguments)?;
+        let mut command = nuschl_ipc::host::content_sandbox_command(&executable, &arguments)?;
         let status = runtime.block_on(async { command.status().await })?;
         return if status.success() {
             Ok(())
@@ -131,29 +131,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     #[cfg(target_os = "linux")]
     if let Some(Action::MediaSandbox) = arguments.command {
-        let worker = nuschel_session::workers::sibling("nuschel-media-worker")?;
-        let mut command = nuschel_ipc::host::media_sandbox_command(&worker)?;
+        let worker = nuschl_session::workers::sibling("nuschl-media-worker")?;
+        let mut command = nuschl_ipc::host::media_sandbox_command(&worker)?;
         let status = runtime.block_on(async { command.status().await })?;
         std::process::exit(status.code().unwrap_or(1));
     }
 
     #[cfg(target_os = "linux")]
     if let Some(Action::TransferSandbox { file }) = &arguments.command {
-        let worker = nuschel_session::workers::sibling("nuschel-transfer-worker")?;
-        let mut command = nuschel_ipc::host::transfer_sandbox_command(&worker, file.as_deref())?;
+        let worker = nuschl_session::workers::sibling("nuschl-transfer-worker")?;
+        let mut command = nuschl_ipc::host::transfer_sandbox_command(&worker, file.as_deref())?;
         let status = runtime.block_on(async { command.status().await })?;
         std::process::exit(status.code().unwrap_or(1));
     }
 
     if let Some(Action::Render { text }) = arguments.command {
         let worker =
-            nuschel_client::native::content_worker().ok_or("cannot locate the content worker")?;
-        let document = runtime.block_on(nuschel_ipc::host::render_content(worker, &text))?;
+            nuschl_client::native::content_worker().ok_or("cannot locate the content worker")?;
+        let document = runtime.block_on(nuschl_ipc::host::render_content(worker, &text))?;
         println!("{}", serde_json::to_string(&document)?);
         return Ok(());
     }
 
+    let default_profile = arguments.profile_dir.is_none();
     let profile = Profile::open(arguments.profile_dir)?;
+    if default_profile && let Err(error) = autostart::migrate_legacy() {
+        tracing::warn!(%error, "could not migrate the old login entry");
+    }
     for moved in profile.moved() {
         tracing::info!("{moved}");
     }
@@ -165,7 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let startup = arguments
         .url
         .as_deref()
-        .map(nuschel_session::config::MumbleUrl::parse)
+        .map(nuschl_session::config::MumbleUrl::parse)
         .transpose()?;
     let runtime_handle = runtime.handle().clone();
     // GPUI owns the event loop; preserve startup errors until it returns so failed
@@ -193,11 +197,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cx,
                 ))),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Nuschel".into()),
+                    title: Some("Nuschl".into()),
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(14.), px(12.))),
                 }),
-                // GNOME and several other compositors do not draw decorations; Nuschel
+                // GNOME and several other compositors do not draw decorations; Nuschl
                 // draws a consistent title bar with window controls on Linux.
                 window_decorations: Some(if cfg!(target_os = "linux") {
                     WindowDecorations::Client
@@ -207,11 +211,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 window_min_size: Some(size(px(860.), px(520.))),
                 // GPUI draws inactive windows at 30 fps at most, and GNOME takes the
                 // keyboard focus for the length of an interactive resize: every resize
-                // would run at half the display's rate. Nuschel draws only when
+                // would run at half the display's rate. Nuschl draws only when
                 // something changed, so an inactive window costs nothing at rest.
                 inactive_frame_interval: None,
                 // The desktop entry's name: shells use it to find the icon.
-                app_id: Some("org.nuschel.Nuschel".into()),
+                app_id: Some("org.nuschl.Nuschl".into()),
                 // Only X11 takes the icon from the window. Windows loads it
                 // from the executable (build.rs), macOS from the bundle.
                 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -221,7 +225,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let minimised = arguments.autostart;
             let offers = arguments.offers;
             if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
-                window.set_window_title("Nuschel");
+                window.set_window_title("Nuschl");
                 if minimised {
                     window.minimize_window();
                 }

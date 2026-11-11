@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The server-side interface. `nuscheld` uses only this trait, so the backend can be
+//! The server-side interface. `nuschld` uses only this trait, so the backend can be
 //! replaced (for example by an IETF KEYTRANS log) without touching the server.
 
 use crate::error::DirectoryError;

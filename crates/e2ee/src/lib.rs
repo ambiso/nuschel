@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! MLS for Nuschel (docs/e2ee.md §6): OpenMLS 0.9.2 with the libcrux provider,
-//! behind Nuschel's own types. This is the only crate that uses the OpenMLS API;
-//! the crypto worker uses [`client`], `nuscheld` uses [`ds`].
+//! MLS for Nuschl (docs/e2ee.md §6): OpenMLS 0.9.2 with the libcrux provider,
+//!
+//! The 2026-11-11 Nuschel → Nuschl rename changes all application crypto
+//! domain labels to `nuschl`. Vectors are regenerated under this namespace;
+//! old experimental identities, proofs, MLS state and encrypted objects are
+//! intentionally incompatible. The client archives old crypto stores.
+//! behind Nuschl's own types. This is the only crate that uses the OpenMLS API;
+//! the crypto worker uses [`client`], `nuschld` uses [`ds`].
 //!
 //! - [`SUITE`]: the one ciphersuite constant. **Provisional**: OpenMLS's code point
 //!   0x004F, not the draft's 0x0010 (see its documentation).
@@ -47,7 +52,7 @@ use openmls::prelude::Ciphersuite;
 /// assigns it 0x0010 with HPKE KEM 0x647a, and OpenMLS `main` already changes the
 /// X-Wing key derivation. Groups and key packages made with this constant will
 /// not be readable after the bump to the release that carries the draft's code
-/// points (accepted while Nuschel is in early development, TODO.md); the bump
+/// points (accepted while Nuschl is in early development, TODO.md); the bump
 /// changes only this constant (and [`SUITE_ID`]).
 pub const SUITE: Ciphersuite = Ciphersuite::MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519;
 
@@ -57,9 +62,9 @@ pub const SUITE_ID: u16 = 0x004F;
 /// An X-Wing public key (ML-KEM-768 encapsulation key and X25519 point).
 pub const SUITE_KEM_PUBLIC_KEY_LEN: usize = 1216;
 
-/// The MLS credential type carrying a nuschel-identity `DeviceCredential`
+/// The MLS credential type carrying a nuschl-identity `DeviceCredential`
 /// (private use, docs/e2ee.md §3.3).
-pub const CREDENTIAL_TYPE: u16 = nuschel_identity::MLS_CREDENTIAL_TYPE;
+pub const CREDENTIAL_TYPE: u16 = nuschl_identity::MLS_CREDENTIAL_TYPE;
 
 /// Devices not seen for this long are removed from groups, and commits are kept at
 /// least this long (the catch-up window, docs/e2ee.md §6.3; the user's answer to

@@ -11,7 +11,7 @@ pub mod windows_sandbox;
 
 use std::io::{self, Read, Write};
 
-use nuschel_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
+use nuschl_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -124,13 +124,13 @@ pub enum StorageRequest {
         servers: Vec<String>,
         channel: Option<String>,
         query: String,
-        after: Option<nuschel_core::SearchCursor>,
+        after: Option<nuschl_core::SearchCursor>,
         limit: u16,
     },
-    /// Messages of a Nuschel server's conversations by seq, stored once
+    /// Messages of a Nuschl server's conversations by seq, stored once
     /// (see `History::store_server`); answered with `Stored`.
     StoreServer {
-        records: Vec<nuschel_core::ServerRecord>,
+        records: Vec<nuschl_core::ServerRecord>,
     },
     /// Our own pending message (row `id`) was acknowledged as `seq`.
     SetSeq {
@@ -165,7 +165,7 @@ pub enum StorageResponse {
     Appended(i64),
     Messages(Vec<ChatMessage>),
     HistoryPage(HistoryPage),
-    SearchResults(nuschel_core::SearchPage),
+    SearchResults(nuschl_core::SearchPage),
     /// Row IDs of `StoreServer`'s records, in order (0: not stored).
     Stored(Vec<i64>),
     /// Whether an edit or deletion found its message (`SetSeq`: true).
@@ -406,7 +406,7 @@ pub enum LiveMediaRequest {
         /// Measured server-to-client loss, used to tune Opus in-band FEC.
         #[serde(default)]
         packet_loss_percent: u8,
-        settings: nuschel_core::audio::AudioSettings,
+        settings: nuschl_core::audio::AudioSettings,
         /// Use only this audio server ("pipewire", "pulseaudio", "alsa"): the one
         /// that worked before a failure. While a sound server restarts, falling
         /// back to raw ALSA could take the hardware device from under it.
@@ -450,7 +450,7 @@ pub enum LiveMediaRequest {
     /// Mix a sound effect into the playback output at `volume` (0 to 1). A
     /// worker without open devices drops it after a short wait.
     PlaySound {
-        sound: nuschel_core::audio::Sound,
+        sound: nuschl_core::audio::Sound,
         volume: f32,
     },
     Shutdown,
@@ -480,17 +480,17 @@ pub enum LiveMediaEvent {
     },
     /// Device inventory and the active route, sent whenever devices are opened.
     Devices {
-        inputs: Vec<nuschel_core::audio::AudioDevice>,
-        outputs: Vec<nuschel_core::audio::AudioDevice>,
+        inputs: Vec<nuschl_core::audio::AudioDevice>,
+        outputs: Vec<nuschl_core::audio::AudioDevice>,
         input: Option<String>,
         output: Option<String>,
-        echo: nuschel_core::audio::EchoSource,
+        echo: nuschl_core::audio::EchoSource,
         /// A noise suppressor found upstream of the microphone (e.g. an RNNoise
-        /// filter-chain); Nuschel's own suppressor stays off while it is there.
+        /// filter-chain); Nuschl's own suppressor stays off while it is there.
         #[serde(default)]
         noise: Option<String>,
-        /// What Nuschel's echo canceller uses as its reference: the output it
-        /// records (all applications), or `None` for Nuschel's own playback only.
+        /// What Nuschl's echo canceller uses as its reference: the output it
+        /// records (all applications), or `None` for Nuschl's own playback only.
         #[serde(default)]
         reference: Option<String>,
     },
@@ -502,7 +502,7 @@ pub enum LiveMediaEvent {
     },
     /// The adaptive controller's view of the live graph, sent when it changes.
     Health {
-        /// The microphone reaches full scale before Nuschel receives it.
+        /// The microphone reaches full scale before Nuschl receives it.
         clipping: bool,
         /// Persistent residual echo: the transmit gate demands clearer speech
         /// while only the far end talks.
@@ -511,16 +511,16 @@ pub enum LiveMediaEvent {
         double_talk: f32,
         /// Output device callbacks that ran dry in the last two seconds.
         underruns: u32,
-        /// Nuschel's own playback buffer.
+        /// Nuschl's own playback buffer.
         playback_ms: u32,
     },
     /// Result of [`LiveMediaRequest::EchoTest`].
     EchoTest {
-        /// Echo reaching Nuschel relative to the played signal, in dB; `None`
+        /// Echo reaching Nuschl relative to the played signal, in dB; `None`
         /// when nothing rose above the room's noise (headphones, or a system
         /// canceller already removed it).
         echo_db: Option<f32>,
-        /// How much Nuschel's processing reduced that echo, in dB.
+        /// How much Nuschl's processing reduced that echo, in dB.
         reduction_db: Option<f32>,
         /// Share of the test during which the voice gate would have transmitted.
         transmitted: f32,
@@ -529,7 +529,7 @@ pub enum LiveMediaEvent {
 
 /// Cost of JSON framing for live voice, which decides whether a binary audio
 /// IPC is worth its extra parsing surface. Run with
-/// `cargo test --release -p nuschel-ipc -- --ignored --nocapture voice_ipc_cost`.
+/// `cargo test --release -p nuschl-ipc -- --ignored --nocapture voice_ipc_cost`.
 #[cfg(test)]
 mod voice_ipc_cost {
     use super::*;

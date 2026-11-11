@@ -9,7 +9,7 @@ use crate::{
     document::{self, clean},
     view,
 };
-use nuschel_client::{
+use nuschl_client::{
     Conversation,
     conversation::Entry,
     server::Status,
@@ -240,7 +240,7 @@ impl Transcript {
 /// Run the plain-line mode until /quit or the end of the input.
 pub async fn run(
     mut app: App,
-    mut events: tokio::sync::mpsc::Receiver<nuschel_client::native::Event>,
+    mut events: tokio::sync::mpsc::Receiver<nuschl_client::native::Event>,
 ) -> std::io::Result<()> {
     use std::io::Write;
     let (lines, mut typed) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -266,7 +266,7 @@ pub async fn run(
     let mut outbox = VecDeque::<String>::new();
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
     let mut input_open = true;
-    println!("Nuschel in plain lines. Type a message, or a command: /help lists them.");
+    println!("Nuschl in plain lines. Type a message, or a command: /help lists them.");
     loop {
         // Messages go one at a time, in the order typed.
         if !app.client.sending()

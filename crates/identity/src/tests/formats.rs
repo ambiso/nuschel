@@ -267,7 +267,7 @@ fn hybrid_public_key_flips() {
 }
 
 /// Every byte of every signed format (release mode:
-/// `cargo test --release -p nuschel-identity -- --ignored`).
+/// `cargo test --release -p nuschl-identity -- --ignored`).
 #[test]
 #[ignore]
 fn exhaustive_flips() {

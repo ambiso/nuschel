@@ -1,6 +1,6 @@
-# Nuschel architecture
+# Nuschl architecture
 
-Nuschel separates a portable application model from desktop rendering, platform
+Nuschl separates a portable application model from desktop rendering, platform
 services, and processing of untrusted input. GPUI is a desktop choice, not the
 application framework for every platform. Small typed interfaces keep renderer and
 platform decisions reversible without duplicating the session model.
@@ -9,20 +9,20 @@ platform decisions reversible without duplicating the session model.
 
 | Package | Responsibility | Dependencies it must not acquire |
 | --- | --- | --- |
-| `nuschel-core` | Domain values, session values, saved servers, typed content, non-destructive message previews | UI, network runtime, database, native FFI |
-| `nuschel-client` | The client SDK (docs/clients.md): timelines, conversations, servers and their rules, the `Client` with its platform trait; with `native`, the driver over sessions and workers | GPUI, SQLite, codecs, platform device handles; without `native`: tokio, I/O, a clock |
-| `nuschel-protocol` | Mumble protobuf schemas and bounded control framing | UI, audio decoding, sockets |
-| `nuschel-rtc` | str0m WebRTC state machine, bounded SDP and encoded audio/video | UI, sockets, codecs, device handles, database |
-| `nuschel-session` | Native TLS/control sessions, identities, bookmarks and worker supervision | GPUI, SQLite implementation, content parser, codecs |
-| `nuschel-cli` | Diagnostic frontend using the real session implementation | GPUI, audio codecs |
-| `nuschel-ipc` | Versioned worker messages, framing, and native supervision | Content parser, SQLite, codecs |
-| `nuschel-content` | Literal text, fenced code parsing, syntax highlighting | Network access, database, native regex engines |
-| `nuschel-storage` | SQLx/Tokio history operations for SQLite and PostgreSQL | UI, session credentials, arbitrary SQL from IPC |
-| `nuschel` | GPUI desktop shell and native application supervision | Direct parser, database, or codec implementation |
-| `nuscheld` | Server session/routing authority and native transports | GPUI, content parser, audio decoding |
-| `nuschel-content-worker` | Parse and highlight untrusted content | Credentials, microphone, user files, network |
-| `nuschel-media-worker` | Audio device adapters, DSP, Opus | Server credentials, history database, arbitrary files, network |
-| `nuschel-storage-worker` | Own the explicitly selected history database | Server credentials, microphone, network |
+| `nuschl-core` | Domain values, session values, saved servers, typed content, non-destructive message previews | UI, network runtime, database, native FFI |
+| `nuschl-client` | The client SDK (docs/clients.md): timelines, conversations, servers and their rules, the `Client` with its platform trait; with `native`, the driver over sessions and workers | GPUI, SQLite, codecs, platform device handles; without `native`: tokio, I/O, a clock |
+| `nuschl-protocol` | Mumble protobuf schemas and bounded control framing | UI, audio decoding, sockets |
+| `nuschl-rtc` | str0m WebRTC state machine, bounded SDP and encoded audio/video | UI, sockets, codecs, device handles, database |
+| `nuschl-session` | Native TLS/control sessions, identities, bookmarks and worker supervision | GPUI, SQLite implementation, content parser, codecs |
+| `nuschl-cli` | Diagnostic frontend using the real session implementation | GPUI, audio codecs |
+| `nuschl-ipc` | Versioned worker messages, framing, and native supervision | Content parser, SQLite, codecs |
+| `nuschl-content` | Literal text, fenced code parsing, syntax highlighting | Network access, database, native regex engines |
+| `nuschl-storage` | SQLx/Tokio history operations for SQLite and PostgreSQL | UI, session credentials, arbitrary SQL from IPC |
+| `nuschl` | GPUI desktop shell and native application supervision | Direct parser, database, or codec implementation |
+| `nuschld` | Server session/routing authority and native transports | GPUI, content parser, audio decoding |
+| `nuschl-content-worker` | Parse and highlight untrusted content | Credentials, microphone, user files, network |
+| `nuschl-media-worker` | Audio device adapters, DSP, Opus | Server credentials, history database, arbitrary files, network |
+| `nuschl-storage-worker` | Own the explicitly selected history database | Server credentials, microphone, network |
 
 Worker dependencies are restricted with cargo-deny's wrapper rules. The shell and
 server exchange typed commands and results with workers rather than linking the
@@ -40,7 +40,7 @@ flowchart LR
     UI[GPUI shell] --> Client[Client SDK]
     Client --> Driver[Native driver]
     Driver --> Session[Native session adapter]
-    Session --> Server[Mumble or Nuschel server]
+    Session --> Server[Mumble or Nuschl server]
     Driver --> Content[Content worker]
     Driver --> Storage[Storage worker]
     Driver --> Media[Media worker]
@@ -119,7 +119,7 @@ For AEC, noise suppression, and gain control separately, evidence is active,
 inactive, or unknown. Missing metadata is not proof that processing is absent.
 
 Reuse confirmed upstream effects. An upstream AEC also needs a reference that covers
-Nuschel's actual speaker output: move Nuschel's own playback connection to the matching
+Nuschl's actual speaker output: move Nuschl's own playback connection to the matching
 reference when possible. Do not reconfigure an unrelated processor, change global
 defaults, move another application's stream, or change hardware gain to make a local
 optimization. If the route is opaque, retain the uncertainty and expose a device-level
@@ -133,13 +133,13 @@ safety or correct Opus output. Codec and
 DSP SIMD remains confined to the media worker. Native PipeWire or platform processing
 can be reused when it is already working well on the active route.
 
-When Nuschel's own canceller runs, its reference is a recording of the output device,
-not Nuschel's playback buffer (`reference.rs`): PipeWire captures the sink, PulseAudio
+When Nuschl's own canceller runs, its reference is a recording of the output device,
+not Nuschl's playback buffer (`reference.rs`): PipeWire captures the sink, PulseAudio
 records its monitor (on a connection of its own; see TODO.md), WASAPI and Core Audio
 (process tap, macOS 14.2) record in loopback. Every application's sound is removed
 from the microphone, and the reference is exactly what played, on the device's clock.
 Without such a recording (raw ALSA) the output callback records what it hands to the
-device. The output is recorded only while the microphone is open and Nuschel's
+device. The output is recorded only while the microphone is open and Nuschl's
 canceller is in use, inside the media worker, and is never sent anywhere. Each device
 callback stamps its samples on one clock (the worker's epoch, corrected by cpal's
 reported latency); the worker feeds the canceller every reference frame that sounded up
@@ -148,30 +148,30 @@ to 25 ms after the microphone frame it is processing, holding the microphone up 
 reference. Up to two reference channels are kept; AEC3 runs mono until they differ
 (stereo music, games) and then models each speaker's path separately.
 
-On Linux, Nuschel recognises PipeWire and PulseAudio echo-cancel nodes, reuses them,
+On Linux, Nuschl recognises PipeWire and PulseAudio echo-cancel nodes, reuses them,
 and routes only its own playback to the paired reference sink. On Windows, the planned
 source is `IAudioEffectsManager` (active stream effects and change notifications) and
 `IAcousticEchoCancellationControl`. On macOS it is the voice-processing I/O unit, whose
-gain control and other-audio ducking must be evaluated against Nuschel's ownership rule.
+gain control and other-audio ducking must be evaluated against Nuschl's ownership rule.
 Both need COM or Objective-C calls through unsafe bindings and validation on those
 systems, so they are not implemented. On Windows and macOS, Automatic mode cannot see a
-system canceller and therefore runs Nuschel's own; the per-microphone override lets
+system canceller and therefore runs Nuschl's own; the per-microphone override lets
 users turn it off where the system (or a headset) already cancels echo.
 
 While audio is active, observe residual echo, clipping, noise, underruns, latency, and
 near-end speech preservation. The media worker's adaptive controller (`adaptive.rs`)
-does this in two-second windows with hysteresis. Device underruns raise Nuschel's
+does this in two-second windows with hysteresis. Device underruns raise Nuschl's
 playback buffer (40 to 120 ms) and it relaxes after a clean minute. Persistent residual
 echo during far-end speech makes the voice gate demand clearer speech while only the
 far end talks. A clipping microphone is reported to the user, since its level is not
-Nuschel's to change. Use far-end-only and double-talk conditions correctly;
+Nuschl's to change. Use far-end-only and double-talk conditions correctly;
 silencing the microphone does not count as better cancellation. Apply hysteresis and
 allow AEC to converge. Do not claim ERLE when the required unprocessed reference is
 unavailable. Monitoring is local and does not save microphone audio by default.
 
 Device changes and audio-server restarts invalidate device handles, link IDs, reference
 timing, and DSP state. Increment the route generation; stop old callbacks; discard old
-queued PCM; re-enumerate; recreate Nuschel-owned resources; re-evaluate effects; resume.
+queued PCM; re-enumerate; recreate Nuschl-owned resources; re-evaluate effects; resume.
 Keep network/chat state alive. One media worker serves every server (clients.md,
 "Voice on several servers"); opening or closing the microphone replaces it, so blocked
 native stream destructors cannot retain microphone access. Automatic recovery must not repeatedly undo an explicit
@@ -186,9 +186,9 @@ mute/deafen, UDP reachability, nonce resync, and TCP tunneling. Mumble's histori
 packet format must not be substituted with a generic modern OCB implementation.
 Handle both legacy UDP encoding and the protobuf format introduced with Mumble 1.5.
 
-Nuschel is trialing str0m 0.25 for its modern WebRTC media transport. C++ and Go
+Nuschl is trialing str0m 0.25 for its modern WebRTC media transport. C++ and Go
 WebRTC implementations remain excluded, including implementations hidden behind
-Rust bindings or isolated workers. `nuschel-rtc` owns the socket-independent state
+Rust bindings or isolated workers. `nuschl-rtc` owns the socket-independent state
 machine; callers route datagrams and honor its timer deadlines. Capture, playback,
 DSP and codecs remain in the media worker. The trial does not replace the Mumble
 session transport or establish browser interoperability and sustained-call quality.
@@ -219,7 +219,7 @@ subscriptions require a capability-negotiated extension (designed in
 `docs/extension.md`: ALPN plus a capability list in `Version`, per-conversation
 sequence numbers, idempotent sends, subscriptions, ACL-checked history pages). Stock clients continue to
 receive ordinary live TextMessage messages; stock servers provide live chat plus local
-history in Nuschel. Authentication and channel ACLs must govern history as well as live
+history in Nuschl. Authentication and channel ACLs must govern history as well as live
 messages. Persistently address a conversation without relying on transient session IDs.
 
 Keep history writes and pagination off the voice-routing critical path. Apply rate
@@ -244,7 +244,7 @@ History is scoped to the endpoint and observed server certificate; cached channe
 allow offline browsing. Direct messages use peer certificate hashes when available,
 otherwise a connection-specific identity avoids merging reused session IDs.
 
-For a Nuschel server, show all retained history the authenticated member is authorized
+For a Nuschl server, show all retained history the authenticated member is authorized
 to read, including messages from before their current connection. Fetch older pages
 as the user scrolls; complete access does not mean an unbounded response or allocating
 the whole archive. Stock servers fall back to local observations with explicit gaps.
@@ -279,7 +279,7 @@ do not confuse transport encryption with E2EE. The current client displays only 
 
 Identities are separate by protocol. The Mumble identity is an RSA-2048 X.509
 TLS client certificate used only for Mumble logins; stock Mumble imports only
-RSA keys, so this keeps it portable as PKCS#12. Nuschel-native/MLS identities are
+RSA keys, so this keeps it portable as PKCS#12. Nuschl-native/MLS identities are
 independent device keys and credentials, never derived from the Mumble
 certificate; an optional signed binding may link both for one person, without
 either depending on the other. Mumble's constraints do not shape MLS.

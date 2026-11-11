@@ -4,7 +4,7 @@
 //! The worker owns a [`Client`]: OpenMLS's records in memory, persisted by the
 //! worker as a whole ([`Client::snapshot`]) in its sealed store. The device's leaf
 //! signature key never enters OpenMLS storage; operations that sign take the
-//! device's keys ([`nuschel_identity::DeviceKeys`]) and sign through them.
+//! device's keys ([`nuschl_identity::DeviceKeys`]) and sign through them.
 //!
 //! Nothing that adds members is merged without the caller seeing every member
 //! first: [`Client::stage_welcome`] and [`Client::process`] return the members of
@@ -20,14 +20,14 @@ use crate::provider::{
     wire_policy,
 };
 use crate::{CREDENTIAL_TYPE, ConversationBinding, Error, SUITE, guard, mls};
-use nuschel_identity::{DeviceCredential, DeviceKeys};
+use nuschl_identity::{DeviceCredential, DeviceKeys};
 use openmls::prelude::*;
 use openmls_traits::OpenMlsProvider;
 use openmls_traits::signatures::{Signer, SignerError};
 
 pub use crate::provider::MemberInfo;
 
-/// Signs with the device's MLS leaf key (Ed25519), held by nuschel-identity.
+/// Signs with the device's MLS leaf key (Ed25519), held by nuschl-identity.
 struct LeafSigner<'a>(&'a DeviceKeys);
 
 impl Signer for LeafSigner<'_> {
@@ -411,7 +411,7 @@ impl Client {
                     credential_with_key(device, credential),
                 )
                 .map_err(mls)?
-                // The joiner's new leaf supports what every Nuschel leaf does.
+                // The joiner's new leaf supports what every Nuschl leaf does.
                 .leaf_node_parameters(
                     LeafNodeParameters::builder()
                         .with_capabilities(capabilities())
@@ -793,7 +793,7 @@ impl Client {
         let key = group
             .export_secret(
                 self.provider.crypto(),
-                "nuschel/archive-key/v1",
+                "nuschl/archive-key/v1",
                 &binding.encode(),
                 32,
             )

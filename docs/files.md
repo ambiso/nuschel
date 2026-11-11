@@ -1,7 +1,7 @@
-# Files on Nuschel servers (`files/1`)
+# Files on Nuschl servers (`files/1`)
 
 Status: design for review (2026-11-11). Only the object format (§4.1) is implemented,
-as a prototype with tests in `crates/files` (`nuschel-files`). It replaces the sketch
+as a prototype with tests in `crates/files` (`nuschl-files`). It replaces the sketch
 in [docs/extension.md](extension.md) §8 and [docs/e2ee.md](e2ee.md) §6.8, which now
 point here, and settles the security review's D9
 ([docs/reviews/2026-11-11-server-security.md](reviews/2026-11-11-server-security.md)).
@@ -10,7 +10,7 @@ Open questions for the user are in §11.
 On stock Mumble servers nothing changes: a file is a magic-wormhole receive code in
 the message text, refreshed after each pickup, sent by the sandboxed transfer worker
 (`apps/transfer-worker`, `crates/core/src/transfer.rs`, SECURITY.md). This document
-is about Nuschel servers, where the client negotiated `files/1`.
+is about Nuschl servers, where the client negotiated `files/1`.
 
 ## The conflict, and the short answer
 
@@ -58,7 +58,7 @@ Both are kept, as two classes of one thing:
 - **rqbit is not embedded for now**: it has no BitTorrent v2 support yet and no way to run
   over our authenticated channels; the BEP 52 format keeps that door open (§2.10).
 - Server traffic runs on a **second TLS connection to the same port** (ALPN
-  `nuschel-bulk/1`), so bulk data never queues in front of chat, control or tunnelled
+  `nuschl-bulk/1`), so bulk data never queues in front of chat, control or tunnelled
   voice; direct paths are TLS 1.3 between the two clients with per-transfer
   certificates pinned in the sealed hints.
 - No content-defined chunking: with a fresh key per file it deduplicates nothing, in the
@@ -183,7 +183,7 @@ file kept forwards it, which makes a new object under a new key (§4.3).
 
 Live transfers work like magic-wormhole's transit: for each recipient, the two
 clients exchange connection hints, race direct connections, and fall back to a relay
-when none works. Here the relay is the Nuschel server, and it keeps a **piece cache**.
+when none works. Here the relay is the Nuschl server, and it keeps a **piece cache**.
 A *piece* is one encrypted chunk of the object with its index and inclusion proof
 (§4.1).
 
@@ -197,7 +197,7 @@ What differs from magic-wormhole:
 - No code and no PAKE: both sides are authenticated sessions of the server, and every
   recipient already holds the file key from the message (§4.2). Hints and the direct
   connection are keyed from it (§2.2, §2.4).
-- The relay is the Nuschel server, not a third-party transit relay, and it understands
+- The relay is the Nuschl server, not a third-party transit relay, and it understands
   pieces (by object id and index), so it can cache them and serve several recipients
   from one upload. magic-wormhole's relay pairs two anonymous connections by a hash of
   the transit key and forwards opaque bytes; ours pairs a recipient with the owner's
@@ -207,8 +207,8 @@ What differs from magic-wormhole:
 | Connection | Between | Carries |
 | --- | --- | --- |
 | Control (the existing TLS connection) | Client and server | `FileOpen`, `ChatSend`, `FileConnect` (sealed hints), `FileQuery`/`FileStatus`, `FileHold`, `FileServe` (withdrawals), `BulkWanted` |
-| Bulk (TLS, same port, ALPN `nuschel-bulk/1`), opened on demand | Client and server | The relay path and kept uploads: `FilePull`, `FileWant`, `FileChunk`, `FileHalt` |
-| Direct (TLS 1.3, ALPN `nuschel-direct/1`, per-transfer certificates) | A source and one recipient | `FileWant`, `FileChunk`, `FileHalt` |
+| Bulk (TLS, same port, ALPN `nuschl-bulk/1`), opened on demand | Client and server | The relay path and kept uploads: `FilePull`, `FileWant`, `FileChunk`, `FileHalt` |
+| Direct (TLS 1.3, ALPN `nuschl-direct/1`, per-transfer certificates) | A source and one recipient | `FileWant`, `FileChunk`, `FileHalt` |
 
 ### 2.2 Hint exchange
 
@@ -219,7 +219,7 @@ What differs from magic-wormhole:
   answers with its own `FileConnect`, relayed back the same way. The server relays these
   only between those two sessions and only for that object.
 - `sealed` is ChaCha20-Poly1305 under
-  `hint_key = HKDF-SHA256(ikm = file key, salt = transfer_id, info = "nuschel files/1 hints")`,
+  `hint_key = HKDF-SHA256(ikm = file key, salt = transfer_id, info = "nuschl files/1 hints")`,
   nonce 0 for the recipient's message and 1 for the owner's (one key, two messages; every
   race takes a new `transfer_id`, so a key never seals a third message). It
   holds the side's role, its direct candidates (at most 16 `address:port`), the SHA-256
@@ -265,7 +265,7 @@ What differs from magic-wormhole:
 
 ### 2.4 The direct path
 
-- TLS 1.3 (rustls, already in the session) with ALPN `nuschel-direct/1`. Each side
+- TLS 1.3 (rustls, already in the session) with ALPN `nuschl-direct/1`. Each side
   presents a self-signed certificate made for this transfer (rcgen, already in the
   session), and each verifies the other's against the pin from its sealed hint, both as
   client and as server. The Mumble client certificate is not used: it is a stable identity
@@ -284,12 +284,12 @@ What differs from magic-wormhole:
 ### 2.5 The relay path and kept uploads
 
 **Recommendation: a second TLS connection to the server's TCP port, ALPN
-`nuschel-bulk/1`, opened while transfers run.** It carries the relay path of live
+`nuschl-bulk/1`, opened while transfers run.** It carries the relay path of live
 transfers and the uploads of kept objects.
 
 - The client asks for a ticket on its control connection (`BulkTicket`: 32 random
   bytes, single use, valid 60 seconds, bound to the session) and opens a TLS connection
-  to the same address and port, offering only `nuschel-bulk/1` and presenting the same
+  to the same address and port, offering only `nuschl-bulk/1` and presenting the same
   client certificate (if the session has one). Its first frame is `BulkHello { ticket }`
   (or a serve token, §3.4); the server checks the ticket and the certificate hash
   against the session, or closes the connection. Before
@@ -298,7 +298,7 @@ transfers and the uploads of kept objects.
 - One bulk connection per session. It ends with the session; both reconnect together
   and transfers resume (§3). It does not count as a user (`max_users`), and the
   per-address connection caps count it with its session.
-- Framing is the Mumble control framing with types from the `nuschel.v1` block (§9),
+- Framing is the Mumble control framing with types from the `nuschl.v1` block (§9),
   so `crates/protocol` and the per-type limits apply unchanged. A bulk frame on the
   control connection, or a control frame on the bulk connection, is a protocol error.
 
@@ -342,7 +342,7 @@ behind a NAT through the relay.
 ```mermaid
 sequenceDiagram
   participant A as Alice (owner)
-  participant S as nuscheld (relay, piece cache)
+  participant S as nuschld (relay, piece cache)
   participant B as Bob (same LAN)
   participant C as Carol (behind NAT)
   A->>S: FileOpen(root, object_len, keep=false) → object_id
@@ -532,7 +532,7 @@ original person sharing should still have authority over deleting a message/file
 **Who is a source.** The owner's device, and every device that has downloaded and
 verified the whole object, belongs to an account that may read a referencing message,
 and has "Help share files I received" on (a user setting, on by default; sources serve
-only while Nuschel runs, under the client's upload limit, below its own transfers). With
+only while Nuschl runs, under the client's upload limit, below its own transfers). With
 it off, a device never serves. Partial holders do not serve in this version; the format
 would allow it, since every piece verifies on its own.
 
@@ -573,7 +573,7 @@ other sources carry on. What deletion cannot do, honestly: copies already downlo
 on recipients' disks, a modified client could finish a direct transfer already running or
 pass the file on by other means, and a recipient offline at the time learns of the
 deletion only when it next sees the conversation. Deletion withdraws distribution through
-Nuschel; it cannot recall copies, as with message text.
+Nuschl; it cannot recall copies, as with message text.
 
 **Privacy.** The server learns which devices hold which objects (it already knew who
 fetched them). Peers learn each other's IP addresses, LAN addresses included, as with
@@ -590,9 +590,9 @@ before transmission. librqbit, as of 9.1.0:
 | Question | Finding |
 | --- | --- |
 | Maintenance | Active: 9.1.0 on 2026-10-29, 9.0 in August 2026, about 190,000 downloads |
-| Licence | Apache-2.0, already allowed in `deny.toml`; compatible with distributing Nuschel under EUPL-1.2 |
+| Licence | Apache-2.0, already allowed in `deny.toml`; compatible with distributing Nuschl under EUPL-1.2 |
 | BitTorrent v2 (BEP 52) | **Not supported.** It verifies v1 SHA-1 piece hashes. Issue #70 ("Support BitTorrent v2") and the design issue #546 are open; the SHA-256 groundwork (#562) is merged, the Merkle tree module (#568) was closed unmerged, the hybrid verification work (#554) is open |
-| Private swarm | Possible at run time: `SessionOptions { dht: None, disable_local_service_discovery, disable_trackers }` and `AddTorrentOptions::initial_peers` from the Nuschel server. But the DHT, local service discovery, UPnP, uTP and tracker code is always compiled in (ten workspace crates of its own), and there is no switch for UPnP in `SessionOptions` |
+| Private swarm | Possible at run time: `SessionOptions { dht: None, disable_local_service_discovery, disable_trackers }` and `AddTorrentOptions::initial_peers` from the Nuschl server. But the DHT, local service discovery, UPnP, uTP and tracker code is always compiled in (ten workspace crates of its own), and there is no switch for UPnP in `SessionOptions` |
 | Transport | Plain BitTorrent over TCP or uTP. No hook to run it over our authenticated direct TLS or the bulk connection (a SOCKS proxy for outgoing connections only). The info hash crosses the network in clear in every handshake, and a peer is anyone who knows an address and the info hash |
 | `unsafe` and C | librqbit's own 19,000 lines have 7 `unsafe` (sparse files, read buffers, an mmap example, tests) and do not forbid it; it depends on memmap2, nix and socket2; the default TLS for its HTTP client is the platform's (OpenSSL on Linux), `rust-tls` uses ring |
 | What it would bring | A mature piece picker, choking and endgame; a storage trait that could serve the ciphertext by encrypting on read |
@@ -688,7 +688,7 @@ no space until the original changes.
   uploading keeps serving the pieces it has, and the piece cache keeps serving what it
   holds.
 - **Owner logged in elsewhere.** Mumble allows one session per account, so opening
-  Nuschel on a second device takes the session over and would take the first device's
+  Nuschl on a second device takes the session over and would take the first device's
   shares offline. Instead, the server keeps the first device's bulk connection as
   **serve-only**: it answers pulls and relayed `FileConnect`s for its own shares and can do
   nothing else (no chat, no new objects). A serve-only device that reconnects asks with
@@ -706,8 +706,8 @@ no space until the original changes.
   blob files); cache and wants do not; recipients re-want, sources announce nothing.
 - **Owner restarting:** nothing is reloaded or announced (§3.5); the server already knows
   the device's shares and sends requests when they come. Quitting with active uploads or
-  shares asks first ("2 uploads will continue when you start Nuschel again; 1 shared file
-  is unavailable while Nuschel is closed").
+  shares asks first ("2 uploads will continue when you start Nuschl again; 1 shared file
+  is unavailable while Nuschl is closed").
 
 ### 3.5 Thousands of shares: nothing at rest
 
@@ -794,8 +794,8 @@ One format for both classes and both server modes:
   the pieces root. An object of one piece is padded only to the next power of two of its
   blocks, as BEP 52 and libtorrent do. The prototype's pieces roots and piece layers are
   identical to those libtorrent 2.1.2 computes for the same ciphertext (§8).
-- **Object root:** key commitment `C = SHA-256(0x03 ‖ "nuschel files/1 key" ‖ key)`;
-  `R = SHA-256(0x02 ‖ "nuschel files/1 root" ‖ piece_log2 ‖ object_len (u64 BE) ‖ C ‖
+- **Object root:** key commitment `C = SHA-256(0x03 ‖ "nuschl files/1 key" ‖ key)`;
+  `R = SHA-256(0x02 ‖ "nuschl files/1 root" ‖ piece_log2 ‖ object_len (u64 BE) ‖ C ‖
   pieces root)`, which binds length, piece size and key to the BEP 52 tree. The message
   carries the pieces root (§4.2); the server computes `R` from what `FileOpen` gives it
   and reports it; recipients compute `R` from their key and compare.
@@ -809,7 +809,7 @@ One format for both classes and both server modes:
   power of two), every leaf is at the same depth, proofs have one fixed length, and `R`
   binds the length, so an inner node cannot pass for a leaf.
 - **Primitives:** ChaCha20-Poly1305, SHA-256 and the random keys come from ring, the TLS
-  provider in both the session and `nuscheld`, so the format adds no crate and no new
+  provider in both the session and `nuschld`, so the format adds no crate and no new
   security exception (SECURITY.md). ChaCha20-Poly1305 is what e2ee.md §6.8 named; SHA-256
   rather than BLAKE3 because BEP 52 uses it and ring has it with hardware acceleration.
 - **The root is not secret.** It is a hash of ciphertext under a random key, so the server
@@ -894,7 +894,7 @@ struct {
 - **Keep, release, end:** only the owner. **Serve:** the owner's device, and devices
   that hold the whole object and whose account may read a referencing message (§2.10).
 - **Unregistered users** have no account to own an object or be charged, and no durable
-  identity to resume with, so they cannot open, keep or share objects; their Nuschel
+  identity to resume with, so they cannot open, keep or share objects; their Nuschl
   client sends files as magic-wormhole codes, as on a stock server. They may download
   the attachments of messages delivered to them live in their current session (as stock
   users see inline images live), and of history only where `history.guests = full` lets
@@ -939,7 +939,7 @@ registered users, the network (IPv4 /24, IPv6 /56) for unregistered ones.
 - Element and frame caps per message type (§9) and 16 in-flight control requests
   (extension.md §2) bound memory per connection; the piece cache bounds it globally.
   Process limits (`MemoryMax`, `CPUQuota`, traffic shaping in the NixOS unit) stay the
-  main defence, as for the rest of `nuscheld`.
+  main defence, as for the rest of `nuschld`.
 
 ### 5.3 Storage quotas (operator settings)
 
@@ -961,13 +961,13 @@ which the user can see and change.
 ### 5.4 Blob store
 
 Kept ciphertext lives in files under `state_directory/files/` (`ab/cd/<object id hex>`,
-0600, opened with `O_NOFOLLOW`), written by `nuscheld`'s relay task: it never parses
+0600, opened with `O_NOFOLLOW`), written by `nuschld`'s relay task: it never parses
 their contents. Beside the blob, `<id>.tree` keeps the piece layer and every node above
 it that the server has learned from proofs, at most two hashes per piece.
 With them the server can prove any piece it holds, so recipients can download a kept
 object while its upload is still running. The bitmap of stored pieces is in the database
 with the object record. Large blobs in PostgreSQL `bytea` would bloat backups and
-VACUUM. `nuscheld admin files usage` (per account), `files list --account NAME` and
+VACUUM. `nuschld admin files usage` (per account), `files list --account NAME` and
 `files remove OBJECT --yes` manage them; `history erase-user` also removes the user's
 objects. Back `files/` up with the database: a database restored without its blobs shows
 those kept files as ended.
@@ -995,7 +995,7 @@ images) and the file card (`apps/desktop/src/transfer.rs::card`: kind tile, name
 
 ### 6.1 Composing
 
-- Any number of images and files in the tray. On a Nuschel server up to 100 go **in one
+- Any number of images and files in the tray. On a Nuschl server up to 100 go **in one
   message** with the text (§9); more go as several messages, the text with the first. The
   one-image-per-message pacing stays for stock servers.
 - Each chip shows its class: "On the server" or "From this device", with the menu of
@@ -1066,15 +1066,15 @@ device's shares, its own and the ones it helps with, from one query (§3.5).
 - `tests/accessibility.py` gains a case: attach two files, send, check the cards' names,
   roles and the announced states over AT-SPI.
 
-## 7. Stock clients on a Nuschel server in compatible mode
+## 7. Stock clients on a Nuschl server in compatible mode
 
 Stock clients do not speak `files/1`; the server makes their copy of a message
 (extension.md §4) and adds, per attachment:
 
 | Attachment | What stock clients see |
 | --- | --- |
-| Kept image | Its thumbnail as an inline `<img>` (PNG or JPEG, checked by magic bytes and size against `image_message_length`), plus "📎 name (size) — open it with Nuschel for the full image". The server decrypts the thumbnail with the key in the plaintext message; it decodes no image, so it needs no image parser, and stock users see exactly the preview Nuschel users see |
-| Other kept file | "📎 report.pdf (2.1 MB) — sent with Nuschel; open it with a Nuschel client", and a magic-wormhole code while the owner's client is online (below) |
+| Kept image | Its thumbnail as an inline `<img>` (PNG or JPEG, checked by magic bytes and size against `image_message_length`), plus "📎 name (size) — open it with Nuschl for the full image". The server decrypts the thumbnail with the key in the plaintext message; it decodes no image, so it needs no image parser, and stock users see exactly the preview Nuschl users see |
+| Other kept file | "📎 report.pdf (2.1 MB) — sent with Nuschl; open it with a Nuschl client", and a magic-wormhole code while the owner's client is online (below) |
 | Live file | The same notice, and, while the owner shares it, a magic-wormhole code as on stock servers (below) |
 
 - **Timing.** The text of the stock copy goes at once, with the notices, so stock users
@@ -1085,12 +1085,12 @@ Stock clients do not speak `files/1`; the server makes their copy of a message
 - **Wormhole bridge.** When `ChatAck` reports stock clients in the conversation's live
   audience, the owner's client also offers the file through the existing transfer worker
   and sends the code with `FileStockOffer`. The server checks it with the same functions
-  as the client (`nuschel_core::transfer::valid_code`, `valid_url`) and posts
+  as the client (`nuschl_core::transfer::valid_code`, `valid_url`) and posts
   `📎 name (size) — receive with magic-wormhole: wormhole receive CODE` (with
   `--relay-url=…` when the rendezvous is not the public one), in the exact format
   `format_offer` writes, with name and size from the `FileRef`. Refreshed codes go only to
   the stock sessions that received the message's stock copy, not to whoever is in the
-  channel later; they are never stored and never shown to Nuschel clients (they have
+  channel later; they are never stored and never shown to Nuschl clients (they have
   `files/1`). A fresh code after each pickup follows the existing rhythm: at least two
   seconds apart, charged to the owner's text bucket (`messagelimit`/`messageburst`), so the
   bridge cannot be used to flood. The card shows "also offered to Mumble users via
@@ -1117,19 +1117,19 @@ Stock clients do not speak `files/1`; the server makes their copy of a message
   - each waiting code holds a rendezvous connection, so the client keeps at most 16 at once
     (a setting); a code picked up is replaced as today, at least two seconds apart.
 - **What the bridge gives up.** The bytes behind a wormhole code are whatever the owner's
-  client sends; neither the server nor Nuschel users can check that they match the
+  client sends; neither the server nor Nuschl users can check that they match the
   object (extension.md §4 made the stock copy server-made to avoid exactly this for
   text). It is no worse than a stock user's own wormhole offer today, and the code line
   names the file the message names. magic-wormhole's transit also tries direct
   connections, so it reveals the owner's addresses to the stock receiver, as the direct
   path of §2.4 does.
 - No download links: a link stock clients could open would be a bearer capability in
-  their logs, and `nuscheld` has no HTTP server.
+  their logs, and `nuschld` has no HTTP server.
 - End-to-end mode admits no stock clients, so none of this applies there.
 
 ## 8. Implementation outline
 
-1. `nuschel-files`: the object format with the BEP 52 tree, key commitment, proofs,
+1. `nuschl-files`: the object format with the BEP 52 tree, key commitment, proofs,
    Padmé (§4.1). Done as a prototype: a pure library on ring (no I/O), tested against a
    naive BEP 52 implementation for many piece counts, tampering and wrong-key cases, and
    frozen values that a separate Python implementation reproduces. **Interoperable:**
@@ -1139,7 +1139,7 @@ Stock clients do not speak `files/1`; the server makes their copy of a message
 2. Server: object records, references and reference counting with retention and
    erasure, `FileOpen`, `ChatSend.attachments`, the bulk connection with tickets, kept
    uploads by pull, downloads of kept objects, quotas and the disk reserve.
-3. Client: preparation, the bulk connection in `nuschel-session`, persisted shares and
+3. Client: preparation, the bulk connection in `nuschl-session`, persisted shares and
    downloads, the composer and card states of §6, the Transfers panel.
 4. Live transfers: persisted sources and on-demand bulk connections (§3.5), wants,
    coalescing, the piece cache, availability pushes, throttling; then the hint exchange,
@@ -1150,8 +1150,8 @@ Stock clients do not speak `files/1`; the server makes their copy of a message
 7. Later: UDP hole punching as a further direct candidate type (str0m's ICE or QUIC),
    after measuring its bulk throughput; NAT-PMP/UPnP mappings.
 
-Tests follow the server's pattern: loopback tests between `nuschel-session` and
-`nuscheld` for every state of §6 (owner restart mid-transfer, recipient restart, server
+Tests follow the server's pattern: loopback tests between `nuschl-session` and
+`nuschld` for every state of §6 (owner restart mid-transfer, recipient restart, server
 restart, owner switching devices, file changed on disk, quota exhausted, access revoked
 mid-transfer, coalescing with several recipients, several sources with one failing,
 deletion while transfers run, a stock user present across a sender's restart), a test
@@ -1161,7 +1161,7 @@ and a NixOS VM test with a 2 GB file over a lossy link.
 
 ## 9. Wire messages
 
-New types in the `nuschel.v1` block, capability `files/1`: 0x4E40–0x4E4F on the control
+New types in the `nuschl.v1` block, capability `files/1`: 0x4E40–0x4E4F on the control
 connection, 0x4E50–0x4E5F on the bulk connection and the direct path. 0x4E20–0x4E2C are
 taken by `mls/1` on its branch (e2ee.md §6.3), and 0x4E2D–0x4E3F stay free for it. Each
 type has a wire cap and element caps checked before and after decoding (extension.md
@@ -1190,7 +1190,7 @@ and their thumbnails), `Attachment { object_id, file_ref }`, with `file_ref` (th
 size. `ChatAck` gains `stock_audience` (compatible mode: whether a stock client was in the
 message's live audience), which starts the wormhole bridge (§7).
 
-**Bulk connection** (`nuschel-bulk/1`), and the direct path (`nuschel-direct/1`), which
+**Bulk connection** (`nuschl-bulk/1`), and the direct path (`nuschl-direct/1`), which
 uses only `FileWant`, `FileChunk` and `FileHalt` between recipient and owner
 
 | Type | Message | Fields | Cap |
@@ -1244,7 +1244,7 @@ delivered and simply counted.
   served by recipients too, and the file key also keys their hint exchange
   and direct connections.
 - **SECURITY.md**, when implemented: the bulk connection, blob store and piece cache
-  under `nuscheld`; on the client, the bulk connection and the direct path in the
+  under `nuschld`; on the client, the bulk connection and the direct path in the
   session (a TCP listener only during a race, TLS with pinned per-transfer
   certificates), which reads offered and helped files and writes downloads only to the
   path the user chose; no new worker and no new crypto dependency.
@@ -1275,7 +1275,7 @@ The user answered the questions this section asked:
    transmitted: a private swarm of the people who may read the message, over the
    encrypted object. The original sender keeps authority over deleting the message
    and the file (message deletion exists since 2026-11-11). To work out: a private
-   swarm only (no DHT, no public trackers, the Nuschel server as tracker and relay,
+   swarm only (no DHT, no public trackers, the Nuschl server as tracker and relay,
    peers limited to those with `can_read`), whether the object format can match
    BitTorrent v2's SHA-256 Merkle tree over 16 KiB blocks so that rqbit verifies the
    same root, and how a deletion makes peers stop seeding.

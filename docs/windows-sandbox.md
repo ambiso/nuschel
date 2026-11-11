@@ -1,6 +1,6 @@
 # Windows worker sandbox
 
-Nuschel's workers (content, storage, crypto, media, transfer) run in AppContainers
+Nuschl's workers (content, storage, crypto, media, transfer) run in AppContainers
 on Windows, each in a job object of its own. This page records how, why, what was
 verified in a Windows 11 VM, and what remains. SECURITY.md has the summary.
 
@@ -10,12 +10,12 @@ Windows has no `exec`, so a helper cannot set up confinement and then become the
 worker, as bwrap and `sandbox-exec` do. Each worker executable is therefore its own
 launch stage. The supervisor (`crates/ipc/src/host.rs`) starts it as
 
-    nuschel-<kind>-worker.exe --nuschel-sandbox --profile NAME [policy] -- [worker arguments]
+    nuschl-<kind>-worker.exe --nuschl-sandbox --profile NAME [policy] -- [worker arguments]
 
 with an empty environment apart from `SystemRoot`, `WINDIR`, `TEMP` and `TMP`, no
 console window, and inside the supervisor's kill-on-close job (`host::contain`, as
 before). The first thing every worker's `main` does is
-`nuschel_sandbox_windows::launch_if_requested()`. With the flag, that code:
+`nuschl_sandbox_windows::launch_if_requested()`. With the flag, that code:
 
 1. creates the AppContainer profile `NAME`, or derives its SID if it exists;
 2. grants the container read and execute on its own executable, and on each
@@ -42,10 +42,10 @@ before). The first thing every worker's `main` does is
 6. waits, and exits with the worker's exit code.
 
 The launch stage reads no untrusted input: the worker's pipes go straight to the
-confined process. When the supervisor kills it (a timeout, a mute change, Nuschel
+confined process. When the supervisor kills it (a timeout, a mute change, Nuschl
 exiting), its job handle closes and the job ends the worker.
 
-The policy is plain data (`nuschel_ipc::windows_sandbox::Policy`), encoded on the
+The policy is plain data (`nuschl_ipc::windows_sandbox::Policy`), encoded on the
 command line by the supervisor and parsed by the launch stage. Its encoding, the
 command-line quoting and the per-worker policies are unit-tested on every platform.
 
@@ -53,12 +53,12 @@ command-line quoting and the per-worker policies are unit-tested on every platfo
 
 | Worker | AppContainer profile | Kind | Capabilities | Files | Committed memory |
 | --- | --- | --- | --- | --- | --- |
-| content | `nuschel.content` | less privileged | none | none | 512 MiB, plus the request's CPU seconds |
-| math | `nuschel.math` | less privileged | none | none | 512 MiB, and 120 CPU seconds over its life (it is restarted), as on Linux |
-| storage | `nuschel.storage.<hash of the directory>` | less privileged | none | the history directory's contents (the directory itself: list, add, delete entries) | 1 GiB |
-| crypto | `nuschel.crypto.<hash of the directory>` | less privileged | none | its `keys` directory's contents (likewise) | 1 GiB |
-| media | `nuschel.media` | full | `microphone` | none | 1 GiB |
-| transfer | `nuschel.transfer` | full | `internetClient`, `privateNetworkClientServer` | the offered file, as a read-only handle | 1 GiB |
+| content | `nuschl.content` | less privileged | none | none | 512 MiB, plus the request's CPU seconds |
+| math | `nuschl.math` | less privileged | none | none | 512 MiB, and 120 CPU seconds over its life (it is restarted), as on Linux |
+| storage | `nuschl.storage.<hash of the directory>` | less privileged | none | the history directory's contents (the directory itself: list, add, delete entries) | 1 GiB |
+| crypto | `nuschl.crypto.<hash of the directory>` | less privileged | none | its `keys` directory's contents (likewise) | 1 GiB |
+| media | `nuschl.media` | full | `microphone` | none | 1 GiB |
+| transfer | `nuschl.transfer` | full | `internetClient`, `privateNetworkClientServer` | the offered file, as a read-only handle | 1 GiB |
 
 Every container may also use its own folder (`%LOCALAPPDATA%\Packages\<profile>\AC`),
 which is its working directory and `TEMP`, and read the system files every
@@ -66,10 +66,10 @@ AppContainer may read (the Windows directory, Program Files). A full AppContaine
 also gets everything granted to "ALL APPLICATION PACKAGES"; a less privileged one
 (LPAC) only what is granted to "ALL RESTRICTED APPLICATION PACKAGES" or to itself.
 
-The history and keys directories are siblings in `%LOCALAPPDATA%\Nuschel\Nuschel\data`
+The history and keys directories are siblings in `%LOCALAPPDATA%\Nuschl\Nuschl\data`
 (`Profile::history_dir`, `Profile::keys_dir`; crates/session/src/layout.rs), next to
 the Mumble identity, which no worker is granted. Versions before that layout kept the
-history directly in `data` and the keys in `%APPDATA%\Nuschel\Nuschel\config\nuschel-identity`;
+history directly in `data` and the keys in `%APPDATA%\Nuschl\Nuschl\config\nuschl-identity`;
 the first start moves them, and the new directories get containers of their own
 (their names hash the path). The grant an earlier version gave its storage container
 on `data` itself stays, inherited by what is created there since; no current worker
@@ -95,12 +95,12 @@ Decisions:
   cannot remove or move it. An older, broader grant (Modify on the directory
   itself) is revoked and replaced.
 - **One profile per worker kind**, created once and reused. Storage and crypto get
-  one per directory instead, so the workers of two Nuschel profiles (for example
+  one per directory instead, so the workers of two Nuschl profiles (for example
   `--profile-dir`) can never open each other's history or keys: a grant belongs to a
   container, not to a process.
 - **Transfer gets `internetClient` and `privateNetworkClientServer`**: outgoing
   connections to the rendezvous, the relay and peers, and connections both ways on
-  the local network, so that two Nuschel users on one LAN can use magic-wormhole's
+  the local network, so that two Nuschl users on one LAN can use magic-wormhole's
   direct transit instead of a public relay (the Linux and macOS sandboxes allow the
   LAN too). It does not get `internetClientServer`: nothing on the Internet can
   connect to it. No AppContainer can reach loopback, so the transfer worker cannot
@@ -134,7 +134,7 @@ Decisions:
 
 ## Why an own crate with unsafe code
 
-Nuschel's own crates forbid `unsafe`; SECURITY.md allows a small supervisor adapter
+Nuschl's own crates forbid `unsafe`; SECURITY.md allows a small supervisor adapter
 for OS sandbox APIs, preferring safe wrappers. No maintained safe wrapper does what
 is needed here, so `crates/sandbox-windows` is that adapter. The crates considered
 (November 2026):
@@ -147,7 +147,7 @@ is needed here, so `crates/sandbox-windows` is that adapter. The crates consider
 | `heel`, `crabpot-windows`, `cageforge-windows`, `sandboxrs-windows`, `zagens-windows-sandbox` | Sandboxes for AI agents' shell commands | 6,000 to 41,000 lines with firewall rules, PTYs and policy engines, far more unsafe code than this needs, and fast-moving (`heel` released four versions on 2026-11-11) |
 | `std` | Process creation | `CommandExt::raw_attribute` is still unstable (Rust 1.99), and `Command` inherits every inheritable handle |
 
-`nuschel-sandbox-windows` builds on `windows-sys` (Microsoft, MIT or Apache-2.0,
+`nuschl-sandbox-windows` builds on `windows-sys` (Microsoft, MIT or Apache-2.0,
 already in the dependency graph). It does not use the workspace lints, because
 `forbid` cannot be lifted for single modules; it denies `unsafe_code` itself, and
 `unsafe_op_in_unsafe_fn`, `missing_safety_doc`, Clippy's `undocumented_unsafe_blocks`
@@ -271,7 +271,7 @@ list.
 Windows 11 Enterprise 25H2 (build 26200) in `tests/windows_vm.py`, two vCPUs, a QEMU
 HDA sound card without a host backend, no network except forwards into host
 loopback. `crates/sandbox-windows/tests/confinement.rs` (see tests/README.md) starts
-itself through `nuschel_ipc::host`'s real commands as each worker kind and probes
+itself through `nuschl_ipc::host`'s real commands as each worker kind and probes
 from the inside. Result on 2026-11-11, every worker kind:
 
 | Attempt | content | storage | crypto | media | transfer |
@@ -346,7 +346,7 @@ unoptimised build, not the sandbox.
   PACKAGES" may read, including the user's environment variables
   (`HKCU\Environment`). Beyond the keys and folders in the table above, what that
   group and "ALL RESTRICTED APPLICATION PACKAGES" may read (system folders,
-  registry) was not audited for Nuschel.
+  registry) was not audited for Nuschl.
 - The media worker can use whatever the Windows audio service offers it, as on Linux
   with an audio socket; capture is subject to Windows' microphone privacy setting.
 - The transfer worker may connect anywhere on the Internet and on the LAN, as on the
@@ -354,7 +354,7 @@ unoptimised build, not the sandbox.
 - The launch stage is started by `std`'s process API and so inherits every
   inheritable handle of the desktop process; it is trusted code and passes none of
   them on.
-- AppContainer profiles stay registered when a Nuschel profile is deleted, and the
+- AppContainer profiles stay registered when a Nuschl profile is deleted, and the
   read/execute entries on the worker executables stay (one per container; they are
   written again after an update replaces the files, and concurrent launches can
   lose one, which fails closed until the next launch). An installation on a network

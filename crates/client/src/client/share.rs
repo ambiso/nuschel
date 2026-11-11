@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Share links (docs/web.md, "Share links"): a link to a channel, and opening
-//! one. On a Nuschel server with `share/1` a registered user gets a token from
+//! one. On a Nuschl server with `share/1` a registered user gets a token from
 //! the server, which resolves it for whoever opens the link (with an access
 //! token for a private channel); anywhere else the link names the channel by
 //! its path, in the fragment.
 use super::{Client, Update};
 use crate::{platform::Request, server::Status};
-use nuschel_core::{
+use nuschl_core::{
     model::TextTarget,
     share::{ShareLink, encode_token},
 };
-use nuschel_protocol::nuschel::{capability, v1};
+use nuschl_protocol::nuschl::{capability, v1};
 
 /// What a share-link request was for, by request id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,7 +39,7 @@ impl Client {
                 channel: path,
                 ..self.share_base(index)
             };
-            if link.app_url().len() > nuschel_core::share::MAX_LINK_BYTES {
+            if link.app_url().len() > nuschl_core::share::MAX_LINK_BYTES {
                 return Err("the channel's path is too long for a link".into());
             }
             return Ok(Some(link));
@@ -102,7 +102,7 @@ impl Client {
                 .certificate_sha256
                 .clone()
                 .or_else(|| server.peer_sha256.clone()),
-            require_nuschel: !server.capabilities.is_empty(),
+            require_nuschl: !server.capabilities.is_empty(),
             name: None,
         }
     }
@@ -116,7 +116,7 @@ impl Client {
         };
         // A token this client cannot read, or a server without share/1: the
         // link's path decides.
-        let bytes = nuschel_core::share::decode_token(&token);
+        let bytes = nuschl_core::share::decode_token(&token);
         let Some(bytes) = bytes.filter(|_| server.has(capability::SHARE)) else {
             if server.pending_channel.is_empty() {
                 server.notice = Some("This server cannot open share links.".into());
@@ -154,7 +154,7 @@ impl Client {
                     channel: path,
                     ..self.share_base(index)
                 };
-                if share.app_url().len() > nuschel_core::share::MAX_LINK_BYTES {
+                if share.app_url().len() > nuschl_core::share::MAX_LINK_BYTES {
                     share.channel.clear();
                 }
                 self.updates.push(Update::ShareLink {

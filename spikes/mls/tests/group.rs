@@ -4,10 +4,10 @@
 
 use std::sync::RwLock;
 
-use nuschel_mls_spike::ds::DeliveryService;
-use nuschel_mls_spike::pins::ConversationPins;
-use nuschel_mls_spike::sim::Client;
-use nuschel_mls_spike::*;
+use nuschl_mls_spike::ds::DeliveryService;
+use nuschl_mls_spike::pins::ConversationPins;
+use nuschl_mls_spike::sim::Client;
+use nuschl_mls_spike::*;
 use openmls::prelude::*;
 use openmls_memory_storage::MemoryStorage;
 use openmls_traits::OpenMlsProvider;
@@ -150,7 +150,7 @@ fn post_compromise_security_needs_the_victims_own_update() {
         .read()
         .unwrap()
         .clone();
-    let thief = NuschelProvider::with_storage(MemoryStorage {
+    let thief = NuschlProvider::with_storage(MemoryStorage {
         values: RwLock::new(stolen),
     });
     let mut thief_group = MlsGroup::load(thief.storage(), &id).unwrap().unwrap();

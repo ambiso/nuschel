@@ -5,10 +5,10 @@
 mod common;
 
 use common::*;
-use nuschel_ipc::crypto::{
+use nuschl_ipc::crypto::{
     ContactState, CryptoRequest, CryptoResponse, HeadOutcome, IdentityView, RecoveryPolicy,
 };
-use nuschel_kt::Directory;
+use nuschl_kt::Directory;
 
 fn identity(client: &mut Client, request: CryptoRequest) -> IdentityView {
     match client.ask(request) {
@@ -187,7 +187,7 @@ async fn the_schedule_publishes_monitors_and_rechecks_daily() {
             server: bob.server.into(),
             history: history.encode().unwrap(),
         }),
-        CryptoResponse::Monitor(nuschel_ipc::crypto::MonitorOutcome::Consistent {
+        CryptoResponse::Monitor(nuschl_ipc::crypto::MonitorOutcome::Consistent {
             current: true,
             ..
         })
@@ -219,7 +219,7 @@ async fn guests_and_strangers_are_refused_and_bounds_hold() {
         witnessed: None,
         witnessing: Default::default(),
         registration: None,
-        server: nuschel_ipc::crypto::CryptoServer {
+        server: nuschl_ipc::crypto::CryptoServer {
             key: SERVER.into(),
             label: "x".into(),
         },
@@ -264,7 +264,7 @@ async fn guests_and_strangers_are_refused_and_bounds_hold() {
         witnessed: None,
         witnessing: Default::default(),
         registration: None,
-        server: nuschel_ipc::crypto::CryptoServer {
+        server: nuschl_ipc::crypto::CryptoServer {
             key: "other:1".into(),
             label: "x".into(),
         },

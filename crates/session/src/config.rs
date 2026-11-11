@@ -11,14 +11,14 @@ use std::{
 };
 use uuid::Uuid;
 
-pub use nuschel_core::bookmark::{CachedChannel, ServerBookmark, ServerIcon, fingerprint};
+pub use nuschl_core::bookmark::{CachedChannel, ServerBookmark, ServerIcon, fingerprint};
 
 fn connect_on_startup() -> bool {
     true
 }
 
 /// A `mumble://` link as produced by Mumble's "Copy URL" and web server lists,
-/// or a Nuschel share link (`https://<web host>/join/…`, `nuschel://join/…`).
+/// or a Nuschl share link (`https://<web host>/join/…`, `nuschl://join/…`).
 #[derive(Clone, PartialEq, Eq)]
 pub struct MumbleUrl {
     pub host: String,
@@ -31,9 +31,9 @@ pub struct MumbleUrl {
     /// From an invite (`?fp=sha256:…`): the server certificate's SHA-256, pinned
     /// before the first connection.
     pub certificate_sha256: Option<String>,
-    /// From an invite (`?policy=nuschel`): the server must speak the Nuschel
+    /// From an invite (`?policy=nuschl`): the server must speak the Nuschl
     /// protocol, from the very first connection.
-    pub require_nuschel: bool,
+    pub require_nuschl: bool,
     /// From a share link: the server's token, resolved once connected
     /// (`share/1`); `channel` is then only the fallback.
     pub share_token: Option<String>,
@@ -47,7 +47,7 @@ impl std::fmt::Debug for MumbleUrl {
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("channel", &self.channel)
             .field("certificate_sha256", &self.certificate_sha256)
-            .field("require_nuschel", &self.require_nuschel)
+            .field("require_nuschl", &self.require_nuschl)
             .field(
                 "share_token",
                 &self.share_token.as_ref().map(|_| "<redacted>"),
@@ -60,7 +60,7 @@ impl MumbleUrl {
         if !url
             .get(..9)
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("mumble://"))
-            && let Ok(link) = nuschel_core::share::ShareLink::parse(url)
+            && let Ok(link) = nuschl_core::share::ShareLink::parse(url)
         {
             return Self::from_share(link);
         }
@@ -76,7 +76,7 @@ impl MumbleUrl {
         let rest = rest.split('#').next().unwrap_or_default();
         let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
         let mut certificate_sha256 = None;
-        let mut require_nuschel = false;
+        let mut require_nuschl = false;
         for (name, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
             match name {
                 "fp" => {
@@ -87,7 +87,7 @@ impl MumbleUrl {
                     certificate_sha256 = Some(hex.to_ascii_lowercase());
                 }
                 "policy" => {
-                    require_nuschel = value.split('+').any(|part| part == "nuschel");
+                    require_nuschl = value.split('+').any(|part| part == "nuschl");
                 }
                 _ => {}
             }
@@ -138,13 +138,13 @@ impl MumbleUrl {
             password,
             channel,
             certificate_sha256,
-            require_nuschel,
+            require_nuschl,
             share_token: None,
         })
     }
 
     /// A share link, checked like any link.
-    pub fn from_share(link: nuschel_core::share::ShareLink) -> Result<Self, String> {
+    pub fn from_share(link: nuschl_core::share::ShareLink) -> Result<Self, String> {
         ServerBookmark::new("", &link.host, link.port, "user")?;
         if link
             .channel
@@ -160,7 +160,7 @@ impl MumbleUrl {
             password: None,
             channel: link.channel,
             certificate_sha256: link.certificate_sha256,
-            require_nuschel: link.require_nuschel,
+            require_nuschl: link.require_nuschl,
             share_token: link.token,
         })
     }
@@ -200,11 +200,11 @@ pub enum ShortcutAction {
     ToggleMute,
     ToggleDeafen,
     PushToMute,
-    /// Ctrl+K: the switcher (in Nuschel only).
+    /// Ctrl+K: the switcher (in Nuschl only).
     Find,
-    /// Ctrl+F: search this conversation (in Nuschel only).
+    /// Ctrl+F: search this conversation (in Nuschl only).
     Search,
-    /// Ctrl+Shift+F: search every server (in Nuschel only).
+    /// Ctrl+Shift+F: search every server (in Nuschl only).
     SearchAll,
 }
 impl ShortcutAction {
@@ -217,7 +217,7 @@ impl ShortcutAction {
         Self::Search,
         Self::SearchAll,
     ];
-    /// Voice actions work system-wide; the others only while Nuschel is in
+    /// Voice actions work system-wide; the others only while Nuschl is in
     /// front, and are never registered with the desktop (they would take the
     /// key from every other application).
     pub fn system_wide(self) -> bool {
@@ -248,7 +248,7 @@ impl ShortcutAction {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ClientSettings {
-    pub audio: nuschel_core::audio::AudioSettings,
+    pub audio: nuschl_core::audio::AudioSettings,
     /// Keep voice in the TLS tunnel (Mumble's "Force TCP mode").
     pub force_tcp: bool,
     /// Reconnect automatically after an unexpected disconnect.
@@ -285,7 +285,7 @@ pub struct ClientSettings {
     pub nicknames: std::collections::BTreeMap<String, String>,
     /// A desktop notification when a friend connects.
     pub friend_notifications: bool,
-    /// Tell others in a conversation that you are typing (Nuschel servers).
+    /// Tell others in a conversation that you are typing (Nuschl servers).
     pub send_typing: bool,
     /// Use only locally configured servers/relays: never gather or advertise
     /// peer addresses, use STUN or establish a direct peer connection.
@@ -296,9 +296,9 @@ pub struct ClientSettings {
     pub wormhole_relay: String,
     /// Theme, fonts, text size and zoom.
     pub appearance: AppearanceSettings,
-    /// Whether a recovery key is offered when the Nuschel identity is created
+    /// Whether a recovery key is offered when the Nuschl identity is created
     /// (docs/e2ee.md §10, question 1: offered and skippable by default).
-    pub recovery_key: nuschel_ipc::crypto::RecoveryPolicy,
+    pub recovery_key: nuschl_ipc::crypto::RecoveryPolicy,
     /// No longer used: end-to-end encryption is a server-level switch (`e2ee/1`,
     /// docs/e2ee.md §10), not a client setting. Still read, so settings files that
     /// carry it keep loading; never written.
@@ -308,7 +308,7 @@ pub struct ClientSettings {
     /// and what happens without them (docs/e2ee.md §5.9). The built-in project
     /// auditor is included unless `default_witnesses` is false; until it is
     /// deployed nothing is required.
-    pub key_transparency: nuschel_ipc::crypto::KeyTransparencySettings,
+    pub key_transparency: nuschl_ipc::crypto::KeyTransparencySettings,
     /// The web host for share links (`web.example.org`, docs/web.md) when the
     /// server names none; empty: the project's, if it has one.
     pub share_web_host: String,
@@ -324,7 +324,7 @@ pub enum ThemeChoice {
     Dark,
 }
 
-/// How Nuschel looks.
+/// How Nuschl looks.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppearanceSettings {
@@ -397,9 +397,9 @@ impl Default for ClientSettings {
             nicknames: Default::default(),
             friend_notifications: false,
             send_typing: true,
-            wormhole_rendezvous: nuschel_core::transfer::PUBLIC_RENDEZVOUS.into(),
+            wormhole_rendezvous: nuschl_core::transfer::PUBLIC_RENDEZVOUS.into(),
             relay_only: false,
-            wormhole_relay: nuschel_core::transfer::PUBLIC_RELAY.into(),
+            wormhole_relay: nuschl_core::transfer::PUBLIC_RELAY.into(),
             appearance: AppearanceSettings::default(),
             recovery_key: Default::default(),
             e2ee_direct_messages: true,
@@ -456,25 +456,25 @@ impl ClientSettings {
         } else {
             248.
         };
-        if !nuschel_core::transfer::valid_url(&self.wormhole_rendezvous) {
-            self.wormhole_rendezvous = nuschel_core::transfer::PUBLIC_RENDEZVOUS.into();
+        if !nuschl_core::transfer::valid_url(&self.wormhole_rendezvous) {
+            self.wormhole_rendezvous = nuschl_core::transfer::PUBLIC_RENDEZVOUS.into();
         }
         if !self.wormhole_relay.starts_with("tcp://") || self.wormhole_relay.len() > 256 {
-            self.wormhole_relay = nuschel_core::transfer::PUBLIC_RELAY.into();
+            self.wormhole_relay = nuschl_core::transfer::PUBLIC_RELAY.into();
         }
         // Never repair a security policy by silently dropping witnesses or
         // reducing its quorum. Invalid keys remain required in the crypto worker.
         // Oversized configurations become one bounded invalid enabled entry,
         // rather than leaking an unbounded setting through worker IPC.
         let mut witnessing = std::mem::take(&mut self.key_transparency);
-        if witnessing.witnesses.len() > nuschel_ipc::crypto::MAX_WITNESSES {
-            witnessing.witnesses = vec![nuschel_ipc::crypto::WitnessSetting {
+        if witnessing.witnesses.len() > nuschl_ipc::crypto::MAX_WITNESSES {
+            witnessing.witnesses = vec![nuschl_ipc::crypto::WitnessSetting {
                 key: "invalid: too many configured witnesses".into(),
                 enabled: true,
             }];
         }
         for witness in &mut witnessing.witnesses {
-            if witness.key.len() > nuschel_ipc::crypto::MAX_WITNESS_KEY {
+            if witness.key.len() > nuschl_ipc::crypto::MAX_WITNESS_KEY {
                 witness.key = "invalid: verifier key exceeds the size limit".into();
             }
         }
@@ -551,7 +551,7 @@ fn insert_name(
 
 /// What a system configuration (Home Manager, an administrator) sets in
 /// managed.json: settings that win over settings.json on every start, and
-/// bookmarks. Nuschel never writes it.
+/// bookmarks. Nuschl never writes it.
 #[derive(Clone, Debug, Default)]
 pub struct Managed {
     settings: Map<String, Value>,
@@ -592,7 +592,7 @@ fn mumble_port() -> u16 {
 impl Managed {
     fn parse(bytes: &[u8]) -> io::Result<Self> {
         let file: ManagedFile = serde_json::from_slice(bytes)?;
-        // Only settings Nuschel knows, with values of the right types.
+        // Only settings Nuschl knows, with values of the right types.
         ClientSettings::deserialize(&Value::Object(file.settings.clone())).map_err(|error| {
             io::Error::new(io::ErrorKind::InvalidData, format!("settings: {error}"))
         })?;
@@ -746,7 +746,7 @@ fn put(map: &mut Map<String, Value>, path: &[String], value: Option<Value>) {
 }
 
 /// Saved bookmarks with the declared ones over them. A declared bookmark keeps
-/// what Nuschel saved about it (an accepted certificate, the channel tree, the
+/// what Nuschl saved about it (an accepted certificate, the channel tree, the
 /// icon, the last channel) while its address stays the same; one no longer
 /// declared is dropped.
 fn merge_servers(
@@ -801,14 +801,16 @@ fn too_many(servers: &[ServerBookmark]) -> bool {
     managed > MAX_SERVERS || servers.len() - managed > MAX_SERVERS
 }
 
-/// The first `nuschel/managed.json` in `$XDG_CONFIG_DIRS` (`/etc/xdg` by default).
+/// The first `nuschl/managed.json` in `$XDG_CONFIG_DIRS` (`/etc/xdg` by default).
 fn system_managed() -> Option<PathBuf> {
     if !cfg!(all(unix, not(target_os = "macos"))) {
         return None;
     }
     crate::layout::xdg_config_dirs(|name| std::env::var_os(name))
         .into_iter()
-        .map(|directory| directory.join("nuschel").join(MANAGED_FILE))
+        .flat_map(|directory| {
+            ["nuschl", "nuschel"].map(|name| directory.join(name).join(MANAGED_FILE))
+        })
         .find(|path| path.exists())
 }
 
@@ -835,7 +837,7 @@ pub struct Profile {
 const HISTORY_FILE: &str = crate::layout::HISTORY_FILE;
 const SETTINGS_FILE: &str = "settings.json";
 const SERVERS_FILE: &str = "servers.json";
-/// Written by Home Manager or an administrator; Nuschel only reads it.
+/// Written by Home Manager or an administrator; Nuschl only reads it.
 const MANAGED_FILE: &str = "managed.json";
 /// In the cache folder: the channel trees, by bookmark id.
 const CHANNELS_FILE: &str = "channels.json";
@@ -853,7 +855,7 @@ const MAX_CHANNEL_NAME: usize = 512;
 /// folders took them.
 const SERVER_CACHE_KEYS: [&str; 4] = ["cached_channels", "icon", "icon_checked_ms", "last_channel"];
 
-/// Everything Nuschel reads at start (see [`Profile::load`]).
+/// Everything Nuschl reads at start (see [`Profile::load`]).
 pub struct Loaded {
     pub settings: ClientSettings,
     pub managed: ManagedSettings,
@@ -895,7 +897,7 @@ impl<'a> From<&'a ServerBookmark> for SavedBookmark<'a> {
     }
 }
 
-/// A server's icon in the cache, or only when Nuschel last looked for one.
+/// A server's icon in the cache, or only when Nuschl last looked for one.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CachedIcon {
@@ -905,7 +907,7 @@ struct CachedIcon {
     checked_ms: i64,
 }
 
-/// What Nuschel learns about saved servers, kept apart from the bookmarks:
+/// What Nuschl learns about saved servers, kept apart from the bookmarks:
 /// channel trees and icons in the cache, the last channels in the state folder.
 #[derive(Default)]
 struct ServerFiles {
@@ -1106,10 +1108,23 @@ impl Profile {
     /// configuration is not read either, and the four folders are its
     /// `config`, `data`, `state` and `cache`.
     pub fn open(override_dir: Option<PathBuf>) -> io::Result<Self> {
-        match override_dir {
-            Some(root) => Self::at(Layout::under(&root), None),
-            None => Self::at(Layout::system()?, system_managed()),
-        }
+        let (layout, old, managed) = match override_dir {
+            Some(root) => (Layout::under(&root), None, None),
+            None => (
+                Layout::system()?,
+                Some(Layout::legacy_system()?),
+                system_managed(),
+            ),
+        };
+        layout.check()?;
+        let mut rename = crate::rename::migrate(old.as_ref(), &layout)?;
+        let mut profile = Self::at(layout, managed)?;
+        rename.moved.extend(profile.migration.moved.iter().cloned());
+        rename
+            .problems
+            .extend(profile.migration.problems.iter().cloned());
+        profile.migration = Arc::new(rename);
+        Ok(profile)
     }
 
     /// Open `layout`, after moving what earlier versions kept elsewhere into it.
@@ -1169,7 +1184,7 @@ impl Profile {
 
     /// Settings, managed configuration and servers. A settings.json or
     /// servers.json that cannot be read is renamed to `<name>.invalid` (or
-    /// `.invalid.N`) and Nuschel goes on without it; an invalid managed.json
+    /// `.invalid.N`) and Nuschl goes on without it; an invalid managed.json
     /// is ignored and left alone. Either way the problem is reported, as is
     /// anything that could not be moved to its new place.
     pub fn load(&self) -> Loaded {
@@ -1178,7 +1193,7 @@ impl Profile {
             Ok(managed) => Some(managed),
             Err(error) => {
                 problems.push(format!(
-                    "The system configuration is invalid, so Nuschel ignored it: {error}."
+                    "The system configuration is invalid, so Nuschl ignored it: {error}."
                 ));
                 None
             }
@@ -1200,7 +1215,7 @@ impl Profile {
         }
     }
 
-    /// managed.json, over the first `nuschel/managed.json` in
+    /// managed.json, over the first `nuschl/managed.json` in
     /// `$XDG_CONFIG_DIRS`. Missing files declare nothing.
     pub fn load_managed(&self) -> io::Result<Managed> {
         let mut managed = Managed::default();
@@ -1366,7 +1381,7 @@ impl Profile {
             .contains(name)
         {
             return Err(io::Error::other(format!(
-                "{name} could not be read, so Nuschel does not overwrite it"
+                "{name} could not be read, so Nuschl does not overwrite it"
             )));
         }
         let path = self.config_dir.join(name);
@@ -1392,7 +1407,7 @@ impl Profile {
             });
         match renamed {
             Ok(target) => format!(
-                "{name} could not be read ({error}). It was renamed to {target}, and Nuschel started with {instead}."
+                "{name} could not be read ({error}). It was renamed to {target}, and Nuschl started with {instead}."
             ),
             Err(rename) => {
                 self.kept
@@ -1400,7 +1415,7 @@ impl Profile {
                     .unwrap_or_else(PoisonError::into_inner)
                     .insert(name);
                 format!(
-                    "{name} could not be read ({error}) or renamed ({rename}). Nuschel started with {instead} and will not save over it."
+                    "{name} could not be read ({error}) or renamed ({rename}). Nuschl started with {instead} and will not save over it."
                 )
             }
         }
@@ -1507,10 +1522,10 @@ impl ClientIdentity {
             &rustls::pki_types::PrivatePkcs8KeyDer::from(der.as_bytes()),
             &rcgen::PKCS_RSA_SHA256,
         )?;
-        let mut params = rcgen::CertificateParams::new(vec!["nuschel-client.invalid".to_string()])?;
+        let mut params = rcgen::CertificateParams::new(vec!["nuschl-client.invalid".to_string()])?;
         params
             .distinguished_name
-            .push(rcgen::DnType::CommonName, "Nuschel user");
+            .push(rcgen::DnType::CommonName, "Nuschl user");
         params.not_after = rcgen::date_time_ymd(2046, 1, 1);
         let cert = params.self_signed(&signing_key)?;
         Ok(Self {
@@ -1576,7 +1591,7 @@ impl ClientIdentity {
         if !self.is_rsa() {
             return Err(
                 "This identity uses an ECDSA key, which stock Mumble cannot import. \
-                 Identities created by current Nuschel versions use RSA."
+                 Identities created by current Nuschl versions use RSA."
                     .into(),
             );
         }
@@ -1588,7 +1603,7 @@ impl ClientIdentity {
             p12_keystore::PrivateKeyChain::new(self.mumble_hash().into_bytes(), key, [certificate]);
         let mut store = p12_keystore::KeyStore::new();
         store.add_entry(
-            "Nuschel",
+            "Nuschl",
             p12_keystore::KeyStoreEntry::PrivateKeyChain(chain),
         );
         store
@@ -1646,7 +1661,7 @@ pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_core::audio::TransmitMode;
+    use nuschl_core::audio::TransmitMode;
     #[test]
     fn validates_endpoints_and_binds_history_to_certificate() {
         assert!(ServerBookmark::new("", "mumble://example.org", 64738, "me").is_err());
@@ -1673,7 +1688,7 @@ mod tests {
     }
     #[test]
     fn identities_round_trip_through_pkcs12() {
-        let root = std::env::temp_dir().join(format!("nuschel-identity-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("nuschl-identity-{}", Uuid::new_v4()));
         let profile = Profile::open(Some(root.clone())).unwrap();
         let original = profile.identity().unwrap();
         let exported = profile.export_identity("secret").unwrap();
@@ -1713,7 +1728,7 @@ mod tests {
 
     impl OldProfile {
         fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!("nuschel-old-{name}-{}", Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!("nuschl-old-{name}-{}", Uuid::new_v4()));
             let (config, data) = (root.join("config"), root.join("data"));
             fs::create_dir_all(config.join("nuschel-identity")).unwrap();
             fs::create_dir_all(&data).unwrap();
@@ -1725,8 +1740,8 @@ mod tests {
             fs::write(config.join("nuschel-identity/keystore"), b"sealed").unwrap();
             fs::write(config.join("nuschel-identity/state"), b"sealed state").unwrap();
             fs::write(
-                config.join("nuschel-policy.json"),
-                br#"{"voice.example.org:64738": {"nuschel": true}}"#,
+                config.join("nuschl-policy.json"),
+                br#"{"voice.example.org:64738": {"nuschl": true}}"#,
             )
             .unwrap();
             fs::write(config.join("update-state.json"), b"{}").unwrap();
@@ -1801,7 +1816,7 @@ mod tests {
     #[test]
     fn an_earlier_profile_moves_to_the_new_layout() {
         let old = OldProfile::new("full");
-        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let profile = Profile::at(Layout::under(&old.root), None).unwrap();
         let layout = profile.layout().clone();
         assert_eq!(layout, Layout::under(&old.root));
         // Only what a user edits stays in the configuration folder.
@@ -1817,7 +1832,7 @@ mod tests {
         // The data folder: three folders of their own, and the security records.
         assert_eq!(
             names(&layout.data),
-            ["history", "identity", "keys", "nuschel-policy.json"]
+            ["history", "identity", "keys", "nuschl-policy.json"]
         );
         assert_eq!(profile.history_dir(), layout.history());
         assert_eq!(
@@ -1847,7 +1862,7 @@ mod tests {
                 .policy()
                 .unwrap()
                 .get("voice.example.org", 64738)
-                .nuschel
+                .nuschl
         );
         assert_eq!(
             profile.update_state_path(),
@@ -1897,7 +1912,7 @@ mod tests {
             assert!(moved.contains(what), "{what} in {moved}");
         }
         // A second start finds nothing to move.
-        let again = Profile::open(Some(old.root.clone())).unwrap();
+        let again = Profile::at(Layout::under(&old.root), None).unwrap();
         assert!(again.moved().is_empty(), "{:?}", again.moved());
         assert!(again.load().problems.is_empty());
         assert_eq!(again.load_servers(None).unwrap()[0].last_channel, Some(7));
@@ -1975,7 +1990,7 @@ mod tests {
             serde_json::to_vec(&BTreeMap::from([(old.servers[0].id.clone(), newer)])).unwrap(),
         )
         .unwrap();
-        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let profile = Profile::at(Layout::under(&old.root), None).unwrap();
         let loaded = profile.load();
         assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
         assert_eq!(
@@ -1984,7 +1999,7 @@ mod tests {
         );
         assert_eq!(
             names(&layout.data),
-            ["history", "identity", "keys", "nuschel-policy.json"]
+            ["history", "identity", "keys", "nuschl-policy.json"]
         );
         assert_eq!(fs::read(profile.history_path()).unwrap(), b"database");
         assert_eq!(
@@ -2013,7 +2028,7 @@ mod tests {
         fs::create_dir_all(layout.identity()).unwrap();
         let newer = br#"{"certificate":[9],"private_key":[9]}"#;
         fs::write(layout.identity().join("identity.json"), newer).unwrap();
-        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let profile = Profile::at(Layout::under(&old.root), None).unwrap();
         let problems = profile.load().problems.join("\n");
         assert!(
             problems.contains("The identity (certificate and private key) is in")
@@ -2030,7 +2045,7 @@ mod tests {
         );
         // An earlier version started meanwhile and created the identity anew
         // in its old place: the same report, nothing replaced.
-        let again = Profile::open(Some(old.root.clone())).unwrap();
+        let again = Profile::at(Layout::under(&old.root), None).unwrap();
         assert_eq!(again.load().problems.len(), 1);
         assert_eq!(again.identity().unwrap().certificate, [9]);
     }
@@ -2045,7 +2060,7 @@ mod tests {
         // A different log already in the new place stops the history's move.
         fs::create_dir_all(layout.history()).unwrap();
         fs::write(layout.history().join("history.sqlite3-wal"), b"other log").unwrap();
-        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let profile = Profile::at(Layout::under(&old.root), None).unwrap();
         assert_eq!(profile.history_dir(), layout.data);
         assert_eq!(
             names(&layout.data),
@@ -2063,7 +2078,7 @@ mod tests {
                 .policy()
                 .unwrap()
                 .get("voice.example.org", 64738)
-                .nuschel
+                .nuschl
         );
         assert_eq!(profile.identity().unwrap().certificate, [1, 2, 3]);
         assert!(old.config("identity.json").exists());
@@ -2084,7 +2099,7 @@ mod tests {
         );
         // Once the obstacle is gone, everything moves.
         fs::remove_file(layout.history().join("history.sqlite3-wal")).unwrap();
-        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let profile = Profile::at(Layout::under(&old.root), None).unwrap();
         assert!(
             profile.load().problems.is_empty(),
             "{:?}",
@@ -2108,7 +2123,7 @@ mod tests {
         fs::write(layout.identity().join("identity.json"), b"newer").unwrap();
         fs::create_dir_all(layout.history()).unwrap();
         fs::write(layout.history().join("history.sqlite3-wal"), b"other log").unwrap();
-        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let profile = Profile::at(Layout::under(&old.root), None).unwrap();
         assert_eq!(profile.history_dir(), layout.history());
         let problems = profile.load().problems.join("\n");
         assert!(
@@ -2128,7 +2143,7 @@ mod tests {
         fs::create_dir_all(dotfiles.parent().unwrap()).unwrap();
         fs::rename(old.config("identity.json"), &dotfiles).unwrap();
         std::os::unix::fs::symlink(&dotfiles, old.config("identity.json")).unwrap();
-        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let profile = Profile::at(Layout::under(&old.root), None).unwrap();
         let identity = profile.layout().identity().join("identity.json");
         assert_eq!(fs::read(&identity).unwrap(), old.identity);
         assert!(!fs::symlink_metadata(&identity).unwrap().is_symlink());
@@ -2157,7 +2172,10 @@ mod tests {
             names(&layout.identity()),
             ["identity.json", "identity.lock"]
         );
-        assert_eq!(names(&layout.config), ["servers.json"]);
+        assert_eq!(
+            names(&layout.config),
+            ["nuschl-namespace-v1", "servers.json"]
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2166,9 +2184,9 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn the_system_profile_follows_the_xdg_variables() {
-        let root = std::env::temp_dir().join(format!("nuschel-xdg-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("nuschl-xdg-{}", Uuid::new_v4()));
         let home = root.join("home");
-        let system = root.join("etc/nuschel/managed.json");
+        let system = root.join("etc/nuschl/managed.json");
         fs::create_dir_all(system.parent().unwrap()).unwrap();
         fs::write(&system, br#"{"settings": {"force_tcp": true}}"#).unwrap();
         let child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -2178,7 +2196,7 @@ mod tests {
                 "--include-ignored",
             ])
             .env_clear()
-            .env("NUSCHEL_TEST_XDG_CHILD", "1")
+            .env("NUSCHL_TEST_XDG_CHILD", "1")
             .env("HOME", &home)
             .env("XDG_CONFIG_HOME", root.join("config"))
             .env("XDG_DATA_HOME", "relative/data")
@@ -2194,12 +2212,12 @@ mod tests {
         assert!(child.status.success(), "{output}");
         assert!(output.contains("1 passed"), "{output}");
         for file in [
-            root.join("config/nuschel/servers.json"),
-            home.join(".local/share/nuschel/history"),
-            home.join(".local/share/nuschel/identity/identity.json"),
-            home.join(".local/share/nuschel/nuschel-policy.json"),
-            home.join(".local/state/nuschel/last-channels.json"),
-            root.join("cache/nuschel/channels.json"),
+            root.join("config/nuschl/servers.json"),
+            home.join(".local/share/nuschl/history"),
+            home.join(".local/share/nuschl/identity/identity.json"),
+            home.join(".local/share/nuschl/nuschl-policy.json"),
+            home.join(".local/state/nuschl/last-channels.json"),
+            root.join("cache/nuschl/channels.json"),
         ] {
             assert!(file.exists(), "{}", file.display());
         }
@@ -2211,7 +2229,7 @@ mod tests {
     #[test]
     #[ignore = "a child of the_system_profile_follows_the_xdg_variables"]
     fn system_profile_child() {
-        if std::env::var_os("NUSCHEL_TEST_XDG_CHILD").is_none() {
+        if std::env::var_os("NUSCHL_TEST_XDG_CHILD").is_none() {
             return;
         }
         let profile = Profile::open(None).unwrap();
@@ -2239,7 +2257,7 @@ mod tests {
     }
     #[test]
     fn a_hostile_channel_cache_cannot_block_saving_bookmarks() {
-        let root = std::env::temp_dir().join(format!("nuschel-servers-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("nuschl-servers-{}", Uuid::new_v4()));
         let profile = Profile::open(Some(root.clone())).unwrap();
         let mut hostile = ServerBookmark::new("", "hostile.invalid", 64738, "me").unwrap();
         // Each control character is escaped to six bytes ("\u0001") in JSON.
@@ -2291,7 +2309,7 @@ mod tests {
     }
     #[test]
     fn settings_round_trip_and_are_sanitized() {
-        let root = std::env::temp_dir().join(format!("nuschel-settings-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("nuschl-settings-{}", Uuid::new_v4()));
         let profile = Profile::open(Some(root.clone())).unwrap();
         assert_eq!(
             profile.load_settings(&Managed::default()).unwrap().0,
@@ -2363,7 +2381,7 @@ mod tests {
     }
     #[test]
     fn settings_from_before_appearance_follow_the_system_at_100_percent() {
-        let root = std::env::temp_dir().join(format!("nuschel-appearance-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("nuschl-appearance-{}", Uuid::new_v4()));
         let profile = Profile::open(Some(root.clone())).unwrap();
         std::fs::write(
             profile.config_dir.join("settings.json"),
@@ -2445,7 +2463,7 @@ mod tests {
         }
     }
     fn temporary_profile(name: &str) -> (PathBuf, Profile) {
-        let root = std::env::temp_dir().join(format!("nuschel-{name}-{}", Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("nuschl-{name}-{}", Uuid::new_v4()));
         let profile = Profile::open(Some(root.clone())).unwrap();
         (root, profile)
     }
@@ -2579,7 +2597,7 @@ mod tests {
     }
     #[test]
     fn oversized_witness_settings_fail_closed_with_bounded_ipc() {
-        use nuschel_ipc::crypto::{
+        use nuschl_ipc::crypto::{
             KeyTransparencySettings, MAX_WITNESS_KEY, MAX_WITNESSES, WitnessSetting,
         };
         let oversized = WitnessSetting {
@@ -2623,7 +2641,7 @@ mod tests {
     #[test]
     fn system_wide_managed_settings_yield_to_the_users_own() {
         let (root, mut profile) = temporary_profile("system-managed");
-        let system = root.join("etc/xdg/nuschel/managed.json");
+        let system = root.join("etc/xdg/nuschl/managed.json");
         fs::create_dir_all(system.parent().unwrap()).unwrap();
         let id = |n: u8| format!("00000000-0000-4000-8000-0000000000{n:02}");
         fs::write(
@@ -2683,7 +2701,7 @@ mod tests {
         assert_eq!(servers.len(), 2);
         assert!(servers[1].managed && !servers[0].managed);
         let team = &mut servers[1];
-        // What Nuschel learns at run time is saved with it, and kept.
+        // What Nuschl learns at run time is saved with it, and kept.
         team.certificate_sha256 = Some("ab".repeat(32));
         team.last_channel = Some(7);
         team.cached_channels = vec![CachedChannel {
@@ -2866,17 +2884,17 @@ mod tests {
         let pin = "cd".repeat(32);
         for link in [
             format!(
-                "https://web.example.org/join/AAAAAAAAAAAAAAAAAAAAAA#s=Voice.Example.org:1234&c=Lobby/Dev%20Talk&fp=sha256:{pin}&policy=nuschel"
+                "https://web.example.org/join/AAAAAAAAAAAAAAAAAAAAAA#s=Voice.Example.org:1234&c=Lobby/Dev%20Talk&fp=sha256:{pin}&policy=nuschl"
             ),
             format!(
-                "nuschel://join/AAAAAAAAAAAAAAAAAAAAAA#s=voice.example.org:1234&c=Lobby/Dev%20Talk&fp=sha256:{pin}&policy=nuschel"
+                "nuschl://join/AAAAAAAAAAAAAAAAAAAAAA#s=voice.example.org:1234&c=Lobby/Dev%20Talk&fp=sha256:{pin}&policy=nuschl"
             ),
         ] {
             let url = MumbleUrl::parse(&link).unwrap();
             assert_eq!((url.host.as_str(), url.port), ("voice.example.org", 1234));
             assert_eq!(url.channel, ["Lobby", "Dev Talk"]);
             assert_eq!(url.certificate_sha256.as_deref(), Some(pin.as_str()));
-            assert!(url.require_nuschel);
+            assert!(url.require_nuschl);
             assert_eq!(url.share_token.as_deref(), Some("AAAAAAAAAAAAAAAAAAAAAA"));
             assert_eq!(url.username, None);
             assert!(!format!("{url:?}").contains("AAAAAAAAAAAAAAAAAAAAAA"));
@@ -2886,20 +2904,20 @@ mod tests {
         assert_eq!((url.host.as_str(), url.port), ("2001:db8::1", 64738));
         assert_eq!(url.share_token, None);
         assert!(MumbleUrl::parse("https://web.example.org/elsewhere#s=a.b").is_err());
-        assert!(MumbleUrl::parse("nuschel://join/#c=Lobby").is_err());
+        assert!(MumbleUrl::parse("nuschl://join/#c=Lobby").is_err());
     }
 
     #[test]
     fn invites_carry_the_certificate_pin_and_policy() {
         let fp = "AB".repeat(32);
         let url = MumbleUrl::parse(&format!(
-            "mumble://voice.example.org/?fp=sha256:{fp}&policy=nuschel#x"
+            "mumble://voice.example.org/?fp=sha256:{fp}&policy=nuschl#x"
         ))
         .unwrap();
         assert_eq!(url.certificate_sha256, Some("ab".repeat(32)));
-        assert!(url.require_nuschel);
+        assert!(url.require_nuschl);
         let plain = MumbleUrl::parse("mumble://voice.example.org/?version=1.2.0").unwrap();
-        assert!(!plain.require_nuschel && plain.certificate_sha256.is_none());
+        assert!(!plain.require_nuschl && plain.certificate_sha256.is_none());
         assert!(MumbleUrl::parse("mumble://h/?fp=sha1:00").is_err());
     }
 }

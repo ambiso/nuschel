@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The worker against nuschel-kt's directory in process, standing in for the server.
+//! The worker against nuschl-kt's directory in process, standing in for the server.
 #![allow(dead_code)]
 
-use nuschel_crypto_worker::{KeySource, Store, Worker};
-use nuschel_identity::{DisplayName, NewIdentity, Validity};
-use nuschel_ipc::crypto::{
+use nuschl_crypto_worker::{KeySource, Store, Worker};
+use nuschl_identity::{DisplayName, NewIdentity, Validity};
+use nuschl_ipc::crypto::{
     ContactView, CryptoRequest, CryptoResponse, CryptoServer, HeadOutcome, KtRecordBytes,
     PublishBundle,
 };
-use nuschel_kt::{
+use nuschl_kt::{
     AccountBinding, AccountId, AkdDirectory, Directory, DirectoryValue, Ed25519HeadSigner, Label,
     MemoryStore, RosterCommitment, SignedHead, VrfSecret,
 };
@@ -174,7 +174,7 @@ impl Client {
         let CryptoResponse::Bundle(bundle) = self.ask(CryptoRequest::PublishBundle {
             server: self.server.into(),
             device_name: "laptop".into(),
-            recovery: nuschel_ipc::crypto::RecoveryPolicy::Never,
+            recovery: nuschl_ipc::crypto::RecoveryPolicy::Never,
         }) else {
             panic!("no bundle")
         };
@@ -237,8 +237,8 @@ impl Person {
 
 /// The value a bundle binds, as the server computes it.
 pub fn value_of(bundle: &PublishBundle) -> DirectoryValue {
-    let root = nuschel_identity::HybridPublicKey::decode(&bundle.root).unwrap();
-    let signing = nuschel_identity::DeviceSigningCertificate::decode(
+    let root = nuschl_identity::HybridPublicKey::decode(&bundle.root).unwrap();
+    let signing = nuschl_identity::DeviceSigningCertificate::decode(
         &bundle.record.device_signing_certificate,
     )
     .unwrap();
@@ -246,9 +246,9 @@ pub fn value_of(bundle: &PublishBundle) -> DirectoryValue {
         .record
         .devices
         .iter()
-        .map(|d| nuschel_identity::DeviceCertificate::decode(d).unwrap())
+        .map(|d| nuschl_identity::DeviceCertificate::decode(d).unwrap())
         .collect();
-    let statement = nuschel_identity::AccountStatement::decode(&bundle.record.statement).unwrap();
+    let statement = nuschl_identity::AccountStatement::decode(&bundle.record.statement).unwrap();
     let roster = RosterCommitment::compute(&signing, &devices, &[]).unwrap();
     AccountBinding::with_statement(root, roster, &statement).to_value()
 }

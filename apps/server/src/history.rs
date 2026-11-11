@@ -8,10 +8,10 @@
 //! re-checked against the current authorisation state before it is sent.
 use crate::{conversations::Id, server::Server, storage::StorageHandle};
 use bytes::Bytes;
-use nuschel_ipc::server::{
+use nuschl_ipc::server::{
     PageQuery, ServerStorageRequest as Request, ServerStorageResponse as Response,
 };
-use nuschel_protocol::nuschel::v1;
+use nuschl_protocol::nuschl::v1;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -21,7 +21,7 @@ const READ_QUEUE: usize = 64;
 /// What to do once a write is stored.
 pub enum Done {
     Nothing,
-    /// A Nuschel client's message (or edit, deletion): acknowledge, deliver.
+    /// A Nuschl client's message (or edit, deletion): acknowledge, deliver.
     Request {
         session: u32,
         request_id: u64,
@@ -32,7 +32,7 @@ pub enum Done {
     /// An MLS commit or application message (`mls/1`): acknowledge with
     /// `MlsAck`, deliver, and for a commit tell the delivery service.
     Mls(Box<crate::mls::Stored>),
-    /// A stock client's channel message: deliver to Nuschel readers, or the
+    /// A stock client's channel message: deliver to Nuschl readers, or the
     /// stock frame if storing failed.
     Stock {
         /// The sender, who has its own copy.

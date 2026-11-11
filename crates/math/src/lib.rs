@@ -293,10 +293,10 @@ mod tests {
     }
 
     /// Writes PNGs of sample formulas to look at:
-    /// `NUSCHEL_MATH_SAMPLES=dir cargo test -p nuschel-math samples`.
+    /// `NUSCHL_MATH_SAMPLES=dir cargo test -p nuschl-math samples`.
     #[test]
     fn samples() {
-        let Some(directory) = std::env::var_os("NUSCHEL_MATH_SAMPLES") else {
+        let Some(directory) = std::env::var_os("NUSCHL_MATH_SAMPLES") else {
             return;
         };
         let renderer = Renderer::new();

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! In-app updates on Windows and macOS (see the `nuschel-update` crate): a
+//! In-app updates on Windows and macOS (see the `nuschl-update` crate): a
 //! check shortly after start and every few hours, a banner when a newer
 //! signed release exists, and download, swap and restart on request.
 use std::{
@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-pub use nuschel_update::Update;
+pub use nuschl_update::Update;
 
 /// First check after start, then this often.
 pub const FIRST_CHECK: Duration = Duration::from_secs(20);
@@ -39,9 +39,9 @@ pub enum UpdateEvent {
 
 /// The installation this process can update, if any.
 pub fn root() -> Option<PathBuf> {
-    nuschel_update::platform()?;
+    nuschl_update::platform()?;
     let executable = std::env::current_exe().ok()?;
-    nuschel_update::install_root(&executable)
+    nuschl_update::install_root(&executable)
 }
 
 /// Whether this build updates itself (Windows, macOS); Linux packages do not.
@@ -52,7 +52,7 @@ pub fn supported() -> bool {
 /// Remove files an earlier update moved aside.
 pub fn cleanup() {
     if let Some(root) = root() {
-        nuschel_update::cleanup(&root);
+        nuschl_update::cleanup(&root);
     }
 }
 
@@ -68,17 +68,17 @@ pub fn check() -> Result<Option<Update>, String> {
     let state = STATE.get().ok_or("the update state location is not set")?;
     // The state folder is created when first needed.
     if let Some(folder) = state.parent() {
-        nuschel_session::layout::create_private_dir(folder).map_err(|e| e.to_string())?;
+        nuschl_session::layout::create_private_dir(folder).map_err(|e| e.to_string())?;
     }
-    nuschel_update::check(root().as_deref(), env!("CARGO_PKG_VERSION"), state)
+    nuschl_update::check(root().as_deref(), env!("CARGO_PKG_VERSION"), state)
         .map_err(|e| e.to_string())
 }
 
 pub fn install(update: &Update, mut progress: impl FnMut(u64, u64)) -> Result<(), String> {
     let root = root().ok_or("this installation does not update itself")?;
     let staged =
-        nuschel_update::download(update, &root, &mut progress).map_err(|e| e.to_string())?;
-    nuschel_update::apply(staged).map_err(|e| e.to_string())
+        nuschl_update::download(update, &root, &mut progress).map_err(|e| e.to_string())?;
+    nuschl_update::apply(staged).map_err(|e| e.to_string())
 }
 
 /// Start the updated program; the caller quits.

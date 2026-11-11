@@ -5,7 +5,7 @@
 
 use bytes::BytesMut;
 use libfuzzer_sys::fuzz_target;
-use nuschel_protocol::{control as proto, decode_control_limited};
+use nuschl_protocol::{control as proto, decode_control_limited};
 use prost::Message;
 
 fn decode_all(kind: u16, payload: bytes::Bytes) {

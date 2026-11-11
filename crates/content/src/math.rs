@@ -6,13 +6,13 @@
 //! worker renders is what was typed; the text around it, the wire and stock
 //! clients' copy are unchanged.
 
-use nuschel_core::EMBED;
+use nuschl_core::EMBED;
 use std::ops::Range;
 
 /// Formulas per message; past them, the delimiters stay text.
 pub const MAX_FORMULAS: usize = 32;
 /// The longest formula, in bytes between its delimiters
-/// (`nuschel_math::latex::MAX_SOURCE_BYTES`).
+/// (`nuschl_math::latex::MAX_SOURCE_BYTES`).
 pub const MAX_FORMULA_BYTES: usize = 4096;
 
 /// A formula token: all of it, delimiters included, and whether it is a
@@ -126,7 +126,7 @@ pub fn tokens(source: &str) -> Vec<Token> {
 #[cfg(test)]
 mod spec {
     use crate::ContentRenderer;
-    use nuschel_core::{ContentBlock, MessageDocument};
+    use nuschl_core::{ContentBlock, MessageDocument};
 
     fn found(document: &MessageDocument) -> Vec<(String, String, char)> {
         let mut found = Vec::new();

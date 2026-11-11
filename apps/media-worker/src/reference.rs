@@ -4,7 +4,7 @@
 //!
 //! The reference is a recording of the output device (PipeWire sink capture,
 //! PulseAudio monitor, WASAPI loopback, macOS process tap), so the echo of
-//! every application is removed, not just Nuschel's voices. Where no such
+//! every application is removed, not just Nuschl's voices. Where no such
 //! recording exists, the output callback records what it hands to the device.
 //!
 //! Device callbacks stamp their samples on one clock (the worker's `Instant`

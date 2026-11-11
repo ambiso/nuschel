@@ -13,7 +13,7 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_session::{
+use nuschl_session::{
     connection::{Command, TextTarget, User},
     model::{ChannelEdit, UserAction, VoiceTargetSpec, permission as perm},
 };
@@ -102,7 +102,7 @@ enum Volume {
 }
 
 impl Volume {
-    fn get(&self, settings: &nuschel_session::config::ClientSettings) -> f32 {
+    fn get(&self, settings: &nuschl_session::config::ClientSettings) -> f32 {
         match self {
             Volume::User(hash) => settings.volume_for(Some(hash)),
             Volume::Server(id) => settings.server_volume(id),
@@ -110,7 +110,7 @@ impl Volume {
     }
 
     /// Change it by `step`, within 0 to 4.
-    fn step(&self, settings: &mut nuschel_session::config::ClientSettings, step: f32) {
+    fn step(&self, settings: &mut nuschl_session::config::ClientSettings, step: f32) {
         let value = (self.get(settings) + step).clamp(0., 4.);
         match self {
             Volume::User(hash) => settings.user_volumes.insert(hash.clone(), value),
@@ -246,8 +246,8 @@ impl Desktop {
                 self.update_settings(|settings| full = !settings.set_nickname(&hash, &text));
                 if full {
                     self.error = Some(format!(
-                        "You have {} nicknames, the most Nuschel keeps.",
-                        nuschel_session::config::MAX_PEOPLE
+                        "You have {} nicknames, the most Nuschl keeps.",
+                        nuschl_session::config::MAX_PEOPLE
                     ));
                 }
                 self.rename_directs();
@@ -257,7 +257,7 @@ impl Desktop {
                 let result = std::fs::metadata(&path)
                     .map_err(|error| error.to_string())
                     .and_then(|metadata| {
-                        if metadata.len() > nuschel_session::config::MAX_PKCS12_BYTES as u64 {
+                        if metadata.len() > nuschl_session::config::MAX_PKCS12_BYTES as u64 {
                             Err("The certificate file is too large.".to_string())
                         } else {
                             std::fs::read(&path).map_err(|error| error.to_string())
@@ -277,7 +277,7 @@ impl Desktop {
                 let directory = std::env::var_os("HOME")
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(std::env::temp_dir);
-                let target = cx.prompt_for_new_path(&directory, Some("nuschel-certificate.p12"));
+                let target = cx.prompt_for_new_path(&directory, Some("nuschl-certificate.p12"));
                 let password = text;
                 cx.spawn(async move |this, cx| {
                     let Ok(Ok(Some(path))) = target.await else {
@@ -452,7 +452,7 @@ impl Desktop {
                             cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))
                         }));
                     }
-                    // Nuschel servers: edit or delete (see editing.rs).
+                    // Nuschl servers: edit or delete (see editing.rs).
                     let serial = menu.serial;
                     let (edit, delete) = self
                         .selected_indices()
@@ -840,7 +840,7 @@ impl Desktop {
                         cx.write_to_clipboard(ClipboardItem::new_string(url));
                     }
                 }));
-                // A link that opens Nuschel, or the channel in a browser
+                // A link that opens Nuschl, or the channel in a browser
                 // (docs/web.md, "Share links").
                 entries.push(item("Copy share link", "link", move |this, _, cx| {
                     this.copy_share_link(index, channel, cx);
@@ -904,8 +904,8 @@ impl Desktop {
                     let role = self.client.voice_role(index);
                     if matches!(
                         role,
-                        nuschel_client::voice::Role::Listening
-                            | nuschel_client::voice::Role::Deafened
+                        nuschl_client::voice::Role::Listening
+                            | nuschl_client::voice::Role::Deafened
                     ) {
                         entries.push(item("Use voice here", "mic", move |this, _, _| {
                             this.use_voice_here(index)
@@ -1114,7 +1114,7 @@ impl Desktop {
                     self.driver.render_html(
                         view.id.clone(),
                         view.generation,
-                        nuschel_client::platform::RenderKey::Comment(session),
+                        nuschl_client::platform::RenderKey::Comment(session),
                         comment.clone(),
                     );
                 }
@@ -1138,7 +1138,7 @@ fn push_context_actions(
     entries: &mut Vec<Entry>,
     server: &crate::state::ServerView,
     index: usize,
-    applies: impl Fn(&nuschel_session::model::ContextAction) -> bool,
+    applies: impl Fn(&nuschl_session::model::ContextAction) -> bool,
     session: Option<u32>,
     channel: Option<u32>,
 ) {
@@ -1171,7 +1171,7 @@ fn push_context_actions(
 /// Mumble: both are kept by certificate hash, only on this device.
 fn people_entries(
     entries: &mut Vec<Entry>,
-    settings: &nuschel_session::config::ClientSettings,
+    settings: &nuschl_session::config::ClientSettings,
     user: &User,
     hash: String,
 ) {
@@ -1193,8 +1193,8 @@ fn people_entries(
             this.update_settings(|settings| full = !settings.add_friend(&hash, &name));
             if full {
                 this.error = Some(format!(
-                    "You have {} friends, the most Nuschel keeps.",
-                    nuschel_session::config::MAX_PEOPLE
+                    "You have {} friends, the most Nuschl keeps.",
+                    nuschl_session::config::MAX_PEOPLE
                 ));
             }
         }));

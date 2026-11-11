@@ -5,7 +5,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use thiserror::Error;
 
 pub mod crypt;
-pub mod nuschel;
+pub mod nuschl;
 pub mod relay;
 pub mod tunnel;
 pub mod voice;
@@ -52,8 +52,8 @@ pub mod kind {
     pub const SERVER_CONFIG: u16 = 24;
     pub const SUGGEST_CONFIG: u16 = 25;
     pub const PLUGIN_DATA_TRANSMISSION: u16 = 26;
-    /// Reserved for the Nuschel extension (`docs/extension.md`): 0x4E00–0x4EFF.
-    pub const NUSCHEL_EXTENSION: std::ops::RangeInclusive<u16> = 0x4e00..=0x4eff;
+    /// Reserved for the Nuschl extension (`docs/extension.md`): 0x4E00–0x4EFF.
+    pub const NUSCHL_EXTENSION: std::ops::RangeInclusive<u16> = 0x4e00..=0x4eff;
 }
 
 /// A complete control frame (header and protobuf body) in one buffer, so a

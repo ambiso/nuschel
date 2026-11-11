@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """The screenshot at the top of README.md, made reproducibly (`just readme-screenshot`).
 
-A private nuscheld on 127.0.0.1 with a small community's channel tree, a few
-scripted people (nuschel-cli) in its channels, and the desktop in a private
+A private nuschld on 127.0.0.1 with a small community's channel tree, a few
+scripted people (nuschl-cli) in its channels, and the desktop in a private
 headless GNOME Shell on the real GPU (never the user's session). In
 #Development people chat (code, an image, a formula, an edit), Ada talks and
-Lena types. The picture is cropped to Nuschel's window, so nothing else on the
+Lena types. The picture is cropped to Nuschl's window, so nothing else on the
 private screen (top bar, notifications) can appear in it; every name, address
 and file in it is made up here.
 
-    NUSCHEL_WL_TMP=/tmp/... python3 tests/readme_screenshot.py <binaries> --output docs/images/nuschel.png
+    NUSCHL_WL_TMP=/tmp/... python3 tests/readme_screenshot.py <binaries> --output docs/images/nuschl.png
 
 Needs gnome-shell, dbus-run-session, gdbus and ImageMagick's `magick`; with
 `oxipng` on the PATH the PNG is optimised too.
@@ -32,7 +32,7 @@ import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gnome_session import GnomeSession  # noqa: E402
-from local_nuscheld import Nuscheld, eventually, free_port  # noqa: E402
+from local_nuschld import Nuschld, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin, tone  # noqa: E402
 from seed_server import seed  # noqa: E402
 from workers import exchange  # noqa: E402
@@ -69,13 +69,13 @@ FORMULA = ("And the jitter estimate from RFC 3550, for the docs: "
            "$$J_i = J_{i-1} + \\frac{|D_{i-1,i}| - J_{i-1}}{16}$$")
 
 
-class Server(Nuscheld):
-    """nuscheld with the community's name and no test banner."""
+class Server(Nuschld):
+    """nuschld with the community's name and no test banner."""
 
     def write_config(self, message_limit, message_burst):
         super().write_config(message_limit, message_burst)
         self.config.write_text(self.config.read_text()
-                               .replace('welcome_text = "Welcome to the <b>Nuschel</b> test server."',
+                               .replace('welcome_text = "Welcome to the <b>Nuschl</b> test server."',
                                         f'registered_name = "{SERVER}"\nwelcome_text = ""'))
 
 
@@ -179,14 +179,14 @@ class Person:
 
 
 def window_picture(shell, output):
-    """Nuschel's window from a screenshot of the private screen, as an RGBA PNG.
+    """Nuschl's window from a screenshot of the private screen, as an RGBA PNG.
 
-    The frame rectangle may include a margin around what Nuschel draws (the
+    The frame rectangle may include a margin around what Nuschl draws (the
     shell's background and a faint shadow), depending on when the client set
     its window geometry: make the background transparent from the corners
     inwards, which also clears the rounded corners, then trim what became
     transparent. Returns the picture's size."""
-    window = shell.window("Nuschel")
+    window = shell.window("Nuschl")
     raw = output.resolve().with_name(output.stem + "-screen.png")  # the shell needs an absolute path
     shell.screenshot(raw)
     crop = f"{window['width']}x{window['height']}+{window['x']}+{window['y']}"
@@ -217,12 +217,12 @@ def main():
     parser.add_argument("binaries", type=Path)
     parser.add_argument("--output", type=Path, required=True, help="the PNG to write")
     parser.add_argument("--gnome-shell", type=Path)
-    parser.add_argument("--size", default="1078x782", help="the picture (what Nuschel draws), in pixels")
+    parser.add_argument("--size", default="1078x782", help="the picture (what Nuschl draws), in pixels")
     parser.add_argument("--logs", type=Path, help="keep the server's, the shell's and the desktop's logs here")
     args = parser.parse_args()
     width, height = map(int, args.size.split("x"))
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="nuschel-readme-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-readme-") as temporary:
         root = Path(temporary)
         logs = args.logs or root / "logs"
         logs.mkdir(parents=True, exist_ok=True)
@@ -253,38 +253,38 @@ def main():
             (profile / "config/servers.json").write_text(json.dumps([bookmark]))
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": "dark"}}))
             # The link connects without deafening (as at startup), so Andi hears Ada.
-            app = subprocess.Popen([str(args.binaries / "nuschel"), "--profile-dir", str(profile),
+            app = subprocess.Popen([str(args.binaries / "nuschl"), "--profile-dir", str(profile),
                                     f"mumble://Andi@127.0.0.1:{port}/Development"],
-                                   env=shell.app_environment() | {"RUST_LOG": "nuschel=info"},
+                                   env=shell.app_environment() | {"RUST_LOG": "nuschl=info"},
                                    stdout=(logs / "desktop.log").open("w"), stderr=subprocess.STDOUT,
                                    start_new_session=True)
-            eventually(lambda: app.poll() is None and shell.window("Nuschel"), "Nuschel window did not appear")
+            eventually(lambda: app.poll() is None and shell.window("Nuschl"), "Nuschl window did not appear")
 
             def placed(frame_width, frame_height):
-                shell.place("Nuschel", 40, 40, frame_width, frame_height)
+                shell.place("Nuschl", 40, 40, frame_width, frame_height)
                 time.sleep(0.3)
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 return window["width"] == frame_width and window["height"] == frame_height
 
-            # Size the frame so that what Nuschel draws has the requested size
+            # Size the frame so that what Nuschl draws has the requested size
             # (the frame's margin, if any, is known once it is drawn).
             frame = (width, height)
             for _ in range(3):
-                eventually(lambda: placed(*frame), "Nuschel window could not be placed")
+                eventually(lambda: placed(*frame), "Nuschl window could not be placed")
                 time.sleep(1.0)
                 drawn = window_picture(shell, root / "probe.png")
                 if drawn == (width, height):
                     break
                 frame = (frame[0] + width - drawn[0], frame[1] + height - drawn[1])
             else:
-                raise AssertionError(f"Nuschel draws {drawn}, not {width}x{height}")
+                raise AssertionError(f"Nuschl draws {drawn}, not {width}x{height}")
             ada.client.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "Andi"
                             and e["user"]["channel"] == DEVELOPMENT, timeout=30)
             time.sleep(2.0)
 
             jonas.say("Morning! 0.2 is tagged as a release candidate. Who has time to test tonight?")
             # Andi answers from the composer.
-            window = shell.window("Nuschel")
+            window = shell.window("Nuschl")
             margin = (window["height"] - height) // 2
             for _ in range(2):  # the first click after mapping can be swallowed
                 shell.click(window["x"] + window["width"] // 2 + 90, window["y"] + margin + height - 62)
@@ -311,7 +311,7 @@ def main():
 
             # Ada talks while Lena types.
             packets = [packet["value"] for packet in exchange(
-                args.binaries / "nuschel-media-worker",
+                args.binaries / "nuschl-media-worker",
                 [{"kind": "encode_opus", "samples": tone(frame * 960, 960)} for frame in range(25)])]
             talker = threading.Thread(target=talk, args=(ada, packets, stop), daemon=True)
             talker.start()
@@ -330,7 +330,7 @@ def main():
             print(f"{args.output}: {w}x{h}, {args.output.stat().st_size} bytes", flush=True)
         except BaseException:
             if not args.logs:
-                kept = Path(tempfile.mkdtemp(prefix="nuschel-readme-logs-"))
+                kept = Path(tempfile.mkdtemp(prefix="nuschl-readme-logs-"))
                 shutil.copytree(logs, kept, dirs_exist_ok=True)
                 shutil.copy(server.log, kept)
                 print(f"logs kept in {kept}", file=sys.stderr, flush=True)

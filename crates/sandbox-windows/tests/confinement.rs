@@ -4,7 +4,7 @@
 //! `confinement.exe [--only KIND] [--nested] [--connect HOST:PORT] [--workers DIR [--rendezvous ws://HOST:PORT/v1
 //! --relay tcp://HOST:PORT [--code-file PATH] [--receive CODE --expect TEXT]]]`
 //!
-//! This binary starts itself through `nuschel_ipc::host`'s real sandbox
+//! This binary starts itself through `nuschl_ipc::host`'s real sandbox
 //! commands, once per worker kind, as if it were that worker. Inside, as a
 //! probe, it tries what a compromised worker would: read a file in the user's
 //! Documents, list the user's profile, write outside its directory, connect
@@ -29,7 +29,7 @@ fn main() {
 
 #[cfg(windows)]
 fn main() {
-    nuschel_sandbox_windows::launch_if_requested();
+    nuschl_sandbox_windows::launch_if_requested();
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let probe = ["--probe", "--database", "--data", "--live", "--file-handle"];
     // The math worker takes no arguments: a run without any is a probe only
@@ -53,7 +53,7 @@ mod windows {
         time::Duration,
     };
 
-    use nuschel_ipc::{
+    use nuschl_ipc::{
         ContentRequest, ContentResponse, Envelope, LiveMediaEvent, LiveMediaRequest,
         StorageRequest, StorageResponse, TransferEvent, TransferRequest, WormholeServers,
         crypto::{CryptoRequest, CryptoResponse, RecoveryPolicy},
@@ -133,12 +133,12 @@ mod windows {
         report["read_user_environment"] = outcome(read_key(r"Environment")).into();
         report["read_autostart"] =
             outcome(read_key(r"Software\Microsoft\Windows\CurrentVersion\Run")).into();
-        report["write_registry"] = outcome(create_key(r"Software\NuschelSandboxProbe")).into();
+        report["write_registry"] = outcome(create_key(r"Software\NuschlSandboxProbe")).into();
         report["read_clipboard"] = outcome(clipboard_text()).into();
         // The transfer probe was handed a file by handle; it must read it.
         let arguments: Vec<String> = std::env::args().collect();
         if let Some(position) = arguments.iter().position(|a| a == "--file-handle") {
-            let read = nuschel_sandbox_windows::inherited_file(arguments[position + 1].as_ref())
+            let read = nuschl_sandbox_windows::inherited_file(arguments[position + 1].as_ref())
                 .and_then(|mut file| {
                     let mut text = String::new();
                     std::io::Read::read_to_string(&mut file, &mut text).map(|_| text)
@@ -402,9 +402,9 @@ mod windows {
         let profile = PathBuf::from(std::env::var_os("USERPROFILE").expect("USERPROFILE"));
         let documents = profile.join("Documents");
         std::fs::create_dir_all(&documents).ok();
-        let secret = documents.join("nuschel-sandbox-secret.txt");
+        let secret = documents.join("nuschl-sandbox-secret.txt");
         std::fs::write(&secret, "secret").expect("secret file");
-        let work = std::env::temp_dir().join(format!("nuschel-confinement-{}", std::process::id()));
+        let work = std::env::temp_dir().join(format!("nuschl-confinement-{}", std::process::id()));
         let storage = work.join("history");
         let crypto = work.join("crypto");
         for directory in [&storage, &crypto] {
@@ -417,9 +417,9 @@ mod windows {
             json!({
                 "secret": secret,
                 "profile": profile,
-                "outside": profile.join("nuschel-sandbox-escape.txt"),
-                "public": r"C:\Users\Public\nuschel-sandbox-escape.txt",
-                "temp": std::env::temp_dir().join("nuschel-sandbox-escape.txt"),
+                "outside": profile.join("nuschl-sandbox-escape.txt"),
+                "public": r"C:\Users\Public\nuschl-sandbox-escape.txt",
+                "temp": std::env::temp_dir().join("nuschl-sandbox-escape.txt"),
                 "inside": inside,
                 "connect": connect,
                 "driver": std::process::id(),
@@ -578,7 +578,7 @@ mod windows {
         // A policy the launch stage cannot apply never runs the worker.
         let refused = Command::new(&me)
             .args([
-                "--nuschel-sandbox",
+                "--nuschl-sandbox",
                 "--profile",
                 "not a valid name",
                 "--",
@@ -592,7 +592,7 @@ mod windows {
             "launcher",
             "refuses a bad policy",
             match refused.map(|status| status.code()) {
-                Ok(Some(nuschel_sandbox_windows::LAUNCH_FAILED)) => Ok("exit 125".into()),
+                Ok(Some(nuschl_sandbox_windows::LAUNCH_FAILED)) => Ok("exit 125".into()),
                 other => Err(format!("{other:?}")),
             },
         );
@@ -683,7 +683,7 @@ mod windows {
         arguments: &[String],
         checks: &mut Checks,
     ) {
-        let worker = |name: &str| directory.join(format!("nuschel-{name}-worker.exe"));
+        let worker = |name: &str| directory.join(format!("nuschl-{name}-worker.exe"));
         let rendezvous = option(arguments, "--rendezvous");
         let servers = WormholeServers {
             rendezvous: rendezvous
@@ -739,7 +739,7 @@ mod windows {
             let command = host::storage_sandbox_command(&worker("storage"), &history)
                 .map_err(|e| e.to_string())?;
             let (mut child, _containment) = spawn(command)?;
-            let message = nuschel_core::ChatMessage {
+            let message = nuschl_core::ChatMessage {
                 server: "vm".into(),
                 channel: "Root".into(),
                 author: "tester".into(),

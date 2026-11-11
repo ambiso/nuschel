@@ -16,8 +16,8 @@ use cpal::{
     FromSample, Sample, SampleFormat, SizedSample,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
-use nuschel_core::audio::{AudioDevice, AudioSettings, EchoMode, EchoSource};
-use nuschel_ipc::{Envelope, LiveMediaEvent, LiveMediaRequest, read_frame, write_frame};
+use nuschl_core::audio::{AudioDevice, AudioSettings, EchoMode, EchoSource};
+use nuschl_ipc::{Envelope, LiveMediaEvent, LiveMediaRequest, read_frame, write_frame};
 use opus_pure::{Application, MAX_PACKET_BYTES, OpusEncoder};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::{
@@ -36,7 +36,7 @@ use std::{
 const RING: usize = 20 * FRAME;
 /// The canceller's initial delay guess: device buffering on both sides plus
 /// the acoustic path. Far-end audio reaches it when the device takes it from
-/// Nuschel's ring, so the ring's own fill is not part of the delay.
+/// Nuschl's ring, so the ring's own fill is not part of the delay.
 const ECHO_DELAY_HINT_MS: i32 = 30;
 
 const LEVEL_EVERY: u32 = 10;
@@ -108,7 +108,7 @@ impl Transmit {
 }
 
 /// `--probe-route`: open the default (or configured) devices once, as a call
-/// would, and print what Nuschel found upstream of the microphone. A
+/// would, and print what Nuschl found upstream of the microphone. A
 /// diagnostic for users: it opens the microphone briefly and sends nothing.
 pub fn probe_route() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, _rx) = mpsc::sync_channel(64);
@@ -192,8 +192,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             match open_devices(tx.clone(), !muted, &settings, only_host.as_deref(), labels) {
                 Ok((opened, route)) => {
                     // Without a microphone the canceller has nothing to do.
-                    let echo =
-                        opened.capture.is_some() && matches!(route.echo, EchoSource::Nuschel);
+                    let echo = opened.capture.is_some() && matches!(route.echo, EchoSource::Nuschl);
                     upstream_noise = route.noise.is_some();
                     let channels = opened
                         .reference
@@ -216,7 +215,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             (_, Some(name)) => {
                                 format!("Audio ready · system noise suppression ({name})")
                             }
-                            (EchoSource::Nuschel, None) => {
+                            (EchoSource::Nuschl, None) => {
                                 "Audio ready · echo cancellation on".into()
                             }
                             (EchoSource::None, None) => "Audio ready".into(),
@@ -643,13 +642,13 @@ struct Route {
     output: Option<String>,
     echo: EchoSource,
     noise: Option<String>,
-    /// The output recorded as the canceller's reference; `None` when Nuschel
+    /// The output recorded as the canceller's reference; `None` when Nuschl
     /// cancels only its own playback (or does not cancel at all).
     reference: Option<String>,
 }
 
-/// The processing Nuschel applies itself: a noise suppressor upstream of the
-/// microphone (e.g. an RNNoise filter-chain) replaces Nuschel's own.
+/// The processing Nuschl applies itself: a noise suppressor upstream of the
+/// microphone (e.g. an RNNoise filter-chain) replaces Nuschl's own.
 fn chain_settings(settings: &AudioSettings, upstream_noise: bool) -> AudioSettings {
     let mut settings = settings.clone();
     settings.noise_suppression &= !upstream_noise;
@@ -682,7 +681,7 @@ fn open_devices(
     let mut hosts = vec![];
     #[cfg(target_os = "linux")]
     {
-        let forced = std::env::var("NUSCHEL_AUDIO_BACKEND").ok();
+        let forced = std::env::var("NUSCHL_AUDIO_BACKEND").ok();
         match forced.as_deref().or(only_host) {
             Some("pulse" | "pulseaudio") => hosts.push(cpal::HostId::PulseAudio),
             Some("pipewire") => hosts.push(cpal::HostId::PipeWire),
@@ -715,13 +714,13 @@ fn open_devices(
     Err(errors.join("; "))
 }
 
-/// Connect to an audio server as Nuschel, the application mixers show.
+/// Connect to an audio server as Nuschl, the application mixers show.
 fn connect(id: cpal::HostId) -> Result<cpal::Host, String> {
     #[cfg(target_os = "linux")]
     let host = {
         let application = || cpal::ApplicationInfo {
-            name: "Nuschel".into(),
-            icon_name: Some("org.nuschel.Nuschel".into()),
+            name: "Nuschl".into(),
+            icon_name: Some("org.nuschl.Nuschl".into()),
         };
         match id {
             cpal::HostId::PipeWire => {
@@ -741,7 +740,7 @@ fn connect(id: cpal::HostId) -> Result<cpal::Host, String> {
 
 /// Name the streams built next from `host`'s devices. PipeWire also gets the
 /// communication role, as stock Mumble sets; PulseAudio's equivalent
-/// ("phone") would pause music for as long as Nuschel is in a call
+/// ("phone") would pause music for as long as Nuschl is in a call
 /// (module-role-cork), so it is left out there.
 fn label(host: &mut cpal::Host, name: &str) {
     #[cfg(target_os = "linux")]
@@ -750,7 +749,7 @@ fn label(host: &mut cpal::Host, name: &str) {
             name: Some(name.into()),
             role,
         };
-        // Names come from Nuschel's constants and device names: a NUL byte
+        // Names come from Nuschl's constants and device names: a NUL byte
         // (refused) only costs the label.
         let _ = match host.as_inner_mut() {
             cpal::platform::HostInner::PipeWire(host) => {
@@ -920,7 +919,7 @@ fn open_host(
             capture_consumer = Some(consumer);
             Some(stream)
         });
-    // Processing that already happens before Nuschel: follow PipeWire's graph
+    // Processing that already happens before Nuschl: follow PipeWire's graph
     // upstream (mic → echo-cancel → RNNoise → default source), falling back to
     // recognising an echo-cancel source by name (PulseAudio, other systems).
     #[cfg(target_os = "linux")]
@@ -942,12 +941,12 @@ fn open_host(
     // Reported even without capture, so Settings can explain the route before a test.
     let echo = match (mode, &upstream_echo) {
         (EchoMode::Off, _) => EchoSource::None,
-        (EchoMode::On, _) => EchoSource::Nuschel,
+        (EchoMode::On, _) => EchoSource::Nuschl,
         (EchoMode::Auto, Some(name)) => EchoSource::Upstream(name.clone()),
-        (EchoMode::Auto, None) => EchoSource::Nuschel,
+        (EchoMode::Auto, None) => EchoSource::Nuschl,
     };
-    // With a system canceller, Nuschel's own playback must reach its reference.
-    // Only Nuschel's stream is routed; system defaults and other apps are untouched.
+    // With a system canceller, Nuschl's own playback must reach its reference.
+    // Only Nuschl's stream is routed; system defaults and other apps are untouched.
     let reference = if settings.output_device.is_none() && upstream_echo.is_some() {
         found
             .reference
@@ -1000,12 +999,12 @@ fn open_host(
         )
     )?;
     stream.play().map_err(|error| error.to_string())?;
-    // Nuschel's canceller needs to know everything the speakers play: record
+    // Nuschl's canceller needs to know everything the speakers play: record
     // the output device (all applications) where the system allows it, and
     // only while the microphone is open.
     let mut recording = None;
     let mut reference_name = None;
-    let reference = if input.is_some() && matches!(echo, EchoSource::Nuschel) {
+    let reference = if input.is_some() && matches!(echo, EchoSource::Nuschl) {
         match record_output(
             host,
             &all,
@@ -1021,7 +1020,7 @@ fn open_host(
             }
             Err(error) => {
                 eprintln!(
-                    "output recording unavailable, using Nuschel's playback as the echo reference: {error}"
+                    "output recording unavailable, using Nuschl's playback as the echo reference: {error}"
                 );
                 Some(Reference {
                     samples: played_consumer,
@@ -1585,7 +1584,7 @@ mod tests {
         let mut pcm = [1_f32; MAX_PACKET_SAMPLES];
         let count = decoder
             .decode(
-                &nuschel_core::audio::SILENT_OPUS,
+                &nuschl_core::audio::SILENT_OPUS,
                 MAX_PACKET_SAMPLES,
                 &mut pcm,
             )

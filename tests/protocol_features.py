@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mumble protocol features through Nuschel's session against a stock server.
+"""Mumble protocol features through Nuschl's session against a stock server.
 
 Whisper/shout routing isolation, listening, permissions, user statistics,
 comments and avatars via blobs, self-registration, PKCS#12 identities created
@@ -77,13 +77,13 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=64738)
     parser.add_argument("--opus-library", type=Path, required=True)
-    parser.add_argument("--superuser-password", default="nuschel-super")
+    parser.add_argument("--superuser-password", default="nuschl-super")
     parser.add_argument("--openssl", default="openssl")
     parser.add_argument("--no-listening", action="store_true", help="server predates channel listeners (1.4)")
     args = parser.parse_args()
     reference = ReferenceOpus(args.opus_library)
     packets = reference.encode_tone(8)
-    with tempfile.TemporaryDirectory(prefix="nuschel-protocol-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-protocol-") as temporary:
         root = Path(temporary)
         pin = certificate_pin(args.binaries, args.host, args.port, root / "probe")
         connect = lambda name, *extra: Client(args.binaries, args.host, args.port, pin, name, root / name, list(extra))

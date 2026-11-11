@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarise frame timings: the desktop's NUSCHEL_FRAME_TIMING log (a build with
+"""Summarise frame timings: the desktop's NUSCHL_FRAME_TIMING log (a build with
 `--features frame-timing`) and the compositor-side tick logs of
 gnome_session.resize_sweep and drag_resize.
 

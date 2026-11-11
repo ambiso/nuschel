@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-math"
+name = "nuschl-math"
 description = "LaTeX math to pixels for the sandboxed math worker: a LaTeX-to-Typst converter and a restricted Typst"
 version.workspace = true
 edition.workspace = true

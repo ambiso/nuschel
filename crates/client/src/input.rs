@@ -12,11 +12,11 @@ use crate::{
     server::AudioHealth,
     timeline::{Deletion, IncomingMessage, Page},
 };
-use nuschel_core::{
+use nuschl_core::{
     MessageDocument, SearchPage,
     audio::{AudioDevice, EchoSource},
 };
-use nuschel_protocol::nuschel::v1;
+use nuschl_protocol::nuschl::v1;
 use std::collections::BTreeMap;
 
 /// Something a platform reports. Those of one connection carry its
@@ -118,7 +118,7 @@ pub enum Input {
     HistoryError(String),
     /// History writes work again after an earlier failure.
     HistoryRecovered,
-    /// A message on a Nuschel server was edited (by its author, perhaps us).
+    /// A message on a Nuschl server was edited (by its author, perhaps us).
     Edited {
         server: String,
         conversation: [u8; 16],
@@ -127,7 +127,7 @@ pub enum Input {
         document: MessageDocument,
         edited_ms: i64,
     },
-    /// A message on a Nuschel server became a tombstone.
+    /// A message on a Nuschl server became a tombstone.
     Deleted {
         server: String,
         conversation: [u8; 16],
@@ -212,12 +212,12 @@ pub enum ServerEvent {
     },
     /// The server's certificate fingerprint on this connection.
     PeerCertificate(String),
-    /// The Nuschel extension's negotiation (only with Nuschel servers).
+    /// The Nuschl extension's negotiation (only with Nuschl servers).
     Negotiated {
         capabilities: Vec<String>,
         policy: Option<v1::Policy>,
     },
-    /// A channel's conversation on a Nuschel server.
+    /// A channel's conversation on a Nuschl server.
     ChannelInfo {
         channel: u32,
         conversation: Option<[u8; 16]>,
@@ -271,7 +271,7 @@ pub enum ServerEvent {
     Bans(Vec<Ban>),
     Acl(Acl),
     UserNames(BTreeMap<u32, String>),
-    /// Someone speaks with a codec Nuschel cannot play (seen at `at_ms`).
+    /// Someone speaks with a codec Nuschl cannot play (seen at `at_ms`).
     UnsupportedCodec {
         session: u32,
         at_ms: i64,

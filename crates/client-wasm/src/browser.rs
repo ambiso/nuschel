@@ -9,15 +9,15 @@ use crate::{
     session::{Event, Login, Session},
     snapshot,
 };
-use nuschel_client::{
+use nuschl_client::{
     Client, HistoryTicket, Update,
     input::Input,
     names::Preferences,
     platform::{CacheKey, ChangeRequest, Platform, RenderKey, Request},
     timeline::Page,
 };
-use nuschel_core::{SearchCursor, audio::Sound, bookmark::ServerBookmark};
-use nuschel_protocol::tunnel;
+use nuschl_core::{SearchCursor, audio::Sound, bookmark::ServerBookmark};
+use nuschl_protocol::tunnel;
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, VecDeque},

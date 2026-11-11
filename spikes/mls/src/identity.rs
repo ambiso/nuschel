@@ -32,7 +32,7 @@ use crate::DeviceSigner;
 use libcrux_ml_dsa::ml_dsa_65;
 
 #[cfg(feature = "mldsa")]
-const ML_DSA_CONTEXT: &[u8] = b"nuschel/v1";
+const ML_DSA_CONTEXT: &[u8] = b"nuschl/v1";
 
 /// HPKE with X-Wing (ML-KEM-768 + X25519), HKDF-SHA-256, ChaCha20-Poly1305: the
 /// same HPKE configuration as the MLS suite, through the same libcrux code.
@@ -233,7 +233,7 @@ impl Statement {
         let mut out = Vec::new();
         match self {
             Self::DeviceSigningKey { key, generation } => {
-                put(&mut out, b"nuschel/device-signing-key/v1");
+                put(&mut out, b"nuschl/device-signing-key/v1");
                 put(&mut out, &key.encode());
                 put(&mut out, &generation.to_be_bytes());
             }
@@ -243,23 +243,23 @@ impl Statement {
                 leaf_key,
                 kem_key,
             } => {
-                put(&mut out, b"nuschel/device/v1");
+                put(&mut out, b"nuschl/device/v1");
                 put(&mut out, device_id);
                 put(&mut out, display_name.as_bytes());
                 put(&mut out, leaf_key);
                 put(&mut out, kem_key);
             }
             Self::RevokeDevice { device_id } => {
-                put(&mut out, b"nuschel/revoke-device/v1");
+                put(&mut out, b"nuschl/revoke-device/v1");
                 put(&mut out, device_id);
             }
             Self::Account { server, account } => {
-                put(&mut out, b"nuschel/account/v1");
+                put(&mut out, b"nuschl/account/v1");
                 put(&mut out, server);
                 put(&mut out, account);
             }
             Self::MumbleCertificate { sha1 } => {
-                put(&mut out, b"nuschel/mumble-certificate/v1");
+                put(&mut out, b"nuschl/mumble-certificate/v1");
                 put(&mut out, sha1);
             }
         }
@@ -269,25 +269,25 @@ impl Statement {
     fn decode(bytes: &[u8]) -> Option<Self> {
         let mut r = Reader(bytes);
         let statement = match r.get()? {
-            b"nuschel/device-signing-key/v1" => {
+            b"nuschl/device-signing-key/v1" => {
                 let key = HybridPublic::read(&mut Reader(r.get()?))?;
                 let generation = u32::from_be_bytes(r.get()?.try_into().ok()?);
                 Self::DeviceSigningKey { key, generation }
             }
-            b"nuschel/device/v1" => Self::Device {
+            b"nuschl/device/v1" => Self::Device {
                 device_id: r.get()?.try_into().ok()?,
                 display_name: String::from_utf8(r.get()?.to_vec()).ok()?,
                 leaf_key: r.get()?.to_vec(),
                 kem_key: r.get()?.to_vec(),
             },
-            b"nuschel/revoke-device/v1" => Self::RevokeDevice {
+            b"nuschl/revoke-device/v1" => Self::RevokeDevice {
                 device_id: r.get()?.try_into().ok()?,
             },
-            b"nuschel/account/v1" => Self::Account {
+            b"nuschl/account/v1" => Self::Account {
                 server: r.get()?.try_into().ok()?,
                 account: r.get()?.try_into().ok()?,
             },
-            b"nuschel/mumble-certificate/v1" => Self::MumbleCertificate {
+            b"nuschl/mumble-certificate/v1" => Self::MumbleCertificate {
                 sha1: r.get()?.try_into().ok()?,
             },
             _ => return None,
@@ -575,7 +575,7 @@ impl LinkOffer {
 /// key if the user lets this device link others, contact pins and verified
 /// identities, account bindings, and history keys.
 pub fn seal_provisioning(offer: &LinkOffer, payload: &[u8]) -> HpkeCiphertext {
-    let mut info = b"nuschel/link/v1".to_vec();
+    let mut info = b"nuschl/link/v1".to_vec();
     info.extend_from_slice(&offer.rendezvous);
     crypto()
         .hpke_seal(xwing(), &offer.kem_key, &info, &offer.leaf_key, payload)
@@ -587,7 +587,7 @@ pub fn open_provisioning(
     rendezvous: &[u8; 16],
     sealed: &HpkeCiphertext,
 ) -> Result<Vec<u8>, &'static str> {
-    let mut info = b"nuschel/link/v1".to_vec();
+    let mut info = b"nuschl/link/v1".to_vec();
     info.extend_from_slice(rendezvous);
     crypto()
         .hpke_open(

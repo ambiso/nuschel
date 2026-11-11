@@ -7,7 +7,7 @@ use crate::{
     app::{App, Overlay, Pane, Row},
     input::Input,
 };
-use nuschel_client::search::Scope;
+use nuschl_client::search::Scope;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 /// The keys, as the help shows them.
@@ -34,8 +34,8 @@ pub const KEYS: &[&str] = &[
     "  Up, Down         previous, next message",
     "  Home, End        oldest loaded (older load), newest",
     "  Enter, o         the message's links, to open one",
-    "  e                edit your message (Nuschel servers)",
-    "  Delete, x        delete your message (Nuschel servers)",
+    "  e                edit your message (Nuschl servers)",
+    "  Delete, x        delete your message (Nuschl servers)",
     "Composer",
     "  Enter            send; a line starting with / is a command",
     "  Alt+Enter        new line",
@@ -356,7 +356,7 @@ impl App {
                 mut selected,
             } => {
                 let items = self.finder_items(input.text());
-                let at = nuschel_client::finder::selected_index(selected.as_ref(), &items);
+                let at = nuschl_client::finder::selected_index(selected.as_ref(), &items);
                 let pick = |step: isize, selected: &mut Option<_>| {
                     if let Some(item) = items.get(
                         at.saturating_add_signed(step)

@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-content"
+name = "nuschl-content"
 description = "Untrusted message parsing and Rust-backed syntax highlighting"
 version.workspace = true
 edition.workspace = true
@@ -12,7 +12,7 @@ base64 = "0.22"
 html5ever = "0.40.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "ico", "webp"] }
 markup5ever_rcdom = "0.40.1"
-nuschel-core.workspace = true
+nuschl-core.workspace = true
 pulldown-cmark = { version = "0.13.6", default-features = false }
 syntect = { version = "5.3.0", default-features = false, features = [
   "parsing",

@@ -6,7 +6,7 @@
 //! end up in the same methods, so the plain-line mode and the full screen
 //! behave alike. Everything that is not drawing is the SDK's.
 use crate::{document, input::Input};
-use nuschel_client::{
+use nuschl_client::{
     Client, Conversation, Update,
     conversation::ConversationState,
     finder::{self, Item, Target},
@@ -17,8 +17,8 @@ use nuschel_client::{
     timeline::{Message, Page},
     tree::{ChannelRow, TreeRow},
 };
-use nuschel_core::{SearchCursor, SearchPage, model::RejectKind, search::Query};
-use nuschel_session::config::{MumbleUrl, Profile};
+use nuschl_core::{SearchCursor, SearchPage, model::RejectKind, search::Query};
+use nuschl_session::config::{MumbleUrl, Profile};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Notes kept for the status line and the plain-line mode.
@@ -258,7 +258,7 @@ impl App {
                 if self.client.servers.is_empty() {
                     self.say(
                         "No saved servers. Connect with /url mumble://name@host[:port], \
-                         or start nuschel-tui with such a link.",
+                         or start nuschl-tui with such a link.",
                     );
                 }
             }
@@ -294,14 +294,12 @@ impl App {
     // What the platform reports.
 
     /// Apply a batch of the driver's events, then what changed.
-    pub fn events(&mut self, events: impl IntoIterator<Item = nuschel_client::native::Event>) {
+    pub fn events(&mut self, events: impl IntoIterator<Item = nuschl_client::native::Event>) {
         self.client.set_time(monotonic_ms());
         for event in events {
             match event.into_input() {
                 Ok(input) => self.client.handle(input),
-                Err(nuschel_client::native::Native::Identity { event, .. }) => {
-                    self.identity(*event)
-                }
+                Err(nuschl_client::native::Native::Identity { event, .. }) => self.identity(*event),
                 // End-to-end conversations are not shown here yet.
                 Err(_) => {}
             }
@@ -311,11 +309,11 @@ impl App {
 
     /// What the identity worker says that must not go unseen; the rest of
     /// identity and key transparency is the desktop's for now.
-    fn identity(&mut self, event: nuschel_session::identity::IdentityEvent) {
-        use nuschel_session::identity::IdentityEvent;
+    fn identity(&mut self, event: nuschl_session::identity::IdentityEvent) {
+        use nuschl_session::identity::IdentityEvent;
         match event {
             IdentityEvent::RecoveryKey(key) => self.warn(format!(
-                "Your Nuschel identity was made with this recovery key. Write it down: it is shown \
+                "Your Nuschl identity was made with this recovery key. Write it down: it is shown \
                  once here (the desktop's Settings → Identity shows it again until you confirm). \
                  Without it, losing this device means a new identity: {key}"
             )),
@@ -475,7 +473,7 @@ impl App {
                         server.status == Status::Connected && server.own_user_id().is_none()
                     });
                     if error.starts_with("Server history") && guest {
-                        // nuscheld keeps its history for registered people
+                        // nuschld keeps its history for registered people
                         // unless it lets guests read it.
                         self.warn(format!(
                             "{error} This server may show its history to registered people \
@@ -793,13 +791,13 @@ impl App {
         }
         match self.client.send_text(body) {
             Ok(()) => {}
-            Err(nuschel_client::SendError::TooLong) => self.warn("The message is too long."),
-            Err(nuschel_client::SendError::Nothing) => {
+            Err(nuschl_client::SendError::TooLong) => self.warn("The message is too long."),
+            Err(nuschl_client::SendError::Nothing) => {
                 if self.selected().is_none() {
                     self.warn("Open a conversation first (Ctrl+K, or /go NAME).");
                 }
             }
-            Err(nuschel_client::SendError::Refused) => {
+            Err(nuschl_client::SendError::Refused) => {
                 let notice = self
                     .selected()
                     .and_then(|(server, _)| self.client.servers[server].notice.clone());
@@ -808,7 +806,7 @@ impl App {
         }
     }
 
-    // Editing and deleting (Nuschel servers).
+    // Editing and deleting (Nuschl servers).
 
     /// Our newest message in the open conversation that may be edited.
     fn last_own(&self, edit: bool) -> Option<&Message> {
@@ -842,7 +840,7 @@ impl App {
             return false;
         };
         if !server.may_edit(channel, message) {
-            self.warn("Only your own stored messages on Nuschel servers can be edited (registered accounts).");
+            self.warn("Only your own stored messages on Nuschl servers can be edited (registered accounts).");
             return false;
         }
         let (source, seq) = (message.source.clone(), message.seq);

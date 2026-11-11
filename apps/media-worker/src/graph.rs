@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! What already happens to the microphone signal before Nuschel receives it.
+//! What already happens to the microphone signal before Nuschl receives it.
 //!
 //! A PipeWire microphone is often a chain: hardware → echo-cancel → RNNoise
-//! filter-chain → the default source. Nuschel walks that chain upstream from
+//! filter-chain → the default source. Nuschl walks that chain upstream from
 //! the source it captures so it neither doubles a system echo canceller or
 //! noise suppressor nor starves one of its playback reference.
 
@@ -40,7 +40,7 @@ pub struct Upstream {
     pub echo: Option<String>,
     /// A readable name for the stage that suppresses noise.
     pub noise: Option<String>,
-    /// The echo canceller's sink: Nuschel's playback must reach it as the reference.
+    /// The echo canceller's sink: Nuschl's playback must reach it as the reference.
     pub reference: Option<String>,
     /// The walk met a capture stream without links (a passive filter that
     /// nobody records from yet): the answer may be incomplete.

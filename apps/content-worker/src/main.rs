@@ -2,9 +2,9 @@
 use std::io;
 
 use base64::Engine as _;
-use nuschel_content::ContentRenderer;
-use nuschel_core::{ContentBlock, MessageDocument};
-use nuschel_ipc::{
+use nuschl_content::ContentRenderer;
+use nuschl_core::{ContentBlock, MessageDocument};
+use nuschl_ipc::{
     ContentRequest, ContentResponse, EncodedImage, Envelope, PreparedContent, read_frame,
     write_frame,
 };
@@ -12,7 +12,7 @@ use nuschel_ipc::{
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // On Windows, the launch stage starts this worker again in its AppContainer.
     #[cfg(windows)]
-    nuschel_sandbox_windows::launch_if_requested();
+    nuschl_sandbox_windows::launch_if_requested();
     let renderer = ContentRenderer::new()?;
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
@@ -54,14 +54,14 @@ fn answer(renderer: &ContentRenderer, request: ContentRequest) -> Result<Content
             })
             .map_err(|error| error.to_string()),
         ContentRequest::Avatar { image: encoded } => {
-            image(nuschel_content::decode_image(&base64(&encoded)?, 96, 96))
+            image(nuschl_content::decode_image(&base64(&encoded)?, 96, 96))
         }
         ContentRequest::Icon { image: encoded } => {
-            image(nuschel_content::decode_icon(&base64(&encoded)?))
+            image(nuschl_content::decode_icon(&base64(&encoded)?))
         }
-        ContentRequest::View { uri } => image(nuschel_content::decode_view(&uri)),
+        ContentRequest::View { uri } => image(nuschl_content::decode_view(&uri)),
         ContentRequest::EncodeImage { image, limit } => {
-            nuschel_content::encode_image_message(&base64(&image)?, limit as usize)
+            nuschl_content::encode_image_message(&base64(&image)?, limit as usize)
                 .map(|(html, thumbnail)| ContentResponse::Encoded(EncodedImage { html, thumbnail }))
                 .map_err(|error| error.to_string())
         }

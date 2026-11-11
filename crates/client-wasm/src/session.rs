@@ -7,12 +7,12 @@
 //!
 //! The browser glue (`browser.rs`) moves bytes; tests drive this directly.
 //! For now it logs in and keeps the channel tree and the users; text, voice
-//! and the Nuschel extension come with the web client.
+//! and the Nuschl extension come with the web client.
 
 use bytes::BytesMut;
-use nuschel_client::input::ServerEvent;
-use nuschel_core::model::{Channel, User};
-use nuschel_protocol::{
+use nuschl_client::input::ServerEvent;
+use nuschl_core::model::{Channel, User};
+use nuschl_protocol::{
     control as proto, decode_control, encode_control, kind,
     tunnel::{self, CloseReason, Frame},
 };
@@ -356,8 +356,8 @@ impl Session {
     fn log_in(&mut self) {
         let version = proto::Version {
             version_v1: Some(0x0001_0500),
-            version_v2: Some(nuschel_protocol::voice::PROTOBUF_VERSION),
-            release: Some(format!("Nuschel web {}", env!("CARGO_PKG_VERSION"))),
+            version_v2: Some(nuschl_protocol::voice::PROTOBUF_VERSION),
+            release: Some(format!("Nuschl web {}", env!("CARGO_PKG_VERSION"))),
             os: Some("web".into()),
             ..Default::default()
         };

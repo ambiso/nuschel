@@ -18,12 +18,12 @@ use crate::{
     timeline::{Change, MAX_TIMELINE, Page},
     voice::{self, Seat, Unmute, Voice},
 };
-use nuschel_core::{
+use nuschl_core::{
     ContentBlock, MAX_CONTENT_BYTES, MessageDocument, SearchCursor, SearchPage,
     audio::Sound,
     bookmark::{CachedChannel, ServerBookmark},
 };
-use nuschel_protocol::nuschel::{self, v1};
+use nuschl_protocol::nuschl::{self, v1};
 use std::collections::BTreeMap;
 
 /// How often we say we are typing: the server's limit per conversation.
@@ -83,7 +83,7 @@ pub enum Update {
     OwnMessage,
     /// Something arrived out of sight that deserves a notification.
     Notify(Notification),
-    /// The Nuschel extension was negotiated (the server's policy, e.g. its
+    /// The Nuschl extension was negotiated (the server's policy, e.g. its
     /// minimum version, is in the server's state).
     Negotiated { server: String },
     /// The connection was gone between these times; the client logged it
@@ -121,7 +121,7 @@ pub enum Update {
     ShareLink {
         server: String,
         channel: u32,
-        link: nuschel_core::share::ShareLink,
+        link: nuschl_core::share::ShareLink,
         web_host: Option<String>,
     },
 }
@@ -621,7 +621,7 @@ impl Client {
     }
 
     /// Load a page of the open conversation's history before `before` (the
-    /// latest page for None): from the server on a Nuschel server with
+    /// latest page for None): from the server on a Nuschl server with
     /// history, else from local history.
     pub fn load_history(&mut self, before: Option<i64>) -> Result<(), String> {
         let Some((index, channel)) = self.selected_indices() else {
@@ -637,7 +637,7 @@ impl Client {
         let Some(identity) = server.history_identity() else {
             return Ok(());
         };
-        // Stock direct messages on a Nuschel server are local observations.
+        // Stock direct messages on a Nuschl server are local observations.
         let archived = server.archived(&server.channels[position]);
         let source = server.history_source;
         let channel = &mut server.channels[position];
@@ -653,7 +653,7 @@ impl Client {
             source,
         );
         let requested = match channel.conversation.filter(|_| archived) {
-            // A Nuschel server's history: everything this member may read.
+            // A Nuschl server's history: everything this member may read.
             Some(conversation) => {
                 let cache = CacheKey {
                     identity,
@@ -768,7 +768,7 @@ impl Client {
     }
 
     /// The composer of the open conversation changed; `typing` is whether
-    /// it holds text being written (not an edit). On Nuschel servers others
+    /// it holds text being written (not an edit). On Nuschl servers others
     /// learn we type, at most every [`TYPING_EVERY_MS`].
     pub fn composing(&mut self, typing: bool) {
         if !typing || !self.preferences.send_typing {
@@ -817,7 +817,7 @@ impl Client {
     }
 
     /// The open conversation is read when it is in sight: the application in
-    /// front and the newest message shown. A Nuschel server keeps the read
+    /// front and the newest message shown. A Nuschl server keeps the read
     /// marker (synced to the account's other devices; unread counts come
     /// from it).
     pub fn mark_read(&mut self) {
@@ -856,7 +856,7 @@ impl Client {
     }
 
     /// Open the direct conversation with `session` on server `index`. On a
-    /// Nuschel server, between registered accounts, it is the server's
+    /// Nuschl server, between registered accounts, it is the server's
     /// conversation, opened once the server names it ([`Update::Browse`]);
     /// otherwise the stock path, whose conversation id is returned to open now.
     pub fn open_direct(&mut self, index: usize, session: u32) -> Option<u32> {
@@ -906,7 +906,7 @@ impl Client {
         true
     }
 
-    /// Edit or delete a message on a Nuschel server; the answer comes back
+    /// Edit or delete a message on a Nuschl server; the answer comes back
     /// as an edit or deletion, or [`Input::ChangeFailed`].
     pub fn change_message(&self, change: ChangeRequest) -> Result<(), String> {
         if self
@@ -953,7 +953,7 @@ impl Client {
             .ok_or("That message is not loaded.")?;
         let allowed = match &content {
             Some(text) => {
-                if text.trim().is_empty() || text.len() > nuschel::MAX_CONTENT_BYTES {
+                if text.trim().is_empty() || text.len() > nuschl::MAX_CONTENT_BYTES {
                     return Err("An edit needs text, of at most 64 KiB.".into());
                 }
                 server.may_edit(channel, message)
@@ -1633,7 +1633,7 @@ impl Client {
             channel.timeline.trim_oldest(MAX_TIMELINE);
         }
         if direct
-            && server.notice.as_deref() == Some(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE)
+            && server.notice.as_deref() == Some(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE)
         {
             server.dismiss_notice();
         }
@@ -1821,7 +1821,7 @@ impl Client {
                 server.expand_occupied();
                 self.passwords.remove(&server.id);
                 // A share link's token decides first; its path is the fallback.
-                if server.share_token.is_some() && server.has(nuschel::capability::SHARE) {
+                if server.share_token.is_some() && server.has(nuschl::capability::SHARE) {
                     self.share_connected(index);
                 } else {
                     server.share_token = None;
@@ -1981,7 +1981,7 @@ impl Client {
                 {
                     channel.log(
                         format!(
-                            "{} uses a legacy voice codec (CELT/Speex) that Nuschel cannot play.",
+                            "{} uses a legacy voice codec (CELT/Speex) that Nuschl cannot play.",
                             names::display_name(&user, &self.preferences)
                         ),
                         at_ms,
@@ -2120,7 +2120,7 @@ impl Client {
         let Some(direct) = opened.direct else {
             return;
         };
-        let Some(id) = nuschel::id(&direct.conversation) else {
+        let Some(id) = nuschl::id(&direct.conversation) else {
             return;
         };
         let server = &mut self.servers[index];
@@ -2145,7 +2145,7 @@ impl Client {
         let selected = self.navigation.selection().cloned();
         let server = &mut self.servers[index];
         for direct in directs {
-            let Some(id) = nuschel::id(&direct.conversation) else {
+            let Some(id) = nuschl::id(&direct.conversation) else {
                 continue;
             };
             let unread = direct.head.saturating_sub(direct.read);
@@ -2259,7 +2259,7 @@ mod tests {
         model::{Channel, User},
         timeline::IncomingMessage,
     };
-    use nuschel_core::ChatMessage;
+    use nuschl_core::ChatMessage;
     use std::sync::{Arc, Mutex};
 
     /// A platform that records what the client asked of it.
@@ -2399,7 +2399,7 @@ mod tests {
         client.handle(Input::Server {
             server: id.clone(),
             generation: 1,
-            event: ServerEvent::Notice(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into()),
+            event: ServerEvent::Notice(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into()),
         });
         assert!(client.servers[0].has_temporary_notice());
         assert!(!client.set_time(10_099));
@@ -2430,7 +2430,7 @@ mod tests {
         client.servers[0].users.insert(4, old.clone());
         let channel = client.open_direct(0, 4).unwrap();
         client.open(0, channel).unwrap();
-        client.servers[0].notice = Some(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
+        client.servers[0].notice = Some(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
         let current = User {
             session: 9,
             instance: 11,
@@ -2886,7 +2886,7 @@ mod tests {
         assert_eq!(link.channel, ["Three"]);
         assert_eq!(link.host, "localhost");
         assert_eq!(link.certificate_sha256, Some("ab".repeat(32)));
-        assert!(!link.require_nuschel, "a stock server");
+        assert!(!link.require_nuschl, "a stock server");
         assert!(recorder.requests.lock().unwrap().is_empty());
         assert!(client.share_link(0, 99).is_err());
     }
@@ -2951,9 +2951,9 @@ mod tests {
         assert_eq!(web_host.as_deref(), Some("web.example.org"));
         assert_eq!(
             link.token.as_deref(),
-            Some(nuschel_core::share::encode_token(&[7; 16]).as_str())
+            Some(nuschl_core::share::encode_token(&[7; 16]).as_str())
         );
-        assert!(link.require_nuschel);
+        assert!(link.require_nuschl);
         // An answer nobody asked for is ignored.
         client.handle(share_input(
             &id,
@@ -2976,7 +2976,7 @@ mod tests {
             vec![bookmark],
             Preferences::default(),
         );
-        let token = nuschel_core::share::encode_token(&[9; 16]);
+        let token = nuschl_core::share::encode_token(&[9; 16]);
         client.open_share_token(0, token);
         client.servers[0].pending_channel = vec!["Two".into()];
         client.connect(0, None, false);
@@ -3041,7 +3041,7 @@ mod tests {
         );
 
         // A token the server no longer knows: the path still leads there.
-        client.open_share_token(0, nuschel_core::share::encode_token(&[8; 16]));
+        client.open_share_token(0, nuschl_core::share::encode_token(&[8; 16]));
         client.servers[0].pending_channel = vec!["Two".into()];
         let request_id = match recorder.requests.lock().unwrap().pop() {
             Some((_, Request::ResolveShareLink { request_id, .. })) => request_id,
@@ -3073,7 +3073,7 @@ mod tests {
             vec![bookmark],
             Preferences::default(),
         );
-        client.open_share_token(0, nuschel_core::share::encode_token(&[1; 16]));
+        client.open_share_token(0, nuschl_core::share::encode_token(&[1; 16]));
         client.servers[0].pending_channel = vec!["Three".into()];
         client.connect(0, None, false);
         client.handle(share_input(

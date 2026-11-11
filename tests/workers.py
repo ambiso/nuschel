@@ -58,7 +58,7 @@ def exchange(executable, payloads, arguments=()):
 def check_history_pages(binaries, arguments):
     message = {"server": "paged-fixture", "channel": "general", "author": "fixture-user",
                "observed_at_ms": 123, "body": "Repeated text\nwith identical timestamps"}
-    appended = exchange(binaries / "nuschel-storage-worker", [
+    appended = exchange(binaries / "nuschl-storage-worker", [
         {"kind": "append", "message": message} for _ in range(11)
     ], arguments)
     expected = [response["value"] for response in appended]
@@ -67,7 +67,7 @@ def check_history_pages(binaries, arguments):
     before = None
     while True:
         # Each page reopens the persistent store in a new worker process.
-        response, = exchange(binaries / "nuschel-storage-worker", [
+        response, = exchange(binaries / "nuschl-storage-worker", [
             {"kind": "history_page", "server": "paged-fixture", "channel": "general",
              "before": before, "limit": 4},
         ], arguments)
@@ -87,7 +87,7 @@ def check_history_pages(binaries, arguments):
 
 def check_workers(binaries):
     source = "first\n\nsecond\n```rust\nfn main() {}\n```\nlast"
-    rendered, image, legacy = exchange(binaries / "nuschel-content-worker", [
+    rendered, image, legacy = exchange(binaries / "nuschl-content-worker", [
         {"kind": "render", "text": source},
         {"kind": "encode_image", "image": base64.b64encode(png(64, 48)).decode(), "limit": 131072},
         {"kind": "legacy_html", "html": "<b>bold</b><br/>&amp; more"},
@@ -109,7 +109,7 @@ def check_workers(binaries):
     assert "".join(run["text"] for run in code["runs"]) == "fn main() {}\n"
     assert len({tuple(run["foreground"]) for run in code["runs"]}) > 1
 
-    formula, refused = exchange(binaries / "nuschel-math-worker", [
+    formula, refused = exchange(binaries / "nuschl-math-worker", [
         {"tex": "\\frac{a}{b} + x^2", "display": False, "size": 20.0},
         {"tex": "\\foo", "display": True, "size": 20.0},
     ])
@@ -120,7 +120,7 @@ def check_workers(binaries):
     assert refused == {"status": "rejected", "value": "unknown command \\foo"}, refused
 
     failed = subprocess.run(
-        [str(binaries / "nuschel-content-worker")], input=struct.pack(">I", 2**32 - 1),
+        [str(binaries / "nuschl-content-worker")], input=struct.pack(">I", 2**32 - 1),
         capture_output=True, timeout=10,
     )
     assert failed.returncode != 0, "oversized input must fail without a body allocation"
@@ -129,20 +129,20 @@ def check_workers(binaries):
         "server": "fixture-server", "channel": "general", "author": "fixture-user",
         "observed_at_ms": 123, "body": source,
     }
-    with tempfile.TemporaryDirectory(prefix="nuschel-history-") as directory:
+    with tempfile.TemporaryDirectory(prefix="nuschl-history-") as directory:
         arguments = ["--database", Path(directory) / "history.sqlite3"]
-        saved, = exchange(binaries / "nuschel-storage-worker", [{"kind": "append", "message": message}], arguments)
+        saved, = exchange(binaries / "nuschl-storage-worker", [{"kind": "append", "message": message}], arguments)
         assert saved["status"] == "appended"
         # A new process reopens the database; this checks persistence, not just an in-memory value.
-        restored, = exchange(binaries / "nuschel-storage-worker", [
+        restored, = exchange(binaries / "nuschl-storage-worker", [
             {"kind": "recent", "server": "fixture-server", "channel": "general", "limit": 10},
         ], arguments)
         assert restored == {"status": "messages", "value": [message]}
         check_history_pages(binaries, arguments)
 
-    encoded, = exchange(binaries / "nuschel-media-worker", [{"kind": "encode_opus", "samples": [0.0] * 960}])
+    encoded, = exchange(binaries / "nuschl-media-worker", [{"kind": "encode_opus", "samples": [0.0] * 960}])
     assert encoded["status"] == "packet", encoded
-    decoded, = exchange(binaries / "nuschel-media-worker", [{"kind": "decode_opus", "packet": encoded["value"]}])
+    decoded, = exchange(binaries / "nuschl-media-worker", [{"kind": "decode_opus", "packet": encoded["value"]}])
     assert decoded["status"] == "samples", decoded
     assert len(decoded["value"]) == 960
     assert all(math.isfinite(value) for value in decoded["value"])
@@ -150,12 +150,12 @@ def check_workers(binaries):
 
 def check_sandbox(binaries, server):
     # This trusted executable is a test instrument, never a command from a chat message.
-    with tempfile.TemporaryDirectory(prefix="nuschel-secret-") as directory:
+    with tempfile.TemporaryDirectory(prefix="nuschl-secret-") as directory:
         secret = Path(directory) / "private"
         secret.write_text("not available to the content worker")
         probe = r"""
 import os, socket, sys
-assert 'NUSCHEL_TEST_SECRET' not in os.environ
+assert 'NUSCHL_TEST_SECRET' not in os.environ
 try:
     open(sys.argv[1]).read()
 except (FileNotFoundError, PermissionError):
@@ -169,13 +169,13 @@ except OSError:
 else:
     raise AssertionError('sandbox allowed a network connection')
 """
-        environment = os.environ | {"NUSCHEL_TEST_SECRET": "must not be inherited"}
+        environment = os.environ | {"NUSCHL_TEST_SECRET": "must not be inherited"}
         subprocess.run([
-            str(binaries / "nuschel"), "sandbox-probe", sys.executable, "--", "-c", probe,
+            str(binaries / "nuschl"), "sandbox-probe", sys.executable, "--", "-c", probe,
             str(secret), socket.gethostbyname(server),
         ], check=True, timeout=15, env=environment)
         document = subprocess.run([
-            str(binaries / "nuschel"), "render", "line one\nline two",
+            str(binaries / "nuschl"), "render", "line one\nline two",
         ], capture_output=True, check=True, timeout=15)
         assert json.loads(document.stdout)["blocks"] == [{"kind": "text", "text": "line one\nline two"}]
 
@@ -184,9 +184,9 @@ def check_postgres(binaries, url_file):
     message = {"server": "postgres-fixture", "channel": "general", "author": "fixture-user",
                "observed_at_ms": 456, "body": "PostgreSQL\nkeeps newlines"}
     arguments = ["--database-url-file", url_file]
-    saved, = exchange(binaries / "nuschel-storage-worker", [{"kind": "append", "message": message}], arguments)
+    saved, = exchange(binaries / "nuschl-storage-worker", [{"kind": "append", "message": message}], arguments)
     assert saved["status"] == "appended"
-    restored, = exchange(binaries / "nuschel-storage-worker", [
+    restored, = exchange(binaries / "nuschl-storage-worker", [
         {"kind": "recent", "server": "postgres-fixture", "channel": "general", "limit": 1},
     ], arguments)
     assert restored == {"status": "messages", "value": [message]}

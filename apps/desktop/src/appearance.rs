@@ -16,10 +16,10 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_session::config::{TEXT_SIZE, ThemeChoice, ZOOM};
+use nuschl_session::config::{TEXT_SIZE, ThemeChoice, ZOOM};
 use std::{rc::Rc, time::Duration};
 
-actions!(nuschel, [ZoomIn, ZoomOut, ResetZoom]);
+actions!(nuschl, [ZoomIn, ZoomOut, ResetZoom]);
 
 /// Ctrl (Cmd on macOS) with = or + zooms in, with - out, with 0 back to 100 %.
 /// None of these type text, so the composer keeps every key it needs.
@@ -169,7 +169,7 @@ impl Desktop {
     /// Change the appearance settings and show the result.
     fn change_appearance(
         &mut self,
-        change: impl FnOnce(&mut nuschel_session::config::AppearanceSettings),
+        change: impl FnOnce(&mut nuschl_session::config::AppearanceSettings),
         window: &mut Window,
         cx: &mut App,
     ) {

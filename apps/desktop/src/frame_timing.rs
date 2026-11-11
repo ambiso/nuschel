@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Frame timings for measuring smoothness: build with `--features
-//! frame-timing` and set `NUSCHEL_FRAME_TIMING=<file>`. Each line is one
+//! frame-timing` and set `NUSCHL_FRAME_TIMING=<file>`. Each line is one
 //! event, times in microseconds since startup:
 //! `draw <start> <request_layout> <prepaint> <paint> <total>` (GPUI's own
 //! phases; request_layout includes rendering views into elements),
@@ -27,7 +27,7 @@ thread_local! {
 }
 
 pub fn init() {
-    let Some(path) = std::env::var_os("NUSCHEL_FRAME_TIMING") else {
+    let Some(path) = std::env::var_os("NUSCHL_FRAME_TIMING") else {
         return;
     };
     let file = match File::create(&path) {

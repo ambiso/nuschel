@@ -14,20 +14,20 @@ appeared. Checks:
 3. A pipewire-pulse restart does not disturb a native PipeWire worker; a
    worker on the PulseAudio API recovers after pipewire-pulse restarts.
 4. A PipeWire echo-cancel node as the default microphone is recognised:
-   Nuschel does not stack its own canceller, routes only its own playback
+   Nuschl does not stack its own canceller, routes only its own playback
    into the canceller's sink and leaves the session defaults alone. Device
    lists hold only real sources and sinks (no other applications' streams,
    sink monitors or virtual default entries).
 5. An RNNoise filter-chain behind the echo canceller (PipeWire's own
    source-rnnoise.conf layout: mic → echo-cancel → RNNoise → default source)
-   is followed upstream: Nuschel turns off both its echo canceller and its
+   is followed upstream: Nuschl turns off both its echo canceller and its
    noise suppressor and feeds the system canceller its playback.
-6. Nuschel's own canceller in a room on one clock (the speakers looped into
+6. Nuschl's own canceller in a room on one clock (the speakers looped into
    the microphone at -37 dB): it records what the speakers play, so both its
    own playback and another application's sound are removed from the
    microphone, every run.
 7. The restarts of 2 and 3 with every worker in the sandbox a call gives it
-   (`nuschel media-sandbox`, the desktop's own bwrap command), replaced as
+   (`nuschl media-sandbox`, the desktop's own bwrap command), replaced as
    the desktop replaces it. PipeWire's socket is bound as a file, so after a
    restart only a replacement worker reaches the new one; PulseAudio's
    directory is bound, so a pipewire-pulse restart shows up in place.
@@ -51,7 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mumble_client import ReferenceOpus  # noqa: E402
 
 VIRTUAL_NODES = """# A raised quantum range, as PipeWire applies in virtual machines (and some users
-# configure): Nuschel must fit its buffer request into it.
+# configure): Nuschl must fit its buffer request into it.
 context.properties = { default.clock.min-quantum = 1024 default.clock.max-quantum = 2048 }
 context.objects = [
   { factory = adapter
@@ -77,7 +77,7 @@ ECHO_CANCEL = """context.modules = [
 """
 # PipeWire's source-rnnoise.conf, mono, capturing the echo canceller's output.
 # Without --rnnoise-ladspa a pass-through plugin stands in for RNNoise (the
-# graph and names are what Nuschel recognises).
+# graph and names are what Nuschl recognises).
 RNNOISE = """context.modules = [
   { name = libpipewire-module-filter-chain
     args = {
@@ -225,7 +225,7 @@ class Worker:
         """`binary`: the media worker, or a whole command that runs it (the sandbox)."""
         env = dict(pipewire.env) | {"PULSE_SERVER": f"unix:{pipewire.runtime}/pulse/native", "PIPEWIRE_DEBUG": "2"}
         if backend:
-            env["NUSCHEL_AUDIO_BACKEND"] = backend
+            env["NUSCHL_AUDIO_BACKEND"] = backend
         Worker.count += 1
         self.log = Worker.logs / f"worker-{Worker.count}.log"
         command = binary if isinstance(binary, list) else [str(binary), "--live"]
@@ -446,7 +446,7 @@ def check_echo_cancel(binary, pipewire):
     after = defaults(pipewire)
     worker.stop()
     assert before == after, f"the session defaults changed: {before} -> {after}"
-    print("PipeWire echo-cancel recognised: no second canceller; only Nuschel's playback goes to its sink; "
+    print("PipeWire echo-cancel recognised: no second canceller; only Nuschl's playback goes to its sink; "
           "session defaults untouched.", flush=True)
 
 
@@ -478,20 +478,20 @@ def check_rnnoise_chain(binary, pipewire):
     assert devices["echo"] == {"kind": "upstream", "device": "Echo-Cancel Source"}, devices["echo"]
     assert devices["noise"] == "Noise Canceling source", devices["noise"]
     assert devices["output"].endswith(":echo-cancel-sink"), \
-        f"Nuschel's playback must reach the canceller's reference: {devices['output']}"
+        f"Nuschl's playback must reach the canceller's reference: {devices['output']}"
     assert "system echo cancellation" in status["message"], status
-    # The chain Nuschel recognised is the one PipeWire actually built.
+    # The chain Nuschl recognised is the one PipeWire actually built.
     assert ("echo-cancel-source", "effect_input.rnnoise") in graph, sorted(graph)
     time.sleep(1)
     after = defaults(pipewire)
     worker.stop()
     assert before == after, f"the session defaults changed: {before} -> {after}"
-    print("RNNoise behind echo-cancel recognised: Nuschel's canceller and noise suppressor are off, "
+    print("RNNoise behind echo-cancel recognised: Nuschl's canceller and noise suppressor are off, "
           "its playback feeds the system canceller, session defaults untouched.", flush=True)
 
 
 def check_room_echo(binary, pipewire, output):
-    """Nuschel's canceller with its reference recorded from the speakers."""
+    """Nuschl's canceller with its reference recorded from the speakers."""
     env = pipewire.env
     subprocess.run([str(pipewire.pipewire / "bin/pw-metadata"), "-n", "default", "0",
                     "default.configured.audio.source", '{ "name": "room.mic" }', "Spa:String:JSON"],
@@ -507,7 +507,7 @@ def check_room_echo(binary, pipewire, output):
     for run in range(3):
         worker = Worker(binary, pipewire, muted=False)
         devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
-        assert devices["input"] == "pipewire:room.mic" and devices["echo"]["kind"] == "nuschel", devices
+        assert devices["input"] == "pipewire:room.mic" and devices["echo"]["kind"] == "nuschl", devices
         worker.ready()
         worker.send({"kind": "echo_test"})
         report = worker.wait(lambda e: e["kind"] == "echo_test", "no echo test result", timeout=20)
@@ -515,7 +515,7 @@ def check_room_echo(binary, pipewire, output):
         assert report["echo_db"] is not None and report["reduction_db"] >= 30 and report["transmitted"] <= 0.02, \
             f"run {run}: the canceller did not remove its own playback: {report}"
         removed.append(f"{report['reduction_db']:.0f}")
-    # Another application plays into the speakers; Nuschel plays nothing.
+    # Another application plays into the speakers; Nuschl plays nothing.
     music = output / "other-app.wav"
     with wave.open(str(music), "wb") as file:
         file.setnchannels(2)
@@ -546,7 +546,7 @@ def check_room_echo(binary, pipewire, output):
         levels[mode] = (sum(loud) / max(1, len(loud)), sum(e["transmitting"] for e in window) / max(1, len(window)))
     assert levels["off"][0] - levels["on"][0] >= 20 and levels["on"][1] <= 0.05, \
         f"another application's sound was not removed: {levels}"
-    print(f"Room on one clock: Nuschel's canceller removed its own playback ({', '.join(removed)} dB; 30 dB or "
+    print(f"Room on one clock: Nuschl's canceller removed its own playback ({', '.join(removed)} dB; 30 dB or "
           f"more in every run) and another application's stereo sound "
           f"({levels['off'][0] - levels['on'][0]:.0f} dB).", flush=True)
 
@@ -564,10 +564,10 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     Worker.logs = args.output
     packets = ReferenceOpus(args.opus_library).encode_tone(100)
-    binary = args.binaries / "nuschel-media-worker"
-    sandboxed = [str(args.binaries / "nuschel"), "media-sandbox"]
-    with tempfile.TemporaryDirectory(prefix="nuschel-pw-", dir=os.environ.get("NUSCHEL_SHORT_TMP")) as temporary:
-        only = os.environ.get("NUSCHEL_PIPEWIRE_ONLY")
+    binary = args.binaries / "nuschl-media-worker"
+    sandboxed = [str(args.binaries / "nuschl"), "media-sandbox"]
+    with tempfile.TemporaryDirectory(prefix="nuschl-pw-", dir=os.environ.get("NUSCHL_SHORT_TMP")) as temporary:
+        only = os.environ.get("NUSCHL_PIPEWIRE_ONLY")
         if only in (None, "restarts"):
             pipewire = PipeWire(args.pipewire, args.wireplumber, args.dbus_daemon, Path(temporary) / "plain")
             try:

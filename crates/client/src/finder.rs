@@ -124,7 +124,7 @@ pub fn items(client: &Client, recent: &Recent, query: &str) -> Vec<Item> {
                 {
                     continue;
                 }
-                // Likewise a Nuschel server's direct conversation with
+                // Likewise a Nuschl server's direct conversation with
                 // someone online.
                 TextTarget::DirectConversation(_)
                     if connected
@@ -174,7 +174,7 @@ pub fn items(client: &Client, recent: &Recent, query: &str) -> Vec<Item> {
             if Some(user.session) == server.own_session {
                 continue;
             }
-            // Their direct conversation, if one is open (on a Nuschel
+            // Their direct conversation, if one is open (on a Nuschl
             // server, the account's).
             let direct = server.channels.iter().find(|channel| {
                 channel.target == TextTarget::Direct(user.session)

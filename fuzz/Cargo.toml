@@ -4,7 +4,7 @@
 # flake's fuzz shell), or `cargo +nightly fuzz run html` here. Cargo.lock is
 # committed and pins what the main workspace's lock does (SECURITY.md, "Fuzzing").
 [package]
-name = "nuschel-fuzz"
+name = "nuschl-fuzz"
 version = "0.0.0"
 edition = "2024"
 license = "EUPL-1.2"
@@ -15,24 +15,24 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-nuschel-content = { path = "../crates/content" }
-nuschel-math = { path = "../crates/math" }
+nuschl-content = { path = "../crates/content" }
+nuschl-math = { path = "../crates/math" }
 pulldown-cmark = { version = "0.13.6", default-features = false }
-nuschel-core = { path = "../crates/core" }
-nuschel-protocol = { path = "../crates/protocol" }
-nuscheld = { path = "../apps/server" }
+nuschl-core = { path = "../crates/core" }
+nuschl-protocol = { path = "../crates/protocol" }
+nuschld = { path = "../apps/server" }
 bytes = "1.12.1"
 prost = "0.14.4"
-nuschel-identity = { path = "../crates/identity" }
-nuschel-ipc = { path = "../crates/ipc" }
-nuschel-kt = { path = "../crates/kt" }
-nuschel-e2ee = { path = "../crates/e2ee" }
+nuschl-identity = { path = "../crates/identity" }
+nuschl-ipc = { path = "../crates/ipc" }
+nuschl-kt = { path = "../crates/kt" }
+nuschl-e2ee = { path = "../crates/e2ee" }
 serde_json = "1.0.154"
 base64 = "0.22"
 image = { version = "0.25", default-features = false }
-nuschel-client = { path = "../crates/client" }
-nuschel-legacy-html = { path = "../crates/legacy-html" }
-nuschel-session = { path = "../crates/session" }
+nuschl-client = { path = "../crates/client" }
+nuschl-legacy-html = { path = "../crates/legacy-html" }
+nuschl-session = { path = "../crates/session" }
 opus-pure = "0.2.3"
 
 [[bin]]

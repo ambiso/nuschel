@@ -12,7 +12,7 @@
 //! RFC 9420's TLS encoding that knows nothing of OpenMLS:
 //!
 //! - [`key_package`]: version, suite, the init key, the leaf node (encryption and
-//!   signature key lengths, a Nuschel credential, capabilities, the key-package
+//!   signature key lengths, a Nuschl credential, capabilities, the key-package
 //!   lifetime), extensions, signature; nothing may trail.
 //! - [`ratchet_tree`]: every leaf and parent node of a tree (as served by the
 //!   delivery service, or exported after a commit).
@@ -26,10 +26,10 @@ use crate::{CREDENTIAL_TYPE, SUITE_ID, SUITE_KEM_PUBLIC_KEY_LEN};
 /// Ed25519 leaf signature keys and signatures.
 const SIGNATURE_KEY_LEN: usize = 32;
 const SIGNATURE_LEN: usize = 64;
-/// A Nuschel device credential (nuschel-identity `DeviceCredential`).
+/// A Nuschl device credential (nuschl-identity `DeviceCredential`).
 const DEVICE_CREDENTIAL_LEN: usize = 172;
 /// Elements in a capabilities list or extension list (RFC 9420 has no limit; a
-/// Nuschel leaf lists a handful).
+/// Nuschl leaf lists a handful).
 const MAX_LIST: usize = 64;
 /// One extension's data.
 const MAX_EXTENSION: usize = 64 * 1024;
@@ -52,7 +52,7 @@ pub enum Malformed {
         got: usize,
         expected: usize,
     },
-    #[error("not a Nuschel device credential")]
+    #[error("not a Nuschl device credential")]
     Credential,
     #[error("invalid {0}")]
     Value(&'static str),
@@ -167,7 +167,7 @@ impl<'a> Reader<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeafFacts {
     pub signature_key: [u8; 32],
-    /// The Nuschel device credential (172 bytes).
+    /// The Nuschl device credential (172 bytes).
     pub credential: Vec<u8>,
     /// 1 key package, 2 update, 3 commit.
     pub source: u8,
@@ -204,7 +204,7 @@ fn extensions(reader: &mut Reader<'_>) -> Result<Vec<(u16, usize)>, Malformed> {
     Ok(out)
 }
 
-/// RFC 9420 §7.2 `LeafNode`, with Nuschel's constraints.
+/// RFC 9420 §7.2 `LeafNode`, with Nuschl's constraints.
 fn leaf_node(reader: &mut Reader<'_>) -> Result<LeafFacts, Malformed> {
     reader.exact("leaf encryption key", SUITE_KEM_PUBLIC_KEY_LEN)?;
     let signature_key: [u8; 32] = reader
@@ -320,7 +320,7 @@ impl TreeLeaves {
 /// 6): the input's size bounds the work. Every node takes at least one byte (its
 /// presence flag), so the walk is linear in the input, and only present leaves are
 /// kept. What bounds a hostile tree is the message size limit of whoever hands it
-/// over (`nuschel_protocol::nuschel::MAX_MLS_TREE_BYTES`) and the process's limits.
+/// over (`nuschl_protocol::nuschl::MAX_MLS_TREE_BYTES`) and the process's limits.
 pub fn ratchet_tree(bytes: &[u8]) -> Result<TreeLeaves, Malformed> {
     let mut outer = Reader::new(bytes);
     let mut nodes = outer.vector()?;

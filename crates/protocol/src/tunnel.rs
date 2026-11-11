@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The web client's tunnel (docs/web.md, "The tunnel relay"): browsers cannot
-//! open TCP or UDP sockets, so the web client sends a Mumble or Nuschel
+//! open TCP or UDP sockets, so the web client sends a Mumble or Nuschl
 //! connection through a WebSocket to the relay, which connects to the server.
 //! TLS runs inside the browser; the relay only ever forwards ciphertext.
 //!
@@ -18,7 +18,7 @@
 //! out-of-range lengths are errors, and the relay closes the tunnel on any.
 
 /// The WebSocket subprotocol (`Sec-WebSocket-Protocol`) both sides require.
-pub const SUBPROTOCOL: &str = "nuschel-tunnel.1";
+pub const SUBPROTOCOL: &str = "nuschl-tunnel.1";
 /// Largest TCP payload in one `Stream` frame.
 pub const MAX_STREAM: usize = 64 * 1024;
 /// Largest UDP datagram: stock Mumble's 1024-byte UDP buffer.

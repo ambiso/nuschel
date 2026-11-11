@@ -1,16 +1,16 @@
 # End-to-end encryption, identity and key transparency
 
 Status: design for review (2026-11-11). Phase 3 (identity and key transparency, without
-MLS) is implemented: `nuschel-identity`, `nuschel-kt`, the crypto worker
-(`apps/crypto-worker`), the `kt/1` directory in `nuscheld` and the client flow in
-`nuschel-session` and the desktop; "Phase 3 as implemented" at the end lists what the
+MLS) is implemented: `nuschl-identity`, `nuschl-kt`, the crypto worker
+(`apps/crypto-worker`), the `kt/1` directory in `nuschld` and the client flow in
+`nuschl-session` and the desktop; "Phase 3 as implemented" at the end lists what the
 implementation settled. Phases 4a (delivery service) and 4b (direct conversations) are
 implemented on OpenMLS 0.9.2 with a patch for its vulnerable libcrux pins and the
 provisional suite code point; end-to-end mode is a server-level switch
 (`security = "e2ee"`, `e2ee/1`). "Phase 4 prototype" at the end describes it, and how
 to move to the OpenMLS release with the draft's code points (§1.1, §1.4); "Phase 4c
 and the answers as implemented" covers the user's answers to §10 and channels. It covers roadmap phases 3
-(identity, key transparency) and 4 (MLS) in TODO.md, "Nuschel server", and builds on
+(identity, key transparency) and 4 (MLS) in TODO.md, "Nuschl server", and builds on
 the framing, identifiers and policies of [docs/extension.md](extension.md). Claims
 marked *(spike)* are checked by tests in [`spikes/mls`](../spikes/mls), a standalone
 crate outside the default build:
@@ -33,9 +33,9 @@ cargo test --release --test scale -- --ignored --nocapture --test-threads 1
 | Root key custody | Encrypted under a recovery key; linked devices hold the device-signing key, not the root |
 | Device linking | Short code with SPAKE2 (magic-wormhole style) or QR, then an X-Wing-sealed provisioning bundle |
 | Trust | TOFU on the identity root, safety numbers over both roots, verification valid on every server |
-| Key transparency | One log per Nuschel server; `akd` behind a narrow interface; self-monitoring, contact monitoring, gossip of signed heads in MLS, optional auditors |
+| Key transparency | One log per Nuschl server; `akd` behind a narrow interface; self-monitoring, contact monitoring, gossip of signed heads in MLS, optional auditors |
 | Groups | One MLS group per conversation, bound to server and `ConversationId`; channel membership follows `can_read`, proposed by the server, committed by members |
-| Delivery service | In `nuscheld`; handshake messages as PublicMessage validated with OpenMLS `PublicGroup`; one commit per epoch; shared `seq` stream |
+| Delivery service | In `nuschld`; handshake messages as PublicMessage validated with OpenMLS `PublicGroup`; one commit per epoch; shared `seq` stream |
 | History for new members | Per-conversation history keys, rotated on removal and monthly, granted to new members inside MLS (§6.6) |
 | Voice | SFrame (RFC 9605) with the MLS exporter; on the Mumble UDP transport too |
 | Ordering | Per-sender counter and previous-message hash inside every payload, plus the last message the sender saw (§6.4) |
@@ -180,7 +180,7 @@ associated data (`src/store.rs`). Findings:
   ([draft-ietf-mls-combiner-02](https://datatracker.ietf.org/doc/draft-ietf-mls-combiner/),
   expired, waiting for the WG chair) amortises PQ protection over two groups.
   `SignatureScheme` is a closed enum in openmls_traits, so a private composite scheme
-  would need a fork. Hence: hybrid signatures where Nuschel controls the format
+  would need a fork. Hence: hybrid signatures where Nuschl controls the format
   (identity certificates), plain ML-DSA-44 for MLS leaves once that suite ships.
 - **Migration**: OpenMLS parses `ReInit` proposals but offers no public API to create
   one. A group therefore migrates by **generation**: a member creates the replacement
@@ -239,7 +239,7 @@ they change. Not: content, typing, file contents, read positions, history keys.
 **Mumble compatibility limits**: stock clients cannot take part in end-to-end
 conversations at all. An end-to-end mode server (the default, extension.md Decision 3)
 rejects them at the connection stage. A compatible mode server has no end-to-end
-encryption. On stock Mumble servers, Nuschel has no E2EE; a Mumble certificate binding
+encryption. On stock Mumble servers, Nuschl has no E2EE; a Mumble certificate binding
 (§3.9) is a hint, never authentication. Unregistered (guest) users have no account and
 no identity, so they cannot be members of end-to-end conversations (open question 12).
 
@@ -262,10 +262,10 @@ identity root key (hybrid ML-DSA-65 + Ed25519)       ← fingerprint = the ident
         └─ signs: device revocations, account bindings, Mumble certificate bindings
 ```
 
-Implemented in [`crates/identity`](../crates/identity) (`nuschel-identity`): its module
+Implemented in [`crates/identity`](../crates/identity) (`nuschl-identity`): its module
 documentation gives every layout, and `test-vectors/identity-v1.txt` the known-answer
 vectors. The identity is
-`SHA-256(uint8 len || "nuschel/identity-fingerprint/v1" || root public key encoding)`.
+`SHA-256(uint8 len || "nuschl/identity-fingerprint/v1" || root public key encoding)`.
 
 - The **root** names the person on every server. Safety numbers, pins and the
   "verified" state refer to it. It signs only device-signing keys, so it is used
@@ -347,7 +347,7 @@ copied credential fails *(spike)*.
 
 ### 3.4 Linking a device
 
-**Decision: magic-wormhole style.** Nuschel is desktop-first and desktops have no
+**Decision: magic-wormhole style.** Nuschl is desktop-first and desktops have no
 camera, so QR alone is not enough.
 
 1. The new device creates its device keys and opens a linking mailbox on the server
@@ -358,7 +358,7 @@ camera, so QR alone is not enough.
    device.
 3. Both run SPAKE2 over the mailbox with the code
    ([`spake2`](https://crates.io/crates/spake2) 0.4.0, RustCrypto, pure Rust; the PAKE
-   that magic-wormhole uses, which Nuschel already plans for file transfer on Mumble
+   that magic-wormhole uses, which Nuschl already plans for file transfer on Mumble
    servers). The new device sends its leaf and X-Wing keys with an HMAC key
    confirmation over the transcript (both SPAKE2 messages and the keys); a server that
    swaps keys, or a wrong code, fails the existing device's check.
@@ -425,7 +425,7 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
 - The crypto worker owns an encrypted store (§8.3). Its store key is in the OS
   credential store: Secret Service on Linux, Keychain on macOS, DPAPI on Windows;
   never in the history database, never on a server. **For now** the key is a 0600
-  file in the worker's own directory (`store.key` in `$XDG_DATA_HOME/nuschel/keys`,
+  file in the worker's own directory (`store.key` in `$XDG_DATA_HOME/nuschl/keys`,
   never in the configuration folder); moving it to the credential store
   changes only where the worker gets it (`KeySource`: the supervisor hands it over),
   not the sealed files.
@@ -447,13 +447,13 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
 
 ### 3.8 One identity on every server
 
-- Each Nuschel account is bound to the identity by an `Account { server, account }`
+- Each Nuschl account is bound to the identity by an `Account { server, account }`
   statement signed with the device-signing key: `server` is the hash of the server's
   identity key, `account` the immutable 128-bit account id (extension.md §3), never
   Murmur's reusable registration number *(spike: `Statement::Account`)*. The server
   publishes the binding in its KT log (§5).
 - **As implemented:** `AccountStatement` (kind 0x06, 3467 bytes, context
-  `nuschel/account-statement/v1`) names the server by its KT **log id**, which hashes
+  `nuschl/account-statement/v1`) names the server by its KT **log id**, which hashes
   the head-signing key (the server identity key) and the VRF key. The `acct:` value
   commits to the statement's hash (format 3, §5.1), the server checks the statement
   before publishing, and clients check it with every lookup
@@ -471,8 +471,8 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
 ### 3.9 The Mumble RSA certificate
 
 The identity can sign `MumbleCertificate { sha1 }` for the user's Mumble certificate
-(the hash stock Mumble shows), published in KT on Nuschel servers. Nuschel clients then
-link a Nuschel identity to a certificate hash, for example to carry friends and
+(the hash stock Mumble shows), published in KT on Nuschl servers. Nuschl clients then
+link a Nuschl identity to a certificate hash, for example to carry friends and
 nicknames (keyed by certificate hash today, TODO.md) over to the identity.
 
 What it cannot do: on a stock server, the server only claims each user's certificate
@@ -511,7 +511,7 @@ identity, and the RSA key is never used for anything end-to-end.
   in DMs and in member lists, until the root changes.
 - **Automatic verification** (§5): Signal shows its check mark only on request, with
   all its auditors' signatures, and only for contacts whose phone number is known.
-  Nuschel shows no "verified automatically" state; a contact checked by KT is "not
+  Nuschl shows no "verified automatically" state; a contact checked by KT is "not
   verified" until compared, and "Automatic verification unavailable" when the
   server's log is not witnessed (§5.9). Manual verification is stronger: it does not
   trust the server and its witnesses.
@@ -520,14 +520,14 @@ identity, and the RSA key is never used for anything end-to-end.
 
 ### 5.1 Design
 
-**Decision: each Nuschel server runs one verifiable key directory**, modelled on
+**Decision: each Nuschl server runs one verifiable key directory**, modelled on
 Signal's [automatic key verification](https://signal.org/blog/automatic-key-verification/)
 (2026-08-11), which is based on an earlier IETF KEYTRANS draft and runs in
 third-party-auditing mode: clients require a head from each of three auditors (run
 by Signal, Cloudflare and Trail of Bits), auditor heads at most 7 days old, the
 server's head within ±24 h, and a tree size can never be re-signed with another time
 (libsignal `verify.rs`, `env.rs`; docs/reviews/2026-11-11-key-transparency.md §2.1).
-Nuschel's counterpart is witnessing (§5.9).
+Nuschl's counterpart is witnessing (§5.9).
 
 Labels (VRF-hidden):
 
@@ -549,7 +549,7 @@ server comes from the witnesses' cosignatures (§5.9). Heads are signed with the
 server's identity key, the same key extension.md §3 names as the log key; it is pinned
 like the server (sticky, carried in invites).
 
-**Implemented** in [`crates/kt`](../crates/kt) (`nuschel-kt`), with these refinements
+**Implemented** in [`crates/kt`](../crates/kt) (`nuschl-kt`), with these refinements
 (2026-11-11):
 
 - **`acct:` carries the roster.** Its value is an `AccountBinding` (value format 1): the
@@ -595,7 +595,7 @@ Merkle prefix tree and VRF from a draft is the larger risk.
 `refresh_head`, `latest_head`, `head_at`, `lookup`, `history`, `audit`). `AkdDirectory`
 implements it on a `KtStore`, an ordered key-value store with atomic batches; the
 server backs it with one table through the storage worker (`kt_records(key, value)`,
-point reads and prefix scans; the record layout belongs to `nuschel-kt`, so the worker
+point reads and prefix scans; the record layout belongs to `nuschl-kt`, so the worker
 never interprets it). Clients use pure functions: `verify_head`, `check_freshness`,
 `KnownHeads`, `verify_lookup`, `verify_history` with `monitor_own`, `verify_audit`,
 `roster_for_binding`, `ContactTrust::assess`. A backend is a *suite* in the pinned
@@ -606,19 +606,19 @@ verifiers would be new.
 - **Configuration:** akd 0.13.0 with default features off plus `experimental` and
   `parallel_vrf`; akd's current configuration (`ExperimentalConfiguration`, the one akd's
   main branch deploys; `WhatsAppV1Configuration` exists for WhatsApp's tree) with the
-  domain label `nuschel-kt/v1 akd`; BLAKE3 with `pure`; ECVRF-EDWARDS25519-SHA512-TAI
+  domain label `nuschl-kt/v1 akd`; BLAKE3 with `pure`; ECVRF-EDWARDS25519-SHA512-TAI
   (RFC 9381), akd's only VRF. The VRF secret is the server's second KT secret: it also
   keys the value commitments and can never change for a log.
 - **Findings while integrating akd:**
   1. akd 0.13 does not build without `akd_core/protobuf` (it re-exports `proto`
      unconditionally). The protobuf runtime is linked but never used: proofs travel in
-     `nuschel-kt`'s own strict encoding (§5.6).
+     `nuschl-kt`'s own strict encoding (§5.6).
   2. `akd_core` turns on ed25519-dalek's `legacy_compatibility`, which accepts
      non-canonical (malleable) Ed25519 signatures *for every crate in the same binary*.
-     `nuschel-kt` checks `s < ℓ` itself; no other crate linked with it may rely on
-     ed25519-dalek for canonical signatures (`nuschel-identity` uses libcrux).
+     `nuschl-kt` checks `s < ℓ` itself; no other crate linked with it may rely on
+     ed25519-dalek for canonical signatures (`nuschl-identity` uses libcrux).
   3. akd's verifier asserts on version 0 and does unchecked arithmetic on epochs.
-     `nuschel-kt` rejects such proofs first, caps epochs at 2^48 and runs akd's
+     `nuschl-kt` rejects such proofs first, caps epochs at 2^48 and runs akd's
      verifiers under `catch_unwind`.
   4. akd's verifier never hashes the label of a membership proof's first sibling entry
      (the root), so 34 bytes per membership proof were malleable (found by the mutation
@@ -641,7 +641,7 @@ verifiers would be new.
   value-bag, home: MIT and/or Apache-2.0; dashmap 5.5.3, which: MIT; ed25519-dalek
   2.2.0: BSD-3-Clause; blake3 1.8.7, constant_time_eq: CC0-1.0 or Apache-2.0; rustix,
   linux-raw-sys: Apache-2.0 (LLVM exception) or MIT. `cargo deny` passes, and its
-  wrapper rules confine `akd` and `akd_core` to `nuschel-kt`.
+  wrapper rules confine `akd` and `akd_core` to `nuschl-kt`.
 
 ### 5.3 Auditing and gossip
 
@@ -659,7 +659,7 @@ verifiers would be new.
   device-signing key signs them, so a server can only omit or delay). Clients compare
   generations and revocations between the servers they use and flag a stale server.
 - **Witnesses** (§5.9, decided as option B): a small fixed set every client checks,
-  led by the project auditor `nuschel-witness`; each server submits its own epochs
+  led by the project auditor `nuschl-witness`; each server submits its own epochs
   and serves the cosignatures. Without witnesses there is no split-view defence
   (gossip over the operator's own channel is not the out-of-band channel KEYTRANS
   architecture §3.3 requires); until the auditor is deployed, that is today's state.
@@ -787,8 +787,8 @@ Decided by the user (§10, answer 9; review "Answers"), operated as described in
 
 - **Epoch log.** Each server keeps an RFC 6962 tree whose leaf `i` is akd epoch
   `i`'s root (`EpochLeaf`), stored with each epoch, and signs C2SP checkpoints of it
-  with its log key under the origin `<host>:<port>/nuschel-kt/v1`.
-- **Witnesses.** The project auditor (`nuschel-witness`) verifies every akd
+  with its log key under the origin `<host>:<port>/nuschl-kt/v1`.
+- **Witnesses.** The project auditor (`nuschl-witness`) verifies every akd
   transition from epoch 0 and cosigns with ML-DSA-44 (C2SP type 0x06); it holds one
   log per origin, checked against the server's hello. Servers submit their own
   epochs (`[kt] origins`, `[[kt.witnesses]]`, `DEFAULT_WITNESSES`), keep the
@@ -818,7 +818,7 @@ Decided by the user (§10, answer 9; review "Answers"), operated as described in
   **conversation binding** extension (private-use 0xF4E0): server identity key hash,
   `ConversationId`, generation, and the conversation policy (history: `members` or
   `since_join`; membership: `server` or `members`; policy admins by identity). Required
-  capabilities list the binding extension and the Nuschel credential type, so no member
+  capabilities list the binding extension and the Nuschl credential type, so no member
   without them can be added *(spike)*.
 - Wire format: handshake messages as PublicMessage, application messages always
   PrivateMessage (`MIXED_PLAINTEXT_WIRE_FORMAT_POLICY`) *(spike)*.
@@ -855,13 +855,13 @@ itself: it holds no member key, and anything it could do is visible *(spike)*.
   by an admin; the server's per-channel settings are mirrored, and on a mismatch members
   follow the group context.
 
-### 6.3 Delivery service in `nuscheld`
+### 6.3 Delivery service in `nuschld`
 
 The server tracks each group's public state with OpenMLS `PublicGroup` from the
 PublicMessage handshakes *(spike: `src/ds.rs`)*:
 
 - **Epoch fencing**: a commit is accepted only for the current epoch, first come first
-  served; others get `NuschelError { code: stale_epoch, epoch, head_seq }`. The committer
+  served; others get `NuschlError { code: stale_epoch, epoch, head_seq }`. The committer
   merges its own commit only after the server's ack (never before), and clears it on
   rejection.
 - **Validation before fan-out**: framing, signatures against the sender's leaf, proposal
@@ -908,7 +908,7 @@ PublicMessage handshakes *(spike: `src/ds.rs`)*:
 ### 6.4 The application payload: per-sender ordering
 
 A server-assigned `seq` lets a malicious server reorder, withhold or fork history per
-member (extension.md §3). Every MLS application message therefore carries a Nuschel
+member (extension.md §3). Every MLS application message therefore carries a Nuschl
 **envelope**, inside the ciphertext:
 
 ```
@@ -1037,7 +1037,7 @@ Consequences:
   process limits, not a member count: prevalidation's work is linear in its input
   (every node takes at least one byte, and only present leaves are kept, so what it
   keeps is never larger than the input). With today's limits (a tree or commit of
-  2 MiB, `nuschel::MAX_MLS_TREE_BYTES`, `MAX_MLS_HANDSHAKE_BYTES`; 8 MiB control
+  2 MiB, `nuschl::MAX_MLS_TREE_BYTES`, `MAX_MLS_HANDSHAKE_BYTES`; 8 MiB control
   frames) the practical ceiling is around 1,500 X-Wing devices per group; larger
   groups need those limits raised and the join info and the server's group state
   split across frames and records (listed in "What remains").
@@ -1080,7 +1080,7 @@ clients never trust a server MIME type.
   Mumble). Devices join by external commit on entering and are removed on leaving;
   voice channels are small, so the churn is affordable.
 - **Transport**: Opus frames are SFrame-encrypted before the Mumble UDP/TCP voice
-  framing, so on Nuschel servers in end-to-end mode, voice is end-to-end encrypted on
+  framing, so on Nuschl servers in end-to-end mode, voice is end-to-end encrypted on
   today's transport (the server routes and never decodes anyway), and the same frames
   work later over WebRTC. SFrame's counter gives replay protection per sender; the
   voice badge turns green only when every participant is in the voice group.
@@ -1101,7 +1101,7 @@ decrypted (expired epochs, lost state) show as explicit gaps, never silently.
 
 As extension.md §1: end-to-end mode (the default for new servers) rejects stock clients
 at ALPN with a displayable `Reject`; compatible mode is the operator's explicit choice.
-Capabilities `mls/1` and `kt/1` are in the `NuschelHello`. The sticky record is keyed by
+Capabilities `mls/1` and `kt/1` are in the `NuschlHello`. The sticky record is keyed by
 server address, later by the server identity key, so certificate rotation does not reset
 it. Invites carry the server identity-key fingerprint and policy. A server that drops
 `mls/1` fails the connection; it never continues in a weaker mode.
@@ -1122,7 +1122,7 @@ The client's own state decides, not the server's advertisement *(spike: `src/pin
 
 ### 7.3 Minimum client versions
 
-The `NuschelHello` carries `minimum_client` and `recommended_client` with a grace date,
+The `NuschlHello` carries `minimum_client` and `recommended_client` with a grace date,
 advisory as extension.md says. For MLS, the binding requirement is stricter: a group's
 required capabilities and suite exclude clients that cannot take part, and migrations
 (§1.5) announce a deadline. Clients below the minimum see an update notice; after the
@@ -1147,15 +1147,15 @@ Chat-only encryption never turns the server badge green (docs/architecture.md).
 
 | Component | Responsibility | Must not acquire |
 | --- | --- | --- |
-| `crates/e2ee` (`nuschel-e2ee`) | Identity types and encodings (`tls_codec`), compact credentials, certificate verification, safety numbers, binding and pins, envelope, archive records, SFrame key schedule. No I/O | Network, database, UI |
-| `apps/crypto-worker` (`nuschel-crypto-worker`) | Owns identity, device and MLS state; OpenMLS + libcrux; the encrypted store; history keys; verification policy | Network, server credentials, history database |
-| `crates/kt` (`nuschel-kt`) | `akd` wrapper: server log and client verifiers | UI |
-| `crates/protocol` | `nuschel.v1` MLS, KT, linking and blob messages, with limits | |
-| `apps/server` (`nuscheld`) | Delivery service (`PublicGroup` per group), epoch fencing, key package directory, Welcome and linking mailboxes, KT log, external proposals | Member keys |
+| `crates/e2ee` (`nuschl-e2ee`) | Identity types and encodings (`tls_codec`), compact credentials, certificate verification, safety numbers, binding and pins, envelope, archive records, SFrame key schedule. No I/O | Network, database, UI |
+| `apps/crypto-worker` (`nuschl-crypto-worker`) | Owns identity, device and MLS state; OpenMLS + libcrux; the encrypted store; history keys; verification policy | Network, server credentials, history database |
+| `crates/kt` (`nuschl-kt`) | `akd` wrapper: server log and client verifiers | UI |
+| `crates/protocol` | `nuschl.v1` MLS, KT, linking and blob messages, with limits | |
+| `apps/server` (`nuschld`) | Delivery service (`PublicGroup` per group), epoch fencing, key package directory, Welcome and linking mailboxes, KT log, external proposals | Member keys |
 | `crates/storage` | Server tables: group stream, GroupInfo, trees, key packages, mailboxes, KT state | MLS private keys |
 
-- cargo-deny wrappers: `openmls*` only in `nuschel-e2ee`, `nuschel-crypto-worker` and
-  `nuscheld`; `akd` only in `nuschel-kt`.
+- cargo-deny wrappers: `openmls*` only in `nuschl-e2ee`, `nuschl-crypto-worker` and
+  `nuschld`; `akd` only in `nuschl-kt`.
 - The crypto worker follows the worker contract in SECURITY.md: versioned, bounded IPC,
   its own store directory only, no network, sandboxed like the storage worker. The
   session hands it MLS messages and gets back plaintext envelopes and outgoing
@@ -1165,7 +1165,7 @@ Chat-only encryption never turns the server badge green (docs/architecture.md).
 
 ### 8.2 Order of work
 
-1. **Phase 3a, identity offline**: `nuschel-e2ee` identity types from the spike, with
+1. **Phase 3a, identity offline**: `nuschl-e2ee` identity types from the spike, with
    compact credentials and `tls_codec` encodings; recovery key and identity export;
    Settings → Identity.
 2. **3b, crypto worker**: encrypted store, OS credential store integration, IPC, crash
@@ -1252,9 +1252,9 @@ on flash become unreadable once the old key is gone from the OS credential store
    fetches (X-Wing leaves ≈ 1.2 KB, ≈ 12 MB at 10,000 devices), served by the server.
 7. **Voice and shouts:** there are no unencrypted channels on an end-to-end server.
    End-to-end is a **server-level switch**: a server is either legacy/Mumble-compatible
-   or a Nuschel server where everything is end-to-end encrypted and every Nuschel
+   or a Nuschl server where everything is end-to-end encrypted and every Nuschl
    feature is available (WebRTC, video, files, several images per message, typing,
-   …). On a compatible (legacy) server, Nuschel clients keep the extension's
+   …). On a compatible (legacy) server, Nuschl clients keep the extension's
    unencrypted extras (server history, edits, typing, durable direct messages),
    clearly labelled "not end-to-end encrypted" (user, 2026-11-11). Shouts and
    whispers on an end-to-end server are therefore encrypted too: a device joins a target
@@ -1302,7 +1302,7 @@ on flash become unreadable once the old key is gone from the OS credential store
 7. **Voice**: a voice group per channel of present devices (recommended)? Are shouts to
    other channels allowed without end-to-end encryption, or blocked?
 8. **Inactive devices**: removed after 90 days?
-9. **Auditors**: should the Nuschel project run a public auditor that servers can opt
+9. **Auditors**: should the Nuschl project run a public auditor that servers can opt
    into, or leave auditors to operators?
 10. **Release timing**: agree to ship persistent end-to-end groups only on an OpenMLS
     release with the draft's code points and fixed libcrux crates (prototype on 0.9.2)?
@@ -1319,15 +1319,15 @@ on flash become unreadable once the old key is gone from the OS credential store
 Identity and key transparency work end to end without MLS. What the implementation
 settled, beyond the refinements marked "as implemented" above:
 
-- **Processes.** `apps/crypto-worker` (`nuschel-crypto-worker`) owns every identity
+- **Processes.** `apps/crypto-worker` (`nuschl-crypto-worker`) owns every identity
   secret and key-transparency decision. It runs in the shared bubblewrap sandbox
   (`crypto_sandbox_command`: its own directory at `/data`, no network), one per
-  profile, shared by all connections; the session (`nuschel_session::identity`) only
-  moves bytes between it and the server and never links `nuschel-kt` (cargo-deny
-  confines `nuschel-kt` to the worker and `nuscheld`, `nuschel-identity` to them and
-  `nuschel-kt`). The IPC is `nuschel_ipc::crypto`: typed JSON with base64 binaries,
-  every field bounded (§8.1). `nuschel-e2ee` (§8.1) is not needed yet:
-  `nuschel-identity` carries the identity formats.
+  profile, shared by all connections; the session (`nuschl_session::identity`) only
+  moves bytes between it and the server and never links `nuschl-kt` (cargo-deny
+  confines `nuschl-kt` to the worker and `nuschld`, `nuschl-identity` to them and
+  `nuschl-kt`). The IPC is `nuschl_ipc::crypto`: typed JSON with base64 binaries,
+  every field bounded (§8.1). `nuschl-e2ee` (§8.1) is not needed yet:
+  `nuschl-identity` carries the identity formats.
 - **The worker's store** (§8.3, for phase 3): the sealed `DeviceKeystore`, a JSON state
   sealed under the store key (purpose 5: pinned logs, `KnownHeads`, our bindings and
   monitoring checkpoint, contacts' `ContactTrust`, verified identities), and the
@@ -1337,7 +1337,7 @@ settled, beyond the refinements marked "as implemented" above:
   reused while valid) and renews this device's certificate 30 days before it expires
   (validity one year). Devices without the device-signing key cannot bind accounts yet
   (multi-device publishing comes with linking).
-- **The server** (`nuscheld`, docs/server.md): the directory on its `kt_records` table
+- **The server** (`nuschld`, docs/server.md): the directory on its `kt_records` table
   through its own storage worker; records behind each binding (`R ‖ account ‖
   SHA-256(value)`, and `C ‖ account` for the current one) in the same table; one task
   serves every request in order, so a lookup never pairs a new value with an old
@@ -1383,7 +1383,7 @@ settled, beyond the refinements marked "as implemented" above:
 - **Registration numbers.** The client looks users up by registration number (what
   Mumble shows), which only the server maps to an account. The worker remembers the
   account it was shown for each number; another account behind the same number later
-  (numbers are never reused on Nuschel servers) puts a notice on that contact: "treat
+  (numbers are never reused on Nuschl servers) puts a notice on that contact: "treat
   them as someone new until you compare safety numbers".
 - **Gossip** (§5.3) is ready: `MakeGossip` and `CheckGossip` produce and check
   `HeadGossip` against the worker's `KnownHeads` and keep `Evidence`; carrying it in
@@ -1411,15 +1411,15 @@ section.
 
 | Component | What it does |
 | --- | --- |
-| `crates/e2ee` (`nuschel-e2ee`) | The only crate that uses the OpenMLS API (deny.toml confines `openmls*` to it, and it to `nuscheld` and the crypto worker). [`SUITE`] is the one ciphersuite constant; `binding` the conversation binding; `prevalidate` a strict parser of key packages, ratchet trees and message framing that runs before OpenMLS; `envelope` §6.4; `ds` the delivery service's `PublicGroup` view; `client` a device's groups |
-| `nuscheld` (`apps/server/src/mls.rs`) | `mls/1`: the key package directory, the Welcome mailboxes, the group registry with epoch fencing, the shared `seq` stream, join info (see "The delivery service") |
-| `nuschel-crypto-worker` (`apps/crypto-worker/src/mls.rs`) | The OpenMLS state, credential checks against key-transparency rosters, pins, envelopes and chains, the lock; persisted sealed |
-| `nuschel-session` (`crates/session/src/mls.rs`) | Moves bytes between the server and the worker inside the key-transparency driver: key package uploads, Welcomes, creating a direct conversation's group, sending, catching up in `seq` order |
-| `nuschel-cli` | `e2ee_open`, `e2ee_send`, `e2ee_status`, `e2ee_sync` and `e2ee_*` events: the test driver; `--offline` runs only the crypto worker for device linking (`link_offer`, `link_join`, `link_approve`, `link_complete`) |
-| Device linking (`apps/crypto-worker/src/link.rs`) | §3.4's protocol from nuschel-identity through the worker, with the messages relayed by the caller (the server mailbox is later work); multi-device publishing and self-monitoring (see decision 13) |
+| `crates/e2ee` (`nuschl-e2ee`) | The only crate that uses the OpenMLS API (deny.toml confines `openmls*` to it, and it to `nuschld` and the crypto worker). [`SUITE`] is the one ciphersuite constant; `binding` the conversation binding; `prevalidate` a strict parser of key packages, ratchet trees and message framing that runs before OpenMLS; `envelope` §6.4; `ds` the delivery service's `PublicGroup` view; `client` a device's groups |
+| `nuschld` (`apps/server/src/mls.rs`) | `mls/1`: the key package directory, the Welcome mailboxes, the group registry with epoch fencing, the shared `seq` stream, join info (see "The delivery service") |
+| `nuschl-crypto-worker` (`apps/crypto-worker/src/mls.rs`) | The OpenMLS state, credential checks against key-transparency rosters, pins, envelopes and chains, the lock; persisted sealed |
+| `nuschl-session` (`crates/session/src/mls.rs`) | Moves bytes between the server and the worker inside the key-transparency driver: key package uploads, Welcomes, creating a direct conversation's group, sending, catching up in `seq` order |
+| `nuschl-cli` | `e2ee_open`, `e2ee_send`, `e2ee_status`, `e2ee_sync` and `e2ee_*` events: the test driver; `--offline` runs only the crypto worker for device linking (`link_offer`, `link_join`, `link_approve`, `link_complete`) |
+| Device linking (`apps/crypto-worker/src/link.rs`) | §3.4's protocol from nuschl-identity through the worker, with the messages relayed by the caller (the server mailbox is later work); multi-device publishing and self-monitoring (see decision 13) |
 | Desktop | With `e2ee_direct_messages` on (off by default), opens a direct conversation's group on `mls/1` servers; shows its lock (§7.4) in the conversation header; MLS rows never reach the timeline as text |
 
-**Wire** (docs/extension.md conventions; `crates/protocol/proto/nuschel.proto`):
+**Wire** (docs/extension.md conventions; `crates/protocol/proto/nuschl.proto`):
 capability `mls/1` (requires `kt/1`, sticky like every capability; a client refuses a
 server that offers `mls/1` without `kt/1`); messages `0x4E20`–`0x4E2C`:
 `MlsKeyPackageUpload` → `MlsKeyPackageStatus`, `MlsKeyPackageClaim` → `MlsKeyPackages`,
@@ -1430,7 +1430,7 @@ server that offers `mls/1` without `kt/1`); messages `0x4E20`–`0x4E2C`:
 proposals and application messages are rows of the conversation's stream with formats
 `MLS_HANDSHAKE` (4) and `MLS_APPLICATION` (3), the MLS message in `Message.mls`, so a
 history page `after(seq)` replays everything in order (§6.10). Limits per type
-(`crates/protocol/src/nuschel/mod.rs`): a key package 4 KiB, 16 per upload and 50 kept
+(`crates/protocol/src/nuschl/mod.rs`): a key package 4 KiB, 16 per upload and 50 kept
 per device; a commit or proposal 2 MiB, an application message 80 KiB, a Welcome 2
 MiB, a GroupInfo 256 KiB, a tree 2 MiB, 32 Welcomes per fetch.
 
@@ -1439,7 +1439,7 @@ MiB, a GroupInfo 256 KiB, a tree 2 MiB, 32 Welcomes per fetch.
 Where §6–§10 left room, with the reason:
 
 1. **Suite.** `MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519` under OpenMLS's
-   provisional code point **0x004F** (`nuschel_e2ee::SUITE`, `SUITE_ID`, marked
+   provisional code point **0x004F** (`nuschl_e2ee::SUITE`, `SUITE_ID`, marked
    *provisional* in code). It works end to end on 0.9.2 and is the suite this document
    targets (open question 11, recommendation taken); 0x004D (ChaCha20) is not in the
    draft.
@@ -1448,10 +1448,10 @@ Where §6–§10 left room, with the reason:
    validly signed key package, and the panic hits whoever encapsulates to it later
    (`crates/e2ee/tests/flow.rs` demonstrates both). So `prevalidate` checks every HPKE
    key a key package, a ratchet tree or a commit's resulting tree can carry (exact
-   length), Ed25519 key and signature lengths, a 172-byte Nuschel credential in every
+   length), Ed25519 key and signature lengths, a 172-byte Nuschl credential in every
    leaf, the suite, minimal variable-length integers and no trailing bytes, before any
    OpenMLS call. Every OpenMLS call on input also runs under `catch_unwind`
-   (`nuschel_e2ee::guard`): no profile sets `panic = "abort"`, so this contains other
+   (`nuschl_e2ee::guard`): no profile sets `panic = "abort"`, so this contains other
    panics in the server and the worker; prevalidation is what stops the known ones. A
    panic never happens under the server's state lock: MLS work runs in its own task.
 3. **Binding.** 54 bytes: version, the server's **key-transparency log id** (it hashes
@@ -1482,7 +1482,7 @@ Where §6–§10 left room, with the reason:
    `seq` if the first attempt was stored. A commit retried with the same key and bytes
    gets its original ack; the client also recognises its own pending commit in the
    stream (lost ack) and merges it.
-8. **Credentials and key changes** (§3.3, §4, §5.4). Every member must carry a Nuschel
+8. **Credentials and key changes** (§3.3, §4, §5.4). Every member must carry a Nuschl
    credential naming our identity or the direct conversation peer's pinned identity and
    verifying against that identity's KT roster (contacts now keep the verified record).
    A stranger, a bad signature, a key mismatch or a revoked device is refused: nothing
@@ -1526,7 +1526,7 @@ Where §6–§10 left room, with the reason:
     log. The key-transparency driver makes that lookup silently before publishing or
     monitoring. Mumble allows one connection per registered account, and accounts are
     identified by certificate: a second device uses the account's exported certificate
-    and connects while the first is offline (nuscheld disconnects the older session).
+    and connects while the first is offline (nuschld disconnects the older session).
 14. **Crash consistency in the server.** Before acknowledging a commit, the delivery
     service writes a pending record with the group after it; once the history row is
     stored one batch promotes it. On start every pending record is adopted if the
@@ -1557,7 +1557,7 @@ Where §6–§10 left room, with the reason:
 
 `apps/server/src/mls.rs`, built like the key-transparency task: requests are authorised
 under the state lock and processed in one task that owns the groups, through
-nuschel-e2ee only; answers go out under the lock. It runs only with `kt/1` and
+nuschl-e2ee only; answers go out under the lock. It runs only with `kt/1` and
 `security = "e2ee"` (`claims_per_minute` 30, `uploads_per_minute` 10, `welcome_days`
 90).
 
@@ -1590,7 +1590,7 @@ nuschel-e2ee only; answers go out under the lock. It runs only with `kt/1` and
 - **Join info** for readers of the conversation: epoch, the newest GroupInfo, the
   server's tree and the latest commit's `seq`.
 - **Persistence**, without new tables: the server's key-value table (`kt_records`, its
-  own storage worker), uppercase prefixes that never meet nuschel-kt's (lowercase) or
+  own storage worker), uppercase prefixes that never meet nuschl-kt's (lowercase) or
   kt.rs's (`R`, `C`); an empty value deletes a key.
 
   | Key | Value |
@@ -1610,13 +1610,13 @@ nuschel-e2ee only; answers go out under the lock. It runs only with `kt/1` and
 
 | Command | What it covers |
 | --- | --- |
-| `cargo test -p nuschel-e2ee` | Envelope encoding and chains, prevalidation, the binding; in process: a direct conversation through the `DeliveryGroup`, stale epochs and a losing concurrent commit, restore of both halves, replay refused, the DS refusing what does not fit (wrong GroupInfo rolls back, another server's binding), a validly signed key package with a 32-byte X-Wing init key refused before libcrux (OpenMLS 0.9.2 accepts it; the patched libcrux-kem refuses to encapsulate to it with an error where 0.0.9 panicked), a tree with a short key refused |
-| `cargo test -p nuschel-crypto-worker --test mls` | The worker against a delivery service in the test (in the style of `tests/malicious.rs`): two and three devices (a second device of one identity made with its device-signing key, standing in for linking), restarts, a server that drops, reorders, replays and forks, stale epoch with the same envelope resent, a stranger's commit refused, a device KT does not list (blocked, then unblocked by a lookup), a hostile key package, a Welcome for a pinned conversation, concurrent creations, a lost ack settled by the stream, removal |
-| `cargo test -p nuscheld --test mls` | The delivery service over the wire with raw protocol clients and real identities (6 tests): upload, claim, creation, Welcome push, fetch and ack, join info, a message decrypted by the other side and a history page with both row formats; idempotent resends of the creation and of a message; `STALE_EPOCH` with epoch and head for an old-epoch message and a racing commit, catch-up and resend; plaintext and edits refused; hostile key packages (a short X-Wing init key as one-time and last-resort package, garbage, another identity's) refused while the server keeps serving; a claim without a direct conversation and a commit adding a third identity refused; the mailbox, epoch and fencing after a restart; a commit stored just before a crash adopted on restart, and a pending commit without its row dropped. Storage tests: delete on empty value, commits surviving expiry and erase |
-| `cargo test -p nuschel-crypto-worker --test link` | Linking two workers in process; a wrong code and steps out of order refused |
-| `cargo test -p nuschel-cli --test e2ee_devices` (after `cargo build -p nuschel-crypto-worker`) | Three devices via `nuschel-cli`: Bob's phone linked to his laptop, the two-device roster published without an own-key alarm, Alice's group with three verified members, each Bob device reading Alice's message while online, the phone's reply reaching Alice and later the laptop as its own; and a device linked after the conversation existed, added through the missing-device report, which unblocks Alice after her next lookup |
-| `cargo test -p nuschel-cli --test e2ee` (after `cargo build -p nuschel-crypto-worker`) | Compatible servers offer no MLS; encrypted servers automatically upload key packages and create groups. Sandboxed workers through local nuscheld: Welcome delivery, ordered bidirectional messages, offline catch-up and plaintext refusal |
-| `python3 tests/with_local_nuscheld.py <bins> --e2ee tests/e2ee_direct.py <bins> --port PORT` | Direct messages, lazy channel join and retained prejoin history with the donor offline at join and returning later. `--state DIR` / `--phase second` check restart persistence; `vm-server` uses explicit encrypted SQLite/PostgreSQL nodes |
+| `cargo test -p nuschl-e2ee` | Envelope encoding and chains, prevalidation, the binding; in process: a direct conversation through the `DeliveryGroup`, stale epochs and a losing concurrent commit, restore of both halves, replay refused, the DS refusing what does not fit (wrong GroupInfo rolls back, another server's binding), a validly signed key package with a 32-byte X-Wing init key refused before libcrux (OpenMLS 0.9.2 accepts it; the patched libcrux-kem refuses to encapsulate to it with an error where 0.0.9 panicked), a tree with a short key refused |
+| `cargo test -p nuschl-crypto-worker --test mls` | The worker against a delivery service in the test (in the style of `tests/malicious.rs`): two and three devices (a second device of one identity made with its device-signing key, standing in for linking), restarts, a server that drops, reorders, replays and forks, stale epoch with the same envelope resent, a stranger's commit refused, a device KT does not list (blocked, then unblocked by a lookup), a hostile key package, a Welcome for a pinned conversation, concurrent creations, a lost ack settled by the stream, removal |
+| `cargo test -p nuschld --test mls` | The delivery service over the wire with raw protocol clients and real identities (6 tests): upload, claim, creation, Welcome push, fetch and ack, join info, a message decrypted by the other side and a history page with both row formats; idempotent resends of the creation and of a message; `STALE_EPOCH` with epoch and head for an old-epoch message and a racing commit, catch-up and resend; plaintext and edits refused; hostile key packages (a short X-Wing init key as one-time and last-resort package, garbage, another identity's) refused while the server keeps serving; a claim without a direct conversation and a commit adding a third identity refused; the mailbox, epoch and fencing after a restart; a commit stored just before a crash adopted on restart, and a pending commit without its row dropped. Storage tests: delete on empty value, commits surviving expiry and erase |
+| `cargo test -p nuschl-crypto-worker --test link` | Linking two workers in process; a wrong code and steps out of order refused |
+| `cargo test -p nuschl-cli --test e2ee_devices` (after `cargo build -p nuschl-crypto-worker`) | Three devices via `nuschl-cli`: Bob's phone linked to his laptop, the two-device roster published without an own-key alarm, Alice's group with three verified members, each Bob device reading Alice's message while online, the phone's reply reaching Alice and later the laptop as its own; and a device linked after the conversation existed, added through the missing-device report, which unblocks Alice after her next lookup |
+| `cargo test -p nuschl-cli --test e2ee` (after `cargo build -p nuschl-crypto-worker`) | Compatible servers offer no MLS; encrypted servers automatically upload key packages and create groups. Sandboxed workers through local nuschld: Welcome delivery, ordered bidirectional messages, offline catch-up and plaintext refusal |
+| `python3 tests/with_local_nuschld.py <bins> --e2ee tests/e2ee_direct.py <bins> --port PORT` | Direct messages, lazy channel join and retained prejoin history with the donor offline at join and returning later. `--state DIR` / `--phase second` check restart persistence; `vm-server` uses explicit encrypted SQLite/PostgreSQL nodes |
 | `fuzz/fuzz_targets/mls.rs` | Prevalidation, key package checks, Welcome routing, envelopes (one encoding), the `mls/1` messages, and the DS paths on a fixture group that garbage must never move |
 
 ### Bumping OpenMLS
@@ -1628,7 +1628,7 @@ libcrux-kem and libcrux-hmac-drbg):
    `draft-ietf-mls-pq-ciphersuites`; never enable OpenMLS's `async` feature (it
    switches every storage-touching call to `async fn` in every crate of the build) or
    `legacy-pq-key-derivation`.
-2. `nuschel_e2ee::SUITE` and `SUITE_ID`: the release's variant for
+2. `nuschl_e2ee::SUITE` and `SUITE_ID`: the release's variant for
    `MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519`. As of 2026-11-11 OpenMLS `main`
    still names it 0x004F ("provisional"), with the X-Wing HPKE KEM id moved to 0x647a
    and X-Wing key derivation following draft-ietf-hpke-pq; no variant uses the draft's
@@ -1655,7 +1655,7 @@ libcrux-kem and libcrux-hmac-drbg):
      may be named `load_psk` (#2242); `PublicGroup::validate_key_package_for_add`
      (#2167) can replace part of the directory's own checks.
    - MSRV 1.94 (#2234; the workspace is on 1.95).
-5. Run `cargo test -p nuschel-e2ee` first (the short-key test expects libcrux to
+5. Run `cargo test -p nuschl-e2ee` first (the short-key test expects libcrux to
    refuse the key with an error, which the patched and the released crates both do;
    the flow tests show whether the API changes above were complete), then the
    worker, server and CLI tests above and `vm-server`.
@@ -1709,12 +1709,12 @@ The user's answers to §10 (above), and what the code does with them.
   transparency, runs the delivery service and offers the capability **`e2ee/1`** with
   `mls/1` and `kt/1` (and `Policy.mode = E2EE`). `mls/1` exists only in this mode: a
   compatible server has no end-to-end encryption at all, which is what "a server is
-  either legacy/Mumble-compatible or a Nuschel server where everything is end-to-end
+  either legacy/Mumble-compatible or a Nuschl server where everything is end-to-end
   encrypted" asks for. `e2ee/1` is sticky like every capability, so a server that
   falls back to compatible mode is refused by clients that knew it as end-to-end
   (§7.1), and a client refuses `e2ee/1` without `mls/1`.
 - **Who takes part.** Stock clients are rejected at the connection stage, before their
-  `Authenticate` is read; Nuschel clients that do not agree on `e2ee/1` (older ones)
+  `Authenticate` is read; Nuschl clients that do not agree on `e2ee/1` (older ones)
   at `Authenticate` with `WrongVersion`. Unregistered connections are admitted so that
   people can register (self-registration is a stock Mumble flow), but take no part:
   no reading (`history.guests` is ignored), no writing, and the server routes no
@@ -1727,10 +1727,10 @@ The user's answers to §10 (above), and what the code does with them.
   exporter keys (4e). The client also disables audio for this connection. Read markers
   are still visible `ReadMarker` sequence numbers until self blobs (§3.7); files
   are not offered.
-- **Compatible servers.** Nuschel clients keep the extension's extras (server history,
+- **Compatible servers.** Nuschl clients keep the extension's extras (server history,
   edits, typing, durable direct messages) and label them "not end-to-end encrypted".
 - The client follows the server: `ClientSettings.e2ee_direct_messages` and
-  `nuschel-cli --e2ee` are gone (the setting is still read, never written).
+  `nuschl-cli --e2ee` are gone (the setting is still read, never written).
 
 ### No size cap (answer 6)
 
@@ -1748,7 +1748,7 @@ that stays visible in key transparency, to self-monitoring and to contacts.
 
 ### Channels: subscribers, lazy external joins and the server's removals (answers 4 and 8)
 
-Implemented across `nuschel-e2ee`, the crypto worker, `nuscheld` and the session:
+Implemented across `nuschl-e2ee`, the crypto worker, `nuschld` and the session:
 
 - **Binding version 2** (56 bytes) adds the policy: history (`members`, the default,
   or `since_join`) and membership (`server` for channels, `members` for direct
@@ -1756,7 +1756,7 @@ Implemented across `nuschel-e2ee`, the crypto worker, `nuscheld` and the session
   Version 1 still decodes, as a direct conversation.
 - **The server as external sender.** Every new group names exactly one external
   sender: the server's key-transparency head-signing key (Ed25519), with a Basic
-  credential `nuschel-server`. Clients take the key from the log descriptor they
+  credential `nuschl-server`. Clients take the key from the log descriptor they
   pin, the delivery service refuses a group that names any other, and commits may
   not change it. Reusing the head-signing key is safe because MLS signs with
   `SignWithLabel` ("MLS 1.0 " and a label) and heads under their own context
@@ -1805,7 +1805,7 @@ Implemented across `nuschel-e2ee`, the crypto worker, `nuscheld` and the session
 - **Threads.** OpenMLS parallelises TreeKEM on rayon's global pool, which by default
   starts a thread per CPU; under the crypto worker's 1 GiB address-space limit that
   failed on a 24-CPU machine and panicked mid-commit. The worker now sizes the pool to
-  two threads first (`nuschel_e2ee::limit_threads`), and a contained panic carries
+  two threads first (`nuschl_e2ee::limit_threads`), and a contained panic carries
   its message (`Error::Panicked`).
 
 ### Channel history and native SDK completion

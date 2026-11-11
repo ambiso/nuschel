@@ -9,11 +9,11 @@ use crate::{
     udp::{self, PingStats, Received, TransportStats, Udp},
 };
 use bytes::Bytes;
-use nuschel_core::MAX_CONTENT_BYTES;
-use nuschel_protocol::{
+use nuschl_core::MAX_CONTENT_BYTES;
+use nuschl_protocol::{
     ControlFrame, MAX_CONTROL_BYTES, control as proto,
     crypt::CryptState,
-    nuschel::{
+    nuschl::{
         self, v1,
         version::{Standing, Version},
     },
@@ -32,7 +32,7 @@ use tokio::{
 };
 
 pub use crate::model::{Channel, ServerLimits, TextTarget, User};
-pub use nuschel_legacy_html::{escape_html, legacy_body, text_html};
+pub use nuschl_legacy_html::{escape_html, legacy_body, text_html};
 
 fn next_user_instance() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -94,13 +94,13 @@ pub struct IncomingText {
     pub html: bool,
     pub outgoing: bool,
     pub observed_at_ms: i64,
-    /// The server's sequence number (Nuschel servers: from history).
+    /// The server's sequence number (Nuschl servers: from history).
     pub seq: Option<u64>,
-    /// Our own message on a Nuschel server, until `ChatAcked`: its key.
+    /// Our own message on a Nuschl server, until `ChatAcked`: its key.
     pub pending: Option<[u8; 16]>,
 }
 
-/// Our message to a Nuschel conversation until the server acknowledged it.
+/// Our message to a Nuschl conversation until the server acknowledged it.
 /// Retries (also after a reconnect) carry the same idempotency key, so the
 /// server stores it once.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,16 +120,16 @@ const MAX_SEND_ATTEMPTS: u32 = 5;
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
     PeerCertificate(String),
-    /// The extension negotiation succeeded (only for `nuschel/1` servers);
+    /// The extension negotiation succeeded (only for `nuschl/1` servers);
     /// frontends raise the server's sticky record to it.
     Negotiated(Negotiated),
-    /// A channel's conversation id and history properties (Nuschel servers).
+    /// A channel's conversation id and history properties (Nuschl servers).
     ChannelInfo {
         channel: u32,
         info: v1::ChannelInfo,
     },
-    Nuschel(NuschelEvent),
-    /// Our message went to a Nuschel server and waits for its acknowledgement.
+    Nuschl(NuschlEvent),
+    /// Our message went to a Nuschl server and waits for its acknowledgement.
     ChatPending(PendingChat),
     /// Identity and key transparency on this server (`kt/1`, with a crypto worker).
     Identity(crate::identity::IdentityEvent),
@@ -145,7 +145,7 @@ pub enum SessionEvent {
         key: [u8; 16],
         reason: String,
     },
-    /// A subscribed channel's newest seq and our read marker (Nuschel servers).
+    /// A subscribed channel's newest seq and our read marker (Nuschl servers).
     ConversationState {
         channel: u32,
         head: u64,
@@ -187,7 +187,7 @@ pub enum SessionEvent {
     Acl(Acl),
     /// Resolved names for registered user ids (ACL editor).
     UserNames(BTreeMap<u32, String>),
-    /// A voice packet from a legacy codec Nuschel does not decode.
+    /// A voice packet from a legacy codec Nuschl does not decode.
     UnsupportedCodec {
         session: u32,
     },
@@ -279,16 +279,16 @@ pub enum Command {
     QueryAcl(u32),
     UpdateAcl(Acl),
     QueryUserNames(Vec<u32>),
-    /// Mark a channel read up to `seq` (Nuschel servers; synced to the
+    /// Mark a channel read up to `seq` (Nuschl servers; synced to the
     /// account's other devices).
     MarkRead {
         channel: u32,
         seq: u64,
     },
-    /// A Nuschel extension request; only sent when the extension (and the
+    /// A Nuschl extension request; only sent when the extension (and the
     /// capability it needs) was negotiated, otherwise answered locally with
     /// `UNSUPPORTED`.
-    Nuschel(NuschelRequest),
+    Nuschl(NuschlRequest),
     /// Identity and key transparency (`kt/1` servers with a crypto worker);
     /// ignored elsewhere.
     Identity(crate::identity::IdentityCommand),
@@ -316,7 +316,7 @@ pub struct ConnectOptions {
     /// Rejoin this channel after login (reconnect).
     pub channel: Option<u32>,
     /// Messages not acknowledged on an earlier connection, sent again with
-    /// their keys (Nuschel servers).
+    /// their keys (Nuschl servers).
     pub resend: Vec<PendingChat>,
     /// The server's rate limit for text, which it does not announce.
     pub message_rate: MessageRate,
@@ -328,9 +328,9 @@ pub struct ConnectOptions {
     pub crypto: Option<crate::identity::IdentitySetup>,
 }
 
-/// Requests of the Nuschel extension (docs/extension.md), as on the wire.
+/// Requests of the Nuschl extension (docs/extension.md), as on the wire.
 #[derive(Debug, Clone)]
-pub enum NuschelRequest {
+pub enum NuschlRequest {
     Send(v1::ChatSend),
     Edit(v1::ChatEdit),
     Delete(v1::ChatDelete),
@@ -348,9 +348,9 @@ pub enum NuschelRequest {
     ShareLinkResolve(v1::ShareLinkResolve),
 }
 
-impl NuschelRequest {
+impl NuschlRequest {
     fn frame(&self) -> (u16, Vec<u8>) {
-        use nuschel::kind;
+        use nuschl::kind;
         match self {
             Self::Send(message) => (kind::CHAT_SEND, message.encode_to_vec()),
             Self::Edit(message) => (kind::CHAT_EDIT, message.encode_to_vec()),
@@ -392,9 +392,9 @@ pub fn random_key() -> [u8; 16] {
     uuid::Uuid::new_v4().into_bytes()
 }
 
-/// What a Nuschel server sends, checked against the extension's bounds.
+/// What a Nuschl server sends, checked against the extension's bounds.
 #[derive(Debug, Clone)]
-pub enum NuschelEvent {
+pub enum NuschlEvent {
     Error(v1::Error),
     Ack(v1::ChatAck),
     Chat(v1::ChatEvent),
@@ -416,43 +416,43 @@ pub enum NuschelEvent {
 }
 
 /// Decode and bound an extension frame from the server (`None`: ignored).
-fn nuschel_event(frame: &ControlFrame) -> Result<Option<NuschelEvent>, Error> {
-    use nuschel::kind;
-    if frame.payload.len() > nuschel::server_limit(frame.kind) {
-        return Err(Error::Protocol("oversized Nuschel message".into()));
+fn nuschl_event(frame: &ControlFrame) -> Result<Option<NuschlEvent>, Error> {
+    use nuschl::kind;
+    if frame.payload.len() > nuschl::server_limit(frame.kind) {
+        return Err(Error::Protocol("oversized Nuschl message".into()));
     }
-    let invalid = || Error::Protocol("invalid Nuschel message".into());
-    let id = |bytes: &[u8]| bytes.is_empty() || nuschel::id(bytes).is_some();
+    let invalid = || Error::Protocol("invalid Nuschl message".into());
+    let id = |bytes: &[u8]| bytes.is_empty() || nuschl::id(bytes).is_some();
     let event = match frame.kind {
         kind::ERROR => {
             let mut error: v1::Error = decode(frame)?;
             // Shown as plain text, so bounded and never more than a line.
             error.detail = bounded(error.detail.replace(['\n', '\r'], " "), 256);
-            NuschelEvent::Error(error)
+            NuschlEvent::Error(error)
         }
-        kind::CHAT_ACK => NuschelEvent::Ack(decode(frame)?),
+        kind::CHAT_ACK => NuschlEvent::Ack(decode(frame)?),
         kind::CHAT_EVENT => {
             let event: v1::ChatEvent = decode(frame)?;
             if !id(&event.conversation)
-                || !event.message.as_ref().is_some_and(nuschel::valid_message)
+                || !event.message.as_ref().is_some_and(nuschl::valid_message)
             {
                 return Err(invalid());
             }
-            NuschelEvent::Chat(event)
+            NuschlEvent::Chat(event)
         }
         kind::HISTORY_PAGE => {
             let page: v1::HistoryPage = decode(frame)?;
             if !id(&page.conversation)
-                || page.messages.len() > nuschel::MAX_PAGE_MESSAGES
-                || !page.messages.iter().all(nuschel::valid_message)
+                || page.messages.len() > nuschl::MAX_PAGE_MESSAGES
+                || !page.messages.iter().all(nuschl::valid_message)
             {
                 return Err(invalid());
             }
-            NuschelEvent::Page(page)
+            NuschlEvent::Page(page)
         }
         kind::SUBSCRIBED => {
             let subscribed: v1::Subscribed = decode(frame)?;
-            if subscribed.conversations.len() > nuschel::MAX_SUBSCRIBE_PER_MESSAGE
+            if subscribed.conversations.len() > nuschl::MAX_SUBSCRIBE_PER_MESSAGE
                 || !subscribed
                     .conversations
                     .iter()
@@ -460,33 +460,33 @@ fn nuschel_event(frame: &ControlFrame) -> Result<Option<NuschelEvent>, Error> {
             {
                 return Err(invalid());
             }
-            NuschelEvent::Subscribed(subscribed)
+            NuschlEvent::Subscribed(subscribed)
         }
-        kind::UNSUBSCRIBED => NuschelEvent::Unsubscribed(decode(frame)?),
-        kind::READ_MARKER => NuschelEvent::ReadMarker(decode(frame)?),
-        kind::TYPING => NuschelEvent::Typing(decode(frame)?),
+        kind::UNSUBSCRIBED => NuschlEvent::Unsubscribed(decode(frame)?),
+        kind::READ_MARKER => NuschlEvent::ReadMarker(decode(frame)?),
+        kind::TYPING => NuschlEvent::Typing(decode(frame)?),
         kind::DIRECT_OPENED => {
             let mut opened: v1::DirectOpened = decode(frame)?;
             if let Some(direct) = &mut opened.direct {
-                direct.name = bounded(std::mem::take(&mut direct.name), nuschel::MAX_NAME_BYTES);
+                direct.name = bounded(std::mem::take(&mut direct.name), nuschl::MAX_NAME_BYTES);
             }
-            NuschelEvent::DirectOpened(opened)
+            NuschlEvent::DirectOpened(opened)
         }
         kind::DIRECT_LIST => {
             let mut list: v1::DirectList = decode(frame)?;
-            list.directs.truncate(nuschel::MAX_DIRECTS);
+            list.directs.truncate(nuschl::MAX_DIRECTS);
             for direct in &mut list.directs {
-                direct.name = bounded(std::mem::take(&mut direct.name), nuschel::MAX_NAME_BYTES);
+                direct.name = bounded(std::mem::take(&mut direct.name), nuschl::MAX_NAME_BYTES);
             }
-            NuschelEvent::DirectList(list)
+            NuschlEvent::DirectList(list)
         }
-        kind::DONE => NuschelEvent::Done(decode(frame)?),
+        kind::DONE => NuschlEvent::Done(decode(frame)?),
         kind::SHARE_LINK => {
             let link: v1::ShareLink = decode(frame)?;
             if link.token.len() != 16
-                || link.access_token.len() > nuschel::MAX_ACCESS_TOKEN_BYTES
+                || link.access_token.len() > nuschl::MAX_ACCESS_TOKEN_BYTES
                 || link.access_token.contains(char::is_control)
-                || link.web_host.len() > nuschel::MAX_WEB_HOST_BYTES
+                || link.web_host.len() > nuschl::MAX_WEB_HOST_BYTES
                 || !link
                     .web_host
                     .bytes()
@@ -494,21 +494,21 @@ fn nuschel_event(frame: &ControlFrame) -> Result<Option<NuschelEvent>, Error> {
             {
                 return Err(invalid());
             }
-            NuschelEvent::ShareLink(link)
+            NuschlEvent::ShareLink(link)
         }
         _ => return Ok(None),
     };
     Ok(Some(event))
 }
 
-/// What the Nuschel extension negotiation settled, before `Authenticate`.
+/// What the Nuschl extension negotiation settled, before `Authenticate`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Negotiated {
-    pub nuschel: bool,
+    pub nuschl: bool,
     /// The capabilities both sides offered.
     pub capabilities: Vec<String>,
     pub policy: Option<v1::Policy>,
-    /// With `kt/1`: the server's key-transparency log descriptor (nuschel-kt
+    /// With `kt/1`: the server's key-transparency log descriptor (nuschl-kt
     /// encoding), which the crypto worker pins.
     pub kt_log: Vec<u8>,
 }
@@ -605,7 +605,7 @@ struct Outgoing {
     wire: String,
     body: String,
     html: bool,
-    /// A Nuschel conversation's message (sent as `ChatSend`), and whether it
+    /// A Nuschl conversation's message (sent as `ChatSend`), and whether it
     /// was already shown (a retry or resend).
     chat: Option<(PendingChat, bool)>,
 }
@@ -700,9 +700,9 @@ pub async fn run(
     events: mpsc::Sender<SessionEvent>,
 ) -> Result<(), Error> {
     let (stream, peer, peer_addr) = crate::tls::connect(&options.server, options.identity).await?;
-    let nuschel = stream.get_ref().1.alpn_protocol() == Some(nuschel::ALPN);
+    let nuschl = stream.get_ref().1.alpn_protocol() == Some(nuschl::ALPN);
     // Nothing at all is sent to a server that answers weaker than required.
-    if !nuschel {
+    if !nuschl {
         options
             .required
             .check(false, &[])
@@ -730,21 +730,21 @@ pub async fn run(
         let version = proto::Version {
             version_v1: Some(0x0001_0500),
             version_v2: Some(voice::PROTOBUF_VERSION),
-            release: Some(format!("Nuschel {}", env!("CARGO_PKG_VERSION"))),
+            release: Some(format!("Nuschl {}", env!("CARGO_PKG_VERSION"))),
             os: Some(std::env::consts::OS.into()),
             ..Default::default()
         };
-        let hello = nuschel.then(|| v1::Hello {
-            protocol: nuschel::PROTOCOL,
-            capabilities: nuschel::capability::ALL.iter().map(|c| (*c).to_owned()).collect(),
+        let hello = nuschl.then(|| v1::Hello {
+            protocol: nuschl::PROTOCOL,
+            capabilities: nuschl::capability::ALL.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
             client_version: client_version().to_string(),
             relay_only: options.relay_only,
         });
-        let frame = nuschel::version_frame(&version, hello.as_ref())
+        let frame = nuschl::version_frame(&version, hello.as_ref())
             .ok_or_else(|| Error::Protocol("outgoing version too large".into()))?;
-        write_control(&mut writer, kind::VERSION, &frame[nuschel_protocol::HEADER_BYTES..]).await?;
+        write_control(&mut writer, kind::VERSION, &frame[nuschl_protocol::HEADER_BYTES..]).await?;
         let muted = options.muted || options.deafened;
         let mut state = State {
             udp,
@@ -758,7 +758,7 @@ pub async fn run(
         // With the extension (or a sticky record) the server's hello decides
         // before any credential is sent.
         let mut kt_descriptor = None;
-        if nuschel || !options.required.is_empty() {
+        if nuschl || !options.required.is_empty() {
             let frame = loop {
                 let frame = timeout(Duration::from_secs(10), frames.recv())
                     .await
@@ -769,13 +769,13 @@ pub async fn run(
                 }
                 state.handle(frame, &events).await?;
             };
-            let negotiated = negotiate(nuschel, &frame.payload)?;
+            let negotiated = negotiate(nuschl, &frame.payload)?;
             options
                 .required
-                .check(negotiated.nuschel, &negotiated.capabilities)
+                .check(negotiated.nuschl, &negotiated.capabilities)
                 .map_err(Error::Downgrade)?;
             state.handle(frame, &events).await?;
-            if negotiated.nuschel {
+            if negotiated.nuschl {
                 below = negotiated
                     .policy
                     .as_ref()
@@ -821,13 +821,13 @@ pub async fn run(
             mls: state
                 .extension
                 .as_ref()
-                .is_some_and(|capabilities| capabilities.iter().any(|c| c == nuschel::capability::E2EE)),
+                .is_some_and(|capabilities| capabilities.iter().any(|c| c == nuschl::capability::E2EE)),
             witness: state.extension.as_ref().is_some_and(|capabilities| {
                 capabilities
                     .iter()
-                    .any(|c| c == nuschel::capability::KT_WITNESS)
+                    .any(|c| c == nuschl::capability::KT_WITNESS)
             }),
-            server: nuschel_ipc::crypto::CryptoServer {
+            server: nuschl_ipc::crypto::CryptoServer {
                 key: crate::sticky::key(&options.server.host, options.server.port),
                 label: if options.server.name.is_empty() {
                     options.server.host.clone()
@@ -967,7 +967,7 @@ struct KtLink {
     mls: bool,
     /// `kt-witness/1` was negotiated (docs/e2ee.md §5.9).
     witness: bool,
-    server: nuschel_ipc::crypto::CryptoServer,
+    server: nuschl_ipc::crypto::CryptoServer,
     running: Option<KtRunning>,
 }
 
@@ -1033,7 +1033,7 @@ fn kt_reply(
     extension: bool,
     frame: ControlFrame,
 ) -> Result<Option<ControlFrame>, Error> {
-    use nuschel::kind;
+    use nuschl::kind;
     let Some(running) = link.and_then(|link| link.running.as_mut()) else {
         return Ok(Some(frame));
     };
@@ -1062,8 +1062,8 @@ fn kt_reply(
     ) && v1::Done::decode(frame.payload.clone()).is_ok_and(|done| {
         done.request_id & crate::identity::KT_REQUEST != 0 && done.request_id & INTERNAL == 0
     });
-    if frame.payload.len() > nuschel::server_limit(frame.kind) {
-        return Err(Error::Protocol("oversized Nuschel message".into()));
+    if frame.payload.len() > nuschl::server_limit(frame.kind) {
+        return Err(Error::Protocol("oversized Nuschl message".into()));
     }
     if reply || by_id {
         let _ = running.replies.try_send((frame.kind, frame.payload));
@@ -1108,11 +1108,11 @@ struct State {
     /// Budget notices already shown on this connection.
     notices: BTreeSet<&'static str>,
     outbox: Outbox,
-    /// The Nuschel extension's capabilities, when negotiated.
+    /// The Nuschl extension's capabilities, when negotiated.
     extension: Option<Vec<String>>,
-    /// Channel → conversation id (Nuschel servers).
+    /// Channel → conversation id (Nuschl servers).
     conversations: BTreeMap<u32, [u8; 16]>,
-    /// Our direct conversations (Nuschel servers), from `DirectList`,
+    /// Our direct conversations (Nuschl servers), from `DirectList`,
     /// `DirectOpened` and messages in conversations not known before.
     directs: BTreeMap<[u8; 16], v1::Direct>,
     /// Our sends in flight by request id, with their attempts.
@@ -1159,7 +1159,7 @@ impl State {
     fn encrypted_server(&self) -> bool {
         self.extension
             .as_ref()
-            .is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::E2EE))
+            .is_some_and(|caps| caps.iter().any(|cap| cap == nuschl::capability::E2EE))
     }
 
     fn transport(&self) -> TransportStats {
@@ -1195,7 +1195,7 @@ impl State {
             return Some(packet);
         }
         packet.end.then(|| {
-            packet.opus = nuschel_core::audio::SILENT_OPUS.to_vec();
+            packet.opus = nuschl_core::audio::SILENT_OPUS.to_vec();
             packet
         })
     }
@@ -1219,7 +1219,7 @@ impl State {
     fn privacy_supported(&self) -> bool {
         self.extension
             .as_ref()
-            .is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::PRIVACY))
+            .is_some_and(|caps| caps.iter().any(|cap| cap == nuschl::capability::PRIVACY))
     }
     fn channel_name(&self, channel: u32) -> String {
         self.channels
@@ -1283,7 +1283,7 @@ impl State {
         match command {
             Command::RelayOnly(relay_only) => {
                 if self.privacy_supported() {
-                    self.queue(nuschel::kind::PRIVACY, &v1::Privacy { relay_only });
+                    self.queue(nuschl::kind::PRIVACY, &v1::Privacy { relay_only });
                 } else if relay_only {
                     emit(
                         events,
@@ -1752,23 +1752,23 @@ impl State {
                     query: Some(false),
                 },
             ),
-            Command::Nuschel(request) => {
+            Command::Nuschl(request) => {
                 let protected = matches!(
                     request,
-                    NuschelRequest::Send(_)
-                        | NuschelRequest::Edit(_)
-                        | NuschelRequest::Delete(_)
-                        | NuschelRequest::Typing(_)
+                    NuschlRequest::Send(_)
+                        | NuschlRequest::Edit(_)
+                        | NuschlRequest::Delete(_)
+                        | NuschlRequest::Typing(_)
                 );
                 let negotiated = !(self.encrypted_server() && protected)
                     && self.extension.as_ref().is_some_and(|capabilities| {
-                        nuschel::required_capability(request.frame().0)
+                        nuschl::required_capability(request.frame().0)
                             .is_some_and(|needed| capabilities.iter().any(|have| have == needed))
                     });
                 if !negotiated {
                     return emit(
                         events,
-                        SessionEvent::Nuschel(NuschelEvent::Error(nuschel::error(
+                        SessionEvent::Nuschl(NuschlEvent::Error(nuschl::error(
                             request.request_id(),
                             v1::error::Code::Unsupported,
                             0,
@@ -1779,7 +1779,7 @@ impl State {
                 // Sends, edits and deletions share the server's text bucket.
                 if matches!(
                     request,
-                    NuschelRequest::Send(_) | NuschelRequest::Edit(_) | NuschelRequest::Delete(_)
+                    NuschlRequest::Send(_) | NuschlRequest::Edit(_) | NuschlRequest::Delete(_)
                 ) {
                     self.outbox.charge(Instant::now());
                 }
@@ -1827,7 +1827,7 @@ impl State {
                     _ => None,
                 };
                 let chat = conversation
-                    .filter(|_| body.len() <= nuschel::MAX_CONTENT_BYTES)
+                    .filter(|_| body.len() <= nuschl::MAX_CONTENT_BYTES)
                     .map(|conversation| {
                         (
                             PendingChat {
@@ -1854,7 +1854,7 @@ impl State {
                     && let Some(conversation) = self.conversations.get(&channel)
                 {
                     self.outbound.push((
-                        nuschel::kind::READ_MARKER,
+                        nuschl::kind::READ_MARKER,
                         v1::ReadMarker {
                             conversation: conversation.to_vec(),
                             seq,
@@ -1867,16 +1867,16 @@ impl State {
         Ok(())
     }
 
-    /// Whether the Nuschel extension's history was negotiated.
+    /// Whether the Nuschl extension's history was negotiated.
     fn history(&self) -> bool {
         self.extension.as_ref().is_some_and(|capabilities| {
             capabilities
                 .iter()
-                .any(|c| c == nuschel::capability::HISTORY)
+                .any(|c| c == nuschl::capability::HISTORY)
         })
     }
 
-    /// Send a Nuschel conversation's message (paced like text by the outbox).
+    /// Send a Nuschl conversation's message (paced like text by the outbox).
     async fn send_chat(
         &mut self,
         (pending, shown): (PendingChat, bool),
@@ -1895,7 +1895,7 @@ impl State {
         self.next_request += 1;
         let request_id = INTERNAL | self.next_request;
         self.queue(
-            nuschel::kind::CHAT_SEND,
+            nuschl::kind::CHAT_SEND,
             &v1::ChatSend {
                 request_id,
                 conversation: pending.conversation.to_vec(),
@@ -1946,13 +1946,13 @@ impl State {
     /// What the session handles of the extension itself: its own sends'
     /// answers, subscriptions, and live messages (as `Text`). The rest goes
     /// to the frontend.
-    async fn nuschel(
+    async fn nuschl(
         &mut self,
-        event: NuschelEvent,
+        event: NuschlEvent,
         events: &mpsc::Sender<SessionEvent>,
     ) -> Result<(), Error> {
         match event {
-            NuschelEvent::Ack(ack) if ack.request_id & INTERNAL != 0 => {
+            NuschlEvent::Ack(ack) if ack.request_id & INTERNAL != 0 => {
                 if let Some((pending, _)) = self.sending.remove(&ack.request_id) {
                     emit(
                         events,
@@ -1964,7 +1964,7 @@ impl State {
                     .await?;
                 }
             }
-            NuschelEvent::Error(error) if error.request_id & INTERNAL != 0 => {
+            NuschlEvent::Error(error) if error.request_id & INTERNAL != 0 => {
                 let Some((pending, attempts)) = self.sending.remove(&error.request_id) else {
                     return Ok(());
                 };
@@ -1996,7 +1996,7 @@ impl State {
                     .await?;
                 }
             }
-            NuschelEvent::Subscribed(subscribed) if subscribed.request_id & INTERNAL != 0 => {
+            NuschlEvent::Subscribed(subscribed) if subscribed.request_id & INTERNAL != 0 => {
                 for state in subscribed.conversations {
                     if let Some(channel) = self.channel_of(&state.conversation) {
                         emit(
@@ -2011,11 +2011,11 @@ impl State {
                     }
                 }
             }
-            NuschelEvent::Chat(chat) => {
+            NuschlEvent::Chat(chat) => {
                 if self
                     .extension
                     .as_ref()
-                    .is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::E2EE))
+                    .is_some_and(|caps| caps.iter().any(|cap| cap == nuschl::capability::E2EE))
                 {
                     emit(
                         events,
@@ -2030,7 +2030,7 @@ impl State {
                 // itself also carries edits and deletions.
                 emit(
                     events,
-                    SessionEvent::Nuschel(NuschelEvent::Chat(chat.clone())),
+                    SessionEvent::Nuschl(NuschlEvent::Chat(chat.clone())),
                 )
                 .await?;
                 let Some(message) = chat.message else {
@@ -2039,14 +2039,14 @@ impl State {
                 // MLS rows are ciphertext: the end-to-end driver reads them (and
                 // without a crypto worker nothing can).
                 if message.kind != v1::message::Kind::Message as i32
-                    || nuschel::is_mls_format(message.format)
+                    || nuschl::is_mls_format(message.format)
                 {
                     return Ok(());
                 }
                 let target = match self.channel_of(&chat.conversation) {
                     Some(channel) => TextTarget::Channel(channel),
                     None => {
-                        let Some(id) = nuschel::id(&chat.conversation) else {
+                        let Some(id) = nuschl::id(&chat.conversation) else {
                             return Ok(());
                         };
                         // Not a channel's: one of our direct conversations,
@@ -2059,7 +2059,7 @@ impl State {
                                 .and_then(|own| self.users.get(&own))
                                 .and_then(|user| user.user_id);
                             if own.is_some_and(|own| own != author.user_id)
-                                && self.directs.len() < nuschel::MAX_DIRECTS
+                                && self.directs.len() < nuschl::MAX_DIRECTS
                             {
                                 self.directs.insert(
                                     id,
@@ -2074,7 +2074,7 @@ impl State {
                             }
                             self.next_request += 1;
                             self.outbound.push((
-                                nuschel::kind::LIST_DIRECT,
+                                nuschl::kind::LIST_DIRECT,
                                 v1::ListDirect {
                                     request_id: INTERNAL | self.next_request,
                                 }
@@ -2119,32 +2119,28 @@ impl State {
                 )
                 .await?;
             }
-            NuschelEvent::DirectList(list) => {
+            NuschlEvent::DirectList(list) => {
                 for direct in &list.directs {
-                    if let Some(id) = nuschel::id(&direct.conversation) {
+                    if let Some(id) = nuschl::id(&direct.conversation) {
                         self.directs.insert(id, direct.clone());
                     }
                 }
-                emit(
-                    events,
-                    SessionEvent::Nuschel(NuschelEvent::DirectList(list)),
-                )
-                .await?;
+                emit(events, SessionEvent::Nuschl(NuschlEvent::DirectList(list))).await?;
             }
-            NuschelEvent::DirectOpened(opened) => {
+            NuschlEvent::DirectOpened(opened) => {
                 if let Some(direct) = &opened.direct
-                    && let Some(id) = nuschel::id(&direct.conversation)
-                    && (self.directs.len() < nuschel::MAX_DIRECTS || self.directs.contains_key(&id))
+                    && let Some(id) = nuschl::id(&direct.conversation)
+                    && (self.directs.len() < nuschl::MAX_DIRECTS || self.directs.contains_key(&id))
                 {
                     self.directs.insert(id, direct.clone());
                 }
                 emit(
                     events,
-                    SessionEvent::Nuschel(NuschelEvent::DirectOpened(opened)),
+                    SessionEvent::Nuschl(NuschlEvent::DirectOpened(opened)),
                 )
                 .await?;
             }
-            other => emit(events, SessionEvent::Nuschel(other)).await?,
+            other => emit(events, SessionEvent::Nuschl(other)).await?,
         }
         Ok(())
     }
@@ -2171,23 +2167,23 @@ impl State {
         if !self.extension.as_ref().is_some_and(|capabilities| {
             capabilities
                 .iter()
-                .any(|c| c == nuschel::capability::SUBSCRIBE)
+                .any(|c| c == nuschl::capability::SUBSCRIBE)
         }) {
             return;
         }
         let ids: Vec<Vec<u8>> = channels
             .into_iter()
             .filter(|channel| {
-                self.subscribed.len() < nuschel::MAX_SUBSCRIPTIONS
+                self.subscribed.len() < nuschl::MAX_SUBSCRIPTIONS
                     && self.subscribed.insert(*channel)
             })
             .filter_map(|channel| self.conversations.get(&channel))
             .map(|id| id.to_vec())
             .collect();
-        for chunk in ids.chunks(nuschel::MAX_SUBSCRIBE_PER_MESSAGE) {
+        for chunk in ids.chunks(nuschl::MAX_SUBSCRIBE_PER_MESSAGE) {
             self.next_request += 1;
             self.outbound.push((
-                nuschel::kind::SUBSCRIBE,
+                nuschl::kind::SUBSCRIBE,
                 v1::Subscribe {
                     request_id: INTERNAL | self.next_request,
                     conversations: chunk.to_vec(),
@@ -2256,7 +2252,7 @@ impl State {
                     return emit(
                         events,
                         SessionEvent::Notice(
-                            nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into(),
+                            nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into(),
                         ),
                     )
                     .await;
@@ -2412,7 +2408,7 @@ impl State {
                     // messages from others belong).
                     self.next_request += 1;
                     self.outbound.push((
-                        nuschel::kind::LIST_DIRECT,
+                        nuschl::kind::LIST_DIRECT,
                         v1::ListDirect {
                             request_id: INTERNAL | self.next_request,
                         }
@@ -2543,9 +2539,9 @@ impl State {
                 }
                 emit(events, SessionEvent::Channel(snapshot)).await?;
                 if self.extension.is_some()
-                    && let Some(info) = nuschel::channel_info(&frame.payload)
+                    && let Some(info) = nuschl::channel_info(&frame.payload)
                 {
-                    if let Some(conversation) = nuschel::id(&info.conversation) {
+                    if let Some(conversation) = nuschl::id(&info.conversation) {
                         self.conversations.insert(id, conversation);
                         if self.logged_in() {
                             self.subscribe(vec![id]);
@@ -2597,7 +2593,7 @@ impl State {
                 if self
                     .extension
                     .as_ref()
-                    .is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::E2EE))
+                    .is_some_and(|caps| caps.iter().any(|cap| cap == nuschl::capability::E2EE))
                 {
                     emit(
                         events,
@@ -2747,7 +2743,7 @@ impl State {
                 self.opus = version.opus.unwrap_or(false);
                 if !self.opus {
                     emit(events, SessionEvent::Notice(
-                        "This server uses the legacy CELT codec. Nuschel supports Opus only, so voice is unavailable here; text chat still works.".into(),
+                        "This server uses the legacy CELT codec. Nuschl supports Opus only, so voice is unavailable here; text chat still works.".into(),
                     ))
                     .await?;
                 }
@@ -3007,12 +3003,12 @@ impl State {
                 )
                 .await?;
             }
-            kind if nuschel_protocol::kind::NUSCHEL_EXTENSION.contains(&kind) => {
-                // Ignored unless ALPN selected `nuschel/1` (docs/extension.md §1).
+            kind if nuschl_protocol::kind::NUSCHL_EXTENSION.contains(&kind) => {
+                // Ignored unless ALPN selected `nuschl/1` (docs/extension.md §1).
                 if self.extension.is_some()
-                    && let Some(event) = nuschel_event(&frame)?
+                    && let Some(event) = nuschl_event(&frame)?
                 {
-                    self.nuschel(event, events).await?;
+                    self.nuschl(event, events).await?;
                 }
             }
             _ => { /* Optional messages (e.g. plugin data) are framed and ignored. */ }
@@ -3076,7 +3072,7 @@ impl State {
         if let Some(value) = update.self_deaf {
             user.self_deafened = value;
         }
-        // A UserState is sparse. Both Murmur and Nuschel can announce
+        // A UserState is sparse. Both Murmur and Nuschl can announce
         // deafness without a separate mute bit; deafness always implies mute.
         user.muted |= user.deafened;
         user.self_muted |= user.self_deafened;
@@ -3364,29 +3360,29 @@ pub fn now_ms() -> i64 {
         .min(i64::MAX as u128) as i64
 }
 /// Settle the extension from the server's `Version`: on if and only if ALPN
-/// selected `nuschel/1` and the server sent a hello (ours went out with our
+/// selected `nuschl/1` and the server sent a hello (ours went out with our
 /// `Version`). Without ALPN the field is ignored; ALPN without a valid hello is
 /// a protocol error, never plain Mumble.
-fn negotiate(nuschel: bool, version: &[u8]) -> Result<Negotiated, Error> {
-    if !nuschel {
+fn negotiate(nuschl: bool, version: &[u8]) -> Result<Negotiated, Error> {
+    if !nuschl {
         return Ok(Negotiated {
-            nuschel: false,
+            nuschl: false,
             capabilities: Vec::new(),
             policy: None,
             kt_log: Vec::new(),
         });
     }
-    let hello = nuschel::hello(version)
+    let hello = nuschl::hello(version)
         .map_err(|error| Error::Protocol(error.to_string()))?
         .ok_or_else(|| {
-            Error::Protocol("the server selected the Nuschel protocol but sent no hello".into())
+            Error::Protocol("the server selected the Nuschl protocol but sent no hello".into())
         })?;
     let capabilities: Vec<String> =
-        nuschel::intersect(&nuschel::capability::ALL, &hello.capabilities)
+        nuschl::intersect(&nuschl::capability::ALL, &hello.capabilities)
             .into_iter()
             .map(str::to_owned)
             .collect();
-    let kt = capabilities.iter().any(|c| c == nuschel::capability::KT);
+    let kt = capabilities.iter().any(|c| c == nuschl::capability::KT);
     // Key transparency without a log to pin fails closed, like a hello without ALPN.
     if kt && hello.kt_log.is_empty() {
         return Err(Error::Protocol(
@@ -3394,20 +3390,20 @@ fn negotiate(nuschel: bool, version: &[u8]) -> Result<Negotiated, Error> {
         ));
     }
     // MLS credentials are checked against key transparency: never one without it.
-    let mls = capabilities.iter().any(|c| c == nuschel::capability::MLS);
+    let mls = capabilities.iter().any(|c| c == nuschl::capability::MLS);
     if mls && !kt {
         return Err(Error::Protocol(
             "the server offers end-to-end encryption without key transparency".into(),
         ));
     }
     // An end-to-end server without MLS could carry nothing: fail closed.
-    if capabilities.iter().any(|c| c == nuschel::capability::E2EE) && !mls {
+    if capabilities.iter().any(|c| c == nuschl::capability::E2EE) && !mls {
         return Err(Error::Protocol(
             "the server says it encrypts end to end but offers no MLS".into(),
         ));
     }
     Ok(Negotiated {
-        nuschel: true,
+        nuschl: true,
         capabilities,
         policy: hello.policy,
         kt_log: if kt { hello.kt_log } else { Vec::new() },
@@ -3479,7 +3475,7 @@ pub mod fuzzing {
     /// rejects counts as never sent, so later ones still arrive.
     pub fn run(mut data: &[u8]) {
         let mut state = State {
-            extension: Some(nuschel::capability::ALL.map(str::to_owned).to_vec()),
+            extension: Some(nuschl::capability::ALL.map(str::to_owned).to_vec()),
             ..State::default()
         };
         let (events, mut received) = mpsc::channel(1 << 16);
@@ -3488,7 +3484,7 @@ pub mod fuzzing {
                 while let [kind, high, low, rest @ ..] = data {
                     let kind = match *kind {
                         kind @ 0..=31 => u16::from(kind),
-                        other => nuschel::kind::ERROR | u16::from((other - 32) & 0x1f),
+                        other => nuschl::kind::ERROR | u16::from((other - 32) & 0x1f),
                     };
                     let length = usize::from(u16::from_be_bytes([*high, *low])).min(rest.len());
                     let payload = Bytes::copy_from_slice(&rest[..length]);
@@ -3510,7 +3506,7 @@ mod tests {
     async fn encrypted_session_emits_no_plaintext_chat_frames_from_raw_or_restored_commands() {
         let mut state = State {
             own_session: Some(7),
-            extension: Some(nuschel::capability::ALL.map(str::to_owned).to_vec()),
+            extension: Some(nuschl::capability::ALL.map(str::to_owned).to_vec()),
             ..State::default()
         };
         let (tx, mut rx) = mpsc::channel(64);
@@ -3525,17 +3521,17 @@ mod tests {
                 html: vec!["secret inline image".into()],
                 expected_peer: None,
             },
-            Command::Nuschel(NuschelRequest::Send(v1::ChatSend {
+            Command::Nuschl(NuschlRequest::Send(v1::ChatSend {
                 request_id: 1,
                 content: "plaintext send".into(),
                 ..Default::default()
             })),
-            Command::Nuschel(NuschelRequest::Edit(v1::ChatEdit {
+            Command::Nuschl(NuschlRequest::Edit(v1::ChatEdit {
                 request_id: 2,
                 content: "plaintext edit".into(),
                 ..Default::default()
             })),
-            Command::Nuschel(NuschelRequest::Delete(v1::ChatDelete {
+            Command::Nuschl(NuschlRequest::Delete(v1::ChatDelete {
                 request_id: 3,
                 ..Default::default()
             })),
@@ -3564,9 +3560,9 @@ mod tests {
         assert!(state.outbound.iter().all(|(kind, _)| !matches!(
             *kind,
             kind::TEXT_MESSAGE
-                | nuschel::kind::CHAT_SEND
-                | nuschel::kind::CHAT_EDIT
-                | nuschel::kind::CHAT_DELETE
+                | nuschl::kind::CHAT_SEND
+                | nuschl::kind::CHAT_EDIT
+                | nuschl::kind::CHAT_DELETE
         )));
         assert!(
             rx.try_recv().is_ok(),
@@ -3574,7 +3570,7 @@ mod tests {
         );
     }
 
-    use nuschel_protocol::nuschel::version;
+    use nuschl_protocol::nuschl::version;
 
     fn frame<M: Message>(kind: u16, message: M) -> ControlFrame {
         ControlFrame {
@@ -3593,7 +3589,7 @@ mod tests {
 
     fn negotiated(policy: v1::Policy) -> Negotiated {
         Negotiated {
-            nuschel: true,
+            nuschl: true,
             capabilities: Vec::new(),
             policy: Some(policy),
             kt_log: Vec::new(),
@@ -3710,7 +3706,7 @@ mod tests {
         let state = State {
             own_session: Some(7),
             opus: true,
-            extension: Some(vec![nuschel::capability::E2EE.into()]),
+            extension: Some(vec![nuschl::capability::E2EE.into()]),
             ..State::default()
         };
         let packet = VoicePacket {
@@ -3806,7 +3802,7 @@ mod tests {
             "never send to the replacement identity"
         );
         assert_eq!(current, first.users[&4].instance);
-        assert!(drain(&mut rx).await.iter().any(|event| matches!(event, SessionEvent::Notice(note) if note == nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE)));
+        assert!(drain(&mut rx).await.iter().any(|event| matches!(event, SessionEvent::Notice(note) if note == nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE)));
     }
 
     #[tokio::test]
@@ -4226,7 +4222,7 @@ mod tests {
     async fn direct_conversations_carry_sends_and_messages_from_others() {
         let mut state = State {
             own_session: Some(7),
-            extension: Some(vec![nuschel::capability::HISTORY.into()]),
+            extension: Some(vec![nuschl::capability::HISTORY.into()]),
             ..State::default()
         };
         let (tx, mut rx) = mpsc::channel(64);
@@ -4258,12 +4254,12 @@ mod tests {
             }],
         };
         state
-            .nuschel(NuschelEvent::DirectList(list), &tx)
+            .nuschl(NuschlEvent::DirectList(list), &tx)
             .await
             .unwrap();
         while rx.try_recv().is_ok() {}
         state.command(send("hi Bob"), &tx).await.unwrap();
-        let [(nuschel::kind::CHAT_SEND, wire)] = state.outbound.as_slice() else {
+        let [(nuschl::kind::CHAT_SEND, wire)] = state.outbound.as_slice() else {
             panic!("one ChatSend: {:?}", state.outbound)
         };
         let wire = v1::ChatSend::decode(wire.as_slice()).unwrap();
@@ -4296,8 +4292,8 @@ mod tests {
                 ..Default::default()
             }),
         };
-        state.nuschel(NuschelEvent::Chat(chat), &tx).await.unwrap();
-        let Ok(SessionEvent::Nuschel(NuschelEvent::Chat(_))) = rx.try_recv() else {
+        state.nuschl(NuschlEvent::Chat(chat), &tx).await.unwrap();
+        let Ok(SessionEvent::Nuschl(NuschlEvent::Chat(_))) = rx.try_recv() else {
             panic!("no chat event")
         };
         let Ok(SessionEvent::Text(text)) = rx.try_recv() else {
@@ -4319,7 +4315,7 @@ mod tests {
                 .iter()
                 .map(|(kind, _)| *kind)
                 .collect::<Vec<_>>(),
-            [nuschel::kind::LIST_DIRECT],
+            [nuschl::kind::LIST_DIRECT],
             "the list is asked for again"
         );
         // An image goes the stock way to Bob's session, shown in the conversation.
@@ -4563,7 +4559,7 @@ mod tests {
         assert_eq!(state.outgoing_voice(packet(false)), Some(packet(false)));
         assert_eq!(state.outgoing_voice(packet(true)), Some(packet(true)));
         let silent = VoicePacket {
-            opus: nuschel_core::audio::SILENT_OPUS.to_vec(),
+            opus: nuschl_core::audio::SILENT_OPUS.to_vec(),
             ..packet(true)
         };
         state.local_muted = true;

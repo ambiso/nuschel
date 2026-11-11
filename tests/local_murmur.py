@@ -47,7 +47,7 @@ class Murmur:
         self.ini.write_text(
             f"database={self.database}\nport={port}\nhost=127.0.0.1\nautobanAttempts=0\n"
             f"logfile={root / 'murmur.log'}\npidfile={root / 'murmur.pid'}\n"
-            "welcometext=\"Welcome to the <b>Nuschel</b> screenshot server.\"\n"
+            "welcometext=\"Welcome to the <b>Nuschl</b> screenshot server.\"\n"
             "allowhtml=true\nbandwidth=72000\nusers=50\n")
         self.process = None
 
@@ -73,7 +73,7 @@ class Murmur:
                 os.killpg(self.process.pid, signal.SIGKILL)
                 self.process.wait(timeout=5)
 
-    SUPERUSER_PASSWORD = "nuschel-super"
+    SUPERUSER_PASSWORD = "nuschl-super"
 
     def seed(self):
         self.start()

@@ -3,8 +3,8 @@
 #![allow(dead_code)]
 
 use ed25519_dalek::SigningKey;
-use nuschel_identity::HybridPublicKey;
-use nuschel_kt::{
+use nuschl_identity::HybridPublicKey;
+use nuschl_kt::{
     AccountBinding, AccountId, AkdDirectory, Directory, DirectoryValue, Ed25519HeadSigner,
     KnownHeads, KtError, KtStore, Label, LogDescriptor, MemoryStore, Relation, RosterCommitment,
     SignedHead, VerifiedHead, VrfSecret, check_freshness, verify_audit, verify_head,

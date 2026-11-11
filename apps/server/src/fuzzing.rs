@@ -11,7 +11,7 @@ use crate::{
     storage::StorageHandle,
 };
 use bytes::Bytes;
-use nuschel_protocol::{ControlFrame, control as proto, crypt::CryptState};
+use nuschl_protocol::{ControlFrame, control as proto, crypt::CryptState};
 use std::{
     net::SocketAddr,
     sync::{Arc, OnceLock},
@@ -20,7 +20,7 @@ use std::{
 
 /// Stands for the root channel's conversation id in [`Harness::run`]'s input:
 /// conversation ids are random, so input could not name one otherwise.
-pub const ROOT: [u8; 16] = *b"nuschel-fuzzroot";
+pub const ROOT: [u8; 16] = *b"nuschl-fuzzroot!";
 
 pub struct Harness {
     pub state: State,
@@ -55,7 +55,7 @@ impl Harness {
         // Key transparency: requests are authorised and queued (to nowhere).
         state.kt = Some(crate::kt::KtHandle::detached(
             vec![0; 71],
-            nuschel_kt::LogId([7; 32]),
+            nuschl_kt::LogId([7; 32]),
         ));
         state.registry.insert(Registered {
             id: 1,
@@ -71,13 +71,13 @@ impl Harness {
             sessions: Vec::new(),
             out: Datagrams::default(),
         };
-        for (name, user_id, hash, version, nuschel) in [
+        for (name, user_id, hash, version, nuschl) in [
             ("SuperUser", Some(0), None, 5, false),
             ("Registered", Some(1), Some("ab".repeat(20)), 5, true),
             ("Anonymous", None, Some("cd".repeat(20)), 5, true),
             ("Legacy", None, None, 3, false),
         ] {
-            harness.add_user(name, user_id, hash, version, nuschel);
+            harness.add_user(name, user_id, hash, version, nuschl);
         }
         harness
     }
@@ -88,7 +88,7 @@ impl Harness {
         user_id: Option<u32>,
         hash: Option<String>,
         minor: u64,
-        nuschel: bool,
+        nuschl: bool,
     ) {
         let Some(session) = self.state.allocate_session() else {
             return;
@@ -118,8 +118,8 @@ impl Harness {
             crypt,
             Instant::now(),
         );
-        // Nuschel connections, so the extension's handlers are reached.
-        if nuschel {
+        // Nuschl connections, so the extension's handlers are reached.
+        if nuschl {
             user.extension = Some(Box::new(crate::extension::Extension::new(
                 crate::extension::server_capabilities(true, true, false),
                 &config,
@@ -186,7 +186,7 @@ impl Harness {
     fn check_invariants(&self) {
         for (session, user) in &self.state.users {
             if let Some(extension) = &user.extension {
-                assert!(extension.outstanding.len() <= nuschel_protocol::nuschel::MAX_OUTSTANDING);
+                assert!(extension.outstanding.len() <= nuschl_protocol::nuschl::MAX_OUTSTANDING);
                 for id in &extension.subscriptions {
                     assert!(
                         self.state
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn the_placeholder_names_the_root_conversation() {
         let mut harness = Harness::new();
-        let send = nuschel_protocol::nuschel::v1::ChatSend {
+        let send = nuschl_protocol::nuschl::v1::ChatSend {
             request_id: 1,
             conversation: ROOT.to_vec(),
             idempotency_key: vec![7; 16],
@@ -281,7 +281,7 @@ mod tests {
             let structured = [
                 (
                     0x01_u8,
-                    nuschel_protocol::nuschel::v1::ChatSend {
+                    nuschl_protocol::nuschl::v1::ChatSend {
                         request_id: round,
                         conversation: root.clone(),
                         idempotency_key: vec![7; 16],
@@ -293,7 +293,7 @@ mod tests {
                 ),
                 (
                     0x06,
-                    nuschel_protocol::nuschel::v1::Subscribe {
+                    nuschl_protocol::nuschl::v1::Subscribe {
                         request_id: round + 1,
                         conversations: vec![root.clone()],
                     }
@@ -301,11 +301,11 @@ mod tests {
                 ),
                 (
                     0x04,
-                    nuschel_protocol::nuschel::v1::HistoryRequest {
+                    nuschl_protocol::nuschl::v1::HistoryRequest {
                         request_id: round + 2,
                         conversation: root.clone(),
                         anchor: Some(
-                            nuschel_protocol::nuschel::v1::history_request::Anchor::Latest(true),
+                            nuschl_protocol::nuschl::v1::history_request::Anchor::Latest(true),
                         ),
                         limit: 5,
                     }
@@ -313,16 +313,16 @@ mod tests {
                 ),
                 (
                     0x18,
-                    nuschel_protocol::nuschel::v1::KtLookup {
+                    nuschl_protocol::nuschl::v1::KtLookup {
                         request_id: round + 3,
-                        target: Some(nuschel_protocol::nuschel::v1::kt_lookup::Target::UserId(1)),
+                        target: Some(nuschl_protocol::nuschl::v1::kt_lookup::Target::UserId(1)),
                         origin: "127.0.0.1:64738".into(),
                     }
                     .encode_to_vec(),
                 ),
                 (
                     0x1a,
-                    nuschel_protocol::nuschel::v1::KtHistory {
+                    nuschl_protocol::nuschl::v1::KtHistory {
                         request_id: round + 4,
                         account: vec![1; 16],
                         ..Default::default()

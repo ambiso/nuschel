@@ -1,17 +1,17 @@
-# The Nuschel protocol extension
+# The Nuschl protocol extension
 
 Status: design (2026-11-11), revised after the security review of the same day;
-implemented in `nuscheld`, `nuschel-session` and the desktop except files (§8) and
+implemented in `nuschld`, `nuschl-session` and the desktop except files (§8) and
 MLS; key transparency (`kt/1`) is implemented as listed in "Implementation notes". Where the implementation refined the design, the text says so
 and "Implementation notes" at the end lists the refinements. It covers roadmap phase
-2 (TODO.md, "Nuschel server"): negotiation, durable conversations, persistent
+2 (TODO.md, "Nuschl server"): negotiation, durable conversations, persistent
 history, subscriptions. Identity, key transparency
 and MLS (phases 3–4) are designed in `docs/e2ee.md` (in progress) and build on the
 framing and identifiers defined here.
 
 Goals, in priority order:
 
-1. Stock Mumble clients keep working on Nuschel servers that allow them, and Nuschel
+1. Stock Mumble clients keep working on Nuschl servers that allow them, and Nuschl
    keeps working on stock Mumble servers. Nothing here is sent to a peer that did not
    negotiate it.
 2. One server implementation for both: the extension is Mumble's control protocol
@@ -25,28 +25,28 @@ Goals, in priority order:
 
 **Decision: TLS ALPN, plus a capability hello in `Version`.**
 
-- The Nuschel client offers ALPN `nuschel/1` and `mumble` in one handshake. Stock
-  Murmur ignores ALPN; a Nuschel server selects `nuschel/1`. A server in end-to-end
+- The Nuschl client offers ALPN `nuschl/1` and `mumble` in one handshake. Stock
+  Murmur ignores ALPN; a Nuschl server selects `nuschl/1`. A server in end-to-end
   mode rejects a client that did not offer it with a `Reject` stock clients can show
-  ("This server requires the Nuschel client") and closes without parsing or logging
+  ("This server requires the Nuschl client") and closes without parsing or logging
   the stock client's `Authenticate`. **End-to-end mode is a server-level switch**
   (docs/e2ee.md §10, answer 7), announced as the capability `e2ee/1` (with `mls/1`
   and `kt/1`, and `Policy.mode = E2EE`): every conversation is an MLS group, the
-  server takes no plaintext, and unregistered connections take no part. A Nuschel
+  server takes no plaintext, and unregistered connections take no part. A Nuschl
   client that does not agree on `e2ee/1` is refused at `Authenticate`
   (`WrongVersion`, "This server encrypts every conversation end to end. Update
-  Nuschel to connect."). Without `e2ee/1` (compatible mode) there is no end-to-end
+  Nuschl to connect."). Without `e2ee/1` (compatible mode) there is no end-to-end
   encryption at all: no `mls/1`, and the extension's extras are plaintext, which
-  Nuschel labels "not end-to-end encrypted".
-- After TLS both sides send `Version`. A Nuschel peer adds field 7200 holding a
-  `NuschelHello`: protocol version, capabilities (`history/1`, `subscribe/1`,
+  Nuschl labels "not end-to-end encrypted".
+- After TLS both sides send `Version`. A Nuschl peer adds field 7200 holding a
+  `NuschlHello`: protocol version, capabilities (`history/1`, `subscribe/1`,
   `typing/1`, `files/1`, `mls/1`, `kt/1`, `e2ee/1`; at most 32, each ASCII
   `[a-z0-9-]+/[0-9]+` up to 64 bytes, unknown ones ignored), and the server's policy
   (mode, minimum and recommended client versions, retention).
-- **The extension is on if and only if ALPN selected `nuschel/1` and both hellos are
+- **The extension is on if and only if ALPN selected `nuschl/1` and both hellos are
   present.** Any mismatch (ALPN without a hello, a hello without ALPN) is a protocol
-  error, never stock mode. A Nuschel client ignores field 7200 and extension fields in
-  other messages unless ALPN selected `nuschel/1`; a server ignores field 7200 from a
+  error, never stock mode. A Nuschl client ignores field 7200 and extension fields in
+  other messages unless ALPN selected `nuschl/1`; a server ignores field 7200 from a
   client that did not offer ALPN.
 - The hello is accepted once, before `Authenticate`, and the capability set is then
   frozen for the connection. The effective set is the intersection; a capability is
@@ -57,11 +57,11 @@ Goals, in priority order:
 
 **Downgrade protection.** The ALPN offer is covered by the TLS handshake transcript
 (authenticated by the Finished messages), and `Version` travels inside the
-authenticated channel, so a network attacker cannot strip `nuschel/1` or capabilities
+authenticated channel, so a network attacker cannot strip `nuschl/1` or capabilities
 without breaking the connection, provided the server is authenticated. Rules:
 
 1. *No fallback.* The client never reconnects with fewer options after a failure.
-2. *Sticky policy, never downgrade.* A server that negotiated `nuschel/1` (and every
+2. *Sticky policy, never downgrade.* A server that negotiated `nuschl/1` (and every
    capability it negotiated, such as `mls/1`) is remembered by its address (later by its identity
    key), not by its leaf certificate: CA-issued certificates rotate every few months,
    and a rotation (or a misissued certificate) must not reset the record. If the
@@ -73,14 +73,14 @@ without breaking the connection, provided the server is authenticated. Rules:
    decides, and MLS groups declare required capabilities in their group context.
 3. *First contact.* Trust on first use cannot stop a man in the middle on the very
    first connection. Invites and `mumble://` links carry the server's certificate or
-   identity-key fingerprint and required policy (`?fp=sha256:…&policy=nuschel`),
+   identity-key fingerprint and required policy (`?fp=sha256:…&policy=nuschl`),
    which closes first contact for invited users; CA-validated certificates,
    out-of-band fingerprints and the transparency log (phase 3) cover the rest.
 4. *TLS settings.* No 0-RTT and no server session resumption. TLS 1.3 is preferred:
    in TLS 1.2 the client certificate, a stable cross-server identity, crosses the
    wire in cleartext.
 
-The ALPN offer itself is visible to network observers (it reveals Nuschel); hiding
+The ALPN offer itself is visible to network observers (it reveals Nuschl); hiding
 it would need Encrypted Client Hello and is not a goal now.
 
 **Minimum versions** (Signal-like): the client's hello carries its own version
@@ -89,7 +89,7 @@ it would need Encrypted Client Hello and is not a goal now.
 the client shows an update notice the user can dismiss; below `minimum` it shows a
 warning with the date, which cannot be dismissed, and from that date on the server
 rejects it at `Authenticate` with a `Reject` (`WrongVersion`, "This server requires
-Nuschel X or newer"). Without a date the minimum applies at once. The client shows
+Nuschl X or newer"). Without a date the minimum applies at once. The client shows
 the refusal as an error naming the version to update to and never retries it, and
 never falls back to plain Mumble (rules 1 and 2 above). Versions compare by semver precedence; a
 missing or unparsable client version is below every minimum. These are self-reported
@@ -100,17 +100,17 @@ clients in compatible mode.
 
 Extension messages use the Mumble control framing (2-byte type, 4-byte length,
 protobuf body) with types from a reserved block, **0x4E00–0x4EFF**, defined in a
-separate protobuf package (`nuschel.v1`) in `crates/protocol`.
+separate protobuf package (`nuschl.v1`) in `crates/protocol`.
 
 - Every message type has a wire-size cap and element-count caps, enforced before and
   after decoding (protobuf repeated fields expand several-fold in memory); the caps
   also depend on connection state (much lower before authentication).
 - A frame from the reserved block before capabilities are frozen, or for a capability
   that was not negotiated, means disconnect (before authentication) or
-  `NuschelError { unsupported }` (after); it is never processed.
+  `NuschlError { unsupported }` (after); it is never processed.
 - Requests carry a client-chosen `request_id`; at most 16 may be outstanding per
   connection, and a duplicate in-flight id is rejected. Responses echo it.
-- Errors are one type, `NuschelError { request_id, code, detail }`, with stable codes
+- Errors are one type, `NuschlError { request_id, code, detail }`, with stable codes
   and fixed detail strings (never SQL, paths or user text); clients show them as
   plain text. "No such conversation" and "not allowed" are the same error, so ids
   cannot be probed.
@@ -177,7 +177,7 @@ forwarded to other users or returned in pages.
   attachments? }` → `ChatAck { request_id, conversation, seq, server_time }` once the
   message is durably stored, or an error (permission, size, rate limit with
   `retry_after`). The client shows the message as pending until the ack.
-- `content` is what the user typed, with a `format` tag (Nuschel Markdown with fenced
+- `content` is what the user typed, with a `format` tag (Nuschl Markdown with fenced
   code today); every stored message keeps its format. `reply_to` is a `seq` in the
   same conversation (at most the head), never a copied excerpt. Attachments are
   references to the sender's own uploads (§8).
@@ -185,25 +185,25 @@ forwarded to other users or returned in pages.
   functions the client uses on stock servers (escaping, links, the code-fence
   newline; today `legacy_body`/`text_html`, to move into a shared crate), and images
   from attachments as pre-sized inline images. A sender therefore cannot show stock
-  users something different from what Nuschel users, moderators and the archive see,
+  users something different from what Nuschl users, moderators and the archive see,
   and the server has no second HTML path to police. Murmur's text rules
   (`isTextAllowed`, length, image limits) apply to that output.
 - In end-to-end conversations `content` is an MLS ciphertext and nothing is sent to
   stock clients (they are not members).
 - Messages from stock clients are stored too (on servers that keep history) with a
-  `legacy_html` format, so Nuschel clients see one history. A stock `TextMessage`
+  `legacy_html` format, so Nuschl clients see one history. A stock `TextMessage`
   with several channel or tree targets is deduplicated before traversal, capped in
   target count, and stored in each reached channel the sender may write to; direct
   messages to unregistered sessions are not stored.
 - **Rate limits.** `ChatSend` and edits share Murmur's text bucket with `TextMessage`
-  (`messagelimit`/`messageburst`, default 1/s with a burst of 5), so Nuschel clients
+  (`messagelimit`/`messageburst`, default 1/s with a burst of 5), so Nuschl clients
   get no second allowance.
 - Live delivery is `ChatEvent { conversation, message }`, after the message is
   stored, to each subscribed connection that may read the conversation at that moment
-  (§5), and to Nuschel connections in its live audience as for stock text (in the
+  (§5), and to Nuschl connections in its live audience as for stock text (in the
   channel or listening, guests included; both accounts of a direct conversation).
-  Stock clients get the `TextMessage` copy; a Nuschel connection never gets both. A
-  stock sender's channel message reaches stock recipients at once and Nuschel readers
+  Stock clients get the `TextMessage` copy; a Nuschl connection never gets both. A
+  stock sender's channel message reaches stock recipients at once and Nuschl readers
   once stored (live as `TextMessage` if storing fails, or if it exceeds 1 MiB, which
   is not kept).
 
@@ -309,7 +309,7 @@ stock client would silently erase (or, for a deny, open) it.
     whether the channel sets its own), and the server default in the hello's policy.
     Stock clients are told in the archive notice (§9).
   - Expiry never removes records the server must keep: one predicate decides what
-    may expire (`nuschel_ipc::server::expirable` and its SQL twin), where MLS
+    may expire (`nuschl_ipc::server::expirable` and its SQL twin), where MLS
     commits within their catch-up window (docs/e2ee.md §6.3) will be exempted.
     Expired text is overwritten in SQLite (`secure_delete`); PostgreSQL keeps old row
     versions until VACUUM, as for edits.
@@ -335,7 +335,7 @@ stock client would silently erase (or, for a deny, open) it.
 
 ## 8. Files
 
-On a Nuschel server, files are not wormhole codes in text: `files/1` either keeps a
+On a Nuschl server, files are not wormhole codes in text: `files/1` either keeps a
 file in the server's blob store or sends it live from the sender's device.
 
 **The design is [docs/files.md](files.md)** (2026-11-11), which supersedes the details
@@ -346,7 +346,7 @@ works, with a bounded, short-lived piece cache on the relay; nothing is stored; 
 who have the file help share it, and deleting the message ends it for all of them),
 sharing one encrypted format so a live file can be kept later; `upload_id` becomes a
 server-assigned `object_id` with the same ownership rule; the server pulls pieces from a
-source on a second TLS connection (ALPN `nuschel-bulk/1`), opened on demand, and verifies
+source on a second TLS connection (ALPN `nuschl-bulk/1`), opened on demand, and verifies
 each against BitTorrent v2's tree (BEP 52) bound to the key, instead of verifying a hash
 at completion; shares cost nothing while idle (the server persists who holds what, so
 nothing is announced at login); the
@@ -386,13 +386,13 @@ in a channel and who listens. On a server in compatible mode:
   the channel's retention to stock users in it.
 - Direct messages from stock senders are not archived by default
   (`history.archive_stock_direct_messages` stores those between two accounts, when
-  the sender may write to that direct conversation as a Nuschel client would:
+  the sender may write to that direct conversation as a Nuschl client would:
   TextMessage in the channel of every connection of the other account, not only
   the one the stock client named; otherwise that connection gets it live only).
 - Operators get tools to erase a user's messages (and must, for GDPR requests):
-  `nuscheld admin history erase-user NAME --yes` (or the older `nuscheld
+  `nuschld admin history erase-user NAME --yes` (or the older `nuschld
   --erase-user NAME`) turns them into tombstones. Copies already on clients
-  (Nuschel caches, stock clients' logs) remain.
+  (Nuschl caches, stock clients' logs) remain.
 
 ## 10. What the server can see
 
@@ -404,7 +404,7 @@ docs/architecture.md apply unchanged.
 ## 11. Later
 
 - `udp-aead/1`: Mumble's OCB2 with a 24-bit tag is kept only for stock compatibility.
-  If Mumble-transport voice outlives the WebRTC plan, Nuschel↔Nuschel voice should
+  If Mumble-transport voice outlives the WebRTC plan, Nuschl↔Nuschl voice should
   negotiate an AEAD with a 128-bit tag and an explicit counter.
 
 ## Decisions (user, 2026-11-11)
@@ -413,7 +413,7 @@ docs/architecture.md apply unchanged.
    restricts it (`since_access`). In end-to-end channels this needs a history-sharing
    mechanism on top of MLS (docs/e2ee.md).
 2. **Read markers:** synced across the user's devices by default.
-3. **End-to-end mode:** the default for new Nuschel servers; it rejects stock clients
+3. **End-to-end mode:** the default for new Nuschl servers; it rejects stock clients
    at the connection stage. Compatible mode, which admits them and has no end-to-end
    encryption, is an explicit choice.
 4. **Retention:** keep forever by default; shorter retention is an explicit server or
@@ -429,7 +429,7 @@ end-to-end payloads.
 
 ## Implementation notes (2026-11-11)
 
-What the implementation settled or refined (`crates/protocol/proto/nuschel.proto` is
+What the implementation settled or refined (`crates/protocol/proto/nuschl.proto` is
 the wire definition):
 
 - **Messages** `0x4E00`–`0x4E13`: `Error`, `ChatSend`, `ChatAck`, `ChatEvent`,
@@ -437,7 +437,7 @@ the wire definition):
   `Unsubscribed`, `ChatEdit`, `ChatDelete`, `ReadMarker`, `Typing`, `OpenDirect`,
   `DirectOpened`, `ListDirect`, `DirectList`, `ChannelSettings`, `Done`. Field 7200 of
   `ChannelState` carries a channel's conversation id, visibility and retention
-  (`retention_days`, 0 for forever; `live_only`; `own_retention`), to Nuschel
+  (`retention_days`, 0 for forever; `live_only`; `own_retention`), to Nuschl
   connections only. `ChannelSettings` changes only what it carries: an optional
   visibility and an optional `Retention` (server default, forever, 1–36,500 days or
   live-only), with `confirm_expiry` for a shortening.
@@ -453,7 +453,7 @@ the wire definition):
   `Reject` is read).
 - **Capabilities**: `history/1` covers sending, history, edits, deletions, read
   markers, direct conversations and channel settings; `subscribe/1` and `typing/1` are
-  separate. The client's sticky record keeps `nuschel/1` and every negotiated
+  separate. The client's sticky record keeps `nuschl/1` and every negotiated
   capability.
 - **Rows** are `message`, `edit`, `delete` or `void`; deletion reasons are 0 author,
   1 moderator, 2 expired, 3 erased by the operator.
@@ -493,7 +493,7 @@ the wire definition):
   the binding commits to), `KtHistory`/`KtHistoryReply` (the owner and contacts only),
   `KtAudit`/`KtAuditReply` (at most 4096 epochs; `too_large` above 6 MiB, and the
   client audits shorter spans) and `KtHead`/`KtHeadReply` (an earlier epoch's head).
-  Proofs, heads and certificates are nuschel-kt's and nuschel-identity's own strict
+  Proofs, heads and certificates are nuschl-kt's and nuschl-identity's own strict
   encodings in `bytes` fields. Limits: `KtPublish` ≤ 256 KiB from clients, other
   requests 64 bytes; lookup replies ≤ 512 KiB, histories and audits ≤ 6 MiB; per
   connection and minute `kt.lookups_per_minute` (120), `kt.histories_per_minute` (60,
@@ -504,7 +504,7 @@ the wire definition):
   §5.9): needs `kt/1` and is offered with it; sticky. No message types of its own
   (0x4E30–0x4E35 are reserved): `KtStatus`, `KtLookup` and `KtHistory` gain `origin`,
   the server as the client reaches it (`host:port`, lower case); their replies gain
-  `witnessed`, a nuschel-kt `WitnessedHead` (≤ 72 KiB: the newest cosigned
+  `witnessed`, a nuschl-kt `WitnessedHead` (≤ 72 KiB: the newest cosigned
   checkpoint under that origin and the head's inclusion proof; empty when the server
   has no such origin). `KtStatusReply` carries the requester's `user_id` and `name`
   (the `name:` label's lower-case name); `KtLookupReply` the lookups of the user's
@@ -543,7 +543,7 @@ the wire definition):
 How the desktop uses the extension, and the decisions taken while the user was away
 (each can be revisited):
 
-- **Edits and deletions** are offered only on Nuschel servers with `history/1`, while
+- **Edits and deletions** are offered only on Nuschl servers with `history/1`, while
   connected, in conversations the server named. Your own messages (sent from this
   device, or by your registration number) get *Edit message* and *Delete message*;
   unregistered users get neither, since the server refuses them. Moderators get
@@ -577,7 +577,7 @@ How the desktop uses the extension, and the decisions taken while the user was a
   it is a polite live region (AccessKit `live`, set by a small custom element because
   GPUI's elements cannot). Settings → Privacy → *Show when you are typing* (on by
   default) stops sending; others' indicators still show.
-- **Direct messages** between two registered accounts on a Nuschel server use the
+- **Direct messages** between two registered accounts on a Nuschl server use the
   pair's direct conversation (`OpenDirect`, `TextTarget::DirectConversation` in the
   session): sends are paced, idempotent and resent after a reconnect like channel
   messages, the timeline pages the server's history, and read markers and unread counts
@@ -631,11 +631,11 @@ clients while privacy is enabled. Bans created against these users retain their
 addresses for server-side enforcement, but the protocol ban list redacts both
 address and mask. The redaction flag persists across restarts; round-tripping the
 redacted list through a stock administrator retains the private address ban.
-Server operators can still manage addresses locally through `nuscheld admin`.
+Server operators can still manage addresses locally through `nuschld admin`.
 The configured server necessarily sees the connection's source IP; this setting
 does not hide it from that server or erase previously disclosed information.
 
-A legacy Mumble server, or older Nuschel server without `privacy/1`, cannot promise
-server-side address privacy. Nuschel still avoids peer discovery locally and shows
+A legacy Mumble server, or older Nuschl server without `privacy/1`, cannot promise
+server-side address privacy. Nuschl still avoids peer discovery locally and shows
 a notice explaining the missing server support. No new extension frames are sent
 to stock servers.

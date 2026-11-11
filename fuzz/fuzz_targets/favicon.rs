@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! A hostile website's home page through the server icon lookup
-//! (`nuschel_client::favicon`): the first line is the server's host, the rest
+//! (`nuschl_client::favicon`): the first line is the server's host, the rest
 //! the page. Nothing may panic; the chosen link is never SVG, and what is
 //! fetched is HTTPS, without control characters, on the site unless the page
 //! names an absolute or scheme-relative URL.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_client::favicon::{icon_link, is_image, resolve, sites};
+use nuschl_client::favicon::{icon_link, is_image, resolve, sites};
 
 fuzz_target!(|data: &[u8]| {
     let _ = is_image(data);

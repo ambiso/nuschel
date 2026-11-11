@@ -55,9 +55,9 @@ class Wormhole:
                    "wormhole servers did not start")
 
     def environment(self):
-        """Nuschel's override: these servers, relay only."""
-        return {"NUSCHEL_WORMHOLE_RENDEZVOUS": self.servers["rendezvous"],
-                "NUSCHEL_WORMHOLE_RELAY": self.servers["relay"]}
+        """Nuschl's override: these servers, relay only."""
+        return {"NUSCHL_WORMHOLE_RENDEZVOUS": self.servers["rendezvous"],
+                "NUSCHL_WORMHOLE_RELAY": self.servers["relay"]}
 
     def cli(self, *arguments):
         """The reference Python client, on these servers."""
@@ -71,10 +71,10 @@ class Wormhole:
 
 
 class Worker:
-    """`nuschel transfer-sandbox`: the transfer worker in the sandbox Nuschel gives it."""
+    """`nuschl transfer-sandbox`: the transfer worker in the sandbox Nuschl gives it."""
 
     def __init__(self, binaries, request, file=None):
-        command = [str(binaries / "nuschel"), "transfer-sandbox"] + (["--file", str(file)] if file else [])
+        command = [str(binaries / "nuschl"), "transfer-sandbox"] + (["--file", str(file)] if file else [])
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=subprocess.DEVNULL)
         self.events = queue.Queue()
@@ -129,7 +129,7 @@ def main():
     parser.add_argument("binaries", type=Path)
     parser.add_argument("--python", type=Path, required=True)
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="nuschel-transfer-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-transfer-") as temporary:
         root = Path(temporary)
         wormhole = Wormhole(args.python, root)
         servers = wormhole.servers
@@ -151,7 +151,7 @@ def main():
             first = sender.wait("code")["code"]
             print("offered with", first, flush=True)
 
-            # Nuschel to Nuschel, through both sandboxes; the receiver is slow,
+            # Nuschl to Nuschl, through both sandboxes; the receiver is slow,
             # so the sender's progress is seen part-way.
             receiver = worker({"kind": "receive", "code": first, "max_size": len(payload) + 4096, "servers": servers})
             receiver.slow = 0.05

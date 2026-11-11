@@ -40,7 +40,7 @@ def SEARCH_BUTTON(width):
 SEARCH_RESULT = (600, 300)
 # Ctrl+Shift plus a key on the virtual keyboard.
 CONTROL_SHIFT = """
-const k = global._nuschelKeyboard, C = imports.gi.Clutter, t = imports.gi.GLib.get_monotonic_time();
+const k = global._nuschlKeyboard, C = imports.gi.Clutter, t = imports.gi.GLib.get_monotonic_time();
 k.notify_keyval(t, C.KEY_Control_L, C.KeyState.PRESSED);
 k.notify_keyval(t + 5000, C.KEY_Shift_L, C.KeyState.PRESSED);
 k.notify_keyval(t + 10000, C.KEY_%s, C.KeyState.PRESSED);
@@ -109,15 +109,15 @@ LOBBY_LINK = (835, 684)
 
 
 # GNOME Shell exports its freedesktop notification daemon but, headless, never
-# claims the bus name: claim it, so Nuschel's notifications reach the real one.
+# claims the bus name: claim it, so Nuschl's notifications reach the real one.
 # Ask GNOME Shell for the clipboard's text; CLIPBOARD_TEXT reads the answer.
 READ_CLIPBOARD = """
-global._nuschelClipboard = null;
+global._nuschlClipboard = null;
 imports.gi.St.Clipboard.get_default().get_text(imports.gi.St.ClipboardType.CLIPBOARD,
-    (_, text) => { global._nuschelClipboard = text; });
+    (_, text) => { global._nuschlClipboard = text; });
 'ok'
 """
-CLIPBOARD_TEXT = "global._nuschelClipboard"
+CLIPBOARD_TEXT = "global._nuschlClipboard"
 
 CLAIM_NOTIFICATIONS = """
 imports.gi.Gio.bus_own_name_on_connection(imports.gi.Gio.DBus.session,
@@ -139,7 +139,7 @@ imports.gi.St.Clipboard.get_default().set_content(imports.gi.St.ClipboardType.CL
     'image/png', new imports.gi.GLib.Bytes(data)); 'ok'
 """
 PASTE = """
-const k = global._nuschelKeyboard, C = imports.gi.Clutter, t = imports.gi.GLib.get_monotonic_time();
+const k = global._nuschlKeyboard, C = imports.gi.Clutter, t = imports.gi.GLib.get_monotonic_time();
 k.notify_keyval(t, C.KEY_Control_L, C.KeyState.PRESSED);
 k.notify_keyval(t + 10000, C.KEY_v, C.KeyState.PRESSED);
 k.notify_keyval(t + 20000, C.KEY_v, C.KeyState.RELEASED);
@@ -211,7 +211,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     width, height = map(int, args.size.split("x"))
-    with tempfile.TemporaryDirectory(prefix="nuschel-screens-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-screens-") as temporary:
         root = Path(temporary)
         port = free_port()
         murmur = Murmur(args.murmur, root, port)
@@ -220,7 +220,7 @@ def main():
         if resizing or {"all", "scroll", "search"} & set(args.scenes.split(",")):
             # The scroll scene fills several pages of history quickly; the
             # stock server otherwise drops text beyond one message a second.
-            # The bots need not wait for it either (Nuschel itself still does).
+            # The bots need not wait for it either (Nuschl itself still does).
             murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
             bot_options = ["--message-limit", "1000", "--message-burst", "1000"]
         murmur.seed()
@@ -251,7 +251,7 @@ def main():
                 registry = start_registry(args.at_spi, shell.app_environment(), spawn)
             if args.wormhole_python and {"all", "transfer"} & set(args.scenes.split(",")):
                 # A private mailbox server and transit relay on loopback; Andi
-                # offers a file in Development as soon as Nuschel has joined it.
+                # offers a file in Development as soon as Nuschl has joined it.
                 wormhole = Wormhole(args.wormhole_python, root)
                 offered = root / "offered" / "holiday-photos.zip"
                 offered.parent.mkdir()
@@ -263,7 +263,7 @@ def main():
                 script.write_text(f"load-module module-native-protocol-unix socket={socket_dir / 'native'} auth-anonymous=1\n"
                                   "load-module module-null-sink sink_name=speakers sink_properties=device.description=Speakers\n"
                                   # A tone played into a null sink: its monitor is the microphone.
-                                  # (Nuschel records nothing from module-sine-source; see TODO.md.)
+                                  # (Nuschl records nothing from module-sine-source; see TODO.md.)
                                   "load-module module-null-sink sink_name=microphone sink_properties=device.description=Mic\n"
                                   "load-module module-sine sink=microphone frequency=220\n"
                                   "update-source-proplist microphone.monitor device.description=\"Test microphone\"\n"
@@ -296,7 +296,7 @@ def main():
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme, "zoom": args.zoom},
                                                                       "share_web_host": "web.example.org"}))
             if "managed" in args.scenes.split(","):
-                # What Home Manager's programs.nuschel.settings and .servers write
+                # What Home Manager's programs.nuschl.settings and .servers write
                 # (only on request: managed controls move the other scenes' targets).
                 (profile / "config/managed.json").write_text(json.dumps({
                     "settings": {"audio": {"transmit": "push_to_talk"}, "shortcuts": {"push-to-talk": "f13"}},
@@ -305,25 +305,25 @@ def main():
                 # As the package installs it: the portal finds an unsandboxed app's ID by its entry.
                 applications = shell.home / "data/applications"
                 applications.mkdir(parents=True)
-                (applications / "org.nuschel.Nuschel.desktop").write_text(
-                    f"[Desktop Entry]\nType=Application\nName=Nuschel\nExec={args.binaries / 'nuschel'} %u\n")
-            env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHEL_SCREENSHOT_LOG", "nuschel=info")}
+                (applications / "org.nuschl.Nuschl.desktop").write_text(
+                    f"[Desktop Entry]\nType=Application\nName=Nuschl\nExec={args.binaries / 'nuschl'} %u\n")
+            env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHL_SCREENSHOT_LOG", "nuschl=info")}
             # AccessKit honours NO_AT_BRIDGE (NixOS sets it where at-spi2-core is off).
             env.pop("NO_AT_BRIDGE", None)
             if wormhole:
                 env |= wormhole.environment()
             if resizing:
                 # Read by a build with --features frame-timing; others ignore it.
-                env["NUSCHEL_FRAME_TIMING"] = str(args.output / "frames.log")
+                env["NUSCHL_FRAME_TIMING"] = str(args.output / "frames.log")
             log = (args.output / "desktop.log").open("w")
-            # For profiling, e.g. NUSCHEL_SCREENSHOT_WRAPPER="perf record -o nuschel.perf --".
-            wrapper = os.environ.get("NUSCHEL_SCREENSHOT_WRAPPER", "").split()
-            app = subprocess.Popen([*wrapper, str(args.binaries / "nuschel"), "--profile-dir", str(profile),
+            # For profiling, e.g. NUSCHL_SCREENSHOT_WRAPPER="perf record -o nuschl.perf --".
+            wrapper = os.environ.get("NUSCHL_SCREENSHOT_WRAPPER", "").split()
+            app = subprocess.Popen([*wrapper, str(args.binaries / "nuschl"), "--profile-dir", str(profile),
                                     f"mumble://Andi@127.0.0.1:{port}/Lobby/Development"]
                                    + (["--offer", str(offered)] if offered else []),
                                    env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            eventually(lambda: app.poll() is None and shell.window("Nuschel"), "Nuschel window did not appear")
-            shell.place("Nuschel", 40, 40, width, height)
+            eventually(lambda: app.poll() is None and shell.window("Nuschl"), "Nuschl window did not appear")
+            shell.place("Nuschl", 40, 40, width, height)
             # Channel messages reach only current members: wait until Andi has joined.
             bots[0].wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "Andi"
                          and e["user"]["channel"] == 2, timeout=30)
@@ -345,7 +345,7 @@ def main():
             time.sleep(args.settle)
 
             def shot(name):
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 path = shell.screenshot(args.output / f"{name}.png",
                                         crop=(window["x"] - 12, window["y"] - 12, window["width"] + 24, window["height"] + 24))
                 print(path, flush=True)
@@ -358,19 +358,19 @@ def main():
 
             def click(x, y, count=1, button=1):
                 # Coordinates are pixels in the window screenshots above.
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 shell.click(window["x"] - 12 + x, window["y"] - 12 + y, button=button, count=count)
 
             def hover(x, y):
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 shell.move(window["x"] - 12 + x, window["y"] - 12 + y)
 
             def wheel(x, y, clicks):
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 shell.wheel(window["x"] - 12 + x, window["y"] - 12 + y, clicks)
 
             def drag(start, end):
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 origin = (window["x"] - 12, window["y"] - 12)
                 shell.drag((origin[0] + start[0], origin[1] + start[1]), (origin[0] + end[0], origin[1] + end[1]))
             click(width // 2, 140)  # the first click after mapping can be swallowed; spend it on the timeline
@@ -385,7 +385,7 @@ def main():
                 # Ctrl+C on the virtual keyboard: press Control, press and release C, release Control.
                 keyval = "imports.gi.Clutter.KEY_"
                 state = "imports.gi.Clutter.KeyState."
-                shell.eval("const k = global._nuschelKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
+                shell.eval("const k = global._nuschlKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
                            f" k.notify_keyval(t, {keyval}Control_L, {state}PRESSED);"
                            f" k.notify_keyval(t + 10000, {keyval}c, {state}PRESSED);"
                            f" k.notify_keyval(t + 20000, {keyval}c, {state}RELEASED);"
@@ -491,9 +491,9 @@ def main():
                 def selects(start, end, expected=None, begins=None, finishes=None, hold=0.0):
                     # Press where the pointer has settled, drag, and (held past an edge,
                     # where the timeline scrolls itself) stay a while before releasing.
-                    window = shell.window("Nuschel")
+                    window = shell.window("Nuschl")
                     origin = (window["x"] - 12, window["y"] - 12)
-                    pointer = "global._nuschelPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, "
+                    pointer = "global._nuschlPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, "
                     shell.move(origin[0] + start[0], origin[1] + start[1])
                     time.sleep(0.15)
                     shell.eval(pointer + "imports.gi.Clutter.ButtonState.PRESSED); 'ok'")
@@ -543,7 +543,7 @@ def main():
                 time.sleep(0.4)
                 copied = clipboard()
                 assert copied == "https://docs.example/guide", copied
-                # A mumble link to this server's Lobby: Nuschel goes there itself.
+                # A mumble link to this server's Lobby: Nuschl goes there itself.
                 click(*LOBBY_LINK)
                 time.sleep(1.5)
                 shot("34-mumble-link")
@@ -647,13 +647,13 @@ def main():
                 # as well: the speakers then scrolled by under a pointer parked
                 # on the microphones, "System default" and all.)
                 assert registry, "the devices scene reads the lists over AT-SPI: pass --at-spi"
-                nuschel = eventually(lambda: next((node for node in registry.children()
-                                                   if node.name.lower() == "nuschel"), None),
-                                     "Nuschel is not in the accessibility registry", timeout=30)
+                nuschl = eventually(lambda: next((node for node in registry.children()
+                                                   if node.name.lower() == "nuschl"), None),
+                                     "Nuschl is not in the accessibility registry", timeout=30)
 
                 def named(role, name, prefix=False):
                     """The first node named `name` (or starting with it) with `role`, or any but a label."""
-                    return next((node for _, node, r, n in snapshot(nuschel)
+                    return next((node for _, node, r, n in snapshot(nuschl)
                                  if (r == role if role else r != "label")
                                  and (n.startswith(name) if prefix else n == name)), None)
                 named("push button", "Settings").call("Action", "DoAction", "i", "0")
@@ -791,10 +791,10 @@ def main():
 
                 def portal_dialog():
                     return next((w for w in shell.windows()
-                                 if not (w["title"] or "").startswith(("Nuschel", "Another window"))), None)
+                                 if not (w["title"] or "").startswith(("Nuschl", "Another window"))), None)
 
                 def add_in_portal_dialog(name):
-                    # GNOME asks whether to add shortcuts it has not seen, proposing Nuschel's keys.
+                    # GNOME asks whether to add shortcuts it has not seen, proposing Nuschl's keys.
                     dialog = eventually(portal_dialog, "GNOME did not ask to add the shortcut", timeout=20)
                     time.sleep(1.0)
                     print(shell.screenshot(args.output / name), dialog["title"], flush=True)
@@ -830,7 +830,7 @@ def main():
                         print(shell.screenshot(args.output / "40-other-window.png"), flush=True)
                         toggle_mute("while another window is focused, again")
                         # Changed bindings bind again: GNOME asks about a new one only.
-                        shell.place("Nuschel", 40, 40, width, height)
+                        shell.place("Nuschl", 40, 40, width, height)
                         time.sleep(0.6)
                         click(239, 773)
                         time.sleep(1.0)
@@ -902,10 +902,10 @@ def main():
                 bots[0].send(kind="text", channel=2, body="\n".join(f"line {n}" for n in range(40)))
                 time.sleep(1.5)
                 shot("10-long-wide")
-                shell.place("Nuschel", 40, 40, 900, height)
+                shell.place("Nuschl", 40, 40, 900, height)
                 time.sleep(1.5)
                 shot("11-long-narrow")
-                shell.place("Nuschel", 40, 40, width, height)
+                shell.place("Nuschl", 40, 40, width, height)
                 time.sleep(1.0)
             if want("search"):
                 click(*SEARCH_BUTTON(width))
@@ -1231,15 +1231,15 @@ def main():
                     source = subprocess.Popen([str(dragon), "--all-compact", "--and-exit", str(drawing), str(notes)],
                                               env=shell.app_environment(), stdout=subprocess.DEVNULL,
                                               stderr=subprocess.DEVNULL, start_new_session=True)
-                    eventually(lambda: any(not (w["title"] or "").startswith("Nuschel") for w in shell.windows()),
+                    eventually(lambda: any(not (w["title"] or "").startswith("Nuschl") for w in shell.windows()),
                                "dragon-drop did not appear")
-                    title = next(w["title"] for w in shell.windows() if not (w["title"] or "").startswith("Nuschel"))
+                    title = next(w["title"] for w in shell.windows() if not (w["title"] or "").startswith("Nuschl"))
                     time.sleep(1.0)
                     # Its one button ("2 files") fills the bottom of its small window.
                     box = shell.window(title)
-                    nuschel = shell.window("Nuschel")
+                    nuschl = shell.window("Nuschl")
                     shell.drag((box["x"] + box["width"] // 2, box["y"] + box["height"] - 15),
-                               (nuschel["x"] + 900, nuschel["y"] + 250), steps=30, hold=1.0)
+                               (nuschl["x"] + 900, nuschl["y"] + 250), steps=30, hold=1.0)
                     time.sleep(1.0)
                     source.wait(timeout=10)
                     images += 1
@@ -1355,7 +1355,7 @@ def main():
 
                 def measure(name):
                     """Sweep the size as a script would, then drag the corner as a person would."""
-                    window = shell.window("Nuschel")
+                    window = shell.window("Nuschl")
                     w, h = window["width"], window["height"]
                     # Two round trips down to 900x620 and back, one size per tick.
                     sweep = []
@@ -1363,16 +1363,16 @@ def main():
                         for i in range(121):
                             t = 1 - abs(i - 60) / 60
                             sweep.append([round(w - (w - 900) * t), round(h - (h - 620) * t)])
-                    ticks = shell.resize_sweep("Nuschel", sweep)
+                    ticks = shell.resize_sweep("Nuschl", sweep)
                     measured[f"{name} sweep"] = {"ticks": frame_timing.lag(ticks, sweep), "span": frame_timing.moving(ticks, sweep),
                                                  "log": ticks, "steps": sweep}
                     time.sleep(0.5)
-                    shell.place("Nuschel", 40, 40, w, h)
+                    shell.place("Nuschl", 40, 40, w, h)
                     time.sleep(1.0)
                     # The bottom right corner, in the shadow where the resize edge is, at
                     # 125 Hz like a mouse: in by 380x180 over a second, half way out
                     # again, and held still for a moment before letting go.
-                    window = shell.window("Nuschel")
+                    window = shell.window("Nuschl")
                     corner = (window["x"] + window["width"] + 4, window["y"] + window["height"] + 4)
                     path, expected = [], []
                     for i in range(251):
@@ -1380,11 +1380,11 @@ def main():
                         dx, dy = round(-380 * t), round(-180 * t)
                         path.append([corner[0] + dx, corner[1] + dy])
                         expected.append([window["width"] + dx, window["height"] + dy])
-                    ticks = shell.drag_resize("Nuschel", corner, path)
+                    ticks = shell.drag_resize("Nuschl", corner, path)
                     measured[f"{name} drag"] = {"ticks": frame_timing.lag(ticks, expected), "span": frame_timing.moving(ticks, expected),
                                                 "log": ticks, "steps": expected}
                     time.sleep(0.5)
-                    shell.place("Nuschel", 40, 40, w, h)
+                    shell.place("Nuschl", 40, 40, w, h)
                     time.sleep(1.0)
 
                 def zoomed(name):
@@ -1447,7 +1447,7 @@ def main():
             if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 path = shell.screenshot(args.output / "03-maximized.png")
                 print(path, flush=True)
                 shell.click(width // 2, window["y"] + 18, count=2)

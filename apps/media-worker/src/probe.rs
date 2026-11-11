@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The echo test: play a speech-like signal through Nuschel's own output and
+//! The echo test: play a speech-like signal through Nuschl's own output and
 //! measure what the microphone path would send while only "the far end" talks.
 
 use crate::dsp::{FRAME, RATE};
@@ -175,7 +175,7 @@ impl EchoProbe {
         ((voiced * 0.17 + breath) * envelope).clamp(-0.9, 0.9) as f32
     }
 
-    /// Account one captured frame before (`raw`) and after Nuschel's
+    /// Account one captured frame before (`raw`) and after Nuschl's
     /// processing, and whether the gate would transmit it. Returns the report
     /// once the test is over.
     pub fn observe(

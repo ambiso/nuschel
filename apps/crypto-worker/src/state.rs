@@ -3,7 +3,7 @@
 //! key-transparency log, the heads it accepted, its own binding and
 //! self-monitoring checkpoint, and trust on first use per contact; per identity,
 //! where it was verified out of band. Sealed under the store key as JSON.
-use nuschel_ipc::crypto::{
+use nuschl_ipc::crypto::{
     ContactState, KeyTransparencySettings, KtRecordBytes, RecoveryPolicy, base64_bytes, base64_list,
 };
 use serde::{Deserialize, Serialize};
@@ -112,7 +112,7 @@ pub struct ServerState {
     /// Contacts by account id (hex).
     pub contacts: BTreeMap<String, Contact>,
     /// Registration numbers and the account (hex) the server showed for them.
-    /// Registration numbers are never reused on Nuschel servers, so another account
+    /// Registration numbers are never reused on Nuschl servers, so another account
     /// behind one is worth a notice.
     #[serde(default)]
     pub aliases: BTreeMap<u32, String>,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A private, headless GNOME Shell for real-GPU Wayland UI tests.
 
-GNOME draws no server-side decorations, so this exercises Nuschel's own title
+GNOME draws no server-side decorations, so this exercises Nuschl's own title
 bar, controls and resize edges exactly as on a GNOME desktop. The shell runs
 on its own Wayland socket and D-Bus session in unsafe mode, which permits
 screenshots and Clutter virtual input via `org.gnome.Shell.Eval`. Nothing is
@@ -32,16 +32,16 @@ def find_gnome_shell():
 
 
 class GnomeSession:
-    DISPLAY = "nuschel-wl"
+    DISPLAY = "nuschl-wl"
 
     def __init__(self, shell=None, width=1440, height=900, log=None, portals=()):
         self.shell = Path(shell) if shell else find_gnome_shell()
         self.portals = [Path(package) for package in portals]
         self.width, self.height = width, height
         # Wayland socket paths are limited to 108 bytes, so keep this short.
-        self.runtime = Path(tempfile.mkdtemp(prefix="nwl-", dir=os.environ.get("NUSCHEL_WL_TMP", "/tmp")))
+        self.runtime = Path(tempfile.mkdtemp(prefix="nwl-", dir=os.environ.get("NUSCHL_WL_TMP", "/tmp")))
         self.runtime.chmod(0o700)
-        self.home = Path(tempfile.mkdtemp(prefix="nuschel-gnome-home-"))
+        self.home = Path(tempfile.mkdtemp(prefix="nuschl-gnome-home-"))
         self.log = log
         self.process = None
         self.bus = None
@@ -122,7 +122,7 @@ class GnomeSession:
                   "minimized: w.minimized}; }))")
         return json.loads(self.eval(script))
 
-    def window(self, title_prefix="Nuschel"):
+    def window(self, title_prefix="Nuschl"):
         for entry in self.windows():
             if (entry["title"] or "").startswith(title_prefix):
                 return entry
@@ -144,17 +144,17 @@ class GnomeSession:
     const w = global.get_window_actors().map(a => a.meta_window)
         .find(w => (w.get_title() || '').startsWith(%(title)s));
     const steps = %(steps)s, pointer = %(pointer)s, origin = w.get_frame_rect();
-    const run = global._nuschelTicks = {done: false, log: []};
+    const run = global._nuschlTicks = {done: false, log: []};
     let index = 0;
     GLib.timeout_add(GLib.PRIORITY_HIGH, %(interval)d, () => {
         const now = GLib.get_monotonic_time(), rect = w.get_frame_rect();
         run.log.push([now, index, rect.width, rect.height]);
         if (index < steps.length) {
             const [a, b] = steps[index];
-            if (pointer) global._nuschelPointer.notify_absolute_motion(now, a, b);
+            if (pointer) global._nuschlPointer.notify_absolute_motion(now, a, b);
             else w.move_resize_frame(true, origin.x, origin.y, a, b);
         } else if (index == steps.length && pointer) {
-            global._nuschelPointer.notify_button(now, 1, C.ButtonState.RELEASED);
+            global._nuschlPointer.notify_button(now, 1, C.ButtonState.RELEASED);
         }
         index++;
         if (index < steps.length + %(settle)d) return GLib.SOURCE_CONTINUE;
@@ -170,11 +170,11 @@ class GnomeSession:
                                  "pointer": "true" if pointer else "false", "interval": interval,
                                  "settle": settle})
         deadline = time.monotonic() + 30 + len(steps) * interval / 1000
-        while self.eval("global._nuschelTicks.done ? 'yes' : 'no'") != "yes":
+        while self.eval("global._nuschlTicks.done ? 'yes' : 'no'") != "yes":
             if time.monotonic() > deadline:
                 raise RuntimeError("resize ticks did not finish")
             time.sleep(0.2)
-        return json.loads(self.eval("JSON.stringify(global._nuschelTicks.log)"))
+        return json.loads(self.eval("JSON.stringify(global._nuschlTicks.log)"))
 
     def resize_sweep(self, title_prefix, sizes, interval=16):
         """Resize the window to each [width, height] in turn, one per tick, as a
@@ -188,7 +188,7 @@ class GnomeSession:
         self._pointer()
         self.move(*corner)
         time.sleep(0.1)
-        self.eval("global._nuschelPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1,"
+        self.eval("global._nuschlPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1,"
                   " imports.gi.Clutter.ButtonState.PRESSED); 'ok'")
         # The client answers the press by asking the compositor to start the resize.
         time.sleep(0.3)
@@ -209,9 +209,9 @@ class GnomeSession:
 
     def _pointer(self):
         if not self.pointer_ready:
-            self.eval("global._nuschelPointer = imports.gi.Clutter.get_default_backend().get_default_seat()"
+            self.eval("global._nuschlPointer = imports.gi.Clutter.get_default_backend().get_default_seat()"
                       ".create_virtual_device(imports.gi.Clutter.InputDeviceType.POINTER_DEVICE);"
-                      "global._nuschelKeyboard = imports.gi.Clutter.get_default_backend().get_default_seat()"
+                      "global._nuschlKeyboard = imports.gi.Clutter.get_default_backend().get_default_seat()"
                       ".create_virtual_device(imports.gi.Clutter.InputDeviceType.KEYBOARD_DEVICE); 'ok'")
             # Events from a device the seat has not added yet are lost (the
             # accessibility test's first key, Ctrl+V, often was).
@@ -220,13 +220,13 @@ class GnomeSession:
 
     def move(self, x, y):
         self._pointer()
-        self.eval(f"global._nuschelPointer.notify_absolute_motion(imports.gi.GLib.get_monotonic_time(), {x}, {y}); 'ok'")
+        self.eval(f"global._nuschlPointer.notify_absolute_motion(imports.gi.GLib.get_monotonic_time(), {x}, {y}); 'ok'")
 
     def click(self, x, y, button=1, count=1):
         self.move(x, y)
         time.sleep(0.05)
         for _ in range(count):
-            self.eval("const p = global._nuschelPointer; const t = imports.gi.GLib.get_monotonic_time();"
+            self.eval("const p = global._nuschlPointer; const t = imports.gi.GLib.get_monotonic_time();"
                       f" p.notify_button(t, {button}, imports.gi.Clutter.ButtonState.PRESSED);"
                       f" p.notify_button(t + 30000, {button}, imports.gi.Clutter.ButtonState.RELEASED); 'ok'")
             time.sleep(0.06)
@@ -236,7 +236,7 @@ class GnomeSession:
         self.move(x, y)
         time.sleep(0.05)
         direction = "UP" if clicks < 0 else "DOWN"
-        self.eval("const p = global._nuschelPointer; const t = imports.gi.GLib.get_monotonic_time();"
+        self.eval("const p = global._nuschlPointer; const t = imports.gi.GLib.get_monotonic_time();"
                   f" for (let i = 0; i < {abs(clicks)}; i++) p.notify_discrete_scroll(t + i * 8000,"
                   f" imports.gi.Clutter.ScrollDirection.{direction}, imports.gi.Clutter.ScrollSource.WHEEL); 'ok'")
 
@@ -244,18 +244,18 @@ class GnomeSession:
         """Drag with the left button; `hold` waits at the end before the release
         (a file drop needs a moment for the target to read what is offered)."""
         self.move(*start)
-        self.eval("global._nuschelPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, imports.gi.Clutter.ButtonState.PRESSED); 'ok'")
+        self.eval("global._nuschlPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, imports.gi.Clutter.ButtonState.PRESSED); 'ok'")
         for step in range(1, steps + 1):
             x = start[0] + (end[0] - start[0]) * step / steps
             y = start[1] + (end[1] - start[1]) * step / steps
             self.move(x, y)
             time.sleep(0.02)
         time.sleep(hold)
-        self.eval("global._nuschelPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, imports.gi.Clutter.ButtonState.RELEASED); 'ok'")
+        self.eval("global._nuschlPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, imports.gi.Clutter.ButtonState.RELEASED); 'ok'")
 
     def key(self, keysym_name):
         self._pointer()
-        self.eval("const k = global._nuschelKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
+        self.eval("const k = global._nuschlKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
                   f" const v = imports.gi.Clutter.KEY_{keysym_name};"
                   " k.notify_keyval(t, v, imports.gi.Clutter.KeyState.PRESSED);"
                   " k.notify_keyval(t + 20000, v, imports.gi.Clutter.KeyState.RELEASED); 'ok'")
@@ -263,7 +263,7 @@ class GnomeSession:
     def chord(self, modifier, keysym_name):
         """Press a key while holding a modifier, e.g. chord("Control_L", "period")."""
         self._pointer()
-        self.eval("const k = global._nuschelKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
+        self.eval("const k = global._nuschlKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
                   " const C = imports.gi.Clutter, P = C.KeyState.PRESSED, R = C.KeyState.RELEASED;"
                   f" k.notify_keyval(t, C.KEY_{modifier}, P); k.notify_keyval(t + 10000, C.KEY_{keysym_name}, P);"
                   f" k.notify_keyval(t + 20000, C.KEY_{keysym_name}, R); k.notify_keyval(t + 30000, C.KEY_{modifier}, R); 'ok'")
@@ -275,7 +275,7 @@ class GnomeSession:
                    for index, name in enumerate(keysym_names)]
         releases = [f"k.notify_keyval(t + {(len(keysym_names) + index) * 10000}, C.KEY_{name}, C.KeyState.RELEASED);"
                     for index, name in enumerate(reversed(keysym_names))]
-        self.eval("const k = global._nuschelKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
+        self.eval("const k = global._nuschlKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
                   " const C = imports.gi.Clutter; " + " ".join(presses + releases) + " 'ok'")
 
     def type(self, text):
@@ -284,7 +284,7 @@ class GnomeSession:
             if character == "\n":
                 self.key("Return")
                 continue
-            self.eval("const k = global._nuschelKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
+            self.eval("const k = global._nuschlKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
                       f" const v = imports.gi.Clutter.unicode_to_keysym({ord(character)});"
                       " k.notify_keyval(t, v, imports.gi.Clutter.KeyState.PRESSED);"
                       " k.notify_keyval(t + 10000, v, imports.gi.Clutter.KeyState.RELEASED); 'ok'")

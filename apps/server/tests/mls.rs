@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The MLS delivery service (`mls/1`, docs/e2ee.md §6.3) on loopback: raw protocol
 //! clients that register, publish an identity in key transparency and drive MLS
-//! with nuschel-e2ee's client half, against `nuscheld`.
+//! with nuschl-e2ee's client half, against `nuschld`.
 use bytes::BytesMut;
-use nuschel_e2ee::{
+use nuschl_e2ee::{
     ConversationBinding, SUITE_KEM_PUBLIC_KEY_LEN,
     client::{Client as MlsClient, Incoming, ValidKeyPackage},
 };
-use nuschel_identity::{DisplayName, NewIdentity, Validity};
-use nuschel_protocol::{
+use nuschl_identity::{DisplayName, NewIdentity, Validity};
+use nuschl_protocol::{
     ControlFrame, control as proto, decode_control, encode_control, kind,
-    nuschel::{self, kind as nk, v1},
+    nuschl::{self, kind as nk, v1},
 };
-use nuscheld::{
+use nuschld::{
     config::Config,
     server::{Running, start},
     storage::{Backend, MemoryStore},
@@ -62,7 +62,7 @@ fn request_id() -> u64 {
 }
 
 fn key() -> [u8; 16] {
-    nuscheld::state::random()
+    nuschld::state::random()
 }
 
 // ---- the server ----
@@ -258,23 +258,23 @@ impl Connection {
         }
     }
 
-    /// Logs in as a Nuschel client offering `capabilities`; the server's `Reject`
+    /// Logs in as a Nuschl client offering `capabilities`; the server's `Reject`
     /// if it refuses.
     async fn connect_as(
         address: SocketAddr,
         user: &User,
         capabilities: &[&str],
     ) -> Result<Self, proto::Reject> {
-        let mut connection = Self::tls(address, user, nuschel::ALPN).await;
+        let mut connection = Self::tls(address, user, nuschl::ALPN).await;
         let hello = v1::Hello {
-            protocol: nuschel::PROTOCOL,
+            protocol: nuschl::PROTOCOL,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
             client_version: String::new(),
             relay_only: false,
         };
-        let frame = nuschel::version_frame(
+        let frame = nuschl::version_frame(
             &proto::Version {
                 version_v2: Some((1 << 48) | (5 << 32)),
                 ..Default::default()
@@ -284,10 +284,10 @@ impl Connection {
         .unwrap();
         connection.send_bytes(&frame).await;
         let version = connection.until(kind::VERSION).await;
-        let hello = nuschel::hello(&version.payload).unwrap().unwrap();
+        let hello = nuschl::hello(&version.payload).unwrap().unwrap();
         connection.capabilities = hello.capabilities.clone();
         if !hello.kt_log.is_empty() {
-            let descriptor = nuschel_kt::LogDescriptor::decode(&hello.kt_log).unwrap();
+            let descriptor = nuschl_kt::LogDescriptor::decode(&hello.kt_log).unwrap();
             connection.log_id = descriptor.log_id().0;
             connection.server_key = descriptor.signing_key().to_bytes().try_into().unwrap();
         }
@@ -932,7 +932,7 @@ async fn a_direct_conversation_through_the_delivery_service() {
 }
 
 /// End-to-end mode is a server-level switch (docs/e2ee.md §10, answers 7 and 12):
-/// stock clients and Nuschel clients that cannot take part are turned away before
+/// stock clients and Nuschl clients that cannot take part are turned away before
 /// their credentials are read, nothing is sent in plaintext, typing is not offered,
 /// and unregistered connections may register but take no part.
 #[tokio::test]
@@ -944,17 +944,17 @@ async fn the_end_to_end_switch_admits_only_what_can_take_part() {
     let mut stock = Connection::tls(
         fixture.address(),
         &guest,
-        nuschel_protocol::nuschel::ALPN_MUMBLE,
+        nuschl_protocol::nuschl::ALPN_MUMBLE,
     )
     .await;
     let reject = stock.until(kind::REJECT).await;
     let reject = proto::Reject::decode(reject.payload).unwrap();
     assert!(
-        reject.reason().contains("requires the Nuschel client"),
+        reject.reason().contains("requires the Nuschl client"),
         "{reject:?}"
     );
 
-    // A Nuschel client without `e2ee/1` (an older one) too, at Authenticate.
+    // A Nuschl client without `e2ee/1` (an older one) too, at Authenticate.
     let old = Connection::connect_as(fixture.address(), &guest, &CAPABILITIES[..5])
         .await
         .err()
@@ -963,7 +963,7 @@ async fn the_end_to_end_switch_admits_only_what_can_take_part() {
     assert!(old.reason().contains("end to end"), "{old:?}");
     assert_eq!(fixture.running.server.lock().users.len(), 0);
 
-    // An unregistered Nuschel client is admitted: it sees the policy, no typing.
+    // An unregistered Nuschl client is admitted: it sees the policy, no typing.
     let mut g = Connection::connect(fixture.address(), &guest).await;
     for wanted in ["kt/1", "mls/1", "e2ee/1"] {
         assert!(
@@ -1375,7 +1375,7 @@ async fn a_commit_stored_before_a_crash_is_adopted_on_restart() {
         let new_group = store.kt[&record_key(b'G', &group)].clone();
         store.kt.insert(
             record_key(b'N', &group),
-            nuscheld::mls::pending_record(created_seq, 2, &update.commit, &new_group),
+            nuschld::mls::pending_record(created_seq, 2, &update.commit, &new_group),
         );
         store.kt.insert(record_key(b'G', &group), old_group);
         store.kt.insert(record_key(b'E', &group), old_epoch);
@@ -1433,7 +1433,7 @@ async fn a_pending_commit_without_its_row_is_dropped_on_restart() {
         let current = store.kt[&record_key(b'G', &group)].clone();
         store.kt.insert(
             record_key(b'N', &group),
-            nuscheld::mls::pending_record(created_seq, 2, b"a commit never stored", &current),
+            nuschld::mls::pending_record(created_seq, 2, b"a commit never stored", &current),
         );
     })
     .await;

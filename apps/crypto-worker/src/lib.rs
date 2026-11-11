@@ -3,7 +3,7 @@
 //! owns every identity secret and every key-transparency decision.
 //!
 //! - **Identity.** Created on first need: the identity root, the device-signing key of
-//!   generation 1 and this device's keys (`nuschel-identity`). Under the recovery
+//!   generation 1 and this device's keys (`nuschl-identity`). Under the recovery
 //!   policy `offer` (the default; `require`, `never`), the root is sealed under a fresh
 //!   recovery key, which waits (sealed under the store key) until the user saves or
 //!   skips it; skipping deletes the root for good.
@@ -18,9 +18,9 @@
 //! - **Trust on first use** per contact (`ContactTrust`), verification per identity
 //!   (valid on every server whose log binds the same identity), safety numbers.
 //!
-//! The session moves the bytes; see `nuschel_ipc::crypto` for the protocol.
+//! The session moves the bytes; see `nuschl_ipc::crypto` for the protocol.
 //!
-//! [`CryptoRequest::Due`]: nuschel_ipc::crypto::CryptoRequest::Due
+//! [`CryptoRequest::Due`]: nuschl_ipc::crypto::CryptoRequest::Due
 #![forbid(unsafe_code)]
 
 pub mod link;

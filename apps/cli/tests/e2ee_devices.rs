@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Three devices in one end-to-end direct conversation (docs/e2ee.md §3.4, §6):
 //! Alice's one device, Bob's laptop and the phone he links to it. The link runs
-//! between two `nuschel-cli --offline` processes (the test relays the messages, as
+//! between two `nuschl-cli --offline` processes (the test relays the messages, as
 //! the server's linking mailbox will); the phone uses Bob's Mumble certificate, so
 //! it is the same account, and the devices connect one after the other (a second
 //! login of an account disconnects the first). Build the crypto worker first:
-//! `cargo build -p nuschel-crypto-worker`.
-use nuscheld::{
+//! `cargo build -p nuschl-crypto-worker`.
+use nuschld::{
     config::Config,
     server::{Running, start},
     storage::{Backend, MemoryStore},
@@ -28,13 +28,13 @@ use tokio::{
 const WAIT: Duration = Duration::from_secs(60);
 
 fn cli() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_nuschel-cli"))
+    PathBuf::from(env!("CARGO_BIN_EXE_nuschl-cli"))
 }
 
 fn worker_present() -> bool {
     cli()
         .with_file_name(format!(
-            "nuschel-crypto-worker{}",
+            "nuschl-crypto-worker{}",
             std::env::consts::EXE_SUFFIX
         ))
         .exists()
@@ -89,7 +89,7 @@ impl Cli {
     }
 
     fn start(name: &str, mut command: Command) -> Self {
-        let mut child = command.spawn().expect("nuschel-cli starts");
+        let mut child = command.spawn().expect("nuschl-cli starts");
         let input = child.stdin.take().unwrap();
         let output = child.stdout.take().unwrap();
         let (sender, events) = mpsc::unbounded_channel();
@@ -322,7 +322,7 @@ async fn link(server: &Running, profile: &Path, identity: &Path, new_identity: &
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_devices_in_one_direct_conversation() {
     if !worker_present() {
-        panic!("build nuschel-crypto-worker first: cargo build -p nuschel-crypto-worker");
+        panic!("build nuschl-crypto-worker first: cargo build -p nuschl-crypto-worker");
     }
     let state = tempfile::tempdir().unwrap();
     let running = server(state.path()).await;
@@ -420,7 +420,7 @@ async fn three_devices_in_one_direct_conversation() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_linked_device_joins_an_existing_conversation() {
     if !worker_present() {
-        panic!("build nuschel-crypto-worker first: cargo build -p nuschel-crypto-worker");
+        panic!("build nuschl-crypto-worker first: cargo build -p nuschl-crypto-worker");
     }
     let state = tempfile::tempdir().unwrap();
     let running = server(state.path()).await;

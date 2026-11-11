@@ -4,15 +4,15 @@
 //! that crossed the relay are recorded at the server to show they were
 //! ciphertext only. Then everything the relay must refuse.
 //!
-//! With `NUSCHEL_TEST_MURMUR=/path/to/mumble-server` the login also runs
+//! With `NUSCHL_TEST_MURMUR=/path/to/mumble-server` the login also runs
 //! against a real Murmur on loopback.
 
 use futures_util::{SinkExt, StreamExt};
-use nuschel_protocol::{
+use nuschl_protocol::{
     control as proto, decode_control, encode_control, kind,
     tunnel::{self, CloseReason, Frame},
 };
-use nuschel_web_relay::{
+use nuschl_web_relay::{
     Config, Relay,
     config::Ports,
     probe::{self, Probe},
@@ -149,7 +149,7 @@ async fn mumble_server(udp: bool) -> (u16, String, Recording) {
                     }
                 }
                 let version = proto::Version {
-                    version_v2: Some(nuschel_protocol::voice::PROTOBUF_VERSION),
+                    version_v2: Some(nuschl_protocol::voice::PROTOBUF_VERSION),
                     release: Some("fake murmur".into()),
                     ..Default::default()
                 };
@@ -236,7 +236,7 @@ async fn logs_in_through_the_relay_with_tls_end_to_end() {
     for secret in [
         USERNAME.as_bytes(),
         WELCOME.as_bytes(),
-        b"Nuschel web relay probe",
+        b"Nuschl web relay probe",
         b"fake murmur",
     ] {
         assert!(!contains(&up, secret) && !contains(&down, secret));
@@ -503,8 +503,8 @@ async fn limits_tunnels_per_client() {
 
 #[tokio::test]
 async fn logs_in_to_murmur_through_the_relay() {
-    let Some(binary) = std::env::var_os("NUSCHEL_TEST_MURMUR") else {
-        eprintln!("NUSCHEL_TEST_MURMUR is not set; skipping the Murmur run");
+    let Some(binary) = std::env::var_os("NUSCHL_TEST_MURMUR") else {
+        eprintln!("NUSCHL_TEST_MURMUR is not set; skipping the Murmur run");
         return;
     };
     let root = tempfile::tempdir().expect("temporary directory");

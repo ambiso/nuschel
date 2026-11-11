@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Session values: what a Mumble or Nuschel session reports about a server
+//! Session values: what a Mumble or Nuschl session reports about a server
 //! (channels, users, activity, administration), as plain data every client
 //! shares (the native session, the SDK, and a browser build). Raw Mumble HTML
 //! (comments, descriptions) is carried as untrusted text; clients render it
@@ -365,7 +365,7 @@ pub enum UserAction {
 pub enum TextTarget {
     Channel(u32),
     Direct(u32),
-    /// A direct conversation on a Nuschel server (`OpenDirect`), by its id:
+    /// A direct conversation on a Nuschl server (`OpenDirect`), by its id:
     /// stored, and reachable while the other account is offline.
     DirectConversation([u8; 16]),
 }

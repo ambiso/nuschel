@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Stock Mumble GUI client and Nuschel in one channel (run inside xvfb-run).
+"""Stock Mumble GUI client and Nuschl in one channel (run inside xvfb-run).
 
-The stock client logs in with a certificate exported by Nuschel (PKCS#12
+The stock client logs in with a certificate exported by Nuschl (PKCS#12
 interoperability), then both exchange voice through the server: the stock
-client transmits a tone from a private PulseAudio microphone that Nuschel must
-decode, and Nuschel's tone must reach the stock client's speakers. Then chat
+client transmits a tone from a private PulseAudio microphone that Nuschl must
+decode, and Nuschl's tone must reach the stock client's speakers. Then chat
 both ways: a message typed into the stock window (xdotool; Xvfb has no window
-manager) reaches Nuschel, and Nuschel's message shows in the stock client's log
+manager) reaches Nuschl, and Nuschl's message shows in the stock client's log
 (copied out through the X clipboard with xclip).
 
 Waits that depend on how fast the stock GUI is are generous: under heavy host
@@ -43,7 +43,7 @@ def eventually(predicate, message, timeout=40):
 
 
 def drain(client):
-    """The events queued for a Nuschel client since it last waited, without blocking."""
+    """The events queued for a Nuschl client since it last waited, without blocking."""
     events = []
     while True:
         try:
@@ -51,7 +51,7 @@ def drain(client):
         except queue.Empty:
             return events
         if event is None:
-            raise AssertionError(f"the Nuschel client exited: {list(client.events)[-8:]}")
+            raise AssertionError(f"the Nuschl client exited: {list(client.events)[-8:]}")
         events.append(event)
 
 
@@ -118,7 +118,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     reference = ReferenceOpus(args.opus_library)
-    with tempfile.TemporaryDirectory(prefix="nuschel-stock-", dir=os.environ.get("NUSCHEL_SHORT_TMP")) as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-stock-", dir=os.environ.get("NUSCHL_SHORT_TMP")) as temporary:
         root = Path(temporary)
         home, runtime, certificates = root / "home", root / "run", root / "certificates"
         for directory in (home / ".config/Mumble/Mumble", runtime / "pulse", certificates):
@@ -142,8 +142,8 @@ def main():
         mumble = peer = None
         try:
             eventually(socket.exists, "private PulseAudio did not start")
-            # A certificate exported by Nuschel becomes the stock client's identity.
-            exported = subprocess.run([str(args.binaries / "nuschel-cli"), "--host", "unused", "--username", "unused",
+            # A certificate exported by Nuschl becomes the stock client's identity.
+            exported = subprocess.run([str(args.binaries / "nuschl-cli"), "--host", "unused", "--username", "unused",
                                        "--profile-dir", str(root / "stock-identity"), "--export-certificate",
                                        str(certificates / "MumbleAutomaticCertificateBackup.p12")],
                                       capture_output=True, text=True, check=True, timeout=120)
@@ -166,7 +166,7 @@ def main():
                 "tts": {"enable_tts": False},
             }))
             pin = certificate_pin(args.binaries, args.host, args.port, root / "probe")
-            peer = Client(args.binaries, args.host, args.port, pin, "NuschelPeer", root / "peer")
+            peer = Client(args.binaries, args.host, args.port, pin, "NuschlPeer", root / "peer")
             peer.send(kind="join", channel=1)
             mumble = subprocess.Popen([str(args.mumble), "--default-certificate-dir", str(certificates),
                                        f"mumble://StockUser@{args.host}:{args.port}/Lobby"],
@@ -174,10 +174,10 @@ def main():
                                       start_new_session=True)
             stock = peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "StockUser"
                               and e["user"]["channel"] == 1, timeout=180)["user"]
-            assert stock["certificate_hash"] == identity_hash, "stock Mumble did not use the Nuschel-exported certificate"
-            print("Stock Mumble logged in with Nuschel's exported PKCS#12 identity.", flush=True)
+            assert stock["certificate_hash"] == identity_hash, "stock Mumble did not use the Nuschl-exported certificate"
+            print("Stock Mumble logged in with Nuschl's exported PKCS#12 identity.", flush=True)
 
-            # Stock client → Nuschel: Mumble transmits a tone from its microphone.
+            # Stock client → Nuschl: Mumble transmits a tone from its microphone.
             peer.unmute()
             mono = tone(0, 48000)
             second = struct.pack("<%df" % (2 * len(mono)), *[v for s in mono for v in (s, s)])
@@ -211,9 +211,9 @@ def main():
             assert first is not None, "no voice packet from the stock client within 180 s"
             assert len(packets) > 40, f"too few packets from the stock client: {len(packets)}"
             assert rms(reference.decode(packets)) > 0.01, "stock client's audio did not decode"
-            print(f"Stock Mumble → Nuschel voice: {len(packets)} Opus packets decoded.", flush=True)
+            print(f"Stock Mumble → Nuschl voice: {len(packets)} Opus packets decoded.", flush=True)
 
-            # Nuschel → stock client: record what Mumble plays; a busy client may
+            # Nuschl → stock client: record what Mumble plays; a busy client may
             # take a while to play the first spurt, so it is sent again until heard.
             recording = root / "stock-playback.pcm"
             played = False
@@ -238,10 +238,10 @@ def main():
                 finally:
                     os.killpg(recorder.pid, signal.SIGTERM)
                     recorder.wait(timeout=10)
-            assert played, "stock client did not play Nuschel's voice"
-            print("Nuschel → stock Mumble voice played on the stock client's speakers.", flush=True)
+            assert played, "stock client did not play Nuschl's voice"
+            print("Nuschl → stock Mumble voice played on the stock client's speakers.", flush=True)
 
-            # Chat, typed into the stock window: Nuschel receives it from StockUser.
+            # Chat, typed into the stock window: Nuschl receives it from StockUser.
             window = StockWindow()
             typed, attempt = None, 0
             deadline = time.monotonic() + 120
@@ -253,15 +253,15 @@ def main():
                                       and e["body"].startswith("Typed in stock Mumble"), timeout=20)
                 except AssertionError:
                     if peer.process.poll() is not None or time.monotonic() > deadline:
-                        raise AssertionError("the message typed into stock Mumble did not reach Nuschel") from None
+                        raise AssertionError("the message typed into stock Mumble did not reach Nuschl") from None
             assert typed["target"] == {"kind": "channel", "id": 1}, typed
-            print(f"Stock Mumble → Nuschel chat: {typed['body']!r} (typed {attempt} time(s)).", flush=True)
-            # And Nuschel's message shows in the stock client's log.
-            body = f"Hello stock Mumble from Nuschel {os.getpid()}"
+            print(f"Stock Mumble → Nuschl chat: {typed['body']!r} (typed {attempt} time(s)).", flush=True)
+            # And Nuschl's message shows in the stock client's log.
+            body = f"Hello stock Mumble from Nuschl {os.getpid()}"
             peer.send(kind="text", channel=1, body=body)
-            eventually(lambda: f"NuschelPeer: {body}" in window.log_text(),
-                       "Nuschel's message is not in the stock client's log", timeout=60)
-            print("Nuschel → stock Mumble chat: shown in the stock client's log.", flush=True)
+            eventually(lambda: f"NuschlPeer: {body}" in window.log_text(),
+                       "Nuschl's message is not in the stock client's log", timeout=60)
+            print("Nuschl → stock Mumble chat: shown in the stock client's log.", flush=True)
         except BaseException:
             if mumble:
                 screenshot(args.output)

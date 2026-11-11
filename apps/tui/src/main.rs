@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Nuschel in a terminal: the client SDK's second view after the desktop.
+//! Nuschl in a terminal: the client SDK's second view after the desktop.
 //! The same profile and saved servers as the desktop (or `--profile-dir`),
 //! the same sandboxed workers beside the executable, and voice through the
 //! same media worker. A full screen by default; plain lines for screen
@@ -15,12 +15,12 @@ mod tests;
 mod view;
 
 use clap::Parser;
-use nuschel_client::{Client, native::Driver};
-use nuschel_session::config::Profile;
+use nuschl_client::{Client, native::Driver};
+use nuschl_session::config::Profile;
 use std::{io::IsTerminal, path::PathBuf, sync::Arc};
 
 #[derive(Parser)]
-#[command(version, about = "Nuschel in a terminal")]
+#[command(version, about = "Nuschl in a terminal")]
 struct Arguments {
     /// A separate profile (settings, servers, history, identity) in this folder.
     #[arg(long)]
@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new(
         Box::new(driver.clone()),
         loaded.servers,
-        nuschel_client::native::preferences(&loaded.settings),
+        nuschl_client::native::preferences(&loaded.settings),
     );
     let options = app::Options {
         audio,

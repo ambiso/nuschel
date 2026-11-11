@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Device linking (docs/e2ee.md §3.4) and the identity's other devices.
 //!
-//! - **Linking** runs nuschel-identity's protocol (SPAKE2 over the short code, key
+//! - **Linking** runs nuschl-identity's protocol (SPAKE2 over the short code, key
 //!   confirmation, an X-Wing-sealed provisioning bundle). The caller relays the four
 //!   messages between the devices; the server's linking mailbox comes later. The
 //!   state between steps is kept in memory only: a link takes a minute, and a crash
@@ -25,13 +25,13 @@
 //!   key made for this account and log).
 use crate::state::{MAX_PUBLISHED, ServerState, Verified};
 use crate::worker::Worker;
-use nuschel_identity::{
+use nuschl_identity::{
     AccountStatement, DeviceCertificate, DeviceKeys, DeviceKeystore, DisplayName,
     ExistingDeviceLink, LinkBundle, LinkCode, LinkDeviceKeys, LinkPake, NewAwaitingBundle,
     NewDeviceLink, ProvisioningBundle, Validity, VerifiedIdentity,
 };
-use nuschel_ipc::crypto::{CryptoResponse, KtRecordBytes, base64_bytes, base64_list};
-use nuschel_kt::{AccountBinding, LogDescriptor, RosterCommitment};
+use nuschl_ipc::crypto::{CryptoResponse, KtRecordBytes, base64_bytes, base64_list};
+use nuschl_kt::{AccountBinding, LogDescriptor, RosterCommitment};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -300,7 +300,7 @@ impl Worker {
         let code = LinkCode::parse(code).map_err(|error| error.to_string())?;
         let theirs = LinkPake::decode(pake).map_err(|error| error.to_string())?;
         let name = DisplayName::new(if device_name.trim().is_empty() {
-            "Nuschel"
+            "Nuschl"
         } else {
             device_name.trim()
         })

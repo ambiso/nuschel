@@ -3,7 +3,7 @@
 //!
 //! A release publishes `update.json` and its minisign signature
 //! `update.json.minisig`. The manifest lists, per platform, every file of the
-//! installation with its download URL, size and SHA-256. Nuschel:
+//! installation with its download URL, size and SHA-256. Nuschl:
 //!
 //! 1. fetches both and verifies the signature against the release key built
 //!    into the binary (plus `update-key.pub` beside the executable, which is
@@ -39,8 +39,8 @@ fn open_root(root: &Path) -> Result<Dir, Error> {
         .map_err(|error| Error::NotWritable(error.to_string()))
 }
 
-/// Where releases are published; `NUSCHEL_UPDATE_URL` overrides it (tests).
-pub const DEFAULT_URL: &str = "https://github.com/ambiso/nuschel/releases/latest/download/";
+/// Where releases are published; `NUSCHL_UPDATE_URL` overrides it (tests).
+pub const DEFAULT_URL: &str = "https://github.com/ambiso/nuschl/releases/latest/download/";
 pub const MANIFEST: &str = "update.json";
 /// The release signing key (minisign public key file).
 pub const RELEASE_KEY: &str = include_str!("../update-key.pub");
@@ -50,8 +50,8 @@ pub const LOCAL_KEY: &str = "update-key.pub";
 const MAX_MANIFEST: u64 = 256 * 1024;
 const MAX_FILE: u64 = 512 * 1024 * 1024;
 const MAX_FILES: usize = 256;
-const STAGING: &str = ".nuschel-update";
-const RETIRED: &str = ".nuschel-old";
+const STAGING: &str = ".nuschl-update";
+const RETIRED: &str = ".nuschl-old";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -121,7 +121,7 @@ pub fn platform() -> Option<&'static str> {
 pub fn install_root(executable: &Path) -> Option<PathBuf> {
     let directory = executable.parent()?;
     if cfg!(target_os = "macos") {
-        // Nuschel.app/Contents/MacOS/nuschel → Nuschel.app
+        // Nuschl.app/Contents/MacOS/nuschl → Nuschl.app
         let contents = directory.parent()?;
         (directory.file_name()? == "MacOS" && contents.file_name()? == "Contents")
             .then(|| contents.parent().map(Path::to_path_buf))
@@ -286,7 +286,7 @@ fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(600)))
         .timeout_connect(Some(Duration::from_secs(15)))
-        .user_agent(format!("Nuschel/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("Nuschl/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .into()
 }
@@ -304,10 +304,10 @@ fn fetch(agent: &ureq::Agent, url: &str, limit: u64) -> Result<Vec<u8>, Error> {
         .map_err(|error| Error::Http(error.to_string()))
 }
 
-/// The update source: `NUSCHEL_UPDATE_URL` (plain HTTP allowed, for tests on
+/// The update source: `NUSCHL_UPDATE_URL` (plain HTTP allowed, for tests on
 /// loopback; signatures still apply) or the release page.
 pub fn base_url() -> String {
-    let mut url = std::env::var("NUSCHEL_UPDATE_URL").unwrap_or_else(|_| DEFAULT_URL.into());
+    let mut url = std::env::var("NUSCHL_UPDATE_URL").unwrap_or_else(|_| DEFAULT_URL.into());
     if !url.ends_with('/') {
         url.push('/');
     }
@@ -353,7 +353,7 @@ pub struct Staged {
     files: Vec<PathBuf>,
 }
 
-/// Download every file into `<root>/.nuschel-update`, checking size and hash.
+/// Download every file into `<root>/.nuschl-update`, checking size and hash.
 /// `progress` receives bytes done and the total.
 pub fn download(
     update: &Update,
@@ -417,7 +417,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Swap the staged files in. Each replaced file moves to `<root>/.nuschel-old`
+/// Swap the staged files in. Each replaced file moves to `<root>/.nuschl-old`
 /// (a running executable can be renamed but not overwritten on Windows). Any
 /// failure puts every file back.
 pub fn apply(staged: Staged) -> Result<(), Error> {
@@ -497,7 +497,7 @@ pub fn cleanup(root: &Path) {
 }
 
 /// Read and verify everything without the network (used by tests and by
-/// `nuschel-cli` to vet a release before publishing).
+/// `nuschl-cli` to vet a release before publishing).
 pub fn verify_files(root: &Path, files: &[FileEntry]) -> Result<(), Error> {
     let dir = open_root(root)?;
     for file in files {
@@ -538,12 +538,12 @@ mod tests {
         .unwrap()
     }
 
-    /// `NUSCHEL_UPDATE_DIST=dist cargo test -p nuschel-update -- --ignored`
+    /// `NUSCHL_UPDATE_DIST=dist cargo test -p nuschl-update -- --ignored`
     /// checks a release made by release/make-update.py against the built-in key.
     #[test]
     #[ignore = "needs a release directory"]
     fn a_published_manifest_verifies_with_the_release_key() {
-        let dist = PathBuf::from(std::env::var("NUSCHEL_UPDATE_DIST").unwrap());
+        let dist = PathBuf::from(std::env::var("NUSCHL_UPDATE_DIST").unwrap());
         let manifest = fs::read(dist.join(MANIFEST)).unwrap();
         let signature = fs::read_to_string(dist.join(format!("{MANIFEST}.minisig"))).unwrap();
         for platform in ["windows-x86_64", "macos-universal"] {
@@ -561,7 +561,7 @@ mod tests {
     fn only_signed_manifests_are_accepted() {
         let (secret, public) = keypair();
         let (_, other) = keypair();
-        let body = manifest("9.0.0", "nuschel.exe");
+        let body = manifest("9.0.0", "nuschl.exe");
         let signature = sign(&secret, &body);
         assert!(
             verify(
@@ -593,7 +593,7 @@ mod tests {
             "C:/x.exe",
             "a\\b.exe",
             "a//b",
-            ".nuschel-old/x",
+            ".nuschl-old/x",
             "",
         ] {
             let body = manifest("9.0.0", path);
@@ -666,8 +666,8 @@ mod tests {
 
     fn installation() -> (tempfile::TempDir, Vec<FileEntry>) {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("nuschel.exe"), b"old program").unwrap();
-        fs::write(root.path().join("nuschel-media-worker.exe"), b"old worker").unwrap();
+        fs::write(root.path().join("nuschl.exe"), b"old program").unwrap();
+        fs::write(root.path().join("nuschl-media-worker.exe"), b"old worker").unwrap();
         let entry = |path: &str, body: &[u8]| FileEntry {
             path: path.into(),
             url: String::new(),
@@ -677,8 +677,8 @@ mod tests {
         (
             root,
             vec![
-                entry("nuschel.exe", b"new program"),
-                entry("nuschel-media-worker.exe", b"new worker"),
+                entry("nuschl.exe", b"new program"),
+                entry("nuschl-media-worker.exe", b"new worker"),
                 entry("licenses/EUPL-1.2", b"licence"),
             ],
         )
@@ -705,7 +705,7 @@ mod tests {
         // The staging folder is a symlink to somewhere else.
         std::os::unix::fs::symlink(outside.path(), root.path().join(STAGING)).unwrap();
         let mut files = vec![FileEntry {
-            path: "nuschel.exe".into(),
+            path: "nuschl.exe".into(),
             url: "http://127.0.0.1:9/".into(),
             sha256: "00".repeat(32),
             size: 1,
@@ -723,9 +723,9 @@ mod tests {
         // written through.
         let target = outside.path().join("victim");
         fs::write(&target, b"keep").unwrap();
-        fs::remove_file(root.path().join("nuschel.exe")).unwrap();
-        std::os::unix::fs::symlink(&target, root.path().join("nuschel.exe")).unwrap();
-        apply(stage(root.path(), &[("nuschel.exe", b"new program")])).unwrap();
+        fs::remove_file(root.path().join("nuschl.exe")).unwrap();
+        std::os::unix::fs::symlink(&target, root.path().join("nuschl.exe")).unwrap();
+        apply(stage(root.path(), &[("nuschl.exe", b"new program")])).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"keep");
     }
 
@@ -735,8 +735,8 @@ mod tests {
         let staged = stage(
             root.path(),
             &[
-                ("nuschel.exe", b"new program"),
-                ("nuschel-media-worker.exe", b"new worker"),
+                ("nuschl.exe", b"new program"),
+                ("nuschl-media-worker.exe", b"new worker"),
                 ("licenses/EUPL-1.2", b"licence"),
             ],
         );
@@ -752,15 +752,15 @@ mod tests {
     fn a_failed_swap_restores_the_old_files() {
         let (root, _) = installation();
         // The second staged file is missing: the swap fails half way.
-        let mut staged = stage(root.path(), &[("nuschel.exe", b"new program")]);
-        staged.files.push(PathBuf::from("nuschel-media-worker.exe"));
+        let mut staged = stage(root.path(), &[("nuschl.exe", b"new program")]);
+        staged.files.push(PathBuf::from("nuschl-media-worker.exe"));
         assert!(apply(staged).is_err());
         assert_eq!(
-            fs::read(root.path().join("nuschel.exe")).unwrap(),
+            fs::read(root.path().join("nuschl.exe")).unwrap(),
             b"old program"
         );
         assert_eq!(
-            fs::read(root.path().join("nuschel-media-worker.exe")).unwrap(),
+            fs::read(root.path().join("nuschl-media-worker.exe")).unwrap(),
             b"old worker"
         );
     }
@@ -776,7 +776,7 @@ mod tests {
             "version": "9.1.0",
             "released": 1_800_000_000,
             "platforms": { "windows-x86_64": [{
-                "path": "nuschel.exe", "url": format!("{base}nuschel.exe"),
+                "path": "nuschl.exe", "url": format!("{base}nuschl.exe"),
                 "sha256": hex(&Sha256::digest(&body)), "size": body.len()
             }]}
         }))
@@ -785,7 +785,7 @@ mod tests {
         let routes: BTreeMap<String, Vec<u8>> = [
             ("/update.json".to_string(), manifest),
             ("/update.json.minisig".to_string(), signature.into_bytes()),
-            ("/nuschel.exe".to_string(), body),
+            ("/nuschl.exe".to_string(), body),
         ]
         .into();
         std::thread::spawn(move || {
@@ -812,13 +812,13 @@ mod tests {
             .expect("a newer version");
         assert_eq!(update.version.to_string(), "9.1.0");
         assert!(state.exists());
-        fs::write(root.path().join("nuschel.exe"), b"old").unwrap();
+        fs::write(root.path().join("nuschl.exe"), b"old").unwrap();
         let mut reported = 0;
         let staged = download(&update, root.path(), |done, _| reported = done).unwrap();
         assert_eq!(reported, 11);
         apply(staged).unwrap();
         assert_eq!(
-            fs::read(root.path().join("nuschel.exe")).unwrap(),
+            fs::read(root.path().join("nuschl.exe")).unwrap(),
             b"new program"
         );
     }

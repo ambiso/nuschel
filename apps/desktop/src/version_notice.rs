@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! A Nuschel server's minimum-version policy (docs/extension.md, "Minimum
+//! A Nuschl server's minimum-version policy (docs/extension.md, "Minimum
 //! versions"), per server: below the recommended version a notice the user
 //! can dismiss, below the minimum a warning with the date that cannot be
 //! dismissed, and once refused the version to update to. Each offers the
@@ -11,8 +11,8 @@ use crate::{
     update::UpdateState,
 };
 use gpui_kit::{AnyElement, Context, div, prelude::*};
-use nuschel_protocol::nuschel::v1::Policy;
-use nuschel_protocol::nuschel::version::{Standing, Version};
+use nuschl_protocol::nuschl::v1::Policy;
+use nuschl_protocol::nuschl::version::{Standing, Version};
 
 /// What the server's last hello said about this client's version.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -27,8 +27,8 @@ impl VersionNotice {
     /// From the server's hello (its policy); a server without the
     /// extension asks nothing.
     pub fn negotiated(&mut self, policy: Option<&Policy>) {
-        let now_ms = nuschel_session::connection::now_ms();
-        let current = nuschel_session::connection::client_version();
+        let now_ms = nuschl_session::connection::now_ms();
+        let current = nuschl_session::connection::client_version();
         self.standing = Some(policy.map_or(Standing::Current, |policy| {
             Standing::of(policy, Some(&current), now_ms.div_euclid(1000))
         }));
@@ -42,7 +42,7 @@ impl VersionNotice {
 
     /// What to show: tone, icon, text, and whether it can be dismissed.
     fn shown(&self) -> Option<(Token, &'static str, String, bool)> {
-        let current = nuschel_session::connection::client_version();
+        let current = nuschl_session::connection::client_version();
         match self.standing.as_ref()? {
             Standing::Current => None,
             Standing::Recommended { version } => (self.dismissed.as_ref() != Some(version))
@@ -51,7 +51,7 @@ impl VersionNotice {
                         WARNING,
                         "info",
                         format!(
-                            "Update recommended: this server suggests Nuschel {version} or newer (this is {current})."
+                            "Update recommended: this server suggests Nuschl {version} or newer (this is {current})."
                         ),
                         true,
                     )
@@ -60,7 +60,7 @@ impl VersionNotice {
                 WARNING,
                 "alert",
                 format!(
-                    "Update required: from {} this server admits only Nuschel {version} or newer (this is {current}).",
+                    "Update required: from {} this server admits only Nuschl {version} or newer (this is {current}).",
                     local_date(*from)
                 ),
                 false,
@@ -68,7 +68,7 @@ impl VersionNotice {
             Standing::Refused { version } => Some((
                 DANGER,
                 "alert",
-                format!("Update Nuschel to connect: this server requires {version} or newer."),
+                format!("Update Nuschl to connect: this server requires {version} or newer."),
                 false,
             )),
         }
@@ -164,7 +164,7 @@ pub fn banner(this: &Desktop, index: usize, cx: &mut Context<Desktop>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_protocol::nuschel::{v1, version};
+    use nuschl_protocol::nuschl::{v1, version};
 
     fn notice(policy: v1::Policy) -> VersionNotice {
         let mut notice = VersionNotice::default();

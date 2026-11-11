@@ -17,9 +17,9 @@
 //!   (16), access token (the rest, UTF-8).
 
 use crate::state::State;
-use nuschel_protocol::{
+use nuschl_protocol::{
     ControlFrame,
-    nuschel::{
+    nuschl::{
         self, Id, MAX_ACCESS_TOKEN_BYTES, kind,
         v1::{self, error::Code},
     },
@@ -100,7 +100,7 @@ fn now_s() -> u64 {
 impl Links {
     /// Every stored link that has not expired.
     pub async fn load(storage: &crate::storage::StorageHandle) -> Option<Self> {
-        use nuschel_ipc::server::{ServerStorageRequest as Request, ServerStorageResponse};
+        use nuschl_ipc::server::{ServerStorageRequest as Request, ServerStorageResponse};
         let records = match storage
             .request(Request::KtScan {
                 prefix: base64(&[PREFIX]),
@@ -232,7 +232,7 @@ impl State {
             access_token,
         };
         self.storage
-            .send(nuschel_ipc::server::ServerStorageRequest::KtWrite {
+            .send(nuschl_ipc::server::ServerStorageRequest::KtWrite {
                 records: vec![(base64(&key(&token)), base64(&encode(&link)))],
             });
         tracing::info!(actor = %self.log_name(session), channel, expires_at = link.expires_at, private = !link.access_token.is_empty(), "created a share link");
@@ -311,7 +311,7 @@ impl State {
     fn share_delete(&self, token: &Token) {
         // An empty value deletes the key.
         self.storage
-            .send(nuschel_ipc::server::ServerStorageRequest::KtWrite {
+            .send(nuschl_ipc::server::ServerStorageRequest::KtWrite {
                 records: vec![(base64(&key(token)), String::new())],
             });
     }
@@ -335,7 +335,7 @@ impl State {
 /// Whether `host` may be announced as the web host for links.
 pub fn valid_web_host(host: &str) -> bool {
     host.is_empty()
-        || (host.len() <= nuschel::MAX_WEB_HOST_BYTES
+        || (host.len() <= nuschl::MAX_WEB_HOST_BYTES
             && host.split('.').all(|label| {
                 !label.is_empty()
                     && label.len() <= 63

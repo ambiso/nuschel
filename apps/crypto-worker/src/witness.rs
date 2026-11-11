@@ -21,9 +21,9 @@
 //! log holds) fails the head.
 
 use crate::worker::Worker;
-use nuschel_ipc::crypto::WitnessStatus;
-use nuschel_kt::witness::note::CosignerKey;
-use nuschel_kt::{
+use nuschl_ipc::crypto::WitnessStatus;
+use nuschl_kt::witness::note::CosignerKey;
+use nuschl_kt::{
     DEFAULT_WITNESSES, KtError, LogDescriptor, VerifiedHead, WitnessOutcome, WitnessPolicy,
     WitnessedHead, check_witnessed,
 };
@@ -58,7 +58,7 @@ impl Worker {
             match CosignerKey::from_vkey(vkey) {
                 Ok(key) if !disabled.contains(&key) && !intended.contains(&key) => {
                     intended.push(key.clone());
-                    if witnesses.len() < nuschel_kt::witness::policy::MAX_WITNESSES {
+                    if witnesses.len() < nuschl_kt::witness::policy::MAX_WITNESSES {
                         witnesses.push(key);
                     }
                 }
@@ -75,7 +75,7 @@ impl Worker {
             witnesses,
             required,
             max_age_ms: u64::from(settings.max_age_hours.clamp(1, 168)) * 3_600_000,
-            max_future_ms: nuschel_kt::witness::policy::MAX_FUTURE_MS,
+            max_future_ms: nuschl_kt::witness::policy::MAX_FUTURE_MS,
         }
     }
 
@@ -93,7 +93,7 @@ impl Worker {
         let policy = self.witness_policy();
         let active = policy.is_active();
         let now = self.now();
-        let origin = nuschel_kt::witness::origin(key);
+        let origin = nuschl_kt::witness::origin(key);
         let outcome = match (witnessed, &origin) {
             (None, _) => Err(KtError::WitnessMissing(
                 "this server does not offer witnessed key transparency (kt-witness/1)".into(),

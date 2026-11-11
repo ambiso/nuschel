@@ -1,4 +1,4 @@
--- nuscheld's server state. Tracked in _nuscheld_migrations, separate from the
+-- nuschld's server state. Tracked in _nuschld_migrations, separate from the
 -- history schema, so both can share one database.
 CREATE TABLE channels (
     id BIGINT PRIMARY KEY,

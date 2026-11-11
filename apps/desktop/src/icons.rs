@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Server icons from the server's website, where `nuschel_client::favicon`
+//! Server icons from the server's website, where `nuschl_client::favicon`
 //! says to look: only HTTPS, with short timeouts and a size cap. The bytes
 //! are decoded by the sandboxed content worker; here they are only fetched
 //! and checked for an image signature.
-use nuschel_client::favicon::{icon_link, is_image, resolve, sites};
+use nuschl_client::favicon::{icon_link, is_image, resolve, sites};
 use std::time::Duration;
 
 const LIMIT: u64 = 512 * 1024;
@@ -17,7 +17,7 @@ pub fn fetch(host: &str) -> Option<Vec<u8>> {
         .https_only(true)
         .timeout_global(Some(Duration::from_secs(10)))
         .max_redirects(3)
-        .user_agent("Nuschel")
+        .user_agent("Nuschl")
         .build()
         .into();
     let get = |url: &str| {

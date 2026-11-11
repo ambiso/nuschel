@@ -1,12 +1,12 @@
 # Checks for the Home Manager module (nix/home-manager.nix).
 #   files: evaluates Home Manager configurations and inspects what they generate.
-#   vm:    a NixOS machine with Home Manager, where logging in autostarts Nuschel
+#   vm:    a NixOS machine with Home Manager, where logging in autostarts Nuschl
 #          and managed settings show as set by the system and stay so.
 {
   pkgs,
   home-manager,
   module,
-  nuschel,
+  nuschl,
 }:
 let
   inherit (pkgs) lib;
@@ -22,14 +22,14 @@ let
             homeDirectory = "/home/alice";
             stateVersion = "26.05";
           };
-          programs.nuschel.enable = true;
+          programs.nuschl.enable = true;
         }
         extra
       ];
     };
   pin = builtins.hashString "sha256" "fixture certificate";
   full = homeWith {
-    programs.nuschel = {
+    programs.nuschl = {
       autostart = true;
       initialSettings = {
         enter_sends = false;
@@ -78,25 +78,26 @@ let
       enable = true;
       readOnly = true;
     };
-    programs.nuschel.autostart = true;
+    programs.nuschl.autostart = true;
   };
   plain = homeWith { };
+  legacy = homeWith { programs.nuschel.settings.force_tcp = true; };
   # Key-transparency witnesses as typed options (docs/witness.md).
   witnessKey = lib.removeSuffix "\n" (builtins.readFile ../tests/fixtures/witness-test.vkey);
   witnessed = homeWith {
-    programs.nuschel.keyTransparency = {
+    programs.nuschl.keyTransparency = {
       witnesses = [ { key = witnessKey; } ];
       maxAgeHours = 12;
     };
   };
 
-  # Bookmarks and settings crates/session/src/config.rs would refuse (Nuschel
+  # Bookmarks and settings crates/session/src/config.rs would refuse (Nuschl
   # would set the file aside or ignore it) fail evaluation instead.
   refusedServers =
     option:
     let
       server = attrs: {
-        programs.nuschel.${option} = [
+        programs.nuschl.${option} = [
           (
             {
               host = "voice.example.org";
@@ -116,7 +117,7 @@ let
       long-username = server { username = lib.concatStrings (lib.genList (_: "a") 129); };
       short-pin = server { certificateSha256 = "abcd"; };
       long-token = server { tokens = [ (lib.concatStrings (lib.genList (_: "a") 257)) ]; };
-      duplicate.programs.nuschel.${option} = [
+      duplicate.programs.nuschl.${option} = [
         {
           host = "voice.example.org";
           username = "alice";
@@ -132,9 +133,9 @@ let
     refusedServers "initialServers"
     // refusedServers "servers"
     // {
-      unknown-setting.programs.nuschel.settings.enter_send = false;
-      witness-without-key-id.programs.nuschel.keyTransparency.witnesses = [ { key = "witness+AQ=="; } ];
-      witness-max-age.programs.nuschel.keyTransparency.maxAgeHours = 169;
+      unknown-setting.programs.nuschl.settings.enter_send = false;
+      witness-without-key-id.programs.nuschl.keyTransparency.witnesses = [ { key = "witness+AQ=="; } ];
+      witness-max-age.programs.nuschl.keyTransparency.maxAgeHours = 169;
     };
   # A type error throws; a failed assertion is false. Forcing only these
   # is much cheaper than evaluating the whole activation package.
@@ -142,7 +143,7 @@ let
     extra:
     let
       inherit (homeWith extra) config;
-      inherit (config.programs.nuschel) initialServers servers keyTransparency;
+      inherit (config.programs.nuschl) initialServers servers keyTransparency;
       result = builtins.tryEval (
         builtins.deepSeq [ initialServers servers keyTransparency ] (
           lib.all (a: a.assertion) config.assertions
@@ -167,17 +168,19 @@ let
 
   autostartSource = ../apps/desktop/src/autostart.rs;
 in
+assert lib.assertMsg legacy.config.programs.nuschl.settings.force_tcp
+  "legacy programs.nuschel alias lost settings";
 assert lib.assertMsg (
-  full.config.programs.nuschel.package.outPath == nuschel.outPath
-) "programs.nuschel.package does not default to this flake's package";
+  full.config.programs.nuschl.package.outPath == nuschl.outPath
+) "programs.nuschl.package does not default to this flake's package";
 assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toString accepted}";
 assert lib.assertMsg (lib.length settingFields > 15) "could not read ClientSettings' fields";
 assert lib.assertMsg (accepts {
-  programs.nuschel.settings = lib.genAttrs settingFields (_: null);
-}) "programs.nuschel.settings refuses a field of ClientSettings: update settingNames";
+  programs.nuschl.settings = lib.genAttrs settingFields (_: null);
+}) "programs.nuschl.settings refuses a field of ClientSettings: update settingNames";
 {
   files =
-    pkgs.runCommand "nuschel-home-manager-files"
+    pkgs.runCommand "nuschl-home-manager-files"
       {
         nativeBuildInputs = [
           pkgs.desktop-file-utils
@@ -189,7 +192,7 @@ assert lib.assertMsg (accepts {
 
         # The autostart entry is the one the in-app switch writes, with this
         # package's binary in place of the program the app finds.
-        entry=$home/home-files/.config/autostart/org.nuschel.Nuschel.desktop
+        entry=$home/home-files/.config/autostart/org.nuschl.Nuschl.desktop
         desktop-file-validate "$entry"
         template=$(grep -o '"\[Desktop Entry\]\\n[^"]*"' ${autostartSource}) || {
           echo "apps/desktop/src/autostart.rs no longer has the entry's format string" >&2
@@ -198,7 +201,7 @@ assert lib.assertMsg (accepts {
         flag=$(sed -n 's/^pub const FLAG: &str = "\(.*\)";$/\1/p' ${autostartSource})
         test "$flag" = --autostart
         template=''${template:1:-1}
-        template=''${template//\{program\}/${lib.getExe nuschel}}
+        template=''${template//\{program\}/${lib.getExe nuschl}}
         template=''${template//\{FLAG\}/$flag}
         printf '%b' "$template" > expected.desktop
         if ! cmp expected.desktop "$entry"; then
@@ -208,17 +211,17 @@ assert lib.assertMsg (accepts {
         fi
 
         # The package, its desktop entry and icons.
-        test "$(readlink -f "$home/home-path/bin/nuschel")" = "$(readlink -f ${nuschel}/bin/nuschel)"
-        test -e "$home/home-path/share/applications/org.nuschel.Nuschel.desktop"
-        test -e "$home/home-path/share/icons/hicolor/scalable/apps/org.nuschel.Nuschel.svg"
+        test "$(readlink -f "$home/home-path/bin/nuschl")" = "$(readlink -f ${nuschl}/bin/nuschl)"
+        test -e "$home/home-path/share/applications/org.nuschl.Nuschl.desktop"
+        test -e "$home/home-path/share/icons/hicolor/scalable/apps/org.nuschl.Nuschl.svg"
 
         # A read-only autostart folder lists the same entry.
         test -L ${readOnly.activationPackage}/home-files/.config/autostart
-        cmp "$entry" ${readOnly.activationPackage}/home-files/.config/autostart/org.nuschel.Nuschel.desktop
+        cmp "$entry" ${readOnly.activationPackage}/home-files/.config/autostart/org.nuschl.Nuschl.desktop
 
-        # Managed settings and bookmarks: a read-only file in Nuschel's folder,
+        # Managed settings and bookmarks: a read-only file in Nuschl's folder,
         # with the ids the same endpoints get as initial bookmarks.
-        managed=$home/home-files/.config/nuschel/managed.json
+        managed=$home/home-files/.config/nuschl/managed.json
         test -L "$managed"
         jq -e '.settings == {enter_sends: false, audio: {transmit: "push_to_talk"}}' "$managed"
         jq -e '.servers | length == 2 and .[0].id != .[1].id' "$managed"
@@ -228,24 +231,24 @@ assert lib.assertMsg (accepts {
         # Witnesses as typed options land in managed.json as key_transparency.
         jq -e --arg key "${witnessKey}" '.settings.key_transparency == {default_witnesses: true,
           witnesses: [{key: $key, enabled: true}], max_age_hours: 12, block_new_devices: true}' \
-          ${witnessed.activationPackage}/home-files/.config/nuschel/managed.json
+          ${witnessed.activationPackage}/home-files/.config/nuschl/managed.json
 
         # Without autostart or initial files the module installs the package only.
-        test ! -e ${plain.activationPackage}/home-files/.config/nuschel/managed.json
+        test ! -e ${plain.activationPackage}/home-files/.config/nuschl/managed.json
         test ! -e ${plain.activationPackage}/home-files/.config/autostart
-        if grep -q nuschel-initial-files ${plain.activationPackage}/activate; then
+        if grep -q nuschl-initial-files ${plain.activationPackage}/activate; then
           echo "initial files are written although none are set" >&2
           exit 1
         fi
-        test -e ${plain.activationPackage}/home-path/bin/nuschel
+        test -e ${plain.activationPackage}/home-path/bin/nuschl
 
         # The activation step and what it writes.
-        seed=$(grep -o '/nix/store/[a-z0-9]*-nuschel-initial-files' "$home/activate" | head -n 1)
-        grep -qF "run $seed /home/alice/.config/nuschel" "$home/activate"
-        dir=$PWD/home/alice/.config/nuschel
+        seed=$(grep -o '/nix/store/[a-z0-9]*-nuschl-initial-files' "$home/activate" | head -n 1)
+        grep -qF "run $seed /home/alice/.config/nuschl" "$home/activate"
+        dir=$PWD/home/alice/.config/nuschl
         "$seed" "$dir" > first.log
-        grep -qFx "Nuschel: wrote $dir/settings.json" first.log
-        grep -qFx "Nuschel: wrote $dir/servers.json" first.log
+        grep -qFx "Nuschl: wrote $dir/settings.json" first.log
+        grep -qFx "Nuschl: wrote $dir/servers.json" first.log
         test "$(stat -c %a "$dir")" = 700
         test "$(stat -c %a "$dir/settings.json")" = 600
         test "$(stat -c %a "$dir/servers.json")" = 600
@@ -258,18 +261,18 @@ assert lib.assertMsg (accepts {
           tokens: [], certificate_sha256: "${pin}", auto_connect: false}' "$dir/servers.json"
         jq -e --slurpfile managed "$managed" '.[0] == $managed[0].servers[0]' "$dir/servers.json"
 
-        # Once a file exists Nuschel owns it; a deleted one is written again.
+        # Once a file exists Nuschl owns it; a deleted one is written again.
         echo '[]' > "$dir/servers.json"
         rm "$dir/settings.json"
         "$seed" "$dir" > second.log
         test "$(cat "$dir/servers.json")" = "[]"
-        test "$(cat second.log)" = "Nuschel: wrote $dir/settings.json"
+        test "$(cat second.log)" = "Nuschl: wrote $dir/settings.json"
         test -z "$(find "$dir" -name '.*.home-manager')"
         touch "$out"
       '';
 
   vm = pkgs.testers.runNixOSTest {
-    name = "nuschel-home-manager";
+    name = "nuschl-home-manager";
     nodes.machine = {
       imports = [ home-manager.nixosModules.home-manager ];
       users.users.alice = {
@@ -282,7 +285,7 @@ assert lib.assertMsg (accepts {
         users.alice = {
           imports = [ module ];
           home.stateVersion = "26.05";
-          programs.nuschel = {
+          programs.nuschl = {
             enable = true;
             autostart = true;
             # The user's own choice, under a managed one.
@@ -326,37 +329,37 @@ assert lib.assertMsg (accepts {
     };
     testScript = ''
       user = "--user -M alice@"
-      unit = "app-org.nuschel.Nuschel@autostart.service"
-      entry = "/home/alice/.config/autostart/org.nuschel.Nuschel.desktop"
-      config = "/home/alice/.config/nuschel"
-      data = "/home/alice/.local/share/nuschel"
+      unit = "app-org.nuschl.Nuschl@autostart.service"
+      entry = "/home/alice/.config/autostart/org.nuschl.Nuschl.desktop"
+      config = "/home/alice/.config/nuschl"
+      data = "/home/alice/.local/share/nuschl"
 
       machine.wait_for_unit("home-manager-alice.service")
       machine.wait_for_unit("murmur.service")
 
       with subtest("the package is on the user's PATH with its desktop entry and icons"):
-          machine.succeed("su - alice -c 'nuschel --version' | grep -Fx 'nuschel 0.1.0'")
-          machine.succeed("test \"$(su - alice -c 'readlink -f \"$(command -v nuschel)\"')\" = ${nuschel}/bin/nuschel")
-          machine.succeed("test -e /etc/profiles/per-user/alice/share/applications/org.nuschel.Nuschel.desktop")
-          machine.succeed("test -e /etc/profiles/per-user/alice/share/icons/hicolor/scalable/apps/org.nuschel.Nuschel.svg")
+          machine.succeed("su - alice -c 'nuschl --version' | grep -Fx 'nuschl 0.1.0'")
+          machine.succeed("test \"$(su - alice -c 'readlink -f \"$(command -v nuschl)\"')\" = ${nuschl}/bin/nuschl")
+          machine.succeed("test -e /etc/profiles/per-user/alice/share/applications/org.nuschl.Nuschl.desktop")
+          machine.succeed("test -e /etc/profiles/per-user/alice/share/icons/hicolor/scalable/apps/org.nuschl.Nuschl.svg")
 
       with subtest("the initial files are private to alice"):
           machine.succeed(f"test \"$(stat -c '%a %U' {config})\" = '700 alice'")
           machine.succeed(f"test \"$(stat -c '%a %U' {config}/servers.json {config}/settings.json)\" = \"$(printf '600 alice\\n600 alice')\"")
           machine.succeed(f"grep -F '\"host\": \"127.0.0.1\"' {config}/servers.json")
 
-      with subtest("logging in starts Nuschel minimised from the autostart entry"):
+      with subtest("logging in starts Nuschl minimised from the autostart entry"):
           machine.succeed("loginctl enable-linger alice")
           machine.wait_for_unit("user@1000.service")
           machine.wait_for_unit("default.target", "alice")
           # systemd's XDG autostart generator turned the entry into a unit.
-          machine.succeed(f"systemctl {user} show -p ExecStart {unit} | grep -F 'argv[]=${nuschel}/bin/nuschel --autostart ;'")
+          machine.succeed(f"systemctl {user} show -p ExecStart {unit} | grep -F 'argv[]=${nuschl}/bin/nuschl --autostart ;'")
           machine.succeed(f"systemctl {user} start xvfb.service")
           machine.wait_until_succeeds("test -S /tmp/.X11-unix/X99")
           machine.succeed(f"systemctl {user} set-environment DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=2")
           machine.succeed(f"systemctl {user} start test-session.target")
           machine.wait_until_succeeds(f"systemctl {user} is-active {unit}")
-          machine.wait_until_succeeds("su - alice -c 'DISPLAY=:99 xdotool search --name ^Nuschel$'")
+          machine.wait_until_succeeds("su - alice -c 'DISPLAY=:99 xdotool search --name ^Nuschl$'")
           # It read the seeded bookmark and connected on start.
           machine.wait_until_succeeds("journalctl -u murmur.service --grep 'New connection'")
           machine.succeed(f"systemctl {user} is-active {unit}")
@@ -371,14 +374,14 @@ assert lib.assertMsg (accepts {
       with subtest("managed settings and bookmarks show as set by the system and stay so"):
           machine.succeed(f"test -L {config}/managed.json")
           # Over AT-SPI, as a screen reader and a pointer meet them (see the script).
-          machine.succeed(f"su - alice -c '${pkgs.dbus}/bin/dbus-run-session -- xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/managed_config.py ${nuschel}/bin/nuschel --at-spi ${pkgs.at-spi2-core} --config {config}'")
+          machine.succeed(f"su - alice -c '${pkgs.dbus}/bin/dbus-run-session -- xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/managed_config.py ${nuschl}/bin/nuschl --at-spi ${pkgs.at-spi2-core} --config {config}'")
           machine.succeed(f"grep -F '\"enter_sends\": true' {config}/settings.json")
           machine.succeed(f"test -L {config}/managed.json")
 
-      with subtest("switching again keeps Nuschel's files and replaces an entry the app wrote"):
+      with subtest("switching again keeps Nuschl's files and replaces an entry the app wrote"):
           # The in-app switch turned off and on again: the app's own file in
           # place of the link (it names the program on PATH).
-          machine.succeed(f"su - alice -c 'sed \"s|^Exec=.*|Exec=nuschel --autostart|\" {entry} > {entry}.new && mv {entry}.new {entry}'")
+          machine.succeed(f"su - alice -c 'sed \"s|^Exec=.*|Exec=nuschl --autostart|\" {entry} > {entry}.new && mv {entry}.new {entry}'")
           machine.succeed(f"test ! -L {entry}")
           machine.succeed(f"su - alice -c 'echo [] > {config}/servers.json'")
           machine.succeed("systemctl restart home-manager-alice.service")

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! End-to-end-encrypted direct conversations (`mls/1`, docs/e2ee.md §6) between
-//! `nuschel-cli` processes and `nuscheld` on loopback. Each CLI runs the real
+//! `nuschl-cli` processes and `nuschld` on loopback. Each CLI runs the real
 //! session and its own crypto worker (sandboxed when bubblewrap exists), found
-//! beside the CLI binary: build it first (`cargo build -p nuschel-crypto-worker`).
+//! beside the CLI binary: build it first (`cargo build -p nuschl-crypto-worker`).
 //!
 //! Users register on a first connection without an identity directory and come
 //! back with one, as an account exists only after registration.
-use nuscheld::{
+use nuschld::{
     config::Config,
     server::{Running, start},
     storage::{Backend, MemoryStore},
@@ -28,13 +28,13 @@ use tokio::{
 const WAIT: Duration = Duration::from_secs(60);
 
 fn cli() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_nuschel-cli"))
+    PathBuf::from(env!("CARGO_BIN_EXE_nuschl-cli"))
 }
 
 fn worker_present() -> bool {
     cli()
         .with_file_name(format!(
-            "nuschel-crypto-worker{}",
+            "nuschl-crypto-worker{}",
             std::env::consts::EXE_SUFFIX
         ))
         .exists()
@@ -90,7 +90,7 @@ impl Cli {
         if let Some(identity) = identity {
             command.arg("--identity-dir").arg(identity);
         }
-        let mut child = command.spawn().expect("nuschel-cli starts");
+        let mut child = command.spawn().expect("nuschl-cli starts");
         let input = child.stdin.take().unwrap();
         let output = child.stdout.take().unwrap();
         let (sender, events) = mpsc::unbounded_channel();
@@ -226,9 +226,9 @@ impl Cli {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn two_devices_exchange_direct_messages_through_nuscheld() {
+async fn two_devices_exchange_direct_messages_through_nuschld() {
     if !worker_present() {
-        panic!("build nuschel-crypto-worker first: cargo build -p nuschel-crypto-worker");
+        panic!("build nuschl-crypto-worker first: cargo build -p nuschl-crypto-worker");
     }
     let state = tempfile::tempdir().unwrap();
     let running = server(state.path(), true).await;
@@ -284,7 +284,7 @@ async fn two_devices_exchange_direct_messages_through_nuscheld() {
         .await;
     alice
         .wait("the plaintext refusal", |event| {
-            (event["kind"] == "nuschel_error" && event["request_id"] == 7).then_some(())
+            (event["kind"] == "nuschl_error" && event["request_id"] == 7).then_some(())
         })
         .await;
 
@@ -299,7 +299,7 @@ async fn two_devices_exchange_direct_messages_through_nuscheld() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_compatible_server_has_no_end_to_end_encryption() {
     if !worker_present() {
-        panic!("build nuschel-crypto-worker first: cargo build -p nuschel-crypto-worker");
+        panic!("build nuschl-crypto-worker first: cargo build -p nuschl-crypto-worker");
     }
     let state = tempfile::tempdir().unwrap();
     let running = server(state.path(), false).await;
@@ -355,7 +355,7 @@ async fn a_compatible_server_has_no_end_to_end_encryption() {
         .await;
     alice
         .wait("the plaintext acknowledgement", |event| {
-            if event["kind"] == "nuschel_error" && event["request_id"] == 12 {
+            if event["kind"] == "nuschl_error" && event["request_id"] == 12 {
                 panic!("plaintext refused: {event}");
             }
             (event["kind"] == "chat_ack" && event["request_id"] == 12).then_some(())

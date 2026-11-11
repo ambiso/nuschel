@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Bounded asynchronous adapters for persistent worker processes.
 use crate::Error;
-use nuschel_core::{ChatMessage, HistoryPage, SearchCursor, SearchPage, ServerRecord};
-use nuschel_ipc::{
+use nuschl_core::{ChatMessage, HistoryPage, SearchCursor, SearchPage, ServerRecord};
+use nuschl_ipc::{
     Envelope, LiveMediaEvent, LiveMediaRequest, MAX_FRAME_BYTES, PROTOCOL_VERSION, StorageRequest,
     StorageResponse, TransferEvent, TransferRequest, write_frame,
 };
@@ -31,12 +31,12 @@ pub struct Storage {
     input: ChildStdin,
     output: ChildStdout,
     request_id: u64,
-    _containment: nuschel_ipc::host::Containment,
+    _containment: nuschl_ipc::host::Containment,
 }
 impl Storage {
     pub fn start(directory: &Path) -> Result<Self, Error> {
-        let executable = sibling("nuschel-storage-worker")?;
-        let mut command = nuschel_ipc::host::storage_sandbox_command(&executable, directory)
+        let executable = sibling("nuschl-storage-worker")?;
+        let mut command = nuschl_ipc::host::storage_sandbox_command(&executable, directory)
             .map_err(|e| Error::Worker(e.to_string()))?;
         let mut child = command
             .stdin(Stdio::piped())
@@ -45,7 +45,7 @@ impl Storage {
             .kill_on_drop(true)
             .spawn()?;
         let containment =
-            nuschel_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
+            nuschl_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
         let input = child
             .stdin
             .take()
@@ -93,7 +93,7 @@ impl Storage {
             _ => Err(Error::Worker("unexpected storage response".into())),
         }
     }
-    /// Store a Nuschel server's messages by seq, once each (a page, or a
+    /// Store a Nuschl server's messages by seq, once each (a page, or a
     /// live message): row IDs in order, 0 for one beyond the limits. Sent in
     /// batches that stay well inside the IPC frame limit.
     pub async fn store_server(&mut self, records: Vec<ServerRecord>) -> Result<Vec<i64>, Error> {
@@ -258,8 +258,8 @@ pub struct Media {
 }
 impl Media {
     pub fn start() -> Result<Self, Error> {
-        let executable = sibling("nuschel-media-worker")?;
-        let mut command = nuschel_ipc::host::media_sandbox_command(&executable)
+        let executable = sibling("nuschl-media-worker")?;
+        let mut command = nuschl_ipc::host::media_sandbox_command(&executable)
             .map_err(|e| Error::Worker(e.to_string()))?;
         let mut child = command
             .stdin(Stdio::piped())
@@ -268,7 +268,7 @@ impl Media {
             .kill_on_drop(true)
             .spawn()?;
         let containment =
-            nuschel_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
+            nuschl_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
         let mut input = child
             .stdin
             .take()
@@ -337,8 +337,8 @@ impl Transfer {
     }
 
     pub fn start(file: Option<&Path>) -> Result<Self, Error> {
-        let executable = sibling("nuschel-transfer-worker")?;
-        let mut command = nuschel_ipc::host::transfer_sandbox_command(&executable, file)
+        let executable = sibling("nuschl-transfer-worker")?;
+        let mut command = nuschl_ipc::host::transfer_sandbox_command(&executable, file)
             .map_err(|e| Error::Worker(e.to_string()))?;
         let mut child = command
             .stdin(Stdio::piped())
@@ -347,7 +347,7 @@ impl Transfer {
             .kill_on_drop(true)
             .spawn()?;
         let containment =
-            nuschel_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
+            nuschl_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
         let (Some(mut input), Some(mut output)) = (child.stdin.take(), child.stdout.take()) else {
             return Err(Error::Worker("transfer worker pipes missing".into()));
         };

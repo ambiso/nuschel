@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Witnessing in the worker (docs/e2ee.md §5.9) against a malicious server: the
-//! directory in process stands in for the server, and nuschel-kt's auditor checks
-//! with an ML-DSA-44 cosigner stand in for `nuschel-witness`.
+//! directory in process stands in for the server, and nuschl-kt's auditor checks
+//! with an ML-DSA-44 cosigner stand in for `nuschl-witness`.
 mod common;
 
 use common::*;
-use nuschel_ipc::crypto::{
+use nuschl_ipc::crypto::{
     ContactState, ContactView, CryptoRequest, CryptoResponse, CryptoServer, HeadOutcome,
     KeyTransparencySettings, MonitorOutcome, WitnessSetting, WitnessStatus,
 };
-use nuschel_kt::witness::auditor::{LogState, add_epochs};
-use nuschel_kt::witness::note::{Cosigner, Note};
-use nuschel_kt::witness::{Checkpoint, WitnessedHead};
-use nuschel_kt::{AccountId, Directory, Label, NameBinding, SignedHead};
+use nuschl_kt::witness::auditor::{LogState, add_epochs};
+use nuschl_kt::witness::note::{Cosigner, Note};
+use nuschl_kt::witness::{Checkpoint, WitnessedHead};
+use nuschl_kt::{AccountId, Directory, Label, NameBinding, SignedHead};
 
-const ORIGIN: &str = "kt.example.org:64738/nuschel-kt/v1";
+const ORIGIN: &str = "kt.example.org:64738/nuschl-kt/v1";
 const HOUR: u64 = 3600 * 1000;
 
 struct Auditor {
@@ -25,7 +25,7 @@ struct Auditor {
 impl Auditor {
     fn new() -> Self {
         Self {
-            cosigner: Cosigner::from_seed("witness.example.org/nuschel-kt", &[0x77; 32]).unwrap(),
+            cosigner: Cosigner::from_seed("witness.example.org/nuschl-kt", &[0x77; 32]).unwrap(),
             state: None,
         }
     }
@@ -399,7 +399,7 @@ async fn stale_cosignatures_and_re_signed_old_heads_are_not_witnessed() {
     let now = T0 + 27 * HOUR;
     let at_two = auditor.cosign(&dir, now).await;
     let resigned = SignedHead::sign(
-        &nuschel_kt::Ed25519HeadSigner::from_seed(&[0x11; 32]),
+        &nuschl_kt::Ed25519HeadSigner::from_seed(&[0x11; 32]),
         frozen.log_id,
         frozen.epoch,
         frozen.root,

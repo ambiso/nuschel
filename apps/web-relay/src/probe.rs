@@ -5,7 +5,7 @@
 //! runs here, so the relay only sees ciphertext.
 
 use futures_util::{SinkExt, StreamExt};
-use nuschel_protocol::{
+use nuschl_protocol::{
     control as proto, decode_control, encode_control, kind,
     tunnel::{self, Frame},
 };
@@ -241,9 +241,9 @@ async fn run_inner(probe: Probe) -> Result<Outcome, String> {
 
     let version = proto::Version {
         version_v1: Some(0x0001_0500),
-        version_v2: Some(nuschel_protocol::voice::PROTOBUF_VERSION),
+        version_v2: Some(nuschl_protocol::voice::PROTOBUF_VERSION),
         release: Some(format!(
-            "Nuschel web relay probe {}",
+            "Nuschl web relay probe {}",
             env!("CARGO_PKG_VERSION")
         )),
         os: Some("probe".into()),

@@ -6,7 +6,7 @@
 //! [`Input`](crate::input::Input). Failures that can be told at once (not
 //! connected, a queue full) are returned.
 use crate::{HistoryTicket, model::TextTarget, timeline::Page};
-use nuschel_core::{SearchCursor, audio::Sound, bookmark::ServerBookmark};
+use nuschl_core::{SearchCursor, audio::Sound, bookmark::ServerBookmark};
 
 /// A request to one server's connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,7 +51,7 @@ pub enum Request {
     QueryUserNames(Vec<u32>),
     /// Register our certificate under our current name.
     RegisterSelf,
-    /// A channel read up to `seq` (Nuschel servers; synced to the account's
+    /// A channel read up to `seq` (Nuschl servers; synced to the account's
     /// other devices).
     MarkRead {
         channel: u32,
@@ -87,7 +87,7 @@ pub enum Request {
     },
 }
 
-/// Where a conversation of a Nuschel server is kept in local history: the
+/// Where a conversation of a Nuschl server is kept in local history: the
 /// history identity of the server and the conversation's storage key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CacheKey {
@@ -143,7 +143,7 @@ pub trait Platform {
         ticket: HistoryTicket,
         page: Page,
     ) -> Result<(), String>;
-    /// A page of a Nuschel server's history (ids are seqs), kept in local
+    /// A page of a Nuschl server's history (ids are seqs), kept in local
     /// history under `cache`.
     fn server_history(
         &self,

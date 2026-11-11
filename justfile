@@ -11,7 +11,7 @@ check:
 # The SDK's core builds for browsers (docs/clients.md, "The SDK"): no native
 # session, runtime or clock in it.
 wasm:
-    cargo clippy -p nuschel-core -p nuschel-client --target wasm32-unknown-unknown --no-default-features -- -D warnings
+    cargo clippy -p nuschl-core -p nuschl-client --target wasm32-unknown-unknown --no-default-features -- -D warnings
 
 # The SDK for browsers (crates/client-wasm, docs/web.md), for the Svelte client
 # in web/app (src/sdk). ring's C needs an unwrapped clang for wasm32, and the
@@ -19,11 +19,11 @@ wasm:
 wasm-client profile="release":
     nix shell --inputs-from . nixpkgs#llvmPackages.clang-unwrapped nixpkgs#llvmPackages.bintools-unwrapped nixpkgs#wasm-bindgen-cli_0_2_130 --command sh -euc '\
         export CC_wasm32_unknown_unknown="$(command -v clang)" AR_wasm32_unknown_unknown="$(command -v llvm-ar)"; \
-        cargo clippy -p nuschel-client-wasm --target wasm32-unknown-unknown -- -D warnings; \
-        cargo build -p nuschel-client-wasm --target wasm32-unknown-unknown --profile {{profile}}; \
+        cargo clippy -p nuschl-client-wasm --target wasm32-unknown-unknown -- -D warnings; \
+        cargo build -p nuschl-client-wasm --target wasm32-unknown-unknown --profile {{profile}}; \
         directory={{ if profile == "dev" { "debug" } else { profile } }}; \
         wasm-bindgen --target web --out-dir web/app/src/sdk \
-            "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$directory/nuschel_client_wasm.wasm"'
+            "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$directory/nuschl_client_wasm.wasm"'
 
 # The Svelte client (web/app) with the SDK, into web/app/dist.
 web: wasm-client
@@ -34,7 +34,7 @@ workers:
     python3 tests/workers.py
 
 rtc:
-    cargo build -p nuschel-rtc-probe -p nuschel-media-worker
+    cargo build -p nuschl-rtc-probe -p nuschl-media-worker
     python3 tests/rtc_probe.py
 
 vm:
@@ -45,15 +45,15 @@ build:
 
 desktop:
     cargo build --workspace
-    cargo run -p nuschel
+    cargo run -p nuschl
 
 server:
-    cargo run -p nuscheld -- --help
+    cargo run -p nuschld -- --help
 
 # The storage worker on a throwaway PostgreSQL from nixpkgs (a unix socket in a
 # temporary directory; nothing listens on the network), and on SQLite.
 test-postgres:
-    nix shell --inputs-from . nixpkgs#postgresql -c cargo test -p nuschel-storage-worker --test postgres -- --nocapture
+    nix shell --inputs-from . nixpkgs#postgresql -c cargo test -p nuschl-storage-worker --test postgres -- --nocapture
 
 licenses:
     cargo deny check licenses bans sources
@@ -68,8 +68,8 @@ audit:
 # The Windows sandbox adapter's unit tests (its launch steps against a mock of
 # Win32) under Miri, for Linux and for Windows; docs/windows-sandbox.md.
 miri:
-    nix develop .#miri --command cargo miri test -p nuschel-sandbox-windows --lib
-    nix develop .#miri --command cargo miri test -p nuschel-sandbox-windows --lib --target x86_64-pc-windows-gnu
+    nix develop .#miri --command cargo miri test -p nuschl-sandbox-windows --lib
+    nix develop .#miri --command cargo miri test -p nuschl-sandbox-windows --lib --target x86_64-pc-windows-gnu
 
 fuzz_sanitizer := env_var_or_default("FUZZ_SANITIZER", "none")
 
@@ -92,13 +92,13 @@ fuzz-build:
     nix develop .#fuzz --command cargo fuzz build --fuzz-dir fuzz --debug-assertions \
         --sanitizer {{fuzz_sanitizer}}
 
-# A loopback nuscheld, scripted people and the desktop in a private headless GNOME
+# A loopback nuschld, scripted people and the desktop in a private headless GNOME
 # Shell on this machine's GPU: nothing of yours is read or shown. Look at the result.
-# Regenerate the README's screenshot, docs/images/nuschel.png (tests/readme_screenshot.py).
+# Regenerate the README's screenshot, docs/images/nuschl.png (tests/readme_screenshot.py).
 readme-screenshot:
     cargo build --workspace
     nix shell --inputs-from . nixpkgs#gnome-shell nixpkgs#glib.bin nixpkgs#dbus nixpkgs#imagemagick nixpkgs#oxipng \
-        --command python3 tests/readme_screenshot.py "${CARGO_TARGET_DIR:-target}/debug" --output docs/images/nuschel.png
+        --command python3 tests/readme_screenshot.py "${CARGO_TARGET_DIR:-target}/debug" --output docs/images/nuschl.png
 
 # Regenerate the per-crate Nix build after changing dependencies (Cargo.lock).
 crate2nix:

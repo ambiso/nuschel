@@ -3,8 +3,8 @@
 Built 2026-11-11 as the user decided (option B of
 [the key-transparency review](reviews/2026-11-11-key-transparency.md), §5 and
 "Answers"): a small fixed set of witnesses that every client checks, led by one
-project-run auditor, `nuschel-witness`. **It is off until the user deploys the
-auditor**: `nuschel_kt::DEFAULT_WITNESSES` is empty, so clients require nothing and
+project-run auditor, `nuschl-witness`. **It is off until the user deploys the
+auditor**: `nuschl_kt::DEFAULT_WITNESSES` is empty, so clients require nothing and
 behave as before, and servers submit nowhere. Turning it on is one entry in that
 constant (see "Switching it on").
 
@@ -19,7 +19,7 @@ view needs the auditor's collusion, and a frozen view lasts at most a day.
 
 ## Design
 
-- **Each server collects its own cosignatures.** `nuscheld` keeps an *epoch log*, an
+- **Each server collects its own cosignatures.** `nuschld` keeps an *epoch log*, an
   RFC 6962 Merkle tree whose leaf `i` is its akd epoch `i`, signs C2SP checkpoints of
   it, submits the new epochs to the witnesses, and attaches the newest cosigned
   checkpoint with the head's inclusion proof to the heads it serves. Clients never
@@ -34,9 +34,9 @@ view needs the auditor's collusion, and a frozen view lasts at most a day.
   which must be akd's empty directory, so nothing in a log escapes its checks (no
   trust on first use of log state). Clients keep auditing akd themselves between the
   heads they rely on (review §5.6).
-- **One log per origin.** The origin is `<host>:<port>/nuschel-kt/v1`, the server as
+- **One log per origin.** The origin is `<host>:<port>/nuschl-kt/v1`, the server as
   clients reach it (the session's sticky key). The auditor enrols an origin once: it
-  connects to `host:port` as a Nuschel client and requires the server's hello to
+  connects to `host:port` as a Nuschl client and requires the server's hello to
   announce the submitted log descriptor (`kt_log`), as ACME checks a name. Afterwards
   it refuses another descriptor for that origin (logged as possible evidence). A
   client accepts a checkpoint only for the origin it connects to, so a server cannot
@@ -45,15 +45,15 @@ view needs the auditor's collusion, and a frozen view lasts at most a day.
   two timestamped checkpoint cosignatures: Ed25519 (`cosignature/v1`, signature type
   0x04) and ML-DSA-44 (type 0x06), which signs the binary `CosignedSubtree`
   structure (`"subtree/v1\n\0"`, cosigner name, timestamp, origin, start 0, end =
-  tree size, root) with FIPS 204 and an empty context. Nuschel uses 0x06 only, with
+  tree size, root) with FIPS 204 and an empty context. Nuschl uses 0x06 only, with
   key ids `SHA-256(name ‖ "\n" ‖ 0x06 ‖ public key)[:4]` and C2SP verifier keys
   (`<name>+<key id>+<base64(0x06 ‖ key)>`), read from the C2SP editor's copies of
   2026-11. Checkpoints, signed notes and the log's own Ed25519 signature (type 0x01)
   are C2SP's, so the formats stay interoperable; the submission API (`add-epochs`)
-  is Nuschel's, because a C2SP witness checks Merkle consistency, not akd. A
+  is Nuschl's, because a C2SP witness checks Merkle consistency, not akd. A
   cosignature line is 2,432 bytes (4-byte key id, 8-byte timestamp, 2,420-byte
   signature) against 76 for Ed25519. ML-DSA-44 comes from libcrux, which
-  nuschel-identity already uses for ML-DSA-65.
+  nuschl-identity already uses for ML-DSA-65.
 - **Freshness comes from the witnesses' clocks** (review findings G3 and the clamp in
   §4.10). A head's own `issued_at` is signed by the server, which re-signs its current
   epoch hourly; a server could re-sign an old epoch with a fresh time to freeze a
@@ -92,12 +92,12 @@ has not confirmed; both are settings.
 ## Configuration
 
 **Clients** (`key_transparency` in settings.json or managed.json, or Home Manager's
-`programs.nuschel.keyTransparency`):
+`programs.nuschl.keyTransparency`):
 
 ```json
 "key_transparency": {
   "default_witnesses": true,
-  "witnesses": [ { "key": "witness.example.org/nuschel-kt+5d32ee69+BuajLAZT…", "enabled": true } ],
+  "witnesses": [ { "key": "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…", "enabled": true } ],
   "required": null,
   "max_age_hours": 24,
   "block_new_devices": true
@@ -114,16 +114,16 @@ It never lowers an explicit `required` value to the number of valid keys. Oversi
 local configurations are bounded before IPC and represented as invalid requirements,
 rather than silently dropping part of a security policy. `required: 0` explicitly
 turns the requirement off.
-`nuschel-cli --kt-witness <vkey> --kt-witness-max-age-hours N` sets the same.
+`nuschl-cli --kt-witness <vkey> --kt-witness-max-age-hours N` sets the same.
 
 ```nix
-programs.nuschel.keyTransparency = {
-  witnesses = [ { key = "witness.example.org/nuschel-kt+5d32ee69+BuajLAZT…"; } ];
+programs.nuschl.keyTransparency = {
+  witnesses = [ { key = "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…"; } ];
   maxAgeHours = 24;
 };
 ```
 
-**Servers** (`[kt]` in nuscheld.toml; NixOS `services.nuschel.kt.*`):
+**Servers** (`[kt]` in nuschld.toml; NixOS `services.nuschl.kt.*`):
 
 ```toml
 [kt]
@@ -133,7 +133,7 @@ witness_interval = 60                 # seconds between submissions of new epoch
 witness_refresh_interval = 3600       # resubmit an unchanged checkpoint
 
 [[kt.witnesses]]                      # more witnesses
-key = "witness.example.org/nuschel-kt+5d32ee69+BuajLAZT…"
+key = "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…"
 url = "https://witness.example.org"
 ```
 
@@ -142,10 +142,10 @@ server as unavailable. A server reachable under several names lists each.
 
 ## Running the auditor
 
-On NixOS (`inputs.nuschel.nixosModules.witness`):
+On NixOS (`inputs.nuschl.nixosModules.witness`):
 
 ```nix
-services.nuschel-witness = {
+services.nuschl-witness = {
   enable = true;
   virtualHost = "witness.example.org";  # nginx in front, servers submit to https://…
   enableACME = true;
@@ -154,28 +154,28 @@ services.nuschel-witness = {
 security.acme = { acceptTerms = true; defaults.email = "admin@example.org"; };
 ```
 
-Defaults: cosigner name `<virtualHost>/nuschel-kt`, the key generated once in
-`/var/lib/nuschel-witness/witness.key` (or `keyFile`, loaded with `LoadCredential`;
+Defaults: cosigner name `<virtualHost>/nuschl-kt`, the key generated once in
+`/var/lib/nuschl-witness/witness.key` (or `keyFile`, loaded with `LoadCredential`;
 never in the Nix store), plain HTTP on 127.0.0.1:8473 behind nginx, new logs
 accepted, at most 10,000 logs, 60 submissions per log and minute, 10 enrolments per
 minute, 16 MiB requests, private addresses not enrolled (`enrolPrivateAddresses`),
-`DynamicUser` and the same systemd sandbox as nuscheld. **Back up the key**: clients
+`DynamicUser` and the same systemd sandbox as nuschld. **Back up the key**: clients
 trust it, and a new key is a new witness.
 
-The verifier key is in the journal (`journalctl -u nuschel-witness | grep vkey`), at
-`https://<virtualHost>/nuschel-kt/v1/vkey`, and printed by
-`nuschel-witness vkey --name <name> --key-file <file>`.
+The verifier key is in the journal (`journalctl -u nuschl-witness | grep vkey`), at
+`https://<virtualHost>/nuschl-kt/v1/vkey`, and printed by
+`nuschl-witness vkey --name <name> --key-file <file>`.
 
-Elsewhere: `nuschel-witness serve --name witness.example.org/nuschel-kt
---state-directory /var/lib/nuschel-witness` behind any TLS reverse proxy.
+Elsewhere: `nuschl-witness serve --name witness.example.org/nuschl-kt
+--state-directory /var/lib/nuschl-witness` behind any TLS reverse proxy.
 
 HTTP API (plain HTTP/1.1, `Connection: close`):
 
 | Request | Answer |
 | --- | --- |
-| `POST /nuschel-kt/v1/add-epochs`, body `AddEpochs` | 200 with the cosignature line; 409 with the auditor's size (`text/x.tlog.size`); 400 malformed, 403 not the log's signature or another log for the origin, 422 the epochs or checkpoint do not check out, 429 rate limited, 502/504 enrolment could not reach the server, 413 too large |
-| `GET /nuschel-kt/v1/checkpoints/<hex SHA-256 of the origin>` | The newest checkpoint it cosigned, for monitors |
-| `GET /nuschel-kt/v1/vkey`, `GET /` | Its verifier key |
+| `POST /nuschl-kt/v1/add-epochs`, body `AddEpochs` | 200 with the cosignature line; 409 with the auditor's size (`text/x.tlog.size`); 400 malformed, 403 not the log's signature or another log for the origin, 422 the epochs or checkpoint do not check out, 429 rate limited, 502/504 enrolment could not reach the server, 413 too large |
+| `GET /nuschl-kt/v1/checkpoints/<hex SHA-256 of the origin>` | The newest checkpoint it cosigned, for monitors |
+| `GET /nuschl-kt/v1/vkey`, `GET /` | Its verifier key |
 
 The state is one file per origin (`logs/<hash>.state`: descriptor, size, frontier,
 newest akd root, last timestamp, a few hundred bytes), written atomically before a
@@ -190,7 +190,7 @@ When the auditor runs:
 
    ```rust
    pub const DEFAULT_WITNESSES: &[DefaultWitness] = &[DefaultWitness {
-       vkey: "nuschl.eu/nuschel-kt+…",
+       vkey: "nuschl.eu/nuschl-kt+…",
        url: "https://witness.nuschl.eu",
    }];
    ```
@@ -202,7 +202,7 @@ When the auditor runs:
 
 ## Formats
 
-All in nuschel-kt's strict codec (docs/e2ee.md §5.6) or C2SP's text formats; the
+All in nuschl-kt's strict codec (docs/e2ee.md §5.6) or C2SP's text formats; the
 `kt_witness` fuzz target covers every parser.
 
 | Type | Message | |
@@ -239,8 +239,8 @@ epoch 0). The auditor verifies about a millisecond per changed account.
 - `apps/witness`: enrolment against a fake server's hello (and one announcing
   another log), restarts, private addresses, malformed and oversized bodies.
 - `apps/crypto-worker/tests/witness.rs`: the client rules against a malicious
-  server, names and numbers, owners' monitoring; `tests/kt.rs`: nuscheld,
-  nuschel-witness and real sessions on loopback.
+  server, names and numbers, owners' monitoring; `tests/kt.rs`: nuschld,
+  nuschl-witness and real sessions on loopback.
 - `vm-server`: a witness node behind nginx, the module's server options,
   `tests/kt_witness.py`.
 

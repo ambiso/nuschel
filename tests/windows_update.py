@@ -7,7 +7,7 @@
 Installs RESULT_WINDOWS/bin/*.exe into a per-user folder in the guest, with a
 throwaway minisign key as `update-key.pub` beside it (the release key is not
 used). Publishes a signed "9.9.9" through the harness (the same programs plus a
-marker file), starts Nuschel with NUSCHEL_UPDATE_URL pointing at it, clicks
+marker file), starts Nuschl with NUSCHL_UPDATE_URL pointing at it, clicks
 "Update and restart" and "Restart now", and checks that the files were swapped,
 the marker arrived, a new process runs and the old files are cleaned up.
 """
@@ -23,7 +23,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 VM = [sys.executable, str(HERE / "windows_vm.py")]
 REPO = HERE.parent
-# The update bar's button in a 1280x800 guest with Nuschel maximised.
+# The update bar's button in a 1280x800 guest with Nuschl maximised.
 UPDATE_BUTTON = (1200, 52)
 
 
@@ -42,11 +42,11 @@ def main():
     parser.add_argument("--rsign", default=shutil.which("rsign") or "rsign")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    files = Path(os.environ.get("NUSCHEL_WINDOWS_VM_DIR", Path.home() / "vms" / "nuschel-windows")) / "files"
-    with tempfile.TemporaryDirectory(prefix="nuschel-update-") as temporary:
+    files = Path(os.environ.get("NUSCHL_WINDOWS_VM_DIR", Path.home() / "vms" / "nuschl-windows")) / "files"
+    with tempfile.TemporaryDirectory(prefix="nuschl-update-") as temporary:
         root = Path(temporary)
         subprocess.run([args.rsign, "generate", "-W", "-p", str(root / "test.pub"), "-s", str(root / "test.secret"),
-                        "-c", "Nuschel update test key"], check=True, capture_output=True)
+                        "-c", "Nuschl update test key"], check=True, capture_output=True)
         staging = root / "release"
         (staging / "licenses").mkdir(parents=True)
         for program in sorted((args.build / "bin").glob("*.exe")):
@@ -59,16 +59,16 @@ def main():
                        check=True, capture_output=True)
         vm("push", str(root / "test.pub"), "update-key.pub")
     print(guest(r'''
-$dir = "$env:LOCALAPPDATA\Programs\NuschelUpdateTest"
-Get-Process nuschel -ErrorAction SilentlyContinue | Stop-Process -Force
+$dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest"
+Get-Process nuschl -ErrorAction SilentlyContinue | Stop-Process -Force
 Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
-foreach ($f in "nuschel.exe","nuschel-content-worker.exe","nuschel-media-worker.exe","nuschel-storage-worker.exe") {
+foreach ($f in "nuschl.exe","nuschl-content-worker.exe","nuschl-media-worker.exe","nuschl-storage-worker.exe") {
   Invoke-WebRequest -UseBasicParsing "http://10.0.2.100/files/install--$f" -OutFile "$dir\$f"
 }
 Invoke-WebRequest -UseBasicParsing "http://10.0.2.100/files/update-key.pub" -OutFile "$dir\update-key.pub"
-$env:NUSCHEL_UPDATE_URL = "http://10.0.2.100/files/"
-$p = Start-Process "$dir\nuschel.exe" -ArgumentList "--profile-dir","C:\nuschel-update-profile" -PassThru
+$env:NUSCHL_UPDATE_URL = "http://10.0.2.100/files/"
+$p = Start-Process "$dir\nuschl.exe" -ArgumentList "--profile-dir","C:\nuschl-update-profile" -PassThru
 "started $($p.Id)"
 '''), flush=True)
     time.sleep(8)
@@ -78,22 +78,22 @@ $p = Start-Process "$dir\nuschel.exe" -ArgumentList "--profile-dir","C:\nuschel-
     vm("click", *map(str, UPDATE_BUTTON))
     time.sleep(25)
     vm("screenshot", str(args.output / "update-installed.png"))
-    before = guest('(Get-Process nuschel).Id')
+    before = guest('(Get-Process nuschl).Id')
     vm("click", *map(str, UPDATE_BUTTON))  # "Restart now" replaces the update button
     time.sleep(15)
     vm("screenshot", str(args.output / "update-restarted.png"))
     report = guest(r'''
-$dir = "$env:LOCALAPPDATA\Programs\NuschelUpdateTest"
+$dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest"
 "marker: " + (Test-Path "$dir\licenses\UPDATE-TEST")
-"old files left: " + (Test-Path "$dir\.nuschel-old")
-"staging left: " + (Test-Path "$dir\.nuschel-update")
-"process: " + ((Get-Process nuschel -ErrorAction SilentlyContinue).Id -join ",")
+"old files left: " + (Test-Path "$dir\.nuschl-old")
+"staging left: " + (Test-Path "$dir\.nuschl-update")
+"process: " + ((Get-Process nuschl -ErrorAction SilentlyContinue).Id -join ",")
 ''')
     print(report, flush=True)
     assert "marker: True" in report, report
     assert "staging left: False" in report, report
     assert "old files left: False" in report, "the restarted process did not clean up the old files"
-    assert before.strip() and before.strip() not in report.split("process:")[1], "Nuschel did not restart"
+    assert before.strip() and before.strip() not in report.split("process:")[1], "Nuschl did not restart"
     print("Windows in-place update: signed manifest verified, files swapped, restarted, old files removed.")
 
 

@@ -13,13 +13,13 @@ test("a legacy invite preserves its certificate pin", () => {
 });
 
 test("a required protocol never becomes a legacy connection", () => {
-  for (const policy of ["nuschel", "future-policy", "nuschel+future-policy"]) {
-    assert.match(inviteFragment(`#s=voice.example.org&policy=${policy}`).error, /requires the Nuschel protocol/);
+  for (const policy of ["nuschl", "future-policy", "nuschl+future-policy"]) {
+    assert.match(inviteFragment(`#s=voice.example.org&policy=${policy}`).error, /requires the Nuschl protocol/);
   }
 });
 
 test("malformed pins and oversized invites never become unpinned connections", () => {
   assert.match(inviteFragment("#s=voice.example.org&fp=sha256:bad").error, /invalid certificate pin/);
   assert.match(inviteFragment(`#s=${"a".repeat(8192)}`).error, /too long/);
-  assert.match(inviteFragment("#s=voice.example.org&policy=&policy=nuschel").error, /repeats/);
+  assert.match(inviteFragment("#s=voice.example.org&policy=&policy=nuschl").error, /repeats/);
 });

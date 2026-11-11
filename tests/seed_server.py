@@ -2,7 +2,7 @@
 """Create the stock fixture's channels on a server as SuperUser, over the protocol.
 
 The counterpart of mumble_fixture.py (which writes a stopped Murmur's database):
-works against any server, so the VM seeds nuscheld this way. Channel ids must
+works against any server, so the VM seeds nuschld this way. Channel ids must
 come out as in the fixture (Lobby = 1, Development = 2, ...).
 """
 import argparse
@@ -18,7 +18,7 @@ FIXTURE = [(1, 0, "Lobby"), (2, 1, "Development")]
 
 def verify(binaries, host, port, channels=FIXTURE):
     """The fixture channels exist (after a restart, say), seen by an ordinary user."""
-    with tempfile.TemporaryDirectory(prefix="nuschel-verify-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-verify-") as temporary:
         root = Path(temporary)
         pin = certificate_pin(binaries, host, port, root / "probe")
         user = Client(binaries, host, port, pin, "Verifier", root / "user")
@@ -33,7 +33,7 @@ def verify(binaries, host, port, channels=FIXTURE):
 
 
 def seed(binaries, host, port, password_file, channels=FIXTURE, profile=None):
-    with tempfile.TemporaryDirectory(prefix="nuschel-seed-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-seed-") as temporary:
         root = Path(profile or temporary)
         pin = certificate_pin(binaries, host, port, root / "probe")
         admin = Client(binaries, host, port, pin, "SuperUser", root / "admin", ["--password-file", str(password_file)])

@@ -14,8 +14,8 @@ use crate::{
     theme::{self, *},
 };
 use gpui_kit::{prelude::*, *};
-use nuschel_ipc::crypto::{ContactState, ContactView, HeadOutcome, IdentityView, MonitorOutcome};
-use nuschel_session::{
+use nuschl_ipc::crypto::{ContactState, ContactView, HeadOutcome, IdentityView, MonitorOutcome};
+use nuschl_session::{
     connection::Command,
     identity::{IdentityCommand, IdentityEvent},
 };
@@ -148,7 +148,7 @@ impl IdentityState {
     }
 }
 
-/// The Nuschel identity for Settings, straight from the crypto worker.
+/// The Nuschl identity for Settings, straight from the crypto worker.
 #[derive(Default)]
 pub struct OwnIdentity {
     pub view: Option<IdentityView>,
@@ -158,8 +158,8 @@ pub struct OwnIdentity {
 }
 
 impl OwnIdentity {
-    pub fn apply(&mut self, result: Result<nuschel_ipc::crypto::CryptoResponse, String>) {
-        use nuschel_ipc::crypto::CryptoResponse;
+    pub fn apply(&mut self, result: Result<nuschl_ipc::crypto::CryptoResponse, String>) {
+        use nuschl_ipc::crypto::CryptoResponse;
         match result {
             Ok(CryptoResponse::Identity(view)) => {
                 if !view.recovery_pending {
@@ -175,9 +175,9 @@ impl OwnIdentity {
     }
 }
 
-/// Settings → Identity: the Nuschel identity, its recovery key, the policy.
+/// Settings → Identity: the Nuschl identity, its recovery key, the policy.
 pub fn settings_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
-    use nuschel_ipc::crypto::{CryptoRequest, RecoveryPolicy};
+    use nuschl_ipc::crypto::{CryptoRequest, RecoveryPolicy};
     let own = &this.own_identity;
     let fingerprint = own.view.as_ref().and_then(|view| view.fingerprint.clone());
     let mut rows = vec![
@@ -189,7 +189,7 @@ pub fn settings_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElemen
                 div()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .child(text!("Nuschel identity").with_id("kt-own-heading")),
+                    .child(text!("Nuschl identity").with_id("kt-own-heading")),
             )
             .child(
                 div()
@@ -198,7 +198,7 @@ pub fn settings_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElemen
                     .text_color(color(TEXT_MUTED))
                     .child(
                         text!(fingerprint.clone().unwrap_or_else(|| {
-                            "Created when you first connect to a Nuschel server with key                              transparency."
+                            "Created when you first connect to a Nuschl server with key                              transparency."
                                 .into()
                         }))
                         .with_id("kt-own-fingerprint"),
@@ -375,7 +375,7 @@ fn describe(view: &ContactView) -> ((String, Option<&'static str>), Token) {
         ContactState::NoIdentity => (
             (
                 "No identity on this server".into(),
-                Some("They have not used a Nuschel client with key transparency here yet."),
+                Some("They have not used a Nuschl client with key transparency here yet."),
             ),
             TEXT_MUTED,
         ),
@@ -417,7 +417,7 @@ fn describe(view: &ContactView) -> ((String, Option<&'static str>), Token) {
                 } else {
                     "Automatic verification unavailable".into()
                 },
-                Some("The server could not prove this identity. Nuschel will try again."),
+                Some("The server could not prove this identity. Nuschl will try again."),
             ),
             WARNING,
         ),
@@ -458,7 +458,7 @@ pub fn alarm(this: &Desktop, server: usize, reason: &str, cx: &mut Context<Deskt
         .child(
             div().text_sm().text_color(color(TEXT_MUTED)).child(
                 text!(
-                    "If you did not set up Nuschel on another device for this account, the \
+                    "If you did not set up Nuschl on another device for this account, the \
                      server (or someone controlling it) is presenting another key as yours. \
                      Tell your contacts on another channel, and contact the server's operator. \
                      Revoking devices comes with device linking."

@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The `files/1` object format (docs/files.md).
 //!
-//! Every file attached on a Nuschel server is an *object*: the file, padded to a
+//! The 2026-11-11 Nuschel → Nuschl rename changes all application crypto
+//! domain labels to `nuschl`. Vectors are regenerated under this namespace;
+//! old experimental identities, proofs, MLS state and encrypted objects are
+//! intentionally incompatible. The client archives old crypto stores.
+//!
+//! Every file attached on a Nuschl server is an *object*: the file, padded to a
 //! length from [`padme`], cut into chunks and encrypted with a key of its own that
 //! travels in the message (inside MLS in end-to-end conversations). Each sealed chunk
 //! is a 64 KiB *piece*, and the pieces are verified by the Merkle tree of BitTorrent v2
@@ -73,12 +78,12 @@
 //!
 //! # Root
 //!
-//! The key's [`Commitment`] is `C = SHA-256(0x03 || "nuschel files/1 key" || key)`,
+//! The key's [`Commitment`] is `C = SHA-256(0x03 || "nuschl files/1 key" || key)`,
 //! 32 bytes. It reveals nothing useful about a random 256-bit key, so the server may
 //! hold it. The object's root is
 //!
 //! ```text
-//! R = SHA-256(0x02 || "nuschel files/1 root" || u8(16) || u64_be(object_len) || C || pieces_root)
+//! R = SHA-256(0x02 || "nuschl files/1 root" || u8(16) || u64_be(object_len) || C || pieces_root)
 //! ```
 //!
 //! where 16 is [`PIECE_LOG2`]. The root binds the piece size and the object length,
@@ -114,7 +119,7 @@
 //! their parent, so they could pass only where the parent stands, a level above the
 //! leaves: that takes a proof one hash shorter, which is rejected. The zero leaves are
 //! no hash of anything; a block that hashed to zero would be a SHA-256 preimage. The root
-//! and the commitment keep their prefixes and labels, and with inputs of 94 and 52
+//! and the commitment keep their prefixes and labels, and with inputs of 92 and 50
 //! bytes neither is an inner node of 64.
 //!
 //! # BitTorrent v2
@@ -127,7 +132,7 @@
 //! against the piece layer, or against the pieces root with the sibling hashes of a
 //! hash request: the check of [`PiecesRoot::verify`]. So a swarm, the server and a
 //! recipient verify the same bytes against the same tree. The torrent's name, info
-//! dictionary and info hash are not part of this format; Nuschel names an object by
+//! dictionary and info hash are not part of this format; Nuschl names an object by
 //! its root, which adds the object length, the piece size and the key commitment. A
 //! pieces root learnt elsewhere is checked against a root with [`Root::new`].
 //!
@@ -186,9 +191,9 @@ pub type Hash = [u8; HASH];
 /// Blocks, and so leaves, under one piece.
 const BLOCKS_PER_PIECE: usize = PIECE / BLOCK;
 const ROOT_PREFIX: u8 = 0x02;
-const ROOT_LABEL: &[u8] = b"nuschel files/1 root";
+const ROOT_LABEL: &[u8] = b"nuschl files/1 root";
 const COMMITMENT_PREFIX: u8 = 0x03;
-const COMMITMENT_LABEL: &[u8] = b"nuschel files/1 key";
+const COMMITMENT_LABEL: &[u8] = b"nuschl files/1 key";
 
 /// Why an operation on an object failed.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
@@ -248,7 +253,7 @@ impl Key {
     }
 
     /// The key's commitment, which goes into the root:
-    /// `SHA-256(0x03 || "nuschel files/1 key" || key)`.
+    /// `SHA-256(0x03 || "nuschl files/1 key" || key)`.
     pub fn commitment(&self) -> Commitment {
         let mut hash = Context::new(&SHA256);
         hash.update(&[COMMITMENT_PREFIX]);
@@ -698,7 +703,7 @@ impl Root {
     }
 
     /// The root of the object with this layout, key commitment and pieces root:
-    /// `SHA-256(0x02 || "nuschel files/1 root" || u8(16) || u64_be(object_len) || C ||
+    /// `SHA-256(0x02 || "nuschl files/1 root" || u8(16) || u64_be(object_len) || C ||
     /// pieces_root)`.
     pub fn new(layout: &Layout, commitment: &Commitment, pieces_root: &PiecesRoot) -> Self {
         let mut hash = Context::new(&SHA256);
@@ -1096,6 +1101,8 @@ mod tests {
         assert_eq!(open(&key, tree.layout(), 0, &pieces[0]).unwrap(), b"");
     }
 
+    /// Root/key bindings were independently re-recorded with Python hashlib
+    /// for the Nuschl namespace on 2026-11-11; ciphertext and BEP 52 roots stay.
     /// Any change to the format changes these values. All were recomputed when frozen
     /// by a separate implementation (Python: RFC 8439 by hand, hashlib, BEP 52), and
     /// libtorrent 2.1.2 gave the same "pieces root" and "piece layers" for v2-only
@@ -1105,7 +1112,7 @@ mod tests {
         let key = Key::from_bytes(std::array::from_fn(|i| i as u8));
         assert_eq!(
             key.commitment().to_string(),
-            "375c22f2ecb5e9dd79610fe9d636315bc967300f8661508efd3fd51216e1b517"
+            "b4933d51d2fd989a018b0ae07dedff7f6a8f6d99e446da0a63d7e9d3f15eb9ab"
         );
         let data =
             |len: usize| -> Vec<u8> { (0..len).map(|i| (i as u8).wrapping_mul(7)).collect() };
@@ -1128,7 +1135,7 @@ mod tests {
         );
         assert_eq!(
             tree.root().to_string(),
-            "e6c6be9f5733c11036ecef80456ad8ce3973e2ae65b9be3084d2531fdb57dceb"
+            "0524dd8cedb3b73bba98ca9d24e2d3bf938a43e65fa6e6ae520dac1872c2cc41"
         );
 
         let (tree, _) = encrypt_object(&key, &[]).unwrap();
@@ -1138,7 +1145,7 @@ mod tests {
         );
         assert_eq!(
             tree.root().to_string(),
-            "0158d3747380b712e9fd95da346be2f88659a4237eaad48966e6ac79a6ba7ee3"
+            "2ef6576e5447757e3fcbc215722d1c844bbd4ceca4864ec4852a9214f20a7094"
         );
 
         // One piece of two blocks: two leaves, not four.
@@ -1149,7 +1156,7 @@ mod tests {
         );
         assert_eq!(
             tree.root().to_string(),
-            "e769cc36b75e89965004ed65324b23ed5068c05a1f9fbf8a6b2c548cb59a4e8c"
+            "46801614b3e3bb891df3a24e12ab60d0dcbb6bd823a3af71457b7142f6036428"
         );
 
         // Five pieces: three padding nodes in the piece layer's level.
@@ -1166,7 +1173,7 @@ mod tests {
         );
         assert_eq!(
             tree.root().to_string(),
-            "62b1669faeb10959f564719a90fc015199d6d3f59c8216f06f8d2fb67f91aebb"
+            "2d98388ae06e37ffc0108e3d7a4fe3eef99609fcaf784296e2aa90a8c291a7a8"
         );
     }
 

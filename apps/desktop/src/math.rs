@@ -11,7 +11,7 @@
 //! without one.
 use crate::{document::InlineMath, state::Desktop};
 use gpui_kit::*;
-use nuschel_ipc::math::{MathImage, MathRequest, MathWorker};
+use nuschl_ipc::math::{MathImage, MathRequest, MathWorker};
 use std::{cell::RefCell, collections::HashMap, ops::Range, rc::Rc, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, oneshot};
 
@@ -181,7 +181,7 @@ pub fn lookup(tex: &SharedString, display: bool, em: Pixels, scale: f32, cx: &mu
         return Shown::Off;
     }
     let size =
-        (f32::from(em) * scale).clamp(*nuschel_math_sizes().start(), *nuschel_math_sizes().end());
+        (f32::from(em) * scale).clamp(*nuschl_math_sizes().start(), *nuschl_math_sizes().end());
     let key = Key {
         tex: tex.clone(),
         display,
@@ -225,8 +225,8 @@ pub fn lookup(tex: &SharedString, display: bool, em: Pixels, scale: f32, cx: &mu
     shown
 }
 
-/// The sizes the math worker renders at (`nuschel_math::SIZES`).
-fn nuschel_math_sizes() -> std::ops::RangeInclusive<f32> {
+/// The sizes the math worker renders at (`nuschl_math::SIZES`).
+fn nuschl_math_sizes() -> std::ops::RangeInclusive<f32> {
     4.0..=128.0
 }
 
@@ -299,8 +299,8 @@ fn evict(cache: &mut Cache) {
 /// The math worker's loop on the tokio runtime: one formula at a time,
 /// stopping the worker when idle.
 async fn serve(mut jobs: mpsc::Receiver<Job>) {
-    let executable = nuschel_session::workers::sibling("nuschel-math-worker")
-        .unwrap_or_else(|_| "nuschel-math-worker".into());
+    let executable = nuschl_session::workers::sibling("nuschl-math-worker")
+        .unwrap_or_else(|_| "nuschl-math-worker".into());
     let mut worker = MathWorker::new(executable);
     loop {
         let job = if worker.running() {
@@ -322,9 +322,9 @@ async fn serve(mut jobs: mpsc::Receiver<Job>) {
             .render(&job.request)
             .await
             .map_err(|error| match error {
-                nuschel_ipc::host::Error::Rejected(reason) => reason,
-                nuschel_ipc::host::Error::Timeout => "it took too long".into(),
-                nuschel_ipc::host::Error::MissingSandboxHelper(helper) => {
+                nuschl_ipc::host::Error::Rejected(reason) => reason,
+                nuschl_ipc::host::Error::Timeout => "it took too long".into(),
+                nuschl_ipc::host::Error::MissingSandboxHelper(helper) => {
                     format!("{helper} is missing")
                 }
                 _ => "the math worker failed".into(),

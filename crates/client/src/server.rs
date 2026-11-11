@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! One server as a client sees it: the connection's status, the people and
-//! channels, permissions, what the Nuschel extension negotiated, direct
+//! channels, permissions, what the Nuschl extension negotiated, direct
 //! conversations, and the rules that follow from them (who may edit or
 //! delete a message, where typing is said, which direct messages are kept by
 //! the server).
@@ -13,8 +13,8 @@ use crate::{
     },
     timeline::{Change, Message, WaitingChanges},
 };
-use nuschel_core::bookmark::ServerBookmark;
-use nuschel_protocol::nuschel::v1;
+use nuschl_core::bookmark::ServerBookmark;
+use nuschl_protocol::nuschl::v1;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,14 +35,14 @@ pub struct CertificatePrompt {
 /// What the media worker reports about the active audio route.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AudioInfo {
-    pub inputs: Vec<nuschel_core::audio::AudioDevice>,
-    pub outputs: Vec<nuschel_core::audio::AudioDevice>,
+    pub inputs: Vec<nuschl_core::audio::AudioDevice>,
+    pub outputs: Vec<nuschl_core::audio::AudioDevice>,
     pub input: Option<String>,
     pub output: Option<String>,
-    pub echo: nuschel_core::audio::EchoSource,
-    /// A noise suppressor upstream of the microphone (Nuschel's own is off).
+    pub echo: nuschl_core::audio::EchoSource,
+    /// A noise suppressor upstream of the microphone (Nuschl's own is off).
     pub noise: Option<String>,
-    /// The output Nuschel's canceller records (`None`: its own playback only).
+    /// The output Nuschl's canceller records (`None`: its own playback only).
     pub reference: Option<String>,
     pub erle_db: Option<f32>,
     pub residual_echo: Option<f32>,
@@ -50,7 +50,7 @@ pub struct AudioInfo {
 }
 
 /// The media worker's adaptive controller: what it measured and what it did
-/// with Nuschel's own playback buffer and transmit gate.
+/// with Nuschl's own playback buffer and transmit gate.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AudioHealth {
     pub clipping: bool,
@@ -70,7 +70,7 @@ impl AudioHealth {
         if self.clipping {
             issues.push((
                 "Microphone is clipping",
-                "Your microphone reaches its maximum level before Nuschel receives it, which distorts \
+                "Your microphone reaches its maximum level before Nuschl receives it, which distorts \
                  your voice. Lower the microphone's input level in the system sound settings."
                     .to_string(),
             ));
@@ -78,7 +78,7 @@ impl AudioHealth {
         if self.echo_guard {
             issues.push((
                 "Echo detected",
-                "Some of what you hear keeps reaching your microphone. While others talk, Nuschel now \
+                "Some of what you hear keeps reaching your microphone. While others talk, Nuschl now \
                  needs clearer speech before it transmits. Headphones avoid echo entirely."
                     .to_string(),
             ));
@@ -87,7 +87,7 @@ impl AudioHealth {
             issues.push((
                 "Playback stuttered",
                 format!(
-                    "Audio output ran dry, so Nuschel now buffers {} ms of playback. It returns to \
+                    "Audio output ran dry, so Nuschl now buffers {} ms of playback. It returns to \
                      normal after a minute without stutters.",
                     self.playback_ms
                 ),
@@ -134,11 +134,11 @@ pub struct ServerState {
     /// Acknowledgements (or refusals, `None`) of our messages that arrived
     /// before the messages themselves were shown.
     pub acked: BTreeMap<[u8; 16], Option<u64>>,
-    /// What the Nuschel extension negotiated on this connection (empty on
+    /// What the Nuschl extension negotiated on this connection (empty on
     /// stock Mumble servers) and the server's policy.
     pub capabilities: Vec<String>,
     pub policy: Option<v1::Policy>,
-    /// Our direct conversations on a Nuschel server, by id.
+    /// Our direct conversations on a Nuschl server, by id.
     pub directs: BTreeMap<[u8; 16], v1::Direct>,
     /// Edits and deletions of messages not in a timeline yet.
     pub waiting_changes: WaitingChanges,
@@ -151,7 +151,7 @@ pub struct ServerState {
     /// A server recommendation the user can act on (e.g. push-to-talk).
     pub suggestion: Option<String>,
     pub stats: BTreeMap<u32, UserStats>,
-    /// Users heard speaking with CELT/Speex, which Nuschel cannot play.
+    /// Users heard speaking with CELT/Speex, which Nuschl cannot play.
     pub legacy_voice: BTreeSet<u32>,
     pub registered_users: Option<Vec<RegisteredUser>>,
     pub bans: Option<Vec<Ban>>,
@@ -345,7 +345,7 @@ impl ServerState {
     }
 
     /// Whether this conversation's timeline is the server's history (a
-    /// Nuschel server's channel or direct conversation, connected), rather
+    /// Nuschl server's channel or direct conversation, connected), rather
     /// than what this device observed.
     pub fn archived(&self, channel: &ConversationState) -> bool {
         self.history_source == HistorySource::ServerArchive
@@ -488,7 +488,7 @@ impl ServerState {
     }
 
     /// Whether direct messages with `peer` go to a durable conversation:
-    /// between two registered accounts on a Nuschel server with history.
+    /// between two registered accounts on a Nuschl server with history.
     pub fn durable_directs_with(&self, peer: &User) -> bool {
         self.history_source == HistorySource::ServerArchive
             && self.has("history/1")
@@ -632,7 +632,7 @@ impl ServerState {
             channel.storage_key = format!("direct:{hash}");
         }
         channel.direct_peer = Some(peer);
-        if self.notice.as_deref() == Some(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE) {
+        if self.notice.as_deref() == Some(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE) {
             self.dismiss_notice();
         }
         true
@@ -650,7 +650,7 @@ impl ServerState {
         if matches!(self.channels[position].target, TextTarget::Direct(_))
             && !self.refresh_direct(position)
         {
-            return Err(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE);
+            return Err(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE);
         }
         let channel = &self.channels[position];
         Ok((
@@ -684,7 +684,7 @@ impl ServerState {
     }
 }
 
-/// The local storage key of a direct conversation on a Nuschel server.
+/// The local storage key of a direct conversation on a Nuschl server.
 pub fn direct_conversation_key(conversation: &[u8; 16]) -> String {
     let hex: String = conversation
         .iter()
@@ -697,7 +697,7 @@ pub fn direct_conversation_key(conversation: &[u8; 16]) -> String {
 mod tests {
     use super::*;
     use crate::timeline::{Deletion, IncomingMessage};
-    use nuschel_core::{ChatMessage, MessageDocument};
+    use nuschl_core::{ChatMessage, MessageDocument};
 
     fn message(id: i64, author_id: Option<u32>, outgoing: bool) -> Message {
         let mut rendered = IncomingMessage::plain(
@@ -963,7 +963,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        server.notice = Some(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
+        server.notice = Some(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
         assert_eq!(
             server.message_target(position),
             Ok((TextTarget::Direct(9), Some(12)))

@@ -1,10 +1,60 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Start Nuschel when the user logs in. Each platform keeps the switch in its
+//! Start Nuschl when the user logs in. Each platform keeps the switch in its
 //! own per-user place, which is also the source of truth: an XDG autostart
 //! entry on Linux, the `Run` registry key on Windows and a LaunchAgent on macOS.
 //! Autostarted instances get `--autostart` and open minimised.
 
 pub const FLAG: &str = "--autostart";
+
+/// Transfer the old application's login preference, after the default profile
+/// has migrated. Explicit test/alternate profiles never touch login settings.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub fn migrate_legacy() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    let (new, old, was_enabled) = {
+        let new = entry()?;
+        let old = new.with_file_name("org.nuschel.Nuschel.desktop");
+        let was_enabled = enabled_at(&old);
+        (new, old, was_enabled)
+    };
+    #[cfg(target_os = "macos")]
+    let (new, old, was_enabled) = {
+        let new = agent()?;
+        let old = new.with_file_name("org.nuschel.Nuschel.plist");
+        let was_enabled = old.exists();
+        (new, old, was_enabled)
+    };
+    if std::fs::symlink_metadata(&old).is_err() {
+        return Ok(());
+    }
+    if !new.exists() && was_enabled {
+        set(true)?;
+    }
+    std::fs::remove_file(old).map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "windows")]
+pub fn migrate_legacy() -> Result<(), String> {
+    let old = reg(&["query", RUN_KEY, "/v", "Nuschel"]).map_err(|error| error.to_string())?;
+    if !old.status.success() {
+        return Ok(());
+    }
+    if !enabled() {
+        set(true)?;
+    }
+    let removed =
+        reg(&["delete", RUN_KEY, "/v", "Nuschel", "/f"]).map_err(|error| error.to_string())?;
+    if removed.status.success() {
+        Ok(())
+    } else {
+        Err("could not remove Nuschel's old login entry".into())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+pub fn migrate_legacy() -> Result<(), String> {
+    Ok(())
+}
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn home() -> Result<std::path::PathBuf, String> {
@@ -18,10 +68,10 @@ fn home() -> Result<std::path::PathBuf, String> {
 #[cfg(target_os = "linux")]
 fn program() -> Result<String, String> {
     let on_path = std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|directory| directory.join("nuschel").is_file())
+        std::env::split_paths(&path).any(|directory| directory.join("nuschl").is_file())
     });
     if on_path {
-        return Ok("nuschel".into());
+        return Ok("nuschl".into());
     }
     let exe = std::env::current_exe().map_err(|error| error.to_string())?;
     let path = exe.to_str().ok_or("the program path is not valid UTF-8")?;
@@ -60,7 +110,7 @@ fn entry() -> Result<std::path::PathBuf, String> {
         .map(std::path::PathBuf::from)
         .filter(|path| path.is_absolute())
         .map_or_else(|| home().map(|home| home.join(".config")), Ok)?;
-    Ok(config.join("autostart").join("org.nuschel.Nuschel.desktop"))
+    Ok(config.join("autostart").join("org.nuschl.Nuschl.desktop"))
 }
 
 #[cfg(target_os = "linux")]
@@ -98,7 +148,7 @@ fn set_at(path: &std::path::Path, enable: bool, program: &str) -> Result<(), Str
         std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     }
     let text = format!(
-        "[Desktop Entry]\nType=Application\nName=Nuschel\nComment=Voice and text chat\nExec={program} {FLAG}\nIcon=org.nuschel.Nuschel\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
+        "[Desktop Entry]\nType=Application\nName=Nuschl\nComment=Voice and text chat\nExec={program} {FLAG}\nIcon=org.nuschl.Nuschl\nTerminal=false\nX-GNOME-Autostart-enabled=true\n"
     );
     std::fs::write(path, text).map_err(|error| error.to_string())
 }
@@ -119,7 +169,7 @@ fn reg(arguments: &[&str]) -> std::io::Result<std::process::Output> {
 
 #[cfg(target_os = "windows")]
 pub fn enabled() -> bool {
-    reg(&["query", RUN_KEY, "/v", "Nuschel"]).is_ok_and(|output| output.status.success())
+    reg(&["query", RUN_KEY, "/v", "Nuschl"]).is_ok_and(|output| output.status.success())
 }
 
 #[cfg(target_os = "windows")]
@@ -128,13 +178,13 @@ pub fn set(enable: bool) -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|error| error.to_string())?;
         let command = format!("\"{}\" {FLAG}", exe.display());
         reg(&[
-            "add", RUN_KEY, "/v", "Nuschel", "/t", "REG_SZ", "/d", &command, "/f",
+            "add", RUN_KEY, "/v", "Nuschl", "/t", "REG_SZ", "/d", &command, "/f",
         ])
     } else {
         if !enabled() {
             return Ok(());
         }
-        reg(&["delete", RUN_KEY, "/v", "Nuschel", "/f"])
+        reg(&["delete", RUN_KEY, "/v", "Nuschl", "/f"])
     }
     .map_err(|error| error.to_string())?;
     if output.status.success() {
@@ -149,7 +199,7 @@ fn agent() -> Result<std::path::PathBuf, String> {
     Ok(home()?
         .join("Library")
         .join("LaunchAgents")
-        .join("org.nuschel.Nuschel.plist"))
+        .join("org.nuschl.Nuschl.plist"))
 }
 
 #[cfg(target_os = "macos")]
@@ -177,7 +227,7 @@ pub fn set(enable: bool) -> Result<(), String> {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>org.nuschel.Nuschel</string>
+  <key>Label</key><string>org.nuschl.Nuschl</string>
   <key>ProgramArguments</key><array><string>{escaped}</string><string>{FLAG}</string></array>
   <key>RunAtLoad</key><true/>
   <key>ProcessType</key><string>Interactive</string>
@@ -208,8 +258,8 @@ mod tests {
     #[test]
     fn exec_paths_are_quoted_by_the_desktop_entry_rules() {
         assert_eq!(
-            exec_quote("/opt/nuschel/nuschel").unwrap(),
-            "\"/opt/nuschel/nuschel\""
+            exec_quote("/opt/nuschl/nuschl").unwrap(),
+            "\"/opt/nuschl/nuschl\""
         );
         assert_eq!(
             exec_quote("/a b/$x`y\"z").unwrap(),
@@ -224,23 +274,23 @@ mod tests {
     fn the_autostart_entry_round_trips() {
         // A private directory: never the user's real ~/.config/autostart.
         let directory =
-            std::env::temp_dir().join(format!("nuschel-autostart-{}", std::process::id()));
+            std::env::temp_dir().join(format!("nuschl-autostart-{}", std::process::id()));
         let path = directory
             .join("autostart")
-            .join("org.nuschel.Nuschel.desktop");
+            .join("org.nuschl.Nuschl.desktop");
         assert!(!enabled_at(&path));
-        set_at(&path, true, "nuschel").unwrap();
+        set_at(&path, true, "nuschl").unwrap();
         assert!(enabled_at(&path));
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\nExec=nuschel --autostart\n"), "{text}");
+        assert!(text.contains("\nExec=nuschl --autostart\n"), "{text}");
         std::fs::write(&path, text + "Hidden=true\n").unwrap();
         assert!(
             !enabled_at(&path),
             "a desktop that hid the entry counts as off"
         );
-        set_at(&path, false, "nuschel").unwrap();
+        set_at(&path, false, "nuschl").unwrap();
         assert!(!enabled_at(&path));
-        set_at(&path, false, "nuschel").unwrap();
+        set_at(&path, false, "nuschl").unwrap();
         std::fs::remove_dir_all(directory).ok();
     }
 }

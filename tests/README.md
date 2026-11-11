@@ -33,17 +33,17 @@ all protocol traffic.
 | --- | --- |
 | `udp_voice.py` | Encrypted OCB2 UDP voice, forced TCP and mixed relay; jitter and 5% loss with netem; inbound UDP blocked (IPv4 and IPv6) falls back to the TLS tunnel and recovers |
 | `protocol_features.py` | Whisper/shout isolation, channel listening, permissions, user stats, comments and avatars, self-registration, SuperUser administration (registered users, bans, ACL, kick), OpenSSL-made PKCS#12 import (channel links are not yet covered) |
-| `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, the Settings echo test at -31 dB coupling with and without Nuschel's canceller, clipping detection that leaves system levels untouched |
-| `pipewire_recovery.py` | A private PipeWire + WirePlumber + pipewire-pulse session with virtual nodes only: playback, PipeWire restart with the replacement worker pinned to PipeWire (no ALSA fallback), pipewire-pulse restart, PipeWire echo-cancel reuse without touching session defaults, device lists without other applications' streams, an RNNoise filter-chain behind echo-cancel (both of Nuschel's stages off, playback to the canceller) |
+| `media_live.py` | Live media worker on a private PulseAudio: jitter-buffer continuity, reuse of a system echo canceller with playback routed to its reference, echo modes and overrides, the Settings echo test at -31 dB coupling with and without Nuschl's canceller, clipping detection that leaves system levels untouched |
+| `pipewire_recovery.py` | A private PipeWire + WirePlumber + pipewire-pulse session with virtual nodes only: playback, PipeWire restart with the replacement worker pinned to PipeWire (no ALSA fallback), pipewire-pulse restart, PipeWire echo-cancel reuse without touching session defaults, device lists without other applications' streams, an RNNoise filter-chain behind echo-cancel (both of Nuschl's stages off, playback to the canceller) |
 | `opus_eval.py` | opus-pure against reference libopus: decoder conformance in SILK, Hybrid and CELT, encoder interop both ways, 5,000 hostile packets |
-| `stock_client.py` | The real stock Mumble GUI with a certificate exported by Nuschel; voice in both directions |
+| `stock_client.py` | The real stock Mumble GUI with a certificate exported by Nuschl; voice in both directions |
 | `desktop_recovery.py` | Media and storage worker crashes keep the session and history; server restart reconnects with backoff, rejoins the channel muted and marks the gap |
 | `accessibility.py` | The AT-SPI tree as a screen reader sees it: named controls, channel tree, users and composer; Mute operated through the Action interface alone; every message of a long conversation is a list item, the oldest (screens above the viewport) scrolled into view by AT-SPI ScrollTo and GrabFocus |
 | 1.4 / 1.3 loops | `mumble_client.py`, `udp_voice.py` and `protocol_features.py` against stock Mumble 1.4.287 and 1.3.4 (legacy UDP format) |
 
 Development aids outside the VM: `screenshots.py` (scenes under a private headless
 GNOME Shell on the real GPU; it never touches the user's session) and
-`accessibility.py --gnome-shell` (the same check with Nuschel's own window controls,
+`accessibility.py --gnome-shell` (the same check with Nuschl's own window controls,
 and the timeline walked with the keyboard: Shift+Tab, arrows, Home and End, Tab through
 a message's links, a letter typed into the composer). `voice_servers.py` (voice on two
 loopback Murmurs at once, operated over AT-SPI in the private GNOME Shell with a private
@@ -53,42 +53,42 @@ the rail and the voice card in each state). It also hammers Deafen and checks th
 both routes stop and capture closes, then that one route can resume while the other
 stays deafened. `voice_servers.py --unread-navigation` instead adds twenty offline
 rail entries and fifty rooms and checks both directions of both unread indicators,
-mentions and text-only jumps over AT-SPI, with screenshots. Against a loopback `nuscheld`:
-`with_local_nuscheld.py <binaries> nuschel_conversations.py <binaries> --port PORT`
+mentions and text-only jumps over AT-SPI, with screenshots. Against a loopback `nuschld`:
+`with_local_nuschld.py <binaries> nuschl_conversations.py <binaries> --port PORT`
 (edits, deletions and their authorisation, typing, direct conversations, with
-`nuschel-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,
+`nuschl-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,
 the typing line, a direct conversation from server history, keyboard links, and the
 local cache it leaves, in a private headless GNOME Shell). The client SDK without a
-UI: `with_local_nuscheld.py <binaries> sdk_headless.py <binaries> --port PORT` runs
+UI: `with_local_nuschld.py <binaries> sdk_headless.py <binaries> --port PORT` runs
 `crates/client/examples/headless.rs` (three people connect, register, meet in a
 channel, send, receive, edit, and load the server's history through the SDK alone).
 `readme_screenshot.py` (`just readme-screenshot`) makes the picture at the top of
-README.md the same way: a loopback `nuscheld`, scripted people, and the desktop in a
+README.md the same way: a loopback `nuschld`, scripted people, and the desktop in a
 private headless GNOME Shell, cropped to the window; check it before committing.
-The terminal client: `with_local_nuscheld.py <binaries> tui_loopback.py <binaries> --port
+The terminal client: `with_local_nuschld.py <binaries> tui_loopback.py <binaries> --port
 PORT` (or `with_local_murmur.py <mumble-server> tui_loopback.py <binaries> --port PORT
---stock`) drives `nuschel-tui` through pseudo-terminals, one person in the full screen
+--stock`) drives `nuschl-tui` through pseudo-terminals, one person in the full screen
 (read back by a small VT100 emulator; `--screens DIR` saves each step's screen as text)
 and one in plain lines: certificate on first use, joining through Ctrl+K, sending and
-receiving, and on nuscheld registering, typing, editing, deleting, search, a direct
+receiving, and on nuschld registering, typing, editing, deleting, search, a direct
 conversation and unread counts.
 
 `windows_vm.py` installs Windows 11 Enterprise (evaluation ISO from Microsoft)
 unattended into a KVM guest with two vCPUs and drives it through a PowerShell agent
 in the desktop session, QMP screenshots, clicks and keys. The guest has no network
 except forwards into host loopback (the harness on 10.0.2.100:80, a test Murmur on
-10.0.2.100:64738). Keep its state directory (`$NUSCHEL_WINDOWS_VM_DIR`, default
-`~/vms/nuschel-windows`) out of backups and off a RAM-backed `/tmp`.
+10.0.2.100:64738). Keep its state directory (`$NUSCHL_WINDOWS_VM_DIR`, default
+`~/vms/nuschl-windows`) out of backups and off a RAM-backed `/tmp`.
 
 ### Windows worker sandbox
 
 `crates/sandbox-windows/tests/confinement.rs` checks every worker's AppContainer from
 the inside (docs/windows-sandbox.md). Cross-build it with the workers
-(`cargo test --target x86_64-pc-windows-gnu -p nuschel-sandbox-windows --test
+(`cargo test --target x86_64-pc-windows-gnu -p nuschl-sandbox-windows --test
 confinement --no-run`), copy the test executable and the six worker executables
 into one folder in the guest (`windows_vm.py push`, then `Invoke-WebRequest`), and
 run `confinement.exe --workers <folder>` there. It starts itself through
-`nuschel_ipc::host`'s real commands as each worker kind; inside, it must fail to read
+`nuschl_ipc::host`'s real commands as each worker kind; inside, it must fail to read
 a file it creates in Documents, list or write the profile, `C:\Users\Public` or the
 user's TEMP, connect to 10.0.2.100:80 (only transfer may), start a process, open the
 test's own process to query or terminate it, commit more memory than its job
@@ -116,7 +116,7 @@ microphone with its workers in AppContainers.
 
 The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
 module's hardened database preflight. `vm-server` runs the protocol suites against
-Nuscheld, including stock-client interoperability, persistent history, witnesses
+Nuschld, including stock-client interoperability, persistent history, witnesses
 and encrypted text/history on dedicated SQLite and PostgreSQL nodes.
 Both databases reopen the worker between pages and retain duplicate messages correctly.
 
@@ -125,9 +125,9 @@ Both databases reopen the worker between pages and retain duplicate messages cor
 | Client | Server | Purpose |
 | --- | --- | --- |
 | Stock Mumble | Stock Mumble | Validate the stock fixture and virtual audio setup |
-| Nuschel | Stock Mumble | Legacy-server compatibility and default local history |
-| Stock Mumble | Nuschel | Legacy-client compatibility |
-| Nuschel | Nuschel | Negotiated extensions and persistent server history |
+| Nuschl | Stock Mumble | Legacy-server compatibility and default local history |
+| Stock Mumble | Nuschl | Legacy-client compatibility |
+| Nuschl | Nuschl | Negotiated extensions and persistent server history |
 
 Use a real stock Mumble GUI client with a deterministic X11 session and test profile;
 do not replace it with a custom protocol script and call the result interoperability.
@@ -144,7 +144,7 @@ UDP and forced TCP tunneling separately. Include channel/whisper routing isolati
 - Restart PipeWire, pipewire-pulse, and native PulseAudio during a session; network/chat
   stay connected and audio resumes without restarting the client.
 - Remove/switch devices and change formats while processing is active.
-- Add/remove an upstream AEC route and verify Nuschel does not stack another canceller.
+- Add/remove an upstream AEC route and verify Nuschl does not stack another canceller.
 - Snapshot unrelated graph objects and defaults before/after recovery.
 - Restart client and server independently; compare legacy local history with negotiated
   server history and verify ACLs, observation timestamps, gaps, and repeated messages.
@@ -168,14 +168,14 @@ the Windows sandbox has run in the Windows 11 VM only (above).
 
 ## WebRTC transport trial
 
-`cargo test -p nuschel-rtc` exchanges ICE/DTLS/SRTP datagrams in memory with a virtual
+`cargo test -p nuschl-rtc` exchanges ICE/DTLS/SRTP datagrams in memory with a virtual
 clock. It checks bidirectional Opus/VP8 payloads and timestamps, video fragmentation
 and retransmission, audio progress during video loss, video backpressure, SDP/media
 limits, shutdown, fingerprint rejection, authenticated-packet tampering and replay.
 The harness drops an interior video packet; a missing first-ever RTP packet has no
 previous sequence number from which a receiver can infer the loss.
 
-`just rtc` builds the real `nuschel-rtc-probe` and media worker. `rtc_probe.py` sends
+`just rtc` builds the real `nuschl-rtc-probe` and media worker. `rtc_probe.py` sends
 a generated tone through the worker encoder, the two loopback peers and the worker
 decoder. The VM also decodes the received packet with reference libopus. Video uses
 the locally generated [VP8 keyframe](fixtures/README.md), spans multiple RTP packets,

@@ -2,11 +2,11 @@
 //! One conversation's timeline: the latest page of history, older pages
 //! prepended as the reader scrolls up, and live messages appended. Pages come
 //! from the local cache (ids are row ids, ordered by observation time) or,
-//! on a Nuschel server, from the server's history (ids are seqs); our own
-//! messages on a Nuschel server stay pending until the server acknowledges
+//! on a Nuschl server, from the server's history (ids are seqs); our own
+//! messages on a Nuschl server stay pending until the server acknowledges
 //! their idempotency key. Edits and deletions apply to the message they name
 //! and never overtake it: one that arrives first waits for its message.
-use nuschel_core::{ChatMessage, MessageDocument, transfer::Offer};
+use nuschl_core::{ChatMessage, MessageDocument, transfer::Offer};
 use std::collections::VecDeque;
 
 /// Messages a timeline keeps while its reader is at the newest message;
@@ -16,26 +16,26 @@ pub const MAX_TIMELINE: usize = 1000;
 /// A message as the content worker rendered it, live or from a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct IncomingMessage {
-    /// The local row id, or on a Nuschel server's history timeline the seq.
+    /// The local row id, or on a Nuschl server's history timeline the seq.
     pub id: Option<i64>,
     pub message: ChatMessage,
     pub document: MessageDocument,
     pub outgoing: bool,
-    /// Our message on a Nuschel server until it is acknowledged: its key.
+    /// Our message on a Nuschl server until it is acknowledged: its key.
     pub pending: Option<[u8; 16]>,
-    /// Nuschel servers: the message's seq in its conversation (on a server
+    /// Nuschl servers: the message's seq in its conversation (on a server
     /// history timeline also its id; never a local row id).
     pub seq: Option<u64>,
-    /// Nuschel servers: the author's registration number (who may edit it).
+    /// Nuschl servers: the author's registration number (who may edit it).
     pub author_id: Option<u32>,
-    /// When it was last edited (Nuschel servers).
+    /// When it was last edited (Nuschl servers).
     pub edited_ms: Option<i64>,
-    /// A tombstone: the message was deleted (Nuschel servers).
+    /// A tombstone: the message was deleted (Nuschl servers).
     pub deleted: Option<Deletion>,
 }
 
 impl IncomingMessage {
-    /// A message without Nuschel server details.
+    /// A message without Nuschl server details.
     pub fn plain(
         id: Option<i64>,
         message: ChatMessage,
@@ -107,23 +107,23 @@ pub struct Message {
     pub document: MessageDocument,
     /// A file offered with this message (a magic-wormhole code).
     pub offer: Option<Offer>,
-    /// Our message on a Nuschel server until it is acknowledged: its key.
+    /// Our message on a Nuschl server until it is acknowledged: its key.
     pub pending: Option<[u8; 16]>,
     /// Sent from this device (or our account's other one).
     pub outgoing: bool,
-    /// Nuschel servers: its seq in the conversation (edits, deletions and
+    /// Nuschl servers: its seq in the conversation (edits, deletions and
     /// read markers name it), and the author's registration number.
     pub seq: Option<u64>,
     pub author_id: Option<u32>,
     /// What was typed (a composer edits it).
     pub source: String,
-    /// Nuschel servers: when it was last edited, or that it was deleted.
+    /// Nuschl servers: when it was last edited, or that it was deleted.
     pub edited_ms: Option<i64>,
     pub deleted: Option<Deletion>,
 }
 
 impl Message {
-    /// Ours, on a Nuschel server: sent from here, or by our registration.
+    /// Ours, on a Nuschl server: sent from here, or by our registration.
     pub fn ours(&self, own_user_id: Option<u32>) -> bool {
         self.outgoing || (self.author_id.is_some() && self.author_id == own_user_id)
     }
@@ -132,8 +132,8 @@ impl Message {
 impl From<IncomingMessage> for Message {
     fn from(message: IncomingMessage) -> Self {
         static SERIALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let offer = nuschel_core::transfer::parse_offer(&message.message.body)
-            .or_else(|| nuschel_core::transfer::offer_in(&message.document));
+        let offer = nuschl_core::transfer::parse_offer(&message.message.body)
+            .or_else(|| nuschl_core::transfer::offer_in(&message.document));
         let status = if message.deleted.is_some() {
             MessageStatus::Plain
         } else if message.pending.is_some() {
@@ -176,7 +176,7 @@ pub enum Page {
     Around(i64),
 }
 
-/// What changed about a message on a Nuschel server.
+/// What changed about a message on a Nuschl server.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Change {
     Edited {
@@ -390,8 +390,8 @@ impl Timeline {
                 {
                     return Ok(false);
                 }
-                message.offer = nuschel_core::transfer::parse_offer(&source)
-                    .or_else(|| nuschel_core::transfer::offer_in(&document));
+                message.offer = nuschl_core::transfer::parse_offer(&source)
+                    .or_else(|| nuschl_core::transfer::offer_in(&document));
                 message.source = source;
                 message.document = document;
                 message.edited_ms = Some(edited_ms);
@@ -410,7 +410,7 @@ impl Timeline {
         }
     }
 
-    /// The newest seq shown (Nuschel servers), for the read marker.
+    /// The newest seq shown (Nuschl servers), for the read marker.
     pub fn newest_seq(&self) -> Option<u64> {
         self.messages.iter().filter_map(|message| message.seq).max()
     }

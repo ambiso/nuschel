@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Persistence through the storage worker (`nuschel-storage-worker --server`),
-//! which owns SQLite/PostgreSQL and the database credential; `nuscheld` links
+//! Persistence through the storage worker (`nuschl-storage-worker --server`),
+//! which owns SQLite/PostgreSQL and the database credential; `nuschld` links
 //! no database code (deny.toml, SECURITY.md). Writes are queued in order and
 //! never awaited by the control path; reads (startup, a registered user's
 //! blobs) are awaited outside the state lock. An in-memory backend serves tests
 //! and `--ephemeral` runs.
 use base64::Engine as _;
 use bytes::Bytes;
-use nuschel_ipc::{
+use nuschl_ipc::{
     Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
     server::{
         HISTORY_LOAD_PAGE, MessageKind, Retention, SeqRows, ServerSnapshot,
@@ -290,7 +290,7 @@ pub fn start(backend: Backend) -> StorageHandle {
 }
 
 /// A worker that takes the operator lock before it opens the database (a
-/// running server's state worker, `nuscheld admin`); ask it
+/// running server's state worker, `nuschld admin`); ask it
 /// `OperatorLock` first: `Held` means another process uses the database.
 pub fn start_locked(backend: Backend) -> StorageHandle {
     start_with(backend, true)
@@ -800,7 +800,7 @@ impl MemoryHistory {
                     .collect(),
             ),
             Request::HistoryPage { query } => {
-                match ready(nuschel_ipc::server::page(
+                match ready(nuschl_ipc::server::page(
                     &mut MemoryRows(&self.messages),
                     &query,
                 )) {

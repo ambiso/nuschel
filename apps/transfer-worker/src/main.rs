@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The network side of file transfers, over magic-wormhole. The supervisor
 //! starts one worker per offer or download in its sandbox
-//! (`nuschel_ipc::host::transfer_sandbox_command`): an offer reads only the
+//! (`nuschl_ipc::host::transfer_sandbox_command`): an offer reads only the
 //! file at `--file` (on Windows, the inherited handle `--file-handle`, as the
 //! worker's AppContainer cannot open the user's files), a download streams
 //! what it receives back over stdout. Neither opens any other file, and
@@ -29,7 +29,7 @@ use magic_wormhole::{
     transfer::{self, TransferError},
     transit,
 };
-use nuschel_ipc::{
+use nuschl_ipc::{
     Envelope, TransferEvent, TransferRequest, WormholeServers, read_frame, write_frame,
 };
 
@@ -46,7 +46,7 @@ type Cancel = Shared<BoxFuture<'static, ()>>;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // On Windows, the launch stage starts this worker again in its AppContainer.
     #[cfg(windows)]
-    nuschel_sandbox_windows::launch_if_requested();
+    nuschl_sandbox_windows::launch_if_requested();
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
     // Opened once; every pickup reads it at its own offset. A failure is
     // reported with the offer, as an event the supervisor shows.
@@ -54,10 +54,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [] => None,
         [flag, path] if flag == "--file" => Some(File::open(path)),
         #[cfg(windows)]
-        [flag, handle] if flag == nuschel_ipc::windows_sandbox::FILE_HANDLE_FLAG => {
-            Some(nuschel_sandbox_windows::inherited_file(handle))
+        [flag, handle] if flag == nuschl_ipc::windows_sandbox::FILE_HANDLE_FLAG => {
+            Some(nuschl_sandbox_windows::inherited_file(handle))
         }
-        _ => return Err("usage: nuschel-transfer-worker [--file PATH]".into()),
+        _ => return Err("usage: nuschl-transfer-worker [--file PATH]".into()),
     };
     let Some(first) = read_frame::<TransferRequest>(&mut io::stdin().lock())? else {
         return Ok(());

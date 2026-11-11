@@ -433,7 +433,7 @@ mod tests {
 
     fn checkpoint() -> Checkpoint {
         Checkpoint {
-            origin: "chat.example.org:64738/nuschel-kt/v1".into(),
+            origin: "chat.example.org:64738/nuschl-kt/v1".into(),
             size: 5,
             root: [7; 32],
         }

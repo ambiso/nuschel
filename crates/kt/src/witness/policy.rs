@@ -21,14 +21,14 @@ pub struct DefaultWitness {
     /// Its C2SP verifier key (`<name>+<key id>+<base64(0x06 || ML-DSA-44 key)>`).
     pub vkey: &'static str,
     /// Where servers submit their epochs (`https://…`, without the
-    /// `/nuschel-kt/v1/add-epochs` path).
+    /// `/nuschl-kt/v1/add-epochs` path).
     pub url: &'static str,
 }
 
-/// The built-in witness set, shared by clients and `nuscheld`'s defaults.
+/// The built-in witness set, shared by clients and `nuschld`'s defaults.
 ///
 /// **Empty until the project auditor is deployed**: switching it on is one entry
-/// here with the auditor's verifier key (`nuschel-witness vkey`) and URL, released
+/// here with the auditor's verifier key (`nuschl-witness vkey`) and URL, released
 /// with servers first (docs/witness.md, "Switching it on").
 pub const DEFAULT_WITNESSES: &[DefaultWitness] = &[];
 

@@ -2,7 +2,7 @@
 //! Typed directory values over the identity crate's formats.
 //!
 //! The directory itself commits to versioned [`DirectoryValue`]s. These types give the
-//! formats Nuschel publishes:
+//! formats Nuschl publishes:
 //!
 //! | Format | Label | Value |
 //! | --- | --- | --- |
@@ -12,7 +12,7 @@
 //! | 2 | `reg:` | [`NameBinding`]: the account id |
 //! | 4 | `name:`, `reg:` | [`NameBinding::Released`]: no account any more (renamed or unregistered) |
 //!
-//! Nuschel servers publish format 3; [`verify_account_record`] requires it, because
+//! Nuschl servers publish format 3; [`verify_account_record`] requires it, because
 //! without the identity's signed statement a server could bind someone else's
 //! identity to one of its accounts (and make it look like the same person as on
 //! another server).
@@ -23,7 +23,7 @@
 use crate::error::KtError;
 use crate::log::LogId;
 use crate::types::{AccountId, DirectoryValue};
-use nuschel_identity::{
+use nuschl_identity::{
     AccountStatement, DeviceCertificate, DeviceRevocation, DeviceRoster, DeviceSigningCertificate,
     HybridPublicKey, IdentityFingerprint, VerifiedIdentity,
 };
@@ -39,7 +39,7 @@ pub const FORMAT_ACCOUNT_BINDING_V2: u16 = 3;
 /// [`DirectoryValue::format`] of a name or number that names no account any more.
 pub const FORMAT_NAME_RELEASED: u16 = 4;
 
-const ROSTER_CONTEXT: &[u8] = b"nuschel-kt/v1 roster\0";
+const ROSTER_CONTEXT: &[u8] = b"nuschl-kt/v1 roster\0";
 /// Most device certificates or revocations in one roster commitment.
 pub const MAX_ROSTER_ENTRIES: usize = 4096;
 
@@ -55,7 +55,7 @@ pub enum ValueError {
 /// A commitment to an identity's device roster under its current device-signing key:
 ///
 /// ```text
-/// SHA-256("nuschel-kt/v1 roster\0"
+/// SHA-256("nuschl-kt/v1 roster\0"
 ///         || SHA-256(DeviceSigningCertificate)
 ///         || uint16 n || SHA-256(DeviceCertificate)[n]     // DeviceCertificate::hash, sorted
 ///         || uint16 m || SHA-256(DeviceRevocation)[m])     // sorted
@@ -256,7 +256,7 @@ pub fn roster_for_binding(
     if commitment != binding.roster() {
         return Err(KtError::RosterMismatch);
     }
-    let invalid = |e: nuschel_identity::Error| KtError::InvalidRecord(e.to_string());
+    let invalid = |e: nuschl_identity::Error| KtError::InvalidRecord(e.to_string());
     // One current certificate per device: a superseded key epoch does not belong in the
     // roster, and accepting it would make the result depend on the order.
     let mut ids: Vec<_> = devices.iter().map(DeviceCertificate::device_id).collect();

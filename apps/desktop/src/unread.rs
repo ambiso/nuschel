@@ -4,7 +4,7 @@
 //! collapsed branches; no row-height or window-size assumptions are needed.
 use crate::{state::Desktop, theme::*};
 use gpui_kit::{prelude::*, *};
-use nuschel_client::{model::TextTarget, server::ServerState, tree::TreeRow};
+use nuschl_client::{model::TextTarget, server::ServerState, tree::TreeRow};
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -352,8 +352,8 @@ impl Desktop {
 #[cfg(test)]
 mod tests {
     use super::{Candidate, Target, channel_slot, channels, classify};
-    use nuschel_client::{conversation::ConversationState, server::ServerState};
-    use nuschel_core::bookmark::ServerBookmark;
+    use nuschl_client::{conversation::ConversationState, server::ServerState};
+    use nuschl_core::bookmark::ServerBookmark;
 
     #[test]
     fn unread_in_a_collapsed_branch_counts_on_its_visible_ancestor() {

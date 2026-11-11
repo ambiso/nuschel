@@ -10,8 +10,8 @@ use crate::{
     text,
 };
 use bytes::Bytes;
-use nuschel_ipc::server::ServerStorageRequest as Storage;
-use nuschel_protocol::{ControlFrame, control as proto, kind};
+use nuschl_ipc::server::ServerStorageRequest as Storage;
+use nuschl_protocol::{ControlFrame, control as proto, kind};
 use proto::permission_denied::DenyType;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -84,9 +84,9 @@ impl State {
                 .control_bytes
                 .fetch_add(frame.payload.len() as u64 + 6, Ordering::Relaxed);
         }
-        let privacy_update = frame.kind == nuschel_protocol::nuschel::kind::PRIVACY
+        let privacy_update = frame.kind == nuschl_protocol::nuschl::kind::PRIVACY
             && user.extension.as_ref().is_some_and(|extension| {
-                extension.has(nuschel_protocol::nuschel::capability::PRIVACY)
+                extension.has(nuschl_protocol::nuschl::capability::PRIVACY)
             });
         if frame.kind != kind::UDP_TUNNEL
             && frame.kind != kind::PING
@@ -218,7 +218,7 @@ impl State {
             | kind::CODEC_VERSION
             | kind::SERVER_CONFIG
             | kind::SUGGEST_CONFIG => {}
-            other if kind::NUSCHEL_EXTENSION.contains(&other) => {
+            other if kind::NUSCHL_EXTENSION.contains(&other) => {
                 self.extension_frame(session, &frame);
             }
             _ => {
@@ -315,7 +315,7 @@ impl State {
             return;
         };
         let voice = &mut user.voice;
-        voice.remote = nuschel_protocol::crypt::CryptStats {
+        voice.remote = nuschl_protocol::crypt::CryptStats {
             good: message.good(),
             late: message.late(),
             lost: message.lost(),
@@ -1250,7 +1250,7 @@ impl State {
             }
         }
         if local {
-            let stats = |stats: nuschel_protocol::crypt::CryptStats| proto::user_stats::Stats {
+            let stats = |stats: nuschl_protocol::crypt::CryptStats| proto::user_stats::Stats {
                 good: Some(stats.good),
                 late: Some(stats.late),
                 lost: Some(stats.lost),
@@ -1398,8 +1398,7 @@ impl State {
         let receivers: BTreeSet<u32> = std::mem::take(&mut message.receiver_sessions)
             .into_iter()
             .collect();
-        let Some(frame) =
-            nuschel_protocol::encode_control(kind::PLUGIN_DATA_TRANSMISSION, &message)
+        let Some(frame) = nuschl_protocol::encode_control(kind::PLUGIN_DATA_TRANSMISSION, &message)
         else {
             return;
         };
@@ -1512,14 +1511,14 @@ impl State {
 
     /// The single path every stock text message takes: permission checks,
     /// limits and delivery. Channel messages are also stored (format
-    /// `legacy_html`), and Nuschel readers get them from history once stored
+    /// `legacy_html`), and Nuschl readers get them from history once stored
     /// (docs/extension.md §4); direct messages to sessions are not stored.
     fn text_message(&mut self, source: u32, mut message: proto::TextMessage) {
         if self.rate_limited(source) {
             return;
         }
         // An end-to-end server carries text only inside MLS groups (docs/e2ee.md
-        // §10, answer 7); only Nuschel clients get this far, and they never send
+        // §10, answer 7); only Nuschl clients get this far, and they never send
         // plaintext there.
         if self.end_to_end() {
             self.deny_with(
@@ -1601,10 +1600,10 @@ impl State {
             }
         }
         recipients.remove(&source);
-        let Some(frame) = nuschel_protocol::encode_control(kind::TEXT_MESSAGE, &message) else {
+        let Some(frame) = nuschl_protocol::encode_control(kind::TEXT_MESSAGE, &message) else {
             return;
         };
-        // Nuschel readers of the reached channels get the stored message.
+        // Nuschl readers of the reached channels get the stored message.
         let mut readers = BTreeSet::new();
         for &channel in &reached {
             if let Some(id) = self.conversation_of_channel(channel) {
@@ -1613,7 +1612,7 @@ impl State {
         }
         // Direct messages from stock senders are kept only if the operator
         // chose to (docs/extension.md §9), between two accounts, and only when
-        // the sender may write to that direct conversation as a Nuschel client
+        // the sender may write to that direct conversation as a Nuschl client
         // would (to every connection of the account, not only the one listed);
         // otherwise the listed connection gets it live, as from Murmur.
         let mut directs = BTreeSet::new();
@@ -2367,6 +2366,6 @@ pub fn bounded_tokens(tokens: &[String]) -> Vec<[u8; 32]> {
 }
 
 /// What stock clients are told about retention (docs/extension.md §9).
-pub fn retention_text(retention: nuschel_ipc::server::Retention) -> String {
+pub fn retention_text(retention: nuschl_ipc::server::Retention) -> String {
     crate::retention::notice(retention, false)
 }

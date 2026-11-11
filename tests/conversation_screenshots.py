@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""The desktop's conversations on a Nuschel server, end to end: edits,
+"""The desktop's conversations on a Nuschl server, end to end: edits,
 deletions, typing and a direct conversation with server history, against a
-private loopback nuscheld in a private headless GNOME Shell (never the user's
-session). Ada is a scripted nuschel-cli client; Andi is the desktop.
+private loopback nuschld in a private headless GNOME Shell (never the user's
+session). Ada is a scripted nuschl-cli client; Andi is the desktop.
 
-    NUSCHEL_WL_TMP=/tmp/... python3 tests/conversation_screenshots.py <binaries> --output DIR
+    NUSCHL_WL_TMP=/tmp/... python3 tests/conversation_screenshots.py <binaries> --output DIR
 
 Checks along the way (each scene is also a screenshot to look at):
 
@@ -35,7 +35,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gnome_session import GnomeSession  # noqa: E402
-from local_nuscheld import Nuscheld, eventually, free_port  # noqa: E402
+from local_nuschld import Nuschld, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
 
 EDIT, DELETE = 1, 2
@@ -60,11 +60,11 @@ def conversation(client, channel):
 
 def answer(client, request_id):
     return client.wait(lambda event: event.get("request_id") == request_id
-                       and event["kind"] in ("chat_ack", "nuschel_error", "direct_opened"))
+                       and event["kind"] in ("chat_ack", "nuschl_error", "direct_opened"))
 
 
 class Ada:
-    """The other side: a nuschel-cli client in #Development."""
+    """The other side: a nuschl-cli client in #Development."""
 
     def __init__(self, binaries, port, pin, root):
         self.client = Client(binaries, "127.0.0.1", port, pin, "Ada", root / "ada")
@@ -116,11 +116,11 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     width, height = map(int, args.size.split("x"))
-    with tempfile.TemporaryDirectory(prefix="nuschel-conversation-screens-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-conversation-screens-") as temporary:
         root = Path(temporary)
         port = free_port()
         (root / "server").mkdir()
-        server = Nuscheld(args.binaries, root / "server", port)
+        server = Nuschld(args.binaries, root / "server", port)
         server.seed()
         server.start()
         shell = GnomeSession(args.gnome_shell, width + 160, height + 100,
@@ -148,37 +148,37 @@ def main():
             ada.tell(direct, "Hi Andi, are you around this afternoon?")
             ada.tell(direct, "I left the notes for the release in #Development.")
 
-            bookmark = {"id": str(uuid.uuid4()), "name": "Nuschel test server", "host": "127.0.0.1",
+            bookmark = {"id": str(uuid.uuid4()), "name": "Nuschl test server", "host": "127.0.0.1",
                         "port": port, "username": "Andi", "certificate_sha256": pin}
             (profile / "config/servers.json").write_text(json.dumps([bookmark]))
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme}}))
             log = (args.output / "desktop.log").open("w")
-            app = subprocess.Popen([str(args.binaries / "nuschel"), "--profile-dir", str(profile),
+            app = subprocess.Popen([str(args.binaries / "nuschl"), "--profile-dir", str(profile),
                                     f"mumble://Andi@127.0.0.1:{port}/Lobby/Development"],
-                                   env=shell.app_environment() | {"RUST_LOG": "nuschel=info"},
+                                   env=shell.app_environment() | {"RUST_LOG": "nuschl=info"},
                                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            eventually(lambda: app.poll() is None and shell.window("Nuschel"), "Nuschel window did not appear")
+            eventually(lambda: app.poll() is None and shell.window("Nuschl"), "Nuschl window did not appear")
 
             def placed():
-                shell.place("Nuschel", 40, 40, width, height)
+                shell.place("Nuschl", 40, 40, width, height)
                 time.sleep(0.3)
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 return window["width"] == width and window["height"] == height
 
-            eventually(placed, "Nuschel window could not be placed")
+            eventually(placed, "Nuschl window could not be placed")
             andi = ada.client.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "Andi"
                                    and e["user"]["channel"] == DEVELOPMENT, timeout=30)["user"]["session"]
             time.sleep(3.0)
 
             def shot(name):
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 path = shell.screenshot(args.output / f"{name}.png",
                                         crop=(window["x"] - 12, window["y"] - 12,
                                               window["width"] + 24, window["height"] + 24))
                 print(path, flush=True)
 
             def at(x, y):
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 return window["x"] - 12 + x, window["y"] - 12 + y
 
             def click(x, y, button=1):
@@ -331,7 +331,7 @@ def main():
             click(600, 300)
             time.sleep(2.0)
             shot("conversation-12-search-jumped")
-            print("Conversations on a Nuschel server: ok", flush=True)
+            print("Conversations on a Nuschl server: ok", flush=True)
         finally:
             if ada:
                 ada.client.process.kill()

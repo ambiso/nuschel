@@ -16,7 +16,7 @@
 //!   HybridPublicKey device_signing_key;     // 1986 bytes
 //!   SignatureAlgorithm credential_algorithm;// ed25519
 //!   opaque credential_key[32];              // signs compact credentials only
-//!   opaque signature[3373];                 // root, ctx "nuschel/device-signing-certificate/v1"
+//!   opaque signature[3373];                 // root, ctx "nuschl/device-signing-certificate/v1"
 //! } DeviceSigningCertificate;               // 5439 bytes
 //!
 //! struct {
@@ -32,7 +32,7 @@
 //!   KemAlgorithm kem_algorithm;             // xwing
 //!   opaque kem_key[1216];
 //!   opaque display_name<0..64>;             // UTF-8, no control characters
-//!   opaque signature[3373];                 // device-signing key, ctx "nuschel/device-certificate/v1"
+//!   opaque signature[3373];                 // device-signing key, ctx "nuschl/device-certificate/v1"
 //! } DeviceCertificate;                      // 4700 to 4764 bytes
 //!
 //! struct {
@@ -45,7 +45,7 @@
 //!   uint64 not_after;
 //!   SignatureAlgorithm leaf_algorithm;      // ed25519: decides the key length and that
 //!   opaque leaf_key[32];                    //   the signature is Ed25519 by the credential key
-//!   opaque signature[64];                   // ctx "nuschel/device-credential/v1"
+//!   opaque signature[64];                   // ctx "nuschl/device-credential/v1"
 //! } DeviceCredential;                       // 172 bytes: the MLS credential (type 0xF4E1)
 //!
 //! struct {
@@ -55,7 +55,7 @@
 //!   opaque device_id[16];
 //!   uint32 through_key_epoch;               // revokes key epochs <= this; 0xFFFFFFFF: the device
 //!   uint64 revoked_at;                      // Unix seconds, informational
-//!   opaque signature[3373];                 // device-signing key, ctx "nuschel/device-revocation/v1"
+//!   opaque signature[3373];                 // device-signing key, ctx "nuschl/device-revocation/v1"
 //! } DeviceRevocation;                       // 3439 bytes
 //!
 //! struct {
@@ -65,7 +65,7 @@
 //!   opaque server[32];                      // the server's key-transparency log id
 //!   opaque account[16];                     // the immutable account id on that server
 //!   uint64 created_at;                      // Unix seconds, informational
-//!   opaque signature[3373];                 // device-signing key, ctx "nuschel/account-statement/v1"
+//!   opaque signature[3373];                 // device-signing key, ctx "nuschl/account-statement/v1"
 //! } AccountStatement;                       // 3467 bytes
 //! ```
 
@@ -81,11 +81,11 @@ use crate::keys::{
 };
 use crate::roster::VerifiedIdentity;
 
-pub(crate) const DEVICE_SIGNING_CERTIFICATE_CTX: &str = "nuschel/device-signing-certificate/v1";
-pub(crate) const DEVICE_CERTIFICATE_CTX: &str = "nuschel/device-certificate/v1";
-pub(crate) const DEVICE_CREDENTIAL_CTX: &str = "nuschel/device-credential/v1";
-pub(crate) const DEVICE_REVOCATION_CTX: &str = "nuschel/device-revocation/v1";
-pub(crate) const ACCOUNT_STATEMENT_CTX: &str = "nuschel/account-statement/v1";
+pub(crate) const DEVICE_SIGNING_CERTIFICATE_CTX: &str = "nuschl/device-signing-certificate/v1";
+pub(crate) const DEVICE_CERTIFICATE_CTX: &str = "nuschl/device-certificate/v1";
+pub(crate) const DEVICE_CREDENTIAL_CTX: &str = "nuschl/device-credential/v1";
+pub(crate) const DEVICE_REVOCATION_CTX: &str = "nuschl/device-revocation/v1";
+pub(crate) const ACCOUNT_STATEMENT_CTX: &str = "nuschl/account-statement/v1";
 
 /// `through_key_epoch` of a revocation that retires the device itself.
 pub const WHOLE_DEVICE: u32 = u32::MAX;

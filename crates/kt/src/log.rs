@@ -9,7 +9,7 @@ use std::fmt;
 use thiserror::Error;
 
 /// Domain separation for the log id.
-const LOG_ID_CONTEXT: &[u8] = b"nuschel-kt/v1 log id\0";
+const LOG_ID_CONTEXT: &[u8] = b"nuschl-kt/v1 log id\0";
 /// Largest encoded [`LogDescriptor`].
 pub const MAX_DESCRIPTOR_BYTES: usize = 512;
 const MAX_SIGNING_KEY: usize = 64;
@@ -21,7 +21,7 @@ const MAX_SUITE_PARAMS: usize = 256;
 #[repr(u8)]
 pub enum Suite {
     /// `akd` 0.13 with its current ("experimental") configuration under the domain label
-    /// `nuschel-kt/v1 akd`: BLAKE3, ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381), 256-bit
+    /// `nuschl-kt/v1 akd`: BLAKE3, ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381), 256-bit
     /// labels. Suite parameter: the 32-byte VRF public key.
     AkdBlake3Ecvrf25519V1 = 1,
 }
@@ -177,7 +177,7 @@ impl HeadSigner for Ed25519HeadSigner {
     }
 }
 
-/// Identifies a log: SHA-256 over `"nuschel-kt/v1 log id\0" || descriptor`. Every head
+/// Identifies a log: SHA-256 over `"nuschl-kt/v1 log id\0" || descriptor`. Every head
 /// names it, so a head binds the suite, the signing key and the VRF key.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LogId(pub [u8; 32]);
@@ -194,7 +194,7 @@ impl fmt::Debug for LogId {
 
 /// Everything a client pins about a server's log: the suite, the head-signing key and
 /// the suite's public parameters (for akd, the VRF public key). Sent in the
-/// `NuschelHello` and pinned with the server (sticky); invites can carry its [`LogId`].
+/// `NuschlHello` and pinned with the server (sticky); invites can carry its [`LogId`].
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct LogDescriptor {
     suite: Suite,

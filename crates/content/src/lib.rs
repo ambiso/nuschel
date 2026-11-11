@@ -5,7 +5,7 @@ use std::cell::OnceCell;
 
 use base64::Engine as _;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder as _, ImageFormat, ImageReader, Limits};
-use nuschel_core::{CodeRun, ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
+use nuschl_core::{CodeRun, ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use syntect::{
     easy::HighlightLines,
@@ -398,7 +398,7 @@ impl ContentRenderer {
                             && fences < math::MAX_FORMULAS
                             && !body.trim().is_empty()
                             && body.len() <= math::MAX_FORMULA_BYTES
-                            && !written.contains(nuschel_core::EMBED);
+                            && !written.contains(nuschl_core::EMBED);
                         let block = if formula {
                             fences += 1;
                             ContentBlock::Math {
@@ -465,7 +465,7 @@ mod tests {
     /// document the worker renders, though its prepared source keeps markers.
     #[test]
     fn html_file_offers_are_recognised_after_rendering() -> Result<(), super::Error> {
-        use nuschel_core::transfer::{Offer, format_offer, offer_in};
+        use nuschl_core::transfer::{Offer, format_offer, offer_in};
         let renderer = super::ContentRenderer::new()?;
         let offer = Offer {
             name: "frost.pdf".into(),
@@ -483,7 +483,7 @@ mod tests {
         };
         let html = format_offer(&ended).html;
         let source = renderer.legacy_plain_text(&html)?;
-        assert_eq!(nuschel_core::transfer::parse_offer(&source), None);
+        assert_eq!(nuschl_core::transfer::parse_offer(&source), None);
         assert_eq!(offer_in(&renderer.render(&source)?), Some(ended));
         Ok(())
     }
@@ -509,7 +509,7 @@ mod tests {
             &html[..html.len().min(80)]
         );
     }
-    use nuschel_core::EMBED;
+    use nuschl_core::EMBED;
 
     #[test]
     fn favicons_decode_from_ico() {

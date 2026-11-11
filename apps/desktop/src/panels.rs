@@ -12,7 +12,7 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_session::{
+use nuschl_session::{
     connection::Command,
     model::{AclEntry, permission},
 };
@@ -231,7 +231,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 if let Some(address) = &stats.address {
                     rows.push(row("Address", address.clone(), 11));
                 }
-                // What the user's voice is sent with, as far as known: Nuschel
+                // What the user's voice is sent with, as far as known: Nuschl
                 // sends only Opus; others are judged by what was heard from
                 // them, then by the extended statistics (a client version from
                 // 1.2.4 on supports Opus). Without either, no guess.
@@ -498,7 +498,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                                         this.run(
                                             index,
                                             Command::UpdateRegisteredUsers(vec![
-                                                nuschel_session::model::RegisteredUser {
+                                                nuschl_session::model::RegisteredUser {
                                                     user_id: id,
                                                     name: None,
                                                     last_seen: None,

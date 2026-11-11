@@ -1,26 +1,26 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! End-to-end-encrypted direct conversations through the worker (docs/e2ee.md §6,
-//! §7), in process: nuschel-kt's directory stands in for the server's log, the
-//! test plays the delivery service with nuschel-e2ee's `DeliveryGroup` and assigns
-//! seqs itself, and "raw" devices (nuschel-e2ee's client driven directly) play
+//! §7), in process: nuschl-kt's directory stands in for the server's log, the
+//! test plays the delivery service with nuschl-e2ee's `DeliveryGroup` and assigns
+//! seqs itself, and "raw" devices (nuschl-e2ee's client driven directly) play
 //! members that misbehave or are not workers.
 mod common;
 
 use common::*;
-use nuschel_crypto_worker::{KeySource, Store};
-use nuschel_e2ee::client::{Client as RawClient, Incoming, ValidKeyPackage};
-use nuschel_e2ee::ds::{DeliveryGroup, DsError};
-use nuschel_e2ee::envelope::{Envelope, Kind};
-use nuschel_e2ee::{ConversationBinding, SUITE_KEM_PUBLIC_KEY_LEN};
-use nuschel_identity::{
+use nuschl_crypto_worker::{KeySource, Store};
+use nuschl_e2ee::client::{Client as RawClient, Incoming, ValidKeyPackage};
+use nuschl_e2ee::ds::{DeliveryGroup, DsError};
+use nuschl_e2ee::envelope::{Envelope, Kind};
+use nuschl_e2ee::{ConversationBinding, SUITE_KEM_PUBLIC_KEY_LEN};
+use nuschl_identity::{
     DeviceCertificate, DeviceCredential, DeviceKeys, DeviceKeystore, DisplayName, NewIdentity,
     Validity,
 };
-use nuschel_ipc::crypto::{
+use nuschl_ipc::crypto::{
     ConversationView, CryptoRequest, CryptoResponse, KtRecordBytes, Lock, MlsOutgoing, Order,
     Received,
 };
-use nuschel_kt::{AccountBinding, Directory, RosterCommitment};
+use nuschl_kt::{AccountBinding, Directory, RosterCommitment};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -873,7 +873,7 @@ fn person_for(
     }
 }
 
-/// A device driven with nuschel-e2ee directly.
+/// A device driven with nuschl-e2ee directly.
 struct RawDevice {
     account: std::cell::Cell<Option<[u8; 16]>>,
     /// A first device holds its identity (and the device-signing key).
@@ -1015,7 +1015,7 @@ fn short_init_key_package(device: &RawDevice) -> Vec<u8> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_grant_must_match_the_independently_derived_current_key() {
-    use nuschel_e2ee::history::{HistoryKey, encode_grant_page};
+    use nuschl_e2ee::history::{HistoryKey, encode_grant_page};
     let dir = directory([0x11; 32]).await;
     let (mut alice, _) = worker(&dir, 1, T0 + 10).await;
     let bob = RawDevice::new("bob");
@@ -1099,7 +1099,7 @@ async fn a_grant_must_match_the_independently_derived_current_key() {
     // An archive holder cannot substitute an unlisted device credential or
     // attribute a genuine signer to somebody else's account.
     let unlisted = bob.second_device("not published");
-    let record = nuschel_e2ee::history::seal_archive(
+    let record = nuschl_e2ee::history::seal_archive(
         &current,
         &CONVERSATION,
         &unlisted
@@ -1121,7 +1121,7 @@ async fn a_grant_must_match_the_independently_derived_current_key() {
     assert!(
         matches!(read(&mut alice, record, bob_person.account.to_vec()), CryptoResponse::Rejected(reason) if reason.contains("pinned roster"))
     );
-    let record = nuschel_e2ee::history::seal_archive(
+    let record = nuschl_e2ee::history::seal_archive(
         &current,
         &CONVERSATION,
         &bob.envelope(1, [0; 32], "before revocation", [3; 16])

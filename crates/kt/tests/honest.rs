@@ -4,8 +4,8 @@
 mod common;
 
 use common::*;
-use nuschel_identity::{DeviceKeys, DisplayName, NewIdentity, Validity};
-use nuschel_kt::*;
+use nuschl_identity::{DeviceKeys, DisplayName, NewIdentity, Validity};
+use nuschl_kt::*;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

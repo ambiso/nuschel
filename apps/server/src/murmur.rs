@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! `nuscheld --import-murmur`: move a Murmur (mumble-server) server here.
+//! `nuschld --import-murmur`: move a Murmur (mumble-server) server here.
 //!
 //! The storage worker reads the Murmur database read-only
-//! (`nuschel-storage-worker --read-murmur`, crates/storage/src/murmur.rs); this
+//! (`nuschl-storage-worker --read-murmur`, crates/storage/src/murmur.rs); this
 //! module treats every row as untrusted and applies the server's own rules:
 //! user and channel names against the configured patterns, comments and
 //! descriptions against the text limits, textures against the image limit,
@@ -28,7 +28,7 @@ use crate::{
     text,
 };
 use bytes::Bytes;
-use nuschel_ipc::{
+use nuschl_ipc::{
     Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
     murmur::{MurmurDump, MurmurFrame, decode_blob},
     server::ServerStorageRequest,
@@ -65,7 +65,7 @@ pub struct Options {
     pub replace_existing: bool,
 }
 
-/// `nuscheld admin import-murmur` (and the older `--import-murmur`).
+/// `nuschld admin import-murmur` (and the older `--import-murmur`).
 #[derive(clap::Args, Clone, Debug)]
 pub struct ImportArguments {
     /// The Murmur database (`murmur.sqlite`, `mumble-server.sqlite`); opened
@@ -364,7 +364,7 @@ pub fn apply(
     let settings = state.settings.clone();
 
     // ---- the channel tree: one root, parents first, no cycles ----
-    let mut by_id: BTreeMap<u32, &nuschel_ipc::murmur::MurmurChannel> = BTreeMap::new();
+    let mut by_id: BTreeMap<u32, &nuschl_ipc::murmur::MurmurChannel> = BTreeMap::new();
     for channel in &dump.channels {
         match to_id(channel.id) {
             Some(id) if by_id.contains_key(&id) => {
@@ -658,7 +658,7 @@ pub fn apply(
     let registered = |id: u32| state.registry.users.contains_key(&id);
 
     // ---- ACLs and groups ----
-    let mut acls: BTreeMap<u32, Vec<&nuschel_ipc::murmur::MurmurAcl>> = BTreeMap::new();
+    let mut acls: BTreeMap<u32, Vec<&nuschl_ipc::murmur::MurmurAcl>> = BTreeMap::new();
     for acl in &dump.acls {
         acls.entry(to_id(acl.channel).unwrap_or(u32::MAX))
             .or_default()
@@ -923,7 +923,7 @@ pub fn apply(
     state.persist_bans();
     if dump.users.iter().any(|user| user.email) {
         report.advice.push(
-            "note: e-mail addresses of registered users were not imported (nuscheld has no \
+            "note: e-mail addresses of registered users were not imported (nuschld has no \
              e-mail login)"
                 .into(),
         );
@@ -1160,7 +1160,7 @@ pub fn write_outputs(
         let path = directory.join("murmur-import.toml");
         let mut text = String::from(
             "# Murmur's per-server settings (its database's config table), converted by\n\
-             # nuscheld --import-murmur. Merge them into the configuration file; settings\n\
+             # nuschld --import-murmur. Merge them into the configuration file; settings\n\
              # from murmur.ini are not in the database and need to be carried over by hand.\n",
         );
         text.push_str(&outputs.toml);
@@ -1243,7 +1243,7 @@ pub async fn import(
     settings.config.bind.clear();
     // The state directory 0700 and a new SQLite database 0600, as at startup.
     server::prepare_files(&settings, &backend)?;
-    // The operator lock first, as `nuscheld admin` takes it: an import never
+    // The operator lock first, as `nuschld admin` takes it: an import never
     // runs against a database a live server (or another admin command) holds.
     let storage = storage::start_locked(backend);
     server::hold_operator_lock(&storage).await?;

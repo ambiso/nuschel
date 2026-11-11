@@ -11,7 +11,7 @@ use crate::{
     tls, udp,
 };
 use bytes::Bytes;
-use nuschel_protocol::control as proto;
+use nuschl_protocol::control as proto;
 use std::{
     collections::{HashMap, VecDeque},
     io,
@@ -34,7 +34,7 @@ pub enum StartError {
     #[error("storage unavailable: {0}")]
     Storage(String),
     #[error(
-        "another process (a running nuscheld, or `nuscheld admin`) is using this database; \
+        "another process (a running nuschld, or `nuschld admin`) is using this database; \
          stop it first"
     )]
     Held,
@@ -83,10 +83,10 @@ pub struct Server {
     /// Connections that have not authenticated yet (TLS included).
     pub pending: Arc<Semaphore>,
     /// The server's `Version` message, sent first on every connection; the
-    /// second carries the Nuschel hello, for `nuschel/1` connections.
+    /// second carries the Nuschl hello, for `nuschl/1` connections.
     pub version_frame: Bytes,
-    pub nuschel_version_frame: Bytes,
-    /// What `nuschel/1` connections are offered (`kt/1` only with a log).
+    pub nuschl_version_frame: Bytes,
+    /// What `nuschl/1` connections are offered (`kt/1` only with a log).
     pub capabilities: extension::Capabilities,
     pub shutdown: Notify,
     /// Failed password logins per registered account (ten, then one a second).
@@ -277,7 +277,7 @@ fn server_version(settings: &Settings) -> proto::Version {
         ..Default::default()
     };
     if settings.config.send_version {
-        message.release = Some(format!("Nuschel {}", env!("CARGO_PKG_VERSION")));
+        message.release = Some(format!("Nuschl {}", env!("CARGO_PKG_VERSION")));
         message.os = Some(std::env::consts::OS.to_owned());
     }
     message
@@ -287,7 +287,7 @@ fn server_version(settings: &Settings) -> proto::Version {
 /// channels with a missing parent (or in a cycle) moved under the root.
 fn build_channels(
     state: &mut State,
-    stored: Vec<nuschel_ipc::server::StoredChannel>,
+    stored: Vec<nuschl_ipc::server::StoredChannel>,
     links: Vec<(u32, u32)>,
 ) {
     for stored in stored {
@@ -405,7 +405,7 @@ fn bind_udp(address: SocketAddr) -> io::Result<UdpSocket> {
 /// Take the operator lock through a worker from [`storage::start_locked`]:
 /// a running server and administrative commands never share a database.
 pub async fn hold_operator_lock(storage: &StorageHandle) -> Result<(), StartError> {
-    use nuschel_ipc::server::{ServerStorageRequest as Request, ServerStorageResponse as Response};
+    use nuschl_ipc::server::{ServerStorageRequest as Request, ServerStorageResponse as Response};
     match storage.request(Request::OperatorLock).await {
         Some(Response::Done) => Ok(()),
         Some(Response::Held) => Err(StartError::Held),
@@ -588,19 +588,19 @@ pub fn find_account(state: &State, user: &str) -> Result<(conversations::Id, Str
 
 /// The operator's erase (docs/extension.md §9): every message stored by an
 /// account becomes a tombstone without content. Copies already on clients
-/// (Nuschel caches, stock clients' logs) remain.
+/// (Nuschl caches, stock clients' logs) remain.
 pub async fn erase_account(
     storage: &StorageHandle,
     account: conversations::Id,
 ) -> Result<u64, StartError> {
     match storage
-        .request(nuschel_ipc::server::ServerStorageRequest::HistoryErase {
+        .request(nuschl_ipc::server::ServerStorageRequest::HistoryErase {
             account: conversations::hex(&account),
             deleted_ms: crate::chat::now_ms(),
         })
         .await
     {
-        Some(nuschel_ipc::server::ServerStorageResponse::Count(count)) => Ok(count),
+        Some(nuschl_ipc::server::ServerStorageResponse::Count(count)) => Ok(count),
         _ => Err(StartError::Storage("could not erase the messages".into())),
     }
 }
@@ -611,8 +611,8 @@ pub fn default_backend(settings: &Settings) -> io::Result<Backend> {
         Some(path) => path.clone(),
         None => std::env::current_exe()?
             .parent()
-            .map(|directory| directory.join("nuschel-storage-worker"))
-            .ok_or_else(|| io::Error::other("cannot locate nuschel-storage-worker"))?,
+            .map(|directory| directory.join("nuschl-storage-worker"))
+            .ok_or_else(|| io::Error::other("cannot locate nuschl-storage-worker"))?,
     };
     Ok(match &settings.config.database_url_file {
         Some(path) => Backend::UrlFile {
@@ -666,13 +666,13 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         (Some(kt), true, Some(seed)) => {
             // The groups' external sender: the log's head-signing key, which every
             // client pins with the log descriptor.
-            let public: [u8; 32] = nuschel_kt::LogDescriptor::decode(&kt.descriptor)
+            let public: [u8; 32] = nuschl_kt::LogDescriptor::decode(&kt.descriptor)
                 .map_err(|error| StartError::Storage(format!("mls: the log descriptor: {error}")))?
                 .signing_key()
                 .to_bytes()
                 .try_into()
                 .map_err(|_| StartError::Storage("mls: the log key is not Ed25519".into()))?;
-            let signer = nuschel_e2ee::ds::ServerSigner::new(&seed, public)
+            let signer = nuschl_e2ee::ds::ServerSigner::new(&seed, public)
                 .map_err(|error| StartError::Storage(format!("mls: {error}")))?;
             let (handle, service) = mls::open(
                 &settings.config.mls,
@@ -704,7 +704,7 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     {
         tracing::info!(
             "SuperUser has no password and cannot log in; set one with superuser_password_file \
-             or `nuscheld --set-superuser-password`"
+             or `nuschld --set-superuser-password`"
         );
     }
     let config = &settings.config;
@@ -759,7 +759,7 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         admission: Mutex::new(Admission::default()),
         pending: Arc::new(Semaphore::new(config.max_pending_connections as usize)),
         version_frame: extension::version_frame(&server_version(&settings), None),
-        nuschel_version_frame: extension::version_frame(
+        nuschl_version_frame: extension::version_frame(
             &server_version(&settings),
             Some(&extension::server_hello(
                 &settings,
@@ -930,7 +930,7 @@ impl PingLimiter {
     }
 }
 
-impl nuschel_protocol::relay::PingBudget for PingLimiter {
+impl nuschl_protocol::relay::PingBudget for PingLimiter {
     fn allow(&mut self, request_length: usize, reply_length: usize) -> bool {
         if reply_length > request_length && !self.allow_double {
             return false;

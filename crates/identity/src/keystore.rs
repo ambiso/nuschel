@@ -16,7 +16,7 @@
 //!   opaque ciphertext<16..2^24-1>;
 //! } Sealed;
 //!
-//! key        = HKDF-SHA-256(salt, caller_key, uint8(19) || "nuschel/keystore/v1" || purpose)
+//! key        = HKDF-SHA-256(salt, caller_key, uint8(18) || "nuschl/keystore/v1" || purpose)
 //! ciphertext = ChaCha20-Poly1305(key, nonce = 0^12, aad = kind || version || purpose || salt,
 //!                                plaintext)
 //! ```
@@ -70,7 +70,7 @@
 //!
 //! The recovery key is 256 random bits, shown as 56 Crockford base32 characters in 14
 //! groups of 4: the key and a 24-bit checksum
-//! (`SHA-256(uint8(23) || "nuschel/recovery-key/v1" || key)[0..3]`). Whether a recovery
+//! (`SHA-256(uint8(23) || "nuschl/recovery-key/v1" || key)[0..3]`). Whether a recovery
 //! key is required is a policy for the caller (docs/e2ee.md §10, question 1).
 
 use std::fmt;
@@ -86,8 +86,8 @@ use crate::keys::{
 use crate::roster::VerifiedIdentity;
 use crate::{DeviceSigningCertificate, Error};
 
-const KEYSTORE_LABEL: &str = "nuschel/keystore/v1";
-const RECOVERY_CHECKSUM_LABEL: &str = "nuschel/recovery-key/v1";
+const KEYSTORE_LABEL: &str = "nuschl/keystore/v1";
+const RECOVERY_CHECKSUM_LABEL: &str = "nuschl/recovery-key/v1";
 const MAX_CIPHERTEXT: usize = (1 << 24) - 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

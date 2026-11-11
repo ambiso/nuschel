@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! A model of the delivery service in `nuscheld` (docs/e2ee.md, "Delivery service").
+//! A model of the delivery service in `nuschld` (docs/e2ee.md, "Delivery service").
 //!
 //! The server is not a member. It tracks each group's public state with OpenMLS's
 //! [`PublicGroup`] from handshake messages sent as PublicMessage, so it can

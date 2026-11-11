@@ -58,7 +58,7 @@ impl ServerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_ipc::server::{HistoryVisibility, StoredChannel, StoredUser};
+    use nuschl_ipc::server::{HistoryVisibility, StoredChannel, StoredUser};
 
     fn channel(id: u32) -> StoredChannel {
         StoredChannel {

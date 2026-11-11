@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! A malicious server against the worker, with nuschel-kt's directory in process as
+//! A malicious server against the worker, with nuschl-kt's directory in process as
 //! the server: wrong and stale heads, a fork shown to two clients, hidden changes,
 //! proofs for the wrong account, records the log does not commit to, and a binding
-//! that came and went. Each must be caught by the worker's use of nuschel-kt's
+//! that came and went. Each must be caught by the worker's use of nuschl-kt's
 //! checks, with the classification of docs/e2ee.md §5.5.
 mod common;
 
 use common::*;
-use nuschel_ipc::crypto::{
+use nuschl_ipc::crypto::{
     ContactState, CryptoRequest, CryptoResponse, HeadOutcome, MonitorOutcome, RecoveryPolicy,
 };
-use nuschel_kt::{AccountId, Directory, Ed25519HeadSigner, HeadSigner, Label, SignedHead};
+use nuschl_kt::{AccountId, Directory, Ed25519HeadSigner, HeadSigner, Label, SignedHead};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wrong_or_stale_head_is_refused_and_never_accepted() {
@@ -77,7 +77,7 @@ async fn a_fork_shown_to_two_clients_is_caught_by_gossip() {
     }) else {
         panic!()
     };
-    assert_eq!(gossip.len(), nuschel_kt::GOSSIP_BYTES);
+    assert_eq!(gossip.len(), nuschl_kt::GOSSIP_BYTES);
     let CryptoResponse::GossipChecked(outcome) = bob.ask(CryptoRequest::CheckGossip {
         server: SERVER.into(),
         gossip,
@@ -164,7 +164,7 @@ async fn hidden_changes_wrong_accounts_and_foreign_records_are_not_accepted() {
     bob.sync(&dir).await;
     let history = dir.history(&alice.label()).await.unwrap();
     let mut hidden = history.clone();
-    hidden.proof = nuschel_kt::__private::drop_newest_history_version(&history.proof).unwrap();
+    hidden.proof = nuschl_kt::__private::drop_newest_history_version(&history.proof).unwrap();
     let view = bob.history(&dir, &alice, hidden.encode().unwrap()).await;
     // A failure, first retried quietly: the pin does not move.
     assert_eq!(view.state, ContactState::Unverified);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Typing indicators on Nuschel servers (`typing/1`, docs/extension.md §7).
+//! Typing indicators on Nuschl servers (`typing/1`, docs/extension.md §7).
 //!
-//! While the composer changes, Nuschel says so at most every three seconds
+//! While the composer changes, Nuschl says so at most every three seconds
 //! (the server forwards at most one a conversation in that time and drops the
 //! rest). Nothing more is sent once the message is sent, the composer is
 //! emptied or editing stops: the protocol has no "stopped typing", so others

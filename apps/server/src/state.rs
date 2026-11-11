@@ -13,10 +13,10 @@ use crate::{
     text::utf16_len,
 };
 use bytes::Bytes;
-use nuschel_ipc::server::{
+use nuschl_ipc::server::{
     HistoryVisibility, StoredAcl, StoredBan, StoredChannel, StoredGroup, StoredUser,
 };
-use nuschel_protocol::{control as proto, crypt::CryptState, encode_control, kind};
+use nuschl_protocol::{control as proto, crypt::CryptState, encode_control, kind};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
@@ -141,7 +141,7 @@ pub struct ClientInfo {
 
 impl ClientInfo {
     /// The one place a `Version` message is interpreted, before and after
-    /// authentication. The Nuschel extension's hello (field 7200) will be
+    /// authentication. The Nuschl extension's hello (field 7200) will be
     /// decoded here too (docs/extension.md).
     pub fn apply(&mut self, message: &proto::Version) {
         self.version = match (message.version_v2, message.version_v1) {
@@ -196,7 +196,7 @@ pub struct Peer {
     pub certificate_hash: Option<String>,
     /// The certificate chains to a configured authority (Murmur's `bVerified`).
     pub strong: bool,
-    /// The Nuschel extension's negotiation (frozen at `Authenticate`).
+    /// The Nuschl extension's negotiation (frozen at `Authenticate`).
     pub negotiation: crate::extension::Negotiation,
     pub info: ClientInfo,
     pub link: Link,
@@ -225,7 +225,7 @@ pub struct Voice {
     pub udp_active: bool,
     pub last_good: Instant,
     pub last_resync_request: Option<Instant>,
-    pub remote: nuschel_protocol::crypt::CryptStats,
+    pub remote: nuschl_protocol::crypt::CryptStats,
     pub bandwidth: BandwidthRecord,
     pub udp_ping: (f32, f32, u32),
     pub tcp_ping: (f32, f32, u32),
@@ -246,7 +246,7 @@ pub struct User {
     pub address: SocketAddr,
     /// The immutable account id of a registered user.
     pub account: Option<Id>,
-    /// The Nuschel extension, when negotiated (docs/extension.md).
+    /// The Nuschl extension, when negotiated (docs/extension.md).
     pub extension: Option<Box<crate::extension::Extension>>,
     /// Channels whose retention this stock client was told about.
     pub notified: BTreeSet<u32>,
@@ -752,7 +752,7 @@ impl Ban {
 /// Things worth counting for operators.
 #[derive(Default)]
 pub struct Counters {
-    /// Control frames in the Nuschel extension's reserved range, ignored until
+    /// Control frames in the Nuschl extension's reserved range, ignored until
     /// phase 2 handles them.
     pub extension_frames: AtomicU64,
     pub unknown_frames: AtomicU64,
@@ -957,7 +957,7 @@ impl State {
     // ---- sending ----
 
     /// Encode once and queue for every authenticated user (except one).
-    /// Phase 2: connections that negotiated the Nuschel extension may get a
+    /// Phase 2: connections that negotiated the Nuschl extension may get a
     /// second encoding with extension fields; stock clients never do.
     pub fn broadcast(&self, kind: u16, message: &impl prost::Message, except: Option<u32>) {
         let Some(frame) = encode_control(kind, message) else {

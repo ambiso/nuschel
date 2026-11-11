@@ -5,7 +5,7 @@
 
 use std::io;
 
-use nuschel_ipc::windows_sandbox::{FILE_HANDLE_FLAG, Policy};
+use nuschl_ipc::windows_sandbox::{FILE_HANDLE_FLAG, Policy};
 use windows_sys::Win32::Foundation::HANDLE;
 
 use crate::{
@@ -155,9 +155,9 @@ mod tests {
         },
     };
 
-    const EXECUTABLE: &str = r"C:\Program Files\Nuschel\nuschel-storage-worker.exe";
-    const HISTORY: &str = r"C:\Users\t\AppData\Local\Nuschel\history";
-    const PROFILE: &str = "nuschel.storage.0123456789abcdef";
+    const EXECUTABLE: &str = r"C:\Program Files\Nuschl\nuschl-storage-worker.exe";
+    const HISTORY: &str = r"C:\Users\t\AppData\Local\Nuschl\history";
+    const PROFILE: &str = "nuschl.storage.0123456789abcdef";
 
     fn handle(raw: usize) -> HANDLE {
         ptr::without_provenance_mut::<c_void>(raw)

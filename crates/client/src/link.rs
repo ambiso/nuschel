@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Opening `mumble://` and share links on native platforms, where the link's parser
-//! and the servers' security records are `nuschel-session`'s.
+//! and the servers' security records are `nuschl-session`'s.
 use crate::{Client, Update};
-use nuschel_session::config::{MumbleUrl, Profile, ServerBookmark};
+use nuschl_session::config::{MumbleUrl, Profile, ServerBookmark};
 
 impl Client {
     /// Connect to a `mumble://` link, reusing a saved server with its host,
     /// port and (if the link names one) username, or saving a new one. An
     /// invite's certificate pin fills in a missing pin, never replaces one,
-    /// and its `policy=nuschel` raises the server's security record before
+    /// and its `policy=nuschl` raises the server's security record before
     /// anything connects. The link's channel is joined once the tree is
     /// known, and its password is kept for this run only. It connects
     /// muted, and `deafened` too if so asked.
@@ -23,7 +23,7 @@ impl Client {
         profile: &Profile,
         deafened: bool,
     ) -> Result<Option<usize>, String> {
-        if url.require_nuschel {
+        if url.require_nuschl {
             profile
                 .policy()
                 .and_then(|mut store| store.raise(&url.host, url.port, true, &[]))
@@ -69,7 +69,7 @@ impl Client {
 mod tests {
     use super::*;
     use crate::platform::{ChangeRequest, Platform, RenderKey, Request};
-    use nuschel_core::{SearchCursor, audio::Sound};
+    use nuschl_core::{SearchCursor, audio::Sound};
 
     struct Offline;
     impl Platform for Offline {
@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn links_reuse_saved_servers_and_only_fill_in_a_pin() -> Result<(), String> {
-        let root = std::env::temp_dir().join(format!("nuschel-link-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("nuschl-link-{}", std::process::id()));
         let profile = Profile::open(Some(root.clone())).map_err(|error| error.to_string())?;
         let saved = ServerBookmark::new("Saved", "voice.example.org", 64738, "ada")?;
         let mut client = Client::new(Box::new(Offline), vec![saved], Default::default());

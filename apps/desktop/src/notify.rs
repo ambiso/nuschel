@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Desktop notifications for messages that arrive while Nuschel is in the
+//! Desktop notifications for messages that arrive while Nuschl is in the
 //! background (direct messages, your voice channel, mentions of your name).
 //! Linux uses the freedesktop notification service over D-Bus, with an
 //! image's thumbnail attached; other systems are not implemented yet.
@@ -88,7 +88,7 @@ pub fn start(handle: &tokio::runtime::Handle) -> tokio::sync::mpsc::Sender<Note>
         while let Some(note) = notes.recv().await {
             use zbus::zvariant::Value;
             let mut hints = std::collections::HashMap::<&str, Value>::new();
-            hints.insert("desktop-entry", Value::from("org.nuschel.Nuschel"));
+            hints.insert("desktop-entry", Value::from("org.nuschl.Nuschl"));
             hints.insert("category", Value::from("im.received"));
             if let Some((width, height, rgba)) = note.image {
                 let image = (
@@ -107,9 +107,9 @@ pub fn start(handle: &tokio::runtime::Handle) -> tokio::sync::mpsc::Sender<Note>
                 .call::<_, _, u32>(
                     "Notify",
                     &(
-                        "Nuschel",
+                        "Nuschl",
                         previous,
-                        "org.nuschel.Nuschel",
+                        "org.nuschl.Nuschl",
                         plain(&note.summary),
                         escape(&note.body),
                         Vec::<&str>::new(),

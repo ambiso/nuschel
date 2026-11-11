@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-update"
+name = "nuschl-update"
 description = "Signed in-place updates for the Windows and macOS builds"
 version.workspace = true
 edition.workspace = true

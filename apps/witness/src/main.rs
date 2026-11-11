@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! `nuschel-witness`: see the library documentation and docs/witness.md.
+//! `nuschl-witness`: see the library documentation and docs/witness.md.
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(version, about = "The project auditor for Nuschel's key transparency")]
+#[command(version, about = "The project auditor for Nuschl's key transparency")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -16,11 +16,11 @@ enum Command {
     /// Check and cosign the epoch logs servers submit.
     Serve {
         /// The cosigner name clients configure (for example
-        /// `witness.example.org/nuschel-kt`).
+        /// `witness.example.org/nuschl-kt`).
         #[arg(long)]
         name: String,
         /// Where the key (if generated) and one state file per log are kept.
-        #[arg(long, default_value = "/var/lib/nuschel-witness")]
+        #[arg(long, default_value = "/var/lib/nuschl-witness")]
         state_directory: PathBuf,
         /// The ML-DSA-44 seed: 32 bytes or 64 hex digits. Generated once in the
         /// state directory (`witness.key`) without it.
@@ -51,7 +51,7 @@ enum Command {
     Vkey {
         #[arg(long)]
         name: String,
-        #[arg(long, default_value = "/var/lib/nuschel-witness")]
+        #[arg(long, default_value = "/var/lib/nuschl-witness")]
         state_directory: PathBuf,
         #[arg(long)]
         key_file: Option<PathBuf>,
@@ -79,7 +79,7 @@ async fn main() {
             max_request_bytes,
             enrol_private_addresses,
         } => {
-            let config = nuschel_witness::Config {
+            let config = nuschl_witness::Config {
                 key_file,
                 listen,
                 accept_new_logs,
@@ -88,9 +88,9 @@ async fn main() {
                 enrolments_per_minute,
                 max_request_bytes,
                 enrol_private_addresses,
-                ..nuschel_witness::Config::new(name, state_directory)
+                ..nuschl_witness::Config::new(name, state_directory)
             };
-            match nuschel_witness::start(config).await {
+            match nuschl_witness::start(config).await {
                 Ok(running) => {
                     tokio::select! {
                         () = running.wait() => Ok(()),
@@ -105,15 +105,15 @@ async fn main() {
             state_directory,
             key_file,
         } => {
-            let config = nuschel_witness::Config {
+            let config = nuschl_witness::Config {
                 key_file,
-                ..nuschel_witness::Config::new(name, state_directory)
+                ..nuschl_witness::Config::new(name, state_directory)
             };
-            nuschel_witness::cosigner(&config).map(|cosigner| println!("{}", cosigner.key().vkey()))
+            nuschl_witness::cosigner(&config).map(|cosigner| println!("{}", cosigner.key().vkey()))
         }
     };
     if let Err(error) = result {
-        eprintln!("nuschel-witness: {error}");
+        eprintln!("nuschl-witness: {error}");
         std::process::exit(1);
     }
 }

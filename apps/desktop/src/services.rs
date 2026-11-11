@@ -3,9 +3,9 @@
 //! audio check, update checks and installs, website icons, the image
 //! viewer's larger decodes, and images attached for sending. Each reports a
 //! [`ServiceEvent`] for the desktop to apply.
-use nuschel_client::native::content_worker;
-use nuschel_core::MessageDocument;
-use nuschel_session::config::ClientSettings;
+use nuschl_client::native::content_worker;
+use nuschl_core::MessageDocument;
+use nuschl_session::config::ClientSettings;
 use tokio::{
     runtime::Handle,
     sync::{mpsc, watch},
@@ -18,7 +18,7 @@ pub enum ServiceEvent {
     /// A server's website icon, decoded by the content worker (`None`: none found).
     ServerIcon {
         server: String,
-        icon: Option<nuschel_core::ContentBlock>,
+        icon: Option<nuschl_core::ContentBlock>,
     },
     /// The image viewer's larger decode (`None` if the worker refused it).
     Viewed {
@@ -28,7 +28,7 @@ pub enum ServiceEvent {
     /// An attached image re-encoded for sending, or why it cannot be sent.
     Prepared {
         id: u64,
-        result: Result<nuschel_ipc::EncodedImage, String>,
+        result: Result<nuschl_ipc::EncodedImage, String>,
     },
 }
 
@@ -92,7 +92,7 @@ impl Services {
                 .ok()
                 .flatten();
             let icon = match (bytes, content_worker()) {
-                (Some(bytes), Some(worker)) => nuschel_ipc::host::decode_icon(worker, &bytes)
+                (Some(bytes), Some(worker)) => nuschl_ipc::host::decode_icon(worker, &bytes)
                     .await
                     .ok()
                     .and_then(|document| document.blocks.into_iter().next()),
@@ -105,7 +105,7 @@ impl Services {
         let events = self.sender.clone();
         self.handle.spawn(async move {
             let document = match content_worker() {
-                Some(worker) => nuschel_ipc::host::decode_view(worker, &uri).await.ok(),
+                Some(worker) => nuschl_ipc::host::decode_view(worker, &uri).await.ok(),
                 None => None,
             };
             let _ = events
@@ -202,9 +202,9 @@ impl Services {
                 if image.len() as u64 > crate::attachments::MAX_IMAGE_BYTES {
                     return Err("it is larger than 8 MB".to_owned());
                 }
-                match nuschel_ipc::host::encode_image(worker, &image, limit as u32).await {
+                match nuschl_ipc::host::encode_image(worker, &image, limit as u32).await {
                     Ok(encoded) => Ok(encoded),
-                    Err(nuschel_ipc::host::Error::Rejected(reason)) => Err(reason),
+                    Err(nuschl_ipc::host::Error::Rejected(reason)) => Err(reason),
                     Err(error) => Err(error.to_string()),
                 }
             }

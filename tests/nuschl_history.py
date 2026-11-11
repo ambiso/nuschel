@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Nuschel against nuscheld with the Nuschel extension: the extension is
+"""Nuschl against nuschld with the Nuschl extension: the extension is
 negotiated, channel text is stored and acknowledged, members read what was said
 while they were offline from the server's history, and a client that requires
-the Nuschel protocol (an invite's policy=nuschel) logs in."""
+the Nuschl protocol (an invite's policy=nuschl) logs in."""
 import argparse
 import secrets
 import tempfile
@@ -14,7 +14,7 @@ from mumble_client import Client, certificate_pin
 def connect(binaries, args, pin, name, profile, extra=()):
     client = Client(binaries, args.host, args.port, pin, name, profile, extra)
     negotiated = next((event for event in client.events if event["kind"] == "negotiated"), None)
-    assert negotiated and negotiated["nuschel"], f"no Nuschel negotiation: {negotiated}"
+    assert negotiated and negotiated["nuschl"], f"no Nuschl negotiation: {negotiated}"
     assert "history/1" in negotiated["capabilities"], negotiated
     return client
 
@@ -35,7 +35,7 @@ def conversation(client, channel=0):
 def page(client, request_id, conversation_id):
     client.send(kind="history", request_id=request_id, conversation=conversation_id, limit=100)
     event = client.wait(lambda event: event.get("request_id") == request_id
-                        and event["kind"] in ("history_page", "nuschel_error"))
+                        and event["kind"] in ("history_page", "nuschl_error"))
     assert event["kind"] == "history_page", event
     return [message["content"] for message in event["messages"]]
 
@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--port", type=int, default=64738)
     args = parser.parse_args()
     token = secrets.token_hex(4)
-    with tempfile.TemporaryDirectory(prefix="nuschel-history-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-history-") as temporary:
         root = Path(temporary)
         pin = certificate_pin(args.binaries, args.host, args.port, root / "probe")
         alice = connect(args.binaries, args, pin, f"Alice{token}", root / "alice")
@@ -58,7 +58,7 @@ def main():
         acked = alice.wait(lambda event: event["kind"] in ("chat_acked", "chat_failed"))
         assert acked["kind"] == "chat_acked", acked
         bob = connect(args.binaries, args, pin, f"Bob{token}", root / "bob",
-                      ("--require-nuschel",))
+                      ("--require-nuschl",))
         register(bob)
         assert first in page(bob, 1, lobby), "a later member reads earlier history"
         # Said while Alice is offline; she reads it from the server afterwards.
@@ -76,7 +76,7 @@ def main():
         assert live["seq"] is not None, live
         bob.close()
         alice.close()
-    print("Nuschel history against nuscheld: ok")
+    print("Nuschl history against nuschld: ok")
 
 
 if __name__ == "__main__":

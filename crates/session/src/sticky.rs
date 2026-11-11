@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The sticky extension policy (docs/extension.md §1, "Downgrade protection").
-//! Once a server negotiated `nuschel/1` or a capability, a later connection
+//! Once a server negotiated `nuschl/1` or a capability, a later connection
 //! that offers less fails with an error the user can act on; nothing falls
 //! back to the weaker mode, and only an explicit reset (per server, in its
 //! settings) clears the record. Records are kept per server address, not per
@@ -16,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(crate) const FILE: &str = "nuschel-policy.json";
+pub(crate) const FILE: &str = "nuschl-policy.json";
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_RECORDS: usize = 4096;
 const MAX_CAPABILITIES: usize = 32;
@@ -25,8 +25,9 @@ const MAX_CAPABILITIES: usize = 32;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Requirement {
-    /// The server must select ALPN `nuschel/1` and send a hello.
-    pub nuschel: bool,
+    /// The server must select ALPN `nuschl/1` and send a hello.
+    #[serde(alias = "nuschel")]
+    pub nuschl: bool,
     /// Capabilities the server must keep offering.
     #[serde(default)]
     pub capabilities: BTreeSet<String>,
@@ -34,16 +35,16 @@ pub struct Requirement {
 
 impl Requirement {
     pub fn is_empty(&self) -> bool {
-        !self.nuschel && self.capabilities.is_empty()
+        !self.nuschl && self.capabilities.is_empty()
     }
 
     /// Whether a negotiation result meets the requirement; the error is what
     /// the user is shown.
-    pub fn check(&self, nuschel: bool, capabilities: &[String]) -> Result<(), String> {
-        if self.nuschel && !nuschel {
+    pub fn check(&self, nuschl: bool, capabilities: &[String]) -> Result<(), String> {
+        if self.nuschl && !nuschl {
             return Err(
-                "This server used the Nuschel protocol before but now answers as a plain \
-                 Mumble server. That can mean someone is impersonating it. Nuschel did not log \
+                "This server used the Nuschl protocol before but now answers as a plain \
+                 Mumble server. That can mean someone is impersonating it. Nuschl did not log \
                  in. If the operator changed the server, reset this server's security record."
                     .into(),
             );
@@ -57,7 +58,7 @@ impl Requirement {
         if !missing.is_empty() {
             return Err(format!(
                 "This server no longer offers {} although it did before. That can mean \
-                 someone is impersonating it. Nuschel did not log in. If the operator changed \
+                 someone is impersonating it. Nuschl did not log in. If the operator changed \
                  the server, reset this server's security record.",
                 missing.join(", ")
             ));
@@ -67,9 +68,9 @@ impl Requirement {
 
     /// Raise the requirement to what was negotiated; it never goes down.
     /// Returns whether it changed.
-    pub fn raise(&mut self, nuschel: bool, capabilities: &[String]) -> bool {
+    pub fn raise(&mut self, nuschl: bool, capabilities: &[String]) -> bool {
         let before = self.clone();
-        self.nuschel |= nuschel;
+        self.nuschl |= nuschl;
         for capability in capabilities {
             if self.capabilities.len() < MAX_CAPABILITIES {
                 self.capabilities.insert(capability.clone());
@@ -106,7 +107,7 @@ impl PolicyStore {
                 })
             {
                 return Err(io::Error::other(
-                    "the Nuschel policy file exceeds its limits",
+                    "the Nuschl policy file exceeds its limits",
                 ));
             }
             records
@@ -129,18 +130,18 @@ impl PolicyStore {
         &mut self,
         host: &str,
         port: u16,
-        nuschel: bool,
+        nuschl: bool,
         capabilities: &[String],
     ) -> io::Result<bool> {
         let key = key(host, port);
         if !self.records.contains_key(&key) && self.records.len() >= MAX_RECORDS {
-            return Err(io::Error::other("too many Nuschel policy records"));
+            return Err(io::Error::other("too many Nuschl policy records"));
         }
         let changed = self
             .records
             .entry(key)
             .or_default()
-            .raise(nuschel, capabilities);
+            .raise(nuschl, capabilities);
         if changed {
             self.save()?;
         }
@@ -199,7 +200,7 @@ mod tests {
                 .unwrap()
         );
         let reloaded = PolicyStore::load(&directory).unwrap();
-        assert!(reloaded.get("example.org", 64738).nuschel);
+        assert!(reloaded.get("example.org", 64738).nuschl);
         assert!(reloaded.get("example.org", 1).is_empty(), "per address");
         let mut reloaded = reloaded;
         reloaded.reset("example.org", 64738).unwrap();
@@ -218,7 +219,7 @@ mod tests {
     }
 
     fn tempdir() -> PathBuf {
-        let path = std::env::temp_dir().join(format!("nuschel-sticky-{}", uuid::Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!("nuschl-sticky-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }

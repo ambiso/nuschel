@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The Nuschel extension (docs/extension.md) on loopback: the real client
-//! session (`nuschel-session`) and a raw protocol client against `nuscheld`,
+//! The Nuschl extension (docs/extension.md) on loopback: the real client
+//! session (`nuschl-session`) and a raw protocol client against `nuschld`,
 //! and the client against fake servers that answer weaker than they should.
 use bytes::BytesMut;
-use nuschel_protocol::{
+use nuschl_protocol::{
     ControlFrame, control as proto, decode_control, encode_control, kind,
-    nuschel::{self, v1},
+    nuschl::{self, v1},
 };
-use nuschel_session::{
+use nuschl_session::{
     Error as SessionError,
     config::{ClientIdentity, ServerBookmark},
-    connection::{self, Command, ConnectOptions, NuschelEvent, NuschelRequest, SessionEvent},
+    connection::{self, Command, ConnectOptions, NuschlEvent, NuschlRequest, SessionEvent},
     sticky::Requirement,
 };
-use nuscheld::{
+use nuschld::{
     config::Config,
     server::{Running, start},
     storage::{Backend, MemoryStore},
@@ -126,16 +126,16 @@ fn request_id() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-fn request_of(event: &NuschelEvent) -> Option<u64> {
+fn request_of(event: &NuschlEvent) -> Option<u64> {
     match event {
-        NuschelEvent::Error(error) => Some(error.request_id),
-        NuschelEvent::Ack(ack) => Some(ack.request_id),
-        NuschelEvent::Page(page) => Some(page.request_id),
-        NuschelEvent::Subscribed(subscribed) => Some(subscribed.request_id),
-        NuschelEvent::DirectOpened(opened) => Some(opened.request_id),
-        NuschelEvent::DirectList(list) => Some(list.request_id),
-        NuschelEvent::Done(done) => Some(done.request_id),
-        NuschelEvent::ShareLink(link) => Some(link.request_id),
+        NuschlEvent::Error(error) => Some(error.request_id),
+        NuschlEvent::Ack(ack) => Some(ack.request_id),
+        NuschlEvent::Page(page) => Some(page.request_id),
+        NuschlEvent::Subscribed(subscribed) => Some(subscribed.request_id),
+        NuschlEvent::DirectOpened(opened) => Some(opened.request_id),
+        NuschlEvent::DirectList(list) => Some(list.request_id),
+        NuschlEvent::Done(done) => Some(done.request_id),
+        NuschlEvent::ShareLink(link) => Some(link.request_id),
         _ => None,
     }
 }
@@ -256,7 +256,7 @@ async fn relay_only_hides_addresses_before_presence_and_through_ban_roundtrips()
     viewer
         .command(Command::User {
             session: private.session,
-            action: nuschel_session::model::UserAction::Ban,
+            action: nuschl_session::model::UserAction::Ban,
             reason: Some("privacy regression".into()),
         })
         .await;
@@ -421,24 +421,24 @@ impl Session {
     }
 
     /// Send an extension request and wait for its answer.
-    async fn request(&mut self, request: NuschelRequest) -> NuschelEvent {
+    async fn request(&mut self, request: NuschlRequest) -> NuschlEvent {
         let id = match &request {
-            NuschelRequest::Send(message) => message.request_id,
-            NuschelRequest::Edit(message) => message.request_id,
-            NuschelRequest::Delete(message) => message.request_id,
-            NuschelRequest::History(message) => message.request_id,
-            NuschelRequest::Subscribe(message) => message.request_id,
-            NuschelRequest::OpenDirect(message) => message.request_id,
-            NuschelRequest::ListDirect(message) => message.request_id,
-            NuschelRequest::ChannelSettings(message) => message.request_id,
-            NuschelRequest::ShareLinkCreate(message) => message.request_id,
-            NuschelRequest::ShareLinkRevoke(message) => message.request_id,
-            NuschelRequest::ShareLinkResolve(message) => message.request_id,
+            NuschlRequest::Send(message) => message.request_id,
+            NuschlRequest::Edit(message) => message.request_id,
+            NuschlRequest::Delete(message) => message.request_id,
+            NuschlRequest::History(message) => message.request_id,
+            NuschlRequest::Subscribe(message) => message.request_id,
+            NuschlRequest::OpenDirect(message) => message.request_id,
+            NuschlRequest::ListDirect(message) => message.request_id,
+            NuschlRequest::ChannelSettings(message) => message.request_id,
+            NuschlRequest::ShareLinkCreate(message) => message.request_id,
+            NuschlRequest::ShareLinkRevoke(message) => message.request_id,
+            NuschlRequest::ShareLinkResolve(message) => message.request_id,
             _ => 0,
         };
-        self.command(Command::Nuschel(request)).await;
+        self.command(Command::Nuschl(request)).await;
         self.wait(|event| match event {
-            SessionEvent::Nuschel(event) if request_of(event) == Some(id) => Some(event.clone()),
+            SessionEvent::Nuschl(event) if request_of(event) == Some(id) => Some(event.clone()),
             _ => None,
         })
         .await
@@ -449,8 +449,8 @@ impl Session {
         conversation: [u8; 16],
         key: [u8; 16],
         content: &str,
-    ) -> NuschelEvent {
-        self.request(NuschelRequest::Send(v1::ChatSend {
+    ) -> NuschlEvent {
+        self.request(NuschlRequest::Send(v1::ChatSend {
             request_id: request_id(),
             conversation: conversation.to_vec(),
             idempotency_key: key.to_vec(),
@@ -467,7 +467,7 @@ impl Session {
             .send_keyed(conversation, connection::random_key(), content)
             .await
         {
-            NuschelEvent::Ack(ack) => ack.seq,
+            NuschlEvent::Ack(ack) => ack.seq,
             other => panic!("expected an acknowledgement, got {other:?}"),
         }
     }
@@ -477,8 +477,8 @@ impl Session {
         conversation: [u8; 16],
         anchor: v1::history_request::Anchor,
         limit: u32,
-    ) -> NuschelEvent {
-        self.request(NuschelRequest::History(v1::HistoryRequest {
+    ) -> NuschlEvent {
+        self.request(NuschlRequest::History(v1::HistoryRequest {
             request_id: request_id(),
             conversation: conversation.to_vec(),
             anchor: Some(anchor),
@@ -494,20 +494,20 @@ impl Session {
         limit: u32,
     ) -> v1::HistoryPage {
         match self.history(conversation, anchor, limit).await {
-            NuschelEvent::Page(page) => page,
+            NuschlEvent::Page(page) => page,
             other => panic!("expected a page, got {other:?}"),
         }
     }
 
     async fn subscribe(&mut self, conversations: &[[u8; 16]]) -> v1::Subscribed {
         match self
-            .request(NuschelRequest::Subscribe(v1::Subscribe {
+            .request(NuschlRequest::Subscribe(v1::Subscribe {
                 request_id: request_id(),
                 conversations: conversations.iter().map(|id| id.to_vec()).collect(),
             }))
             .await
         {
-            NuschelEvent::Subscribed(subscribed) => subscribed,
+            NuschlEvent::Subscribed(subscribed) => subscribed,
             other => panic!("expected Subscribed, got {other:?}"),
         }
     }
@@ -515,7 +515,7 @@ impl Session {
     /// The next live chat event.
     async fn chat(&mut self) -> v1::ChatEvent {
         self.wait(|event| match event {
-            SessionEvent::Nuschel(NuschelEvent::Chat(chat)) => Some(chat.clone()),
+            SessionEvent::Nuschl(NuschlEvent::Chat(chat)) => Some(chat.clone()),
             _ => None,
         })
         .await
@@ -533,9 +533,9 @@ impl Session {
     }
 }
 
-fn error_code(event: &NuschelEvent) -> Option<v1::error::Code> {
+fn error_code(event: &NuschlEvent) -> Option<v1::error::Code> {
     match event {
-        NuschelEvent::Error(error) => v1::error::Code::try_from(error.code).ok(),
+        NuschlEvent::Error(error) => v1::error::Code::try_from(error.code).ok(),
         _ => None,
     }
 }
@@ -643,14 +643,14 @@ impl Raw {
 
     async fn version(&mut self, capabilities: Option<&[&str]>) {
         let hello = capabilities.map(|capabilities| v1::Hello {
-            protocol: nuschel::PROTOCOL,
+            protocol: nuschl::PROTOCOL,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
             client_version: String::new(),
             relay_only: false,
         });
-        let frame = nuschel::version_frame(
+        let frame = nuschl::version_frame(
             &proto::Version {
                 version_v2: Some((1 << 48) | (5 << 32)),
                 ..Default::default()
@@ -716,7 +716,7 @@ async fn fake_server(
     version: bytes::Bytes,
 ) -> (SocketAddr, String, tokio::task::JoinHandle<Vec<u16>>) {
     let (certificate, key) = certificate();
-    let pin = nuschel_session::config::fingerprint(certificate.as_ref());
+    let pin = nuschl_session::config::fingerprint(certificate.as_ref());
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut config = rustls::ServerConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
@@ -753,7 +753,7 @@ async fn fake_server(
 }
 
 fn stock_version() -> bytes::Bytes {
-    nuschel::version_frame(
+    nuschl::version_frame(
         &proto::Version {
             version_v2: Some((1 << 48) | (5 << 32)),
             release: Some("Murmur".into()),
@@ -765,13 +765,13 @@ fn stock_version() -> bytes::Bytes {
 }
 
 fn hello_version(capabilities: &[&str]) -> bytes::Bytes {
-    nuschel::version_frame(
+    nuschl::version_frame(
         &proto::Version {
             version_v2: Some((1 << 48) | (5 << 32)),
             ..Default::default()
         },
         Some(&v1::Hello {
-            protocol: nuschel::PROTOCOL,
+            protocol: nuschl::PROTOCOL,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
@@ -782,9 +782,9 @@ fn hello_version(capabilities: &[&str]) -> bytes::Bytes {
     .unwrap()
 }
 
-fn requirement(nuschel: bool, capabilities: &[&str]) -> Requirement {
+fn requirement(nuschl: bool, capabilities: &[&str]) -> Requirement {
     Requirement {
-        nuschel,
+        nuschl,
         capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
     }
 }
@@ -792,7 +792,7 @@ fn requirement(nuschel: bool, capabilities: &[&str]) -> Requirement {
 // ---- §1 negotiation ----
 
 #[tokio::test]
-async fn the_session_negotiates_the_extension_with_nuscheld() {
+async fn the_session_negotiates_the_extension_with_nuschld() {
     let fixture = Fixture::start("").await;
     let (session, negotiated) = Session::connect(options(
         fixture.address(),
@@ -802,7 +802,7 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
     ))
     .await;
     let negotiated = negotiated.expect("negotiated");
-    assert!(negotiated.nuschel);
+    assert!(negotiated.nuschl);
     // A compatible server has no end-to-end encryption: no `mls/1`, no `e2ee/1`.
     assert_eq!(
         negotiated.capabilities,
@@ -879,8 +879,8 @@ async fn a_stock_server_is_fine_without_a_record() {
 
 #[tokio::test]
 async fn alpn_without_a_hello_or_with_fewer_capabilities_never_authenticates() {
-    // ALPN nuschel/1 with a plain Version: a protocol error, not stock mode.
-    let (address, pin, received) = fake_server(Some(nuschel::ALPN), stock_version()).await;
+    // ALPN nuschl/1 with a plain Version: a protocol error, not stock mode.
+    let (address, pin, received) = fake_server(Some(nuschl::ALPN), stock_version()).await;
     let error = Session::spawn(options(address, &pin, "Alice", 0))
         .failure()
         .await;
@@ -888,7 +888,7 @@ async fn alpn_without_a_hello_or_with_fewer_capabilities_never_authenticates() {
     assert_eq!(received.await.unwrap(), [kind::VERSION]);
     // A hello lacking a remembered capability: a downgrade.
     let (address, pin, received) =
-        fake_server(Some(nuschel::ALPN), hello_version(&["typing/1"])).await;
+        fake_server(Some(nuschl::ALPN), hello_version(&["typing/1"])).await;
     let mut sticky = options(address, &pin, "Alice", 0);
     sticky.required = requirement(true, &["history/1"]);
     let error = Session::spawn(sticky).failure().await;
@@ -896,7 +896,7 @@ async fn alpn_without_a_hello_or_with_fewer_capabilities_never_authenticates() {
     assert_eq!(received.await.unwrap(), [kind::VERSION]);
     // A malformed hello fails closed too.
     let (address, pin, received) =
-        fake_server(Some(nuschel::ALPN), hello_version(&["NOT VALID"])).await;
+        fake_server(Some(nuschl::ALPN), hello_version(&["NOT VALID"])).await;
     let error = Session::spawn(options(address, &pin, "Alice", 0))
         .failure()
         .await;
@@ -907,19 +907,19 @@ async fn alpn_without_a_hello_or_with_fewer_capabilities_never_authenticates() {
 #[tokio::test]
 async fn the_server_fails_closed_on_mismatched_negotiation() {
     let fixture = Fixture::start("").await;
-    // ALPN nuschel/1 but no hello: closed at Authenticate, nobody logged in.
-    let mut raw = Raw::connect(fixture.address(), &[nuschel::ALPN, nuschel::ALPN_MUMBLE]).await;
-    assert_eq!(raw.alpn.as_deref(), Some(nuschel::ALPN));
+    // ALPN nuschl/1 but no hello: closed at Authenticate, nobody logged in.
+    let mut raw = Raw::connect(fixture.address(), &[nuschl::ALPN, nuschl::ALPN_MUMBLE]).await;
+    assert_eq!(raw.alpn.as_deref(), Some(nuschl::ALPN));
     let version = raw.until(kind::VERSION).await.unwrap();
     assert!(
-        nuschel::hello(&version.payload).unwrap().is_some(),
+        nuschl::hello(&version.payload).unwrap().is_some(),
         "the server's hello"
     );
     raw.version(None).await;
     raw.authenticate("NoHello").await;
     assert!(raw.closed().await);
     // A malformed hello closes the connection.
-    let mut raw = Raw::connect(fixture.address(), &[nuschel::ALPN]).await;
+    let mut raw = Raw::connect(fixture.address(), &[nuschl::ALPN]).await;
     raw.version(Some(&["Bad Capability"])).await;
     raw.authenticate("BadHello").await;
     assert!(raw.closed().await);
@@ -927,7 +927,7 @@ async fn the_server_fails_closed_on_mismatched_negotiation() {
     let mut raw = Raw::connect(fixture.address(), &[]).await;
     assert_eq!(raw.alpn, None);
     let version = raw.until(kind::VERSION).await.unwrap();
-    assert_eq!(nuschel::hello(&version.payload).unwrap(), None);
+    assert_eq!(nuschl::hello(&version.payload).unwrap(), None);
     raw.version(Some(&["history/1"])).await;
     raw.authenticate("Stock").await;
     assert!(!raw.closed().await);
@@ -939,10 +939,10 @@ async fn the_server_fails_closed_on_mismatched_negotiation() {
 #[tokio::test]
 async fn extension_frames_before_authentication_close_the_connection() {
     let fixture = Fixture::start("").await;
-    let mut raw = Raw::connect(fixture.address(), &[nuschel::ALPN]).await;
+    let mut raw = Raw::connect(fixture.address(), &[nuschl::ALPN]).await;
     raw.version(Some(&["history/1"])).await;
     raw.send(
-        nuschel::kind::SUBSCRIBE,
+        nuschl::kind::SUBSCRIBE,
         &v1::Subscribe {
             request_id: 1,
             conversations: vec![vec![0; 16]],
@@ -957,7 +957,7 @@ async fn extension_frames_before_authentication_close_the_connection() {
 // ---- minimum client versions (§1, "Minimum versions") ----
 
 #[tokio::test]
-async fn an_outdated_nuschel_client_is_refused_with_the_version_and_stock_clients_are_not() {
+async fn an_outdated_nuschl_client_is_refused_with_the_version_and_stock_clients_are_not() {
     let fixture = Fixture::start("[history]\nminimum_client = \"99.0.0\"").await;
     // The real session: refused with the version to update to, never retried,
     // and the server keeps nobody.
@@ -978,12 +978,12 @@ async fn an_outdated_nuschel_client_is_refused_with_the_version_and_stock_client
     assert!(
         error
             .to_string()
-            .contains("requires Nuschel 99.0.0 or newer")
+            .contains("requires Nuschl 99.0.0 or newer")
     );
     assert_eq!(fixture.users(), 0);
-    // A Nuschel hello without a version is older than any minimum; the reject
+    // A Nuschl hello without a version is older than any minimum; the reject
     // says why, as a Mumble `Reject` any client can show.
-    let mut raw = Raw::connect(fixture.address(), &[nuschel::ALPN]).await;
+    let mut raw = Raw::connect(fixture.address(), &[nuschl::ALPN]).await;
     raw.version(Some(&["history/1"])).await;
     raw.authenticate("Unversioned").await;
     let reject = raw.until(kind::REJECT).await.expect("a reject");
@@ -994,7 +994,7 @@ async fn an_outdated_nuschel_client_is_refused_with_the_version_and_stock_client
     );
     assert_eq!(
         reject.reason.as_deref(),
-        Some("This server requires Nuschel 99.0.0 or newer. Update Nuschel to connect.")
+        Some("This server requires Nuschl 99.0.0 or newer. Update Nuschl to connect.")
     );
     // Stock Mumble clients are not affected by the minimum.
     let mut stock = Raw::connect(fixture.address(), &[]).await;
@@ -1023,8 +1023,8 @@ async fn before_the_date_an_outdated_client_is_admitted_and_told_when() {
     assert_eq!(policy.minimum_client_from, 32_472_144_000);
     assert_eq!(
         negotiated.standing(connection::now_ms()),
-        nuschel::version::Standing::Required {
-            version: nuschel::version::Version::new(99, 0, 0),
+        nuschl::version::Standing::Required {
+            version: nuschl::version::Version::new(99, 0, 0),
             from: 32_472_144_000,
         }
     );
@@ -1041,16 +1041,16 @@ async fn before_the_date_an_outdated_client_is_admitted_and_told_when() {
     .await;
     assert_eq!(
         negotiated.unwrap().standing(connection::now_ms()),
-        nuschel::version::Standing::Recommended {
-            version: nuschel::version::Version::new(99, 1, 0)
+        nuschl::version::Standing::Recommended {
+            version: nuschl::version::Version::new(99, 1, 0)
         }
     );
 }
 
 // ---- helpers for stages 2–5 ----
 
-/// A Nuschel connection to the fixture.
-async fn nuschel(fixture: &Fixture, name: &str, identity: usize) -> Session {
+/// A Nuschl connection to the fixture.
+async fn nuschl(fixture: &Fixture, name: &str, identity: usize) -> Session {
     Session::connect(options(
         fixture.address(),
         &fixture.running.fingerprint,
@@ -1086,15 +1086,15 @@ impl Fixture {
     fn add_channel(
         &self,
         name: &str,
-        acls: Vec<nuscheld::acl::AclEntry>,
+        acls: Vec<nuschld::acl::AclEntry>,
         groups: Vec<(&str, Vec<u32>)>,
     ) -> (u32, [u8; 16]) {
         let mut state = self.running.server.lock();
         let id = state.channels.0.keys().max().unwrap() + 1;
-        let mut channel = nuscheld::state::Channel::new(id, Some(0), name.into());
+        let mut channel = nuschld::state::Channel::new(id, Some(0), name.into());
         channel.node.acls = acls;
         for (group, members) in groups {
-            let mut entry = nuscheld::acl::Group::new();
+            let mut entry = nuschld::acl::Group::new();
             entry.add = members.into_iter().collect();
             channel.node.groups.insert(group.into(), entry);
         }
@@ -1103,23 +1103,23 @@ impl Fixture {
         state.channels.0.insert(id, channel);
         state.channels.get_mut(0).unwrap().children.push(id);
         state.permissions_changed(None);
-        state.authz_changed(nuscheld::conversations::Scope::All);
+        state.authz_changed(nuschld::conversations::Scope::All);
         state.finish();
         (id, conversation)
     }
 
     /// Change a channel as an ACL edit would, then let the server re-evaluate.
-    fn edit_channel(&self, id: u32, edit: impl FnOnce(&mut nuscheld::state::Channel)) {
+    fn edit_channel(&self, id: u32, edit: impl FnOnce(&mut nuschld::state::Channel)) {
         let mut state = self.running.server.lock();
         edit(state.channels.get_mut(id).unwrap());
         state.permissions_changed(None);
-        state.authz_changed(nuscheld::conversations::Scope::All);
+        state.authz_changed(nuschld::conversations::Scope::All);
         state.finish();
     }
 }
 
-fn entry(group: &str, user: Option<u32>, grant: u32, deny: u32) -> nuscheld::acl::AclEntry {
-    nuscheld::acl::AclEntry {
+fn entry(group: &str, user: Option<u32>, grant: u32, deny: u32) -> nuschld::acl::AclEntry {
+    nuschld::acl::AclEntry {
         apply_here: true,
         apply_subs: true,
         user_id: user,
@@ -1129,7 +1129,7 @@ fn entry(group: &str, user: Option<u32>, grant: u32, deny: u32) -> nuscheld::acl
     }
 }
 
-use nuscheld::acl::perm;
+use nuschld::acl::perm;
 
 const QUIET: Duration = Duration::from_millis(400);
 
@@ -1139,7 +1139,7 @@ fn stock_text(event: &SessionEvent) -> bool {
 }
 
 fn is_chat(event: &SessionEvent) -> bool {
-    matches!(event, SessionEvent::Nuschel(NuschelEvent::Chat(_)))
+    matches!(event, SessionEvent::Nuschl(NuschlEvent::Chat(_)))
 }
 
 // ---- §4 sending, stock copies ----
@@ -1147,9 +1147,9 @@ fn is_chat(event: &SessionEvent) -> bool {
 #[tokio::test]
 async fn messages_are_stored_acknowledged_and_copied_for_stock_clients() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     let mut carol = Raw::login(fixture.address(), "Carol").await;
     let root = alice.conversations[&0];
     assert_eq!(bob.conversations[&0], root, "one conversation per channel");
@@ -1162,17 +1162,14 @@ async fn messages_are_stored_acknowledged_and_copied_for_stock_clients() {
     assert_eq!(message.author.unwrap().name, "Alice");
     // The stock copy is made by the server from the same text.
     let text = carol.text().await;
-    assert_eq!(
-        text.message,
-        nuschel_legacy_html::legacy_body(content, true)
-    );
+    assert_eq!(text.message, nuschl_legacy_html::legacy_body(content, true));
     assert_eq!(text.actor, Some(alice.session));
     assert_eq!(text.channel_id, [0]);
     assert!(
         !bob.arrives(QUIET, stock_text).await,
-        "Nuschel clients get no TextMessage duplicate"
+        "Nuschl clients get no TextMessage duplicate"
     );
-    // A stock sender's message reaches Nuschel readers from history.
+    // A stock sender's message reaches Nuschl readers from history.
     carol
         .send(
             kind::TEXT_MESSAGE,
@@ -1202,18 +1199,18 @@ async fn messages_are_stored_acknowledged_and_copied_for_stock_clients() {
 #[tokio::test]
 async fn retries_return_the_first_seq_and_conflicts_fail() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     alice.register().await;
     bob.register().await;
     let root = alice.conversations[&0];
     let key = connection::random_key();
     let first = alice.send_keyed(root, key, "once").await;
-    assert!(matches!(first, NuschelEvent::Ack(ref ack) if ack.seq == 1));
+    assert!(matches!(first, NuschlEvent::Ack(ref ack) if ack.seq == 1));
     assert_eq!(bob.chat().await.message.unwrap().seq, 1);
     let retry = alice.send_keyed(root, key, "once").await;
     assert!(
-        matches!(retry, NuschelEvent::Ack(ref ack) if ack.seq == 1),
+        matches!(retry, NuschlEvent::Ack(ref ack) if ack.seq == 1),
         "{retry:?}"
     );
     let conflict = alice.send_keyed(root, key, "something else").await;
@@ -1240,10 +1237,10 @@ async fn retries_return_the_first_seq_and_conflicts_fail() {
     // Durable across a restart: the same account's retry still gets seq 1.
     drop((alice, bob));
     let fixture = fixture.restart("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     let retry = alice.send_keyed(root, key, "once").await;
     assert!(
-        matches!(retry, NuschelEvent::Ack(ref ack) if ack.seq == 1),
+        matches!(retry, NuschlEvent::Ack(ref ack) if ack.seq == 1),
         "{retry:?}"
     );
     assert_eq!(
@@ -1252,12 +1249,12 @@ async fn retries_return_the_first_seq_and_conflicts_fail() {
         "seq continues after a restart"
     );
     // Unregistered senders have no durable identity: no idempotency.
-    let mut guest = nuschel(&fixture, "Guest", 2).await;
+    let mut guest = nuschl(&fixture, "Guest", 2).await;
     let key = connection::random_key();
     for expected in [6, 7] {
         let ack = guest.send_keyed(root, key, "same").await;
         assert!(
-            matches!(ack, NuschelEvent::Ack(ref ack) if ack.seq == expected),
+            matches!(ack, NuschlEvent::Ack(ref ack) if ack.seq == expected),
             "{ack:?}"
         );
     }
@@ -1268,7 +1265,7 @@ async fn retries_return_the_first_seq_and_conflicts_fail() {
 #[tokio::test]
 async fn history_pages_every_anchor_and_never_skip_at_the_byte_cap() {
     let fixture = Fixture::start("text_message_length = 0\nimage_message_length = 0").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
     let root = alice.conversations[&0];
     for n in 1..=10 {
@@ -1331,7 +1328,7 @@ async fn history_pages_every_anchor_and_never_skip_at_the_byte_cap() {
 #[tokio::test]
 async fn errors_are_uniform_and_ids_cannot_be_probed() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
     let (_, secret) = fixture.add_channel(
         "Secret",
@@ -1347,7 +1344,7 @@ async fn errors_are_uniform_and_ids_cannot_be_probed() {
                 .send_keyed(conversation, connection::random_key(), "x")
                 .await,
         ] {
-            let NuschelEvent::Error(error) = event else {
+            let NuschlEvent::Error(error) = event else {
                 panic!("expected an error, got {event:?}");
             };
             assert_eq!(error.code, v1::error::Code::NotFound as i32);
@@ -1355,7 +1352,7 @@ async fn errors_are_uniform_and_ids_cannot_be_probed() {
         }
     }
     details.dedup();
-    assert_eq!(details, [nuschel::detail(v1::error::Code::NotFound)]);
+    assert_eq!(details, [nuschl::detail(v1::error::Code::NotFound)]);
     assert!(
         alice
             .subscribe(&[secret, unknown])
@@ -1372,7 +1369,7 @@ async fn errors_are_uniform_and_ids_cannot_be_probed() {
     assert_eq!(
         error_code(
             &alice
-                .request(NuschelRequest::History(malformed.clone()))
+                .request(NuschlRequest::History(malformed.clone()))
                 .await
         ),
         Some(v1::error::Code::Malformed)
@@ -1381,18 +1378,18 @@ async fn errors_are_uniform_and_ids_cannot_be_probed() {
     malformed.anchor = None;
     malformed.request_id = request_id();
     assert_eq!(
-        error_code(&alice.request(NuschelRequest::History(malformed)).await),
+        error_code(&alice.request(NuschlRequest::History(malformed)).await),
         Some(v1::error::Code::Malformed)
     );
     // Over the wire: an unnegotiated capability and a server-only type are
     // refused, never processed.
-    let mut raw = Raw::connect(fixture.address(), &[nuschel::ALPN]).await;
+    let mut raw = Raw::connect(fixture.address(), &[nuschl::ALPN]).await;
     raw.version(Some(&["history/1"])).await;
     raw.authenticate("Raw").await;
     raw.until(kind::SERVER_SYNC).await.unwrap();
     for (frame_kind, body) in [
         (
-            nuschel::kind::TYPING,
+            nuschl::kind::TYPING,
             v1::Typing {
                 conversation: vec![0; 16],
                 session: 0,
@@ -1400,7 +1397,7 @@ async fn errors_are_uniform_and_ids_cannot_be_probed() {
             .encode_to_vec(),
         ),
         (
-            nuschel::kind::CHAT_ACK,
+            nuschl::kind::CHAT_ACK,
             v1::ChatAck {
                 request_id: 7,
                 ..Default::default()
@@ -1418,13 +1415,13 @@ async fn errors_are_uniform_and_ids_cannot_be_probed() {
         )
         .await;
         let error =
-            v1::Error::decode(raw.until(nuschel::kind::ERROR).await.unwrap().payload).unwrap();
+            v1::Error::decode(raw.until(nuschl::kind::ERROR).await.unwrap().payload).unwrap();
         assert_eq!(error.code, v1::error::Code::Unsupported as i32);
     }
     // An oversized frame from the header closes the connection.
     raw.send_bytes(
         &[
-            &nuschel::kind::HISTORY_REQUEST.to_be_bytes()[..],
+            &nuschl::kind::HISTORY_REQUEST.to_be_bytes()[..],
             &4096_u32.to_be_bytes(),
         ]
         .concat(),
@@ -1438,9 +1435,9 @@ async fn errors_are_uniform_and_ids_cannot_be_probed() {
 #[tokio::test]
 async fn guests_see_live_messages_but_read_no_history() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
-    let mut guest = nuschel(&fixture, "Guest", 1).await;
+    let mut guest = nuschl(&fixture, "Guest", 1).await;
     let root = alice.conversations[&0];
     alice.send(root, "live").await;
     assert_eq!(guest.chat().await.message.unwrap().content, "live");
@@ -1451,16 +1448,16 @@ async fn guests_see_live_messages_but_read_no_history() {
     assert!(guest.subscribe(&[root]).await.conversations.is_empty());
     drop((alice, guest));
     let fixture = fixture.restart("[history]\nguests = \"full\"").await;
-    let mut guest = nuschel(&fixture, "Guest", 1).await;
+    let mut guest = nuschl(&fixture, "Guest", 1).await;
     assert_eq!(seqs(&guest.page(root, latest(), 10).await), [1]);
 }
 
 #[tokio::test]
 async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     let alice_id = alice.register().await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     bob.register().await;
     let (channel, conversation) = fixture.add_channel("Side", vec![], vec![]);
     let subscribed = alice.subscribe(&[conversation]).await;
@@ -1476,7 +1473,7 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
     });
     let gone = alice
         .wait(|event| match event {
-            SessionEvent::Nuschel(NuschelEvent::Unsubscribed(gone)) => Some(gone.clone()),
+            SessionEvent::Nuschl(NuschlEvent::Unsubscribed(gone)) => Some(gone.clone()),
             _ => None,
         })
         .await;
@@ -1497,13 +1494,13 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
     // A page authorised before a revocation and finished after it is
     // re-checked and never sent.
     fixture.edit_channel(channel, |channel| channel.node.acls.clear());
-    let page = nuscheld::history::Read {
+    let page = nuschld::history::Read {
         session: alice.session,
         request_id: 4242,
         conversation,
-        query: nuschel_ipc::server::PageQuery {
-            conversation: nuscheld::conversations::hex(&conversation),
-            anchor: nuschel_ipc::server::Anchor::Latest,
+        query: nuschl_ipc::server::PageQuery {
+            conversation: nuschld::conversations::hex(&conversation),
+            anchor: nuschl_ipc::server::Anchor::Latest,
             limit: 10,
             ranges: vec![(1, u64::MAX)],
             max_bytes: 1024,
@@ -1511,9 +1508,9 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
         epoch: fixture.running.server.lock().authz_epoch,
         clipped: false,
     };
-    let rows = nuschel_ipc::server::StoredPage {
-        rows: vec![nuschel_ipc::server::StoredMessage {
-            conversation: nuscheld::conversations::hex(&conversation),
+    let rows = nuschl_ipc::server::StoredPage {
+        rows: vec![nuschl_ipc::server::StoredMessage {
+            conversation: nuschld::conversations::hex(&conversation),
             seq: 1,
             content: "secret".into(),
             ..Default::default()
@@ -1529,7 +1526,7 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
     fixture.running.server.lock().page_read(page, Some(rows));
     let answer = alice
         .wait(|event| match event {
-            SessionEvent::Nuschel(event) if request_of(event) == Some(4242) => Some(event.clone()),
+            SessionEvent::Nuschl(event) if request_of(event) == Some(4242) => Some(event.clone()),
             _ => None,
         })
         .await;
@@ -1538,7 +1535,7 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
     let mut state = fixture.running.server.lock();
     assert!(!state.allowed(
         alice.session,
-        nuscheld::authz::Action::ReadHistory(&conversation)
+        nuschld::authz::Action::ReadHistory(&conversation)
     ));
     state
         .users
@@ -1548,24 +1545,24 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
         .insert(channel, 1.0);
     assert!(state.allowed(
         alice.session,
-        nuscheld::authz::Action::ReadHistory(&conversation)
+        nuschld::authz::Action::ReadHistory(&conversation)
     ));
 }
 
 /// Listeners follow Listen (the user's decision on review D3.4; Murmur keeps
-/// them): an ACL edit that takes Listen away ends the listener of a Nuschel
+/// them): an ACL edit that takes Listen away ends the listener of a Nuschl
 /// client and of a stock client at once. Both learn it as from Murmur and by a
 /// `PermissionDenied`; live text stops; the channel is no longer readable
 /// through the listener, neither for new pages nor for one in flight; the
 /// remembered listener is forgotten; a listener that keeps Listen stays.
 #[tokio::test]
-async fn a_listener_that_loses_listen_ends_for_stock_and_nuschel_clients() {
+async fn a_listener_that_loses_listen_ends_for_stock_and_nuschl_clients() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     let alice_id = alice.register().await;
-    let mut carol = nuschel(&fixture, "Carol", 1).await;
+    let mut carol = nuschl(&fixture, "Carol", 1).await;
     let carol_id = carol.register().await;
-    let mut bob = nuschel(&fixture, "Bob", 2).await;
+    let mut bob = nuschl(&fixture, "Bob", 2).await;
     bob.register().await;
     let mut dave = Raw::login(fixture.address(), "Dave").await;
     let dave_session = {
@@ -1655,13 +1652,13 @@ async fn a_listener_that_loses_listen_ends_for_stock_and_nuschel_clients() {
     };
     assert!(stored(alice_id, vec![(radio, 1.0)]).await);
     // A page authorised now and finished after the revocation.
-    let page = nuscheld::history::Read {
+    let page = nuschld::history::Read {
         session: alice.session,
         request_id: 4343,
         conversation,
-        query: nuschel_ipc::server::PageQuery {
-            conversation: nuscheld::conversations::hex(&conversation),
-            anchor: nuschel_ipc::server::Anchor::Latest,
+        query: nuschl_ipc::server::PageQuery {
+            conversation: nuschld::conversations::hex(&conversation),
+            anchor: nuschl_ipc::server::Anchor::Latest,
             limit: 10,
             ranges: vec![(1, u64::MAX)],
             max_bytes: 1024,
@@ -1679,7 +1676,7 @@ async fn a_listener_that_loses_listen_ends_for_stock_and_nuschel_clients() {
             .push(entry("", Some(carol_id), perm::LISTEN, 0));
     });
     assert_eq!(listeners(), BTreeSet::from([carol.session]));
-    // The Nuschel client is told why, then loses the subscription.
+    // The Nuschl client is told why, then loses the subscription.
     let told = alice
         .wait(|event| match event {
             SessionEvent::PermissionDenied(text) => Some(text.clone()),
@@ -1689,7 +1686,7 @@ async fn a_listener_that_loses_listen_ends_for_stock_and_nuschel_clients() {
     assert!(told.contains("Radio") && told.contains("stopped"), "{told}");
     alice
         .wait(|event| match event {
-            SessionEvent::Nuschel(NuschelEvent::Unsubscribed(gone))
+            SessionEvent::Nuschl(NuschlEvent::Unsubscribed(gone))
                 if gone.conversation == conversation.to_vec() =>
             {
                 Some(())
@@ -1738,9 +1735,9 @@ async fn a_listener_that_loses_listen_ends_for_stock_and_nuschel_clients() {
     );
     fixture.running.server.lock().page_read(
         page,
-        Some(nuschel_ipc::server::StoredPage {
-            rows: vec![nuschel_ipc::server::StoredMessage {
-                conversation: nuscheld::conversations::hex(&conversation),
+        Some(nuschl_ipc::server::StoredPage {
+            rows: vec![nuschl_ipc::server::StoredMessage {
+                conversation: nuschld::conversations::hex(&conversation),
                 seq: 1,
                 content: "secret".into(),
                 ..Default::default()
@@ -1750,7 +1747,7 @@ async fn a_listener_that_loses_listen_ends_for_stock_and_nuschel_clients() {
     );
     let answer = alice
         .wait(|event| match event {
-            SessionEvent::Nuschel(event) if request_of(event) == Some(4343) => Some(event.clone()),
+            SessionEvent::Nuschl(event) if request_of(event) == Some(4343) => Some(event.clone()),
             _ => None,
         })
         .await;
@@ -1763,9 +1760,9 @@ async fn a_listener_that_loses_listen_ends_for_stock_and_nuschel_clients() {
 #[tokio::test]
 async fn since_access_shows_only_what_was_said_while_the_reader_had_access() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     let alice_id = alice.register().await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     let bob_id = bob.register().await;
     let (channel, conversation) = fixture.add_channel(
         "Private",
@@ -1778,14 +1775,14 @@ async fn since_access_shows_only_what_was_said_while_the_reader_had_access() {
     );
     // Bob (Write on the channel) switches it to since_access.
     let done = bob
-        .request(NuschelRequest::ChannelSettings(v1::ChannelSettings {
+        .request(NuschlRequest::ChannelSettings(v1::ChannelSettings {
             request_id: request_id(),
             channel,
             visibility: Some(v1::Visibility::SinceAccess as i32),
             ..Default::default()
         }))
         .await;
-    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    assert!(matches!(done, NuschlEvent::Done(_)), "{done:?}");
     let info = alice
         .wait(|event| match event {
             SessionEvent::ChannelInfo { channel: id, info } if *id == channel => Some(info.clone()),
@@ -1793,7 +1790,7 @@ async fn since_access_shows_only_what_was_said_while_the_reader_had_access() {
         })
         .await;
     assert_eq!(info.visibility, v1::Visibility::SinceAccess as i32);
-    let members = |state: &mut nuscheld::state::Channel, add: bool| {
+    let members = |state: &mut nuschld::state::Channel, add: bool| {
         let group = state.node.groups.get_mut("members").unwrap();
         if add {
             group.add.insert(alice_id);
@@ -1830,7 +1827,7 @@ async fn since_access_shows_only_what_was_said_while_the_reader_had_access() {
         [1, 2, 3, 4, 5]
     );
     // Someone admitted later reads only from then on.
-    let mut carol = nuschel(&fixture, "Carol", 2).await;
+    let mut carol = nuschl(&fixture, "Carol", 2).await;
     let carol_id = carol.register().await;
     fixture.edit_channel(channel, |channel| {
         channel
@@ -1853,7 +1850,7 @@ async fn since_access_shows_only_what_was_said_while_the_reader_had_access() {
     // The intervals are durable.
     drop((alice, bob, carol));
     let fixture = fixture.restart("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     assert_eq!(
         seqs(&alice.page(conversation, latest(), 10).await),
         [1, 2, 5, 6]
@@ -1863,8 +1860,8 @@ async fn since_access_shows_only_what_was_said_while_the_reader_had_access() {
 // ---- §6 edits and deletions ----
 
 impl Session {
-    async fn edit(&mut self, conversation: [u8; 16], target: u64, content: &str) -> NuschelEvent {
-        self.request(NuschelRequest::Edit(v1::ChatEdit {
+    async fn edit(&mut self, conversation: [u8; 16], target: u64, content: &str) -> NuschlEvent {
+        self.request(NuschlRequest::Edit(v1::ChatEdit {
             request_id: request_id(),
             conversation: conversation.to_vec(),
             target,
@@ -1874,8 +1871,8 @@ impl Session {
         .await
     }
 
-    async fn delete(&mut self, conversation: [u8; 16], target: u64) -> NuschelEvent {
-        self.request(NuschelRequest::Delete(v1::ChatDelete {
+    async fn delete(&mut self, conversation: [u8; 16], target: u64) -> NuschlEvent {
+        self.request(NuschlRequest::Delete(v1::ChatDelete {
             request_id: request_id(),
             conversation: conversation.to_vec(),
             target,
@@ -1887,9 +1884,9 @@ impl Session {
 #[tokio::test]
 async fn edits_replace_content_and_deletions_leave_tombstones() {
     let fixture = Fixture::start("[history]\nedit_limit = 1").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     let bob_id = bob.register().await;
     let mut carol = Raw::login(fixture.address(), "Carol").await;
     let root = alice.conversations[&0];
@@ -1897,7 +1894,7 @@ async fn edits_replace_content_and_deletions_leave_tombstones() {
     bob.chat().await;
     carol.text().await;
     let edited = alice.edit(root, 1, "fixed").await;
-    let NuschelEvent::Ack(ack) = edited else {
+    let NuschlEvent::Ack(ack) = edited else {
         panic!("{edited:?}");
     };
     assert_eq!(ack.seq, 2, "an edit is an event with its own seq");
@@ -1937,7 +1934,7 @@ async fn edits_replace_content_and_deletions_leave_tombstones() {
     // Stock clients see neither edits nor deletions.
     assert!(carol.next_text(QUIET).await.is_none());
     // The author deletes; the tombstone keeps the seq.
-    assert!(matches!(alice.delete(root, 1).await, NuschelEvent::Ack(_)));
+    assert!(matches!(alice.delete(root, 1).await, NuschlEvent::Ack(_)));
     let event = bob.chat().await.message.unwrap();
     assert_eq!(event.kind, v1::message::Kind::Delete as i32);
     assert_eq!(event.target, 1);
@@ -1946,10 +1943,7 @@ async fn edits_replace_content_and_deletions_leave_tombstones() {
     fixture.edit_channel(0, |root| {
         root.node.acls.push(entry("", Some(1), perm::WRITE, 0));
     });
-    assert!(matches!(
-        alice.delete(root, seq).await,
-        NuschelEvent::Ack(_)
-    ));
+    assert!(matches!(alice.delete(root, seq).await, NuschlEvent::Ack(_)));
     assert_eq!(
         error_code(&bob.delete(root, 1).await),
         Some(v1::error::Code::NotFound),
@@ -1993,8 +1987,8 @@ impl Raw {
 // ---- §3 direct conversations, accounts ----
 
 impl Session {
-    async fn open_direct(&mut self, user_id: u32) -> NuschelEvent {
-        self.request(NuschelRequest::OpenDirect(v1::OpenDirect {
+    async fn open_direct(&mut self, user_id: u32) -> NuschlEvent {
+        self.request(NuschlRequest::OpenDirect(v1::OpenDirect {
             request_id: request_id(),
             user_id,
         }))
@@ -2005,20 +1999,20 @@ impl Session {
 #[tokio::test]
 async fn direct_conversations_belong_to_two_accounts_for_good() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     let bob_id = bob.register().await;
-    let mut carol = nuschel(&fixture, "Carol", 2).await;
+    let mut carol = nuschl(&fixture, "Carol", 2).await;
     carol.register().await;
-    let NuschelEvent::DirectOpened(opened) = alice.open_direct(bob_id).await else {
+    let NuschlEvent::DirectOpened(opened) = alice.open_direct(bob_id).await else {
         panic!("expected a direct conversation");
     };
     let direct = opened.direct.unwrap();
     assert_eq!((direct.user_id, direct.name.as_str()), (bob_id, "Bob"));
     let conversation: [u8; 16] = direct.conversation.clone().try_into().unwrap();
     // The same pair always gets the same conversation.
-    let NuschelEvent::DirectOpened(again) = alice.open_direct(bob_id).await else {
+    let NuschlEvent::DirectOpened(again) = alice.open_direct(bob_id).await else {
         panic!();
     };
     assert_eq!(again.direct.unwrap().conversation, direct.conversation);
@@ -2029,8 +2023,8 @@ async fn direct_conversations_belong_to_two_accounts_for_good() {
         error_code(&carol.history(conversation, latest(), 10).await),
         Some(v1::error::Code::NotFound)
     );
-    let NuschelEvent::DirectList(list) = bob
-        .request(NuschelRequest::ListDirect(v1::ListDirect {
+    let NuschlEvent::DirectList(list) = bob
+        .request(NuschlRequest::ListDirect(v1::ListDirect {
             request_id: request_id(),
         }))
         .await
@@ -2040,7 +2034,7 @@ async fn direct_conversations_belong_to_two_accounts_for_good() {
     assert_eq!(list.directs.len(), 1);
     assert_eq!(list.directs[0].name, "Alice");
     // Guests have no durable identity and no direct conversations.
-    let mut guest = nuschel(&fixture, "Guest", 3).await;
+    let mut guest = nuschl(&fixture, "Guest", 3).await;
     assert_eq!(
         error_code(&guest.open_direct(bob_id).await),
         Some(v1::error::Code::NotFound)
@@ -2052,7 +2046,7 @@ async fn direct_conversations_belong_to_two_accounts_for_good() {
         let mut state = fixture.running.server.lock();
         let bob = state.registry.by_name("Bob").unwrap().clone();
         state.registry.remove(bob.id);
-        state.authz_changed(nuscheld::conversations::Scope::All);
+        state.authz_changed(nuschld::conversations::Scope::All);
         state.finish();
     }
     let page = alice.page(conversation, latest(), 10).await;
@@ -2065,7 +2059,7 @@ async fn direct_conversations_belong_to_two_accounts_for_good() {
         ),
         Some(v1::error::Code::NotFound)
     );
-    let mut new_bob = nuschel(&fixture, "Bob", 1).await;
+    let mut new_bob = nuschl(&fixture, "Bob", 1).await;
     let new_id = new_bob.register().await;
     assert_ne!(new_id, bob_id, "registration numbers are never reused");
     assert_eq!(
@@ -2079,7 +2073,7 @@ async fn direct_conversations_belong_to_two_accounts_for_good() {
 #[tokio::test]
 async fn read_markers_sync_across_devices_and_typing_is_never_stored() {
     let fixture = Fixture::start("").await;
-    let mut phone = nuschel(&fixture, "Alice", 0).await;
+    let mut phone = nuschl(&fixture, "Alice", 0).await;
     phone.register().await;
     let root = phone.conversations[&0];
     for n in 1..=3 {
@@ -2087,17 +2081,17 @@ async fn read_markers_sync_across_devices_and_typing_is_never_stored() {
     }
     // Another device of the same account (Mumble allows one connection per
     // account at a time: this login replaces the first).
-    let mut laptop = nuschel(&fixture, "Alice", 0).await;
+    let mut laptop = nuschl(&fixture, "Alice", 0).await;
     drop(phone);
     let marker = |seq| {
-        NuschelRequest::ReadMarker(v1::ReadMarker {
+        NuschlRequest::ReadMarker(v1::ReadMarker {
             conversation: root.to_vec(),
             seq,
         })
     };
-    laptop.command(Command::Nuschel(marker(2))).await;
-    laptop.command(Command::Nuschel(marker(1))).await;
-    laptop.command(Command::Nuschel(marker(99))).await;
+    laptop.command(Command::Nuschl(marker(2))).await;
+    laptop.command(Command::Nuschl(marker(1))).await;
+    laptop.command(Command::Nuschl(marker(99))).await;
     let state = laptop.subscribe(&[root]).await;
     assert_eq!(
         state.conversations[0].read, 2,
@@ -2107,19 +2101,19 @@ async fn read_markers_sync_across_devices_and_typing_is_never_stored() {
     // Durable: after a restart the marker is still there.
     drop(laptop);
     let fixture = fixture.restart("").await;
-    let mut laptop = nuschel(&fixture, "Alice", 0).await;
+    let mut laptop = nuschl(&fixture, "Alice", 0).await;
     assert_eq!(laptop.subscribe(&[root]).await.conversations[0].read, 2);
     // Typing reaches readers and is rate-limited, never stored.
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
-    let typing = NuschelRequest::Typing(v1::Typing {
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
+    let typing = NuschlRequest::Typing(v1::Typing {
         conversation: root.to_vec(),
         session: 0,
     });
-    laptop.command(Command::Nuschel(typing.clone())).await;
-    laptop.command(Command::Nuschel(typing)).await;
+    laptop.command(Command::Nuschl(typing.clone())).await;
+    laptop.command(Command::Nuschl(typing)).await;
     let typer = bob
         .wait(|event| match event {
-            SessionEvent::Nuschel(NuschelEvent::Typing(typing)) => Some(typing.session),
+            SessionEvent::Nuschl(NuschlEvent::Typing(typing)) => Some(typing.session),
             _ => None,
         })
         .await;
@@ -2127,7 +2121,7 @@ async fn read_markers_sync_across_devices_and_typing_is_never_stored() {
     assert!(
         !bob.arrives(QUIET, |event| matches!(
             event,
-            SessionEvent::Nuschel(NuschelEvent::Typing(_))
+            SessionEvent::Nuschl(NuschlEvent::Typing(_))
         ))
         .await,
         "one per three seconds"
@@ -2144,7 +2138,7 @@ async fn read_markers_sync_across_devices_and_typing_is_never_stored() {
 #[tokio::test]
 async fn temporary_history_goes_with_its_channel_and_deleted_channels_are_archived() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
     alice
         .command(Command::CreateChannel {
@@ -2203,14 +2197,14 @@ async fn temporary_history_goes_with_its_channel_and_deleted_channels_are_archiv
     let state = fixture.running.server.lock();
     assert_eq!(
         state.conversations.kind(&side_conversation),
-        Some(nuscheld::conversations::Kind::Archived)
+        Some(nuschld::conversations::Kind::Archived)
     );
 }
 
 #[tokio::test]
 async fn stock_clients_are_told_that_text_is_kept() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
     let (side, side_conversation) = fixture.add_channel("Side", vec![], vec![]);
     alice.send(side_conversation, "history here").await;
@@ -2240,7 +2234,7 @@ async fn stock_clients_are_told_that_text_is_kept() {
             .contains("people who join a channel later can read it")
     );
     assert_eq!(notice.actor, None, "from the server");
-    // Nuschel clients are not told this way (their client knows).
+    // Nuschl clients are not told this way (their client knows).
     assert!(
         !alice
             .arrives(
@@ -2254,17 +2248,17 @@ async fn stock_clients_are_told_that_text_is_kept() {
 #[tokio::test]
 async fn the_operator_erases_a_users_messages() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
     let root = alice.conversations[&0];
     alice.send(root, "personal data").await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     bob.register().await;
     bob.send(root, "stays").await;
     let (account, name) =
-        nuscheld::server::find_account(&fixture.running.server.lock(), "alice").unwrap();
+        nuschld::server::find_account(&fixture.running.server.lock(), "alice").unwrap();
     assert_eq!(name, "Alice");
-    let erased = nuscheld::server::erase_account(&fixture.running.server.storage, account).await;
+    let erased = nuschld::server::erase_account(&fixture.running.server.storage, account).await;
     assert_eq!(erased.unwrap(), 1);
     let page = bob.page(root, latest(), 10).await;
     assert!(page.messages[0].content.is_empty() && page.messages[0].deleted_ms > 0);
@@ -2275,8 +2269,8 @@ async fn the_operator_erases_a_users_messages() {
 // ---- §6 retention ----
 
 /// `ChannelSettings` with only a retention.
-fn retention_settings(channel: u32, kind: v1::retention::Kind, confirm: bool) -> NuschelRequest {
-    NuschelRequest::ChannelSettings(v1::ChannelSettings {
+fn retention_settings(channel: u32, kind: v1::retention::Kind, confirm: bool) -> NuschlRequest {
+    NuschlRequest::ChannelSettings(v1::ChannelSettings {
         request_id: request_id(),
         channel,
         retention: Some(v1::Retention { kind: Some(kind) }),
@@ -2302,7 +2296,7 @@ fn backdate(fixture: &Fixture, conversation: &[u8; 16], seq: u64, days: i64) {
     let row = store
         .history
         .messages
-        .get_mut(&(nuscheld::conversations::hex(conversation), seq))
+        .get_mut(&(nuschld::conversations::hex(conversation), seq))
         .unwrap();
     row.sent_ms -= days * 86_400_000;
 }
@@ -2311,9 +2305,9 @@ fn backdate(fixture: &Fixture, conversation: &[u8; 16], seq: u64, days: i64) {
 async fn channel_retention_needs_write_and_shortening_needs_confirmation() {
     use v1::retention::Kind;
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     let bob_id = bob.register().await;
     let (channel, conversation) = fixture.add_channel(
         "Kept",
@@ -2347,13 +2341,13 @@ async fn channel_retention_needs_write_and_shortening_needs_confirmation() {
     );
     assert_eq!(
         fixture.running.server.lock().retention(&conversation),
-        nuschel_ipc::server::Retention::Forever,
+        nuschl_ipc::server::Retention::Forever,
         "nothing changed"
     );
     let done = bob
         .request(retention_settings(channel, Kind::Days(7), true))
         .await;
-    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    assert!(matches!(done, NuschlEvent::Done(_)), "{done:?}");
     let info = alice.channel_info(channel).await;
     assert_eq!(
         (info.retention_days, info.live_only, info.own_retention),
@@ -2367,25 +2361,25 @@ async fn channel_retention_needs_write_and_shortening_needs_confirmation() {
     assert_eq!(page.messages[1].content, "recent words");
     // The expiry tombstones them in storage.
     let server = &fixture.running.server;
-    let expired = nuscheld::retention::expire_now(server, &server.storage).await;
+    let expired = nuschld::retention::expire_now(server, &server.storage).await;
     assert_eq!(expired, Some(1));
     {
         let store = fixture.store.lock().unwrap();
         let rows = &store.history.messages;
-        let hex = nuscheld::conversations::hex(&conversation);
+        let hex = nuschld::conversations::hex(&conversation);
         assert_eq!(rows[&(hex.clone(), old)].content, "");
         assert_eq!(rows[&(hex.clone(), old)].delete_reason, Some(2));
         assert_eq!(rows[&(hex, recent)].content, "recent words");
     }
     assert_eq!(
-        nuscheld::retention::expire_now(server, &server.storage).await,
+        nuschld::retention::expire_now(server, &server.storage).await,
         Some(0)
     );
     // Keeping more needs no confirmation; back to the server's default.
     let done = bob
         .request(retention_settings(channel, Kind::Forever(true), false))
         .await;
-    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    assert!(matches!(done, NuschlEvent::Done(_)), "{done:?}");
     let done = bob
         .request(retention_settings(
             channel,
@@ -2393,7 +2387,7 @@ async fn channel_retention_needs_write_and_shortening_needs_confirmation() {
             false,
         ))
         .await;
-    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    assert!(matches!(done, NuschlEvent::Done(_)), "{done:?}");
     // Malformed: zero days.
     let malformed = bob
         .request(retention_settings(channel, Kind::Days(0), true))
@@ -2403,7 +2397,7 @@ async fn channel_retention_needs_write_and_shortening_needs_confirmation() {
     let done = bob
         .request(retention_settings(channel, Kind::Days(30), true))
         .await;
-    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    assert!(matches!(done, NuschlEvent::Done(_)), "{done:?}");
     // Synchronise with the history writer before restarting.
     alice.send(conversation, "sync").await;
     drop((alice, bob));
@@ -2411,7 +2405,7 @@ async fn channel_retention_needs_write_and_shortening_needs_confirmation() {
     let state = fixture.running.server.lock();
     assert_eq!(
         state.retention(&conversation),
-        nuschel_ipc::server::Retention::Days(30)
+        nuschl_ipc::server::Retention::Days(30)
     );
 }
 
@@ -2419,9 +2413,9 @@ async fn channel_retention_needs_write_and_shortening_needs_confirmation() {
 async fn live_only_channels_deliver_without_storing() {
     use v1::retention::Kind;
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     let bob_id = bob.register().await;
     let (channel, conversation) = fixture.add_channel(
         "Live",
@@ -2432,7 +2426,7 @@ async fn live_only_channels_deliver_without_storing() {
     let done = bob
         .request(retention_settings(channel, Kind::LiveOnly(true), true))
         .await;
-    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    assert!(matches!(done, NuschlEvent::Done(_)), "{done:?}");
     let info = alice.channel_info(channel).await;
     assert!(info.live_only && info.own_retention);
     bob.subscribe(&[conversation]).await;
@@ -2441,7 +2435,7 @@ async fn live_only_channels_deliver_without_storing() {
     assert_eq!(seq, before + 1);
     let chat = bob.chat().await;
     assert_eq!(chat.message.unwrap().content, "live words");
-    let hex = nuscheld::conversations::hex(&conversation);
+    let hex = nuschld::conversations::hex(&conversation);
     {
         let store = fixture.store.lock().unwrap();
         assert!(
@@ -2457,7 +2451,7 @@ async fn live_only_channels_deliver_without_storing() {
     assert!(page.messages.is_empty() && !page.more_before);
     assert_eq!(page.head, seq);
     let edit = alice
-        .request(NuschelRequest::Edit(v1::ChatEdit {
+        .request(NuschlRequest::Edit(v1::ChatEdit {
             request_id: request_id(),
             conversation: conversation.to_vec(),
             target: seq,
@@ -2503,7 +2497,7 @@ async fn live_only_channels_deliver_without_storing() {
     alice.send(conversation, "sync").await;
     let server = &fixture.running.server;
     assert_eq!(
-        nuscheld::retention::expire_now(server, &server.storage).await,
+        nuschld::retention::expire_now(server, &server.storage).await,
         Some(1)
     );
     {
@@ -2532,7 +2526,7 @@ async fn live_only_channels_deliver_without_storing() {
 #[tokio::test]
 async fn the_server_default_and_maximum_retention() {
     let fixture = Fixture::start("[history]\nretention = \"none\"").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     let root = alice.conversations[&0];
     let policy = {
         let state = fixture.running.server.lock();
@@ -2552,10 +2546,10 @@ async fn the_server_default_and_maximum_retention() {
     // A maximum caps channels that keep more.
     let fixture = fixture.restart("[history]\nmax_retention_days = 30").await;
     let mut state = fixture.running.server.lock();
-    state.set_retention(root, Some(nuschel_ipc::server::Retention::Forever));
+    state.set_retention(root, Some(nuschl_ipc::server::Retention::Forever));
     assert_eq!(
         state.retention(&root),
-        nuschel_ipc::server::Retention::Days(30)
+        nuschl_ipc::server::Retention::Days(30)
     );
     let info = state.channel_info(state.channels.get(0).unwrap());
     assert_eq!((info.retention_days, info.own_retention), (30, true));
@@ -2566,14 +2560,14 @@ async fn history_pages_are_limited_per_network_and_account() {
     let fixture =
         Fixture::start("[history]\nguests = \"full\"\nnetwork_pages_per_minute = 6").await;
     // Two unregistered connections from 127.0.0.0/24 share a burst of two.
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     let root = alice.conversations[&0];
     alice.page(root, latest(), 10).await;
     bob.page(root, latest(), 10).await;
     let limited = alice.history(root, latest(), 10).await;
     assert_eq!(error_code(&limited), Some(v1::error::Code::RateLimited));
-    let NuschelEvent::Error(error) = limited else {
+    let NuschlEvent::Error(error) = limited else {
         unreachable!()
     };
     assert!(
@@ -2582,7 +2576,7 @@ async fn history_pages_are_limited_per_network_and_account() {
         error.retry_after_ms
     );
     // A registered user has a budget of their own, and the connection stays.
-    let mut carol = nuschel(&fixture, "Carol", 2).await;
+    let mut carol = nuschl(&fixture, "Carol", 2).await;
     carol.register().await;
     carol.page(root, latest(), 10).await;
     carol.page(root, latest(), 10).await;
@@ -2595,7 +2589,7 @@ async fn history_pages_are_limited_per_network_and_account() {
              unlimited_networks = [\"127.0.0.0/8\"]",
         )
         .await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     for _ in 0..5 {
         alice.page(root, latest(), 10).await;
     }
@@ -2608,7 +2602,7 @@ async fn stock_direct_messages_are_kept_only_when_the_operator_says_so() {
             "[history]\narchive_stock_direct_messages = {archive}"
         ))
         .await;
-        let mut alice = nuschel(&fixture, "Alice", 0).await;
+        let mut alice = nuschl(&fixture, "Alice", 0).await;
         alice.register().await;
         let mut carol = Raw::login(fixture.address(), "Carol").await;
         carol
@@ -2650,7 +2644,7 @@ async fn stock_direct_messages_are_kept_only_when_the_operator_says_so() {
                 .kind(&event.conversation.try_into().unwrap());
             assert!(matches!(
                 kind,
-                Some(nuscheld::conversations::Kind::Direct(..))
+                Some(nuschld::conversations::Kind::Direct(..))
             ));
         } else {
             let text = alice
@@ -2670,9 +2664,9 @@ async fn stock_direct_messages_are_kept_only_when_the_operator_says_so() {
 #[tokio::test]
 async fn the_session_sends_channel_text_durably_and_resends_after_a_reconnect() {
     let fixture = Fixture::start("").await;
-    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut alice = nuschl(&fixture, "Alice", 0).await;
     alice.register().await;
-    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut bob = nuschl(&fixture, "Bob", 1).await;
     bob.register().await;
     let root = alice.conversations[&0];
     // Plain SendText becomes ChatSend: pending, then acknowledged with a seq.
@@ -2753,8 +2747,8 @@ async fn the_session_sends_channel_text_durably_and_resends_after_a_reconnect() 
 
 // ---- share/1: share links (docs/web.md) ----
 
-fn create(channel: u32, expires_at: u64, access_token: &str) -> NuschelRequest {
-    NuschelRequest::ShareLinkCreate(v1::ShareLinkCreate {
+fn create(channel: u32, expires_at: u64, access_token: &str) -> NuschlRequest {
+    NuschlRequest::ShareLinkCreate(v1::ShareLinkCreate {
         request_id: request_id(),
         channel,
         expires_at,
@@ -2762,23 +2756,23 @@ fn create(channel: u32, expires_at: u64, access_token: &str) -> NuschelRequest {
     })
 }
 
-fn resolve(token: &[u8]) -> NuschelRequest {
-    NuschelRequest::ShareLinkResolve(v1::ShareLinkResolve {
+fn resolve(token: &[u8]) -> NuschlRequest {
+    NuschlRequest::ShareLinkResolve(v1::ShareLinkResolve {
         request_id: request_id(),
         token: token.to_vec(),
     })
 }
 
-fn revoke(token: &[u8]) -> NuschelRequest {
-    NuschelRequest::ShareLinkRevoke(v1::ShareLinkRevoke {
+fn revoke(token: &[u8]) -> NuschlRequest {
+    NuschlRequest::ShareLinkRevoke(v1::ShareLinkRevoke {
         request_id: request_id(),
         token: token.to_vec(),
     })
 }
 
-fn share_link(event: NuschelEvent) -> v1::ShareLink {
+fn share_link(event: NuschlEvent) -> v1::ShareLink {
     match event {
-        NuschelEvent::ShareLink(link) => link,
+        NuschlEvent::ShareLink(link) => link,
         other => panic!("expected a share link, got {other:?}"),
     }
 }
@@ -2796,9 +2790,9 @@ async fn share_links_open_channels_until_revoked_or_expired() {
         vec![],
     );
     let (open, _) = fixture.add_channel("Open", vec![], vec![]);
-    let mut owner = nuschel(&fixture, "owner", 0).await;
+    let mut owner = nuschl(&fixture, "owner", 0).await;
     let owner_id = owner.register().await;
-    let mut guest = nuschel(&fixture, "guest", 1).await;
+    let mut guest = nuschl(&fixture, "guest", 1).await;
 
     // Anyone registered who may enter makes a plain link; the guest may not
     // (no durable identity), and nobody may for a channel they cannot enter.
@@ -2849,7 +2843,7 @@ async fn share_links_open_channels_until_revoked_or_expired() {
     drop(owner);
     drop(guest);
     let fixture = fixture.restart("").await;
-    let mut owner = nuschel(&fixture, "owner", 0).await;
+    let mut owner = nuschl(&fixture, "owner", 0).await;
     let again = share_link(owner.request(resolve(&door.token)).await);
     assert_eq!(again.channel, private);
     assert!(
@@ -2857,7 +2851,7 @@ async fn share_links_open_channels_until_revoked_or_expired() {
         "the web host is the configuration's"
     );
     let done = owner.request(revoke(&door.token)).await;
-    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    assert!(matches!(done, NuschlEvent::Done(_)), "{done:?}");
     let gone = owner.request(resolve(&door.token)).await;
     assert_eq!(error_code(&gone), Some(v1::error::Code::NotFound));
     let plain = share_link(owner.request(resolve(&plain.token)).await);

@@ -1,9 +1,9 @@
 {
-  "name": "nuschel-web",
+  "name": "nuschl-web",
   "private": true,
   "version": "0.1.0",
   "license": "EUPL-1.2",
-  "description": "The Nuschel web client (docs/web.md): Svelte over the SDK in WebAssembly",
+  "description": "The Nuschl web client (docs/web.md): Svelte over the SDK in WebAssembly",
   "type": "module",
   "scripts": {
     "dev": "vite",

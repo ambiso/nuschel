@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The native driver: the SDK's platform services on Linux, Windows and
-//! macOS, on tokio. It supervises one connection per server (`nuschel-session`)
+//! macOS, on tokio. It supervises one connection per server (`nuschl-session`)
 //! with reconnects and backoff, runs the one media worker they share
 //! ([`media`]: every server's voice mixed, the microphone to the talk
 //! servers), renders
@@ -15,15 +15,15 @@ use crate::{
     server::{AudioHealth, direct_conversation_key},
     timeline::{Deletion, IncomingMessage, Page},
 };
-use nuschel_core::audio::{AudioDevice, EchoSource, Sound, TransmitMode};
-use nuschel_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
-use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
-use nuschel_protocol::nuschel::v1;
-use nuschel_session::{
+use nuschl_core::audio::{AudioDevice, EchoSource, Sound, TransmitMode};
+use nuschl_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
+use nuschl_ipc::{LiveMediaEvent, LiveMediaRequest};
+use nuschl_protocol::nuschl::v1;
+use nuschl_session::{
     Error,
     config::{ClientSettings, Profile, ServerBookmark},
     connection::{
-        self, Command, ConnectOptions, IncomingText, NuschelEvent, NuschelRequest, PendingChat,
+        self, Command, ConnectOptions, IncomingText, NuschlEvent, NuschlRequest, PendingChat,
         SessionEvent, TextTarget,
     },
     model::RejectKind,
@@ -68,7 +68,7 @@ fn author_name(author: &v1::Author) -> String {
     }
 }
 
-/// Render a Nuschel server's history page like a local one: text in one
+/// Render a Nuschl server's history page like a local one: text in one
 /// content worker, stock clients' HTML made inert first. Ids are seqs;
 /// messages come in their current state (edited, or a tombstone); edit,
 /// deletion and void rows only move the cursor. Also returns the records
@@ -80,7 +80,7 @@ async fn render_server_page(
 ) -> (
     Vec<IncomingMessage>,
     (Option<i64>, Option<i64>),
-    Vec<nuschel_core::ServerRecord>,
+    Vec<nuschl_core::ServerRecord>,
 ) {
     let next_before = page
         .more_before
@@ -97,7 +97,7 @@ async fn render_server_page(
         // worker, never to the timeline as text.
         .filter(|message| {
             message.kind == v1::message::Kind::Message as i32
-                && !nuschel_protocol::nuschel::is_mls_format(message.format)
+                && !nuschl_protocol::nuschl::is_mls_format(message.format)
         })
         .collect();
     let mut out = Vec::with_capacity(shown.len());
@@ -120,7 +120,7 @@ async fn render_server_page(
         };
         let edited_ms = (message.edited_ms != 0).then_some(message.edited_ms);
         if let Some(cache) = cache.filter(|_| !unauthenticated.contains(&message.seq)) {
-            records.push(nuschel_core::ServerRecord {
+            records.push(nuschl_core::ServerRecord {
                 message: ChatMessage {
                     server: cache.identity.clone(),
                     channel: cache.channel.clone(),
@@ -156,7 +156,7 @@ async fn render_server_page(
 pub enum Event {
     Input(Input),
     /// The crypto worker's answer to [`Driver::identity`].
-    OwnIdentity(Result<nuschel_ipc::crypto::CryptoResponse, String>),
+    OwnIdentity(Result<nuschl_ipc::crypto::CryptoResponse, String>),
     Protocol {
         server: String,
         generation: u64,
@@ -228,7 +228,7 @@ pub enum Event {
         next_after: Option<i64>,
     },
     HistoryError(String),
-    /// A message on a Nuschel server was edited (by its author, perhaps us).
+    /// A message on a Nuschl server was edited (by its author, perhaps us).
     Edited {
         server: String,
         conversation: [u8; 16],
@@ -237,7 +237,7 @@ pub enum Event {
         document: MessageDocument,
         edited_ms: i64,
     },
-    /// A message on a Nuschel server became a tombstone.
+    /// A message on a Nuschl server became a tombstone.
     Deleted {
         server: String,
         conversation: [u8; 16],
@@ -265,7 +265,7 @@ pub enum Event {
     /// Results for search `request` (see `Driver::search`).
     SearchResults {
         request: u64,
-        result: Result<nuschel_core::SearchPage, String>,
+        result: Result<nuschl_core::SearchPage, String>,
     },
     /// History writes work again after an earlier failure.
     HistoryRecovered,
@@ -325,7 +325,7 @@ pub struct Driver {
     handle: Handle,
     profile: Profile,
     /// The crypto worker, shared by every connection (identity and key transparency).
-    crypto: nuschel_session::identity::CryptoHandle,
+    crypto: nuschl_session::identity::CryptoHandle,
     sender: mpsc::Sender<Event>,
     storage: mpsc::Sender<StorageCommand>,
     content: mpsc::Sender<ContentWork>,
@@ -374,10 +374,10 @@ enum StorageCommand {
         source: String,
         document: MessageDocument,
     },
-    /// A Nuschel server's messages by seq (a history page): kept, or
+    /// A Nuschl server's messages by seq (a history page): kept, or
     /// replaced where already kept.
     StoreServer {
-        records: Vec<nuschel_core::ServerRecord>,
+        records: Vec<nuschl_core::ServerRecord>,
     },
     /// Our message (by its key) was stored by the server as `seq`.
     Acked { key: [u8; 16], seq: u64 },
@@ -401,7 +401,7 @@ enum StorageCommand {
         request: u64,
         scope: (Vec<String>, Option<String>),
         query: String,
-        after: Option<nuschel_core::SearchCursor>,
+        after: Option<nuschl_core::SearchCursor>,
     },
 }
 enum CacheChange {
@@ -432,9 +432,9 @@ impl Driver {
         // folder (docs/e2ee.md §3.7).
         let crypto = {
             let _runtime = handle.enter();
-            nuschel_session::identity::CryptoHandle::start(
-                nuschel_session::workers::sibling("nuschel-crypto-worker")
-                    .unwrap_or_else(|_| "nuschel-crypto-worker".into()),
+            nuschl_session::identity::CryptoHandle::start(
+                nuschl_session::workers::sibling("nuschl-crypto-worker")
+                    .unwrap_or_else(|_| "nuschl-crypto-worker".into()),
                 profile.keys_dir().to_owned(),
             )
         };
@@ -510,7 +510,7 @@ impl Driver {
         );
         Ok(generation)
     }
-    /// A page of a Nuschel server's history: before a seq (or the latest),
+    /// A page of a Nuschl server's history: before a seq (or the latest),
     /// after one, or around one (a search result); ids are seqs.
     pub fn server_history(
         &self,
@@ -538,7 +538,7 @@ impl Driver {
         }
         let result = self.command(
             &server,
-            Command::Nuschel(NuschelRequest::History(v1::HistoryRequest {
+            Command::Nuschl(NuschlRequest::History(v1::HistoryRequest {
                 request_id,
                 conversation: conversation.to_vec(),
                 anchor: Some(anchor),
@@ -550,20 +550,20 @@ impl Driver {
         }
         result
     }
-    /// Edit (`content`) or delete a message on a Nuschel server. The answer
+    /// Edit (`content`) or delete a message on a Nuschl server. The answer
     /// arrives as `Event::Edited`/`Event::Deleted` or `Event::ChangeFailed`.
     pub fn change_message(&self, change: ChangeRequest) -> Result<(), String> {
         let request_id = request_id();
         let conversation = change.conversation.to_vec();
         let request = match &change.content {
-            Some(content) => NuschelRequest::Edit(v1::ChatEdit {
+            Some(content) => NuschlRequest::Edit(v1::ChatEdit {
                 request_id,
                 conversation,
                 target: change.seq,
                 format: v1::Format::Text as i32,
                 content: content.clone(),
             }),
-            None => NuschelRequest::Delete(v1::ChatDelete {
+            None => NuschlRequest::Delete(v1::ChatDelete {
                 request_id,
                 conversation,
                 target: change.seq,
@@ -577,14 +577,14 @@ impl Driver {
             }
             pending.insert(request_id, change);
         }
-        let result = self.command(&server, Command::Nuschel(request));
+        let result = self.command(&server, Command::Nuschl(request));
         if result.is_err() {
             changes().remove(&request_id);
         }
         result
     }
     /// A request to the crypto worker that concerns no server (Settings → Identity).
-    pub fn identity(&self, request: nuschel_ipc::crypto::CryptoRequest) {
+    pub fn identity(&self, request: nuschl_ipc::crypto::CryptoRequest) {
         let crypto = self.crypto.clone();
         let events = self.sender.clone();
         self.handle.spawn(async move {
@@ -637,7 +637,7 @@ impl Driver {
         request: u64,
         scope: (Vec<String>, Option<String>),
         query: String,
-        after: Option<nuschel_core::SearchCursor>,
+        after: Option<nuschl_core::SearchCursor>,
     ) -> Result<(), String> {
         self.storage
             .try_send(StorageCommand::Search {
@@ -667,7 +667,7 @@ impl Driver {
             let Some(worker) = content_worker() else {
                 return;
             };
-            if let Ok(document) = nuschel_ipc::host::decode_avatar(worker, &encoded).await {
+            if let Ok(document) = nuschl_ipc::host::decode_avatar(worker, &encoded).await {
                 let _ = events
                     .send(Event::Avatar {
                         server,
@@ -760,7 +760,7 @@ struct Restore {
     deafened: bool,
     connected: bool,
     disconnected_at_ms: Option<i64>,
-    /// Our messages a Nuschel server has not acknowledged yet; sent again
+    /// Our messages a Nuschl server has not acknowledged yet; sent again
     /// with their keys after a reconnect.
     unacked: Vec<PendingChat>,
 }
@@ -777,7 +777,7 @@ enum Outcome {
 /// failures, restoring channel and mute/deafen, and report gaps in history.
 #[allow(clippy::too_many_arguments)]
 async fn connection_loop(
-    (profile, crypto): (Profile, nuschel_session::identity::CryptoHandle),
+    (profile, crypto): (Profile, nuschl_session::identity::CryptoHandle),
     server: ServerBookmark,
     (password, deafened): (Option<String>, bool),
     generation: u64,
@@ -934,14 +934,14 @@ fn device_name() -> String {
         .map(|name| name.trim().chars().take(48).collect::<String>())
         .filter(|name| !name.is_empty() && !name.chars().any(char::is_control));
     match host {
-        Some(host) => format!("Nuschel on {host}"),
-        None => format!("Nuschel ({})", std::env::consts::OS),
+        Some(host) => format!("Nuschl on {host}"),
+        None => format!("Nuschl ({})", std::env::consts::OS),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn connect_once(
-    (profile, crypto): (&Profile, &nuschel_session::identity::CryptoHandle),
+    (profile, crypto): (&Profile, &nuschl_session::identity::CryptoHandle),
     server: &ServerBookmark,
     password: Option<String>,
     generation: u64,
@@ -959,7 +959,7 @@ async fn connect_once(
     let required = profile
         .policy()
         .map(|store| store.get(&server.host, server.port))
-        .map_err(|error| format!("Nuschel's server security records could not be read: {error}"));
+        .map_err(|error| format!("Nuschl's server security records could not be read: {error}"));
     let options = match profile
         .identity()
         .map_err(|error| error.to_string())
@@ -977,7 +977,7 @@ async fn connect_once(
             resend: restore.unacked.clone(),
             message_rate: Default::default(),
             required,
-            crypto: Some(nuschel_session::identity::IdentitySetup {
+            crypto: Some(nuschl_session::identity::IdentitySetup {
                 crypto: crypto.clone(),
                 device_name: device_name(),
                 recovery: settings.borrow().recovery_key,
@@ -1075,7 +1075,7 @@ async fn connect_once(
                 hub.send(media::Control::Sound(sound));
             },
             Some(command) = commands.recv() => {
-                if let Command::Mls(command @ (nuschel_session::mls::MlsCommand::OpenChannel { .. } | nuschel_session::mls::MlsCommand::OpenDirect { .. })) = &command {
+                if let Command::Mls(command @ (nuschl_session::mls::MlsCommand::OpenChannel { .. } | nuschl_session::mls::MlsCommand::OpenDirect { .. })) = &command {
                     pending_encrypted_open = Some(command.clone());
                     if !mls_keys_ready { continue; }
                 }
@@ -1103,7 +1103,7 @@ async fn connect_once(
                 // Only unmuted, as the worker's supervisor routes it; nothing
                 // captured before a mute leaves.
                 if !voice_allowed || revision != voice_revision || muted || deafened || voice_keys.borrow().mute { continue; }
-                let packet = nuschel_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
+                let packet = nuschl_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                 sequence += 2;
                 transmitting = !end;
                 let _ = session_commands.try_send(Command::Voice { target: 0, packet });
@@ -1122,14 +1122,14 @@ async fn connect_once(
                     restore.unacked.retain(|pending| pending.key != key);
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::ChatFailed { key, reason } }).await;
                 },
-                SessionEvent::Nuschel(page_event @ (NuschelEvent::Page(_) | NuschelEvent::DecryptedPage { .. })) => {
+                SessionEvent::Nuschl(page_event @ (NuschlEvent::Page(_) | NuschlEvent::DecryptedPage { .. })) => {
                     let (page, decrypted, unauthenticated) = match page_event {
-                        NuschelEvent::Page(page) => (page, false, Vec::new()),
-                        NuschelEvent::DecryptedPage { page, unauthenticated } => (page, true, unauthenticated),
+                        NuschlEvent::Page(page) => (page, false, Vec::new()),
+                        NuschlEvent::DecryptedPage { page, unauthenticated } => (page, true, unauthenticated),
                         _ => unreachable!(),
                     };
                     if encrypted_server && !decrypted {
-                        let _ = session_commands.send(Command::Mls(nuschel_session::mls::MlsCommand::DecryptPage { page })).await;
+                        let _ = session_commands.send(Command::Mls(nuschl_session::mls::MlsCommand::DecryptPage { page })).await;
                         continue;
                     }
                     let asked = server_pages().remove(&page.request_id);
@@ -1147,7 +1147,7 @@ async fn connect_once(
                         });
                     }
                 },
-                SessionEvent::Nuschel(NuschelEvent::Ack(ack)) if changes().contains_key(&ack.request_id) => {
+                SessionEvent::Nuschl(NuschlEvent::Ack(ack)) if changes().contains_key(&ack.request_id) => {
                     let change = changes().remove(&ack.request_id);
                     if let Some(change) = change {
                         // The server tells others, never us: apply it here.
@@ -1160,19 +1160,19 @@ async fn connect_once(
                         queue_change(content, events, job).await;
                     }
                 },
-                SessionEvent::Nuschel(NuschelEvent::Error(error)) => {
+                SessionEvent::Nuschl(NuschlEvent::Error(error)) => {
                     let asked = server_pages().remove(&error.request_id);
                     let change = changes().remove(&error.request_id);
                     match (asked, change) {
                         (Some((server, ticket, _, _)), _) => { let _ = events.send(Event::HistoryFailed { server, ticket, reason: error.detail }).await; },
                         (None, Some(change)) => { let _ = events.send(Event::ChangeFailed { server: change.server, delete: change.content.is_none(), reason: error.detail }).await; },
-                        (None, None) => { let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Nuschel(NuschelEvent::Error(error)) }).await; },
+                        (None, None) => { let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Nuschl(NuschlEvent::Error(error)) }).await; },
                     }
                 },
-                SessionEvent::Nuschel(NuschelEvent::Chat(chat)) => {
+                SessionEvent::Nuschl(NuschlEvent::Chat(chat)) => {
                     // New messages arrive as `Text`; edits and deletions here.
                     let Some(message) = chat.message else { continue };
-                    let Some(conversation) = nuschel_protocol::nuschel::id(&chat.conversation) else { continue };
+                    let Some(conversation) = nuschl_protocol::nuschl::id(&chat.conversation) else { continue };
                     let cache = peer.as_deref().map(|peer| CacheKey {
                         identity: server.history_identity(peer),
                         channel: conversation_keys.get(&conversation).cloned().unwrap_or_else(|| direct_conversation_key(&conversation)),
@@ -1188,7 +1188,7 @@ async fn connect_once(
                     queue_change(content, events, job).await;
                 },
                 SessionEvent::ChannelInfo { channel, info } => {
-                    if let Some(conversation) = nuschel_protocol::nuschel::id(&info.conversation)
+                    if let Some(conversation) = nuschl_protocol::nuschl::id(&info.conversation)
                         && conversation_keys.len() < 4096
                     {
                         conversation_keys.insert(conversation, channel.to_string());
@@ -1210,7 +1210,7 @@ async fn connect_once(
                     encrypted_server = negotiated.capabilities.iter().any(|capability| capability == "e2ee/1");
                     // Remember what this server offers: a weaker answer later fails.
                     let raised = profile.policy()
-                        .and_then(|mut store| store.raise(&server.host, server.port, negotiated.nuschel, &negotiated.capabilities));
+                        .and_then(|mut store| store.raise(&server.host, server.port, negotiated.nuschl, &negotiated.capabilities));
                     if let Err(error) = raised { let _ = events.send(Event::HistoryError(format!("Could not save this server's security record: {error}"))).await; }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Negotiated(negotiated) }).await;
                 },
@@ -1249,7 +1249,7 @@ async fn connect_once(
                         restore.channel = Some(user.channel);
                         if own_registration != user.user_id && user.user_id.is_some() {
                             own_registration = user.user_id;
-                            let _ = session_commands.send(Command::Identity(nuschel_session::identity::IdentityCommand::Refresh)).await;
+                            let _ = session_commands.send(Command::Identity(nuschl_session::identity::IdentityCommand::Refresh)).await;
                         }
                     }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::User(user) }).await;
@@ -1271,8 +1271,8 @@ async fn connect_once(
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Transport(stats) }).await;
                 },
                 SessionEvent::Mls(event) => {
-                    use nuschel_session::mls::MlsEvent;
-                    use nuschel_ipc::crypto::Received;
+                    use nuschl_session::mls::MlsEvent;
+                    use nuschl_ipc::crypto::Received;
                     match &event {
                         MlsEvent::KeyPackages { .. } => {
                             mls_keys_ready = true;
@@ -1280,12 +1280,12 @@ async fn connect_once(
                         }
                         MlsEvent::Conversation { view, peer } => {
                             if view.pinned && view.active && pending_encrypted_open.as_ref().is_some_and(|pending| match pending {
-                                nuschel_session::mls::MlsCommand::OpenChannel { conversation } => view.conversation.as_slice() == conversation,
-                                nuschel_session::mls::MlsCommand::OpenDirect { user_id } => *peer == Some(*user_id),
+                                nuschl_session::mls::MlsCommand::OpenChannel { conversation } => view.conversation.as_slice() == conversation,
+                                nuschl_session::mls::MlsCommand::OpenDirect { user_id } => *peer == Some(*user_id),
                                 _ => false,
                             }) { pending_encrypted_open = None; }
 
-                            if let Some(conversation) = nuschel_protocol::nuschel::id(&view.conversation) {
+                            if let Some(conversation) = nuschl_protocol::nuschl::id(&view.conversation) {
                                 let state = encryption_state(view);
                                 let _ = events.send(Event::Input(Input::Server { server: id.clone(), generation, event: ServerEvent::Encryption { conversation, state } })).await;
                             }
@@ -1313,7 +1313,7 @@ async fn connect_once(
                             };
                             if let (Some((seq, body, observed_at_ms, outgoing)), Some(peer)) = (visible, peer.as_ref()) {
                                 let target = conversation_keys.get(conversation).and_then(|key| key.parse().ok()).map(TextTarget::Channel).unwrap_or(TextTarget::DirectConversation(*conversation));
-                                let author = if outgoing { server.username.clone() } else if let Received::Message { sender, .. } = received { nuschel_session::mls::authenticated_sender_label(sender) } else { "Encrypted member".into() };
+                                let author = if outgoing { server.username.clone() } else if let Received::Message { sender, .. } = received { nuschl_session::mls::authenticated_sender_label(sender) } else { "Encrypted member".into() };
                                 let text = IncomingText { target, author, peer: None, body, html: false, outgoing, observed_at_ms, seq: Some(seq), pending: None };
                                 let job = ContentJob { server: id.clone(), generation, identity: server.history_identity(peer), nonce: nonce.clone(), text, archived: true };
                                 if content.send(ContentWork::Text(Box::new(job))).await.is_err() { break; }
@@ -1357,10 +1357,10 @@ pub struct VoiceKeys {
 /// Ends our transmission. Receivers stop at once, as with stock Mumble, but
 /// the terminator is silence: nothing the microphone captured after muting leaves.
 fn silent_terminator(sequence: &mut u64) -> Command {
-    let packet = nuschel_protocol::voice::VoicePacket {
+    let packet = nuschl_protocol::voice::VoicePacket {
         sender: 0,
         sequence: *sequence,
-        opus: nuschel_core::audio::SILENT_OPUS.to_vec(),
+        opus: nuschl_core::audio::SILENT_OPUS.to_vec(),
         end: true,
         volume: 1.,
     };
@@ -1413,7 +1413,7 @@ async fn queue_change(
 /// The content worker next to this executable, looked up once.
 pub fn content_worker() -> Option<&'static std::path::Path> {
     static WORKER: std::sync::LazyLock<Option<PathBuf>> =
-        std::sync::LazyLock::new(|| workers::sibling("nuschel-content-worker").ok());
+        std::sync::LazyLock::new(|| workers::sibling("nuschl-content-worker").ok());
     WORKER.as_deref()
 }
 
@@ -1426,7 +1426,7 @@ fn plain(source: &str) -> MessageDocument {
 
 async fn prepare(source: &str, html: bool) -> (String, MessageDocument) {
     let prepared = match content_worker() {
-        Some(worker) => nuschel_ipc::host::prepare_content(worker, source, html)
+        Some(worker) => nuschl_ipc::host::prepare_content(worker, source, html)
             .await
             .ok(),
         None => None,
@@ -1440,7 +1440,7 @@ async fn prepare(source: &str, html: bool) -> (String, MessageDocument) {
 async fn prepare_many(messages: Vec<(String, bool)>) -> Vec<(String, MessageDocument)> {
     let prepared = match content_worker() {
         Some(worker) if !messages.is_empty() => {
-            nuschel_ipc::host::prepare_contents(worker, &messages).await
+            nuschl_ipc::host::prepare_contents(worker, &messages).await
         }
         _ => Vec::new(),
     };
@@ -1566,7 +1566,7 @@ impl RecentChanges {
             CacheChange::Delete(deletion) => entry.deleted = Some(deletion.at_ms),
         }
     }
-    fn patch(&self, records: &mut [nuschel_core::ServerRecord]) {
+    fn patch(&self, records: &mut [nuschl_core::ServerRecord]) {
         for record in records {
             let key = (
                 record.message.server.clone(),
@@ -1595,7 +1595,7 @@ async fn storage_loop(
     events: mpsc::Sender<Event>,
 ) {
     let mut storage: Option<Storage> = None;
-    // Our own messages on Nuschel servers, kept before the server stored
+    // Our own messages on Nuschl servers, kept before the server stored
     // them: their rows by key, and acknowledgements that came first.
     let mut unacked_rows = BTreeMap::<[u8; 16], i64>::new();
     let mut early_acks = BTreeMap::<[u8; 16], u64>::new();
@@ -1647,7 +1647,7 @@ async fn storage_loop(
                     observed_at_ms: job.text.observed_at_ms,
                     body: source,
                 };
-                // A Nuschel server's message is kept once by its seq (a page
+                // A Nuschl server's message is kept once by its seq (a page
                 // may have brought it already); ours gets its seq when the
                 // server acknowledges it.
                 let seq = job.text.seq.map(|seq| seq as i64).or_else(|| {
@@ -1666,7 +1666,7 @@ async fn storage_loop(
                     let Some(worker) = &mut storage else { break };
                     let saved = match seq {
                         Some(seq) => {
-                            let mut records = vec![nuschel_core::ServerRecord {
+                            let mut records = vec![nuschl_core::ServerRecord {
                                 message: message.clone(),
                                 seq,
                                 edited_ms: None,
@@ -1703,7 +1703,7 @@ async fn storage_loop(
                 if id.is_some() {
                     let _ = events.send(Event::HistoryRecovered).await;
                 }
-                // On a Nuschel server the timeline counts in the server's seqs;
+                // On a Nuschl server the timeline counts in the server's seqs;
                 // the local copy is the offline cache. Our own message has
                 // none until it is acknowledged.
                 let id = match (job.text.seq, job.text.pending) {
@@ -1893,7 +1893,7 @@ async fn history_loop(
             .map(|entry| entry.message.body.clone())
             .collect();
         let documents = match content_worker() {
-            Some(worker) => nuschel_ipc::host::render_many(worker, &sources).await,
+            Some(worker) => nuschl_ipc::host::render_many(worker, &sources).await,
             None => vec![None; sources.len()],
         };
         let messages = page
@@ -1949,7 +1949,7 @@ const HOST_PIN: std::time::Duration = std::time::Duration::from_secs(60);
 /// The audio settings, and the bitrate and packet loss the encoder plans for.
 fn configure(
     media: &Media,
-    audio: &nuschel_core::audio::AudioSettings,
+    audio: &nuschl_core::audio::AudioSettings,
     (bitrate, packet_loss_percent): (u32, u8),
     host: Option<String>,
 ) {
@@ -1976,7 +1976,7 @@ fn play(media: &Media, settings: &ClientSettings, sound: Sound) {
 /// Play a sound where no connection's worker can (deafened or disconnected):
 /// a worker that opens only the output plays it and exits.
 async fn chime(
-    audio: nuschel_core::audio::AudioSettings,
+    audio: nuschl_core::audio::AudioSettings,
     volume: f32,
     host: Option<String>,
     sound: Sound,
@@ -2034,12 +2034,12 @@ impl Platform for Driver {
                 channel,
                 peer,
             } => Command::Mls(match (channel, peer) {
-                (true, _) => nuschel_session::mls::MlsCommand::OpenChannel { conversation },
-                (false, Some(user_id)) => nuschel_session::mls::MlsCommand::OpenDirect { user_id },
-                _ => nuschel_session::mls::MlsCommand::Sync { conversation },
+                (true, _) => nuschl_session::mls::MlsCommand::OpenChannel { conversation },
+                (false, Some(user_id)) => nuschl_session::mls::MlsCommand::OpenDirect { user_id },
+                _ => nuschl_session::mls::MlsCommand::Sync { conversation },
             }),
             Request::SendEncrypted { conversation, text } => {
-                Command::Mls(nuschel_session::mls::MlsCommand::SendText { conversation, text })
+                Command::Mls(nuschl_session::mls::MlsCommand::SendText { conversation, text })
             }
             Request::SendText {
                 target,
@@ -2074,13 +2074,13 @@ impl Platform for Driver {
             Request::RegisterSelf => Command::RegisterSelf,
             Request::MarkRead { channel, seq } => Command::MarkRead { channel, seq },
             Request::ReadMarker { conversation, seq } => {
-                Command::Nuschel(NuschelRequest::ReadMarker(v1::ReadMarker {
+                Command::Nuschl(NuschlRequest::ReadMarker(v1::ReadMarker {
                     conversation: conversation.to_vec(),
                     seq,
                 }))
             }
             Request::Typing { conversation } => {
-                Command::Nuschel(NuschelRequest::Typing(v1::Typing {
+                Command::Nuschl(NuschlRequest::Typing(v1::Typing {
                     conversation: conversation.to_vec(),
                     session: 0,
                 }))
@@ -2088,7 +2088,7 @@ impl Platform for Driver {
             Request::OpenDirect {
                 request_id,
                 user_id,
-            } => Command::Nuschel(NuschelRequest::OpenDirect(v1::OpenDirect {
+            } => Command::Nuschl(NuschlRequest::OpenDirect(v1::OpenDirect {
                 request_id,
                 user_id,
             })),
@@ -2098,14 +2098,14 @@ impl Platform for Driver {
                 channel,
                 expires_at,
                 access_token,
-            } => Command::Nuschel(NuschelRequest::ShareLinkCreate(v1::ShareLinkCreate {
+            } => Command::Nuschl(NuschlRequest::ShareLinkCreate(v1::ShareLinkCreate {
                 request_id,
                 channel,
                 expires_at,
                 access_token,
             })),
             Request::ResolveShareLink { request_id, token } => {
-                Command::Nuschel(NuschelRequest::ShareLinkResolve(v1::ShareLinkResolve {
+                Command::Nuschl(NuschlRequest::ShareLinkResolve(v1::ShareLinkResolve {
                     request_id,
                     token: token.to_vec(),
                 }))
@@ -2153,7 +2153,7 @@ impl Platform for Driver {
         request: u64,
         scope: (Vec<String>, Option<String>),
         query: String,
-        after: Option<nuschel_core::SearchCursor>,
+        after: Option<nuschl_core::SearchCursor>,
     ) -> Result<(), String> {
         Driver::search(self, request, scope, query, after)
     }
@@ -2163,18 +2163,18 @@ impl Platform for Driver {
 /// crypto worker's identity and key-transparency state.
 pub enum Native {
     /// The crypto worker's answer to [`Driver::identity`].
-    OwnIdentity(Box<Result<nuschel_ipc::crypto::CryptoResponse, String>>),
+    OwnIdentity(Box<Result<nuschl_ipc::crypto::CryptoResponse, String>>),
     /// Identity and key transparency on one connection.
     Identity {
         server: String,
         generation: u64,
-        event: Box<nuschel_session::identity::IdentityEvent>,
+        event: Box<nuschl_session::identity::IdentityEvent>,
     },
     /// End-to-end conversations on one connection (`mls/1`).
     Mls {
         server: String,
         generation: u64,
-        event: Box<nuschel_session::mls::MlsEvent>,
+        event: Box<nuschl_session::mls::MlsEvent>,
     },
     /// Nothing anyone needs.
     Ignored,
@@ -2464,18 +2464,18 @@ impl Event {
 
 /// What the session says that the client does not model yet.
 enum Unmodelled {
-    Identity(Box<nuschel_session::identity::IdentityEvent>),
-    Mls(Box<nuschel_session::mls::MlsEvent>),
+    Identity(Box<nuschl_session::identity::IdentityEvent>),
+    Mls(Box<nuschl_session::mls::MlsEvent>),
 }
 
 /// What the session said, as the client models it; identity and end-to-end
 /// events (to the UI for now) and what nobody needs (the driver's own
 /// business) are not.
 fn encryption_state(
-    view: &nuschel_ipc::crypto::ConversationView,
+    view: &nuschl_ipc::crypto::ConversationView,
 ) -> crate::conversation::EncryptionState {
     use crate::SessionSecurity;
-    use nuschel_ipc::crypto::Lock;
+    use nuschl_ipc::crypto::Lock;
     let (security, description) = match &view.lock {
         Lock::Encrypted | Lock::Verified => (
             SessionSecurity::MlsEstablished,
@@ -2514,19 +2514,19 @@ fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> 
             channel,
             conversation: info.conversation.as_slice().try_into().ok(),
         },
-        SessionEvent::Nuschel(NuschelEvent::Typing(typing)) => ServerEvent::Typing(typing),
-        SessionEvent::Nuschel(NuschelEvent::DirectList(list)) => {
+        SessionEvent::Nuschl(NuschlEvent::Typing(typing)) => ServerEvent::Typing(typing),
+        SessionEvent::Nuschl(NuschlEvent::DirectList(list)) => {
             ServerEvent::DirectList(list.directs)
         }
-        SessionEvent::Nuschel(NuschelEvent::DirectOpened(opened)) => {
+        SessionEvent::Nuschl(NuschlEvent::DirectOpened(opened)) => {
             ServerEvent::DirectOpened(opened)
         }
-        SessionEvent::Nuschel(NuschelEvent::Error(error)) => ServerEvent::ExtensionError(error),
-        SessionEvent::Nuschel(NuschelEvent::ShareLink(link)) => ServerEvent::ShareLink(link),
-        SessionEvent::Nuschel(NuschelEvent::ReadMarker(marker)) => ServerEvent::ReadMarker(marker),
+        SessionEvent::Nuschl(NuschlEvent::Error(error)) => ServerEvent::ExtensionError(error),
+        SessionEvent::Nuschl(NuschlEvent::ShareLink(link)) => ServerEvent::ShareLink(link),
+        SessionEvent::Nuschl(NuschlEvent::ReadMarker(marker)) => ServerEvent::ReadMarker(marker),
         SessionEvent::Identity(event) => return Err(Some(Unmodelled::Identity(Box::new(event)))),
         SessionEvent::Mls(event) => return Err(Some(Unmodelled::Mls(Box::new(event)))),
-        SessionEvent::Nuschel(_)
+        SessionEvent::Nuschl(_)
         | SessionEvent::ChatPending(_)
         | SessionEvent::Text(_)
         | SessionEvent::Audio(_) => return Err(None),
@@ -2608,7 +2608,7 @@ pub fn preferences(settings: &ClientSettings) -> crate::names::Preferences {
 #[cfg(test)]
 mod tests {
     use super::{CacheChange, CacheKey, Deletion, RecentChanges};
-    use nuschel_core::{ChatMessage, MessageDocument, ServerRecord};
+    use nuschl_core::{ChatMessage, MessageDocument, ServerRecord};
 
     fn record(seq: i64, body: &str) -> ServerRecord {
         ServerRecord {
@@ -2686,7 +2686,7 @@ mod encrypted_history_tests {
             reply_to: 99,
             ..Default::default()
         };
-        let authenticated = nuschel_session::mls::reconstructed_archive_chat(
+        let authenticated = nuschl_session::mls::reconstructed_archive_chat(
             forged,
             "Authenticated original text".into(),
             123,

@@ -4,7 +4,7 @@
      connected. The full client comes later. -->
 <script>
   import { onMount } from "svelte";
-  import init, { WebClient } from "./sdk/nuschel_client_wasm.js";
+  import init, { WebClient } from "./sdk/nuschl_client_wasm.js";
   import { inviteFragment } from "./invite.js";
 
   const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -82,7 +82,7 @@
 </script>
 
 <main>
-  <h1><img src="/nuschel.svg" alt="" width="32" height="32"> Nuschel</h1>
+  <h1><img src="/nuschl.svg" alt="" width="32" height="32"> Nuschl</h1>
   <p class="muted">The web client is in its first steps: it connects and shows the channels.</p>
 
   <form onsubmit={connect}>

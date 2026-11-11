@@ -23,7 +23,7 @@ from mumble_client import Client, certificate_pin  # noqa: E402
 
 
 def worker_pids(app, binary):
-    """The app's own workers run from `binary`, never another Nuschel's (another
+    """The app's own workers run from `binary`, never another Nuschl's (another
     test's, or the user's own): its descendants only. Sandboxed, a worker runs
     as /worker under bubblewrap, whose command line binds `binary` there; the
     worker is the process at the bottom of that bwrap."""
@@ -71,14 +71,14 @@ class RecoveryTest(DesktopTest):
             # Worker failures keep the session and history working.
             streams = eventually(lambda: {stream["index"] for stream in self.pulse_json("sink-inputs")},
                                  "the desktop did not start playback")
-            media = worker_pids(self.app, "nuschel-media-worker")
+            media = worker_pids(self.app, "nuschl-media-worker")
             assert media, "the desktop has no media worker to kill"
             for pid in media:
                 subprocess.run(["kill", "-9", str(pid)], check=False)
             # A new worker plays through a stream of its own.
             eventually(lambda: {stream["index"] for stream in self.pulse_json("sink-inputs")} - streams,
                        "media worker was not restarted", timeout=20)
-            storage = worker_pids(self.app, "nuschel-storage-worker")
+            storage = worker_pids(self.app, "nuschl-storage-worker")
             assert storage, "the desktop has no storage worker to kill"
             for pid in storage:
                 subprocess.run(["kill", "-9", str(pid)], check=False)
@@ -106,13 +106,13 @@ class RecoveryTest(DesktopTest):
             self.capture("reconnected")
             print("Server restart: reconnected, rejoined Lobby muted and marked the history gap.", flush=True)
 
-            # Starting Nuschel again (no link) connects and rejoins the channel it was last in.
+            # Starting Nuschl again (no link) connects and rejoins the channel it was last in.
             terminate(self.app)
             self.start_app()
             again = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
                                    and e["user"]["channel"] == 1, timeout=60)["user"]
             assert again["self_muted"] and again["self_deafened"], "a fresh start must join muted and deafened"
-            print("Restart: Nuschel rejoined Lobby, its last channel.", flush=True)
+            print("Restart: Nuschl rejoined Lobby, its last channel.", flush=True)
         finally:
             if self.peer:
                 self.peer.close()
@@ -132,7 +132,7 @@ if __name__ == "__main__":
                         help="dbus-daemon for the private session bus")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="nuschel-recovery-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-recovery-") as temporary:
         test = RecoveryTest(args, Path(temporary), args.output)
         try:
             test.run()

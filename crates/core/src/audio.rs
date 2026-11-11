@@ -13,11 +13,11 @@ pub enum TransmitMode {
     Continuous,
 }
 
-/// Whether Nuschel runs its own echo canceller on the selected microphone.
+/// Whether Nuschl runs its own echo canceller on the selected microphone.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EchoMode {
-    /// Reuse a recognised upstream canceller, otherwise run Nuschel's.
+    /// Reuse a recognised upstream canceller, otherwise run Nuschl's.
     #[default]
     Auto,
     On,
@@ -30,7 +30,7 @@ pub enum EchoMode {
 pub enum EchoSource {
     #[default]
     None,
-    Nuschel,
+    Nuschl,
     /// A recognised system canceller (e.g. PipeWire or PulseAudio echo-cancel).
     Upstream(String),
 }

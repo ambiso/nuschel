@@ -6,6 +6,7 @@ pub mod identity;
 pub mod layout;
 pub mod mls;
 pub mod model;
+mod rename;
 pub mod sticky;
 mod tls;
 pub mod udp;
@@ -52,7 +53,7 @@ pub enum Error {
     /// The server refuses this client's version (docs/extension.md, "Minimum
     /// versions"). Never retried automatically, and never by plain Mumble.
     #[error(
-        "This server requires Nuschel {minimum} or newer; this is Nuschel {current}. Update Nuschel to connect."
+        "This server requires Nuschl {minimum} or newer; this is Nuschl {current}. Update Nuschl to connect."
     )]
     Outdated { minimum: String, current: String },
 }
@@ -105,7 +106,7 @@ mod tests {
         assert!(!outdated.transient());
         assert_eq!(
             outdated.to_string(),
-            "This server requires Nuschel 0.3.0 or newer; this is Nuschel 0.2.0. Update Nuschel to connect."
+            "This server requires Nuschl 0.3.0 or newer; this is Nuschl 0.2.0. Update Nuschl to connect."
         );
     }
 }

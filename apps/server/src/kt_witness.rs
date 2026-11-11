@@ -17,15 +17,15 @@
 
 use crate::config::Kt as KtConfig;
 use crate::kt::StorageKt;
-use nuschel_kt::witness::note::{CosignerKey, Note, NoteSignature};
-use nuschel_kt::witness::{Checkpoint, WitnessedHead};
-use nuschel_kt::{AkdDirectory, DEFAULT_WITNESSES, Directory, MAX_AUDIT_SPAN};
+use nuschl_kt::witness::note::{CosignerKey, Note, NoteSignature};
+use nuschl_kt::witness::{Checkpoint, WitnessedHead};
+use nuschl_kt::{AkdDirectory, DEFAULT_WITNESSES, Directory, MAX_AUDIT_SPAN};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// The path below a witness's URL (`nuschel_witness::ADD_EPOCHS_PATH`).
-const ADD_EPOCHS: &str = "/nuschel-kt/v1/add-epochs";
+/// The path below a witness's URL (`nuschl_witness::ADD_EPOCHS_PATH`).
+const ADD_EPOCHS: &str = "/nuschl-kt/v1/add-epochs";
 /// The largest submission sent; larger spans are halved.
 const MAX_SUBMISSION: usize = 15 * 1024 * 1024;
 /// Submissions in one round for one origin and witness (conflicts and steps).
@@ -91,12 +91,12 @@ impl Witnesses {
         let origins = config
             .origins
             .iter()
-            .filter_map(|o| nuschel_kt::witness::origin(o))
+            .filter_map(|o| nuschl_kt::witness::origin(o))
             .collect();
         let agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(120)))
-            .user_agent("nuscheld")
+            .user_agent("nuschld")
             .build()
             .new_agent();
         Self {
@@ -116,7 +116,7 @@ impl Witnesses {
     /// The configured origin a client asked for (`host:port`, the session's sticky
     /// key), if this server has it.
     pub fn origin_index(&self, requested: &str) -> Option<usize> {
-        let origin = nuschel_kt::witness::origin(requested)?;
+        let origin = nuschl_kt::witness::origin(requested)?;
         self.origins.iter().position(|o| *o == origin)
     }
 

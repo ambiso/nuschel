@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Message text from hostile peers as a file offer (`nuschel_core::transfer`,
+//! Message text from hostile peers as a file offer (`nuschl_core::transfer`,
 //! the magic-wormhole compatibility mode): nothing may panic, an offer that
-//! parses has a valid code and rendezvous URL and a name as Nuschel shows it,
-//! and Nuschel's own message for it reads back as the same offer.
+//! parses has a valid code and rendezvous URL and a name as Nuschl shows it,
+//! and Nuschl's own message for it reads back as the same offer.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_core::transfer::{
+use nuschl_core::transfer::{
     MAX_MESSAGE, display_name, format_offer, format_size, parse_offer, parse_size, save_name,
     valid_code, valid_url,
 };

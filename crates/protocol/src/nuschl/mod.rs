@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The Nuschel protocol extension (docs/extension.md): message types in the
+//! The Nuschl protocol extension (docs/extension.md): message types in the
 //! reserved block 0x4E00–0x4EFF, the hello in field 7200 of `Version`, channel
 //! properties in field 7200 of `ChannelState`, per-type limits before and after
 //! decoding, and errors with fixed details. Pure data; no I/O.
@@ -8,7 +8,7 @@ use bytes::{Bytes, BytesMut};
 use prost::Message as _;
 
 pub mod v1 {
-    include!(concat!(env!("OUT_DIR"), "/nuschel.v1.rs"));
+    include!(concat!(env!("OUT_DIR"), "/nuschl.v1.rs"));
     mod redacted;
 }
 
@@ -16,9 +16,9 @@ pub mod version;
 
 use v1::error::Code;
 
-/// TLS ALPN identifiers. A Nuschel client offers both in one handshake; stock
-/// Murmur ignores ALPN, a Nuschel server selects `nuschel/1`.
-pub const ALPN: &[u8] = b"nuschel/1";
+/// TLS ALPN identifiers. A Nuschl client offers both in one handshake; stock
+/// Murmur ignores ALPN, a Nuschl server selects `nuschl/1`.
+pub const ALPN: &[u8] = b"nuschl/1";
 pub const ALPN_MUMBLE: &[u8] = b"mumble";
 /// `Hello.protocol` for this specification.
 pub const PROTOCOL: u32 = 1;
@@ -140,9 +140,9 @@ pub const MAX_KT_REVOCATIONS: usize = 32;
 pub const MAX_KT_CERTIFICATE_BYTES: usize = 8 * 1024;
 /// A `KtPublish` from a client.
 pub const MAX_KT_PUBLISH_BYTES: usize = 256 * 1024;
-/// A nuschel-kt `WitnessedHead` in a reply (`kt-witness/1`).
+/// A nuschl-kt `WitnessedHead` in a reply (`kt-witness/1`).
 pub const MAX_KT_WITNESSED_BYTES: usize = 72 * 1024;
-/// A lookup reply: up to three proofs (nuschel-kt allows 256 KiB each), the
+/// A lookup reply: up to three proofs (nuschl-kt allows 256 KiB each), the
 /// record and the witnessed checkpoint.
 pub const MAX_KT_LOOKUP_REPLY_BYTES: usize = 1536 * 1024;
 /// History and audit replies; a server answers `TOO_LARGE` beyond this, and
@@ -309,11 +309,11 @@ pub fn is_mls_format(format: i32) -> bool {
 /// Why a hello is refused. Any refusal fails the connection closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum HelloError {
-    #[error("the Nuschel hello is malformed")]
+    #[error("the Nuschl hello is malformed")]
     Malformed,
-    #[error("the Nuschel hello has too many or invalid capabilities")]
+    #[error("the Nuschl hello has too many or invalid capabilities")]
     Capabilities,
-    #[error("the peer speaks an unsupported Nuschel protocol version")]
+    #[error("the peer speaks an unsupported Nuschl protocol version")]
     Protocol,
 }
 
@@ -395,9 +395,7 @@ pub fn version_frame(version: &proto::Version, hello: Option<&v1::Hello>) -> Opt
 /// A `ChannelState` frame with the channel's extension properties; only for
 /// connections that negotiated the extension.
 pub fn channel_state_frame(state: &proto::ChannelState, info: v1::ChannelInfo) -> Option<Bytes> {
-    let extension = v1::ChannelStateExtension {
-        nuschel: Some(info),
-    };
+    let extension = v1::ChannelStateExtension { nuschl: Some(info) };
     frame(
         crate::kind::CHANNEL_STATE,
         &[&|buffer| state.encode_raw(buffer), &|buffer| {
@@ -409,7 +407,7 @@ pub fn channel_state_frame(state: &proto::ChannelState, info: v1::ChannelInfo) -
 
 /// The extension properties in a `ChannelState` body, if valid.
 pub fn channel_info(body: &[u8]) -> Option<v1::ChannelInfo> {
-    let info = v1::ChannelStateExtension::decode(body).ok()?.nuschel?;
+    let info = v1::ChannelStateExtension::decode(body).ok()?.nuschl?;
     id(&info.conversation)?;
     Some(info)
 }

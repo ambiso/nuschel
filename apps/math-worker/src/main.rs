@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Renders LaTeX formulas from messages, one request at a time, for as long
-//! as its input stays open (see `nuschel_ipc::math`).
+//! as its input stays open (see `nuschl_ipc::math`).
 use std::io;
 
 use base64::Engine as _;
-use nuschel_ipc::{
+use nuschl_ipc::{
     Envelope,
     math::{MathImage, MathRequest, MathResponse},
     read_frame, write_frame,
 };
-use nuschel_math::Renderer;
+use nuschl_math::Renderer;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // On Windows, the launch stage starts this worker again in its AppContainer.
     #[cfg(windows)]
-    nuschel_sandbox_windows::launch_if_requested();
+    nuschl_sandbox_windows::launch_if_requested();
     let renderer = Renderer::new();
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();

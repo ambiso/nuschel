@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- SPDX-License-Identifier: EUPL-1.2
-     Unattended Windows 11 install for the Nuschel test VM: UEFI/GPT on the
+     Unattended Windows 11 install for the Nuschl test VM: UEFI/GPT on the
      first disk, a local administrator that logs on automatically, no online
      account, and a first-logon hook that starts the test agent from the
-     second CD (label NUSCHELVM). Only for a disposable VM: the password is public. -->
+     second CD (label NUSCHLVM). Only for a disposable VM: the password is public. -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -45,14 +45,14 @@
       </ImageInstall>
       <UserData>
         <AcceptEula>true</AcceptEula>
-        <FullName>Nuschel Tester</FullName>
-        <Organization>Nuschel</Organization>
+        <FullName>Nuschl Tester</FullName>
+        <Organization>Nuschl</Organization>
       </UserData>
     </component>
   </settings>
   <settings pass="specialize">
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <ComputerName>NUSCHEL-VM</ComputerName>
+      <ComputerName>NUSCHL-VM</ComputerName>
       <TimeZone>UTC</TimeZone>
     </component>
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -83,21 +83,21 @@
           <LocalAccount wcm:action="add">
             <Name>tester</Name>
             <Group>Administrators</Group>
-            <Password><Value>nuschel-vm</Value><PlainText>true</PlainText></Password>
+            <Password><Value>nuschl-vm</Value><PlainText>true</PlainText></Password>
           </LocalAccount>
         </LocalAccounts>
       </UserAccounts>
       <AutoLogon>
         <Enabled>true</Enabled>
         <Username>tester</Username>
-        <Password><Value>nuschel-vm</Value><PlainText>true</PlainText></Password>
+        <Password><Value>nuschl-vm</Value><PlainText>true</PlainText></Password>
         <LogonCount>9999999</LogonCount>
       </AutoLogon>
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "$d = (Get-Volume -FileSystemLabel NUSCHELVM).DriveLetter; &amp; powershell -NoProfile -ExecutionPolicy Bypass -File ($d + ':\firstlogon.ps1')"</CommandLine>
-          <Description>Install the Nuschel test agent</Description>
+          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "$d = (Get-Volume -FileSystemLabel NUSCHLVM).DriveLetter; &amp; powershell -NoProfile -ExecutionPolicy Bypass -File ($d + ':\firstlogon.ps1')"</CommandLine>
+          <Description>Install the Nuschl test agent</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>

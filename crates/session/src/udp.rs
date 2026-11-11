@@ -3,10 +3,10 @@
 //!
 //! Stock servers send voice over UDP to a client once they receive a valid UDP
 //! datagram from it, and switch back to the TCP tunnel when the client tunnels
-//! a packet. Nuschel therefore treats UDP as usable only while the server's
+//! a packet. Nuschl therefore treats UDP as usable only while the server's
 //! ping replies arrive, and tunnels a ping after a failed probe so the server
 //! stops sending UDP that never reaches us (e.g. inbound UDP is filtered).
-use nuschel_protocol::{
+use nuschl_protocol::{
     crypt::{CryptState, CryptStats},
     voice::{self, UdpMessage},
 };
@@ -26,9 +26,9 @@ const GIVE_UP_AFTER: Duration = Duration::from_secs(15);
 const BACKOFF_PING: Duration = Duration::from_secs(10);
 /// Stock clients request a resync after five seconds without a good packet.
 const RESYNC_AFTER: Duration = Duration::from_secs(5);
-pub use nuschel_core::model::{PingStats, TransportStats};
+pub use nuschl_core::model::{PingStats, TransportStats};
 
-pub const MAX_DATAGRAM: usize = 1024 + nuschel_protocol::crypt::HEADER;
+pub const MAX_DATAGRAM: usize = 1024 + nuschl_protocol::crypt::HEADER;
 
 pub enum Received {
     Message(UdpMessage),

@@ -11,20 +11,20 @@ Decisions with the user (2026-11-11, docs/clients.md) and what was built from th
 - **Legacy Mumble servers** work from the web where possible: the browser reaches
   every server through an untrusted tunnel and runs TLS itself.
 - **Share links** open the installed app (Android App Links, iOS Universal Links,
-  the desktop's `nuschel://`), and otherwise join in the browser. The project
+  the desktop's `nuschl://`), and otherwise join in the browser. The project
   domain is optional: any web host can serve them.
 
 ## The tunnel relay (`apps/web-relay`)
 
 Browsers cannot open TCP or UDP sockets. The web client opens a WebSocket to the
-relay (`wss://<web host>/relay`, subprotocol `nuschel-tunnel.1`); the relay connects
-to the Mumble or Nuschel server's TCP port and, if the server answers a Mumble ping,
+relay (`wss://<web host>/relay`, subprotocol `nuschl-tunnel.1`); the relay connects
+to the Mumble or Nuschl server's TCP port and, if the server answers a Mumble ping,
 a UDP socket for voice datagrams. TLS runs in the browser (rustls in WebAssembly),
 so the relay forwards ciphertext it cannot read and the client checks the server's
 certificate itself, exactly as the apps do. Voice datagrams are OCB2-encrypted with
 keys from that TLS session.
 
-**Framing** (`nuschel_protocol::tunnel`, fuzz target `tunnel`): every WebSocket
+**Framing** (`nuschl_protocol::tunnel`, fuzz target `tunnel`): every WebSocket
 message is a type byte and a body: `Open` (port, host; first and once), `Stream`
 (TCP bytes, at most 64 KiB), `Datagram` (one UDP datagram, at most 1024 bytes),
 `Opened` (whether UDP works) and `Closed` (a reason with a fixed text). Decoding is
@@ -61,29 +61,29 @@ with `Closed` and a reason the client shows.
 **Logs** name refusals (reason and destination), never payloads, user names or
 client addresses; tunnel lifetimes and byte counts are debug-level.
 
-**Settings** (`nuschel-web-relay.toml`, apps/web-relay/src/config.rs): `listen`
+**Settings** (`nuschl-web-relay.toml`, apps/web-relay/src/config.rs): `listen`
 (`127.0.0.1:8090` or `unix:/run/…/relay.sock`), `ports`, `allow_networks`,
 `deny_networks`, `allowed_origins`, `trusted_proxies`, `require_ping`, `max_tunnels`,
 `client_tunnels`, `client_opens_per_minute`, `bytes_per_second`, `burst_bytes`,
 `idle_timeout_seconds`.
 
-`nuschel-web-relay-probe` logs in through a relay with TLS on its side (the loopback
+`nuschl-web-relay-probe` logs in through a relay with TLS on its side (the loopback
 test and the VM check use it):
-`nuschel-web-relay-probe --relay wss://web.example.org/relay --origin https://web.example.org --server voice.example.org`.
+`nuschl-web-relay-probe --relay wss://web.example.org/relay --origin https://web.example.org --server voice.example.org`.
 
-Later: WebTransport (datagrams without the TCP tunnel), and Nuschel servers offering
+Later: WebTransport (datagrams without the TCP tunnel), and Nuschl servers offering
 the tunnel endpoint themselves.
 
-## The NixOS module (`services.nuschel-web`)
+## The NixOS module (`services.nuschl-web`)
 
 ```nix
-imports = [ inputs.nuschel.nixosModules.web ];
+imports = [ inputs.nuschl.nixosModules.web ];
 security.acme = { acceptTerms = true; defaults.email = "admin@example.org"; };
-services.nuschel-web = {
+services.nuschl-web = {
   enable = true;
   hostName = "web.example.org";   # a domain or subdomain; keep it for good
-  # appLinks.android = [ { package = "org.nuschel.android"; certificateFingerprints = [ "…" ]; } ];
-  # appLinks.apple = [ "TEAMID.org.nuschel.Nuschel" ];
+  # appLinks.android = [ { package = "org.nuschl.android"; certificateFingerprints = [ "…" ]; } ];
+  # appLinks.apple = [ "TEAMID.org.nuschl.Nuschl" ];
   # relay.ports = [ "64738-64799" "10000-20000" ];
 };
 ```
@@ -96,13 +96,13 @@ One nginx virtual host with `enableACME` and `forceSSL` (both on by default) ser
 - `/.well-known/assetlinks.json` and `/.well-known/apple-app-site-association`, from
   `appLinks` (empty lists by default), served as JSON.
 - `/relay`: the relay, through a WebSocket upgrade over a Unix socket in
-  `/run/nuschel-web-relay` that only nginx's group reaches.
+  `/run/nuschl-web-relay` that only nginx's group reaches.
 
 Every response carries a strict Content-Security-Policy (only this origin; the relay
 as the one connection; `wasm-unsafe-eval` for WebAssembly), `Referrer-Policy:
 no-referrer`, `nosniff` and a Permissions-Policy allowing only the microphone. The
 relay runs as its own system user (static, so nginx can share the socket's group)
-under the server module's systemd hardening. `installUrl` sets where "Get Nuschel"
+under the server module's systemd hardening. `installUrl` sets where "Get Nuschl"
 leads.
 
 `nix build .#checks.x86_64-linux.vm-web` boots the module (plain HTTP, no ACME in a
@@ -115,14 +115,14 @@ refused.
 ## Share links
 
 ```text
-https://<web host>/join/<token>#s=<host>[:<port>]&c=<channel path>&fp=sha256:<hex>&policy=nuschel&n=<name>
-nuschel://join/<token>#<the same fragment>
+https://<web host>/join/<token>#s=<host>[:<port>]&c=<channel path>&fp=sha256:<hex>&policy=nuschl&n=<name>
+nuschl://join/<token>#<the same fragment>
 ```
 
-`nuschel_core::share::ShareLink` reads and writes them; web/site/join.js reads the
+`nuschl_core::share::ShareLink` reads and writes them; web/site/join.js reads the
 same format.
 
-- **The token** is opaque: 16 random bytes in base64url, issued by a Nuschel server
+- **The token** is opaque: 16 random bytes in base64url, issued by a Nuschl server
   (`share/1`), which resolves it to a channel after the client connects. Links to
   stock Murmur, and from users the server issues no tokens to, have no token
   (`/join/#…`) and name the channel by its path in the fragment. A token link
@@ -139,27 +139,27 @@ same format.
 
 **The landing page** (`web/site/join.html`, no tracking, nothing loaded from
 elsewhere, readable by screen readers) shows the channel and server, and offers
-**Open in Nuschel** (`nuschel://join/…`), **Join in the browser** (`/#t=<token>&…`,
-the web client's entry) and **Get Nuschel**. After "Open in Nuschel" was used once,
+**Open in Nuschl** (`nuschl://join/…`), **Join in the browser** (`/#t=<token>&…`,
+the web client's entry) and **Get Nuschl**. After "Open in Nuschl" was used once,
 it opens the app at once next time (one local preference, never sent anywhere).
 Android and iOS open `/join/` links themselves once `appLinks` lists the apps.
 
-**The desktop** registers `nuschel://` next to `mumble://` (the Linux desktop entry)
+**The desktop** registers `nuschl://` next to `mumble://` (the Linux desktop entry)
 and opens share links from the command line, from links clicked in messages and from
 the landing page. A link to a server not saved yet opens the server form; the link's
 pin, policy, channel and token apply to the server saved from it. Once connected, the
 token is resolved (`share/1`); a private channel's access token is kept with the
 server like one typed in, then the channel is joined; without `share/1` the path
-decides. **Copy share link** in a channel's menu asks a Nuschel server with `share/1`
+decides. **Copy share link** in a channel's menu asks a Nuschl server with `share/1`
 for a token (registered users), and elsewhere copies a link with the channel's path,
 the pin and the policy. The web host in copied links is the server operator's
-(`share_links.web_host` in nuscheld.toml), else the user's `share_web_host` setting,
-else the project's, nuschl.eu (`nuschel_core::share::PROJECT_WEB_HOST`; until the
-module runs there, its links open only in Nuschel, which reads them itself); with
-none, the app's own `nuschel://` link would be copied. macOS and Windows do not
+(`share_links.web_host` in nuschld.toml), else the user's `share_web_host` setting,
+else the project's, nuschl.eu (`nuschl_core::share::PROJECT_WEB_HOST`; until the
+module runs there, its links open only in Nuschl, which reads them itself); with
+none, the app's own `nuschl://` link would be copied. macOS and Windows do not
 register the scheme yet.
 
-**nuscheld** (`share/1`, apps/server/src/share.rs; messages 0x4E90–0x4E93, 0x4E94–
+**nuschld** (`share/1`, apps/server/src/share.rs; messages 0x4E90–0x4E93, 0x4E94–
 0x4E97 reserved, docs/extension.md):
 
 - `ShareLinkCreate` → `ShareLink`: registered users who may enter the channel; a link
@@ -196,17 +196,17 @@ DOM, so a Web Worker can host it.
   relay's address (the same origin by default), "Connected" or "Not connected" as a
   live status, a certificate prompt and the channels with their users. A share link's
   "Join in the browser" fills in the server; with a name (`u=`) it connects at once.
-  Certificate pins are preserved. Invites requiring `policy=nuschel` are refused
+  Certificate pins are preserved. Invites requiring `policy=nuschl` are refused
   with an app-opening explanation until the browser implements that negotiation;
   they must never silently fall back to legacy Mumble. Malformed or ambiguous
   security options also fail closed. `npm test` covers these fragment rules.
-- Tests: `cargo test -p nuschel-client-wasm` runs the Session through the real relay
-  to a TLS server (and to Murmur with `NUSCHEL_TEST_MURMUR`); `tests/web_client.py
+- Tests: `cargo test -p nuschl-client-wasm` runs the Session through the real relay
+  to a TLS server (and to Murmur with `NUSCHL_TEST_MURMUR`); `tests/web_client.py
   <binaries> --murmur <mumble-server>` runs the WebAssembly build in Node.js (the
   browser's WebSocket and Web Crypto) through the relay to a loopback Murmur, trusting
   the certificate it is shown.
 
-Left for the web client: text, history and the Nuschel extension through the SDK
+Left for the web client: text, history and the Nuschl extension through the SDK
 (today the browser session speaks plain Mumble only), voice (WebAudio and
 getUserMedia, datagrams through the tunnel), storage (IndexedDB) and identity in a
 Worker, the Svelte client itself, its version requirement, building the site with

@@ -1,5 +1,5 @@
 {
-  description = "Nuschel development, desktop, server, and worker builds";
+  description = "Nuschl development, desktop, server, and worker builds";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -72,7 +72,7 @@
             ];
           }
         );
-        # Miri for nuschel-sandbox-windows' unsafe code (docs/windows-sandbox.md).
+        # Miri for nuschl-sandbox-windows' unsafe code (docs/windows-sandbox.md).
         miriToolchain = pkgs.rust-bin.selectLatestNightlyWith (
           toolchain:
           toolchain.minimal.override {
@@ -132,7 +132,7 @@
           pkgs.libxcb
         ];
         common = {
-          pname = "nuschel";
+          pname = "nuschl";
           version = "0.1.0";
           inherit src nativeBuildInputs buildInputs;
           strictDeps = true;
@@ -167,27 +167,25 @@
           args: craneLib.buildDepsOnly ((builtins.removeAttrs args [ "src" ]) // { inherit dummySrc; });
         cargoArtifacts = buildDeps common;
         serverCommon = common // {
-          pname = "nuscheld";
-          cargoExtraArgs = "-p nuscheld -p nuschel-storage-worker";
+          pname = "nuschld";
+          cargoExtraArgs = "-p nuschld -p nuschl-storage-worker";
           buildInputs = [ ];
         };
         rtcCommon = common // {
-          pname = "nuschel-rtc-probe";
-          cargoExtraArgs = "-p nuschel-rtc -p nuschel-rtc-probe";
+          pname = "nuschl-rtc-probe";
+          cargoExtraArgs = "-p nuschl-rtc -p nuschl-rtc-probe";
           buildInputs = [ ];
         };
-        witnessPackage =
-          pkgs.runCommand "nuschel-witness-0.1.0" { meta.mainProgram = "nuschel-witness"; }
-            ''
-              install -Dm755 ${crates.project.workspaceMembers.nuschel-witness.build}/bin/nuschel-witness "$out/bin/nuschel-witness"
-              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
-            '';
+        witnessPackage = pkgs.runCommand "nuschl-witness-0.1.0" { meta.mainProgram = "nuschl-witness"; } ''
+          install -Dm755 ${crates.project.workspaceMembers.nuschl-witness.build}/bin/nuschl-witness "$out/bin/nuschl-witness"
+          install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
+        '';
         rtcPackage = craneLib.buildPackage (
           rtcCommon
           // {
             cargoArtifacts = buildDeps rtcCommon;
             postInstall = ''
-              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
+              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
             '';
           }
         );
@@ -196,19 +194,19 @@
           // {
             cargoArtifacts = buildDeps serverCommon;
             postInstall = ''
-              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
-              install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
+              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
+              install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschl/Mumble-BSD"
             '';
           }
         );
         # Licences, and on Linux the desktop binary under libexec (screen readers
-        # announce the executable's name, not ".nuschel-wrapped") with wrappers.
+        # announce the executable's name, not ".nuschl-wrapped") with wrappers.
         packageLayout = ''
-          install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
-          install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
-          install -Dm644 ${./vendor/pulseaudio/LICENSE.md} "$out/share/licenses/nuschel/pulseaudio-MIT"
-          install -Dm644 ${./vendor/cpal/LICENSE} "$out/share/licenses/nuschel/cpal-Apache-2.0"
-          install -Dm644 ${./crates/math/fonts/GUST-FONT-LICENSE.txt} "$out/share/licenses/nuschel/NewCMMath-GUST-Font-License"
+          install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
+          install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschl/Mumble-BSD"
+          install -Dm644 ${./vendor/pulseaudio/LICENSE.md} "$out/share/licenses/nuschl/pulseaudio-MIT"
+          install -Dm644 ${./vendor/cpal/LICENSE} "$out/share/licenses/nuschl/cpal-Apache-2.0"
+          install -Dm644 ${./crates/math/fonts/GUST-FONT-LICENSE.txt} "$out/share/licenses/nuschl/NewCMMath-GUST-Font-License"
         ''
         + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
           runtimeFlags=(--prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}"
@@ -218,17 +216,17 @@
                 pkgs.util-linux
               ]
             }")
-          mkdir -p "$out/libexec/nuschel"
-          mv "$out/bin/nuschel" "$out/libexec/nuschel/nuschel"
-          for worker in nuschel-content-worker nuschel-crypto-worker nuschel-math-worker nuschel-media-worker nuschel-storage-worker nuschel-transfer-worker; do
-            ln -s "../../bin/$worker" "$out/libexec/nuschel/$worker"
+          mkdir -p "$out/libexec/nuschl"
+          mv "$out/bin/nuschl" "$out/libexec/nuschl/nuschl"
+          for worker in nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker; do
+            ln -s "../../bin/$worker" "$out/libexec/nuschl/$worker"
           done
-          makeWrapper "$out/libexec/nuschel/nuschel" "$out/bin/nuschel" "''${runtimeFlags[@]}"
-          wrapProgram "$out/bin/nuschel-cli" "''${runtimeFlags[@]}"
+          makeWrapper "$out/libexec/nuschl/nuschl" "$out/bin/nuschl" "''${runtimeFlags[@]}"
+          wrapProgram "$out/bin/nuschl-cli" "''${runtimeFlags[@]}"
           # The terminal client finds the workers beside it in bin; the
           # wrapper gives their sandbox bubblewrap and the media worker its
           # audio libraries.
-          wrapProgram "$out/bin/nuschel-tui" "''${runtimeFlags[@]}"
+          wrapProgram "$out/bin/nuschl-tui" "''${runtimeFlags[@]}"
           # Desktop entry and hicolor icons; shells match the window by its app id.
           cp -R --no-preserve=mode ${
             (import ./nix/desktop-files.nix { inherit pkgs; }).linux
@@ -271,10 +269,10 @@
             )
           );
         package =
-          pkgs.runCommand "nuschel-0.1.0"
+          pkgs.runCommand "nuschl-0.1.0"
             {
               nativeBuildInputs = [ pkgs.makeWrapper ];
-              meta.mainProgram = "nuschel";
+              meta.mainProgram = "nuschl";
             }
             ''
               mkdir -p "$out/bin"
@@ -296,7 +294,7 @@
               "aarch64-apple-darwin"
             ];
           };
-        desktopCrates = "-p nuschel -p nuschel-content-worker -p nuschel-crypto-worker -p nuschel-math-worker -p nuschel-media-worker -p nuschel-storage-worker -p nuschel-transfer-worker";
+        desktopCrates = "-p nuschl -p nuschl-content-worker -p nuschl-crypto-worker -p nuschl-math-worker -p nuschl-media-worker -p nuschl-storage-worker -p nuschl-transfer-worker";
         crossCommon = {
           version = "0.1.0";
           inherit src dummySrc;
@@ -312,18 +310,18 @@
         windowsPackage = ((crane.mkLib mingw).overrideToolchain crossToolchain).buildPackage (
           crossCommon
           // {
-            pname = "nuschel-windows";
+            pname = "nuschl-windows";
             __CRANE_EXPORT_CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = "${pkgs.coreutils}/bin/false";
             CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-C target-feature=+crt-static -L native=${mingw.windows.pthreads}/lib";
             postInstall = ''
-              for program in nuschel nuschel-content-worker nuschel-crypto-worker nuschel-math-worker nuschel-media-worker nuschel-storage-worker nuschel-transfer-worker; do
+              for program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker; do
                 test -f "$out/bin/$program.exe"
               done
-              if ${pkgs.binutils}/bin/objdump -p "$out/bin/nuschel.exe" | grep -iE 'DLL Name:.*(libgcc|libstdc|libwinpthread)'; then
+              if ${pkgs.binutils}/bin/objdump -p "$out/bin/nuschl.exe" | grep -iE 'DLL Name:.*(libgcc|libstdc|libwinpthread)'; then
                 echo "Windows binary depends on a MinGW runtime DLL" >&2
                 exit 1
               fi
-              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
+              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
             '';
           }
         );
@@ -345,7 +343,7 @@
           ((crane.mkLib pkgs).overrideToolchain crossToolchain).buildPackage (
             crossCommon
             // {
-              pname = "nuschel-macos-${arch}";
+              pname = "nuschl-macos-${arch}";
               nativeBuildInputs = crossCommon.nativeBuildInputs ++ [
                 cargoZigbuild
                 pkgs.zig
@@ -372,31 +370,31 @@
             }
           );
         macUniversal =
-          pkgs.runCommand "nuschel-macos-universal" { nativeBuildInputs = [ pkgs.llvmPackages.llvm ]; }
+          pkgs.runCommand "nuschl-macos-universal" { nativeBuildInputs = [ pkgs.llvmPackages.llvm ]; }
             ''
               mkdir -p "$out/bin"
-              for program in nuschel nuschel-content-worker nuschel-crypto-worker nuschel-math-worker nuschel-media-worker nuschel-storage-worker nuschel-transfer-worker; do
+              for program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker; do
                 llvm-lipo -create ${macSlice "x86_64"}/bin/$program ${macSlice "aarch64"}/bin/$program \
                   -output "$out/bin/$program"
                 llvm-lipo "$out/bin/$program" -verify_arch x86_64 arm64
               done
-              if llvm-otool -L "$out/bin/nuschel" | grep -qE '^[[:space:]]+/nix/store/'; then
+              if llvm-otool -L "$out/bin/nuschl" | grep -qE '^[[:space:]]+/nix/store/'; then
                 echo "macOS binary depends on a Nix store library" >&2
                 exit 1
               fi
             '';
-        # Nuschel.app for macOS: the universal binaries, Info.plist with the
+        # Nuschl.app for macOS: the universal binaries, Info.plist with the
         # microphone usage text macOS requires, and an ad-hoc signature over
         # the whole bundle (rcodesign, from Linux). Updates replace every file
         # of the bundle, signature included.
         macApp =
-          pkgs.runCommand "nuschel-macos-app"
+          pkgs.runCommand "nuschl-macos-app"
             {
               nativeBuildInputs = [ pkgs.rcodesign ];
               version = crossCommon.version;
             }
             ''
-              app="$out/Nuschel.app"
+              app="$out/Nuschl.app"
               mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
               cp ${macUniversal}/bin/* "$app/Contents/MacOS/"
               chmod 755 "$app"/Contents/MacOS/*
@@ -405,25 +403,25 @@
               <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
               <plist version="1.0">
               <dict>
-                <key>CFBundleExecutable</key><string>nuschel</string>
-                <key>CFBundleIdentifier</key><string>org.nuschel.Nuschel</string>
-                <key>CFBundleName</key><string>Nuschel</string>
-                <key>CFBundleDisplayName</key><string>Nuschel</string>
-                <key>CFBundleIconFile</key><string>Nuschel</string>
+                <key>CFBundleExecutable</key><string>nuschl</string>
+                <key>CFBundleIdentifier</key><string>org.nuschl.Nuschl</string>
+                <key>CFBundleName</key><string>Nuschl</string>
+                <key>CFBundleDisplayName</key><string>Nuschl</string>
+                <key>CFBundleIconFile</key><string>Nuschl</string>
                 <key>CFBundlePackageType</key><string>APPL</string>
                 <key>CFBundleShortVersionString</key><string>$version</string>
                 <key>CFBundleVersion</key><string>$version</string>
                 <key>LSMinimumSystemVersion</key><string>${macMinimum}</string>
                 <key>NSHighResolutionCapable</key><true/>
-                <key>NSMicrophoneUsageDescription</key><string>Nuschel sends your voice to the people in your channel.</string>
-                <key>NSAudioCaptureUsageDescription</key><string>Nuschel removes what your speakers play from your microphone, so others do not hear it. The sound stays on this Mac.</string>
+                <key>NSMicrophoneUsageDescription</key><string>Nuschl sends your voice to the people in your channel.</string>
+                <key>NSAudioCaptureUsageDescription</key><string>Nuschl removes what your speakers play from your microphone, so others do not hear it. The sound stays on this Mac.</string>
               </dict>
               </plist>
               PLIST
               install -Dm644 ${./LICENSE} "$app/Contents/Resources/EUPL-1.2"
               install -Dm644 ${
                 (import ./nix/desktop-files.nix { inherit pkgs; }).macIcon
-              } "$app/Contents/Resources/Nuschel.icns"
+              } "$app/Contents/Resources/Nuschl.icns"
               rcodesign sign "$app"
             '';
       in
@@ -439,16 +437,16 @@
         packages.macos-aarch64 = macSlice "aarch64";
         packages.rtc-probe = rtcPackage;
         # The web client's tunnel relay and its probe (docs/web.md), from cached crates.
-        packages.web-relay = crates.project.workspaceMembers."nuschel-web-relay".build;
+        packages.web-relay = crates.project.workspaceMembers."nuschl-web-relay".build;
         # The web host's static files: the share-link landing page and, until
         # the Svelte client exists, a placeholder.
-        packages.web-site = pkgs.runCommand "nuschel-web-site" { } ''
+        packages.web-site = pkgs.runCommand "nuschl-web-site" { } ''
           cp -R ${./web/site} "$out"
         '';
         apps.rtc-probe =
           (flake-utils.lib.mkApp {
             drv = rtcPackage;
-            exePath = "/bin/nuschel-rtc-probe";
+            exePath = "/bin/nuschl-rtc-probe";
           })
           // {
             meta.description = "Local-only str0m audio/video transport trial";
@@ -456,19 +454,19 @@
         apps.default =
           (flake-utils.lib.mkApp {
             drv = package;
-            exePath = "/bin/nuschel";
+            exePath = "/bin/nuschl";
           })
           // {
-            meta.description = "Nuschel Mumble desktop client";
+            meta.description = "Nuschl Mumble desktop client";
           };
         # `nix run .#tui -- mumble://name@host`: the terminal client.
         apps.tui =
           (flake-utils.lib.mkApp {
             drv = package;
-            exePath = "/bin/nuschel-tui";
+            exePath = "/bin/nuschl-tui";
           })
           // {
-            meta.description = "Nuschel in a terminal";
+            meta.description = "Nuschl in a terminal";
           };
         checks = {
           build = package;
@@ -517,7 +515,7 @@
             # Registry-dependent yanked checks remain enabled in `cargo deny check`.
             preBuild = ''
               mkdir -p .cargo
-              cp ${pkgs.writeText "nuschel-sandbox-audit.toml" "[yanked]\nenabled = false\n"} .cargo/audit.toml
+              cp ${pkgs.writeText "nuschl-sandbox-audit.toml" "[yanked]\nenabled = false\n"} .cargo/audit.toml
             '';
           };
         }
@@ -526,16 +524,16 @@
             homeManagerChecks = import ./nix/home-manager-test.nix {
               inherit pkgs home-manager;
               module = self.homeModules.default;
-              nuschel = package;
+              nuschl = package;
             };
           in
           {
             home-manager = homeManagerChecks.files;
             vm-home-manager = homeManagerChecks.vm;
-            # nuscheld under the module with stock clients (`nix build .#checks.x86_64-linux.vm-server`).
+            # nuschld under the module with stock clients (`nix build .#checks.x86_64-linux.vm-server`).
             vm-server = import ./nix/vm-server.nix {
               inherit pkgs;
-              nuschel = package;
+              nuschl = package;
               module = self.nixosModules.default;
               witnessModule = self.nixosModules.witness;
             };
@@ -543,12 +541,12 @@
             # to Murmur through the relay (`nix build .#checks.x86_64-linux.vm-web`).
             vm-web = import ./nix/vm-web.nix {
               inherit pkgs;
-              relay = crates.project.workspaceMembers."nuschel-web-relay".build;
+              relay = crates.project.workspaceMembers."nuschl-web-relay".build;
               module = self.nixosModules.web;
             };
             vm-smoke = import ./nix/vm-smoke.nix {
               inherit pkgs;
-              nuschel = package;
+              nuschl = package;
               rtcProbe = rtcPackage;
               module = self.nixosModules.default;
               legacyServers = {

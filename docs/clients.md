@@ -28,13 +28,13 @@ clients are queued.
   web client and share-link host using the usual `services.nginx.virtualHosts` with
   `enableACME = true` (optionally on a subdomain), next to the existing server module.
 - **Share links** (`https://<web host>/join/…`) open the installed app through Android
-  App Links, iOS Universal Links or the desktop's `nuschel://` scheme, and otherwise
+  App Links, iOS Universal Links or the desktop's `nuschl://` scheme, and otherwise
   join in the browser. The project domain is optional; a server or operator can host
   the same page.
 
 ## The SDK (`crates/client`)
 
-The SDK is `nuschel-client`. It owns every decision that is not drawing; each client
+The SDK is `nuschl-client`. It owns every decision that is not drawing; each client
 (GPUI desktop, ratatui, Compose, SwiftUI, Svelte) is a view over it. Extracted from
 the desktop on 2026-11-11; "Status" says what moved and what is left.
 
@@ -42,14 +42,14 @@ the desktop on 2026-11-11; "Status" says what moved and what is left.
 
 | Layer | Where | Builds for | Holds |
 |---|---|---|---|
-| Plain data | `nuschel-core` (`model`, `bookmark`) | everything, `wasm32-unknown-unknown` | what a session reports (channels, users, text targets, activity, administration, limits, transport statistics) and saved servers |
-| SDK core | `nuschel-client` without features | everything, `wasm32-unknown-unknown` | the `Client`; timelines, conversations, servers, the channel tree; unread, mentions, read markers, typing, direct conversations; the rules for editing, deleting, typing and sounds; the `Platform` trait with its requests and inputs |
-| Native platform | `nuschel-client`, feature `native` (default) | Linux, Windows, macOS; later Android and iOS | `native::Driver`, the `Platform` on tokio: one supervised connection per server over `nuschel-session` with reconnects and backoff, the one media worker they share, the content and storage workers, server history pages, edits and deletions kept in order |
+| Plain data | `nuschl-core` (`model`, `bookmark`) | everything, `wasm32-unknown-unknown` | what a session reports (channels, users, text targets, activity, administration, limits, transport statistics) and saved servers |
+| SDK core | `nuschl-client` without features | everything, `wasm32-unknown-unknown` | the `Client`; timelines, conversations, servers, the channel tree; unread, mentions, read markers, typing, direct conversations; the rules for editing, deleting, typing and sounds; the `Platform` trait with its requests and inputs |
+| Native platform | `nuschl-client`, feature `native` (default) | Linux, Windows, macOS; later Android and iOS | `native::Driver`, the `Platform` on tokio: one supervised connection per server over `nuschl-session` with reconnects and backoff, the one media worker they share, the content and storage workers, server history pages, edits and deletions kept in order |
 | The app's own services | the app | per platform | Desktop: notifications, updates, the Settings audio check, website icons, the image viewer, attached images (`apps/desktop/src/services.rs`) |
 
-`just wasm` (part of `just check`) lints `nuschel-core` and `nuschel-client` without
-features for `wasm32-unknown-unknown`. The core depends on `nuschel-core`,
-`nuschel-protocol` and serde only; no runtime, no clock, no I/O.
+`just wasm` (part of `just check`) lints `nuschl-core` and `nuschl-client` without
+features for `wasm32-unknown-unknown`. The core depends on `nuschl-core`,
+`nuschl-protocol` and serde only; no runtime, no clock, no I/O.
 
 ### Modules
 
@@ -60,7 +60,7 @@ features for `wasm32-unknown-unknown`. The core depends on `nuschel-core`,
   messages, history pages, edits, audio), and `ServerEvent`, what a server said.
 - `timeline` — one conversation's messages: `Timeline`, `Message`, `MessageStatus`,
   `IncomingMessage`, `Change`, `Deletion`, `Page`, `WaitingChanges`. Merging the
-  local cache and server pages by id (seq on Nuschel servers) and observation time;
+  local cache and server pages by id (seq on Nuschl servers) and observation time;
   the latest page starting over while keeping what arrived since; older pages only
   if they continue the timeline; windows around a search result and the newer pages
   after them; trimming the oldest; pending sends settled by their idempotency key;
@@ -86,7 +86,7 @@ features for `wasm32-unknown-unknown`. The core depends on `nuschel-core`,
 - `navigation` — the open conversation, voice, and tickets that drop late pages.
 - `native` (feature) — `Driver`, its `Event`s and their conversion to `Input`;
   `Client::open_url` for `mumble://` links (their parser and the servers' security
-  records are `nuschel-session`'s); `native::media`, the one media worker's supervisor.
+  records are `nuschl-session`'s); `native::media`, the one media worker's supervisor.
 
 ### API
 
@@ -130,7 +130,7 @@ while let Some(event) = events.recv().await {
 - **Plain data**: owned strings, enums with data, ids as values (server ids, channel
   ids, 16-byte conversation ids, message serials); no generics or lifetimes on the
   `Client`'s methods, no GPUI types. Rendered content is
-  `nuschel_core::MessageDocument`; a UI converts it once per message serial and
+  `nuschl_core::MessageDocument`; a UI converts it once per message serial and
   revision (the desktop: `presentation.rs`).
 - **Time is passed in**: `set_time` with the platform's monotonic milliseconds
   (`std::time::Instant` panics on `wasm32-unknown-unknown`); inputs carry wall-clock
@@ -150,15 +150,15 @@ composed, where the reader is scrolled (it tells the client through `Focus`).
 
 Moved, in this order, each step leaving the desktop working:
 
-1. Session values and saved servers to `nuschel-core` (`model`, `bookmark`), re-exported
-   by `nuschel-session`.
+1. Session values and saved servers to `nuschl-core` (`model`, `bookmark`), re-exported
+   by `nuschl-session`.
 2. Timelines.
 3. Conversations, servers and the channel tree.
 4. The native driver (the desktop's former `backend.rs`) and the sound policy.
 5. `Client`: applying what the driver reports, and the commands. The desktop is a
    view over it.
 6. `examples/headless.rs` with `tests/sdk_headless.py`: three clients without a UI
-   connect to a loopback nuscheld, register, meet in a channel, send, receive, edit,
+   connect to a loopback nuschld, register, meet in a channel, send, receive, edit,
    and load the server's history through the SDK alone.
 7. For the terminal client, what it would otherwise have copied from the desktop: the
    switcher's ranking (`finder`), search scopes, result naming and jumps (`search`),
@@ -171,11 +171,11 @@ Left, in the order they should move:
 
 - **Identity, key transparency and trust** (`apps/desktop/src/identity.rs`): the
   driver reports them as `native::Native` events outside `Input`, because their
-  types live in `nuschel-ipc::crypto`, which needs tokio. Move the crypto worker's
+  types live in `nuschl-ipc::crypto`, which needs tokio. Move the crypto worker's
   message types to a crate that builds for the browser, then the state to the SDK.
   The version notice (`version_notice.rs`) goes with it.
 - **End-to-end direct conversations** (`mls/1`, opt-in): the driver reports
-  `nuschel_session::mls::MlsEvent`s as `native::Native::Mls`; the desktop keeps each
+  `nuschl_session::mls::MlsEvent`s as `native::Native::Mls`; the desktop keeps each
   conversation's lock (`ServerUi::e2ee`) and opens groups with `MlsCommand`s. In the
   SDK they become a conversation's lock state in `ConversationState`, sends through
   the crypto worker as a `Request` settled like pending sends (by key, then seq), and
@@ -184,10 +184,10 @@ Left, in the order they should move:
   `ServerState::mls`.
 - **Administration** (ACLs, bans, registered users, channel edits, user actions,
   comments and avatars, listening, whisper targets, context actions): the desktop
-  still sends `nuschel_session::connection::Command`s to the driver itself; each
+  still sends `nuschl_session::connection::Command`s to the driver itself; each
   becomes a `Request`.
-- **Settings**: `ClientSettings` stays in `nuschel-session::config` (its recovery
-  policy is an `nuschel-ipc` type); the client sees `names::Preferences`.
+- **Settings**: `ClientSettings` stays in `nuschl-session::config` (its recovery
+  policy is an `nuschl-ipc` type); the client sees `names::Preferences`.
 - **Transfers** (wormhole offers, `transfer.rs`) and **attachments**: a platform
   service and SDK state each.
 - **Search**: requests, scopes, results and jumps go through the client; the
@@ -201,9 +201,9 @@ Left, in the order they should move:
 
 ## The terminal client (`apps/tui`)
 
-`nuschel-tui` (ratatui on crossterm) is the SDK's second view, built on 2026-11-11 to
+`nuschl-tui` (ratatui on crossterm) is the SDK's second view, built on 2026-11-11 to
 prove the SDK is UI-independent: everything in it that is not drawing or keys is a
-call into `nuschel-client`, and what the desktop had kept to itself moved into the SDK
+call into `nuschl-client`, and what the desktop had kept to itself moved into the SDK
 first (Status, step 7). Decisions:
 
 - **Same profile and workers.** `Profile` (or `--profile-dir`), the saved servers,
@@ -324,7 +324,7 @@ boundary runs in-process there, which is weaker and documented as such.
 Browsers cannot open TCP or UDP sockets. The web client therefore reaches servers
 through a WebSocket (later WebTransport) tunnel, and keeps the tunnel untrusted:
 
-- TLS to the Mumble or Nuschel server runs **inside the browser** (rustls in WASM)
+- TLS to the Mumble or Nuschl server runs **inside the browser** (rustls in WASM)
   over the tunnel, so the tunnel relay sees only ciphertext and the server's
   certificate is checked by the client itself, as in the apps.
 - Voice datagrams are already OCB2-encrypted with keys from the TLS channel; the relay
@@ -335,12 +335,12 @@ through a WebSocket (later WebTransport) tunnel, and keeps the tunnel untrusted:
   not an open proxy: destinations must answer a Mumble ping first, private and
   link-local address ranges are refused (no SSRF), and connections are rate-limited
   per client address.
-- Nuschel servers may offer the tunnel endpoint themselves, so the extra hop is
+- Nuschl servers may offer the tunnel endpoint themselves, so the extra hop is
   optional, and video and group voice later use WebRTC to the server's SFU.
 
 Built (2026-11-11): the relay (`apps/web-relay`), the NixOS module for the web host
-(`services.nuschel-web`), share links (`share/1`, the landing page, the desktop's
-`nuschel://`) and the SDK in WebAssembly with a Svelte skeleton; docs/web.md has
+(`services.nuschl-web`), share links (`share/1`, the landing page, the desktop's
+`nuschl://`) and the SDK in WebAssembly with a Svelte skeleton; docs/web.md has
 the details and what is left.
 
 ## Video (queued)

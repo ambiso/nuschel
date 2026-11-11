@@ -5,7 +5,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuscheld::fuzzing::Harness;
+use nuschld::fuzzing::Harness;
 
 fuzz_target!(|data: &[u8]| {
     Harness::new().run(data);

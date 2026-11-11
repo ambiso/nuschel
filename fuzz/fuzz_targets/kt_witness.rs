@@ -9,10 +9,10 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_kt::witness::auditor::{AddEpochs, LogState, add_epochs};
-use nuschel_kt::witness::note::{Cosigner, CosignerKey, Note};
-use nuschel_kt::witness::{Checkpoint, EpochLeaf};
-use nuschel_kt::*;
+use nuschl_kt::witness::auditor::{AddEpochs, LogState, add_epochs};
+use nuschl_kt::witness::note::{Cosigner, CosignerKey, Note};
+use nuschl_kt::witness::{Checkpoint, EpochLeaf};
+use nuschl_kt::*;
 use std::sync::OnceLock;
 
 fn auditor() -> &'static Cosigner {
@@ -59,7 +59,7 @@ fuzz_target!(|data: &[u8]| {
                     for policy in [WitnessPolicy::off(), required] {
                         let _ = check_witnessed(
                             &descriptor,
-                            "chat.example.org:64738/nuschel-kt/v1",
+                            "chat.example.org:64738/nuschl-kt/v1",
                             &head,
                             &witnessed,
                             &policy,

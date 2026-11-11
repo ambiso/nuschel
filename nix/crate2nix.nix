@@ -39,13 +39,13 @@ let
     wayland-sys = withLibraries;
     xkbcommon = withLibraries;
     # prost-build compiles the Mumble protocol definitions.
-    nuschel-protocol = _: {
+    nuschl-protocol = _: {
       nativeBuildInputs = [ pkgs.protobuf ];
       PROTOC = "${pkgs.protobuf}/bin/protoc";
     };
-    nuschel = withLibraries;
-    nuschel-media-worker = withLibraries;
-    nuschel-cli = withLibraries;
+    nuschl = withLibraries;
+    nuschl-media-worker = withLibraries;
+    nuschl-cli = withLibraries;
   };
   project = import ./crate2nix/Cargo.nix {
     inherit pkgs;
@@ -63,16 +63,16 @@ in
   # The programs of the desktop package (with the terminal client), each
   # built from cached crates.
   binaries = map (member: project.workspaceMembers.${member}.build) [
-    "nuschel"
-    "nuschel-cli"
-    "nuschel-content-worker"
-    "nuschel-crypto-worker"
-    "nuschel-math-worker"
-    "nuschel-media-worker"
-    "nuschel-storage-worker"
-    "nuschel-transfer-worker"
-    "nuschel-tui"
-    "nuscheld"
-    "nuschel-witness"
+    "nuschl"
+    "nuschl-cli"
+    "nuschl-content-worker"
+    "nuschl-crypto-worker"
+    "nuschl-math-worker"
+    "nuschl-media-worker"
+    "nuschl-storage-worker"
+    "nuschl-transfer-worker"
+    "nuschl-tui"
+    "nuschld"
+    "nuschl-witness"
   ];
 }

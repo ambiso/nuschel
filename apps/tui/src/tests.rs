@@ -8,14 +8,14 @@ use crate::{
     plain::Transcript,
     view,
 };
-use nuschel_client::{
+use nuschl_client::{
     Client,
     input::{Input, ServerEvent},
     model::{Channel, TextTarget, User},
     platform::{CacheKey, ChangeRequest, Platform, RenderKey, Request},
     timeline::{Deletion, IncomingMessage, Page},
 };
-use nuschel_core::{
+use nuschl_core::{
     ChatMessage, ContentBlock, MessageDocument, SearchCursor, Span, TextRole, audio::Sound,
     bookmark::ServerBookmark,
 };
@@ -35,7 +35,7 @@ struct Recorder {
     connects: Mutex<Vec<Connect>>,
     requests: Mutex<Vec<Request>>,
     changes: Mutex<Vec<ChangeRequest>>,
-    pages: Mutex<Vec<(nuschel_client::HistoryTicket, Page)>>,
+    pages: Mutex<Vec<(nuschl_client::HistoryTicket, Page)>>,
 }
 
 impl Platform for Recorder {
@@ -59,7 +59,7 @@ impl Platform for Recorder {
         _: String,
         _: String,
         _: String,
-        ticket: nuschel_client::HistoryTicket,
+        ticket: nuschl_client::HistoryTicket,
         page: Page,
     ) -> Result<(), String> {
         self.pages.lock().unwrap().push((ticket, page));
@@ -69,7 +69,7 @@ impl Platform for Recorder {
         &self,
         _: String,
         _: [u8; 16],
-        _: nuschel_client::HistoryTicket,
+        _: nuschl_client::HistoryTicket,
         _: Option<CacheKey>,
         _: Page,
     ) -> Result<(), String> {
@@ -548,9 +548,9 @@ fn a_new_certificate_asks_and_y_trusts_it() {
 }
 
 #[test]
-fn up_in_the_empty_composer_edits_the_last_own_message_on_a_nuschel_server() {
+fn up_in_the_empty_composer_edits_the_last_own_message_on_a_nuschl_server() {
     let (mut app, recorder, id) = connected();
-    // A Nuschel server keeping this channel's history.
+    // A Nuschl server keeping this channel's history.
     app.client.handle(Input::Server {
         server: id.clone(),
         generation: 1,

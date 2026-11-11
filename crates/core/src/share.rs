@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Share links (docs/web.md, "Share links"): a link you send someone that opens
-//! Nuschel if it is installed, and otherwise the web host's landing page.
+//! Nuschl if it is installed, and otherwise the web host's landing page.
 //!
 //! ```text
-//! https://<web host>/join/<token>#s=<host>[:<port>]&c=<channel path>&fp=sha256:<hex>&policy=nuschel&n=<name>
-//! nuschel://join/<token>#<the same fragment>
+//! https://<web host>/join/<token>#s=<host>[:<port>]&c=<channel path>&fp=sha256:<hex>&policy=nuschl&n=<name>
+//! nuschl://join/<token>#<the same fragment>
 //! ```
 //!
-//! - The **token** is opaque: issued by a Nuschel server (`share/1`), which
+//! - The **token** is opaque: issued by a Nuschl server (`share/1`), which
 //!   resolves it to a channel (and, for a private channel, an access token)
 //!   after the client connects. Links to stock Murmur, or to a channel by its
 //!   path, have no token (`/join/#…`) and name the channel in `c`.
@@ -19,7 +19,7 @@
 //! The landing page (web/site/join.js) reads the same format.
 
 /// The scheme the desktop registers next to `mumble://`.
-pub const SCHEME: &str = "nuschel";
+pub const SCHEME: &str = "nuschl";
 /// The default Mumble port, left out of links.
 pub const MUMBLE_PORT: u16 = 64738;
 /// The project's web host (docs/clients.md: nuschl.eu, decided with the user),
@@ -46,18 +46,18 @@ pub struct ShareLink {
     pub channel: Vec<String>,
     /// The server certificate's SHA-256, lowercase hex.
     pub certificate_sha256: Option<String>,
-    /// The server must speak the Nuschel protocol (`policy=nuschel`).
-    pub require_nuschel: bool,
+    /// The server must speak the Nuschl protocol (`policy=nuschl`).
+    pub require_nuschl: bool,
     /// What the landing page calls the server.
     pub name: Option<String>,
 }
 
 impl ShareLink {
     /// Parse `https://<web host>/join/<token>#…`, `http://…` (local hosts) or
-    /// `nuschel://join/<token>#…`. Any web host is accepted: the link names the
+    /// `nuschl://join/<token>#…`. Any web host is accepted: the link names the
     /// server itself, and the client checks the server as for any connection.
     pub fn parse(url: &str) -> Result<Self, String> {
-        let invalid = || "not a Nuschel share link".to_string();
+        let invalid = || "not a Nuschl share link".to_string();
         if url.len() > MAX_LINK_BYTES {
             return Err(invalid());
         }
@@ -134,10 +134,10 @@ impl ShareLink {
                 }
                 "policy" => {
                     for policy in value.split(['+', ' ']).filter(|part| !part.is_empty()) {
-                        if policy != "nuschel" {
+                        if policy != "nuschl" {
                             return Err("the share link requires an unsupported policy".into());
                         }
-                        link.require_nuschel = true;
+                        link.require_nuschl = true;
                     }
                 }
                 "n" => {
@@ -178,8 +178,8 @@ impl ShareLink {
         if let Some(pin) = &self.certificate_sha256 {
             parts.push(format!("fp=sha256:{pin}"));
         }
-        if self.require_nuschel {
-            parts.push("policy=nuschel".into());
+        if self.require_nuschl {
+            parts.push("policy=nuschl".into());
         }
         if let Some(name) = &self.name {
             parts.push(format!("n={}", encode(name, "")));
@@ -196,7 +196,7 @@ impl ShareLink {
         )
     }
 
-    /// The same link for the installed app (`nuschel://`).
+    /// The same link for the installed app (`nuschl://`).
     pub fn app_url(&self) -> String {
         format!(
             "{SCHEME}://join/{}#{}",
@@ -346,14 +346,14 @@ mod tests {
             port: 64739,
             channel: Vec::new(),
             certificate_sha256: Some("ab".repeat(32)),
-            require_nuschel: true,
+            require_nuschl: true,
             name: Some("Our place & more".into()),
         };
         let web = link.web_url("web.example.org");
         assert_eq!(
             web,
             format!(
-                "https://web.example.org/join/{token}#s=voice.example.org:64739&fp=sha256:{}&policy=nuschel&n=Our%20place%20%26%20more",
+                "https://web.example.org/join/{token}#s=voice.example.org:64739&fp=sha256:{}&policy=nuschl&n=Our%20place%20%26%20more",
                 "ab".repeat(32)
             )
         );
@@ -367,7 +367,7 @@ mod tests {
             port: MUMBLE_PORT,
             channel: vec!["Lobby".into(), "Games / Fun".into()],
             certificate_sha256: None,
-            require_nuschel: false,
+            require_nuschl: false,
             name: None,
         };
         let web = stock.web_url("web.example.org");
@@ -393,30 +393,30 @@ mod tests {
         assert_eq!(link.port, MUMBLE_PORT);
         assert_eq!(link.channel, ["Lobby"]);
         assert_eq!(link.name.as_deref(), Some("A B"));
-        assert!(ShareLink::parse("NUSCHEL://join#s=a.b").is_ok());
+        assert!(ShareLink::parse("NUSCHL://join#s=a.b").is_ok());
     }
 
     #[test]
     fn security_options_are_decoded_once_and_never_ambiguous() {
         for fragment in [
-            "policy=nuschel",
-            "pol%69cy=nuschel",
-            "policy=nuschel+nuschel",
-            "policy=nuschel%2Bnuschel",
+            "policy=nuschl",
+            "pol%69cy=nuschl",
+            "policy=nuschl+nuschl",
+            "policy=nuschl%2Bnuschl",
         ] {
-            let link = ShareLink::parse(&format!("nuschel://join/#s=a.b&{fragment}")).unwrap();
-            assert!(link.require_nuschel, "{fragment}");
+            let link = ShareLink::parse(&format!("nuschl://join/#s=a.b&{fragment}")).unwrap();
+            assert!(link.require_nuschl, "{fragment}");
         }
         for fragment in [
-            "policy=nuschel&policy=",
-            "policy=&pol%69cy=nuschel",
-            "policy=nuschel+future",
+            "policy=nuschl&policy=",
+            "policy=&pol%69cy=nuschl",
+            "policy=nuschl+future",
             "policy=future",
             "s=a.b&%73=other.example",
             "fp=sha256:bad&fp=",
         ] {
             assert!(
-                ShareLink::parse(&format!("nuschel://join/#s=a.b&{fragment}")).is_err(),
+                ShareLink::parse(&format!("nuschl://join/#s=a.b&{fragment}")).is_err(),
                 "{fragment}"
             );
         }
@@ -443,11 +443,11 @@ mod tests {
         ] {
             assert!(ShareLink::parse(url).is_err(), "{url}");
         }
-        assert!(ShareLink::parse(&format!("nuschel://join/#s=a.b&c={}", "x/".repeat(65))).is_err());
+        assert!(ShareLink::parse(&format!("nuschl://join/#s=a.b&c={}", "x/".repeat(65))).is_err());
         // Found by fuzzing: a path of short names that percent-encode to more
         // than a link may hold is refused, so whatever parses writes itself again.
         let wide = "\u{a81b}".repeat(400);
-        let long = format!("nuschel://join/#s=a.b&c={wide}/{wide}");
+        let long = format!("nuschl://join/#s=a.b&c={wide}/{wide}");
         assert!(long.len() < MAX_LINK_BYTES);
         assert!(ShareLink::parse(&long).is_err());
         assert_eq!(decode_token("AAAAAAAAAAAAAAAAAAAAAB"), None);

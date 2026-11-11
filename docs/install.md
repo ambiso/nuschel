@@ -1,26 +1,26 @@
-# Installing and updating Nuschel
+# Installing and updating Nuschl
 
 The README has the short version. This page has the details: the Nix package and
 the Home Manager module, the Windows and macOS downloads, how releases are made and
-signed, and how Nuschel updates itself. No release has been published yet; the
+signed, and how Nuschl updates itself. No release has been published yet; the
 first tag will make one ([How releases are made](#how-releases-are-made)).
 
 ## Nix and NixOS
 
 The flake builds the desktop app for Linux (`packages.<system>.default`, tested on
 x86_64) and exports a NixOS module for the server and a Home Manager module for the
-app. `nix run github:ambiso/nuschel` starts the app without installing it, and
-`nix run github:ambiso/nuschel#tui` the terminal client (`nuschel-tui`, in the same
+app. `nix run github:ambiso/nuschl` starts the app without installing it, and
+`nix run github:ambiso/nuschl#tui` the terminal client (`nuschl-tui`, in the same
 package). To install it system-wide from your own flake:
 
 ```nix
-# inputs.nuschel.url = "github:ambiso/nuschel";
-environment.systemPackages = [ inputs.nuschel.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+# inputs.nuschl.url = "github:ambiso/nuschl";
+environment.systemPackages = [ inputs.nuschl.packages.${pkgs.stdenv.hostPlatform.system}.default ];
 ```
 
 The package installs the desktop entry and icons and registers `mumble://` links. It
 starts every worker inside bubblewrap, which it brings along. Nix installations
-update through Nix (`nix flake update nuschel`), never by themselves.
+update through Nix (`nix flake update nuschl`), never by themselves.
 
 The package (`nix build .#default`, also used by the VM tests) is built per crate with
 crate2nix; [development.md](development.md) explains the build.
@@ -28,7 +28,7 @@ crate2nix; [development.md](development.md) explains the build.
 **`No GPU adapters found` on NixOS.** The desktop loads the host's Vulkan driver, and
 the flake's glibc must be new enough to load it; an older nixpkgs pin can produce
 this error even when other applications work. Diagnose driver loading with
-`VK_LOADER_DEBUG=error,warn RUST_LOG=nuschel=info,gpui_wgpu=info nix run .`. If the
+`VK_LOADER_DEBUG=error,warn RUST_LOG=nuschl=info,gpui_wgpu=info nix run .`. If the
 log reports a missing `GLIBC_*` version, update the pin with
 `nix flake update nixpkgs` and rebuild. Adding driver search paths cannot fix that
 ABI mismatch.
@@ -38,12 +38,12 @@ ABI mismatch.
 The flake exports a Home Manager module, `homeModules.default` (also
 `homeManagerModules.default`). It installs the package with its desktop entry and
 icons and works with your own nixpkgs: only the package comes from this flake, and
-`programs.nuschel.package` replaces it.
+`programs.nuschl.package` replaces it.
 
 ```nix
-# Flake input: nuschel.url = "github:ambiso/nuschel";
-imports = [ inputs.nuschel.homeModules.default ];
-programs.nuschel = {
+# Flake input: nuschl.url = "github:ambiso/nuschl";
+imports = [ inputs.nuschl.homeModules.default ];
+programs.nuschl = {
   enable = true;
   # Start minimised at login (Linux), with the entry Settings → General writes.
   autostart = true;
@@ -58,7 +58,7 @@ programs.nuschel = {
   servers = [
     { name = "Team"; host = "voice.example.org"; username = "alice"; }
   ];
-  # Written only where Nuschel has no settings.json or servers.json yet.
+  # Written only where Nuschl has no settings.json or servers.json yet.
   initialSettings.sound_volume = 0.5;
   initialServers = [
     { name = "Friends"; host = "mumble.example.net"; username = "alice"; }
@@ -66,50 +66,50 @@ programs.nuschel = {
 };
 ```
 
-`settings` and `servers` go into a read-only `managed.json` in Nuschel's folder
-(`~/.config/nuschel`, or `~/Library/Application Support/org.Nuschel.Nuschel`).
-Nuschel never writes it. On every start its settings are merged key by key over
+`settings` and `servers` go into a read-only `managed.json` in Nuschl's folder
+(`~/.config/nuschl`, or `~/Library/Application Support/org.Nuschl.Nuschl`).
+Nuschl never writes it. On every start its settings are merged key by key over
 `settings.json` and win; Settings shows those controls dimmed with "Set by your
 system configuration", and `settings.json` keeps only your own values, which
 return once a key is no longer managed. Its bookmarks cannot be removed and only
-take a password in their form; Nuschel keeps what it learns about them (an
+take a password in their form; Nuschl keeps what it learns about them (an
 accepted certificate in `servers.json`, the channel tree in the cache, the last
 channel in the state folder), and a bookmark removed from `servers` disappears on
-the next start. A `nuschel/managed.json` in `$XDG_CONFIG_DIRS` (such as `/etc/xdg`)
+the next start. A `nuschl/managed.json` in `$XDG_CONFIG_DIRS` (such as `/etc/xdg`)
 sets system-wide defaults under the user's own (profiles opened with
 `--profile-dir` skip it).
 
 `initialSettings` and `initialServers` only seed a new profile: once the files
-exist, Nuschel owns them and later changes to these options do not apply. A bookmark
+exist, Nuschl owns them and later changes to these options do not apply. A bookmark
 in `servers` with the host, port and username of one in `initialServers` takes it
 over. With `autostart`, turning the switch off in the app lasts until the next
 `home-manager switch`.
 
 An invalid `managed.json` is reported and ignored until it is fixed. The check
 `.#checks.x86_64-linux.vm-home-manager` boots a VM in which logging in starts
-Nuschel and managed settings show as set by the system configuration and stay so.
+Nuschl and managed settings show as set by the system configuration and stay so.
 
 ## Other Linux distributions
 
 There is no package outside Nix yet (no Flatpak, AppImage or distribution package).
 Building from source works with Cargo ([development.md](development.md)). At run time
-Nuschel needs a Vulkan driver, and `bwrap` (bubblewrap) and `prlimit` (util-linux) on
+Nuschl needs a Vulkan driver, and `bwrap` (bubblewrap) and `prlimit` (util-linux) on
 the `PATH`: it refuses to start a worker it cannot sandbox.
 
 ## Windows
 
-Each release publishes a portable zip, `nuschel-<version>-windows-x86_64.zip`.
+Each release publishes a portable zip, `nuschl-<version>-windows-x86_64.zip`.
 Unpack it into a folder you can write to (your user folder, not Program Files) and
-start `nuschel.exe`. There is no installer, Start menu entry or uninstaller yet: Nuschel
+start `nuschl.exe`. There is no installer, Start menu entry or uninstaller yet: Nuschl
 updates itself in the folder it was unpacked to, and deleting the folder removes it.
-Settings and history live in `%APPDATA%\Nuschel` and `%LOCALAPPDATA%\Nuschel`
-([desktop.md](desktop.md#where-nuschel-keeps-its-files)).
+Settings and history live in `%APPDATA%\Nuschl` and `%LOCALAPPDATA%\Nuschl`
+([desktop.md](desktop.md#where-nuschl-keeps-its-files)).
 
 Releases are **not code-signed** (a decision for now: no Authenticode certificate).
 The first start of a downloaded copy therefore shows Microsoft Defender SmartScreen's
-"Windows protected your PC". Choose **More info**, check that the app is `nuschel.exe`
+"Windows protected your PC". Choose **More info**, check that the app is `nuschl.exe`
 from an unknown publisher, and choose **Run anyway**. Unblocking the zip before
-unpacking it (**Properties → Unblock**) avoids the prompt, and updates that Nuschel
+unpacking it (**Properties → Unblock**) avoids the prompt, and updates that Nuschl
 fetches itself never show it. With Smart App Control on, Windows blocks unsigned apps
 and offers no way to run them anyway.
 
@@ -121,22 +121,22 @@ been tested on real hardware.
 
 ## macOS
 
-Each release publishes `nuschel-<version>-macos-universal.zip` with `Nuschel.app`
+Each release publishes `nuschl-<version>-macos-universal.zip` with `Nuschl.app`
 for Intel and Apple silicon, for macOS 14.2 or later (the audio library links Core
 Audio's process-tap API). The macOS build has **not yet been run on a Mac**.
 
-Move `Nuschel.app` to Applications before the first start. Started straight from
+Move `Nuschl.app` to Applications before the first start. Started straight from
 Downloads, it would run from a hidden read-only copy (App Translocation), where
-Nuschel cannot update itself.
+Nuschl cannot update itself.
 
 The app is ad-hoc signed, not signed with a Developer ID or notarised (also a
 decision for now). macOS therefore refuses the first start of a downloaded copy,
 saying that it cannot verify the app is free of malware. Close that message, open
 **System Settings → Privacy & Security**, scroll to Security, where it says that
-Nuschel was blocked, choose **Open Anyway** and confirm with your password; macOS
+Nuschl was blocked, choose **Open Anyway** and confirm with your password; macOS
 then starts it and remembers the choice. Removing the quarantine flag in Terminal
-does the same: `xattr -dr com.apple.quarantine /Applications/Nuschel.app`. Updates
-that Nuschel fetches itself are not quarantined and start normally.
+does the same: `xattr -dr com.apple.quarantine /Applications/Nuschl.app`. Updates
+that Nuschl fetches itself are not quarantined and start normally.
 
 On first use macOS also asks for the microphone, and for system audio recording
 when echo cancellation records what the speakers play ([desktop.md](desktop.md#voice)).
@@ -155,7 +155,7 @@ removed on the next start. The code is in `crates/update`.
 
 Tagging `vX.Y.Z` (matching the workspace version) runs
 `.github/workflows/release.yml` on one Linux runner. The flake cross-compiles the
-Windows build (MinGW) and a universal `Nuschel.app` (zig and a pinned SDK, ad-hoc
+Windows build (MinGW) and a universal `Nuschl.app` (zig and a pinned SDK, ad-hoc
 signed with `rcodesign`), so no Windows or macOS runner is needed. The workflow
 zips both, publishes every file of each installation as its own release asset, and
 writes `update.json`, which lists every file with its size and SHA-256.

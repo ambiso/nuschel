@@ -1,6 +1,6 @@
 [package]
-name = "nuschel-crypto-worker"
-description = "Isolated process that owns Nuschel's identity secrets and checks key transparency"
+name = "nuschl-crypto-worker"
+description = "Isolated process that owns Nuschl's identity secrets and checks key transparency"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,32 +11,32 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [[bin]]
-name = "nuschel-crypto-worker"
+name = "nuschl-crypto-worker"
 path = "src/main.rs"
 
 [dependencies]
-nuschel-identity.workspace = true
-nuschel-ipc.workspace = true
-nuschel-kt.workspace = true
-nuschel-e2ee.workspace = true
+nuschl-identity.workspace = true
+nuschl-ipc.workspace = true
+nuschl-kt.workspace = true
+nuschl-e2ee.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 zeroize = "1.9.1"
 
 [dev-dependencies]
-# Loopback tests: nuscheld, the real client session and this worker in its sandbox.
-nuscheld = { path = "../server", version = "0.1.0" }
-nuschel-session.workspace = true
-nuschel-protocol.workspace = true
+# Loopback tests: nuschld, the real client session and this worker in its sandbox.
+nuschld = { path = "../server", version = "0.1.0" }
+nuschl-session.workspace = true
+nuschl-protocol.workspace = true
 # The project auditor, in process, for the loopback test of witnessing.
-nuschel-witness = { path = "../witness", version = "0.1.0" }
+nuschl-witness = { path = "../witness", version = "0.1.0" }
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschel_ipc::windows_sandbox).
+# AppContainer (nuschl_ipc::windows_sandbox).
 [target.'cfg(windows)'.dependencies]
-nuschel-sandbox-windows.workspace = true
+nuschl-sandbox-windows.workspace = true
 
 [lints]
 workspace = true

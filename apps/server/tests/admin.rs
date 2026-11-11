@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! `nuscheld admin` on a stopped server's state (the in-memory backend; the
+//! `nuschld admin` on a stopped server's state (the in-memory backend; the
 //! operator lock against a running server is tested with the real storage
 //! worker in apps/storage-worker/tests/postgres.rs).
 use clap::Parser;
-use nuschel_ipc::server::{MessageKind, Retention, StoredMessage};
-use nuscheld::{
+use nuschl_ipc::server::{MessageKind, Retention, StoredMessage};
+use nuschld::{
     admin::{self, Admin},
     config::{Config, Settings},
     conversations::hex,
@@ -71,13 +71,13 @@ async fn prepared() -> (
             state.persist_registration(id);
         }
         state.registry.next_id = 3;
-        let mut channel = nuscheld::state::Channel::new(1, Some(0), "Lobby".into());
-        channel.node.acls.push(nuscheld::acl::AclEntry {
+        let mut channel = nuschld::state::Channel::new(1, Some(0), "Lobby".into());
+        channel.node.acls.push(nuschld::acl::AclEntry {
             apply_here: true,
             apply_subs: true,
             user_id: Some(2),
             group: String::new(),
-            grant: nuscheld::acl::perm::WRITE,
+            grant: nuschld::acl::perm::WRITE,
             deny: 0,
         });
         let conversation = channel.conversation_id;
@@ -89,7 +89,7 @@ async fn prepared() -> (
     };
     running.shutdown().await;
     // Two old messages and a recent one, as the server would have stored them.
-    let now = nuscheld::chat::now_ms();
+    let now = nuschld::chat::now_ms();
     let mut memory = store.lock().unwrap();
     for (seq, author, age_days, content) in [
         (1, 1_u8, 40, "old from Alice"),
@@ -172,7 +172,7 @@ async fn users_are_listed_renamed_given_passwords_and_removed() {
     for id in [0, 1] {
         let hash = state.registry.users[&id].password_hash.clone().unwrap();
         assert_eq!(
-            nuscheld::password::verify("correct horse".into(), hash).await,
+            nuschld::password::verify("correct horse".into(), hash).await,
             Some(true)
         );
     }

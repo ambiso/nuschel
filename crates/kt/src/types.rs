@@ -2,7 +2,7 @@
 //! Labels and values of the directory.
 
 use crate::codec::{DecodeError, EncodeError, Reader, Writer};
-use nuschel_identity::IdentityFingerprint;
+use nuschl_identity::IdentityFingerprint;
 use std::fmt;
 
 /// Largest opaque payload of a [`DirectoryValue`]: a hybrid identity root public key
@@ -42,7 +42,7 @@ pub enum Label {
     /// `name:` — the account behind a registered user name, as the server normalises it.
     Name(String),
     /// `reg:` — the account behind a registration number (Mumble's user id, which
-    /// clients show and look people up by). Nuschel servers never reuse one.
+    /// clients show and look people up by). Nuschl servers never reuse one.
     Registration(u32),
 }
 
@@ -130,7 +130,7 @@ impl Label {
 }
 
 /// The value of a directory entry: versioned bytes. The backend never interprets them;
-/// [`crate::AccountBinding`] and [`crate::NameBinding`] are the typed formats Nuschel
+/// [`crate::AccountBinding`] and [`crate::NameBinding`] are the typed formats Nuschl
 /// publishes.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DirectoryValue {

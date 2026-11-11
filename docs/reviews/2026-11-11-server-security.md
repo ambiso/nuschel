@@ -1,8 +1,8 @@
-# Nuschel server security review (2026-11-11)
+# Nuschl server security review (2026-11-11)
 
 Read-only review. Inputs: `README.md`, `SECURITY.md`, `docs/architecture.md`,
-`docs/extension.md`, `TODO.md` ("Nuschel server") and `nix/module.nix` on `main`
-(55f6157); the in-progress `server@` change in `~/Projects/nuschel-server`
+`docs/extension.md`, `TODO.md` ("Nuschl server") and `nix/module.nix` on `main`
+(55f6157); the in-progress `server@` change in `~/Projects/nuschl-server`
 (`noxnyusu`, on `dbafe3a2`): `crates/protocol/src/{crypt.rs,lib.rs,relay.rs}` and
 `apps/server/src/main.rs`; stock Murmur at `~/Projects/mumble2` (83503fe1b) for
 comparison. Nothing was built or run. Line numbers below refer to those trees.
@@ -22,7 +22,7 @@ hardening or clarity.
 | D1 | High | Extension | "Read permission" is undefined; Mumble has no read bit, and a new bit is silently erased when a stock client edits that ACL entry |
 | D2 | High | Extension | With Mumble's default ACL, unregistered guests could read every public channel's full archive |
 | D3 | High | Extension | Revocation races: subscriptions, in-flight history pages, listener proxies and whisper caches |
-| D4 | High | Extension | `legacy_html` lets a sender show stock users different content from Nuschel users and the archive; second HTML-injection path |
+| D4 | High | Extension | `legacy_html` lets a sender show stock users different content from Nuschl users and the archive; second HTML-injection path |
 | D5 | High | Extension | Murmur reuses the lowest free user id; extension data keyed by it passes to the next registrant |
 | C4 | High (before first handler) | Code | One 8 MiB frame limit for all states; protobuf decode amplifies repeated fields 4–40x before any permission check |
 | C3 | Medium | Code | `answer_info_ping` answers a 3-byte request with ~17 bytes (~6x reflection) |
@@ -108,8 +108,8 @@ whisper and listener caches are keyed by epoch. Add the trigger list to §5.
 ### D4 — High: `legacy_html` (equivocation, archive gap, HTML policy)
 
 - **Equivocation.** `content` and `legacy_html` come from the same sender
-  independently, and the server cannot check that they match. A hostile Nuschel
-  client can show Nuschel users and moderators a harmless message while stock users
+  independently, and the server cannot check that they match. A hostile Nuschl
+  client can show Nuschl users and moderators a harmless message while stock users
   get a phishing link or the opposite statement. History keeps only `content`, so the
   version stock users saw cannot be reviewed or reported.
 - **Injection into stock clients.** This is not a new capability: any stock client
@@ -123,7 +123,7 @@ whisper and listener caches are keyed by epoch. Add the trigger list to §5.
   text; `textmessagelength` and `imagemessagelength` are measured in QString
   (UTF-16) units, with `<img src>` stripped for the text-length check. It must also
   share Murmur's rate limit.
-- **Format confusion.** History mixes stock HTML (from stock senders) with Nuschel
+- **Format confusion.** History mixes stock HTML (from stock senders) with Nuschl
   text. Without a stored `format` tag a client could interpret one as the other.
 
 **Fix (recommended):** remove `legacy_html` from `ChatSend`. The server builds the
@@ -132,7 +132,7 @@ stock rendering from `content` with the existing pure functions `legacy_body` an
 http(s)/mumble/www), moved into a shared crate. That is not Markdown rendering and
 needs no parser. For inline images the client supplies an attachment already sized
 under `imagemessagelength`; the server checks magic bytes and size and wraps it as
-`<img src="data:…">` without decoding it. Add `format: nuschel_text | mumble_html`
+`<img src="data:…">` without decoding it. Add `format: nuschl_text | mumble_html`
 to every stored message. If `legacy_html` stays, store it with the message, show both
 versions to moderators, and run it through the policy above.
 
@@ -193,14 +193,14 @@ Proposed text:
 1. **Key the sticky policy by server address**, and later by the server identity
    key, **not by the leaf certificate**. CA-validated servers rotate every 60–90
    days; if rotation resets stickiness, a rotation (or a misissued certificate) is a
-   downgrade. A pin change keeps the "requires nuschel/1 (+caps)" record.
-2. **Mismatch fails closed:** extension iff ALPN = `nuschel/1` **and** both hellos
-   are present. ALPN `nuschel/1` without a hello, or a hello without ALPN, is a
-   protocol error, never stock mode. A Nuschel client ignores field 7200 and any
-   ChannelState extension field unless ALPN selected `nuschel/1`; a server ignores
+   downgrade. A pin change keeps the "requires nuschl/1 (+caps)" record.
+2. **Mismatch fails closed:** extension iff ALPN = `nuschl/1` **and** both hellos
+   are present. ALPN `nuschl/1` without a hello, or a hello without ALPN, is a
+   protocol error, never stock mode. A Nuschl client ignores field 7200 and any
+   ChannelState extension field unless ALPN selected `nuschl/1`; a server ignores
    field 7200 from a client that did not offer ALPN.
 3. **Order of credentials.** Stock clients send `Authenticate` (password, tokens)
-   straight after `Version`. A Nuschel client with a sticky record checks ALPN
+   straight after `Version`. A Nuschl client with a sticky record checks ALPN
    (available right after the handshake) and, when sticky capabilities exist, waits
    for the server's `Version` **before** sending `Authenticate`. A strict server sends
    `Reject` and closes without parsing or logging the stock client's `Authenticate`.
@@ -211,11 +211,11 @@ Proposed text:
    `[a-z0-9-]+/[0-9]+`; unknown capabilities ignored.
 6. **Reserved range before negotiation:** a frame in 0x4E00–0x4EFF before the
    capabilities are fixed, or for a capability not negotiated, means disconnect
-   (before authentication) or `NuschelError{unsupported}` (after), and is never
+   (before authentication) or `NuschlError{unsupported}` (after), and is never
    processed.
 7. **First contact:** let invites and `mumble://` links carry the certificate or
    identity-key fingerprint and the required policy
-   (`?fp=sha256:…&policy=nuschel`). That closes first contact for invited users
+   (`?fp=sha256:…&policy=nuschl`). That closes first contact for invited users
    without waiting for key transparency.
 8. **Minimum versions** are self-reported and advisory. They are not a security
    control (a client can omit ALPN or lie).
@@ -243,7 +243,7 @@ Proposed text:
 
 ### D10 — Medium: consent and privacy on mixed servers
 
-Stock users cannot know their channel messages and DMs (to registered Nuschel users)
+Stock users cannot know their channel messages and DMs (to registered Nuschl users)
 are now archived forever and readable by people who join later, or that **invisible
 subscribers** receive them. Mumble shows who is in a channel and who listens. That is
 a privacy regression and, with "forever" as the default, a GDPR exposure for EU
@@ -278,14 +278,14 @@ stock senders by default. Provide operator tools to erase a user's messages.
 ### D13 — Medium: limits for extension messages
 
 - `ChatSend` and edits share Murmur's text bucket with `TextMessage`
-  (`messagelimit`/`messageburst`, default 1/s burst 5); otherwise Nuschel clients get
+  (`messagelimit`/`messageburst`, default 1/s burst 5); otherwise Nuschl clients get
   a second allowance.
 - Separate buckets: `Subscribe`/`Unsubscribe`, `HistoryRequest` (pages and bytes per
   minute), `Typing` (1 per 3 s per conversation), `ReadMarker`, upload chunks.
 - At most 16 outstanding `request_id`s per connection; reject a duplicate in-flight
   id.
 - Uniform errors: "no such conversation" and "not allowed" return the same code
-  (no existence oracle for DM ids). `NuschelError.detail` is a fixed string, never
+  (no existence oracle for DM ids). `NuschlError.detail` is a fixed string, never
   SQL or path text, and clients show it as plain text.
 - A wire size cap and an element-count cap per message type, enforced before decoding
   (C4).
@@ -308,7 +308,7 @@ stock senders by default. Provide operator tools to erase a user's messages.
   counter or previous-hash field **inside** the ciphertext now (an identifier
   decision §3 calls hard to change).
 - **UDP crypto (forward-looking):** OCB2 with a 24-bit tag is kept only for stock
-  compatibility. Add a `udp-aead/1` capability for Nuschel↔Nuschel voice (an AEAD
+  compatibility. Add a `udp-aead/1` capability for Nuschl↔Nuschl voice (an AEAD
   with a 128-bit tag and an explicit counter) if Mumble-transport voice outlives the
   WebRTC plan.
 
@@ -322,7 +322,7 @@ addresses, server availability, the server's TLS key.
 
 **Adversaries:** an anonymous Internet peer (TCP, UDP, spoofed UDP); an authenticated
 guest; a registered user; a moderator abusing rights; a co-tenant behind the same NAT
-or CGNAT; an on-path attacker; a malicious stock or Nuschel client.
+or CGNAT; an on-path attacker; a malicious stock or Nuschl client.
 
 Priorities: **P0** before any listener binds beyond loopback; **P1** before the
 phase-1 release; **P2** hardening.
@@ -572,7 +572,7 @@ so the triple sent and the state kept cannot diverge. Make `new` private.
 A protobuf request of three bytes (`01 10 01`: type, then
 `request_extended_information = true`) gets about 17 bytes back (type, version
 varint, users, max users, bandwidth), roughly 6x. The legacy request is 12 → 24 (2x).
-Stock Murmur behaves the same, but nothing forces Nuschel to.
+Stock Murmur behaves the same, but nothing forces Nuschl to.
 
 **Fix:** do not answer protobuf pings shorter than 12 bytes. Stock 1.5 sends a
 timestamp XORed with `rand64 << 32` (`ConnectDialog.cpp` ~1797), so its requests are
@@ -622,7 +622,7 @@ decode only types allowed in the current state; check counts after decoding.
 4. **UDP binding and session ids** as in P0-10; monotonic session ids from the start
    (changing this later breaks client assumptions).
 5. **Capabilities per connection:** broadcasts need two encodings (stock, and
-   Nuschel with extension fields). Design `encode_control` callers for that instead of
+   Nuschl with extension fields). Design `encode_control` callers for that instead of
    one shared frame.
 6. **TLS verifier** (R1) with a negative test, before any authentication code.
 7. `main.rs`: when no certificate is passed, generate and persist one (P1-17);

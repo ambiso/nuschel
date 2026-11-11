@@ -16,7 +16,7 @@ from local_murmur import Murmur, free_port  # noqa: E402
 
 def main():
     binary, script, *rest = sys.argv[1:]
-    with tempfile.TemporaryDirectory(prefix="nuschel-murmur-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-murmur-") as temporary:
         port = free_port()
         murmur = Murmur(Path(binary), Path(temporary), port)
         murmur.seed()

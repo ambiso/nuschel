@@ -3,13 +3,13 @@
 #![cfg(target_os = "linux")]
 use std::{path::PathBuf, time::Instant};
 
-use nuschel_ipc::{
+use nuschl_ipc::{
     host::Error,
     math::{MathRequest, MathWorker},
 };
 
 fn worker() -> MathWorker {
-    MathWorker::new(env!("CARGO_BIN_EXE_nuschel-math-worker").into())
+    MathWorker::new(env!("CARGO_BIN_EXE_nuschl-math-worker").into())
 }
 
 fn request(tex: &str, display: bool) -> MathRequest {
@@ -106,7 +106,7 @@ async fn a_worker_that_misses_its_deadline_is_killed() {
         eprintln!("skipped: no bash in the Nix store");
         return;
     };
-    let directory = std::env::temp_dir().join(format!("nuschel-math-{}", std::process::id()));
+    let directory = std::env::temp_dir().join(format!("nuschl-math-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let silent: PathBuf = directory.join("silent-worker");
     std::fs::write(
@@ -128,7 +128,7 @@ async fn a_worker_that_misses_its_deadline_is_killed() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
-/// `cargo test --release -p nuschel-math-worker --test worker -- --ignored --nocapture`
+/// `cargo test --release -p nuschl-math-worker --test worker -- --ignored --nocapture`
 #[tokio::test]
 #[ignore = "measurement, not a check"]
 async fn cold_start_and_formula_cost() {

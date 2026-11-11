@@ -1,9 +1,9 @@
 { self }:
-# The project auditor for Nuschel's key transparency (docs/witness.md):
-# `services.nuschel-witness`. Defaults give a working auditor; with a host name
+# The project auditor for Nuschl's key transparency (docs/witness.md):
+# `services.nuschl-witness`. Defaults give a working auditor; with a host name
 # and ACME it is served over HTTPS by nginx:
 #
-#   services.nuschel-witness = {
+#   services.nuschl-witness = {
 #     enable = true;
 #     virtualHost = "witness.example.org";
 #     enableACME = true;
@@ -12,7 +12,7 @@
 #   security.acme = { acceptTerms = true; defaults.email = "admin@example.org"; };
 #
 # Its verifier key (what clients and servers configure) is in the journal and at
-# https://witness.example.org/nuschel-kt/v1/vkey.
+# https://witness.example.org/nuschl-kt/v1/vkey.
 {
   config,
   lib,
@@ -20,11 +20,11 @@
   ...
 }:
 let
-  cfg = config.services.nuschel-witness;
-  stateDirectory = "/var/lib/nuschel-witness";
+  cfg = config.services.nuschl-witness;
+  stateDirectory = "/var/lib/nuschl-witness";
   notInStore = path: path == null || !(lib.hasPrefix builtins.storeDir (toString path));
   arguments = [
-    "${cfg.package}/bin/nuschel-witness"
+    "${cfg.package}/bin/nuschl-witness"
     "serve"
     "--name"
     cfg.name
@@ -50,22 +50,25 @@ let
   ++ lib.optional cfg.enrolPrivateAddresses "--enrol-private-addresses";
 in
 {
-  options.services.nuschel-witness = {
-    enable = lib.mkEnableOption "nuschel-witness, the auditor that checks and cosigns Nuschel servers' key-transparency logs";
+  imports = [
+    (lib.mkRenamedOptionModule [ "services" "nuschel-witness" ] [ "services" "nuschl-witness" ])
+  ];
+  options.services.nuschl-witness = {
+    enable = lib.mkEnableOption "nuschl-witness, the auditor that checks and cosigns Nuschl servers' key-transparency logs";
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.witness;
-      defaultText = lib.literalExpression "inputs.nuschel.packages.\${pkgs.stdenv.hostPlatform.system}.witness";
-      description = "Package containing nuschel-witness.";
+      defaultText = lib.literalExpression "inputs.nuschl.packages.\${pkgs.stdenv.hostPlatform.system}.witness";
+      description = "Package containing nuschl-witness.";
     };
     name = lib.mkOption {
       type = lib.types.str;
       default =
         if cfg.virtualHost != null then
-          "${cfg.virtualHost}/nuschel-kt"
+          "${cfg.virtualHost}/nuschl-kt"
         else
-          "${config.networking.hostName}/nuschel-kt";
-      defaultText = lib.literalExpression ''"''${virtualHost}/nuschel-kt"'';
+          "${config.networking.hostName}/nuschl-kt";
+      defaultText = lib.literalExpression ''"''${virtualHost}/nuschl-kt"'';
       description = ''
         The cosigner name clients configure with the key (C2SP: at most 255 bytes,
         no spaces or "+"). Changing it changes the verifier key.
@@ -129,11 +132,11 @@ in
     assertions = [
       {
         assertion = notInStore cfg.keyFile;
-        message = "services.nuschel-witness.keyFile must not be in the world-readable Nix store.";
+        message = "services.nuschl-witness.keyFile must not be in the world-readable Nix store.";
       }
       {
         assertion = !cfg.enableACME || cfg.virtualHost != null;
-        message = "services.nuschel-witness.enableACME needs virtualHost.";
+        message = "services.nuschl-witness.enableACME needs virtualHost.";
       }
     ];
     networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall (
@@ -160,16 +163,16 @@ in
         };
       };
     };
-    systemd.services.nuschel-witness = {
-      description = "Nuschel key-transparency witness";
+    systemd.services.nuschl-witness = {
+      description = "Nuschl key-transparency witness";
       wantedBy = [ "multi-user.target" ];
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       serviceConfig = {
         Type = "simple";
         DynamicUser = true;
-        User = "nuschel-witness";
-        StateDirectory = "nuschel-witness";
+        User = "nuschl-witness";
+        StateDirectory = "nuschl-witness";
         StateDirectoryMode = "0700";
         WorkingDirectory = stateDirectory;
         UMask = "0077";

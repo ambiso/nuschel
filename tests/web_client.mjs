@@ -37,8 +37,8 @@ class DelayedWebSocket extends NativeWebSocket {
   }
 }
 globalThis.WebSocket = DelayedWebSocket;
-const bindings = await import(pathToFileURL(join(sdk, "nuschel_client_wasm.js")).href);
-await bindings.default({ module_or_path: await readFile(join(sdk, "nuschel_client_wasm_bg.wasm")) });
+const bindings = await import(pathToFileURL(join(sdk, "nuschl_client_wasm.js")).href);
+await bindings.default({ module_or_path: await readFile(join(sdk, "nuschl_client_wasm_bg.wasm")) });
 
 const client = new bindings.WebClient(relay);
 let wake = () => {};

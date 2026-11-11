@@ -12,7 +12,7 @@ pub struct Conversation {
 pub enum HistorySource {
     /// Messages observed by this client, including while using legacy servers.
     LocalObserved,
-    /// Only after an authenticated Nuschel history capability has been negotiated.
+    /// Only after an authenticated Nuschl history capability has been negotiated.
     ServerArchive,
 }
 

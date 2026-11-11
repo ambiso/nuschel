@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! What stock Mumble clients receive for Nuschel text: escaped, line breaks
+//! What stock Mumble clients receive for Nuschl text: escaped, line breaks
 //! kept, web links made clickable as Mumble's own chat bar does it. The client
 //! uses these on stock servers and the server for its stock users (the copy is
 //! always made from the same text, so nobody sees something different).

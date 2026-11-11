@@ -404,6 +404,16 @@ impl Api for Mock {
         0
     }
 
+    unsafe fn delete_app_container_profile(&self, name: PCWSTR) -> HRESULT {
+        // SAFETY: NUL-terminated (contract).
+        let name = unsafe { read_wide(name) };
+        if self.fails("delete_app_container_profile") {
+            return E_ACCESSDENIED;
+        }
+        self.state.borrow_mut().profiles.remove(&name);
+        0
+    }
+
     unsafe fn derive_app_container_sid_from_app_container_name(
         &self,
         name: PCWSTR,

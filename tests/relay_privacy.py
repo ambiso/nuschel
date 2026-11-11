@@ -29,8 +29,8 @@ class PrivacyTest(VoiceTest):
         env.pop("NO_AT_BRIDGE", None)
         # Overrides force relay mode independently of the setting, so this test
         # deliberately configures the private servers through settings.json.
-        env.pop("NUSCHEL_WORMHOLE_RENDEZVOUS", None)
-        env.pop("NUSCHEL_WORMHOLE_RELAY", None)
+        env.pop("NUSCHL_WORMHOLE_RENDEZVOUS", None)
+        env.pop("NUSCHL_WORMHOLE_RELAY", None)
         registry = start_registry(self.args.at_spi, env, self.spawn)
         self.start_pulse()
         wormhole = Wormhole(self.args.python, self.root)
@@ -62,21 +62,21 @@ class PrivacyTest(VoiceTest):
             offered = self.root / "private.txt"
             offered.write_text("A local privacy fixture.\n")
             app = self.app = self.spawn([
-                str(self.args.binaries / "nuschel"), "--profile-dir", str(profile),
+                str(self.args.binaries / "nuschl"), "--profile-dir", str(profile),
                 "--offer", str(offered), f"mumble://Andi@127.0.0.1:{murmur.port}/Lobby",
-            ], env | {"NUSCHEL_AUDIO_BACKEND": "pulse"}, "desktop.log")
-            eventually(lambda: app.poll() is None and self.shell.window("Nuschel"), "no desktop window")
-            self.shell.place("Nuschel", 40, 40, WIDTH, HEIGHT)
-            self.nuschel = eventually(lambda: next((node for node in registry.children()
-                                                   if node.name.lower() == "nuschel"), None),
+            ], env | {"NUSCHL_AUDIO_BACKEND": "pulse"}, "desktop.log")
+            eventually(lambda: app.poll() is None and self.shell.window("Nuschl"), "no desktop window")
+            self.shell.place("Nuschl", 40, 40, WIDTH, HEIGHT)
+            self.nuschl = eventually(lambda: next((node for node in registry.children()
+                                                   if node.name.lower() == "nuschl"), None),
                                       "no desktop accessibility tree", timeout=45)
             joined = peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "Andi",
                                timeout=45)["user"]
             peer.wait(lambda event: event["kind"] == "text" and "wormhole" in event["body"], timeout=45)
-            active = eventually(lambda: worker_pids(app, "nuschel-transfer-worker"), "no active offer worker")
+            active = eventually(lambda: worker_pids(app, "nuschl-transfer-worker"), "no active offer worker")
             self.press("push button", "Settings")
             self.shell.wheel(680, 420, 100)
-            control = eventually(lambda: next((node for _, node, role, name in snapshot(self.nuschel)
+            control = eventually(lambda: next((node for _, node, role, name in snapshot(self.nuschl)
                                                if name == "Relay-only connections"
                                                and role in {"toggle button", "switch", "check box"}), None),
                                  "relay-only privacy is not a named accessible toggle")
@@ -97,18 +97,18 @@ class PrivacyTest(VoiceTest):
             os.killpg(app.pid, signal.SIGTERM)
             app.wait(timeout=15)
             app = self.app = self.spawn([
-                str(self.args.binaries / "nuschel"), "--profile-dir", str(profile),
-            ], env | {"NUSCHEL_AUDIO_BACKEND": "pulse"}, "desktop-restarted.log")
-            eventually(lambda: app.poll() is None and self.shell.window("Nuschel"), "desktop restart failed")
-            self.nuschel = eventually(lambda: next((node for node in registry.children()
-                                                   if node.name.lower() == "nuschel"), None),
+                str(self.args.binaries / "nuschl"), "--profile-dir", str(profile),
+            ], env | {"NUSCHL_AUDIO_BACKEND": "pulse"}, "desktop-restarted.log")
+            eventually(lambda: app.poll() is None and self.shell.window("Nuschl"), "desktop restart failed")
+            self.nuschl = eventually(lambda: next((node for node in registry.children()
+                                                   if node.name.lower() == "nuschl"), None),
                                       "restarted accessibility tree missing", timeout=30)
             self.press("push button", "Settings")
-            control = eventually(lambda: next((node for _, node, _, name in snapshot(self.nuschel)
+            control = eventually(lambda: next((node for _, node, _, name in snapshot(self.nuschl)
                                                if name == "Relay-only connections"), None),
                                  "privacy toggle missing after restart")
             assert control.call("Accessible", "GetState")[0][0] & (1 << 23), "privacy was not selected after reload"
-            assert not worker_pids(app, "nuschel-transfer-worker"), "revoked transfer restarted"
+            assert not worker_pids(app, "nuschl-transfer-worker"), "revoked transfer restarted"
             print("AT-SPI relay-only toggle persisted/reloaded, reconnected the server and killed the actual direct-capable worker.", flush=True)
         finally:
             wormhole.stop()
@@ -121,7 +121,7 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="nuschel-relay-privacy-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-relay-privacy-") as temporary:
         test = PrivacyTest(args, Path(temporary))
         try:
             test.run()

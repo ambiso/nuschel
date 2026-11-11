@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Files offered in a conversation, Mumble compatibility mode. Mumble servers
 //! carry no files, so an offer is a message with a magic-wormhole receive code
-//! (`nuschel_core::transfer`) that stock Mumble users can use with any
+//! (`nuschl_core::transfer`) that stock Mumble users can use with any
 //! wormhole client. A code works once: after each pickup the sandboxed
 //! transfer worker makes a new one and the offer is posted again, until it is
-//! stopped, [`OFFER_LIFETIME`] passes, or Nuschel exits. Nuschel shows each
+//! stopped, [`OFFER_LIFETIME`] passes, or Nuschl exits. Nuschl shows each
 //! offer as one card, at its newest message.
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -14,12 +14,12 @@ use std::{
 
 use base64::Engine as _;
 use gpui_kit::{prelude::*, *};
-use nuschel_core::transfer::{
+use nuschl_core::transfer::{
     Offer, PUBLIC_RENDEZVOUS, display_name, format_offer, format_size, save_name, size_limit,
     valid_code,
 };
-use nuschel_ipc::{TransferEvent, TransferRequest, WormholeServers};
-use nuschel_session::{config::ClientSettings, connection::Command, workers::Transfer};
+use nuschl_ipc::{TransferEvent, TransferRequest, WormholeServers};
+use nuschl_session::{config::ClientSettings, connection::Command, workers::Transfer};
 use tokio::{io::AsyncWriteExt as _, sync::mpsc};
 
 use crate::{
@@ -28,7 +28,7 @@ use crate::{
     theme::*,
 };
 
-/// An offer ends this long after it was made, even while Nuschel keeps
+/// An offer ends this long after it was made, even while Nuschl keeps
 /// running: codes in old messages should not work forever.
 pub const OFFER_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
 /// At least this long between two offer messages, well inside Mumble's
@@ -119,16 +119,16 @@ enum Update {
 fn wormhole_servers(settings: &ClientSettings) -> WormholeServers {
     let pinned = |name| std::env::var(name).ok().filter(|value| !value.is_empty());
     match (
-        pinned("NUSCHEL_WORMHOLE_RENDEZVOUS"),
-        pinned("NUSCHEL_WORMHOLE_RELAY"),
+        pinned("NUSCHL_WORMHOLE_RENDEZVOUS"),
+        pinned("NUSCHL_WORMHOLE_RELAY"),
     ) {
         (None, None) => WormholeServers {
             rendezvous: settings.wormhole_rendezvous.clone(),
             relay: settings.wormhole_relay.clone(),
-            direct: nuschel_core::network::PeerPolicy {
+            direct: nuschl_core::network::PeerPolicy {
                 relay_only: settings.relay_only,
             }
-            .permits(nuschel_core::network::Destination::DirectPeer),
+            .permits(nuschl_core::network::Destination::DirectPeer),
         },
         (rendezvous, relay) => WormholeServers {
             rendezvous: rendezvous.unwrap_or_else(|| settings.wormhole_rendezvous.clone()),
@@ -250,7 +250,7 @@ impl Desktop {
         cx.notify();
     }
 
-    /// Offer `files` (from the command line) in the conversation Nuschel opens
+    /// Offer `files` (from the command line) in the conversation Nuschl opens
     /// at startup, once connected and in it.
     pub fn offer_when_connected(&mut self, files: Vec<PathBuf>, cx: &mut Context<Self>) {
         if files.is_empty() {
@@ -733,7 +733,7 @@ pub fn card(
         .map(|user| user.name.as_str());
     let shown = match ours {
         Some(outgoing) => sender_status(outgoing, position, cx),
-        // Ours from an earlier run: it ended when Nuschel did.
+        // Ours from an earlier run: it ended when Nuschl did.
         None if own_name == Some(message.author.as_str()) => Shown::status("No longer available"),
         None => {
             let key = Key::new(server, channel, &message.author, offer);
@@ -1040,7 +1040,7 @@ mod tests {
     /// What `save` makes of a worker's events, and the file it leaves.
     fn saved(events: Vec<TransferEvent>) -> (Result<(), String>, Vec<u8>) {
         let part = std::env::temp_dir().join(format!(
-            "nuschel-transfer-test-{}-{}.part",
+            "nuschl-transfer-test-{}-{}.part",
             std::process::id(),
             events.len()
         ));
@@ -1090,8 +1090,8 @@ mod tests {
     fn the_test_override_pins_servers_and_avoids_stun() {
         let settings = ClientSettings::default();
         let servers = wormhole_servers(&settings);
-        if std::env::var_os("NUSCHEL_WORMHOLE_RENDEZVOUS").is_none()
-            && std::env::var_os("NUSCHEL_WORMHOLE_RELAY").is_none()
+        if std::env::var_os("NUSCHL_WORMHOLE_RENDEZVOUS").is_none()
+            && std::env::var_os("NUSCHL_WORMHOLE_RELAY").is_none()
         {
             assert_eq!(servers.rendezvous, PUBLIC_RENDEZVOUS);
             assert!(servers.direct);
@@ -1118,7 +1118,7 @@ mod tests {
             let relayed = tokio::spawn(std::future::pending::<()>());
             let (commands, _full) = mpsc::channel(1);
             commands
-                .try_send(nuschel_ipc::TransferRequest::Cancel)
+                .try_send(nuschl_ipc::TransferRequest::Cancel)
                 .unwrap();
             let download = |id, direct, stop| Download {
                 id,

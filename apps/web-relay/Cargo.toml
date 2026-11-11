@@ -1,6 +1,6 @@
 [package]
-name = "nuschel-web-relay"
-description = "The web client's WebSocket tunnel to Mumble and Nuschel servers; forwards ciphertext only"
+name = "nuschl-web-relay"
+description = "The web client's WebSocket tunnel to Mumble and Nuschl servers; forwards ciphertext only"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,20 +11,20 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [[bin]]
-name = "nuschel-web-relay"
+name = "nuschl-web-relay"
 path = "src/main.rs"
 
 # A client without a browser (TLS and a Mumble login through the relay), for
 # the loopback test and the vm-web check.
 [[bin]]
-name = "nuschel-web-relay-probe"
+name = "nuschl-web-relay-probe"
 path = "src/bin/probe.rs"
 
 [lints]
 workspace = true
 
 [dependencies]
-nuschel-protocol.workspace = true
+nuschl-protocol.workspace = true
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

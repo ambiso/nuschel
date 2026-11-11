@@ -1,16 +1,16 @@
 # Key transparency review (2026-11-11)
 
-Research and writing only; no code was changed. The question was: how does Nuschel's key
+Research and writing only; no code was changed. The question was: how does Nuschl's key
 transparency (KT) work, is it a faithful implementation of what Signal and WhatsApp do,
 and what should change. The user has since decided that **akd stays**; KEYTRANS appears
 here only as a comparison. The user's follow-up, "how does this make sense in federation?
-Could every Nuschel server become an auditor?", is answered in §5, the central section.
+Could every Nuschl server become an auditor?", is answered in §5, the central section.
 
 Method: primary sources were downloaded and read as text (blog posts as HTML, papers as
 PDF through `pdftotext`, specifications and code from their repositories). §1 lists every
 source with its version and how much of it was read. Claims about Signal are marked
 **[code]** when checked in Signal's source and **[blog]** when they rest on a post only.
-Nuschel's side was read from `main` at 46dbc8e. Proof sizes in §5.8 were measured with a
+Nuschl's side was read from `main` at 46dbc8e. Proof sizes in §5.8 were measured with a
 temporary test harness in this workspace (a copy of `crates/kt/tests/perf.rs` with other
 account counts), which was deleted afterwards and is not part of this commit.
 
@@ -32,16 +32,16 @@ transported; auditors are optional and none exist. Signal's clients refuse a tre
 unless **every one of three auditors** (one run by Signal, one by Cloudflare, one by
 Trail of Bits) has signed a consistent head within the last seven days **[code]**.
 WhatsApp's directory is cosigned and audited by Cloudflare (whether WhatsApp clients
-require that signature is not documented in anything I read). Nuschel has nothing
+require that signature is not documented in anything I read). Nuschl has nothing
 outside the server's control that a client checks. The earlier design work read blog
 posts and the KEYTRANS drafts but no papers; this review read the papers and code listed
 in §1, and the gap it found is in none of the papers' constructions but in the part
 they all assume: a channel the server cannot split (SoK §3.1). Against a malicious server, which is the
-attacker KT exists for, Nuschel's KT today is a server-signed directory plus
+attacker KT exists for, Nuschl's KT today is a server-signed directory plus
 self-monitoring that the server can fork. The IETF architecture draft says this
 configuration is "not secure" (draft-ietf-keytrans-architecture-11 §3.3).
 
-The akd construction itself is fine for Nuschel's scale. The fixes are around it.
+The akd construction itself is fine for Nuschl's scale. The fixes are around it.
 
 | # | Sev | Finding |
 |---|-----|---------|
@@ -59,13 +59,13 @@ The akd construction itself is fine for Nuschel's scale. The fixes are around it
 **Recommendation** (§7), with the user's decisions of 2026-11-11 built in: keep akd, and
 make **witnessing mandatory once the project auditor is deployed**. Each server keeps a
 small append-only C2SP transparency log of its akd epoch heads (a "log of map roots",
-the shape KEYTRANS has natively). One **project-run auditor** (`nuschel-witness`, a
+the shape KEYTRANS has natively). One **project-run auditor** (`nuschl-witness`, a
 small separate binary with a NixOS module) checks each akd transition and cosigns the
 server's checkpoints; clients require its cosignature, no older than a freshness bound,
 which gives split-view resistance and a freshness bound the server cannot forge. Its key
-ships in the client and in `nuscheld`'s defaults, empty until the user deploys it:
+ships in the client and in `nuschld`'s defaults, empty until the user deploys it:
 until then clients behave exactly as today. Users and administrators can add, remove or
-disable witnesses in the client's settings and through `programs.nuschel` (managed.json).
+disable witnesses in the client's settings and through `programs.nuschl` (managed.json).
 The **other servers a user is connected to** witness each other's logs for that user
 (chosen by the client, never by the witnessed server); they add protection where users
 share servers but cannot replace the common auditor (§5.3). Clients keep auditing akd's
@@ -135,7 +135,7 @@ copy); ELEKTRA (known only through the SoK's quotations); Apple Platform Securit
 the NCC Group audit of akd. Nothing found on federated or multi-provider KT beyond
 CONIKS's multi-provider auditing (§4.1.4) and KEYTRANS architecture §5.3.
 
-### Nuschel
+### Nuschl
 
 docs/e2ee.md §2–§5, §10 (questions 3 and 9) and "Phase 3 as implemented";
 docs/extension.md §3 and the `kt/1` implementation note;
@@ -230,7 +230,7 @@ labels), `apps/desktop/src/identity.rs` (status texts), `crates/identity` (`Acco
 - **Caveat from the SoK** (§1.1): SEEMless's proof needs a simulatable VRF, which
   WhatsApp's ECVRF-EDWARDS25519-SHA512-TAI cannot be, so "provable security cannot be
   claimed for their protocol on the basis of [SEEMless]" ("This does not necessarily
-  mean that there is an attack"). The same applies to Nuschel, which uses the same VRF.
+  mean that there is an attack"). The same applies to Nuschl, which uses the same VRF.
   The SoK also notes SEEMless alone does not give even weak consistency without frequent
   history checks (§3, Appendix E).
 
@@ -244,7 +244,7 @@ encrypted part of a small percentage of messages". At launch the auditing servic
 internal, with "more details about our public auditing strategy in 2024". I found no
 later public source on Apple's third-party auditing.
 
-One difference matters for Nuschel (§5.2): iMessage encrypts to each device separately,
+One difference matters for Nuschl (§5.2): iMessage encrypts to each device separately,
 so a ghost device added by the server does not remove the real devices from the
 conversation, and gossip between the real endpoints still flows. In MLS a ghost member
 is visible to every member in the shared roster, so a working attack has to replace the
@@ -300,11 +300,11 @@ system and offers nothing for this question.
   caught") and adds a username → user id structure.
 - **Consistency-or-Die** replaces auditors with VRF-selected committees of users, but
   states "we do not deal with Sybil attacks": unusable where the server controls
-  registration, as every Nuschel server does.
+  registration, as every Nuschl server does.
 - **PRISM** (a zkVM rollup on a data-availability layer) and **IronDict/Aegon**
   (polynomial commitments; Aegon reports constant audit proofs under 30 KB against AKD)
   aim at client self-auditing at billions of users. New cryptography and research code;
-  Nuschel's scale does not need them.
+  Nuschl's scale does not need them.
 - **Transparency-log witnessing.** C2SP specifies checkpoints, cosignatures, the witness
   protocol and quorum policies; the Witness Network has six staging witnesses
   (GDB Security, Geomys, IPng Networks, Markovian Protocol, Mullvad VPN, TrustFabric) and
@@ -314,7 +314,7 @@ system and offers nothing for this question.
 
 ---
 
-## 3. What Nuschel does (from the code)
+## 3. What Nuschl does (from the code)
 
 - **One akd log per server** (`AkdDirectory`, akd 0.13.0, BLAKE3, ECVRF-EDWARDS25519).
   The only label published is `acct:<account id>` (`apps/server/src/kt.rs`, `label()`).
@@ -345,13 +345,13 @@ system and offers nothing for this question.
   protocol.
 - **UI.** A KT pass is shown as "Not verified" (no "verified automatically" state); a
   `not_found` lookup is shown as "No identity on this server. They have not used a
-  Nuschel client with key transparency here yet." (`apps/desktop/src/identity.rs`).
+  Nuschl client with key transparency here yet." (`apps/desktop/src/identity.rs`).
 
 ---
 
 ## 4. Gap analysis
 
-| Property | Signal | WhatsApp | Nuschel | Sev |
+| Property | Signal | WhatsApp | Nuschl | Sev |
 | --- | --- | --- | --- | --- |
 | Split-view resistance | 3 auditors, all required, ≤ 7 days lag [code] | Cloudflare witness (sync) + monitor (async); client enforcement unverified | None required; first head TOFU | Critical |
 | Gossip | None | None documented | Format only; in-band if shipped | High |
@@ -456,8 +456,8 @@ per changed account in its own epoch, less when batched (§5.8). Affordable at 1
 
 ### 4.9 Absence proofs (G9, Low)
 
-akd has no public non-membership API, and Nuschel correctly treats `not_found` as a
-failure. The desktop, however, states it as fact ("They have not used a Nuschel client
+akd has no public non-membership API, and Nuschl correctly treats `not_found` as a
+failure. The desktop, however, states it as fact ("They have not used a Nuschl client
 with key transparency here yet"). It should say that the server says so. Ensure that no
 path offers an unencrypted conversation because of a `not_found`.
 
@@ -546,7 +546,7 @@ CONIKS Appendix B's partition attack with one auditor per client.
 The witnessed server must never choose; and "the client chooses" must still yield
 intersecting quorums. The user's decision (2026-11-11): **one project-run auditor,
 required by default once it is deployed, configurable in the client's settings and the
-Home Manager module, plus the other Nuschel servers a user is connected to as
+Home Manager module, plus the other Nuschl servers a user is connected to as
 client-picked witnesses.** Evaluated against §5.3:
 
 - **The project auditor (default, required).** Every client that keeps the default
@@ -573,9 +573,9 @@ client-picked witnesses.** Evaluated against §5.3:
 
 ### 5.5 Where the witness software runs
 
-Recommendation: **a small separate binary, `nuschel-witness`, for the project auditor,
-and a built-in witness role in `nuscheld` for the server-to-server case**, with the
-verification logic in one library module (`nuschel-kt::witness`) used by both.
+Recommendation: **a small separate binary, `nuschl-witness`, for the project auditor,
+and a built-in witness role in `nuschld` for the server-to-server case**, with the
+verification logic in one library module (`nuschl-kt::witness`) used by both.
 
 - The project auditor's key is long-lived and worth more than any one server's; it
   should not share a process with a Mumble/TLS voice server and its attack surface. A
@@ -583,7 +583,7 @@ verification logic in one library module (`nuschel-kt::witness`) used by both.
   `DynamicUser` and a strict systemd sandbox, and speaks the standard C2SP witness API,
   so generic tooling (and later other witnesses) interoperates.
 - The server-to-server role needs no new listener: a server witnesses other logs for its
-  own logged-in users over the Nuschel protocol (§5.7, client-mediated submission). This
+  own logged-in users over the Nuschl protocol (§5.7, client-mediated submission). This
   is CONIKS's "providers as auditors" (§4.1.4) with the client, not the witnessed
   server, deciding what to submit.
 
@@ -626,7 +626,7 @@ Leaf `i` (RFC 6962 leaf hash = SHA-256(0x00 ‖ leaf)):
 
 ```text
 struct {
-  opaque context[18] = "nuschel-kt/v1 leaf";
+  opaque context[18] = "nuschl-kt/v1 leaf";
   opaque log_id[32];
   uint64 epoch;              // equals the leaf index
   opaque akd_root[32];
@@ -634,13 +634,13 @@ struct {
 } EpochLeaf;                 // 98 bytes
 ```
 
-Checkpoint (C2SP tlog-checkpoint): origin `<host>:<port>/nuschel-kt/v1` (lower-case
+Checkpoint (C2SP tlog-checkpoint): origin `<host>:<port>/nuschl-kt/v1` (lower-case
 host as in bookmarks), size = newest epoch + 1, root hash, signed by the server identity
 key as an Ed25519 log signature. Signed notes cannot contain NUL and `SignedHead`
-signatures start with `nuschel-kt/v1 signed head\0`, so the two formats cannot collide
+signatures start with `nuschl-kt/v1 signed head\0`, so the two formats cannot collide
 under one key.
 
-#### Messages (Nuschel extension, capability `kt-witness/1`)
+#### Messages (Nuschl extension, capability `kt-witness/1`)
 
 `kt-witness/1` requires `kt/1` and is sticky like every capability: a client that once
 saw it from a server refuses a later connection without it (extension.md §1). The hello
@@ -691,9 +691,9 @@ updates it atomically (tlog-witness's race). Malformed or wrongly signed input i
 an inconsistent proof is `Error{invalid}` and is logged with both checkpoints, since it
 may be evidence.
 
-#### Project auditor (`nuschel-witness`, HTTP)
+#### Project auditor (`nuschl-witness`, HTTP)
 
-- `POST <prefix>/nuschel-kt/v1/add-epochs`: body in nuschel-kt's strict codec:
+- `POST <prefix>/nuschl-kt/v1/add-epochs`: body in nuschl-kt's strict codec:
   descriptor, old size, the new `EpochLeaf`s, one akd append-only proof per new epoch,
   and the signed checkpoint at the new size. The auditor checks the log signature and
   the origin's enrolled key (below), that old size equals its stored size (else 409 with its
@@ -707,14 +707,14 @@ may be evidence.
   size: the hourly refresh of the timestamp.
 - `GET <monitoring prefix>/<origin hash>/checkpoint` (C2SP), for monitors.
 - **Enrolment** of a new origin (`accept_new_logs`, at most `max_logs`): the auditor
-  connects to `host:port` as a Nuschel client, reads `kt_log` from the server's hello
+  connects to `host:port` as a Nuschl client, reads `kt_log` from the server's hello
   and requires it to equal the submitted descriptor, the way ACME checks control of a
   name. A second log id for an enrolled origin is refused and logged (a server showing
-  two logs is evidence; a key rotation is a new origin version, `nuschel-kt/v2`).
+  two logs is evidence; a key rotation is a new origin version, `nuschl-kt/v2`).
   Per-origin rate limit. Its first state for a log is trusted on first use (KEYTRANS's
   `auditor_start_pos`); clients audit across that point with akd as usual.
 
-#### Server (`nuscheld`)
+#### Server (`nuschld`)
 
 1. Append an `EpochLeaf` in the same storage batch as each akd epoch (the stored per-epoch
    audit proof is already written there).
@@ -728,8 +728,8 @@ may be evidence.
 
 #### Client: the witness set
 
-- **Built-in** (`nuschel_kt::DEFAULT_WITNESSES`, one constant used by the client and by
-  nuscheld's defaults): name, vkey, submission URL, `required`. **Empty until the
+- **Built-in** (`nuschl_kt::DEFAULT_WITNESSES`, one constant used by the client and by
+  nuschld's defaults): name, vkey, submission URL, `required`. **Empty until the
   auditor is deployed.** Deploying = putting its vkey and URL in the constant and
   releasing; no user action.
 - **Settings** (`key_transparency` in settings.json, overridable key by key from
@@ -787,7 +787,7 @@ may be evidence.
 #### Configuration
 
 Client, `settings.json` / `managed.json` (`ClientSettings::key_transparency`, type in
-`nuschel_ipc::crypto` like `RecoveryPolicy`, passed to the crypto worker):
+`nuschl_ipc::crypto` like `RecoveryPolicy`, passed to the crypto worker):
 
 ```json
 "key_transparency": {
@@ -809,23 +809,23 @@ Checks: at most 16 witnesses (signed-note verifiers must accept 16 signatures); 
 as C2SP cosigner names (≤ 255 bytes, no spaces, `+` or control characters); vkey types
 0x04 (Ed25519 cosignature) or 0x06 (ML-DSA-44); 1 ≤ `witness_max_age_hours` ≤ 168. A
 managed `key_transparency.witnesses` replaces the user's list and is shown locked; a
-system-wide `/etc/xdg/nuschel/managed.json` works as for other settings. The desktop
+system-wide `/etc/xdg/nuschl/managed.json` works as for other settings. The desktop
 gets a settings page: the list with its source (built-in, managed, own), enable
 switches, add by pasting a vkey, and the server-witness mode.
 
-Home Manager (`programs.nuschel`): add `key_transparency` to `settingNames` in
+Home Manager (`programs.nuschl`): add `key_transparency` to `settingNames` in
 `nix/home-manager.nix` (and its test), so
-`programs.nuschel.settings.key_transparency = { … }` reaches managed.json; optionally
-typed options `programs.nuschel.keyTransparency.{defaultWitnesses, witnesses,
+`programs.nuschl.settings.key_transparency = { … }` reaches managed.json; optionally
+typed options `programs.nuschl.keyTransparency.{defaultWitnesses, witnesses,
 serverWitnesses, witnessMaxAgeHours}` that render into it.
 
-Server, `nuscheld.toml`:
+Server, `nuschld.toml`:
 
 ```toml
 [kt]
-default_witnesses = true          # push to nuschel_kt::DEFAULT_WITNESSES
+default_witnesses = true          # push to nuschl_kt::DEFAULT_WITNESSES
 witness_role = true               # answer KtWitness* for this server's users
-# witness_key_file = "/run/credentials/nuscheld.service/kt-witness-key"
+# witness_key_file = "/run/credentials/nuschld.service/kt-witness-key"
 witness_submits_per_minute = 30
 witness_max_logs = 10000
 
@@ -833,24 +833,24 @@ witness_max_logs = 10000
 name = "kt.example.org/witness"
 key = "kt.example.org/witness+1a2b3c4d+BHHk…"
 url = "https://kt.example.org/witness"
-audit = true                      # Nuschel auditor (add-epochs) rather than plain C2SP
+audit = true                      # Nuschl auditor (add-epochs) rather than plain C2SP
 ```
 
 The witness key is separate from the server identity key (an Ed25519 cosigner key must
 not be shared across cosigner roles); generated once in `state_directory`
 (`kt-witness.key`) if no file is given.
 
-NixOS, `services.nuschel` (nix/module.nix): `kt.defaultWitnesses` (bool, true),
+NixOS, `services.nuschl` (nix/module.nix): `kt.defaultWitnesses` (bool, true),
 `kt.witnesses` (list of `{ name, key, url, audit }`), `kt.witnessRole` (bool, true),
 `kt.witnessKeyFile` (LoadCredential, asserted not in the Nix store like the other keys).
 
-NixOS, new `services.nuschel-witness`: `enable`, `package`, `name` (cosigner name),
+NixOS, new `services.nuschl-witness`: `enable`, `package`, `name` (cosigner name),
 `keyFile` (LoadCredential; required; not in the Nix store), `listenAddress` (default
 `127.0.0.1`), `port`, `acceptNewLogs` (true), `maxLogs` (10,000),
-`submissionsPerMinute` (per origin), `openFirewall`; `StateDirectory=nuschel-witness`,
-`DynamicUser`, the same systemd hardening as `services.nuschel`; TLS through the
+`submissionsPerMinute` (per origin), `openFirewall`; `StateDirectory=nuschl-witness`,
+`DynamicUser`, the same systemd hardening as `services.nuschl`; TLS through the
 operator's reverse proxy (C2SP allows a bastion); outbound network access for enrolment
-checks. The service logs its vkey at start (and `nuschel-witness vkey --key-file …`
+checks. The service logs its vkey at start (and `nuschl-witness vkey --key-file …`
 prints it) for `DEFAULT_WITNESSES`.
 
 ### 5.8 Costs (measured)
@@ -938,11 +938,11 @@ today).
 
 ### (a) Keep akd and add mandatory witnessing and auditing (recommended)
 
-- **Effort.** `nuschel-kt`: epoch log (RFC 6962 inclusion and consistency, compact
+- **Effort.** `nuschl-kt`: epoch log (RFC 6962 inclusion and consistency, compact
   range), signed notes, cosignatures, policy evaluation, witness state machine.
-  `nuscheld`: storage of leaves and checkpoints, a push client (needs an outbound HTTPS
+  `nuschld`: storage of leaves and checkpoints, a push client (needs an outbound HTTPS
   client with rustls: a cargo-deny review), the `KtWitness*` handlers, configuration.
-  `nuschel-witness`: an HTTP service around the shared state machine and akd's audit
+  `nuschl-witness`: an HTTP service around the shared state machine and akd's audit
   verification. Crypto worker: rules C0–C8. Desktop: one settings page. Nix: two module
   changes. Plexi (Apache-2.0) is a usable reference for an akd auditor's message format.
 - **Risk of implementing ourselves.** Low: Merkle inclusion and consistency proofs and
@@ -951,7 +951,7 @@ today).
   which is a configuration decision, not new cryptography.
 - **Interoperability.** C2SP checkpoints and cosignatures are what the Witness Network,
   Sigsum and the transparency-dev witnesses speak, so an independent operator can later
-  witness Nuschel logs with off-the-shelf software and be added to the default policy.
+  witness Nuschl logs with off-the-shelf software and be added to the default policy.
 
 ### (b) KEYTRANS (off the table; comparison only)
 
@@ -971,11 +971,11 @@ structural benefit (a witnessable log of roots) without switching.
 - **Parakeet witnesses** (akd-aware witnesses with a 2f+1 of 3f+1 quorum): the project
   auditor is one of these; growing to a quorum is the upgrade path.
 - **CONIKS-style random auditor sampling** among many servers: detection probability
-  depends on a large pool and random choice; Nuschel users have few servers.
+  depends on a large pool and random choice; Nuschl users have few servers.
 - **Consistency-or-Die**: no Sybil resistance; unusable.
 - **PRISM, IronDict, Aegon**: client self-auditing for billions of users through
   zero-knowledge proofs or polynomial commitments; research code, new assumptions, and
-  PRISM depends on an external data-availability layer. Not justified at Nuschel's scale.
+  PRISM depends on an external data-availability layer. Not justified at Nuschl's scale.
 
 ---
 
@@ -1015,7 +1015,7 @@ the user deploys the auditor and releases its key (C0).
    enrolled-key rule per origin for the auditor; `submit_checkpoint` (C2SP rules:
    404/403/400/409/422 equivalents), `add_epochs` (auditor: leaves and akd proofs),
    `refresh`; atomic check-and-update through the store trait. The network enrolment
-   check lives in `nuschel-witness` (step 5) and hands the state machine an enrolled
+   check lives in `nuschl-witness` (step 5) and hands the state machine an enrolled
    descriptor. Tests: each error case, the tlog-witness rollback race, a made-up key for
    someone else's origin blocks nothing (server-witness mode), a second log id for an
    enrolled origin refused (auditor mode), an inconsistent checkpoint kept as evidence,
@@ -1036,11 +1036,11 @@ the user deploys the auditor and releases its key (C0).
    stickiness, replies carry valid checkpoints and inclusion proofs, rate limits, state
    per (origin, log id), conflict replies, a fake witness endpoint receiving
    `add-epochs`.
-5. **`nuschel-witness`** (`apps/witness`): HTTP server (C2SP `add-checkpoint`,
-   `nuschel-kt/v1/add-epochs`, monitoring `GET`), SQLite state, key from a credential
-   file, limits, the enrolment check (a Nuschel handshake to `host:port` that reads
-   `Hello.kt_log`, using `nuschel-protocol`); `vkey` subcommand. Tests: end to end with an
-   in-process `nuscheld` pushing; enrolment against a fake server whose hello names
+5. **`nuschl-witness`** (`apps/witness`): HTTP server (C2SP `add-checkpoint`,
+   `nuschl-kt/v1/add-epochs`, monitoring `GET`), SQLite state, key from a credential
+   file, limits, the enrolment check (a Nuschl handshake to `host:port` that reads
+   `Hello.kt_log`, using `nuschl-protocol`); `vkey` subcommand. Tests: end to end with an
+   in-process `nuschld` pushing; enrolment against a fake server whose hello names
    another descriptor fails; restart keeps state; malformed and oversized bodies.
 6. **Crypto worker and session** (`apps/crypto-worker`, `crates/ipc`,
    `crates/session`): the policy from settings in a `CryptoRequest` (as
@@ -1056,12 +1056,12 @@ the user deploys the auditor and releases its key (C0).
    settings page. Tests: config parsing and managed merging (managed list replaces,
    shown locked); invalid entries rejected like other settings.
 8. **Home Manager** (`nix/home-manager.nix`, `nix/home-manager-test.nix`):
-   `key_transparency` in `settingNames`; optional typed `programs.nuschel.keyTransparency`
+   `key_transparency` in `settingNames`; optional typed `programs.nuschl.keyTransparency`
    options. Test: the generated managed.json carries it and the client accepts it.
 9. **NixOS** (`nix/module.nix`, new `nix/witness-module.nix` exported as
    `nixosModules.witness` beside `nixosModules.default`, `nix/vm-server.nix`):
-   `services.nuschel.kt.{defaultWitnesses, witnesses, witnessRole, witnessKeyFile}`;
-   `services.nuschel-witness`; a package output for `nuschel-witness`. VM test: a witness and a server on one machine, the
+   `services.nuschl.kt.{defaultWitnesses, witnesses, witnessRole, witnessKeyFile}`;
+   `services.nuschl-witness`; a package output for `nuschl-witness`. VM test: a witness and a server on one machine, the
    server pushes, a CLI client requires the witness and accepts heads; stopping the
    witness yields "unavailable" after the bound (shortened in the test).
 10. **Labels**: publish `name:` and a registration-number label (value: account id);
@@ -1075,8 +1075,8 @@ the user deploys the auditor and releases its key (C0).
     `issued_at` clamp after a forward clock jump.
 13. **Docs**: e2ee.md §5 (the corrections in §9; replace "optional auditors" and
     "gossip in MLS" with this design), extension.md (`kt-witness/1`, messages, limits),
-    server.md (`[kt]` witness keys), a new docs section for operating `nuschel-witness`.
-14. **When the user deploys the auditor**: run `services.nuschel-witness`, put its vkey
+    server.md (`[kt]` witness keys), a new docs section for operating `nuschl-witness`.
+14. **When the user deploys the auditor**: run `services.nuschl-witness`, put its vkey
     and URL into `DEFAULT_WITNESSES`, release server and client together (servers first
     if possible, C5 covers the gap).
 
@@ -1147,7 +1147,7 @@ Not applied here.
    accepted without audit.
 8. **§4**, "Automatic verification shows 'verified automatically' when KT passes, as
    Signal does": Signal shows its green check only on the user's request and only with
-   all auditor signatures, and only for contacts whose phone number is known. Nuschel's
+   all auditor signatures, and only for contacts whose phone number is known. Nuschl's
    desktop shows no such state, which is right until heads carry a witness quorum.
 9. **§5.2 table**, "No crate on crates.io" for KEYTRANS: still true for the protocol, but
    Trail of Bits' `signal-auditor` (a Rust auditor for Signal's variant, AGPL-3.0-only)

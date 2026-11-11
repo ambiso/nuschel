@@ -4,7 +4,7 @@
 //! tunnel. Buffers are reused across packets, so steady-state routing does not
 //! allocate except for tunneled frames.
 use crate::{authz::Action, state::State};
-use nuschel_protocol::{
+use nuschl_protocol::{
     control::permission_denied::DenyType,
     crypt, encode_tunnel, kind,
     relay::{self, Audio, Context, Datagram, Delivery},
@@ -466,7 +466,7 @@ impl State {
             user.voice.last_resync_request = Some(now);
             user.link.message(
                 kind::CRYPT_SETUP,
-                &nuschel_protocol::control::CryptSetup::default(),
+                &nuschl_protocol::control::CryptSetup::default(),
             );
         }
     }

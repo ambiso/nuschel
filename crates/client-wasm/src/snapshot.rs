@@ -2,12 +2,12 @@
 //! What JavaScript sees: plain records serialised as JSON, built from the
 //! SDK's state (read in place) and its updates.
 
-use nuschel_client::{
+use nuschl_client::{
     Update,
     model::TextTarget,
     server::{ServerState, Status},
 };
-use nuschel_core::bookmark::ServerBookmark;
+use nuschl_core::bookmark::ServerBookmark;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -121,7 +121,7 @@ pub fn bookmark(
 ) -> Result<ServerBookmark, String> {
     let host = host.trim().to_ascii_lowercase();
     let username = username.trim();
-    if !nuschel_protocol::tunnel::valid_host(&host) || port == 0 {
+    if !nuschl_protocol::tunnel::valid_host(&host) || port == 0 {
         return Err("Enter a hostname or IP address and a port from 1 to 65535.".into());
     }
     if username.is_empty() || username.len() > 128 || username.contains(char::is_control) {

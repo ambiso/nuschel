@@ -1,6 +1,6 @@
-# Developing Nuschel
+# Developing Nuschl
 
-How to build and check Nuschel, and how its build is put together. What the tests
+How to build and check Nuschl, and how its build is put together. What the tests
 cover is in [tests/README.md](../tests/README.md); the rules for code and dependencies
 are in [SECURITY.md](../SECURITY.md) and [architecture.md](architecture.md).
 
@@ -59,14 +59,14 @@ outside the Nix sandbox.
 
 ## The icon
 
-The icon's source is `apps/desktop/assets/nuschel.svg`. The Linux package installs
+The icon's source is `apps/desktop/assets/nuschl.svg`. The Linux package installs
 the desktop entry and icons and registers `mumble://` links; after changing the icon,
 regenerate the committed Windows `.ico` with the command at the top of
 `nix/desktop-files.nix`.
 
 ## The WebRTC trial
 
-The modern media transport is a str0m trial in `nuschel-rtc`. Run
+The modern media transport is a str0m trial in `nuschl-rtc`. Run
 `nix run --cores 2 .#rtc-probe` for the headless audio/video loopback probe, or
 `just rtc` inside the development shell to include the worker's Opus encoding and
 decoding. Both send Opus and a generated VP8 test pattern between two loopback UDP

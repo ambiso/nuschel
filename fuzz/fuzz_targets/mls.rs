@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! MLS input from hostile peers (docs/e2ee.md §6, `mls/1`): nuschel-e2ee's structural
+//! MLS input from hostile peers (docs/e2ee.md §6, `mls/1`): nuschl-e2ee's structural
 //! checks of key packages, ratchet trees and message framing (which run before
 //! OpenMLS: short X-Wing keys made libcrux-kem 0.0.9 panic); the directory's and
 //! the client's key package validation; Welcome routing; the §6.4 envelope, whose
@@ -9,8 +9,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_e2ee::{client, ds, envelope, prevalidate};
-use nuschel_protocol::nuschel::v1;
+use nuschl_e2ee::{client, ds, envelope, prevalidate};
+use nuschl_protocol::nuschl::v1;
 use prost::Message;
 use std::sync::{Mutex, OnceLock};
 
@@ -21,16 +21,16 @@ fn fixture() -> &'static Mutex<ds::DeliveryGroup> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
-        let validity = nuschel_identity::Validity::starting_at(now - 3600, 365 * 86_400)
+        let validity = nuschl_identity::Validity::starting_at(now - 3600, 365 * 86_400)
             .expect("validity");
-        let identity = nuschel_identity::NewIdentity::create(
-            &nuschel_identity::DisplayName::new("fuzz").expect("name"),
+        let identity = nuschl_identity::NewIdentity::create(
+            &nuschl_identity::DisplayName::new("fuzz").expect("name"),
             validity,
             now,
         )
         .expect("identity");
         let device = client::Client::new().expect("client");
-        let binding = nuschel_e2ee::ConversationBinding::direct([7; 32], [1; 16]);
+        let binding = nuschl_e2ee::ConversationBinding::direct([7; 32], [1; 16]);
         let signer = ds::ServerSigner::generate().expect("server key");
         let created = device
             .create(
@@ -58,12 +58,12 @@ fuzz_target!(|data: &[u8]| {
     let _ = prevalidate::ratchet_tree(data);
     let _ = prevalidate::message(data);
     let _ = prevalidate::wire_format(data);
-    let _ = nuschel_e2ee::history::archive_key_index(data);
-    let _ = nuschel_e2ee::history::decode_grant(data);
-    let key = nuschel_e2ee::history::HistoryKey { index: 0, key: [0; 32] };
-    let _ = nuschel_e2ee::history::open_archive(&key, &[0; 16], data);
-    let _ = nuschel_e2ee::ConversationBinding::decode(data);
-    let _ = nuschel_e2ee::binding::parse_group_id(data);
+    let _ = nuschl_e2ee::history::archive_key_index(data);
+    let _ = nuschl_e2ee::history::decode_grant(data);
+    let key = nuschl_e2ee::history::HistoryKey { index: 0, key: [0; 32] };
+    let _ = nuschl_e2ee::history::open_archive(&key, &[0; 16], data);
+    let _ = nuschl_e2ee::ConversationBinding::decode(data);
+    let _ = nuschl_e2ee::binding::parse_group_id(data);
     if let Ok(parsed) = envelope::Envelope::decode(data) {
         assert_eq!(parsed.encode(), data, "envelopes have one encoding");
     }

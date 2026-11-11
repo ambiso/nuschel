@@ -1,24 +1,24 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Clients without a user interface, through the SDK alone: three people
-//! connect to a Nuschel server, register, and join a channel; Andi sends a
+//! connect to a Nuschl server, register, and join a channel; Andi sends a
 //! message that Ada receives, then edits it and Ada sees the edit; Grace,
 //! who connects afterwards, loads the channel's history from the server and
 //! finds the edited message. This is what a terminal client does, minus the
 //! drawing.
 //!
-//!     cargo run -p nuschel-client --example headless -- 127.0.0.1 PORT
+//!     cargo run -p nuschl-client --example headless -- 127.0.0.1 PORT
 //!
 //! Workers are found beside the executable, as for the desktop; without
 //! them messages show as plain text and nothing is kept in local history,
 //! which this scenario does not need. Only for a server you run (loopback):
 //! it trusts the server's certificate on first use.
-use nuschel_client::{
+use nuschl_client::{
     Client, Update,
     model::TextTarget,
     native::{self, Driver, Event},
     server::Status,
 };
-use nuschel_session::config::{ClientSettings, Profile, ServerBookmark};
+use nuschl_session::config::{ClientSettings, Profile, ServerBookmark};
 use std::{
     path::Path,
     sync::Arc,
@@ -86,7 +86,7 @@ impl Person {
             match event.into_input() {
                 Ok(input) => self.client.handle(input),
                 Err(native::Native::Identity { event, .. }) => {
-                    if let nuschel_session::identity::IdentityEvent::Failed(reason) = *event {
+                    if let nuschl_session::identity::IdentityEvent::Failed(reason) = *event {
                         self.say(format!("identity: {reason}"));
                     }
                 }
@@ -168,7 +168,7 @@ impl Person {
         .await?;
         if !self.registered() {
             self.client
-                .request(0, nuschel_client::platform::Request::RegisterSelf)?;
+                .request(0, nuschl_client::platform::Request::RegisterSelf)?;
             self.until("is registered", |client| {
                 client.servers[0].own_user_id().is_some()
             })
@@ -188,7 +188,7 @@ impl Person {
         let archive = self.client.servers[0].has("history/1");
         self.until("has the channel's latest page", |client| {
             let channel = &client.servers[0].channels[position];
-            // On a Nuschel server the page comes once the server named the
+            // On a Nuschl server the page comes once the server named the
             // channel's conversation.
             channel.timeline.loaded && (!archive || channel.conversation.is_some())
         })
@@ -281,7 +281,7 @@ async fn scenario(host: &str, port: u16, root: &Path) -> Result<(), String> {
                         .encryption
                         .as_ref()
                         .is_some_and(|state| {
-                            state.security == nuschel_client::SessionSecurity::MlsEstablished
+                            state.security == nuschl_client::SessionSecurity::MlsEstablished
                         })
                 })
                 .await?;
@@ -322,7 +322,7 @@ async fn scenario(host: &str, port: u16, root: &Path) -> Result<(), String> {
             client.servers[0].channels.iter().any(|entry| {
                 matches!(entry.target, TextTarget::DirectConversation(_))
                     && entry.encryption.as_ref().is_some_and(|state| {
-                        state.security == nuschel_client::SessionSecurity::MlsEstablished
+                        state.security == nuschl_client::SessionSecurity::MlsEstablished
                     })
             })
         })
@@ -354,7 +354,7 @@ fn main() {
         .next()
         .and_then(|port| port.parse().ok())
         .unwrap_or(64738);
-    let root = std::env::temp_dir().join(format!("nuschel-headless-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("nuschl-headless-{}", std::process::id()));
     let runtime = tokio::runtime::Runtime::new().expect("a tokio runtime");
     let result = runtime.block_on(scenario(&host, port, &root));
     let _ = std::fs::remove_dir_all(&root);

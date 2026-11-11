@@ -15,7 +15,7 @@ export function inviteFragment(fragment) {
   let error = "";
   if (pinValue !== null && !pin) error = "This invite has an invalid certificate pin.";
   if (params.get("policy")) {
-    error = "This invite requires the Nuschel protocol. Open it in the app; this browser client cannot negotiate that protocol yet.";
+    error = "This invite requires the Nuschl protocol. Open it in the app; this browser client cannot negotiate that protocol yet.";
   }
   return {
     host: match ? match[1] : "",

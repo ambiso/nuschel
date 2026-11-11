@@ -2,7 +2,7 @@
 //! When sound effects play. The media worker synthesises and mixes them; the
 //! native driver sends each to the connection's worker and keeps quiet while
 //! deafened, except for the deafen sound itself (as stock Mumble does).
-use nuschel_core::audio::Sound;
+use nuschl_core::audio::Sound;
 
 /// Your own mute or deafen changed from `before` to `after` (muted, deafened).
 /// Deafening implies muting, so its sound replaces the mute sound.

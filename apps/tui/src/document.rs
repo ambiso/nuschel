@@ -6,7 +6,7 @@
 //! keeps no alternative text), and links are numbered so they can be listed
 //! and opened. Every string from a server goes through [`clean`] first: no
 //! control characters or direction overrides reach the terminal.
-use nuschel_core::{ContentBlock, MessageDocument, TextRole};
+use nuschl_core::{ContentBlock, MessageDocument, TextRole};
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -240,7 +240,7 @@ pub fn wrap(line: Line<'static>, width: usize, indent: usize) -> Vec<Line<'stati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_core::Span as TextSpan;
+    use nuschl_core::Span as TextSpan;
 
     #[test]
     fn escapes_and_overrides_never_reach_the_terminal() {

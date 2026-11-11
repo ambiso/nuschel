@@ -17,7 +17,7 @@ use crate::{
     state::{Link, Peer},
 };
 use bytes::{Bytes, BytesMut};
-use nuschel_protocol::{ControlFrame, control as proto, decode_control_limited, kind, relay};
+use nuschl_protocol::{ControlFrame, control as proto, decode_control_limited, kind, relay};
 use prost::Message as _;
 use std::{
     io,
@@ -54,7 +54,7 @@ fn pre_authentication_limit(kind: u16) -> Option<usize> {
 /// Element counts are checked again after decoding.
 pub fn body_limit(settings: &Settings, kind: u16) -> Option<usize> {
     let config = &settings.config;
-    let unlimited = nuschel_protocol::MAX_CONTROL_BYTES;
+    let unlimited = nuschl_protocol::MAX_CONTROL_BYTES;
     let image = match config.image_message_length.max(config.text_message_length) {
         0 => unlimited,
         length => (length as usize).saturating_mul(4),
@@ -69,15 +69,15 @@ pub fn body_limit(settings: &Settings, kind: u16) -> Option<usize> {
             kind::USER_LIST => 512 * 1024,
             kind::VOICE_TARGET => 8 * 1024,
             kind::PLUGIN_DATA_TRANSMISSION => 2 * 1024,
-            kind::UDP_TUNNEL => relay::MAX_PLAIN + nuschel_protocol::crypt::HEADER,
+            kind::UDP_TUNNEL => relay::MAX_PLAIN + nuschl_protocol::crypt::HEADER,
             kind::QUERY_USERS => 64 * 1024,
             kind::REQUEST_BLOB | kind::PING | kind::CRYPT_SETUP | kind::PERMISSION_QUERY => {
                 4 * 1024
             }
             // The extension's own caps (docs/extension.md §2), whether or not
             // this connection negotiated it.
-            extension if kind::NUSCHEL_EXTENSION.contains(&extension) => {
-                nuschel_protocol::nuschel::client_limit(extension)
+            extension if kind::NUSCHL_EXTENSION.contains(&extension) => {
+                nuschl_protocol::nuschl::client_limit(extension)
             }
             _ => 16 * 1024,
         }
@@ -212,7 +212,7 @@ async fn serve(
             kind::REJECT,
             &proto::Reject {
                 r#type: Some(proto::reject::RejectType::None as i32),
-                reason: Some("This server requires the Nuschel client".into()),
+                reason: Some("This server requires the Nuschl client".into()),
             },
         );
         drop(link);
@@ -222,7 +222,7 @@ async fn serve(
     link.send(if stock {
         server.version_frame.clone()
     } else {
-        server.nuschel_version_frame.clone()
+        server.nuschl_version_frame.clone()
     });
     let mut peer = Peer {
         address,
@@ -253,18 +253,18 @@ async fn serve(
                     .negotiation
                     .version(&frame.payload, server.capabilities)
                 {
-                    tracing::info!(address = %server.settings.addresses.socket(address), %error, "closed a nuschel/1 connection");
+                    tracing::info!(address = %server.settings.addresses.socket(address), %error, "closed a nuschl/1 connection");
                     break None;
                 }
             }
             kind::AUTHENTICATE => {
-                // ALPN `nuschel/1` without a hello fails closed, before the
+                // ALPN `nuschl/1` without a hello fails closed, before the
                 // credentials are even decoded.
                 if peer.negotiation.freeze().is_err() {
-                    tracing::info!(address = %server.settings.addresses.socket(address), "closed a nuschel/1 connection without a hello");
+                    tracing::info!(address = %server.settings.addresses.socket(address), "closed a nuschl/1 connection without a hello");
                     break None;
                 }
-                // A Nuschel client below the minimum version, from its date on
+                // A Nuschl client below the minimum version, from its date on
                 // (docs/extension.md, "Minimum versions"), is refused before its
                 // credentials are decoded; never a stock client.
                 let refusal = peer

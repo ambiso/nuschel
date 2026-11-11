@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Edits, deletions, typing and direct conversations against nuscheld
-(docs/extension.md §3, §6, §7), with two nuschel-cli clients and SuperUser:
+"""Edits, deletions, typing and direct conversations against nuschld
+(docs/extension.md §3, §6, §7), with two nuschl-cli clients and SuperUser:
 
 - an author edits their message (others see the edit; pages show the new
   text); someone else can neither edit nor delete it;
@@ -12,7 +12,7 @@
   offline, lists it as unread at their next login, pages it, takes their
   read marker, and carries live messages as text in that conversation.
 
-    python3 tests/with_local_nuscheld.py <binaries> tests/nuschel_conversations.py <binaries> --port PORT
+    python3 tests/with_local_nuschld.py <binaries> tests/nuschl_conversations.py <binaries> --port PORT
 """
 import argparse
 import secrets
@@ -20,9 +20,9 @@ import tempfile
 import time
 from pathlib import Path
 
-from local_nuscheld import Nuscheld
+from local_nuschld import Nuschld
 from mumble_client import Client, certificate_pin
-from nuschel_history import conversation, register
+from nuschl_history import conversation, register
 
 EDIT, DELETE = 1, 2
 NOT_FOUND = 3
@@ -31,14 +31,14 @@ NOT_FOUND = 3
 def connect(binaries, args, pin, name, profile, extra=()):
     client = Client(binaries, args.host, args.port, pin, name, profile, extra)
     negotiated = next(event for event in client.events if event["kind"] == "negotiated")
-    assert negotiated["nuschel"] and "history/1" in negotiated["capabilities"], negotiated
+    assert negotiated["nuschl"] and "history/1" in negotiated["capabilities"], negotiated
     assert "typing/1" in negotiated["capabilities"], negotiated
     return client, negotiated
 
 
 def answer(client, request_id):
     return client.wait(lambda event: event.get("request_id") == request_id
-                       and event["kind"] in ("chat_ack", "nuschel_error", "history_page",
+                       and event["kind"] in ("chat_ack", "nuschl_error", "history_page",
                                              "direct_opened", "direct_list"))
 
 
@@ -63,7 +63,7 @@ def main():
     parser.add_argument("--port", type=int, default=64738)
     args = parser.parse_args()
     token = secrets.token_hex(3)
-    with tempfile.TemporaryDirectory(prefix="nuschel-conversations-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-conversations-") as temporary:
         root = Path(temporary)
         pin = certificate_pin(args.binaries, args.host, args.port, root / "probe")
         alice, negotiated = connect(args.binaries, args, pin, f"Alice{token}", root / "alice")
@@ -88,11 +88,11 @@ def main():
         # Nobody else edits it, and Bob is no moderator.
         bob.send(kind="chat_edit", request_id=3, conversation=lobby, target=typo, content="mine now")
         refused = answer(bob, 3)
-        assert refused["kind"] == "nuschel_error" and refused["code"] == NOT_FOUND, refused
+        assert refused["kind"] == "nuschl_error" and refused["code"] == NOT_FOUND, refused
         time.sleep(1.1)
         bob.send(kind="chat_delete", request_id=4, conversation=lobby, target=typo)
         refused = answer(bob, 4)
-        assert refused["kind"] == "nuschel_error" and refused["code"] == NOT_FOUND, refused
+        assert refused["kind"] == "nuschl_error" and refused["code"] == NOT_FOUND, refused
 
         # The author deletes it: a tombstone without text, live and in pages.
         time.sleep(1.1)
@@ -108,7 +108,7 @@ def main():
         time.sleep(1.1)
         rude = send(bob, f"something rude {token}")
         password = root / "superuser-password"
-        password.write_text(Nuscheld.SUPERUSER_PASSWORD)
+        password.write_text(Nuschld.SUPERUSER_PASSWORD)
         admin, _ = connect(args.binaries, args, pin, "SuperUser", root / "admin",
                            ("--password-file", str(password)))
         admin.send(kind="chat_delete", request_id=7, conversation=lobby, target=rude)
@@ -161,7 +161,7 @@ def main():
         assert bytes(live["target"]["id"]).hex() == direct and live["seq"] is not None, live
         bob.close()
         alice.close()
-    print("Edits, deletions, typing and direct conversations against nuscheld: ok")
+    print("Edits, deletions, typing and direct conversations against nuschld: ok")
 
 
 if __name__ == "__main__":

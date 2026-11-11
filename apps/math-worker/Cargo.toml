@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-math-worker"
+name = "nuschl-math-worker"
 description = "Isolated LaTeX math rendering process"
 version.workspace = true
 edition.workspace = true
@@ -9,13 +9,13 @@ publish.workspace = true
 
 [dependencies]
 base64 = "0.22"
-nuschel-ipc.workspace = true
-nuschel-math.workspace = true
+nuschl-ipc.workspace = true
+nuschl-math.workspace = true
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschel_ipc::windows_sandbox).
+# AppContainer (nuschl_ipc::windows_sandbox).
 [target.'cfg(windows)'.dependencies]
-nuschel-sandbox-windows.workspace = true
+nuschl-sandbox-windows.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt"] }

@@ -3,7 +3,7 @@
 //! as in Mumble, replaces the name someone has on the server, only for you;
 //! their real name stays in a tooltip and in their profile. Friends, also
 //! kept by certificate hash, get a marker.
-pub use nuschel_client::names::{author, author_name, display_name, full_name};
+pub use nuschl_client::names::{author, author_name, display_name, full_name};
 
 /// The friend marker's colour.
 pub use crate::theme::FRIEND;
@@ -11,8 +11,8 @@ pub use crate::theme::FRIEND;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_client::names::{about_friend, activity_text};
-    use nuschel_session::{
+    use nuschl_client::names::{about_friend, activity_text};
+    use nuschl_session::{
         config::ClientSettings,
         connection::User,
         model::{Activity, NameSpan},

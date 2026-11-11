@@ -9,7 +9,7 @@ use crate::{
     server::{PROTOCOL_VERSION, PingLimiter, Server, prefix},
     state::State,
 };
-use nuschel_protocol::relay::{self, ServerInfo};
+use nuschl_protocol::relay::{self, ServerInfo};
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},

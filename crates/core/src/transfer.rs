@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! File offers in a conversation, Mumble compatibility mode: a message that
 //! stock Mumble users read and act on with any magic-wormhole client, and that
-//! Nuschel recognises from its visible text alone.
+//! Nuschl recognises from its visible text alone.
 //!
 //! ```text
 //! 📎 report.pdf (2.1 MB) — receive with magic-wormhole: wormhole receive 7-guitarist-revenge
@@ -10,7 +10,7 @@
 //!
 //! Only visible text survives everywhere such a message goes: servers with
 //! HTML disabled strip all markup, stock Mumble drops links of unknown schemes,
-//! and Nuschel itself keeps legacy HTML only as inert text. So the text is the
+//! and Nuschl itself keeps legacy HTML only as inert text. So the text is the
 //! machine-readable form, and nothing is hidden in it. An offer is identified
 //! by its sender, file name and size: a newer message with all three the same
 //! replaces an older one (a fresh code after a pickup, or the end of the offer).
@@ -54,7 +54,7 @@ impl Offer {
 }
 
 /// An offer as a message: rich text for servers that allow HTML, plain text
-/// for the others. Both read the same once Nuschel has made the HTML inert.
+/// for the others. Both read the same once Nuschl has made the HTML inert.
 pub struct Formatted {
     pub text: String,
     pub html: String,
@@ -135,7 +135,7 @@ pub fn parse_offer(text: &str) -> Option<Offer> {
 }
 
 /// The offer a rendered message makes: its visible text, when the message is
-/// exactly one paragraph. HTML offers (as Nuschel sends them where servers
+/// exactly one paragraph. HTML offers (as Nuschl sends them where servers
 /// allow HTML) reach the client as the content worker's document, never as
 /// HTML, and their raw source carries the worker's formatting markers.
 pub fn offer_in(document: &crate::MessageDocument) -> Option<Offer> {
@@ -229,7 +229,7 @@ pub fn size_limit(size: u64) -> u64 {
     size.saturating_add(size / 16).saturating_add(1024)
 }
 
-/// A file name as Nuschel shows and offers it: one line without control,
+/// A file name as Nuschl shows and offers it: one line without control,
 /// invisible or text-direction characters, at most [`MAX_NAME`] characters.
 pub fn display_name(name: &str) -> String {
     let cleaned: String = name

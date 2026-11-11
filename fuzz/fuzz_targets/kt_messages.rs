@@ -3,12 +3,12 @@
 //! peers: the `kt/1` messages (docs/extension.md) with their bounds and the
 //! server's check of a publication; the crypto worker's requests and responses
 //! (JSON, base64) with their bounds; and the same bytes as `kt/1` frames from
-//! Nuschel connections into the server state, which authorises and queues them.
+//! Nuschl connections into the server state, which authorises and queues them.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_ipc::crypto::{CryptoRequest, CryptoResponse};
-use nuschel_protocol::nuschel::{self, v1};
+use nuschl_ipc::crypto::{CryptoRequest, CryptoResponse};
+use nuschl_protocol::nuschl::{self, v1};
 use prost::Message;
 
 fuzz_target!(|data: &[u8]| {
@@ -23,16 +23,16 @@ fuzz_target!(|data: &[u8]| {
     let _ = v1::KtHead::decode(data);
     let _ = v1::KtHeadReply::decode(data);
     if let Ok(record) = v1::KtRecord::decode(data) {
-        let _ = nuschel::valid_kt_record(&record);
+        let _ = nuschl::valid_kt_record(&record);
     }
     if let Ok(reply) = v1::KtLookupReply::decode(data) {
-        let _ = reply.record.as_ref().map(nuschel::valid_kt_record);
+        let _ = reply.record.as_ref().map(nuschl::valid_kt_record);
     }
     if let Ok(publish) = v1::KtPublish::decode(data) {
-        let _ = nuscheld::kt::check_publish(nuschel_kt::LogId([7; 32]), &[1; 16], &publish);
+        let _ = nuschld::kt::check_publish(nuschl_kt::LogId([7; 32]), &[1; 16], &publish);
     }
-    if let Ok(hello) = nuschel::hello(data) {
-        let _ = hello.map(|hello| nuschel::valid_kt_log(&hello));
+    if let Ok(hello) = nuschl::hello(data) {
+        let _ = hello.map(|hello| nuschl::valid_kt_log(&hello));
     }
     if let Ok(request) = serde_json::from_slice::<CryptoRequest>(data) {
         let _ = request.check();
@@ -46,5 +46,5 @@ fuzz_target!(|data: &[u8]| {
         frames[at + 1] = 32 + 0x14 + frames[at + 1] % 12;
         at += 3 + usize::from(frames[at + 2]);
     }
-    nuscheld::fuzzing::Harness::new().run(&frames);
+    nuschld::fuzzing::Harness::new().run(&frames);
 });

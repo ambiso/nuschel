@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Compiles the application icon into nuschel.exe; other targets do nothing.
+//! Compiles the application icon into nuschl.exe; other targets do nothing.
 //!
 //! Explorer shows an executable's first icon group, and GPUI loads icon group 1
 //! for the window class (title bar, taskbar, Alt+Tab). No resource compiler is
 //! needed: this writes the COFF object that windres produces for
-//! `1 ICON "assets/nuschel.ico"`, one RT_ICON per image plus the RT_GROUP_ICON
+//! `1 ICON "assets/nuschl.ico"`, one RT_ICON per image plus the RT_GROUP_ICON
 //! directory in a `.rsrc` section, and links it into the program.
 use std::{env, fs, path::PathBuf};
 
-const ICON: &str = "assets/nuschel.ico";
+const ICON: &str = "assets/nuschl.ico";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
@@ -32,13 +32,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // The crane builds in flake.nix filter sources by file name extension;
         // a tree without the icon builds a program without it.
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            println!("cargo:warning={ICON} is missing; nuschel.exe has no icon");
+            println!("cargo:warning={ICON} is missing; nuschl.exe has no icon");
             return Ok(());
         }
         Err(error) => return Err(error.into()),
     };
     let object = resource_object(&icon, machine).map_err(|error| format!("{ICON}: {error}"))?;
-    let path = PathBuf::from(env::var("OUT_DIR")?).join("nuschel-icon.o");
+    let path = PathBuf::from(env::var("OUT_DIR")?).join("nuschl-icon.o");
     fs::write(&path, object)?;
     println!("cargo:rustc-link-arg-bins={}", path.display());
     Ok(())

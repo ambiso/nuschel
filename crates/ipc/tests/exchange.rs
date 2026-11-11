@@ -6,8 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nuschel_core::MessageDocument;
-use nuschel_ipc::{
+use nuschl_core::MessageDocument;
+use nuschl_ipc::{
     ContentRequest, ContentResponse, Envelope, PreparedContent,
     host::{self, Error},
     read_frame, write_frame,

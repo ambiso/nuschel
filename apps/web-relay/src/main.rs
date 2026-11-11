@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: EUPL-1.2
 use clap::Parser;
-use nuschel_web_relay::{Config, Relay};
+use nuschl_web_relay::{Config, Relay};
 use std::path::PathBuf;
 
 /// The web client's tunnel relay (docs/web.md).
 #[derive(Parser)]
 #[command(version)]
 struct Arguments {
-    /// Settings (nuschel-web-relay.toml); defaults without one.
+    /// Settings (nuschl-web-relay.toml); defaults without one.
     #[arg(long)]
     config: Option<PathBuf>,
     /// Where to listen, overriding the settings: `127.0.0.1:8090` or
-    /// `unix:/run/nuschel-web-relay/relay.sock`.
+    /// `unix:/run/nuschl-web-relay/relay.sock`.
     #[arg(long)]
     listen: Option<String>,
 }
@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "nuschel_web_relay=info".into()),
+                .unwrap_or_else(|_| "nuschl_web_relay=info".into()),
         )
         .with_writer(std::io::stderr)
         .init();

@@ -62,7 +62,7 @@ def main():
     args = parser.parse_args()
     reference = ReferenceOpus(args.opus_library)
     packets = reference.encode_tone(10)
-    with tempfile.TemporaryDirectory(prefix="nuschel-udp-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-udp-") as temporary:
         root = Path(temporary)
         pin = certificate_pin(args.binaries, args.host, args.port, root / "probe")
         clients = []

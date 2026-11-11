@@ -3,13 +3,13 @@
 //! tests: authentication and rejections, the certificate checks, channels,
 //! text, ACL denial, voice over the TLS tunnel and encrypted UDP, persistence
 //! across a restart, and hostile frames. Stock-client interoperability is
-//! covered by tests/with_local_nuscheld.py and the VM test.
+//! covered by tests/with_local_nuschld.py and the VM test.
 use bytes::BytesMut;
-use nuschel_protocol::{
+use nuschl_protocol::{
     ControlFrame, control as proto, crypt::CryptState, decode_control, encode_control,
     encode_tunnel, kind, udp,
 };
-use nuscheld::{
+use nuschld::{
     config::Config,
     server::{Running, start},
     storage::{Backend, MemoryStore},
@@ -1039,7 +1039,7 @@ async fn voice_over_the_tunnel_udp_legacy_clients_and_whisper() {
     );
     assert_eq!(audio.header, Some(udp::audio::Header::Context(0)));
     let legacy = carol.receives(kind::UDP_TUNNEL, WAIT).await.unwrap();
-    let decoded = nuschel_protocol::voice::decode_voice(&legacy.payload).unwrap();
+    let decoded = nuschl_protocol::voice::decode_voice(&legacy.payload).unwrap();
     assert_eq!(
         legacy.payload[0] >> 5,
         4,
@@ -1307,7 +1307,7 @@ fn fixture_text(name: &str) -> String {
     .unwrap()
 }
 
-fn plain_settings(directory: &std::path::Path, extra: &str) -> nuscheld::config::Settings {
+fn plain_settings(directory: &std::path::Path, extra: &str) -> nuschld::config::Settings {
     Config::from_toml(&format!(
         "bind = [\"127.0.0.1\"]\nport = 0\nstate_directory = {directory:?}\n\
          message_limit = 1000\nmessage_burst = 1000\n{extra}\n\
@@ -1337,21 +1337,21 @@ async fn start_plain(
     }
 }
 
-/// Import Murmur's rows (as `nuschel-storage-worker --read-murmur` reads
+/// Import Murmur's rows (as `nuschl-storage-worker --read-murmur` reads
 /// tests/fixtures/murmur-1.5.sql) into `store`.
 async fn import_murmur(
     directory: &std::path::Path,
     store: &Arc<Mutex<MemoryStore>>,
-    dump: nuschel_ipc::murmur::MurmurDump,
+    dump: nuschl_ipc::murmur::MurmurDump,
     replace: bool,
-) -> Result<nuscheld::murmur::Report, nuscheld::murmur::ImportError> {
+) -> Result<nuschld::murmur::Report, nuschld::murmur::ImportError> {
     let settings = plain_settings(directory, "");
-    let storage = nuscheld::storage::start(Backend::Memory(store.clone()));
+    let storage = nuschld::storage::start(Backend::Memory(store.clone()));
     let counters = Default::default();
-    let mut state = nuscheld::server::load_state_for_admin(&settings, &storage, &counters)
+    let mut state = nuschld::server::load_state_for_admin(&settings, &storage, &counters)
         .await
         .unwrap();
-    let report = nuscheld::murmur::apply(&mut state, dump, replace);
+    let report = nuschld::murmur::apply(&mut state, dump, replace);
     storage.flush().await;
     report
 }
@@ -1360,17 +1360,17 @@ async fn import_murmur(
 async fn a_murmur_database_imports_with_its_passwords_and_acls() {
     let carol = identity();
     let mut dump =
-        nuschel_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
+        nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
     for user in &mut dump.users {
         if user.name == "carol" {
             // Murmur's hashes are lowercase; an uppercase one is normalised.
             user.certificate_hash =
-                Some(nuscheld::tls::sha1_hex(carol.certificate.as_ref()).to_uppercase());
+                Some(nuschld::tls::sha1_hex(carol.certificate.as_ref()).to_uppercase());
         }
     }
     // Two channels that are each other's parent.
     for (id, parent) in [(20, 21), (21, 20)] {
-        dump.channels.push(nuschel_ipc::murmur::MurmurChannel {
+        dump.channels.push(nuschl_ipc::murmur::MurmurChannel {
             id,
             parent: Some(parent),
             name: format!("Loop {id}"),
@@ -1735,7 +1735,7 @@ async fn the_certificate_reloads_and_a_broken_one_is_refused() {
 
     let second = write_certificate(fixture.directory.path(), "second");
     let fingerprint = fixture.running.server.reload_certificate().unwrap();
-    assert_eq!(fingerprint, nuscheld::tls::sha256_hex(&second));
+    assert_eq!(fingerprint, nuschld::tls::sha256_hex(&second));
     assert_eq!(
         handshake(fixture.address(), versions).await.unwrap().0,
         second
@@ -1774,7 +1774,7 @@ async fn a_generated_certificate_is_not_regenerated_on_reload() {
         .unwrap();
     assert_eq!(
         fixture.running.server.reload_certificate().unwrap(),
-        nuscheld::tls::sha256_hex(&leaf)
+        nuschld::tls::sha256_hex(&leaf)
     );
     std::fs::remove_file(fixture.directory.path().join("certificate.pem")).unwrap();
     assert!(fixture.running.server.reload_certificate().is_err());
@@ -1989,7 +1989,7 @@ async fn clients_before_122_are_refused_with_the_reason() {
 #[tokio::test]
 async fn statistics_count_connections_messages_and_voice() {
     let fixture = Fixture::start("").await;
-    let before = nuscheld::server::Statistics::totals(&fixture.running.server.counters);
+    let before = nuschld::server::Statistics::totals(&fixture.running.server.counters);
     let (alice_id, bob_id) = (identity(), identity());
     let mut alice = Client::connect(fixture.address(), Options::new("Alice", &alice_id))
         .await
@@ -2014,7 +2014,7 @@ async fn statistics_count_connections_messages_and_voice() {
     assert!(bob.receives(kind::UDP_TUNNEL, WAIT).await.is_some());
     alice.sync().await;
     let delta =
-        nuscheld::server::Statistics::totals(&fixture.running.server.counters).since(&before);
+        nuschld::server::Statistics::totals(&fixture.running.server.counters).since(&before);
     assert_eq!((delta.connections, delta.logins, delta.rejected), (3, 2, 1));
     assert!(delta.control_messages >= 2 && delta.control_bytes > 0);
     assert_eq!(delta.voice_packets_in, 1);
@@ -2028,10 +2028,10 @@ async fn statistics_count_connections_messages_and_voice() {
 #[tokio::test]
 async fn murmur_16_details_and_failures_before_any_change() {
     let mut dump =
-        nuschel_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
+        nuschl_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
     dump.header.layout = "1.6".into();
     dump.channels[0].parent = Some(0);
-    dump.acls.push(nuschel_ipc::murmur::MurmurAcl {
+    dump.acls.push(nuschl_ipc::murmur::MurmurAcl {
         channel: 3,
         priority: 1,
         user_id: None,

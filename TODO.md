@@ -1,4 +1,4 @@
-# Nuschel TODO
+# Nuschl TODO
 
 Current focus: **integrate and verify the resumed work before the nuschl rename.**
 The desktop and server support stock Mumble interoperability; shared multi-server
@@ -55,7 +55,7 @@ Reported while testing (2026-11-10/11):
 - [ ] Text is held silently while that server's images are still being prepared;
       say so. A per-bookmark rate-limit override. WebP/HEIC go as files for now.
 - [ ] Report upstream: GPUI only drops files on a hovered element, and typing clears
-      hover (Nuschel now accepts drops by position).
+      hover (Nuschl now accepts drops by position).
 - [x] Emoji picker on Ctrl+. / Ctrl+; (GNOME's chooser is GTK-only), in colour on
       Linux via a one-line GPUI patch (vendor/gpui-pre-wgpu).
 - [ ] Colour emoji in messages: text runs that are emoji should use the colour emoji
@@ -67,10 +67,10 @@ Reported while testing (2026-11-10/11):
 - [ ] DNS SRV records (`_mumble._tcp.<host>`) like stock Mumble.
 - [x] Mixers (pavucontrol, PipeWire) show what each stream is for; Windows/macOS
       session names are not set (cpal does not expose them).
-- [ ] Echo reference: Nuschel's canceller records one output device, everything it
+- [ ] Echo reference: Nuschl's canceller records one output device, everything it
       plays (all applications; more than two channels fold into left/right and AEC3
       switches between mono and stereo by itself). Sound on another output device
-      (HDMI speakers while Nuschel plays to a headset) is not cancelled. Settings
+      (HDMI speakers while Nuschl plays to a headset) is not cancelled. Settings
       now names the recorded output, to check the "wrong output" report; record
       several outputs if that turns out to matter.
 - [x] Opening a channel shifted the layout for a frame: it reloaded the latest page
@@ -79,7 +79,7 @@ Reported while testing (2026-11-10/11):
       container whose sound sockets were deleted: the media sandbox now skips them,
       and binds PulseAudio's directory so its restarts show up inside.
 - [x] The PipeWire/PulseAudio restart test also runs through the real sandbox
-      (`nuschel media-sandbox`; PipeWire restarts rely on the worker being replaced).
+      (`nuschl media-sandbox`; PipeWire restarts rely on the worker being replaced).
 - [ ] The room echo check flaked once under heavy load (gate open 43 % for another
       application's sound while the level dropped 40 dB).
 - [x] "scrolling over the microphone or speakers list while hovering the cursor over a
@@ -92,7 +92,7 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
-- [x] Typing indicators on Nuschel servers (`typing/1`, 2026-11-11): "Ada is typing…"
+- [x] Typing indicators on Nuschl servers (`typing/1`, 2026-11-11): "Ada is typing…"
       in the composer's footer line (no layout shift), a polite live region; Settings →
       Privacy turns sending off. Stock Mumble servers: none (`PluginDataTransmission`
       is forwarded without channel authorisation, docs/extension.md §7).
@@ -105,9 +105,9 @@ Later (reported):
       across restarts and lost connections; clearly shown while still uploading.
       On Mumble servers (compatibility mode): done — a magic-wormhole receive code
       in the message, refreshed after each pickup, in a sandboxed transfer worker;
-      Nuschel shows offers as file cards. Nuschel servers get their own, end-to-end
+      Nuschl shows offers as file cards. Nuschl servers get their own, end-to-end
       encrypted design (chunked, resumable; magic-wormhole cannot resume).
-- [ ] Files on Nuschel servers: designed in docs/files.md (2026-11-11), the user's
+- [ ] Files on Nuschl servers: designed in docs/files.md (2026-11-11), the user's
       decisions in §11 folded in: *kept* files on the server (100 MiB / 10 GiB
       defaults), *live* files sent magic-wormhole style (direct first everywhere, the
       server as relay with a piece cache) from the sender or from recipients who help
@@ -119,14 +119,14 @@ Later (reported):
       BEP 52, no pluggable transport; §2.10). Next: implement (§8).
 - [ ] File transfer follow-ups: Settings controls for the rendezvous/relay servers,
       `wss://` rendezvous (the crate's TLS option pulls an old rustls), a rendezvous
-      keepalive for codes waiting for hours, post "no longer available" when Nuschel
+      keepalive for codes waiting for hours, post "no longer available" when Nuschl
       quits, retry automatically when a newer code arrives, test on macOS/Windows,
       drop `--offer` if unwanted.
-- [x] Nuschel-only servers and a current client (user, 2026-11-11). Decided: end-to-end
+- [x] Nuschl-only servers and a current client (user, 2026-11-11). Decided: end-to-end
       mode turns stock clients away at the connection stage. Experimental
       `security = "e2ee"` now starts; compatible mode remains the default while
       encrypted history/media work is unfinished. Done: `minimum_client`
-      with a grace date refuses older Nuschel versions, `recommended_client` shows an
+      with a grace date refuses older Nuschl versions, `recommended_client` shows an
       update notice.
 - [ ] Guests on a server with `history.guests = none` see a red "Server history: No
       such conversation or message…" error in the conversation; show a calm "History
@@ -142,24 +142,24 @@ Later (reported):
       initial settings and servers; checked by evaluation and a NixOS VM test.
 - [x] Declarative settings: a read-only `managed.json` (user and `$XDG_CONFIG_DIRS`)
       merged at start; managed controls show "Set by your system configuration";
-      managed bookmarks keep runtime state. Home Manager `programs.nuschel.settings`
+      managed bookmarks keep runtime state. Home Manager `programs.nuschl.settings`
       and `servers` write it.
 - [x] Broken `settings.json` / `servers.json` are set aside as `*.invalid` with an
       error notice instead of stopping the app or being overwritten.
-- [ ] Managed config follow-ups: a NixOS option for `/etc/xdg/nuschel/managed.json`;
+- [ ] Managed config follow-ups: a NixOS option for `/etc/xdg/nuschl/managed.json`;
       system-wide managed config on Windows/macOS; evaluation-time checks for nested
       settings; a way to dismiss the startup error notice.
-- [x] XDG Base Directory layout (crates/session/src/layout.rs, docs/desktop.md "Where Nuschel
-      keeps its files"): configuration only in `$XDG_CONFIG_HOME/nuschel` (settings,
+- [x] XDG Base Directory layout (crates/session/src/layout.rs, docs/desktop.md "Where Nuschl
+      keeps its files"): configuration only in `$XDG_CONFIG_HOME/nuschl` (settings,
       bookmarks, managed.json); identity, end-to-end keys, history and security records
-      in `$XDG_DATA_HOME/nuschel`, each worker's folder apart; last channels and the
+      in `$XDG_DATA_HOME/nuschl`, each worker's folder apart; last channels and the
       update state in `$XDG_STATE_HOME`; channel trees and icons in `$XDG_CACHE_HOME`.
       The first start moves an earlier profile file by file (never over a newer one,
       interruptible, reported); servers.json is split. The Home Manager VM test checks
-      that `~/.config/nuschel` holds no identity after a session.
+      that `~/.config/nuschl` holds no identity after a session.
 - [ ] XDG follow-ups: revoke the Modify grant earlier versions gave their Windows
       storage container on the whole data folder (needs a revoke step in
-      nuschel-sandbox-windows; see SECURITY.md, "Where secrets live"); a lock of the
+      nuschl-sandbox-windows; see SECURITY.md, "Where secrets live"); a lock of the
       crypto worker's own, so two instances on one profile cannot both run one on
       `keys/` (true before the move too).
 - [x] Unread indicators (channel and DM counts, red for mentions; a pill and a red
@@ -167,10 +167,10 @@ Later (reported):
 - [x] Runs of routine activity lines (joins, moves, connects, disconnects) collapse into
       one line that expands on click or Enter; warnings stay on their own.
 - [ ] A direct-messages home above the servers, as in Discord. Mumble identities are
-      certificate hashes (Nuschel, like stock Mumble, uses one identity for every
+      certificate hashes (Nuschl, like stock Mumble, uses one identity for every
       server), but each server only claims a user's hash, so a hostile server can
       present someone else's: group by server, never merge by name; linking by hash
-      must say which servers vouch for it. Nuschel servers with end-to-end
+      must say which servers vouch for it. Nuschl servers with end-to-end
       identities can do better.
 - [x] Emacs-style word deletion in every text field (user, 2026-11-11): Ctrl+W deletes
       the word before the cursor, Alt+D the word after it (not on macOS, where
@@ -251,7 +251,7 @@ Later (reported):
       privileged AppContainers for media and transfer too (COM and Winsock refuse
       them today, so both can read `HKCU\Environment`; try `lpacCom` and friends), an
       audit of what AppContainers may read (registry, system folders), removing a
-      deleted Nuschel profile's AppContainer profiles, a run on physical hardware.
+      deleted Nuschl profile's AppContainer profiles, a run on physical hardware.
 - [ ] The desktop shows Murmur's HTML welcome text as stripped source: tags vanish
       and images become U+FFFC boxes (seen on Windows against a stock Murmur).
 
@@ -369,15 +369,15 @@ are not concealed (`apps/media-worker/src/live.rs`).
       `sonora` is a dependency of the media worker but is not used yet.
 - [x] Gain control / limiter stage after noise suppression.
 - [x] First-pass duplicate-processing avoidance: detect PipeWire `echo-cancel` sources
-      and PulseAudio `module-echo-cancel` on the selected input, bypass Nuschel's AEC
-      and route Nuschel playback into that canceller's reference. Unknown stays unknown,
+      and PulseAudio `module-echo-cancel` on the selected input, bypass Nuschl's AEC
+      and route Nuschl playback into that canceller's reference. Unknown stays unknown,
       with a per-device override.
 - [x] Upstream processing found by walking PipeWire's graph from the microphone
       (mic → echo-cancel → RNNoise filter-chain → default source): a system echo
-      canceller anywhere in the chain gets Nuschel's playback as its reference and
-      turns Nuschel's off; a noise suppressor turns Nuschel's suppressor off.
+      canceller anywhere in the chain gets Nuschl's playback as its reference and
+      turns Nuschl's off; a noise suppressor turns Nuschl's suppressor off.
 - [x] Microphone and echo tests in Settings without a server or unmuting.
-- [x] Nuschel's canceller works from a recording of the output device (all
+- [x] Nuschl's canceller works from a recording of the output device (all
       applications; PipeWire sink capture, PulseAudio monitor, WASAPI loopback, macOS
       process tap), stamped on one clock with the microphone and fed with a 25 ms lead.
       PipeWire room on one clock: 40-41 dB of its own echo removed in 6 of 6 runs, another
@@ -398,7 +398,7 @@ are not concealed (`apps/media-worker/src/live.rs`).
 - [ ] cpal's PulseAudio client stops a stream playing into a sink while the same
       connection records that sink's monitor (worked around with a second connection);
       reduce and report upstream.
-- [ ] Nuschel records nothing from PulseAudio's `module-sine-source`, and its own
+- [ ] Nuschl records nothing from PulseAudio's `module-sine-source`, and its own
       playback is silent while it records the monitor of the sink it plays into.
       Both found in test rigs; check the PulseAudio client's stream setup.
 - [ ] Desktop notifications on Windows (toasts need an AppUserModelID) and macOS
@@ -459,7 +459,7 @@ ServerConfig.
       (join, create sub-channel, links, description).
 - [ ] cpal's PipeWire host skips `Audio/Source/Virtual` nodes (e.g. filter-chain or
       EasyEffects outputs), so they can be used only as the system default, not picked
-      in Nuschel. Fix upstream in cpal or list them through the PulseAudio API.
+      in Nuschl. Fix upstream in cpal or list them through the PulseAudio API.
 - [x] Audio settings: input/output device, transmission mode, VAD threshold with meter,
       PTT key, processing toggles and per-device override.
 - [x] Connection status: ping, UDP/TCP indicator, packet loss.
@@ -471,7 +471,7 @@ ServerConfig.
 ### 7. Tests (own servers only)
 
 - [x] Drive the stock Mumble GUI client in the VM: stock/stock baseline, then stock
-      client and Nuschel client in the same channel with two-way voice and chat.
+      client and Nuschl client in the same channel with two-way voice and chat.
 - [x] UDP voice and forced TCP separately; block UDP mid-call and verify fallback and
       recovery.
 - [x] Loss, reordering and jitter injection (`tc netem` in the VM) for the jitter buffer.
@@ -484,7 +484,7 @@ ServerConfig.
       tests/pipewire_recovery.py (private PipeWire session, in the VM): restarts, the
       audio-server pin, and PipeWire echo-cancel reuse. Device switches and format changes
       mid-call are not tested.
-- [x] Upstream PipeWire echo-cancel present: Nuschel must not stack its own AEC and must
+- [x] Upstream PipeWire echo-cancel present: Nuschl must not stack its own AEC and must
       not touch unrelated graph objects (snapshot before/after).
       Tested with PulseAudio module-echo-cancel; the snapshot covers defaults and levels.
 - [x] Kill/stall content, media and storage workers independently.
@@ -497,7 +497,7 @@ ServerConfig.
       under AddressSanitizer without findings): the fuzzer found a GIF that decoded
       to an image without pixels; writing the targets and reviewing what they
       cannot see (super-linear time in large inputs) found quadratic link detection
-      in the copy for stock clients (ten seconds under nuscheld's lock per 64 KiB
+      in the copy for stock clients (ten seconds under nuschld's lock per 64 KiB
       message), in bare URLs and in the website-icon page scan, unmatched end tags
       that fooled the HTML depth limit, code blocks past the block limit, and voice
       sequence numbers that overflowed the jitter buffer. All fixed, with regression
@@ -543,7 +543,7 @@ ServerConfig.
       `IAcousticEchoCancellationControl`, macOS Voice Processing (check its ducking).
       Not done: needs unsafe COM/Objective-C and native validation. Documented in docs/architecture.md; users have the per-microphone override.
 - [x] Full adaptive audio controller: continuous residual-echo / double-talk / clipping /
-      underrun monitoring with hysteresis, touching only Nuschel-owned graph objects.
+      underrun monitoring with hysteresis, touching only Nuschl-owned graph objects.
 - [x] Evaluate quality and robustness of the Rust DSP ports (Sonora, nnnoiseless,
       opus-pure).
       docs/dsp-evaluation.md. Perceptual quality on recorded speech is still open.
@@ -559,11 +559,11 @@ ServerConfig.
 
 ## Later
 
-### Nuschel server (`nuscheld`) — queued (2026-11-11), in dependency order
+### Nuschl server (`nuschld`) — queued (2026-11-11), in dependency order
 
-`nuscheld` implements the listener, compatibility mode and experimental encrypted
+`nuschld` implements the listener, compatibility mode and experimental encrypted
 text mode. Decisions so far (user):
-end-to-end mode is the default for new Nuschel servers and turns stock clients
+end-to-end mode is the default for new Nuschl servers and turns stock clients
 away at the connection stage ("compatible" mode admits them, without E2EE); new
 members see earlier history by default (per-channel setting); read markers sync
 across devices; retention defaults to forever (docs/extension.md, "Decisions");
@@ -571,7 +571,7 @@ OpenMLS with the libcrux provider (pure Rust; hybrid post-quantum X-Wing key exc
 Ed25519 signatures until ML-DSA suites exist); trust on first use with optional
 out-of-band verification; key transparency, as in Signal's automatic key
 verification (https://signal.org/blog/automatic-key-verification/); possibly
-Nuschel-only servers and a minimum client version.
+Nuschl-only servers and a minimum client version.
 
 Security review of the server plan and first code: docs/reviews/2026-11-11-server-security.md
 (P0 requirements must be met before the server listens beyond loopback).
@@ -579,11 +579,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 1. **Server for stock Mumble clients** (the base everything else extends) — done
    (2026-11-11): see docs/server.md; the `vm-server` check runs the protocol suites
    and the stock GUI against it. Open phase-1 items:
-   - [x] Import of a Murmur database (2026-11-11): `nuscheld admin import-murmur`
+   - [x] Import of a Murmur database (2026-11-11): `nuschld admin import-murmur`
          (docs/server.md), both layouts (`ServerDB.cpp` of 1.2.4–1.5 and 1.6's),
          read-only by the storage worker and validated by the server's rules;
          PBKDF2-SHA384 and SHA-1 passwords become argon2id at the next login;
-         settings to `murmur-import.toml`; `services.nuschel.importMurmur` (its own
+         settings to `murmur-import.toml`; `services.nuschl.importMurmur` (its own
          oneshot unit). The reader runs confined by Landlock (best effort; bwrap is
          unavailable under the unit's `RestrictNamespaces`). Left out: Murmur on
          MySQL/PostgreSQL (export to SQLite), murmur.ini, e-mail addresses, disabled
@@ -611,9 +611,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Rolling statistics and clients older than 1.2.2 (2026-11-11): a `statistics`
          log line per `statistics_interval`; clients reporting a version below 1.2.2
          are refused with WrongVersion (they cannot fetch blobs by hash and have no
-         Opus). Not done: a live metrics endpoint (`nuscheld admin` works offline).
+         Opus). Not done: a live metrics endpoint (`nuschld admin` works offline).
    - [x] Chat in the stock-client VM check (2026-11-11): xdotool types into the stock
-         window's chat bar and the Nuschel peer receives it from StockUser; the peer's
+         window's chat bar and the Nuschl peer receives it from StockUser; the peer's
          message is read back from the stock client's log (F6, copy, xclip).
    - [x] Fresh full `vm-smoke` passed on integrated `761565c0` (2026-11-11,
          452.24 seconds), including the new private-recipient checks, audio,
@@ -651,11 +651,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          keep receiving or reading; review D3.4): after every authorisation change a
          listener whose user lost Listen ends, with Murmur's `UserState`
          (`listening_channel_remove`) to everyone and a `PermissionDenied` for Listen
-         to the user, whose reason Nuschel shows; its stored row goes too; live
+         to the user, whose reason Nuschl shows; its stored row goes too; live
          delivery stops and `can_read` through it ends (pages in flight fail).
          docs/server.md, "Listeners follow Listen".
    - [ ] A deleted channel's archive can be read by SuperUser but not moderated
-         (`Action::Moderate` covers live channels); only `nuscheld admin history
+         (`Action::Moderate` covers live channels); only `nuschld admin history
          erase-user` removes messages there. Decide whether SuperUser moderates it.
    - [x] Review deviations (2026-11-11): every permission decision goes through one
          `State::authorize(actor, action)` (authz.rs) over the ACL engine, which only
@@ -684,21 +684,21 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          clients, whisper isolation), udp_voice.py with loss and blocked UDP.
    - [x] Persistent state in SQLite/PostgreSQL (the storage worker over
          crates/storage), the TOML config (murmur.ini's names), and the NixOS module
-         deployable (`services.nuschel`: hardened unit, credentials, local
+         deployable (`services.nuschl`: hardened unit, credentials, local
          PostgreSQL): vm-server runs it on both databases across restarts.
    - [x] Rate limits configurable as Murmur's (`message_limit`/`message_burst`,
          `plugin_message_limit`/`plugin_message_burst`; also flood, query and
          extension buckets) and counted in the `statistics` line; the VM matrix:
-         stock client → nuscheld (vm-server: the stock GUI and the client suites),
-         Nuschel → nuscheld (vm-server: history, key transparency), Nuschel → stock
+         stock client → nuschld (vm-server: the stock GUI and the client suites),
+         Nuschl → nuschld (vm-server: history, key transparency), Nuschl → stock
          Murmur (vm-smoke).
-2. **Nuschel extension** (negotiated; stock clients keep working) — done
+2. **Nuschl extension** (negotiated; stock clients keep working) — done
    (2026-11-11), see docs/extension.md "Implementation notes": ALPN + hello with a
-   sticky, fail-closed client policy (and a reset), `nuschel.v1` messages, account
+   sticky, fail-closed client policy (and a reset), `nuschl.v1` messages, account
    ids, conversation ids, durable idempotent sends with per-conversation seq,
    ACL-checked history pages, `can_read`, guests without history, `since_access`
    intervals, subscriptions, edits/deletions with tombstones, read markers, typing,
-   stock-client notices, `nuscheld --erase-user`; the desktop shows server history and
+   stock-client notices, `nuschld --erase-user`; the desktop shows server history and
    pending sends. Open:
    - [x] Desktop (2026-11-11): direct messages as durable direct conversations; edit
          and delete UI; typing indicators; fetched server pages kept in the local
@@ -714,7 +714,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          were deleted), so key them by conversation id; images in direct
          conversations go the stock way and are not in the server's history;
          an AT-SPI check of the edit and delete menu entries and the typing status
-         on a Nuschel server (tests/accessibility.py runs against Murmur).
+         on a Nuschl server (tests/accessibility.py runs against Murmur).
    - [ ] Desktop: show each channel's retention (`ChannelInfo.retention_days`,
          `live_only`, `own_retention`) and offer it in channel settings to users with
          Write: say what a shortening removes ("messages older than N days", all for
@@ -728,21 +728,21 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          storage worker on a throwaway PostgreSQL from nixpkgs).
    - [ ] Session and desktop: honour `retry_after_ms` on `rate_limited` and `busy`
          (history pages today fail without a retry).
-   - [ ] A burst of sends stalls: 30 messages queued at once by `nuschel-cli` against
-         a loopback `nuscheld` (Murmur's default text limit) get 3–8 acknowledgements,
+   - [ ] A burst of sends stalls: 30 messages queued at once by `nuschl-cli` against
+         a loopback `nuschld` (Murmur's default text limit) get 3–8 acknowledgements,
          then nothing for 20 s, neither an acknowledgement nor `chat_failed`; the
          same with binaries from before 2026-11-11's desktop work. One at a time
          works. Not investigated (the session's outbox pacing and retries against the
          server's text bucket and its 16 requests in flight).
-   - [x] Capability negotiation in the Mumble handshake: ALPN `nuschel/1` plus the
+   - [x] Capability negotiation in the Mumble handshake: ALPN `nuschl/1` plus the
          hello in `Version` (field 7200), frozen at `Authenticate`, fail-closed
          (extension.rs, the session's sticky policy), with the protocol version in
          the hello.
    - [x] Minimum-version policy (docs/extension.md "Minimum versions"): the client
          reports its version in the hello; below `recommended_client` the desktop
          shows a dismissible update notice, below `minimum_client` a warning with
-         the date (`minimum_client_from`), from which `nuscheld` refuses it with
-         "This server requires Nuschel X or newer"; stock clients are never
+         the date (`minimum_client_from`), from which `nuschld` refuses it with
+         "This server requires Nuschl X or newer"; stock clients are never
          refused for their version. The notices offer the in-app updater on
          Windows and macOS.
    - [x] Persistent history: per-conversation seq, pages checked with `can_read` and
@@ -773,16 +773,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          statements, renews the device certificate, pins each server's log, audits
          heads, monitors your own binding, daily schedule, trust per contact.
    - [x] Server: the log in `kt_records` through the storage worker, `kt/1` with 12
-         `nuschel.v1` messages, descriptor in the hello, signing key and VRF secret
-         as credentials (`services.nuschel.kt.*`), per-type size and rate limits,
+         `nuschl.v1` messages, descriptor in the hello, signing key and VRF secret
+         as credentials (`services.nuschl.kt.*`), per-type size and rate limits,
          epochs every 10 s while changes wait, hourly re-signed head.
    - [x] Client: publishes and monitors after login on `kt/1` servers; profiles show
          not verified / verified / "verified (same identity as on X)" / identity
          changed, the 60-digit safety number and "Mark as verified"; a red banner on
          a contact's key change; a dialog when your own key is misused; identity and
-         recovery key in Settings; `nuschel-cli --identity-dir`.
+         recovery key in Settings; `nuschl-cli --identity-dir`.
    - [x] Trust on first use; a changed key is shown, never silently accepted.
-   - [x] The same identity on every Nuschel server: per-server account statements,
+   - [x] The same identity on every Nuschl server: per-server account statements,
          so "same identity as on X" cannot be forged by copying a binding.
    Open:
    - [ ] The key-change warning inside the direct conversation's timeline (today a
@@ -824,10 +824,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          steps in docs/e2ee.md "Phase 4 prototype" (suite constant, API changes known
          from OpenMLS `main`, tests, `just crate2nix`). Groups and key packages made
          before the bump break (new code point and X-Wing key derivation); the user
-         accepted that while Nuschel is in early development, so the bump discards
+         accepted that while Nuschl is in early development, so the bump discards
          MLS state instead of migrating it.
    - [ ] The user's answers to docs/e2ee.md §10 (2026-11-11), to implement:
-         - [x] Remove the 1000-device cap (`nuschel_e2ee::MAX_GROUP_DEVICES`, the
+         - [x] Remove the 1000-device cap (`nuschl_e2ee::MAX_GROUP_DEVICES`, the
            server's `mls.max_devices`, the client check); bound hostile trees by
            message size and process limits instead (prevalidate.rs's node bound
            follows from the input size). Done 2026-11-11. Open: today's 2 MiB tree and
@@ -836,12 +836,12 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          - [ ] End-to-end is a server-level switch: on an end-to-end server every channel,
            direct message, whisper and shout is end-to-end encrypted (shouts and
            whispers: the sender joins the target's voice group when it sets up the
-           voice target); no unencrypted channels, and every Nuschel feature
+           voice target); no unencrypted channels, and every Nuschl feature
            (WebRTC, video, files, several images, typing) is available. Done
            (2026-11-11): `security = "e2ee"` starts, `e2ee/1`, no plaintext text, no
            `mls/1` on compatible servers. Open: voice, whispers and shouts (SFrame,
            4e), typing and read markers inside MLS, files.
-         - On compatible servers Nuschel clients keep the unencrypted extras
+         - On compatible servers Nuschl clients keep the unencrypted extras
            (history, edits, typing, durable DMs), labelled "not end-to-end
            encrypted" wherever they appear.
          - [x] Registration required on end-to-end servers; ACLs apply in every case.
@@ -859,18 +859,18 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          - Key transparency witnesses, option B: **built** (2026-11-11,
            docs/witness.md, docs/e2ee.md §5.9). Each server keeps an epoch log of
            its akd heads, submits it to the witnesses and serves their ML-DSA-44
-           cosignatures; `nuschel-witness` audits every akd step from epoch 0 and
+           cosignatures; `nuschl-witness` audits every akd step from epoch 0 and
            has a NixOS module (`nixosModules.witness`, nginx and ACME); clients
            take `key_transparency` from the settings (and Home Manager's
-           `programs.nuschel.keyTransparency`); `reg:` and `name:` labels are
+           `programs.nuschl.keyTransparency`); `reg:` and `name:` labels are
            published, checked on first contact and monitored by their owners.
            **Off until the user deploys the auditor** and puts its key and URL in
            `DEFAULT_WITNESSES` (one entry; docs/witness.md "Switching it on").
            Still open: the user's answer on the proposed 24 h bound and on
            blocking only new devices (both settings now); a desktop settings
            page for witnesses; history-proof growth (review G7).
-   - [x] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, which only the
-         crypto worker and `nuscheld` link; no advisory ignores (patched instead).
+   - [x] deny.toml wrapper rules: openmls only in `nuschl-e2ee`, which only the
+         crypto worker and `nuschld` link; no advisory ignores (patched instead).
          SECURITY.md: libcrux SIMD `unsafe` in the exceptions table.
    - [x] OpenMLS + libcrux in the crypto worker (sealed `mls` file); key packages
          published to the server.
@@ -939,18 +939,18 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          clear; every decision stays retrievable in a **moderation log** (who, what,
          when, which signal), filterable by user.
    - [x] Retention policies (per server and channel, see phase 2).
-   - [x] Server admin CLI: `nuscheld admin` (users, channels and retention, bans,
+   - [x] Server admin CLI: `nuschld admin` (users, channels and retention, bans,
          history export and erasure, check-config), offline under an operator
          lock (docs/server.md, "Administration").
    - [ ] Admin CLI follow-ups: ACL and group editing; a NixOS wrapper that runs
-         `nuscheld admin` as the unit's dynamic user with its credentials; the
+         `nuschld admin` as the unit's dynamic user with its credentials; the
          Murmur import under the operator lock; `--json` output for lists.
 
 ### WebRTC and video (follow-ups to the str0m trial)
 
 - [ ] Evaluate enriching legacy Mumble servers (user proposal, 2026-11-11):
       bounded, authenticated WebRTC signaling over `PluginDataTransmission` for
-      direct Nuschel-to-Nuschel calls; an optional companion SFU on nuschl.eu or a
+      direct Nuschl-to-Nuschl calls; an optional companion SFU on nuschl.eu or a
       self-hosted endpoint for group video and browser watch links. Mumble signaling
       does not replace STUN/TURN; relay-only skips peer discovery and candidate
       disclosure. Define independent call authorization: plugin forwarding or a
@@ -965,7 +965,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       two-person calls over plain WebRTC; SFrame with MLS keys keeps layer selection
       possible; codecs in sandboxed workers, hardware codecs where available.
 
-- [ ] Authenticated signaling over the Nuschel session; server capability negotiation.
+- [ ] Authenticated signaling over the Nuschl session; server capability negotiation.
 - [ ] SFU forwarding in the server; Mumble ↔ WebRTC Opus bridge without re-encoding.
 - [ ] TURN client, ICE restart, renegotiation, multiple tracks per kind.
 - [ ] Adaptive jitter buffer / playout for WebRTC audio.
@@ -991,7 +991,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         Developer account); until then the app is only ad-hoc signed and the first
         start needs **Privacy & Security → Open Anyway**.
   - [ ] Windows Authenticode signing; until then SmartScreen asks on the first start
-        (**More info → Run anyway**) and Smart App Control blocks Nuschel.
+        (**More info → Run anyway**) and Smart App Control blocks Nuschl.
 - [ ] Third-party notices and attribution; walk through the release gates in `SECURITY.md`.
 - [ ] Mobile, web and terminal clients (user, 2026-11-11): decided, see
       docs/clients.md. Then:
@@ -1002,7 +1002,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         transparency and trust; administration requests; transfers and
         attachments; split `native.rs`; UniFFI wrappers. The wasm-bindgen wrapper
         exists (`crates/client-wasm`, 2026-11-11).
-  - [x] **TUI** (ratatui), the SDK's second consumer: `apps/tui` (`nuschel-tui`),
+  - [x] **TUI** (ratatui), the SDK's second consumer: `apps/tui` (`nuschl-tui`),
         connections, certificate pins, the channel tree, timeline with paging,
         composer, voice through the media worker, edits, deletions, typing, unread,
         direct conversations, Ctrl+K and Ctrl+F, plain-line mode, no audio over SSH
@@ -1019,7 +1019,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         boundary (no subprocesses on iOS); CallKit, background audio, push extension.
   - [ ] **Web** (Svelte, SDK in WASM in a Web Worker), served from one domain the
         user hosts (others may host it), so one cross-server identity lives in the
-        browser; Signal-like version requirements apply. Reaches Mumble and Nuschel
+        browser; Signal-like version requirements apply. Reaches Mumble and Nuschl
         servers through an untrusted WebSocket/WebTransport tunnel with TLS inside the
         browser, so legacy Mumble servers work too; the relay is no open proxy.
     - [x] The tunnel relay (`apps/web-relay`, 2026-11-11, docs/web.md): WebSocket
@@ -1036,7 +1036,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           IndexedDB storage and identity in a Worker; its version requirement; the
           Svelte build in the Nix site package; a real-browser test; WebTransport.
   - [x] NixOS module for the web host, share links and tunnel relay
-        (`services.nuschel-web`, 2026-11-11: nginx with `enableACME`, optionally a
+        (`services.nuschl-web`, 2026-11-11: nginx with `enableACME`, optionally a
         subdomain; static files, the landing page, app-link files, the relay over a
         Unix socket with `IPAddressDeny`; `vm-web`).
   - [ ] Push for mobile: content-free pushes (Signal-style), UnifiedPush on Android.
@@ -1068,11 +1068,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 - [ ] **Rename Nuschel → nuschl** (user, 2026-11-11; "nuschl is mumbled nuschel"),
       queued as a sync point: start no new agents, merge the running ones, rename on
       a quiet tree, verify, push, then start the next wave. Checklist:
-      - text: `nuschel`, `Nuschel`, `NUSCHEL` (env vars) in text files only (no PNGs,
+      - text: `nuschl`, `Nuschl`, `NUSCHL` (env vars) in text files only (no PNGs,
         fonts or other binaries; never inside `vendor/`); German prose about
         *nuscheln* stays;
-      - paths: `fd nuschel` renames (crates/apps dirs, desktop file, icons, nix files,
-        `nuschel-policy.json`, …);
+      - paths: `fd nuschl` renames (crates/apps dirs, desktop file, icons, nix files,
+        `nuschl-policy.json`, …);
       - regenerate, never edit: `Cargo.lock`, `fuzz/Cargo.lock`, crate2nix output;
       - re-record frozen test vectors deliberately (identity fingerprint context,
         KT labels, MLS binding context, backup and file key derivation strings),
@@ -1084,7 +1084,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         `mkRenamedOptionModule` aliases with a warning;
       - wire: ALPN `nuschel/1` → `nuschl/1`, `nuschel.v1` → `nuschl.v1` (old and new
         builds stop interoperating; acceptable in early development);
-      - repository: the user renames `ambiso/nuschel` on GitHub (redirects), then the
+      - repository: the user renames `ambiso/nuschl` on GitHub (redirects), then the
         jj remote is updated; README, docs and the screenshot regenerate;
       - domain: **nuschl.eu** is the project domain (user, 2026-11-11): passkey
         relying party, app links, share links, the web client's origin and the
@@ -1094,11 +1094,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         needs EU/EEA citizenship or residence);
       - verify: workspace build, clippy, tests, fmt, deny, crate2nix check, every VM
         check, screenshots, the accessibility test, and a migration test from an
-        existing nuschel profile.
+        existing Nuschel profile.
 - [ ] **Passkey-backed identity backup** (user, 2026-11-11): skip writing down a
       recovery key by tying the identity to a passkey. WebAuthn's PRF extension
       (CTAP2 `hmac-secret`) yields a stable secret per passkey and salt; encrypt the
-      identity root under `HKDF(PRF(passkey, "nuschel identity backup v1"))` and keep
+      identity root under `HKDF(PRF(passkey, "nuschl identity backup v1"))` and keep
       the blob on an identity backup service (untrusted storage suffices: the PRF
       output cannot be guessed). A new device signs in with the synced passkey,
       derives the key, decrypts the root and issues a new device-signing key; the
@@ -1146,7 +1146,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       keys, MLS ratchets and system-managed policy local. Device linking can enable
       sync without backup; browser passkey recovery or a written key can restore
       access, and opting out of recovery remains allowed.
-      **Concurrent sessions are a prerequisite:** one Nuschel account must admit
+      **Concurrent sessions are a prerequisite:** one Nuschl account must admit
       distinct authenticated devices without the current Mumble-style ghost kick
       (apps/server/src/auth.rs). Do not clone an installation's crypto state or
       private device keys. Legacy registered accounts remain single-connection;
@@ -1162,13 +1162,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       channels the device joins the group without a history grant). Stock admins admit
       by moving the person in; a stock client's refused Enter can knock for it.
 - [x] Channel share links (user, 2026-11-11; built 2026-11-11, docs/web.md "Share
-      links"): `https://<web host>/join/<token>#<client-only data>`; nuscheld issues,
+      links"): `https://<web host>/join/<token>#<client-only data>`; nuschld issues,
       resolves and revokes tokens (`share/1`, 0x4E90–0x4E97: expiry, access token for
       private channels); stock Murmur links carry the target in the fragment; the
-      landing page (open the app, join in the browser, get Nuschel), app-link files
-      in the web module, `nuschel://` on the Linux desktop, "Copy share link" in a
+      landing page (open the app, join in the browser, get Nuschl), app-link files
+      in the web module, `nuschl://` on the Linux desktop, "Copy share link" in a
       channel's menu; copied links use nuschl.eu unless the server or the user names
       another web host. Open: deploy the web module on nuschl.eu (until then links
-      to it open only in Nuschel); register `nuschel://` on macOS
+      to it open only in Nuschl); register `nuschl://` on macOS
       (GPUI's `on_open_urls`) and Windows; list and revoke links in the desktop; an
       E2EE invite secret in the fragment; a Settings field for `share_web_host`.

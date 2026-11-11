@@ -6,7 +6,7 @@
 //! microphone before any non-linear processing:
 //! high-pass + AEC3 (Sonora) → RNNoise → AGC2 with limiter (Sonora) → gate.
 use nnnoiseless::DenoiseState;
-use nuschel_core::audio::{AudioSettings, TransmitMode};
+use nuschl_core::audio::{AudioSettings, TransmitMode};
 use sonora::{
     AudioProcessing, Config, StreamConfig,
     config::{AdaptiveDigital, EchoCanceller, GainController2, HighPassFilter},
@@ -594,7 +594,7 @@ mod tests {
 
 /// Quality and cost of the Rust DSP ports on synthetic but realistic input.
 /// Measurements, not checks; run in release:
-/// `cargo test --release -p nuschel-media-worker -- --ignored --nocapture evaluation`.
+/// `cargo test --release -p nuschl-media-worker -- --ignored --nocapture evaluation`.
 #[cfg(test)]
 mod evaluation {
     use super::*;

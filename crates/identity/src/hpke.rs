@@ -13,7 +13,7 @@
 //!   opaque ciphertext<16..2^24-1>;          // AEAD output with tag
 //! } SealedToDevice;
 //!
-//! info = uint8(27) || "nuschel/sealed-to-device/v1" || recipient_device
+//! info = uint8(27) || "nuschl/sealed-to-device/v1" || recipient_device
 //!        || recipient_key_epoch || caller_info
 //! ```
 
@@ -27,7 +27,7 @@ use crate::codec::{Reader, Writer, kind, label};
 use crate::crypto::{Secret32, xwing};
 use crate::keys::{DeviceId, DeviceKeys, XWingPublicKey};
 
-const SEALED_TO_DEVICE_LABEL: &str = "nuschel/sealed-to-device/v1";
+const SEALED_TO_DEVICE_LABEL: &str = "nuschl/sealed-to-device/v1";
 
 /// The largest plaintext sealed to a device.
 pub const MAX_SEALED_PLAINTEXT: usize = (1 << 24) - 1 - 16;

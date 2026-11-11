@@ -25,7 +25,7 @@ def main():
     parser.add_argument("--sdk", type=Path, default=ROOT / "web/app/src/sdk")
     parser.add_argument("--node", default="node")
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="nuschel-web-client-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-web-client-") as temporary:
         root = Path(temporary)
         murmur = Murmur(args.murmur, root, free_port())
         murmur.seed()
@@ -35,7 +35,7 @@ def main():
         # Loopback is refused by default; this test allows it, and any port.
         config.write_text(f'listen = "127.0.0.1:{relay_port}"\nports = ["1024-65535"]\n'
                           'allow_networks = ["127.0.0.0/8"]\n')
-        relay = subprocess.Popen([str(args.binaries / "nuschel-web-relay"), "--config", str(config)],
+        relay = subprocess.Popen([str(args.binaries / "nuschl-web-relay"), "--config", str(config)],
                                  stdout=subprocess.DEVNULL, stderr=(root / "relay.log").open("w"))
         try:
             import socket

@@ -4,10 +4,10 @@
 //! runs, with tokio and tungstenite moving the bytes instead of the browser.
 
 use futures_util::{SinkExt, StreamExt};
-use nuschel_client::input::ServerEvent;
-use nuschel_client_wasm::session::{Event, Login, Session};
-use nuschel_protocol::{control as proto, decode_control, encode_control, kind, tunnel};
-use nuschel_web_relay::{Config, Relay, config::Ports};
+use nuschl_client::input::ServerEvent;
+use nuschl_client_wasm::session::{Event, Login, Session};
+use nuschl_protocol::{control as proto, decode_control, encode_control, kind, tunnel};
+use nuschl_web_relay::{Config, Relay, config::Ports};
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::H
 async fn mumble_server() -> (u16, String) {
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".into()]).expect("cert");
     let certificate = certified.cert.der().clone();
-    let fingerprint = nuschel_client_wasm::session::hex(&sha2_digest(certificate.as_ref()));
+    let fingerprint = nuschl_client_wasm::session::hex(&sha2_digest(certificate.as_ref()));
     let key = rustls::pki_types::PrivateKeyDer::Pkcs8(certified.signing_key.serialize_der().into());
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::ring::default_provider(),
@@ -217,8 +217,8 @@ async fn an_unknown_certificate_is_the_users_decision() {
 
 #[tokio::test]
 async fn logs_in_to_murmur() {
-    let Some(binary) = std::env::var_os("NUSCHEL_TEST_MURMUR") else {
-        eprintln!("NUSCHEL_TEST_MURMUR is not set; skipping the Murmur run");
+    let Some(binary) = std::env::var_os("NUSCHL_TEST_MURMUR") else {
+        eprintln!("NUSCHL_TEST_MURMUR is not set; skipping the Murmur run");
         return;
     };
     let root = tempfile::tempdir().expect("temporary directory");

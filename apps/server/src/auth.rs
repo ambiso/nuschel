@@ -12,7 +12,7 @@ use crate::{
     state::{Peer, State, User, Voice, now_unix, random},
 };
 use bytes::Bytes;
-use nuschel_protocol::{
+use nuschl_protocol::{
     control as proto,
     crypt::{CryptSetupParts, CryptState},
     kind,
@@ -425,7 +425,7 @@ fn complete(
     tracing::info!(
         user = %state.log_name(session),
         address = %state.settings.addresses.socket(peer.address),
-        nuschel = peer.negotiation != crate::extension::Negotiation::Stock,
+        nuschl = peer.negotiation != crate::extension::Negotiation::Stock,
         strong = peer.strong,
         "authenticated"
     );
@@ -532,19 +532,19 @@ fn send_initial_state(
              won't be able to talk or hear anyone. Please upgrade to a client with Opus support.",
         );
     }
-    // The channel tree, parents first, then the links. Nuschel connections
+    // The channel tree, parents first, then the links. Nuschl connections
     // also get each channel's conversation id and history properties.
     let order = state.channels.subtree(0);
-    let nuschel = state
+    let nuschl = state
         .users
         .get(&session)
         .is_some_and(|user| user.extension.is_some());
     for &id in &order {
         if let Some(channel) = state.channels.get(id) {
             let message = state.channel_state(channel, session);
-            match nuschel
+            match nuschl
                 .then(|| {
-                    nuschel_protocol::nuschel::channel_state_frame(
+                    nuschl_protocol::nuschl::channel_state_frame(
                         &message,
                         state.channel_info(channel),
                     )
@@ -607,7 +607,7 @@ fn send_initial_state(
     let config = &settings.config;
     // Stock clients are told that text is kept (docs/extension.md §9).
     let mut welcome = state.settings.welcome_text.clone();
-    if !nuschel && config.history.notify_stock_clients {
+    if !nuschl && config.history.notify_stock_clients {
         if !welcome.is_empty() {
             welcome.push_str(if config.allow_html {
                 "<br/><br/>"

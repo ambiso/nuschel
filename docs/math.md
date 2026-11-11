@@ -1,7 +1,7 @@
 # Math in messages
 
 People type LaTeX math into messages, `$e^{i\pi} + 1 = 0$` inline and
-`$$\int_0^1 x\,dx$$` on its own line, and Nuschel shows it typeset. Nothing
+`$$\int_0^1 x\,dx$$` on its own line, and Nuschl shows it typeset. Nothing
 changes on the wire: stock Mumble clients, search, history and copying see
 the text as typed, which is what LaTeX users expect from them.
 
@@ -22,13 +22,13 @@ desktop: caches masks, tints them with the text colour, paints them on the basel
 
 Formulas are tokens of the Markdown grammar that also finds fenced code
 blocks: pulldown-cmark 0.13 (`crates/content/src/math.rs`, `tokens`), with no
-regular expression or other scan of the text before or after it. Nuschel does
+regular expression or other scan of the text before or after it. Nuschl does
 not render the rest of Markdown (a message's text is literal apart from fenced
 code and formulas), but the parser decides what is code, an autolink or HTML,
 and so where math cannot be.
 
 CommonMark ranks code spans, autolinks and raw HTML above every other inline
-construct, and Nuschel adds the bare URLs it links (`bare_urls`, the
+construct, and Nuschl adds the bare URLs it links (`bare_urls`, the
 linkifier's own detection). pulldown-cmark's math (`Options::ENABLE_MATH`) does not quite: a `$`
 before a code span can pair with a `$` inside it (``$a `$x$` b`` gives the
 formula ``a ` ``, and the code span is gone), which the fuzzer found. So the
@@ -48,7 +48,7 @@ bytes differs from the text and is refused.
 | Escapes | `\$` is a dollar sign and never a delimiter. Inside a formula nothing is unescaped: the LaTeX is the bytes typed (`$a \$ b \_ \{$` keeps every backslash). |
 | Code | Code spans (backticks), fenced and indented code blocks bind tighter: nothing in them is math, `$` included. A formula never contains a backtick. |
 | Emphasis | Formulas bind tighter: `*` and `_` inside one are LaTeX. Emphasis around a formula leaves it whole (`*$x$*`). |
-| Links | A bare URL (`https://`, `http://`, `mumble://`, as the linkifier finds it) binds tighter, like code: `https://a.example/?q=$x$` is a link, whole. Formulas in a Markdown link's text count (`[$x$](…)`; Nuschel shows Markdown links as typed); none in its destination, in an autolink `<https://…>` or in HTML. |
+| Links | A bare URL (`https://`, `http://`, `mumble://`, as the linkifier finds it) binds tighter, like code: `https://a.example/?q=$x$` is a link, whole. Formulas in a Markdown link's text count (`[$x$](…)`; Nuschl shows Markdown links as typed); none in its destination, in an autolink `<https://…>` or in HTML. |
 | Raw HTML | Inline tags are tokens and formulas around them count (`<span>$x$</span>`); an HTML block (a line starting `<div>` and so on, up to a blank line) holds none. |
 | Line breaks | An inline formula may continue on the next line of its paragraph; no formula spans a blank line. |
 | Lists and quotes | A formula within a line of an item or quote counts. One whose continuation lines carry `>` or indentation does not: its bytes would not be its LaTeX. |
@@ -68,7 +68,7 @@ Not supported:
 Compared with others (from their documentation and, for pulldown-cmark, its
 code; blank where neither says):
 
-| | Nuschel (= pulldown-cmark) | GitHub | Pandoc `tex_math_dollars` | Element (historic) |
+| | Nuschl (= pulldown-cmark) | GitHub | Pandoc `tex_math_dollars` | Element (historic) |
 | --- | --- | --- | --- | --- |
 | Inline | `$…$`, no space inside the delimiters | `$…$`, also ``$`…`$`` | `$…$`, no space inside, no digit after the closing `$` | regular expressions over the Markdown source |
 | Display | `$$…$$` within a paragraph, ```` ```math ```` | `$$…$$` as a block, ```` ```math ```` | `$$…$$`, spaces allowed inside | |
@@ -191,8 +191,8 @@ evaluator uses to grow its stack on deep recursion) is a few lines of assembly
 per platform; `deny.toml` confines it to `typst-eval`. Advisories in Typst's
 dependency tree concern its citation styles (quick-xml) and YAML loaders, which
 the restricted library removes; they are ignored with reasons. `deny.toml`
-confines `typst`, `typst-layout` and `typst-render` to `nuschel-math`, and that
-to `nuschel-math-worker`.
+confines `typst`, `typst-layout` and `typst-render` to `nuschl-math`, and that
+to `nuschl-math-worker`.
 
 The one font is New Computer Modern Math (`crates/math/fonts`), Typst's default
 math font, embedded unmodified: GUST Font License (LPPL 1.3c), not OFL. Its text
@@ -239,7 +239,7 @@ Measured on x86_64 Linux, release profile (thin LTO, one codegen unit):
 Most of the size is Typst's library: its embedded data (syntax definitions,
 hyphenation patterns, citation styles, PDF fonts) and the code that uses it,
 none of which formulas need; the math font is 1.3 MB. The desktop binary does
-not grow: it links no Typst. (`cargo test --release -p nuschel-math-worker
+not grow: it links no Typst. (`cargo test --release -p nuschl-math-worker
 --test worker -- --ignored --nocapture cold_start` measures start-up and cost.)
 
 The worker starts on the first formula and stops after a minute without one.

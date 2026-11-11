@@ -7,7 +7,7 @@
 
 use std::{ffi::c_void, io, ptr};
 
-use nuschel_ipc::windows_sandbox::{Policy, append_argument};
+use nuschl_ipc::windows_sandbox::{Policy, append_argument};
 use windows_sys::{
     Win32::{
         Foundation::{HANDLE, INVALID_HANDLE_VALUE},
@@ -424,6 +424,32 @@ fn allowed_entries(acl: &[u8]) -> Option<Vec<(u32, u32, &[u8])>> {
     Some(entries)
 }
 
+/// Drop only access-allowed ACEs for a retired worker SID, including inherited
+/// copies. Keep every other ACE byte-for-byte, its order, revision and flags.
+/// The caller removes parent grants first, so inheritance cannot re-add them.
+pub(crate) fn without_allowed_sid(acl: &[u8], sid: &[u8]) -> io::Result<Vec<u8>> {
+    allowed_entries(acl).ok_or_else(|| invalid("malformed ACL"))?;
+    let mut result = acl[..8].to_vec();
+    let mut kept = 0u16;
+    let mut offset = 8;
+    for _ in 0..u16::from_le_bytes([acl[4], acl[5]]) {
+        let size = usize::from(u16::from_le_bytes([acl[offset + 2], acl[offset + 3]]));
+        let ace = &acl[offset..offset + size];
+        if ace[0] != ACCESS_ALLOWED_ACE_TYPE || &ace[8..] != sid {
+            result.extend_from_slice(ace);
+            kept += 1;
+        }
+        offset += size;
+    }
+    if kept == u16::from_le_bytes([acl[4], acl[5]]) {
+        return Ok(acl.to_vec());
+    }
+    let size = u16::try_from(result.len()).map_err(|_| invalid("ACL too large"))?;
+    result[2..4].copy_from_slice(&size.to_le_bytes());
+    result[4..6].copy_from_slice(&kept.to_le_bytes());
+    Ok(result)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -465,20 +491,36 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn retired_worker_grants_are_removed_without_changing_other_principals() {
+        let retired = sid(1, 2);
+        let other = sid(1, 3);
+        let allowed = allowed_ace(0, MODIFY, &retired);
+        let inherited = allowed_ace(u8::try_from(INHERITED_ACE).unwrap(), MODIFY, &retired);
+        let retained = allowed_ace(0, READ_EXECUTE, &other);
+        let mut denied = allowed_ace(0, MODIFY, &retired);
+        denied[0] = 1;
+        let original = acl(&[allowed, inherited, retained.clone(), denied.clone()]);
+        let result = without_allowed_sid(&original, &retired).unwrap();
+        assert_eq!(result, acl(&[retained, denied]));
+        assert_eq!(without_allowed_sid(&result, &retired).unwrap(), result);
+        assert!(without_allowed_sid(&original[..original.len() - 1], &retired).is_err());
+    }
+
+    #[test]
     fn wide_strings_have_one_nul_at_the_end() {
-        let name = WideCString::from_str("nuschel.content").unwrap();
-        assert_eq!(name.units(), wide("nuschel.content"));
-        assert_eq!(name.len_with_nul(), 16);
+        let name = WideCString::from_str("nuschl.content").unwrap();
+        assert_eq!(name.units(), wide("nuschl.content"));
+        assert_eq!(name.len_with_nul(), 15);
         assert!(WideCString::new(vec![u16::from(b'a'), 0, u16::from(b'b')]).is_err());
         assert_eq!(WideCString::from_str("").unwrap().len_with_nul(), 1);
     }
 
     #[test]
     fn paths_join_and_climb() {
-        let folder = wide(r"C:\Users\a\AppData\Local\Packages\nuschel.content\AC");
+        let folder = wide(r"C:\Users\a\AppData\Local\Packages\nuschl.content\AC");
         assert_eq!(
             join(&folder, "Temp"),
-            wide(r"C:\Users\a\AppData\Local\Packages\nuschel.content\AC\Temp")
+            wide(r"C:\Users\a\AppData\Local\Packages\nuschl.content\AC\Temp")
         );
         assert_eq!(join(&wide(r"C:\"), "x"), wide(r"C:\x"));
         assert_eq!(

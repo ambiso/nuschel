@@ -3,7 +3,7 @@
 # the default build and the crate2nix graph, like fuzz/:
 #   CARGO_TARGET_DIR=... cargo test -j 4   (from this directory)
 [package]
-name = "nuschel-mls-spike"
+name = "nuschl-mls-spike"
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.95"

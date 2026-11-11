@@ -1,6 +1,6 @@
 [package]
-name = "nuschel-kt"
-description = "Key transparency for Nuschel servers: a verifiable key directory and its client-side checks"
+name = "nuschl-kt"
+description = "Key transparency for Nuschl servers: a verifiable key directory and its client-side checks"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,10 +11,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-nuschel-identity.workspace = true
+nuschl-identity.workspace = true
 # The directory backend (docs/e2ee.md §5.2). Default features are off: no auditing
 # helpers (`public_auditing`), no WhatsApp configuration; the directory uses akd's
-# current configuration (`experimental`) with a Nuschel domain label.
+# current configuration (`experimental`) with a Nuschl domain label.
 akd = { version = "0.13.0", default-features = false, features = [
   "experimental",
   "parallel_vrf",
@@ -36,7 +36,7 @@ ed25519-dalek = { version = "2.2.0", default-features = false, features = [
 ] }
 sha2 = "0.10.9"
 # Witnessing (docs/e2ee.md §5.9): C2SP signed notes (base64) and ML-DSA-44
-# checkpoint cosignatures, as libcrux in nuschel-identity (already in the tree).
+# checkpoint cosignatures, as libcrux in nuschl-identity (already in the tree).
 base64 = "0.22"
 getrandom = "0.4.3"
 libcrux-ml-dsa = { version = "0.0.11", default-features = false, features = ["std", "mldsa44"] }

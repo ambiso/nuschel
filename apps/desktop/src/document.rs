@@ -9,7 +9,7 @@ use gpui_kit::{
     FontStyle, FontWeight, HighlightStyle, Hsla, RenderImage, SharedString, StrikethroughStyle,
     UnderlineStyle, px, rgb, rgba,
 };
-use nuschel_core::{CodeRun, ContentBlock, MessageDocument, Span, Style, TextRole};
+use nuschl_core::{CodeRun, ContentBlock, MessageDocument, Span, Style, TextRole};
 use std::{borrow::Cow, ops::Range, sync::Arc};
 
 type Styles = Vec<(Range<usize>, HighlightStyle)>;
@@ -285,7 +285,7 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
         let range = range.start - kept.start..range.end - kept.start;
         if let Some(tex) = span.math {
             // Only whole formulas within the limit; their text stays plain.
-            if range.len() == span.end - span.start && tex.len() <= nuschel_ipc::math::MAX_TEX_BYTES
+            if range.len() == span.end - span.start && tex.len() <= nuschl_ipc::math::MAX_TEX_BYTES
             {
                 math.push(InlineMath {
                     range,
@@ -294,7 +294,7 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
             }
             continue;
         }
-        let link = span.link.filter(|url| nuschel_core::allowed_link(url));
+        let link = span.link.filter(|url| nuschl_core::allowed_link(url));
         if span.style.is_plain() && link.is_none() {
             continue;
         }
@@ -331,7 +331,7 @@ fn math_block(
     index: usize,
     last: usize,
 ) -> Block {
-    if tex.len() > nuschel_ipc::math::MAX_TEX_BYTES || tex.trim().is_empty() {
+    if tex.len() > nuschl_ipc::math::MAX_TEX_BYTES || tex.trim().is_empty() {
         return text_block(source, Vec::new(), TextRole::Paragraph, index, last);
     }
     Block::Math {
@@ -475,7 +475,7 @@ mod tests {
     use super::Kind;
     use super::{Block, Document, render_image};
     use base64::Engine as _;
-    use nuschel_core::{CodeRun, ContentBlock, MessageDocument, Span, Style, TextRole};
+    use nuschl_core::{CodeRun, ContentBlock, MessageDocument, Span, Style, TextRole};
 
     #[test]
     fn saved_images_keep_their_bytes_and_type() {
@@ -706,7 +706,7 @@ mod tests {
                 },
                 ContentBlock::Math {
                     source: "$$too long$$".into(),
-                    tex: "x".repeat(nuschel_ipc::math::MAX_TEX_BYTES + 1),
+                    tex: "x".repeat(nuschl_ipc::math::MAX_TEX_BYTES + 1),
                 },
             ],
         });

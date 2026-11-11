@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 // The share-link landing page (docs/web.md, "Share links"):
-//   https://<web host>/join/<token>#s=<host>[:<port>]&c=<channel path>&fp=sha256:<hex>&policy=nuschel&n=<name>
+//   https://<web host>/join/<token>#s=<host>[:<port>]&c=<channel path>&fp=sha256:<hex>&policy=nuschl&n=<name>
 // The token (empty for links whose target is all in the fragment) is resolved by
-// a Nuschel server after connecting. The fragment never leaves the browser.
-// Mirrors nuschel_core::share::ShareLink; nothing here is sent or stored except
+// a Nuschl server after connecting. The fragment never leaves the browser.
+// Mirrors nuschl_core::share::ShareLink; nothing here is sent or stored except
 // one local preference (whether to open the app at once next time).
 "use strict";
 
 (function () {
   const MUMBLE_PORT = 64738;
-  const PREFERENCE = "nuschel.open-app";
+  const PREFERENCE = "nuschl.open-app";
 
   function parseServer(text) {
     let host = text;
@@ -49,8 +49,8 @@
       pin = match[1].toLowerCase();
     }
     const policies = (params.get("policy") || "").split(/[+ ]/).filter(Boolean);
-    if (policies.some(function (policy) { return policy !== "nuschel"; })) return null;
-    const policy = policies.indexOf("nuschel") >= 0;
+    if (policies.some(function (policy) { return policy !== "nuschl"; })) return null;
+    const policy = policies.indexOf("nuschl") >= 0;
     const name = (params.get("n") || "").slice(0, 100);
     return {
       token: path[1] || "",
@@ -71,7 +71,7 @@
       parts.push("c=" + link.channel.map(encodeURIComponent).join("/"));
     }
     if (link.pin) parts.push("fp=sha256:" + link.pin);
-    if (link.policy) parts.push("policy=nuschel");
+    if (link.policy) parts.push("policy=nuschl");
     if (link.name) parts.push("n=" + encodeURIComponent(link.name));
     return parts.join("&");
   }
@@ -111,12 +111,12 @@
       document.getElementById("title").textContent = "Join " + server;
       where.textContent = link.token ? "You were invited to a channel." : "";
     }
-    const app = "nuschel://join/" + link.token + "#" + fragment(link);
+    const app = "nuschl://join/" + link.token + "#" + fragment(link);
     const openApp = document.getElementById("open-app");
     openApp.href = app;
     openApp.addEventListener("click", function () {
       remember(true);
-      status.textContent = "Opening Nuschel… If nothing happens, get the app below or join in the browser.";
+      status.textContent = "Opening Nuschl… If nothing happens, get the app below or join in the browser.";
     });
     const web = "t=" + link.token + "&" + fragment(link);
     document.getElementById("open-web").href = "/#" + web;
@@ -127,7 +127,7 @@
     else document.getElementById("detail-pin-row").hidden = true;
     document.getElementById("detail-policy").hidden = !link.policy;
     if (remembered()) {
-      status.textContent = "Opening Nuschel…";
+      status.textContent = "Opening Nuschl…";
       location.href = app;
     }
   }

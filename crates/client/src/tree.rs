@@ -209,7 +209,7 @@ mod tests {
         model::{TextTarget, User},
         server::ServerState,
     };
-    use nuschel_core::bookmark::ServerBookmark;
+    use nuschl_core::bookmark::ServerBookmark;
 
     fn channel(id: u32, parent: Option<u32>, name: &str, position: i32) -> ConversationState {
         ConversationState {
@@ -423,7 +423,7 @@ mod tests {
     }
 
     /// 2,000 channels eight to a parent and 5,000 people:
-    /// `cargo test --release -p nuschel-client large_tree -- --ignored --nocapture`
+    /// `cargo test --release -p nuschl-client large_tree -- --ignored --nocapture`
     #[test]
     #[ignore = "timing; run in release"]
     fn large_tree_timing() {

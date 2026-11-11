@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The worker's requests (see `nuschel_ipc::crypto`). Every request is checked
+//! The worker's requests (see `nuschl_ipc::crypto`). Every request is checked
 //! against its bounds, handled, and every change is persisted before the answer
 //! goes out.
 use crate::state::{
@@ -7,16 +7,16 @@ use crate::state::{
     State, Verified,
 };
 use crate::store::Store;
-use nuschel_identity::{
+use nuschl_identity::{
     AccountStatement, DeviceCertificate, DeviceKeystore, DeviceRevocation,
     DeviceSigningCertificate, DisplayName, IdentityFingerprint, NewIdentity, RecoveryBlob,
     RecoveryKey, SafetyNumber, SafetyQr, Validity,
 };
-use nuschel_ipc::crypto::{
+use nuschl_ipc::crypto::{
     ContactState, ContactView, CryptoRequest, CryptoResponse, CryptoServer, Due, HeadOutcome,
     IdentityView, KtRecordBytes, MonitorOutcome, OwnKeyAlarm, PublishBundle, RecoveryPolicy,
 };
-use nuschel_kt::{
+use nuschl_kt::{
     AccountBinding, AccountId, Assessment, AuditResponse, ContactTrust, DirectoryValue, ErrorClass,
     GossipOutcome, HeadGossip, HistoryResponse, IdentityRecord, KnownHeads, KtError, Label,
     LogDescriptor, LookupResponse, MonitorCheckpoint, NameBinding, Observation, Relation,
@@ -444,7 +444,7 @@ impl Worker {
         }
         let now_s = self.now() / 1000;
         let name = DisplayName::new(if device_name.trim().is_empty() {
-            "Nuschel"
+            "Nuschl"
         } else {
             device_name.trim()
         })
@@ -564,7 +564,7 @@ impl Worker {
         let entry = self.state.servers.entry(server.key.clone()).or_default();
         if !entry.descriptor.is_empty() && entry.descriptor != descriptor {
             let reason = "The server's key-transparency log changed (another signing or VRF \
-                          key). Nuschel keeps checking against the log it knew. If the operator \
+                          key). Nuschl keeps checking against the log it knew. If the operator \
                           really replaced it, reset this server's security record."
                 .to_owned();
             entry.misbehaviour = Some(reason.clone());
@@ -1301,7 +1301,7 @@ impl Worker {
         let state = match (state, self.witness_status(key)) {
             (
                 state @ (ContactState::Unverified | ContactState::Verified { .. }),
-                nuschel_ipc::crypto::WitnessStatus::Unavailable { reason },
+                nuschl_ipc::crypto::WitnessStatus::Unavailable { reason },
             ) => ContactState::Unavailable {
                 reason,
                 verified: matches!(state, ContactState::Verified { .. }),

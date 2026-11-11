@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The Nuschel extension's history (docs/extension.md §3–§7): messages with
+//! The Nuschl extension's history (docs/extension.md §3–§7): messages with
 //! per-conversation sequence numbers, scoped atomic idempotency, edits that
 //! replace content, tombstones, direct conversations, `since_access`
-//! intervals and read markers. `nuscheld` assigns sequence numbers and checks
+//! intervals and read markers. `nuschld` assigns sequence numbers and checks
 //! authorisation; this stores, and checks what only the rows can tell
 //! (authorship, edit counts, earlier use of an idempotency key).
 use super::{MAX_NAME, ServerStore, too_long};
 use crate::BeginWrite as _;
 use crate::{Error, Pool};
-use nuschel_ipc::server::{
+use nuschl_ipc::server::{
     HISTORY_LOAD_PAGE, MAX_RETENTION_DAYS, MessageKind, PageQuery, Retention, SeqRows,
     ServerStorageResponse as Response, StoredAccess, StoredDirect, StoredMessage, StoredPage,
     StoredRetention,
 };
 
 /// The rows retention and the operator's erase may tombstone, as an SQL
-/// predicate: live messages. It must say what `nuschel_ipc::server::expirable`
+/// predicate: live messages. It must say what `nuschl_ipc::server::expirable`
 /// says; that is **the hook for records the server must keep** (MLS commits
 /// within their catch-up window, docs/e2ee.md §6.3, are excluded in both).
 macro_rules! expirable {
@@ -194,7 +194,7 @@ impl SeqRows for Rows<'_> {
 impl ServerStore {
     pub async fn history_page(&self, query: &PageQuery) -> Result<StoredPage, Error> {
         too_long(&query.conversation, MAX_ID)?;
-        nuschel_ipc::server::page(&mut Rows(self), query).await
+        nuschl_ipc::server::page(&mut Rows(self), query).await
     }
 
     /// Store a message. A key used before by the same account in the same
@@ -386,7 +386,7 @@ impl ServerStore {
     ) -> Result<(), Error> {
         too_long(conversation, MAX_ID)?;
         too_long(account, MAX_ID)?;
-        if intervals.len() > nuschel_ipc::server::MAX_RANGES {
+        if intervals.len() > nuschl_ipc::server::MAX_RANGES {
             return Err(Error::InvalidMessage);
         }
         with_pool!(&self.pool, |pool| {
@@ -698,7 +698,7 @@ impl ServerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_ipc::server::Anchor;
+    use nuschl_ipc::server::Anchor;
 
     fn row(seq: u64, content: &str, key: Option<&str>) -> StoredMessage {
         StoredMessage {

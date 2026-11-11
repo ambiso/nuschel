@@ -1,29 +1,29 @@
 # Desktop integration generated from the application icon
-# (apps/desktop/assets/nuschel.svg): the freedesktop entry and hicolor icons
-# for Linux, Nuschel.icns for macOS and the Windows icon.
+# (apps/desktop/assets/nuschl.svg): the freedesktop entry and hicolor icons
+# for Linux, Nuschl.icns for macOS and the Windows icon.
 #
-# apps/desktop/build.rs compiles the Windows icon into nuschel.exe, so it is
-# committed as apps/desktop/assets/nuschel.ico. After changing the SVG:
+# apps/desktop/build.rs compiles the Windows icon into nuschl.exe, so it is
+# committed as apps/desktop/assets/nuschl.ico. After changing the SVG:
 #   nix build --cores 2 --max-jobs 1 --impure --expr \
 #     '(import ./nix/desktop-files.nix { pkgs = (builtins.getFlake (toString ./.)).inputs.nixpkgs.legacyPackages.${builtins.currentSystem}; }).windowsIcon'
-#   install -m644 result apps/desktop/assets/nuschel.ico
+#   install -m644 result apps/desktop/assets/nuschl.ico
 { pkgs }:
 let
-  appId = "org.nuschel.Nuschel";
-  svg = ../apps/desktop/assets/nuschel.svg;
+  appId = "org.nuschl.Nuschl";
+  svg = ../apps/desktop/assets/nuschl.svg;
   # The window's Wayland app id and X11 class are the same id, so shells
   # match the window to this entry and show its icon.
   desktopEntry = pkgs.writeText "${appId}.desktop" ''
     [Desktop Entry]
     Type=Application
-    Name=Nuschel
+    Name=Nuschl
     GenericName=Voice Chat
     Comment=Talk with people on Mumble servers
-    Exec=nuschel %u
+    Exec=nuschl %u
     Icon=${appId}
     Terminal=false
     Categories=Network;Chat;AudioVideo;
-    MimeType=x-scheme-handler/mumble;x-scheme-handler/nuschel;
+    MimeType=x-scheme-handler/mumble;x-scheme-handler/nuschl;
     Keywords=Mumble;voice;VoIP;
     StartupWMClass=${appId}
     X-GNOME-UsesNotifications=true
@@ -32,7 +32,7 @@ in
 {
   # share/applications and share/icons/hicolor, for the package's share/.
   linux =
-    pkgs.runCommand "nuschel-desktop-files"
+    pkgs.runCommand "nuschl-desktop-files"
       {
         nativeBuildInputs = [
           pkgs.resvg
@@ -53,7 +53,7 @@ in
   # Apple's icon grid leaves a margin: the tile fills 824 of 1024 pixels.
   # Widening the view box by 152 units on each side does that at every size.
   macIcon =
-    pkgs.runCommand "Nuschel.icns"
+    pkgs.runCommand "Nuschl.icns"
       {
         nativeBuildInputs = [
           pkgs.resvg
@@ -72,7 +72,7 @@ in
 
   # Uncompressed images up to 64 pixels and PNG at 256, as Windows expects.
   windowsIcon =
-    pkgs.runCommand "nuschel.ico"
+    pkgs.runCommand "nuschl.ico"
       {
         nativeBuildInputs = [
           pkgs.resvg

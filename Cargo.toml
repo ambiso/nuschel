@@ -5,7 +5,7 @@ exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendo
 default-members = ["apps/desktop", "apps/server"]
 
 [workspace.metadata.crane]
-name = "nuschel"
+name = "nuschl"
 
 [workspace.package]
 version = "0.1.0"
@@ -15,22 +15,22 @@ license = "EUPL-1.2"
 publish = false
 
 [workspace.dependencies]
-nuschel-core = { path = "crates/core", version = "0.1.0" }
-nuschel-client = { path = "crates/client", version = "0.1.0" }
-nuschel-content = { path = "crates/content", version = "0.1.0" }
-nuschel-files = { path = "crates/files", version = "0.1.0" }
-nuschel-ipc = { path = "crates/ipc", version = "0.1.0" }
-nuschel-sandbox-windows = { path = "crates/sandbox-windows", version = "0.1.0" }
-nuschel-legacy-html = { path = "crates/legacy-html", version = "0.1.0" }
-nuschel-math = { path = "crates/math", version = "0.1.0" }
-nuschel-protocol = { path = "crates/protocol", version = "0.1.0" }
-nuschel-storage = { path = "crates/storage", version = "0.1.0" }
-nuschel-update = { path = "crates/update", version = "0.1.0" }
-nuschel-identity = { path = "crates/identity", version = "0.1.0" }
-nuschel-kt = { path = "crates/kt", version = "0.1.0" }
-nuschel-e2ee = { path = "crates/e2ee", version = "0.1.0" }
+nuschl-core = { path = "crates/core", version = "0.1.0" }
+nuschl-client = { path = "crates/client", version = "0.1.0" }
+nuschl-content = { path = "crates/content", version = "0.1.0" }
+nuschl-files = { path = "crates/files", version = "0.1.0" }
+nuschl-ipc = { path = "crates/ipc", version = "0.1.0" }
+nuschl-sandbox-windows = { path = "crates/sandbox-windows", version = "0.1.0" }
+nuschl-legacy-html = { path = "crates/legacy-html", version = "0.1.0" }
+nuschl-math = { path = "crates/math", version = "0.1.0" }
+nuschl-protocol = { path = "crates/protocol", version = "0.1.0" }
+nuschl-storage = { path = "crates/storage", version = "0.1.0" }
+nuschl-update = { path = "crates/update", version = "0.1.0" }
+nuschl-identity = { path = "crates/identity", version = "0.1.0" }
+nuschl-kt = { path = "crates/kt", version = "0.1.0" }
+nuschl-e2ee = { path = "crates/e2ee", version = "0.1.0" }
 
-nuschel-session = { path = "crates/session", version = "0.1.0" }
+nuschl-session = { path = "crates/session", version = "0.1.0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -39,7 +39,7 @@ unsafe_code = "forbid"
 undocumented_unsafe_blocks = "deny"
 
 # Dependencies keep line tables only (file:line in backtraces and stepping, no variable
-# or type information): a debug build of nuschel-content was 349 MB instead of 457 MB
+# or type information): a debug build of nuschl-content was 349 MB instead of 457 MB
 # (2026-11-11); our own crates keep full debug info. To debug inside one dependency, rebuild just that crate with
 # `cargo build --config 'profile.dev.package."<crate>".debug=true'`.
 [profile.dev.package."*"]
@@ -50,7 +50,7 @@ debug = "line-tables-only"
 opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
-# Key transparency (nuschel-kt): the VRF and tree hashing are ~100x slower unoptimised.
+# Key transparency (nuschl-kt): the VRF and tree hashing are ~100x slower unoptimised.
 [profile.dev.package.curve25519-dalek]
 opt-level = 3
 [profile.dev.package.akd]

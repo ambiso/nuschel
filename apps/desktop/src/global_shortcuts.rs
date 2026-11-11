@@ -2,8 +2,8 @@
 //! System-wide shortcuts. On Linux the XDG GlobalShortcuts portal binds them
 //! in one session (the desktop may ask the user once, and may pick other
 //! triggers); Windows and macOS use the platform hotkey APIs. Only press and
-//! release notifications cross into Nuschel.
-use nuschel_session::config::ShortcutAction;
+//! release notifications cross into Nuschl.
+use nuschl_session::config::ShortcutAction;
 use std::collections::BTreeMap;
 use tokio::runtime::Handle;
 #[cfg(target_os = "linux")]
@@ -240,7 +240,7 @@ async fn run(bindings: Bindings, sender: mpsc::Sender<GlobalEvent>) -> Result<()
     let connection = zbus::Connection::session()
         .await
         .map_err(|error| format!("no session bus ({error})"))?;
-    if let Ok(app_id) = ashpd::AppID::try_from("org.nuschel.Nuschel") {
+    if let Ok(app_id) = ashpd::AppID::try_from("org.nuschl.Nuschl") {
         // Refused where the portal already knows the app (Flatpak, or a
         // desktop launcher's systemd scope); an older portal lacks it.
         if let Err(error) =
@@ -321,7 +321,7 @@ async fn run(bindings: Bindings, sender: mpsc::Sender<GlobalEvent>) -> Result<()
     }
 }
 
-/// Register each binding the platform accepts; the rest work while Nuschel is focused.
+/// Register each binding the platform accepts; the rest work while Nuschl is focused.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 #[allow(clippy::type_complexity)]
 fn register(

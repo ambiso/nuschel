@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-storage-worker"
+name = "nuschl-storage-worker"
 description = "Isolated SQLite history process"
 version.workspace = true
 edition.workspace = true
@@ -8,8 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-nuschel-storage.workspace = true
-nuschel-ipc.workspace = true
+nuschl-storage.workspace = true
+nuschl-ipc.workspace = true
 clap = { version = "4.6.7", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["macros", "rt", "io-std", "io-util"] }
 
@@ -21,9 +21,9 @@ landlock = "0.4.4"
 tempfile = "3.27.0"
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschel_ipc::windows_sandbox).
+# AppContainer (nuschl_ipc::windows_sandbox).
 [target.'cfg(windows)'.dependencies]
-nuschel-sandbox-windows.workspace = true
+nuschl-sandbox-windows.workspace = true
 
 [lints]
 workspace = true

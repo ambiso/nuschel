@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Two local UDP endpoints; synthetic encoded media only, no capture or public services.
-use nuschel_rtc::{Error, Event, Kind, MAX_DATAGRAM_BYTES, MAX_OPUS_BYTES, Output, Peer};
+use nuschl_rtc::{Error, Event, Kind, MAX_DATAGRAM_BYTES, MAX_OPUS_BYTES, Output, Peer};
 use std::{
     io,
     net::UdpSocket,
@@ -130,11 +130,11 @@ fn main() -> Result<()> {
         }
         Some("--help" | "-h") => {
             println!(
-                "Local UDP audio/video transport probe. No microphone or public servers.\nUsage: nuschel-rtc-probe [--opus-hex HEX]"
+                "Local UDP audio/video transport probe. No microphone or public servers.\nUsage: nuschl-rtc-probe [--opus-hex HEX]"
             );
             return Ok(());
         }
-        _ => return Err("usage: nuschel-rtc-probe [--opus-hex HEX]".into()),
+        _ => return Err("usage: nuschl-rtc-probe [--opus-hex HEX]".into()),
     };
     if args.next().is_some() {
         return Err("unexpected arguments".into());

@@ -1,4 +1,4 @@
-# Nuschel is EUPL-1.2. Dependency licenses are reviewed independently;
+# Nuschl is EUPL-1.2. Dependency licenses are reviewed independently;
 # cargo-deny checks SPDX expressions, not legal compatibility or attribution.
 [graph]
 all-features = true
@@ -13,13 +13,13 @@ ignore = [
   { id = "RUSTSEC-2025-0141", reason = "Syntect 5.3 loads its trusted bundled syntax/theme dumps with bincode 1.3.3, inside the content worker" },
   { id = "RUSTSEC-2024-0384", reason = "gpui-base 0.9 uses instant; remove when upstream migrates to web-time" },
   { id = "RUSTSEC-2024-0436", reason = "Transitive compile-time paste macros; current GPUI/DSP dependencies have not migrated" },
-  { id = "RUSTSEC-2026-0206", reason = "GPUI snapshot uses rustybuzz via usvg; no remote fonts or SVG are accepted by Nuschel's message renderer" },
+  { id = "RUSTSEC-2026-0206", reason = "GPUI snapshot uses rustybuzz via usvg; no remote fonts or SVG are accepted by Nuschl's message renderer" },
   { id = "RUSTSEC-2026-0192", reason = "GPUI's text/SVG stack still uses ttf-parser; desktop native-rendering exception" },
   { id = "RUSTSEC-2026-0371", reason = "GPUI's accessibility/portal stack depends on zbus 5; upstream migration to zbus 6 is required" },
   { id = "RUSTSEC-2026-0370", reason = "GPUI's accessibility/portal stack depends on zbus 5 and its zvariant wire types" },
   { id = "RUSTSEC-2026-0372", reason = "The zvariant derive macros migrate together with the GPUI/accessibility zbus 6 upgrade" },
-  { id = "RUSTSEC-2026-0459", reason = "Bundled SQLite (via sqlx 0.9, which caps libsqlite3-sys below the fixed 0.39) opens Nuschel's own databases in the sandboxed storage worker, and an operator-supplied Murmur database read-only and immutable for nuscheld --import-murmur, which refuses WAL-mode files and never opens a -wal; the flaw needs an attacker-written database and WAL. Remove with an sqlx release that allows 0.39" },
-  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is reachable only through hax-lib-macros 0.3.7 under cfg(hax), libcrux's formal-verification builds (libcrux-intrinsics -> core-models -> hax-lib); it is never compiled into Nuschel (cargo tree shows it for no real target). nuschel-identity uses the libcrux crates" },
+  { id = "RUSTSEC-2026-0459", reason = "Bundled SQLite (via sqlx 0.9, which caps libsqlite3-sys below the fixed 0.39) opens Nuschl's own databases in the sandboxed storage worker, and an operator-supplied Murmur database read-only and immutable for nuschld --import-murmur, which refuses WAL-mode files and never opens a -wal; the flaw needs an attacker-written database and WAL. Remove with an sqlx release that allows 0.39" },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is reachable only through hax-lib-macros 0.3.7 under cfg(hax), libcrux's formal-verification builds (libcrux-intrinsics -> core-models -> hax-lib); it is never compiled into Nuschl (cargo tree shows it for no real target). nuschl-identity uses the libcrux crates" },
   { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38 in Typst's citation styles (citationberg, via hayagriva), math worker only: bibliography and cite are removed from its Typst library and its formulas cannot contain code; remove with a Typst on quick-xml 0.41" },
   { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.38 namespaces in Typst's citation styles, math worker only, unreachable as RUSTSEC-2026-0194" },
   { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml (serde_yaml) behind Typst's yaml() and bibliographies, removed from the math worker's Typst library; its formulas cannot contain code" },
@@ -59,64 +59,64 @@ multiple-versions = "warn"
 wildcards = "deny"
 deny = [
   { name = "str0m", wrappers = [
-    "nuschel-rtc",
+    "nuschl-rtc",
   ], reason = "Keep the WebRTC implementation behind the encoded-media transport boundary" },
   { name = "openssl", reason = "Use rustls for transport security" },
   { name = "rsa", wrappers = [
-    "nuschel-session",
+    "nuschl-session",
   ], reason = "RSA key generation only; private-key operations use ring (RUSTSEC-2023-0071)" },
   { name = "openssl-sys", reason = "Avoid adding an OpenSSL FFI dependency" },
   { name = "onig", reason = "Use Syntect's Rust fancy-regex backend in the content worker" },
   { name = "onig_sys", reason = "Keep native regex parsing out of the content pipeline" },
   { name = "gpui-kit", wrappers = [
-    "nuschel",
+    "nuschl",
   ], reason = "GPUI is an explicit desktop rendering exception" },
   { name = "ratatui", wrappers = [
-    "nuschel-tui",
+    "nuschl-tui",
   ], reason = "Terminal drawing belongs to the terminal client; the SDK stays UI-independent" },
   { name = "crossterm", wrappers = [
     "ratatui-crossterm",
   ], reason = "The terminal client reaches the terminal only through ratatui" },
   { name = "cpal", wrappers = [
-    "nuschel-media-worker",
+    "nuschl-media-worker",
   ], reason = "Native audio APIs belong in the media worker" },
   { name = "opus-pure", wrappers = [
-    "nuschel-media-worker",
+    "nuschl-media-worker",
   ], reason = "Keep codec SIMD and packet processing in the media worker" },
   { name = "sonora", wrappers = [
-    "nuschel-media-worker",
+    "nuschl-media-worker",
   ], reason = "DSP runs outside the UI and network session" },
   { name = "nnnoiseless", wrappers = [
-    "nuschel-media-worker",
+    "nuschl-media-worker",
   ], reason = "Keep speech processing on the media execution path" },
   { name = "sqlx", wrappers = [
-    "nuschel-storage",
+    "nuschl-storage",
   ], reason = "SQLx drivers, SQLite FFI, and database credentials are confined to storage" },
-  { name = "nuschel-storage", wrappers = [
-    "nuschel-storage-worker",
+  { name = "nuschl-storage", wrappers = [
+    "nuschl-storage-worker",
   ], reason = "Do not link SQLite into the UI, client, or server" },
   { name = "syntect", wrappers = [
-    "nuschel-content",
+    "nuschl-content",
     "typst-library",
     "two-face",
   ], reason = "Untrusted grammars and message parsing belong in the content worker (and Typst's raw-text highlighting, unused, in the math worker)" },
-  { name = "nuschel-content", wrappers = [
-    "nuschel-content-worker",
+  { name = "nuschl-content", wrappers = [
+    "nuschl-content-worker",
   ], reason = "The UI consumes typed text spans over IPC" },
   { name = "typst", wrappers = [
-    "nuschel-math",
+    "nuschl-math",
   ], reason = "Typst (a scripting language with file, package and plugin access) runs only in the sandboxed math worker, behind its LaTeX converter" },
   { name = "typst-layout", wrappers = [
-    "nuschel-math",
+    "nuschl-math",
     "typst",
     "typst-render",
     "typst-svg",
   ], reason = "Typst runs only in the math worker" },
   { name = "typst-render", wrappers = [
-    "nuschel-math",
+    "nuschl-math",
   ], reason = "Typst runs only in the math worker" },
-  { name = "nuschel-math", wrappers = [
-    "nuschel-math-worker",
+  { name = "nuschl-math", wrappers = [
+    "nuschl-math-worker",
   ], reason = "The UI receives coverage masks over IPC, never Typst" },
   { name = "stacker", wrappers = [
     "typst-eval",
@@ -125,55 +125,55 @@ deny = [
     "stacker",
   ], reason = "Assembly stack switching only through stacker, for Typst's evaluator" },
   { name = "magic-wormhole", wrappers = [
-    "nuschel-transfer-worker",
+    "nuschl-transfer-worker",
   ], reason = "Peer-to-peer file transfer talks to untrusted peers from the sandboxed transfer worker" },
   { name = "akd", wrappers = [
-    "nuschel-kt",
-  ], reason = "The key-transparency backend stays behind nuschel-kt's interface, so it can be replaced (docs/e2ee.md §5.2)" },
+    "nuschl-kt",
+  ], reason = "The key-transparency backend stays behind nuschl-kt's interface, so it can be replaced (docs/e2ee.md §5.2)" },
   { name = "akd_core", wrappers = [
     "akd",
-    "nuschel-kt",
-  ], reason = "akd's verifiers are used only through nuschel-kt" },
-  { name = "nuschel-kt", wrappers = [
-    "nuscheld",
-    "nuschel-crypto-worker",
-    "nuschel-witness",
+    "nuschl-kt",
+  ], reason = "akd's verifiers are used only through nuschl-kt" },
+  { name = "nuschl-kt", wrappers = [
+    "nuschld",
+    "nuschl-crypto-worker",
+    "nuschl-witness",
   ], reason = "Key-transparency decisions belong to the crypto worker (and the server's log); akd_core makes ed25519-dalek accept malleable signatures in any binary that links it (docs/e2ee.md §5.2)" },
-  { name = "nuschel-sandbox-windows", wrappers = [
-    "nuschel-content-worker",
-    "nuschel-crypto-worker",
-    "nuschel-math-worker",
-    "nuschel-media-worker",
-    "nuschel-storage-worker",
-    "nuschel-transfer-worker",
+  { name = "nuschl-sandbox-windows", wrappers = [
+    "nuschl-content-worker",
+    "nuschl-crypto-worker",
+    "nuschl-math-worker",
+    "nuschl-media-worker",
+    "nuschl-storage-worker",
+    "nuschl-transfer-worker",
   ], reason = "The one first-party crate with unsafe code (Win32 AppContainer launch) runs only as the workers' own launch stage" },
-  { name = "nuschel-identity", wrappers = [
-    "nuschel-kt",
-    "nuschel-e2ee",
-    "nuscheld",
-    "nuschel-crypto-worker",
+  { name = "nuschl-identity", wrappers = [
+    "nuschl-kt",
+    "nuschl-e2ee",
+    "nuschld",
+    "nuschl-crypto-worker",
   ], reason = "Identity secrets live in the crypto worker; the server only verifies what clients publish" },
   { name = "openmls", wrappers = [
-    "nuschel-e2ee",
-  ], reason = "The OpenMLS API is used only inside nuschel-e2ee, so a release bump touches one crate (docs/e2ee.md §8.1)" },
+    "nuschl-e2ee",
+  ], reason = "The OpenMLS API is used only inside nuschl-e2ee, so a release bump touches one crate (docs/e2ee.md §8.1)" },
   { name = "openmls_libcrux_crypto", wrappers = [
     "openmls",
-    "nuschel-e2ee",
-  ], reason = "OpenMLS's crypto provider, used only through nuschel-e2ee" },
+    "nuschl-e2ee",
+  ], reason = "OpenMLS's crypto provider, used only through nuschl-e2ee" },
   { name = "openmls_memory_storage", wrappers = [
     "openmls",
     "openmls_libcrux_crypto",
-    "nuschel-e2ee",
-  ], reason = "OpenMLS's storage, used only through nuschel-e2ee" },
+    "nuschl-e2ee",
+  ], reason = "OpenMLS's storage, used only through nuschl-e2ee" },
   { name = "openmls_traits", wrappers = [
     "openmls",
     "openmls_libcrux_crypto",
     "openmls_memory_storage",
-    "nuschel-e2ee",
-  ], reason = "OpenMLS's traits, used only through nuschel-e2ee" },
-  { name = "nuschel-e2ee", wrappers = [
-    "nuscheld",
-    "nuschel-crypto-worker",
+    "nuschl-e2ee",
+  ], reason = "OpenMLS's traits, used only through nuschl-e2ee" },
+  { name = "nuschl-e2ee", wrappers = [
+    "nuschld",
+    "nuschl-crypto-worker",
   ], reason = "MLS state belongs to the crypto worker, and the delivery service's public view to the server (docs/e2ee.md §8.1)" },
 ]
 

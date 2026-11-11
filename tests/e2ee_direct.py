@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end-encrypted direct conversations against a running nuscheld
+"""End-to-end-encrypted direct conversations against a running nuschld
 (docs/e2ee.md §6, `mls/1`): two clients with their own crypto workers register,
 publish their identities, upload key packages, open an encrypted direct
 conversation, exchange messages both ways, and read what arrived while one of
@@ -8,7 +8,7 @@ them was offline. With --phase second, the same users (same directories under
 
     python3 tests/e2ee_direct.py <binaries> --host 127.0.0.1 --port PORT [--state DIR]
 
-The binaries directory holds nuschel-cli and nuschel-crypto-worker (which runs in
+The binaries directory holds nuschl-cli and nuschl-crypto-worker (which runs in
 its bubblewrap sandbox where bwrap and prlimit are on PATH).
 """
 import argparse
@@ -150,7 +150,7 @@ def main():
     parser.add_argument("--state", type=Path, help="keep users here between phases")
     parser.add_argument("--phase", choices=("first", "second"), default="first")
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="nuschel-e2ee-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-e2ee-") as temporary:
         root = args.state or Path(temporary)
         root.mkdir(parents=True, exist_ok=True)
         pin = certificate_pin(args.binaries, args.host, args.port, root / "probe")

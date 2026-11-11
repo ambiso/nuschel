@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
-// The Nuschel protocol extension (docs/extension.md). Messages use Mumble's
-// control framing with types 0x4E00-0x4EFF (see `nuschel::kind`); the hello
+// The Nuschl protocol extension (docs/extension.md). Messages use Mumble's
+// control framing with types 0x4E00-0x4EFF (see `nuschl::kind`); the hello
 // travels in field 7200 of Mumble's `Version`, channel properties in field
 // 7200 of `ChannelState`. Nothing here is sent to a peer that did not
-// negotiate it (ALPN `nuschel/1` and both hellos).
+// negotiate it (ALPN `nuschl/1` and both hellos).
 syntax = "proto3";
 
-package nuschel.v1;
+package nuschl.v1;
 
 // Field 7200 of `MumbleProto.Version`, from both sides, once, before
 // `Authenticate`.
@@ -19,7 +19,7 @@ message Hello {
   // Only from servers.
   Policy policy = 3;
   // Only from servers that offer `kt/1`: the descriptor of the server's
-  // key-transparency log (nuschel-kt `LogDescriptor`, at most 512 bytes).
+  // key-transparency log (nuschl-kt `LogDescriptor`, at most 512 bytes).
   // Clients pin it like the server (docs/e2ee.md §5.1).
   bytes kt_log = 4;
   // Only from clients: the client's own version, semver ("0.3.0", at most 64
@@ -49,7 +49,7 @@ message Policy {
     GUESTS_FULL = 1;
   }
   Mode mode = 1;
-  // Nuschel client versions in the 1.5 version format (`major << 48 |
+  // Nuschl client versions in the 1.5 version format (`major << 48 |
   // minor << 32 | patch << 16`), 0 for none; self-reported and advisory, never
   // a security control (docs/extension.md, "Minimum versions"). Below
   // `recommended_client` the client suggests an update; below
@@ -78,7 +78,7 @@ message VersionExtension {
   Hello hello = 7200;
 }
 
-// Field 7200 of `MumbleProto.ChannelState`, to Nuschel connections only.
+// Field 7200 of `MumbleProto.ChannelState`, to Nuschl connections only.
 message ChannelInfo {
   // 16 random bytes, never reused.
   bytes conversation = 1;
@@ -106,7 +106,7 @@ message Retention {
 }
 
 message ChannelStateExtension {
-  ChannelInfo nuschel = 7200;
+  ChannelInfo nuschl = 7200;
 }
 
 enum Visibility {
@@ -377,15 +377,15 @@ message Done {
 }
 
 // ---- Key transparency (`kt/1`, docs/e2ee.md §5) ----
-// Proofs, heads and certificates travel in nuschel-kt's and
-// nuschel-identity's own strict encodings, as opaque bytes.
+// Proofs, heads and certificates travel in nuschl-kt's and
+// nuschl-identity's own strict encodings, as opaque bytes.
 
 // 0x4E14 -> KtStatusReply or Error.
 message KtStatus {
   uint64 request_id = 1;
   // With `kt-witness/1`: the server as the client reaches it (`host:port`, lower
   // case: the session's sticky key), so that attached checkpoints name the
-  // origin `<host>:<port>/nuschel-kt/v1` the client checks (docs/e2ee.md §5.9).
+  // origin `<host>:<port>/nuschl-kt/v1` the client checks (docs/e2ee.md §5.9).
   // Also in `KtLookup` and `KtHistory`.
   string origin = 2;
 }
@@ -395,9 +395,9 @@ message KtStatusReply {
   uint64 request_id = 1;
   // The requester's own account id (16 bytes); empty when unregistered.
   bytes account = 2;
-  // The newest signed head (nuschel-kt `SignedHead`).
+  // The newest signed head (nuschl-kt `SignedHead`).
   bytes head = 3;
-  // With `kt-witness/1`: nuschel-kt `WitnessedHead` for `head`: the newest
+  // With `kt-witness/1`: nuschl-kt `WitnessedHead` for `head`: the newest
   // cosigned checkpoint of the server's epoch log under the requested origin
   // and the head's inclusion proof (at most 72 KiB). Empty when the server has
   // no checkpoint under that origin. Also in `KtLookupReply` and
@@ -412,7 +412,7 @@ message KtStatusReply {
 // The certificates behind an account's binding: what the log's roster
 // commitment and statement hash refer to.
 message KtRecord {
-  // nuschel-identity `DeviceSigningCertificate`.
+  // nuschl-identity `DeviceSigningCertificate`.
   bytes device_signing_certificate = 1;
   // `DeviceCertificate`s, at most 16.
   repeated bytes devices = 2;
@@ -427,7 +427,7 @@ message KtRecord {
 // verify under `root`, and the statement must name this account and log.
 message KtPublish {
   uint64 request_id = 1;
-  // nuschel-identity `HybridPublicKey`: the identity root.
+  // nuschl-identity `HybridPublicKey`: the identity root.
   bytes root = 2;
   KtRecord record = 3;
 }
@@ -435,7 +435,7 @@ message KtPublish {
 // 0x4E17
 message KtPublished {
   uint64 request_id = 1;
-  // The `acct:` value (nuschel-kt `DirectoryValue`) the server publishes.
+  // The `acct:` value (nuschl-kt `DirectoryValue`) the server publishes.
   bytes value = 2;
   // True if it is already the current value; otherwise it is published in
   // the next epoch (within about ten seconds).
@@ -458,7 +458,7 @@ message KtLookup {
 message KtLookupReply {
   uint64 request_id = 1;
   bytes account = 2;
-  // nuschel-kt `LookupResponse` for the account's `acct:` label.
+  // nuschl-kt `LookupResponse` for the account's `acct:` label.
   bytes response = 3;
   KtRecord record = 4;
   bytes witnessed = 5;
@@ -492,7 +492,7 @@ enum KtLabel {
 message KtHistoryReply {
   uint64 request_id = 1;
   bytes account = 2;
-  // nuschel-kt `HistoryResponse`.
+  // nuschl-kt `HistoryResponse`.
   bytes response = 3;
   bytes witnessed = 4;
   KtLabel label = 5;
@@ -509,7 +509,7 @@ message KtAudit {
 // 0x4E1D
 message KtAuditReply {
   uint64 request_id = 1;
-  // nuschel-kt `AuditResponse`.
+  // nuschl-kt `AuditResponse`.
   bytes response = 2;
 }
 

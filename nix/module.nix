@@ -6,17 +6,17 @@
   ...
 }:
 let
-  cfg = config.services.nuschel;
+  cfg = config.services.nuschl;
   toml = pkgs.formats.toml { };
-  stateDirectory = "/var/lib/nuschel";
+  stateDirectory = "/var/lib/nuschl";
   localPostgres = cfg.database.type == "postgresql" && cfg.database.createLocally;
   databaseUrlFile =
     if localPostgres then
-      pkgs.writeText "nuschel-local-postgresql-url" "postgresql:///nuschel?host=/run/postgresql&user=nuschel\n"
+      pkgs.writeText "nuschl-local-postgresql-url" "postgresql:///nuschl?host=/run/postgresql&user=nuschl\n"
     else
       cfg.database.urlFile;
   # Secrets never go into this file: it is in the world-readable Nix store.
-  configFile = toml.generate "nuscheld.toml" (
+  configFile = toml.generate "nuschld.toml" (
     lib.recursiveUpdate {
       inherit (cfg) security port;
       bind = cfg.listenAddresses;
@@ -122,18 +122,18 @@ let
   # marker keeps later starts from trying again.
   murmurCopy = "${stateDirectory}/murmur-import.sqlite";
   murmurMarker = "${stateDirectory}/murmur-imported";
-  copyMurmur = pkgs.writeShellScript "nuschel-copy-murmur" ''
+  copyMurmur = pkgs.writeShellScript "nuschl-copy-murmur" ''
     set -eu
     if [ ! -e ${murmurMarker} ] && [ ! -e ${murmurCopy} ]; then
-      ${pkgs.coreutils}/bin/install -m 0600 -o nuschel -g nuschel \
+      ${pkgs.coreutils}/bin/install -m 0600 -o nuschl -g nuschl \
         ${lib.escapeShellArg (toString cfg.importMurmur.databaseFile)} ${murmurCopy}
     fi
   '';
-  importMurmur = pkgs.writeShellScript "nuschel-import-murmur" ''
+  importMurmur = pkgs.writeShellScript "nuschl-import-murmur" ''
     set -eu
     if [ -e ${murmurCopy} ] && [ ! -e ${murmurMarker} ]; then
       # Takes the operator lock, as every admin command does.
-      ${cfg.package}/bin/nuscheld --config ${configFile} --state-directory ${stateDirectory} "$@" \
+      ${cfg.package}/bin/nuschld --config ${configFile} --state-directory ${stateDirectory} "$@" \
         admin import-murmur ${murmurCopy} --murmur-server-id ${toString cfg.importMurmur.serverId} \
         ${lib.optionalString cfg.importMurmur.replaceExisting "--replace-existing"}
       ${pkgs.coreutils}/bin/touch ${murmurMarker}
@@ -142,13 +142,14 @@ let
   '';
 in
 {
-  options.services.nuschel = {
-    enable = lib.mkEnableOption "the Nuschel server (Mumble-compatible; phase 1)";
+  imports = [ (lib.mkRenamedOptionModule [ "services" "nuschel" ] [ "services" "nuschl" ]) ];
+  options.services.nuschl = {
+    enable = lib.mkEnableOption "the Nuschl server (Mumble-compatible; phase 1)";
     package = lib.mkOption {
       type = lib.types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.server;
-      defaultText = lib.literalExpression "inputs.nuschel.packages.\${pkgs.stdenv.hostPlatform.system}.server";
-      description = "Package containing nuscheld and nuschel-storage-worker.";
+      defaultText = lib.literalExpression "inputs.nuschl.packages.\${pkgs.stdenv.hostPlatform.system}.server";
+      description = "Package containing nuschld and nuschl-storage-worker.";
     };
     security = lib.mkOption {
       type = lib.types.enum [
@@ -188,7 +189,7 @@ in
         }
       '';
       description = ''
-        Further nuscheld.toml settings (see apps/server/nuscheld.example.toml).
+        Further nuschld.toml settings (see apps/server/nuschld.example.toml).
         The generated file is in the Nix store: never put secrets here; use
         passwordFile and superUserPasswordFile.
       '';
@@ -226,7 +227,7 @@ in
       createLocally = lib.mkOption {
         type = lib.types.bool;
         default = false;
-        description = "Provision PostgreSQL with Unix-socket peer authentication for nuschel.";
+        description = "Provision PostgreSQL with Unix-socket peer authentication for nuschl.";
       };
     };
     kt = {
@@ -236,7 +237,7 @@ in
         description = ''
           Runtime file with the key-transparency head-signing key, the server's
           identity key that clients pin (32 random bytes or 64 hex digits; LoadCredential).
-          Without it, nuscheld generates one once in its state directory.
+          Without it, nuschld generates one once in its state directory.
         '';
       };
       vrfSecretFile = lib.mkOption {
@@ -244,7 +245,7 @@ in
         default = null;
         description = ''
           Runtime file with the key-transparency VRF secret (same format; LoadCredential).
-          It can never change for the life of the log. Without it, nuscheld generates
+          It can never change for the life of the log. Without it, nuschld generates
           one once in its state directory.
         '';
       };
@@ -266,7 +267,7 @@ in
         type = lib.types.bool;
         default = true;
         description = ''
-          Submit to Nuschel's built-in witnesses (the project auditor; none until it
+          Submit to Nuschl's built-in witnesses (the project auditor; none until it
           is deployed).
         '';
       };
@@ -276,7 +277,7 @@ in
             options = {
               key = lib.mkOption {
                 type = lib.types.str;
-                description = "The witness's verifier key (`nuschel-witness vkey`).";
+                description = "The witness's verifier key (`nuschl-witness vkey`).";
               };
               url = lib.mkOption {
                 type = lib.types.str;
@@ -297,11 +298,11 @@ in
         example = "/var/lib/murmur/murmur.sqlite";
         description = ''
           A Murmur (mumble-server) SQLite database to import once, before the first
-          start (`nuscheld --import-murmur`, docs/server.md): users with their
+          start (`nuschld --import-murmur`, docs/server.md): users with their
           passwords, channels, ACLs, groups, links, listeners and bans. Stop Murmur
           first. The import refuses a database that already has channels, users or
-          bans (see replaceExisting); then nuschel-import-murmur.service fails,
-          nuschel.service does not start, and the journal says why. It runs as its
+          bans (see replaceExisting); then nuschl-import-murmur.service fails,
+          nuschl.service does not start, and the journal says why. It runs as its
           own unit before the server, without a start timeout.
           Settings found in it are written to murmur-import.toml in the state
           directory, for `settings`.
@@ -335,11 +336,11 @@ in
       {
         assertion =
           cfg.database.type != "postgresql" || cfg.database.createLocally || cfg.database.urlFile != null;
-        message = "Nuschel PostgreSQL requires database.urlFile or database.createLocally.";
+        message = "Nuschl PostgreSQL requires database.urlFile or database.createLocally.";
       }
       {
         assertion = !cfg.database.createLocally || cfg.database.type == "postgresql";
-        message = "Nuschel database.createLocally requires PostgreSQL.";
+        message = "Nuschl database.createLocally requires PostgreSQL.";
       }
       {
         assertion = !cfg.database.createLocally || cfg.database.urlFile == null;
@@ -347,7 +348,7 @@ in
       }
       {
         assertion = (cfg.tls.certificateFile == null) == (cfg.tls.keyFile == null);
-        message = "Nuschel TLS requires both certificateFile and keyFile.";
+        message = "Nuschl TLS requires both certificateFile and keyFile.";
       }
       {
         assertion = lib.all notInStore [
@@ -358,19 +359,19 @@ in
           cfg.kt.signingKeyFile
           cfg.kt.vrfSecretFile
         ];
-        message = "Nuschel secrets (tls.keyFile, database.urlFile, passwordFile, superUserPasswordFile, kt.signingKeyFile, kt.vrfSecretFile) must not be in the world-readable Nix store.";
+        message = "Nuschl secrets (tls.keyFile, database.urlFile, passwordFile, superUserPasswordFile, kt.signingKeyFile, kt.vrfSecretFile) must not be in the world-readable Nix store.";
       }
       {
         assertion =
           !(cfg.settings ? kt && (cfg.settings.kt ? signing_key_file || cfg.settings.kt ? vrf_secret_file));
-        message = "Use services.nuschel.kt.signingKeyFile / vrfSecretFile instead of key paths in settings.";
+        message = "Use services.nuschl.kt.signingKeyFile / vrfSecretFile instead of key paths in settings.";
       }
       {
         assertion =
           !(
             cfg.settings ? password || cfg.settings ? password_file || cfg.settings ? superuser_password_file
           );
-        message = "Use services.nuschel.passwordFile / superUserPasswordFile instead of secrets in settings.";
+        message = "Use services.nuschl.passwordFile / superUserPasswordFile instead of secrets in settings.";
       }
     ];
     networking.firewall = lib.mkIf cfg.openFirewall {
@@ -379,16 +380,16 @@ in
     };
     services.postgresql = lib.mkIf localPostgres {
       enable = true;
-      ensureDatabases = [ "nuschel" ];
+      ensureDatabases = [ "nuschl" ];
       ensureUsers = [
         {
-          name = "nuschel";
+          name = "nuschl";
           ensureDBOwnership = true;
         }
       ];
     };
-    systemd.services.nuschel = {
-      description = "Nuschel Mumble-compatible server";
+    systemd.services.nuschl = {
+      description = "Nuschl Mumble-compatible server";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ] ++ lib.optional localPostgres "postgresql.target";
       requires = lib.optional localPostgres "postgresql.target";
@@ -396,8 +397,8 @@ in
       serviceConfig = {
         Type = "simple";
         DynamicUser = true;
-        User = "nuschel";
-        StateDirectory = "nuschel";
+        User = "nuschl";
+        StateDirectory = "nuschl";
         StateDirectoryMode = "0700";
         WorkingDirectory = stateDirectory;
         UMask = "0077";
@@ -412,11 +413,11 @@ in
           ++ lib.optional (cfg.kt.signingKeyFile != null) "kt-signing-key:${cfg.kt.signingKeyFile}"
           ++ lib.optional (cfg.kt.vrfSecretFile != null) "kt-vrf-secret:${cfg.kt.vrfSecretFile}";
         # Migrations and a connection check before the server takes traffic,
-        # under the operator lock: never while `nuscheld admin` (or an import)
+        # under the operator lock: never while `nuschld admin` (or an import)
         # uses the database.
         ExecStartPre = lib.escapeShellArgs (
           [
-            "${cfg.package}/bin/nuschel-storage-worker"
+            "${cfg.package}/bin/nuschl-storage-worker"
             "--server"
             "--check-database"
             "--operator-lock"
@@ -425,7 +426,7 @@ in
         );
         ExecStart = lib.escapeShellArgs (
           [
-            "${cfg.package}/bin/nuscheld"
+            "${cfg.package}/bin/nuschld"
             "--config"
             configFile
             "--state-directory"
@@ -442,18 +443,18 @@ in
       // hardening;
     };
     # The one-time Murmur import, before the server's first start (docs/server.md).
-    systemd.services.nuschel-import-murmur = lib.mkIf (cfg.importMurmur.databaseFile != null) {
-      description = "Import a Murmur database into the Nuschel server, once";
-      requiredBy = [ "nuschel.service" ];
-      before = [ "nuschel.service" ];
+    systemd.services.nuschl-import-murmur = lib.mkIf (cfg.importMurmur.databaseFile != null) {
+      description = "Import a Murmur database into the Nuschl server, once";
+      requiredBy = [ "nuschl.service" ];
+      before = [ "nuschl.service" ];
       after = [ "network.target" ] ++ lib.optional localPostgres "postgresql.target";
       requires = lib.optional localPostgres "postgresql.target";
       unitConfig.ConditionPathExists = "!${murmurMarker}";
       serviceConfig = {
         Type = "oneshot";
         DynamicUser = true;
-        User = "nuschel";
-        StateDirectory = "nuschel";
+        User = "nuschl";
+        StateDirectory = "nuschl";
         StateDirectoryMode = "0700";
         WorkingDirectory = stateDirectory;
         UMask = "0077";

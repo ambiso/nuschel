@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Adaptive audio controller.
 //!
-//! Watches the live graph continuously and adjusts only objects Nuschel owns:
+//! Watches the live graph continuously and adjusts only objects Nuschl owns:
 //! its own playback buffer and its own transmit gate. System devices, mixer
 //! levels and other applications' streams are never touched; problems that only
 //! the user or the system can fix (a clipping microphone, echo without
@@ -43,7 +43,7 @@ const PLAYBACK_RELAX_WINDOWS: u32 = 30;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Health {
-    /// The microphone signal reaches full scale before Nuschel sees it.
+    /// The microphone signal reaches full scale before Nuschl sees it.
     pub clipping: bool,
     /// Residual echo is persistent; the transmit gate is guarding against it.
     pub echo_guard: bool,
@@ -51,7 +51,7 @@ pub struct Health {
     pub double_talk: f32,
     /// Device underruns in the last window.
     pub underruns: u32,
-    /// Nuschel's own playback buffer, in milliseconds.
+    /// Nuschl's own playback buffer, in milliseconds.
     pub playback_ms: u32,
 }
 
@@ -148,7 +148,7 @@ impl Controller {
     }
 
     /// Close an observation window. `residual_echo` is the canceller's
-    /// residual-echo likelihood when Nuschel's canceller runs; `underruns` is
+    /// residual-echo likelihood when Nuschl's canceller runs; `underruns` is
     /// the number of device callbacks that ran dry since the last window.
     /// Returns the new health when anything a user might care about changed.
     pub fn window(&mut self, residual_echo: Option<f32>, underruns: u32) -> Option<Health> {
@@ -200,7 +200,7 @@ impl Controller {
             }
             Some(_) => {}
         }
-        // Underruns: raise Nuschel's own playback buffer quickly, lower it slowly.
+        // Underruns: raise Nuschl's own playback buffer quickly, lower it slowly.
         if underruns >= UNDERRUNS_PER_WINDOW {
             self.playback_frames =
                 (self.playback_frames + PLAYBACK_STEP_FRAMES).min(PLAYBACK_MAX_FRAMES);
@@ -324,7 +324,7 @@ mod tests {
             controller.window(Some(0.05), 0);
         }
         assert!(!controller.health().echo_guard);
-        // Without Nuschel's canceller there is nothing to measure.
+        // Without Nuschl's canceller there is nothing to measure.
         controller.echo_guard = true;
         controller.window(None, 0);
         assert!(!controller.health().echo_guard);

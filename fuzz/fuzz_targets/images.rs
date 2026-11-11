@@ -2,7 +2,7 @@
 //! Hostile image bytes through the content worker's decoders, as peers and
 //! websites send them: avatars, website icons (also ICO, BMP and WebP), inline
 //! `data:` images at the viewer's size, and pasted images re-encoded to send
-//! (which receivers, Nuschel included, must decode again). The first byte picks
+//! (which receivers, Nuschl included, must decode again). The first byte picks
 //! the path. Nothing may panic, every result fits its limits and has exactly
 //! its pixels. Images whose header claims more than 256 pixels a side are
 //! skipped: the decoders' own limits allow 4096, and decoding that much only
@@ -11,10 +11,10 @@
 
 use base64::Engine as _;
 use libfuzzer_sys::fuzz_target;
-use nuschel_content::{
+use nuschl_content::{
     VIEW_HEIGHT, VIEW_WIDTH, decode_icon, decode_image, decode_view, encode_image_message,
 };
-use nuschel_core::ContentBlock;
+use nuschl_core::ContentBlock;
 
 const SIDE: u32 = 256;
 

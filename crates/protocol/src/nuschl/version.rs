@@ -76,7 +76,7 @@ impl Standing {
 
 /// The reason a refused client is shown (in a Mumble `Reject`).
 pub fn refusal(minimum: &Version) -> String {
-    format!("This server requires Nuschel {minimum} or newer. Update Nuschel to connect.")
+    format!("This server requires Nuschl {minimum} or newer. Update Nuschl to connect.")
 }
 
 #[cfg(test)]

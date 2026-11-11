@@ -3,10 +3,10 @@
 #![cfg(target_os = "linux")]
 use std::{path::Path, time::Instant};
 
-use nuschel_core::ContentBlock;
+use nuschl_core::ContentBlock;
 
 fn worker() -> &'static Path {
-    Path::new(env!("CARGO_BIN_EXE_nuschel-content-worker"))
+    Path::new(env!("CARGO_BIN_EXE_nuschl-content-worker"))
 }
 
 /// A history page: plain chat, with a code block in every tenth message.
@@ -25,7 +25,7 @@ fn page(code: bool) -> Vec<String> {
 #[tokio::test]
 async fn a_history_page_renders_in_order_in_one_worker() {
     let texts = page(true);
-    let documents = nuschel_ipc::host::render_many(worker(), &texts).await;
+    let documents = nuschl_ipc::host::render_many(worker(), &texts).await;
     assert_eq!(documents.len(), texts.len());
     for (index, document) in documents.iter().enumerate() {
         let blocks = &document.as_ref().expect("rendered").blocks;
@@ -50,11 +50,11 @@ async fn a_burst_of_received_messages_prepares_in_order_in_one_worker() {
             _ => (format!("Message {index}: <html> & such"), false),
         })
         .collect();
-    let burst = nuschel_ipc::host::prepare_contents(worker(), &messages).await;
+    let burst = nuschl_ipc::host::prepare_contents(worker(), &messages).await;
     assert_eq!(burst.len(), messages.len());
     for ((text, legacy_html), prepared) in messages.iter().zip(burst) {
         let prepared = prepared.expect("prepared");
-        let alone = nuschel_ipc::host::prepare_content(worker(), text, *legacy_html)
+        let alone = nuschl_ipc::host::prepare_content(worker(), text, *legacy_html)
             .await
             .unwrap();
         assert_eq!(
@@ -69,7 +69,7 @@ async fn a_burst_of_received_messages_prepares_in_order_in_one_worker() {
 async fn a_pasted_image_becomes_a_stock_mumble_image_message() {
     // A 2×2 RGB PNG.
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x02\x08\x02\0\0\0\xfd\xd4\x9as\0\0\0\x12IDATx\x9cc\xf8\xcf\xc0\xc0\0\xc2\x0c\xff\x81\0\0\x1f\xee\x05\xfb\x0b\xd9h\x8b\0\0\0\0IEND\xaeB`\x82";
-    let encoded = nuschel_ipc::host::encode_image(worker(), PNG, 131_072)
+    let encoded = nuschl_ipc::host::encode_image(worker(), PNG, 131_072)
         .await
         .unwrap();
     let html = encoded.html;
@@ -82,7 +82,7 @@ async fn a_pasted_image_becomes_a_stock_mumble_image_message() {
             ..
         }
     ));
-    let prepared = nuschel_ipc::host::prepare_content(worker(), &html, true)
+    let prepared = nuschl_ipc::host::prepare_content(worker(), &html, true)
         .await
         .unwrap();
     assert!(matches!(
@@ -94,12 +94,12 @@ async fn a_pasted_image_becomes_a_stock_mumble_image_message() {
         }]
     ));
     assert!(matches!(
-        nuschel_ipc::host::encode_image(worker(), b"GIF89a, but not really", 131_072).await,
-        Err(nuschel_ipc::host::Error::Rejected(_))
+        nuschl_ipc::host::encode_image(worker(), b"GIF89a, but not really", 131_072).await,
+        Err(nuschl_ipc::host::Error::Rejected(_))
     ));
 }
 
-/// `cargo test -p nuschel-content-worker --test worker -- --ignored --nocapture`
+/// `cargo test -p nuschl-content-worker --test worker -- --ignored --nocapture`
 #[tokio::test]
 #[ignore = "measurement, not a check"]
 async fn history_page_cost() {
@@ -108,13 +108,13 @@ async fn history_page_cost() {
         let label = if code { "4 with code" } else { "text only" };
         let started = Instant::now();
         for text in &texts {
-            nuschel_ipc::host::render_content(worker(), text)
+            nuschl_ipc::host::render_content(worker(), text)
                 .await
                 .unwrap();
         }
         let each = started.elapsed();
         let started = Instant::now();
-        let documents = nuschel_ipc::host::render_many(worker(), &texts).await;
+        let documents = nuschl_ipc::host::render_many(worker(), &texts).await;
         let batch = started.elapsed();
         assert!(documents.iter().all(Option::is_some));
         println!(

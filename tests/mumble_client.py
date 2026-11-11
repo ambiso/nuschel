@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise Nuschel's real session implementation against a stock Mumble server."""
+"""Exercise Nuschl's real session implementation against a stock Mumble server."""
 import argparse
 import collections
 import ctypes
@@ -24,7 +24,7 @@ class Client:
         self.channels = {}
         self.transport = {}
         self.process = subprocess.Popen([
-            str(self.binaries / "nuschel-cli"), "--host", host, "--port", str(port),
+            str(self.binaries / "nuschl-cli"), "--host", host, "--port", str(port),
             "--username", username, "--certificate-sha256", pin, "--profile-dir", str(profile), *extra,
         ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.reader = threading.Thread(target=self._read, daemon=True)
@@ -96,7 +96,7 @@ class Client:
 
 
 def certificate_pin(binaries, host, port, profile):
-    command = [str(Path(binaries) / "nuschel-cli"), "--host", host, "--port", str(port),
+    command = [str(Path(binaries) / "nuschl-cli"), "--host", host, "--port", str(port),
                "--username", "CertificateProbe", "--profile-dir", str(profile)]
     probe = subprocess.run(command, input="", capture_output=True, text=True, timeout=20)
     events = [json.loads(line) for line in probe.stdout.splitlines()]
@@ -175,12 +175,12 @@ def rms(samples):
 
 
 def check_codec(binaries, reference):
-    encoded = exchange(Path(binaries) / "nuschel-media-worker", [
+    encoded = exchange(Path(binaries) / "nuschl-media-worker", [
         {"kind": "encode_opus", "samples": tone(frame * 960, 960)} for frame in range(30)
     ])
     assert all(packet["status"] == "packet" for packet in encoded)
     assert 0.02 < rms(reference.decode([packet["value"] for packet in encoded])) < 0.4
-    decoded = exchange(Path(binaries) / "nuschel-media-worker", [
+    decoded = exchange(Path(binaries) / "nuschl-media-worker", [
         {"kind": "decode_opus", "packet": packet} for packet in reference.encode_tone(30)
     ])
     assert all(packet["status"] == "samples" for packet in decoded)
@@ -188,13 +188,13 @@ def check_codec(binaries, reference):
 
 
 def check_session(binaries, host, port, reference):
-    with tempfile.TemporaryDirectory(prefix="nuschel-mumble-client-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-mumble-client-") as temporary:
         root = Path(temporary)
         pin = certificate_pin(binaries, host, port, root / "probe")
         alice = bob = None
         try:
-            alice = Client(binaries, host, port, pin, "NuschelAlice", root / "alice")
-            bob = Client(binaries, host, port, pin, "NuschelBob", root / "bob")
+            alice = Client(binaries, host, port, pin, "NuschlAlice", root / "alice")
+            bob = Client(binaries, host, port, pin, "NuschlBob", root / "bob")
             alice.send(kind="create_channel", parent=0, name="Permission test")
             alice.wait(lambda event: event["kind"] == "permission_denied")
             channel = 2
@@ -207,13 +207,13 @@ def check_session(binaries, host, port, reference):
                      and event["user"]["channel"] == channel)
             body = "First line\n\n```rust\nfn main() {}\n```\n<literal>&"
             alice.send(kind="text", channel=channel, body=body)
-            incoming = bob.wait(lambda event: event["kind"] == "text" and event["author"] == "NuschelAlice")
+            incoming = bob.wait(lambda event: event["kind"] == "text" and event["author"] == "NuschlAlice")
             if incoming.get("seq") is not None:
-                # A Nuschel server: the text itself, stored with a seq (docs/extension.md).
+                # A Nuschl server: the text itself, stored with a seq (docs/extension.md).
                 assert not incoming["html"] and incoming["body"] == body, incoming
             else:
                 assert incoming["html"], "stock servers allow HTML"
-                prepared, = exchange(Path(binaries) / "nuschel-content-worker", [{"kind": "legacy_html", "html": incoming["body"]}])
+                prepared, = exchange(Path(binaries) / "nuschl-content-worker", [{"kind": "legacy_html", "html": incoming["body"]}])
                 assert prepared["status"] == "prepared"
                 assert prepared["value"]["source"] == body
                 assert any(block["kind"] == "code" for block in prepared["value"]["document"]["blocks"])

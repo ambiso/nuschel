@@ -10,7 +10,7 @@ use crate::{
     policy::Policy,
 };
 use futures_util::{SinkExt, StreamExt};
-use nuschel_protocol::tunnel::{self, CloseReason, Frame};
+use nuschl_protocol::tunnel::{self, CloseReason, Frame};
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{
@@ -182,7 +182,7 @@ impl Relay {
                 .flat_map(|value| value.split(','))
                 .any(|protocol| protocol.trim() == tunnel::SUBPROTOCOL);
             if !offered {
-                return Err(refuse(StatusCode::BAD_REQUEST, "nuschel-tunnel.1 required"));
+                return Err(refuse(StatusCode::BAD_REQUEST, "nuschl-tunnel.1 required"));
             }
             if !origins.is_empty() {
                 let origin = headers.get("Origin").and_then(|value| value.to_str().ok());

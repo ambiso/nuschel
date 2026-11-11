@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The relay's settings (`nuschel-web-relay.toml`). Every limit fails only the
+//! The relay's settings (`nuschl-web-relay.toml`). Every limit fails only the
 //! tunnel that reaches it, never the relay (docs/web.md, "Limits").
 
 use serde::Deserialize;
@@ -247,7 +247,7 @@ mod tests {
     fn parses_settings() {
         let config: Config = toml::from_str(
             r#"
-            listen = "unix:/run/nuschel-web-relay/relay.sock"
+            listen = "unix:/run/nuschl-web-relay/relay.sock"
             ports = [64738, "10000-10010"]
             allow_networks = ["192.168.1.0/24", "fd00::1"]
             allowed_origins = ["https://web.example.org"]
@@ -258,7 +258,7 @@ mod tests {
         config.check().expect("checked");
         assert_eq!(
             config.listen,
-            Listen::Unix("/run/nuschel-web-relay/relay.sock".into())
+            Listen::Unix("/run/nuschl-web-relay/relay.sock".into())
         );
         assert!(config.port_allowed(64738) && config.port_allowed(10005));
         assert!(!config.port_allowed(64739) && !config.port_allowed(22));

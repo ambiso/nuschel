@@ -16,7 +16,7 @@
 //! supervisor, which may talk to it, will hand the key over with `--store-key-fd`
 //! (or a first IPC message), and [`KeySource`] is the only thing that changes. The
 //! sealed files and their format stay.
-use nuschel_identity::{DeviceKeystore, StoreKey};
+use nuschl_identity::{DeviceKeystore, StoreKey};
 use std::{
     fs,
     io::{self, Read, Write},

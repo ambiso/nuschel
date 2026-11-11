@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Key transparency end to end on loopback: `nuscheld` with its directory, the
+//! Key transparency end to end on loopback: `nuschld` with its directory, the
 //! real client session, and this crate's worker in its sandbox (bubblewrap on
 //! Linux, as the desktop starts it; directly where no sandbox helper exists).
 //!
 //! Each user has their own worker directory. Users register on a first connection
 //! without key transparency and reconnect with it, as an account exists only after
 //! registration.
-use nuschel_ipc::crypto::{
+use nuschl_ipc::crypto::{
     ContactState, ContactView, HeadOutcome, KeyTransparencySettings, MonitorOutcome,
     RecoveryPolicy, WitnessSetting, WitnessStatus,
 };
-use nuschel_protocol::nuschel::v1;
-use nuschel_session::{
+use nuschl_protocol::nuschl::v1;
+use nuschl_session::{
     config::{ClientIdentity, ServerBookmark},
     connection::{self, Command, ConnectOptions, SessionEvent},
     identity::{CryptoHandle, IdentityCommand, IdentityEvent, IdentitySetup},
     sticky::Requirement,
 };
-use nuscheld::{
+use nuschld::{
     config::Config,
     server::{Running, start},
     storage::{Backend, MemoryStore},
@@ -34,13 +34,13 @@ use tokio::{sync::mpsc, time::timeout};
 const WAIT: Duration = Duration::from_secs(30);
 
 fn worker_executable() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_nuschel-crypto-worker"))
+    PathBuf::from(env!("CARGO_BIN_EXE_nuschl-crypto-worker"))
 }
 
 /// The worker as the desktop starts it: sandboxed when bubblewrap is there.
 fn crypto(directory: &Path) -> CryptoHandle {
     let sandboxed =
-        nuschel_ipc::host::crypto_sandbox_command(&worker_executable(), directory).is_ok();
+        nuschl_ipc::host::crypto_sandbox_command(&worker_executable(), directory).is_ok();
     if sandboxed {
         CryptoHandle::start(worker_executable(), directory.to_owned())
     } else {
@@ -94,7 +94,7 @@ impl Server {
 
     /// With a local witness: the origin is this server's loopback address, and
     /// submissions go out every second.
-    async fn start_witnessed(witness: &nuschel_witness::Running) -> Self {
+    async fn start_witnessed(witness: &nuschl_witness::Running) -> Self {
         // The port is part of the origin, so it is chosen before the start.
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -213,7 +213,7 @@ impl User {
 struct Session {
     commands: mpsc::Sender<Command>,
     events: mpsc::Receiver<SessionEvent>,
-    task: tokio::task::JoinHandle<Result<(), nuschel_session::Error>>,
+    task: tokio::task::JoinHandle<Result<(), nuschl_session::Error>>,
     session: u32,
     backlog: VecDeque<SessionEvent>,
 }
@@ -578,10 +578,10 @@ impl Server {
             let account = state.registry.users.get(&user_id).unwrap().account;
             (account, state.kt.clone().unwrap())
         };
-        assert!(kt.submit(nuscheld::kt::Task {
+        assert!(kt.submit(nuschld::kt::Task {
             session: 0,
             request_id: 1,
-            job: nuscheld::kt::Job::Publish { account, publish },
+            job: nuschld::kt::Job::Publish { account, publish },
         }));
         // The next epoch (publish_interval = 1 s).
         tokio::time::sleep(Duration::from_millis(2500)).await;
@@ -597,19 +597,19 @@ async fn forged_publication(server: &Server, user_id: u32, directory: &Path) -> 
         let account = state.registry.users.get(&user_id).unwrap().account;
         (account, kt.descriptor.clone())
     };
-    let store = nuschel_crypto_worker::Store::open(
+    let store = nuschl_crypto_worker::Store::open(
         directory,
-        nuschel_crypto_worker::KeySource::File(directory.join("store.key")),
+        nuschl_crypto_worker::KeySource::File(directory.join("store.key")),
     )
     .unwrap();
-    let mut worker = nuschel_crypto_worker::Worker::open(store).unwrap();
+    let mut worker = nuschl_crypto_worker::Worker::open(store).unwrap();
     // The operator's worker needs a head to accept the log: any signed head will do.
     let status = server_head(server);
-    let response = worker.handle(nuschel_ipc::crypto::CryptoRequest::Connect {
+    let response = worker.handle(nuschl_ipc::crypto::CryptoRequest::Connect {
         witnessed: None,
         witnessing: Default::default(),
         registration: None,
-        server: nuschel_ipc::crypto::CryptoServer {
+        server: nuschl_ipc::crypto::CryptoServer {
             key: "operator".into(),
             label: "operator".into(),
         },
@@ -620,12 +620,12 @@ async fn forged_publication(server: &Server, user_id: u32, directory: &Path) -> 
     assert!(
         matches!(
             response,
-            nuschel_ipc::crypto::CryptoResponse::Head(HeadOutcome::Accepted { .. })
+            nuschl_ipc::crypto::CryptoResponse::Head(HeadOutcome::Accepted { .. })
         ),
         "{response:?}"
     );
-    let nuschel_ipc::crypto::CryptoResponse::Bundle(bundle) =
-        worker.handle(nuschel_ipc::crypto::CryptoRequest::PublishBundle {
+    let nuschl_ipc::crypto::CryptoResponse::Bundle(bundle) =
+        worker.handle(nuschl_ipc::crypto::CryptoRequest::PublishBundle {
             server: "operator".into(),
             device_name: "mallory".into(),
             recovery: RecoveryPolicy::Never,
@@ -672,10 +672,10 @@ async fn log_outcome(session: &mut Session) -> HeadOutcome {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_local_witness_cosigns_the_log_and_clients_require_it() {
     let witness_state = tempfile::tempdir().unwrap();
-    let witness = nuschel_witness::start(nuschel_witness::Config {
+    let witness = nuschl_witness::start(nuschl_witness::Config {
         listen: "127.0.0.1:0".parse().unwrap(),
         enrol_private_addresses: true,
-        ..nuschel_witness::Config::new("witness.test/nuschel-kt", witness_state.path())
+        ..nuschl_witness::Config::new("witness.test/nuschl-kt", witness_state.path())
     })
     .await
     .unwrap();
@@ -734,7 +734,7 @@ async fn a_local_witness_cosigns_the_log_and_clients_require_it() {
 
     // A client that requires a witness this server does not reach: unavailable,
     // and first contact still proceeds as "not verified".
-    let stranger = nuschel_kt::witness::note::Cosigner::from_seed("other.test", &[5; 32])
+    let stranger = nuschl_kt::witness::note::Cosigner::from_seed("other.test", &[5; 32])
         .unwrap()
         .key()
         .vkey();

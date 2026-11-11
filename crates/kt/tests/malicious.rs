@@ -5,7 +5,7 @@
 mod common;
 
 use common::*;
-use nuschel_kt::*;
+use nuschl_kt::*;
 use std::sync::Arc;
 
 fn signer() -> Ed25519HeadSigner {
@@ -192,7 +192,7 @@ async fn a_changed_key_without_a_history_entry_is_caught() {
 
     // Hiding the entry from the proof fails verification.
     let mut hidden = honest.clone();
-    hidden.proof = nuschel_kt::__private::drop_newest_history_version(&honest.proof).unwrap();
+    hidden.proof = nuschl_kt::__private::drop_newest_history_version(&honest.proof).unwrap();
     let error = verify_history(&descriptor, &acct(1), &hidden).unwrap_err();
     assert!(
         matches!(

@@ -6,12 +6,12 @@
 //! window and the desktop saw.
 use crate::global_shortcuts::{Bindings, GlobalEvent, GlobalShortcuts};
 use gpui_kit::{Keystroke, Modifiers, OperatingSystem};
-use nuschel_core::audio::TransmitMode;
-use nuschel_session::config::{ClientSettings, ShortcutAction};
+use nuschl_core::audio::TransmitMode;
+use nuschl_session::config::{ClientSettings, ShortcutAction};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const UNAVAILABLE: &str =
-    "System-wide shortcuts are not available on this desktop; they work while Nuschel is focused.";
+    "System-wide shortcuts are not available on this desktop; they work while Nuschl is focused.";
 
 pub fn label(action: ShortcutAction) -> &'static str {
     match action {

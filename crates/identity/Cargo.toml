@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: EUPL-1.2
 [package]
-name = "nuschel-identity"
+name = "nuschl-identity"
 description = "Persistent cross-server, multi-device identity: keys, certificates, safety numbers, device linking and the encrypted keystore (docs/e2ee.md §3, §4)"
 version.workspace = true
 edition.workspace = true

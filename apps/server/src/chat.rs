@@ -12,13 +12,13 @@ use crate::{
     state::{State, random},
     text,
 };
-use nuschel_ipc::server::{
+use nuschl_ipc::server::{
     Anchor, HistoryVisibility, MessageKind, PageQuery, ServerStorageRequest as Request,
     ServerStorageResponse as Response, StoredDirect, StoredMessage, StoredPage,
 };
-use nuschel_protocol::{
+use nuschl_protocol::{
     ControlFrame, control as proto,
-    nuschel::{
+    nuschl::{
         self, MAX_CONTENT_BYTES, MAX_DIRECTS, MAX_PAGE_BYTES, MAX_SUBSCRIBE_PER_MESSAGE,
         MAX_SUBSCRIPTIONS, capability, kind,
         v1::{self, error::Code},
@@ -45,7 +45,7 @@ pub fn now_ms() -> i64 {
 }
 
 fn conversation(bytes: &[u8]) -> Result<Id, Failure> {
-    nuschel::id(bytes).ok_or(fail(Code::Malformed))
+    nuschl::id(bytes).ok_or(fail(Code::Malformed))
 }
 
 /// What an idempotency key was used for, to tell a retry from a conflict.
@@ -110,7 +110,7 @@ impl State {
         self.send(
             session,
             kind::ERROR,
-            &nuschel::error(request_id, code, retry),
+            &nuschl::error(request_id, code, retry),
         );
     }
 
@@ -226,7 +226,7 @@ impl State {
             return;
         };
         let request_id = v1::Done::decode(frame.payload.clone()).map_or(0, |done| done.request_id);
-        let negotiated = nuschel::required_capability(frame.kind)
+        let negotiated = nuschl::required_capability(frame.kind)
             .is_some_and(|capability| extension.has(capability));
         if !negotiated {
             self.extension_error(session, request_id, fail(Code::Unsupported));
@@ -284,7 +284,7 @@ impl State {
                     .conversations
                     .iter()
                     .take(MAX_SUBSCRIBE_PER_MESSAGE)
-                    .filter_map(|bytes| nuschel::id(bytes))
+                    .filter_map(|bytes| nuschl::id(bytes))
                 {
                     self.unsubscribe(session, &id);
                 }
@@ -344,7 +344,7 @@ impl State {
         if self.end_to_end() {
             return Err(fail(Code::Unsupported));
         }
-        let key = nuschel::id(&message.idempotency_key).ok_or(fail(Code::Malformed))?;
+        let key = nuschl::id(&message.idempotency_key).ok_or(fail(Code::Malformed))?;
         if message.format != v1::Format::Text as i32 || message.content.is_empty() {
             return Err(fail(Code::Malformed));
         }
@@ -359,7 +359,7 @@ impl State {
         // Stock users' copy is made here, from the same text, under Murmur's
         // text rules (docs/extension.md §4).
         let html =
-            nuschel_legacy_html::legacy_body(&message.content, self.settings.config.allow_html);
+            nuschl_legacy_html::legacy_body(&message.content, self.settings.config.allow_html);
         let html = match text::check(&html, self.text_limits()) {
             Err(text::TooLong) => return Err(fail(Code::TooLarge)),
             Ok(Some(changed)) => changed,
@@ -591,7 +591,7 @@ impl State {
                     },
                     source,
                 ),
-                // Not stored: Nuschel users in the channel still see it live.
+                // Not stored: Nuschl users in the channel still see it live.
                 _ => {
                     for session in self.readers(&conversation) {
                         if session != source
@@ -618,7 +618,7 @@ impl State {
         } else {
             message.target
         };
-        let Some(frame) = nuschel::encode(
+        let Some(frame) = nuschl::encode(
             kind::CHAT_EVENT,
             &v1::ChatEvent {
                 conversation: id.to_vec(),
@@ -662,7 +662,7 @@ impl State {
             _ => text.session.clone_from(&audience),
         }
         if let Some(frame) =
-            nuschel_protocol::encode_control(nuschel_protocol::kind::TEXT_MESSAGE, &text)
+            nuschl_protocol::encode_control(nuschl_protocol::kind::TEXT_MESSAGE, &text)
         {
             for session in audience {
                 if let Some(user) = self.users.get(&session) {
@@ -672,11 +672,11 @@ impl State {
         }
     }
 
-    /// Store a stock client's message in a channel's conversation; Nuschel
+    /// Store a stock client's message in a channel's conversation; Nuschl
     /// readers get it once stored (docs/extension.md §4).
     pub fn store_stock(&mut self, source: u32, id: Id, html: &str, fallback: &bytes::Bytes) {
-        if html.len() > nuschel::MAX_LEGACY_CONTENT_BYTES {
-            // Too large to keep: Nuschel users in the channel see it live only.
+        if html.len() > nuschl::MAX_LEGACY_CONTENT_BYTES {
+            // Too large to keep: Nuschl users in the channel see it live only.
             self.stored(
                 Done::Stock {
                     source,
@@ -744,7 +744,7 @@ impl State {
             Some(Wire::Around(seq)) => Anchor::Around(seq),
             None => return Err(fail(Code::Malformed)),
         };
-        if message.limit as usize > nuschel::MAX_PAGE_MESSAGES {
+        if message.limit as usize > nuschl::MAX_PAGE_MESSAGES {
             return Err(fail(Code::Malformed));
         }
         self.extension_limited(session, |extension| &mut extension.pages)?;
@@ -850,7 +850,7 @@ impl State {
                     _ => row,
                 };
                 if cutoff.is_some_and(|cutoff| row.sent_ms < cutoff)
-                    && nuschel_ipc::server::expirable(&row)
+                    && nuschl_ipc::server::expirable(&row)
                 {
                     row.content.clear();
                     row.reply_to = None;
@@ -960,7 +960,7 @@ impl State {
         {
             return;
         }
-        let Some(id) = nuschel::id(&message.conversation) else {
+        let Some(id) = nuschl::id(&message.conversation) else {
             return;
         };
         let Some(account) = self.users.get(&session).and_then(|user| user.account) else {
@@ -1002,7 +1002,7 @@ impl State {
     }
 
     fn typing(&mut self, session: u32, message: v1::Typing) {
-        let Some(id) = nuschel::id(&message.conversation) else {
+        let Some(id) = nuschl::id(&message.conversation) else {
             return;
         };
         let now = Instant::now();
@@ -1142,7 +1142,7 @@ impl State {
 
     // ---- channel settings ----
 
-    /// A channel's extension properties for Nuschel connections.
+    /// A channel's extension properties for Nuschl connections.
     pub fn channel_info(&self, channel: &crate::state::Channel) -> v1::ChannelInfo {
         let (retention_days, live_only) = self.wire_retention(&channel.conversation_id);
         v1::ChannelInfo {
@@ -1157,18 +1157,18 @@ impl State {
         }
     }
 
-    /// Send a `ChannelState` to everyone; Nuschel connections also get the
+    /// Send a `ChannelState` to everyone; Nuschl connections also get the
     /// channel's extension properties, stock clients never see them.
     pub fn broadcast_channel_state(&self, message: &proto::ChannelState) {
         let Some(plain) =
-            nuschel_protocol::encode_control(nuschel_protocol::kind::CHANNEL_STATE, message)
+            nuschl_protocol::encode_control(nuschl_protocol::kind::CHANNEL_STATE, message)
         else {
             return;
         };
         let extended = message
             .channel_id
             .and_then(|id| self.channels.get(id))
-            .and_then(|channel| nuschel::channel_state_frame(message, self.channel_info(channel)));
+            .and_then(|channel| nuschl::channel_state_frame(message, self.channel_info(channel)));
         for user in self.users.values() {
             match (&extended, &user.extension) {
                 (Some(frame), Some(_)) => user.link.send(frame.clone()),

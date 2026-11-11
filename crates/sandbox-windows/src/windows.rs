@@ -16,7 +16,7 @@ use std::{
     },
 };
 
-use nuschel_ipc::windows_sandbox::Policy;
+use nuschl_ipc::windows_sandbox::Policy;
 use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
 use crate::{
@@ -42,7 +42,7 @@ pub fn launch_if_requested() {
 }
 
 fn fail(message: &str) -> ! {
-    eprintln!("nuschel sandbox: {message}; the worker was not started");
+    eprintln!("nuschl sandbox: {message}; the worker was not started");
     std::process::exit(crate::LAUNCH_FAILED)
 }
 
@@ -112,4 +112,44 @@ pub fn inherited_file(value: &OsStr) -> io::Result<File> {
     // and its guard has handed over ownership: nothing else in the process
     // knows the value, so the File becomes its only owner and closes it once.
     Ok(unsafe { File::from_raw_handle(duplicate) })
+}
+
+/// Retire an old-brand worker: revoke its grants before profile deletion.
+/// Only the old application's namespace is accepted. Paths are supplied by the
+/// profile migrator, never by a worker. Walk parents first, never following links.
+pub fn retire_legacy_profile(name: &str, directories: &[std::path::PathBuf]) -> io::Result<()> {
+    if !name.starts_with("nuschel.")
+        || name.len() > 64
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    {
+        return Err(invalid("not a legacy Nuschel worker profile"));
+    }
+    let name = WideCString::from_str(name)?;
+    let sid = os::existing_container_sid(&Win32, &name)?;
+    fn revoke_tree(path: &std::path::Path, sid: &os::Sid) -> io::Result<()> {
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        // A link or junction must not lead the migration outside this profile.
+        use std::os::windows::fs::MetadataExt as _;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(invalid("a legacy worker folder contains a reparse point"));
+        }
+        let wide = WideCString::new(wide(path.as_os_str()))?;
+        os::revoke(&Win32, &wide, sid, metadata.is_dir())?;
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(path)? {
+                revoke_tree(&entry?.path(), sid)?;
+            }
+        }
+        Ok(())
+    }
+    for directory in directories {
+        revoke_tree(directory, &sid)?;
+    }
+    os::delete_container(&Win32, &name)
 }

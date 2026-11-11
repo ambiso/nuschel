@@ -17,7 +17,7 @@ use crate::{
     state::Desktop,
 };
 use gpui_kit::*;
-use nuschel_client::timeline::Message;
+use nuschl_client::timeline::Message;
 
 /// A link in a message: its block, its index in that block, its text and
 /// where it leads.

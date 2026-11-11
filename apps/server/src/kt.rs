@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Key transparency (docs/e2ee.md §5): the server's verifiable key directory.
 //!
-//! - **The log** is nuschel-kt's `AkdDirectory` on the `kt_records` table, through
+//! - **The log** is nuschl-kt's `AkdDirectory` on the `kt_records` table, through
 //!   its own storage worker (`StorageKt`). Its head-signing key (the server's
 //!   identity key) and VRF secret come from credential files, or are generated
 //!   once in `state_directory`.
@@ -16,7 +16,7 @@
 //!   every `refresh_interval` otherwise.
 //! - **The directory API.** Beside each value the server keeps the record it
 //!   commits to (`R ‖ account ‖ SHA-256(value)`) and which one is current
-//!   (`C ‖ account`), in the same table: nuschel-kt's keys start with lowercase
+//!   (`C ‖ account`), in the same table: nuschl-kt's keys start with lowercase
 //!   letters. One task serves every request in order, so a lookup never sees a
 //!   new value with an old record.
 //! - **Who may ask** (decided in authz.rs, `Action::Kt*`). Lookups: any
@@ -43,19 +43,19 @@ use crate::{
 };
 use async_trait::async_trait;
 use base64::Engine as _;
-use nuschel_identity::{
+use nuschl_identity::{
     AccountStatement, DeviceCertificate, DeviceRevocation, DeviceSigningCertificate,
     HybridPublicKey, VerifiedIdentity,
 };
-use nuschel_ipc::server::{ServerStorageRequest as Request, ServerStorageResponse as Response};
-use nuschel_kt::{
+use nuschl_ipc::server::{ServerStorageRequest as Request, ServerStorageResponse as Response};
+use nuschl_kt::{
     AccountBinding, AccountId, AkdDirectory, Directory, DirectoryError, DirectoryValue,
     Ed25519HeadSigner, KtStore, Label, LogId, MAX_AUDIT_SPAN, NameBinding, RosterCommitment,
     SignedHead, StoreError, VrfSecret, roster_for_binding,
 };
-use nuschel_protocol::{
+use nuschl_protocol::{
     ControlFrame,
-    nuschel::{
+    nuschl::{
         self, MAX_KT_CERTIFICATE_BYTES, MAX_KT_LOOKUP_REPLY_BYTES, MAX_KT_REPLY_BYTES, kind,
         v1::{self, error::Code},
     },
@@ -186,7 +186,7 @@ fn unbase64(text: &str) -> Result<Vec<u8>, StoreError> {
         .map_err(|_| StoreError("malformed record from storage".into()))
 }
 
-/// nuschel-kt's store on the `kt_records` table, through a storage worker.
+/// nuschl-kt's store on the `kt_records` table, through a storage worker.
 #[derive(Clone)]
 pub struct StorageKt(StorageHandle);
 
@@ -472,7 +472,7 @@ pub fn check_publish(
     publish: &v1::KtPublish,
 ) -> Result<(AccountBinding, Vec<u8>), &'static str> {
     let record = publish.record.as_ref().ok_or("no record")?;
-    if !nuschel::valid_kt_record(record) || publish.root.len() > MAX_KT_CERTIFICATE_BYTES {
+    if !nuschl::valid_kt_record(record) || publish.root.len() > MAX_KT_CERTIFICATE_BYTES {
         return Err("record out of bounds");
     }
     let root = HybridPublicKey::decode(&publish.root).map_err(|_| "root key")?;
@@ -939,7 +939,7 @@ impl State {
                 .users
                 .get(&id)
                 .map(|registered| registered.account),
-            Some(v1::kt_lookup::Target::Account(bytes)) => nuschel::id(&bytes),
+            Some(v1::kt_lookup::Target::Account(bytes)) => nuschl::id(&bytes),
             None => None,
         };
         account.ok_or((Code::NotFound, 0))
@@ -983,10 +983,7 @@ impl State {
                     .get(&session)
                     .and_then(|user| user.account)
                     .ok_or((Code::NotFound, 0))?;
-                if !publish
-                    .record
-                    .as_ref()
-                    .is_some_and(nuschel::valid_kt_record)
+                if !publish.record.as_ref().is_some_and(nuschl::valid_kt_record)
                     || publish.root.len() > MAX_KT_CERTIFICATE_BYTES
                 {
                     return Err((Code::Malformed, 0));
@@ -1005,7 +1002,7 @@ impl State {
             }
             Pending::History(account, origin, kind) => {
                 self.kt_limited(session, |e| &mut e.kt_histories)?;
-                let account = nuschel::id(&account).ok_or((Code::Malformed, 0))?;
+                let account = nuschl::id(&account).ok_or((Code::Malformed, 0))?;
                 self.authorize(session, Action::KtHistory { account: &account })?;
                 let label = match kind {
                     v1::KtLabel::Account => label(&account),
@@ -1051,7 +1048,7 @@ impl State {
     /// it was read does not get it.
     pub fn kt_answer(&mut self, session: u32, request_id: u64, reply: Result<Reply, Code>) {
         if let Ok(Reply::History(history)) = &reply {
-            let allowed = nuschel::id(&history.account).is_some_and(|account| {
+            let allowed = nuschl::id(&history.account).is_some_and(|account| {
                 self.allowed(session, Action::KtHistory { account: &account })
             });
             if !allowed {

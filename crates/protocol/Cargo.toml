@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-protocol"
+name = "nuschl-protocol"
 description = "Mumble schemas and bounded wire framing without a network runtime"
 version.workspace = true
 edition.workspace = true

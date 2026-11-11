@@ -12,9 +12,9 @@
 //! replaced when the microphone's state or its destinations change. Speech
 //! buffered for one set of listeners must not reach a newly added listener.
 use super::{Event, HOST_PIN, MAX_SOUND_DELAY, VoiceKeys, chime, configure, pinned_host, play};
-use nuschel_core::audio::{Sound, TransmitMode};
-use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
-use nuschel_session::{config::ClientSettings, workers::Media};
+use nuschl_core::audio::{Sound, TransmitMode};
+use nuschl_ipc::{LiveMediaEvent, LiveMediaRequest};
+use nuschl_session::{config::ClientSettings, workers::Media};
 use std::collections::BTreeMap;
 use tokio::{
     sync::{mpsc, watch},

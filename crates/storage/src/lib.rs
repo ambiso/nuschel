@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Asynchronous SQLx persistence. Only the storage worker may link this crate.
 
-use nuschel_core::search::{MAX_QUERY_BYTES, Query};
-use nuschel_core::{
+use nuschl_core::search::{MAX_QUERY_BYTES, Query};
+use nuschl_core::{
     ChatMessage, HistoryEntry, HistoryPage, MAX_CONTENT_BYTES, SearchCursor, SearchPage,
     ServerRecord,
 };
@@ -27,7 +27,7 @@ pub const MAX_SEARCH_SERVERS: usize = 64;
 /// Records one `store_server` call may write (a server's page has at most 100).
 pub const MAX_STORE_RECORDS: usize = 128;
 
-/// A message row: id, server, channel, author, time, body, and a Nuschel
+/// A message row: id, server, channel, author, time, body, and a Nuschl
 /// server's seq, edit and deletion times.
 type Row = (
     i64,
@@ -40,7 +40,7 @@ type Row = (
     Option<i64>,
     Option<i64>,
 );
-/// A search hit: a row's message, its score, and its seq (Nuschel servers),
+/// A search hit: a row's message, its score, and its seq (Nuschl servers),
 /// by which a server-history timeline finds it.
 type RankedRow = (i64, String, String, String, i64, String, i64, Option<i64>);
 
@@ -130,7 +130,7 @@ macro_rules! with_pool {
 
 /// Store a message with its search text and index it, inside a transaction
 /// (`$transaction`); evaluates to its row ID. `$body` is what is stored,
-/// `$author` the search author, `$meta` the Nuschel seq, edit and deletion
+/// `$author` the search author, `$meta` the Nuschl seq, edit and deletion
 /// times.
 macro_rules! insert {
     ($transaction:expr, $index:expr, $message:expr, $body:expr, $author:expr, $meta:expr) => {{
@@ -279,7 +279,7 @@ impl BeginWrite for sqlx::PgPool {
 
 /// What search matches and returns: the text without inline image data.
 fn visible(body: &str) -> String {
-    body.split(nuschel_core::EMBED)
+    body.split(nuschl_core::EMBED)
         .step_by(2)
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
@@ -593,7 +593,7 @@ impl History {
         })
     }
 
-    /// Store messages of a Nuschel server's conversations by their seq, in
+    /// Store messages of a Nuschl server's conversations by their seq, in
     /// one transaction: a message already stored under the same server,
     /// channel (the local storage key) and seq is updated, so one seen live
     /// and again in a history page is kept once. A row deleted before stays a
@@ -722,7 +722,7 @@ impl History {
         })
     }
 
-    /// The author edited the cached message `seq` of a Nuschel server's
+    /// The author edited the cached message `seq` of a Nuschl server's
     /// conversation: its text is overwritten (earlier versions are not kept,
     /// as on the server). Returns whether such a message, not deleted, was
     /// cached.
@@ -770,7 +770,7 @@ impl History {
         })
     }
 
-    /// The cached message `seq` of a Nuschel server's conversation was
+    /// The cached message `seq` of a Nuschl server's conversation was
     /// deleted: it becomes a tombstone, its text gone from the row, the
     /// search text and the full-text index (as the server's `secure_delete`
     /// removes it). Returns whether such a message was cached.
@@ -1159,7 +1159,7 @@ mod tests {
     }
 
     fn image(payload: &str) -> String {
-        let embed = nuschel_core::EMBED;
+        let embed = nuschl_core::EMBED;
         format!("{embed}data:image/png;base64,{payload}{embed}")
     }
 
@@ -1613,13 +1613,13 @@ mod tests {
         search_checks(&history).await
     }
 
-    /// `NUSCHEL_TEST_POSTGRES_URL=postgresql://... cargo test -p nuschel-storage
+    /// `NUSCHL_TEST_POSTGRES_URL=postgresql://... cargo test -p nuschl-storage
     /// -- --ignored` runs the same checks on PostgreSQL. The database must be a
     /// throwaway one: its history tables are dropped first.
     #[tokio::test]
     #[ignore = "needs a throwaway PostgreSQL database"]
     async fn search_on_postgres() -> Result<(), Error> {
-        let url = std::env::var("NUSCHEL_TEST_POSTGRES_URL").expect("NUSCHEL_TEST_POSTGRES_URL");
+        let url = std::env::var("NUSCHL_TEST_POSTGRES_URL").expect("NUSCHL_TEST_POSTGRES_URL");
         let pool = PgPool::connect(&url).await?;
         sqlx::query(
             "DROP TABLE IF EXISTS search_backfill, message_search, messages, _sqlx_migrations",
@@ -1770,7 +1770,7 @@ mod tests {
     fn record(seq: i64, at: i64, body: &str) -> ServerRecord {
         ServerRecord {
             message: ChatMessage {
-                server: "nuschel".into(),
+                server: "nuschl".into(),
                 channel: "3".into(),
                 author: "Ada".into(),
                 observed_at_ms: at,
@@ -1783,7 +1783,7 @@ mod tests {
     }
 
     async fn seqs(history: &History) -> Result<Vec<Option<i64>>, Error> {
-        let page = history.page("nuschel", "3", None, 100).await?;
+        let page = history.page("nuschl", "3", None, 100).await?;
         Ok(page.messages.iter().map(|entry| entry.seq).collect())
     }
 
@@ -1797,7 +1797,7 @@ mod tests {
         Ok(())
     }
 
-    /// A Nuschel server's messages in the cache, as both backends run them.
+    /// A Nuschl server's messages in the cache, as both backends run them.
     async fn server_message_checks(history: &History) -> Result<(), Error> {
         // Live messages first, then an older history page: time order.
         let live = history
@@ -1813,44 +1813,44 @@ mod tests {
             "seen live and in a page: stored once"
         );
         assert_eq!(seqs(history).await?, (1..=6).map(Some).collect::<Vec<_>>());
-        let newest = history.page("nuschel", "3", None, 2).await?;
+        let newest = history.page("nuschl", "3", None, 2).await?;
         assert_eq!(newest.messages[0].message.body, "message 5");
-        let older = history.page("nuschel", "3", newest.next_before, 2).await?;
+        let older = history.page("nuschl", "3", newest.next_before, 2).await?;
         assert_eq!(older.messages[1].seq, Some(4), "{older:?}");
-        let around = history.page_around("nuschel", "3", stored[2], 2).await?;
+        let around = history.page_around("nuschl", "3", stored[2], 2).await?;
         assert_eq!(
             around.messages.iter().map(|e| e.seq).collect::<Vec<_>>(),
             [Some(3), Some(4)]
         );
-        let after = history.page_after("nuschel", "3", stored[3], 100).await?;
+        let after = history.page_after("nuschl", "3", stored[3], 100).await?;
         assert_eq!(
             after.messages.iter().map(|e| e.seq).collect::<Vec<_>>(),
             [Some(5), Some(6)]
         );
         let search = |query: &'static str| async move {
             let page = history
-                .search(&["nuschel".to_string()], Some("3"), query, None, 100)
+                .search(&["nuschl".to_string()], Some("3"), query, None, 100)
                 .await?;
             Ok::<_, Error>(page.hits.iter().map(|hit| hit.id).collect::<Vec<_>>())
         };
         assert_eq!(search("message 2").await?, [stored[1]]);
         // A hit says its seq, by which a server-history timeline finds it.
         let hits = history
-            .search(&["nuschel".to_string()], Some("3"), "message 2", None, 100)
+            .search(&["nuschl".to_string()], Some("3"), "message 2", None, 100)
             .await?;
         assert_eq!(hits.hits[0].seq, Some(2));
 
         // An edit overwrites the text and what search finds.
-        assert!(history.edit("nuschel", "3", 2, "edited words", 650).await?);
+        assert!(history.edit("nuschl", "3", 2, "edited words", 650).await?);
         assert!(search("message 2").await?.is_empty());
         assert_eq!(search("edited").await?, [stored[1]]);
         // An older edit arriving late changes nothing.
-        assert!(!history.edit("nuschel", "3", 2, "older words", 600).await?);
+        assert!(!history.edit("nuschl", "3", 2, "older words", 600).await?);
         assert!(search("older").await?.is_empty());
         // A late copy from before the edit does not undo it; a newer one wins.
         history.store_server(&[record(2, 200, "message 2")]).await?;
         let entry = |page: HistoryPage, seq| page.messages.into_iter().find(|e| e.seq == Some(seq));
-        let edited = entry(history.page("nuschel", "3", None, 100).await?, 2).expect("seq 2");
+        let edited = entry(history.page("nuschl", "3", None, 100).await?, 2).expect("seq 2");
         assert_eq!(
             (edited.message.body.as_str(), edited.edited_ms),
             ("edited words", Some(650))
@@ -1861,19 +1861,19 @@ mod tests {
         assert_eq!(search("again").await?, [stored[1]]);
 
         // A deletion leaves a tombstone without text, also in search.
-        assert!(history.delete("nuschel", "3", 2, 800).await?);
-        let tombstone = entry(history.page("nuschel", "3", None, 100).await?, 2).expect("seq 2");
+        assert!(history.delete("nuschl", "3", 2, 800).await?);
+        let tombstone = entry(history.page("nuschl", "3", None, 100).await?, 2).expect("seq 2");
         assert_eq!(tombstone.message.body, "");
         assert_eq!(tombstone.deleted_ms, Some(800));
         assert!(search("again").await?.is_empty());
         assert!(
-            !history.edit("nuschel", "3", 2, "back", 900).await?,
+            !history.edit("nuschl", "3", 2, "back", 900).await?,
             "a tombstone stays"
         );
         history
             .store_server(&[record(2, 200, "resurrected")])
             .await?;
-        let tombstone = entry(history.page("nuschel", "3", None, 100).await?, 2).expect("seq 2");
+        let tombstone = entry(history.page("nuschl", "3", None, 100).await?, 2).expect("seq 2");
         assert_eq!(
             (tombstone.message.body.as_str(), tombstone.deleted_ms),
             ("", Some(800))
@@ -1883,14 +1883,14 @@ mod tests {
         gone.deleted_ms = Some(750);
         history.store_server(&[gone]).await?;
         assert!(search("secret").await?.is_empty());
-        assert!(!history.edit("nuschel", "3", 99, "x", 1).await?);
-        assert!(!history.delete("nuschel", "3", 99, 1).await?);
+        assert!(!history.edit("nuschl", "3", 99, "x", 1).await?);
+        assert!(!history.delete("nuschl", "3", 99, 1).await?);
 
         // Our own pending message gets its seq; if a page stored it first,
         // the pending copy goes.
         let pending = history
             .append(&ChatMessage {
-                server: "nuschel".into(),
+                server: "nuschl".into(),
                 channel: "3".into(),
                 author: "Ada".into(),
                 observed_at_ms: 1000,
@@ -1904,7 +1904,7 @@ mod tests {
         );
         let raced = history
             .append(&ChatMessage {
-                server: "nuschel".into(),
+                server: "nuschl".into(),
                 channel: "3".into(),
                 author: "Ada".into(),
                 observed_at_ms: 1100,
@@ -1939,7 +1939,7 @@ mod tests {
         // Local observations in the same conversation keep their place by time.
         history
             .append(&ChatMessage {
-                server: "nuschel".into(),
+                server: "nuschl".into(),
                 channel: "other".into(),
                 author: "Bob".into(),
                 observed_at_ms: 0,

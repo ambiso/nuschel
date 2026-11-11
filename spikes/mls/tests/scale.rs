@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use nuschel_mls_spike::*;
+use nuschl_mls_spike::*;
 use openmls::prelude::tls_codec::Serialize as _;
 use openmls::prelude::*;
 

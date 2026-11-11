@@ -14,19 +14,19 @@
 //! ```
 //!
 //! SPAKE2 (`spake2` 0.4, Ed25519 group, the PAKE magic-wormhole uses) runs with the full
-//! code as password, E as side A (`"nuschel/device-link/v1/existing"`) and N as side B
-//! (`"nuschel/device-link/v1/new"`). Peer elements must be canonical and of prime
+//! code as password, E as side A (`"nuschl/device-link/v1/existing"`) and N as side B
+//! (`"nuschl/device-link/v1/new"`). Peer elements must be canonical and of prime
 //! order. With `K` the SPAKE2 key:
 //!
 //! ```text
-//! transcript   = SHA-256(uint8(22) || "nuschel/device-link/v1"
+//! transcript   = SHA-256(uint8(22) || "nuschl/device-link/v1"
 //!                        || LinkPake(A).pake || LinkPake(B).pake || LinkDeviceKeys body)
 //! prk          = HKDF-Extract(salt = transcript, ikm = K)
-//! confirm_key  = HKDF-Expand(prk, "nuschel/device-link/v1 confirm", 32)
-//! psk          = HKDF-Expand(prk, "nuschel/device-link/v1 psk", 32)
+//! confirm_key  = HKDF-Expand(prk, "nuschl/device-link/v1 confirm", 32)
+//! psk          = HKDF-Expand(prk, "nuschl/device-link/v1 psk", 32)
 //! confirmation = HMAC-SHA-256(confirm_key, transcript)
-//! LinkBundle   = HPKE PSK mode to N's kem_key, info = uint8(22) || "nuschel/device-link/v1"
-//!                || transcript, psk, psk_id = "nuschel/device-link/v1", aad = ""
+//! LinkBundle   = HPKE PSK mode to N's kem_key, info = uint8(22) || "nuschl/device-link/v1"
+//!                || transcript, psk, psk_id = "nuschl/device-link/v1", aad = ""
 //! ```
 //!
 //! The confirmation authenticates N's keys to E (a server that swaps them, or a wrong
@@ -78,11 +78,11 @@ use crate::keystore::{DeviceSyncKey, RecoveryBlob};
 use crate::roster::VerifiedIdentity;
 use crate::{DeviceSigningCertificate, Error, hpke};
 
-const LINK_LABEL: &str = "nuschel/device-link/v1";
-const SIDE_EXISTING: &[u8] = b"nuschel/device-link/v1/existing";
-const SIDE_NEW: &[u8] = b"nuschel/device-link/v1/new";
-const CONFIRM_INFO: &[u8] = b"nuschel/device-link/v1 confirm";
-const PSK_INFO: &[u8] = b"nuschel/device-link/v1 psk";
+const LINK_LABEL: &str = "nuschl/device-link/v1";
+const SIDE_EXISTING: &[u8] = b"nuschl/device-link/v1/existing";
+const SIDE_NEW: &[u8] = b"nuschl/device-link/v1/new";
+const CONFIRM_INFO: &[u8] = b"nuschl/device-link/v1 confirm";
+const PSK_INFO: &[u8] = b"nuschl/device-link/v1 psk";
 const PAKE_LEN: usize = 33;
 
 /// The largest application payload a provisioning bundle carries (4 MiB).

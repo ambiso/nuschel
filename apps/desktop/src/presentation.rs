@@ -3,11 +3,11 @@
 //! renderer-ready document (styled text, images for the GPU atlas), the local
 //! time, the height the row had when last laid out, and whether a long
 //! message is expanded. The SDK keeps the messages themselves
-//! (`nuschel_client::timeline`); this keeps what only drawing needs, by
+//! (`nuschl_client::timeline`); this keeps what only drawing needs, by
 //! message serial, built when a conversation is shown and rebuilt when a
 //! message's revision changes (an edit, a deletion).
 use crate::document::Document;
-use nuschel_client::{conversation::ActivityLine, timeline::Message};
+use nuschl_client::{conversation::ActivityLine, timeline::Message};
 use std::{cell::Cell, collections::HashMap, rc::Rc};
 
 /// Messages taller than this are collapsed until expanded.

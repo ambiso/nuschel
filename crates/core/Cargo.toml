@@ -1,6 +1,6 @@
 [package]
-name = "nuschel-core"
-description = "Portable Nuschel domain types and message presentation rules"
+name = "nuschl-core"
+description = "Portable Nuschl domain types and message presentation rules"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

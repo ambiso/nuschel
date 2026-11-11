@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-files"
+name = "nuschl-files"
 description = "The files/1 object format: encrypted 64 KiB chunks with Merkle proofs (docs/files.md)"
 version.workspace = true
 edition.workspace = true

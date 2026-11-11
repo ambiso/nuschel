@@ -1,6 +1,6 @@
 [package]
-name = "nuschel-legacy-html"
-description = "Pure functions turning Nuschel text into the HTML stock Mumble clients receive"
+name = "nuschl-legacy-html"
+description = "Pure functions turning Nuschl text into the HTML stock Mumble clients receive"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

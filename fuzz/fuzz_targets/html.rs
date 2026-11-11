@@ -6,8 +6,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_content::{ContentRenderer, MAX_URL_BYTES};
-use nuschel_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument};
+use nuschl_content::{ContentRenderer, MAX_URL_BYTES};
+use nuschl_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument};
 
 thread_local! {
     // Loads syntect's syntaxes once, on the first code block, as one content
@@ -33,7 +33,7 @@ fn check(document: &MessageDocument) {
         })
         .sum();
     assert!(
-        spans <= 2048 + 3 * nuschel_content::MAX_LINKS,
+        spans <= 2048 + 3 * nuschl_content::MAX_LINKS,
         "{spans} spans"
     );
     for block in &document.blocks {
@@ -46,7 +46,7 @@ fn check(document: &MessageDocument) {
             assert!(end <= span.start && span.start < span.end && span.end <= text.len());
             assert!(text.is_char_boundary(span.start) && text.is_char_boundary(span.end));
             if let Some(url) = &span.link {
-                assert!(nuschel_core::allowed_link(url) && url.len() <= MAX_URL_BYTES);
+                assert!(nuschl_core::allowed_link(url) && url.len() <= MAX_URL_BYTES);
                 assert!(!url.contains(|c: char| c.is_control() || c.is_whitespace()));
             }
             end = span.end;

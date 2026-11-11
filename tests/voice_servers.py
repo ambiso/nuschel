@@ -87,10 +87,10 @@ class VoiceTest:
 
     def playback_streams(self):
         return [stream for stream in self.pactl("list", "sink-inputs")
-                if stream["properties"].get("application.name") == "Nuschel"]
+                if stream["properties"].get("application.name") == "Nuschl"]
 
     def microphone_open(self):
-        """Nuschel records the microphone (not just the speakers, its echo reference)."""
+        """Nuschl records the microphone (not just the speakers, its echo reference)."""
         sources = {source["index"]: source["name"] for source in self.pactl("list", "sources")}
         return any(sources.get(stream["source"]) == "microphone.monitor"
                    for stream in self.pactl("list", "source-outputs"))
@@ -107,7 +107,7 @@ class VoiceTest:
         time.sleep(0.8)
 
     def heard(self, peer, label):
-        """What Nuschel plays while `peer` talks."""
+        """What Nuschl plays while `peer` talks."""
         recording = self.args.output / f"heard-{label}.pcm"
         with recording.open("wb") as output:
             recorder = subprocess.Popen([
@@ -144,7 +144,7 @@ class VoiceTest:
     # The desktop over AT-SPI.
 
     def nodes(self):
-        return snapshot(self.nuschel)
+        return snapshot(self.nuschl)
 
     def find(self, role, name, prefix=False):
         def found():
@@ -173,7 +173,7 @@ class VoiceTest:
 
     def shot(self, name):
         time.sleep(0.8)
-        window = self.shell.window("Nuschel")
+        window = self.shell.window("Nuschl")
         path = self.shell.screenshot(self.args.output / f"voice-{name}.png",
                                      crop=(window["x"] - 12, window["y"] - 12, window["width"] + 24,
                                            window["height"] + 24))
@@ -182,7 +182,7 @@ class VoiceTest:
     def hold(self, keysym, pressed):
         self.shell._pointer()
         state = "PRESSED" if pressed else "RELEASED"
-        self.shell.eval("global._nuschelKeyboard.notify_keyval(imports.gi.GLib.get_monotonic_time(),"
+        self.shell.eval("global._nuschlKeyboard.notify_keyval(imports.gi.GLib.get_monotonic_time(),"
                         f" imports.gi.Clutter.KEY_{keysym}, imports.gi.Clutter.KeyState.{state}); 'ok'")
 
     # The servers' view of the desktop.
@@ -256,18 +256,18 @@ class VoiceTest:
             "audio": {"transmit": "push_to_talk"},
             "shortcuts": {"push-to-talk": "f9", "toggle-mute": "f10", "toggle-deafen": "f11"},
             "appearance": {"theme": "dark"}}))
-        app_env = env | {"NUSCHEL_AUDIO_BACKEND": "pulse", "RUST_LOG": os.environ.get("NUSCHEL_TEST_LOG", "nuschel=info")}
-        app = self.app = self.spawn([str(self.args.binaries / "nuschel"), "--profile-dir", str(profile)], app_env,
+        app_env = env | {"NUSCHL_AUDIO_BACKEND": "pulse", "RUST_LOG": os.environ.get("NUSCHL_TEST_LOG", "nuschl=info")}
+        app = self.app = self.spawn([str(self.args.binaries / "nuschl"), "--profile-dir", str(profile)], app_env,
                                     "desktop.log")
-        eventually(lambda: app.poll() is None and self.shell.window("Nuschel"), "Nuschel window did not appear")
-        self.shell.place("Nuschel", 40, 40, WIDTH, HEIGHT)
+        eventually(lambda: app.poll() is None and self.shell.window("Nuschl"), "Nuschl window did not appear")
+        self.shell.place("Nuschl", 40, 40, WIDTH, HEIGHT)
 
         def application():
             assert app.poll() is None, (self.args.output / "desktop.log").read_text()[-3000:]
-            return next((node for node in registry.children() if node.name.lower() == "nuschel"), None)
-        self.nuschel = eventually(application, "Nuschel did not register with the accessibility registry", timeout=45)
+            return next((node for node in registry.children() if node.name.lower() == "nuschl"), None)
+        self.nuschl = eventually(application, "Nuschl did not register with the accessibility registry", timeout=45)
         # Keys go to the focused window: click into it once.
-        window = self.shell.window("Nuschel")
+        window = self.shell.window("Nuschl")
         self.shell.click(window["x"] + WIDTH // 2, window["y"] + 200)
 
         # Starting: both servers joined muted and deafened, and nothing plays or records.
@@ -469,7 +469,7 @@ class VoiceTest:
         eventually(lambda: is_selected("Lobby"), "server jump did not open the unread Lobby")
         assert self.own("Alpha")["channel"] == 1
 
-        window = self.shell.window("Nuschel")
+        window = self.shell.window("Nuschl")
         self.shell.wheel(window["x"] + 200, window["y"] + 350, 100)
         time.sleep(0.5)
         self.press("tree item", "Unread room 49")
@@ -516,7 +516,7 @@ def main():
     args = parser.parse_args()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="nuschel-voice-servers-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-voice-servers-") as temporary:
         test = VoiceTest(args, Path(temporary))
         try:
             test.run()

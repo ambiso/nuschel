@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-content-worker"
+name = "nuschl-content-worker"
 description = "Isolated rich-content parsing process"
 version.workspace = true
 edition.workspace = true
@@ -9,17 +9,17 @@ publish.workspace = true
 
 [dependencies]
 base64 = "0.22"
-nuschel-content.workspace = true
-nuschel-core.workspace = true
-nuschel-ipc.workspace = true
+nuschl-content.workspace = true
+nuschl-core.workspace = true
+nuschl-ipc.workspace = true
 
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt"] }
 
 # The launch stage: on Windows the worker starts itself again inside its
-# AppContainer (nuschel_ipc::windows_sandbox).
+# AppContainer (nuschl_ipc::windows_sandbox).
 [target.'cfg(windows)'.dependencies]
-nuschel-sandbox-windows.workspace = true
+nuschl-sandbox-windows.workspace = true
 
 [lints]
 workspace = true

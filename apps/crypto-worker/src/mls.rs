@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! End-to-end-encrypted conversations (docs/e2ee.md §6, §7): the worker's MLS state
-//! and the `Mls*` requests of `nuschel_ipc::crypto`. Direct conversations are groups
+//! and the `Mls*` requests of `nuschl_ipc::crypto`. Direct conversations are groups
 //! of the two identities' devices; channels (phase 4c) are groups of the devices that
 //! opened them, which join by external commit and are removed when the server
 //! proposes it (lost access, inactive, not opened for long).
 //!
-//! - **State.** One `nuschel_e2ee::client::Client` (OpenMLS's records, private keys
+//! - **State.** One `nuschl_e2ee::client::Client` (OpenMLS's records, private keys
 //!   included) and, per server and conversation, a [`Conversation`]: its group, pin
 //!   (§7.2), cursor, pending commit, per-sender chains (§6.4), our own chain, the
 //!   envelopes waiting for the server and the texts we sent. Both live in one sealed
@@ -38,20 +38,20 @@
 use crate::state::{Contact, ServerState};
 use crate::store::Store;
 use crate::worker::Worker;
-use nuschel_e2ee::client::{Client, Incoming, MemberInfo, ValidKeyPackage};
-use nuschel_e2ee::envelope::{self, Chain, Envelope, Kind};
-use nuschel_e2ee::history::{self, HistoryKey};
-use nuschel_e2ee::{ConversationBinding, ConversationKind};
-use nuschel_identity::{
+use nuschl_e2ee::client::{Client, Incoming, MemberInfo, ValidKeyPackage};
+use nuschl_e2ee::envelope::{self, Chain, Envelope, Kind};
+use nuschl_e2ee::history::{self, HistoryKey};
+use nuschl_e2ee::{ConversationBinding, ConversationKind};
+use nuschl_identity::{
     DeviceCertificate, DeviceCredential, DeviceId, DeviceRevocation, DeviceRoster,
     DeviceSigningCertificate, Error as IdentityError, HybridPublicKey, IdentityFingerprint,
     VerifiedDevice, VerifiedIdentity,
 };
-use nuschel_ipc::crypto::{
+use nuschl_ipc::crypto::{
     ContactState, ConversationView, CryptoRequest, CryptoResponse, GroupInit, KeyPackageBatch,
     Lock, MemberView, MlsOutgoing, Order, Received, base64_bytes,
 };
-use nuschel_kt::LogDescriptor;
+use nuschl_kt::LogDescriptor;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io;
@@ -194,11 +194,11 @@ mod base64_bytes32 {
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error> {
-        nuschel_ipc::crypto::base64_bytes::serialize(bytes, serializer)
+        nuschl_ipc::crypto::base64_bytes::serialize(bytes, serializer)
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 32], D::Error> {
-        let bytes = nuschel_ipc::crypto::base64_bytes::deserialize(deserializer)?;
+        let bytes = nuschl_ipc::crypto::base64_bytes::deserialize(deserializer)?;
         bytes
             .try_into()
             .map_err(|_| serde::de::Error::custom("expected 32 bytes"))
@@ -386,7 +386,7 @@ fn fingerprint_of(text: &str) -> Option<IdentityFingerprint> {
 impl Rosters {
     fn check(&self, member: &MemberInfo, now_s: u64) -> Verdict {
         let Ok(credential) = DeviceCredential::decode(&member.credential) else {
-            return Verdict::Refused("a member without a valid Nuschel credential".into());
+            return Verdict::Refused("a member without a valid Nuschl credential".into());
         };
         let identity = credential.identity();
         let (roster, own) = if identity == self.own.identity().fingerprint() {
@@ -1080,7 +1080,7 @@ impl Worker {
                 }
             };
             let Ok(credential) = DeviceCredential::decode(&package.credential) else {
-                notes.push("A key package without a Nuschel credential was refused.".into());
+                notes.push("A key package without a Nuschl credential was refused.".into());
                 continue;
             };
             let device = *credential.device_id().as_bytes();
@@ -1432,7 +1432,7 @@ impl Worker {
             Some("the group is bound to another conversation")
         } else if binding.generation != 0
             || binding.kind != ConversationKind::Channel
-            || binding.membership != nuschel_e2ee::Membership::Server
+            || binding.membership != nuschl_e2ee::Membership::Server
         {
             Some("the group is not this channel's")
         } else {
@@ -1693,8 +1693,8 @@ impl Worker {
                 idempotency_key: sent.idempotency_key,
             });
         }
-        let handshake = nuschel_e2ee::prevalidate::wire_format(message)
-            .is_ok_and(|format| format == nuschel_e2ee::prevalidate::WireFormat::PublicMessage);
+        let handshake = nuschl_e2ee::prevalidate::wire_format(message)
+            .is_ok_and(|format| format == nuschl_e2ee::prevalidate::WireFormat::PublicMessage);
         if handshake && let Some(pending) = &entry.pending {
             // Someone else's commit won the epoch: ours is void.
             if pending.create {
@@ -1814,7 +1814,7 @@ impl Worker {
             .pop();
         self.conversation_mut(server, conversation)?.cursor = seq;
         let Ok(credential) = DeviceCredential::decode(&sender.credential) else {
-            return Ok(undecryptable("the sender has no Nuschel credential"));
+            return Ok(undecryptable("the sender has no Nuschl credential"));
         };
         let Some(view) = view.filter(|view| view.verified) else {
             return Ok(undecryptable("the sender's credential does not verify"));
@@ -1887,7 +1887,7 @@ impl Worker {
                 .binding(&group_id)
                 .map_err(|e| e.to_string())?;
             if keys.iter().any(|key| u64::from(key.index) > epoch)
-                || (binding.history == nuschel_e2ee::HistoryPolicy::SinceJoin
+                || (binding.history == nuschl_e2ee::HistoryPolicy::SinceJoin
                     && keys.iter().any(|key| u64::from(key.index) < epoch))
             {
                 return Ok(undecryptable(
@@ -2093,7 +2093,7 @@ impl Worker {
             .ok_or("no end-to-end group")?;
         let (keys, next_key) = history::grant_page(
             entry.history.keys.iter().filter_map(|(index, key)| {
-                if binding.history != nuschel_e2ee::HistoryPolicy::Members {
+                if binding.history != nuschl_e2ee::HistoryPolicy::Members {
                     return None;
                 }
                 Some(HistoryKey {
@@ -2104,7 +2104,7 @@ impl Worker {
             current.clone(),
             after,
         );
-        let total = if binding.history == nuschel_e2ee::HistoryPolicy::Members {
+        let total = if binding.history == nuschl_e2ee::HistoryPolicy::Members {
             entry.history.keys.len() as u64
         } else {
             1

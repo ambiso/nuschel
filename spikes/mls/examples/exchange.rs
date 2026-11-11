@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Size probe: two devices, a group, one message each way, hybrid identities.
-use nuschel_mls_spike::*;
+use nuschl_mls_spike::*;
 
 fn main() {
     let binding = ConversationBinding {

@@ -23,7 +23,7 @@ fn restore() {
 /// Run the full screen until the user quits.
 pub async fn run(
     mut app: App,
-    mut events: tokio::sync::mpsc::Receiver<nuschel_client::native::Event>,
+    mut events: tokio::sync::mpsc::Receiver<nuschl_client::native::Event>,
 ) -> std::io::Result<()> {
     let mut terminal: DefaultTerminal = ratatui::try_init()?;
     let hook = std::panic::take_hook();

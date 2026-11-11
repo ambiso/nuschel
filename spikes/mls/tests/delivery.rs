@@ -2,10 +2,10 @@
 //! The delivery service: ordering, epochs, validation, external joins, and what a
 //! server can and cannot do to a group.
 
-use nuschel_mls_spike::ds::{DeliveryService, DsError};
-use nuschel_mls_spike::pins::ConversationPins;
-use nuschel_mls_spike::sim::Client;
-use nuschel_mls_spike::*;
+use nuschl_mls_spike::ds::{DeliveryService, DsError};
+use nuschl_mls_spike::pins::ConversationPins;
+use nuschl_mls_spike::sim::Client;
+use nuschl_mls_spike::*;
 use openmls::prelude::*;
 use openmls_traits::OpenMlsProvider;
 

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The delivery service's view of a group (docs/e2ee.md §6.3), for `nuscheld`.
+//! The delivery service's view of a group (docs/e2ee.md §6.3), for `nuschld`.
 //!
 //! The server is not a member: it follows each group's public state with OpenMLS's
 //! `PublicGroup` from the handshake messages, which travel as PublicMessage. With
@@ -105,7 +105,7 @@ pub enum DsError {
 /// What a valid key package carries, for the directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyPackageInfo {
-    /// The Nuschel device credential (nuschel-identity `DeviceCredential`).
+    /// The Nuschl device credential (nuschl-identity `DeviceCredential`).
     pub credential: Vec<u8>,
     pub signature_key: [u8; 32],
     /// `KeyPackageRef` (RFC 9420 §5.2): how a Welcome names its recipient.

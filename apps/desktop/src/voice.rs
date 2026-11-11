@@ -12,7 +12,7 @@ use crate::{
     theme::*,
 };
 use gpui_kit::{Role as Role_, prelude::*, *};
-use nuschel_client::{Client, SecondServer, model::TextTarget, voice::Role};
+use nuschl_client::{Client, SecondServer, model::TextTarget, voice::Role};
 use std::{collections::BTreeMap, time::Duration};
 
 /// Half a breath of a listening badge's pulse.

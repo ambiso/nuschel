@@ -2,7 +2,7 @@
 //! Witnessing (docs/e2ee.md §5.9, option B of docs/reviews/2026-11-11-key-transparency.md):
 //! each server keeps a small append-only *epoch log* whose leaf `i` is its akd epoch
 //! `i`, signs C2SP checkpoints of it, and collects cosignatures from a small fixed set
-//! of witnesses, led by the project auditor `nuschel-witness`, which checks every akd
+//! of witnesses, led by the project auditor `nuschl-witness`, which checks every akd
 //! transition before it cosigns. Clients require those cosignatures, no older than a
 //! freshness bound, before they treat the server's view as everyone's.
 //!
@@ -23,8 +23,8 @@ use crate::log::LogId;
 use crate::{MSG_EPOCH_LEAF, MSG_WITNESSED};
 use tlog::Hash;
 
-/// The suffix of every epoch log's origin: `<host>:<port>/nuschel-kt/v1`.
-pub const ORIGIN_SUFFIX: &str = "/nuschel-kt/v1";
+/// The suffix of every epoch log's origin: `<host>:<port>/nuschl-kt/v1`.
+pub const ORIGIN_SUFFIX: &str = "/nuschl-kt/v1";
 
 /// The origin of the epoch log of the server clients reach as `host:port` (the
 /// session's sticky key: lower-case host, then the port). `None` if it would not be
@@ -85,7 +85,7 @@ impl EpochLeaf {
 }
 
 /// A checkpoint of an epoch log (c2sp.org/tlog-checkpoint): origin, tree size and root
-/// hash. Nuschel's checkpoints carry no extension lines, and parsing refuses them.
+/// hash. Nuschl's checkpoints carry no extension lines, and parsing refuses them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checkpoint {
     pub origin: String,
@@ -205,7 +205,7 @@ mod tests {
     fn origins_follow_the_sticky_key() {
         assert_eq!(
             origin("Chat.Example.org:64738").unwrap(),
-            "chat.example.org:64738/nuschel-kt/v1"
+            "chat.example.org:64738/nuschl-kt/v1"
         );
         assert!(origin("").is_none());
         assert!(origin("a b:1").is_none());
@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn checkpoints_are_parsed_strictly() {
         let cp = Checkpoint {
-            origin: "a.example:1/nuschel-kt/v1".into(),
+            origin: "a.example:1/nuschl-kt/v1".into(),
             size: 0,
             root: tlog::empty_root(),
         };

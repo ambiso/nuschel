@@ -68,7 +68,7 @@ def media_workers(root):
                 arguments = Path(f"/proc/{child}/cmdline").read_bytes().split(b"\0")
             except OSError:
                 continue
-            if b"--live" in arguments and arguments[0].endswith((b"/worker", b"nuschel-media-worker")):
+            if b"--live" in arguments and arguments[0].endswith((b"/worker", b"nuschl-media-worker")):
                 found.append(child)
     return found
 
@@ -85,24 +85,24 @@ class DesktopTest:
         self.env = os.environ.copy()
         self.env.pop("WAYLAND_DISPLAY", None)
         self.env.pop("DBUS_SESSION_BUS_ADDRESS", None)
-        self.env.update(XDG_RUNTIME_DIR=str(self.runtime), NUSCHEL_AUDIO_BACKEND="pulse",
-                        LIBGL_ALWAYS_SOFTWARE="1", OMP_NUM_THREADS="2", LP_NUM_THREADS="2", RUST_LOG="nuschel=debug")
+        self.env.update(XDG_RUNTIME_DIR=str(self.runtime), NUSCHL_AUDIO_BACKEND="pulse",
+                        LIBGL_ALWAYS_SOFTWARE="1", OMP_NUM_THREADS="2", LP_NUM_THREADS="2", RUST_LOG="nuschl=debug")
         self.pulse = self.app = self.peer = None
-        self.window = self.nuschel = self.registry = None
+        self.window = self.nuschl = self.registry = None
         self.helpers = []
         self.last_click = 0.0
         self.reference = ReferenceOpus(args.opus_library)
 
     def start_audio(self):
-        # Speakers (nuschel_fixture, recorded from its monitor) and a microphone
-        # of their own (nuschel_microphone's monitor): Nuschel's echo canceller
+        # Speakers (nuschl_fixture, recorded from its monitor) and a microphone
+        # of their own (nuschl_microphone's monitor): Nuschl's echo canceller
         # removes whatever the speakers play from the microphone, so a voice
         # played into the speakers would be cancelled as echo.
         script = self.runtime / "default.pa"
         script.write_text(f"load-module module-native-protocol-unix socket={self.socket} auth-anonymous=1\n"
-                          "load-module module-null-sink sink_name=nuschel_fixture rate=48000 channels=2\n"
-                          "load-module module-null-sink sink_name=nuschel_microphone rate=48000 channels=2\n"
-                          "set-default-sink nuschel_fixture\nset-default-source nuschel_microphone.monitor\n")
+                          "load-module module-null-sink sink_name=nuschl_fixture rate=48000 channels=2\n"
+                          "load-module module-null-sink sink_name=nuschl_microphone rate=48000 channels=2\n"
+                          "set-default-sink nuschl_fixture\nset-default-source nuschl_microphone.monitor\n")
         environment = self.env | {"PULSE_RUNTIME_PATH": str(self.runtime / "pulse"),
                                   "PULSE_STATE_PATH": str(self.runtime / "state")}
         self.pulse = subprocess.Popen([
@@ -141,26 +141,26 @@ class DesktopTest:
         if self.registry is None:
             self.start_accessibility()
         log = self.output / "desktop.log"
-        self.app = subprocess.Popen([str(self.args.binaries / "nuschel"), "--profile-dir", str(self.profile),
+        self.app = subprocess.Popen([str(self.args.binaries / "nuschl"), "--profile-dir", str(self.profile),
                                      *arguments], env=self.env, stdout=log.open("a"),
                                     stderr=subprocess.STDOUT, start_new_session=True)
         def window():
             if self.app.poll() is not None:
                 raise AssertionError(log.read_text()[-4000:])
-            result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^Nuschel"],
+            result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^Nuschl"],
                                     env=self.env, capture_output=True, text=True)
             return result.stdout.splitlines()[0] if result.returncode == 0 else None
-        self.window = eventually(window, "Nuschel did not open a window")
+        self.window = eventually(window, "Nuschl did not open a window")
         self.xdo("windowsize", self.window, "1120", "850")
         self.xdo("windowmove", self.window, "0", "0")
-        previous = self.nuschel
+        previous = self.nuschl
 
         def registered():
             if self.app.poll() is not None:
                 raise AssertionError(log.read_text()[-4000:])
-            return next((node for node in self.registry.children() if node.name.lower() == "nuschel"
+            return next((node for node in self.registry.children() if node.name.lower() == "nuschl"
                          and (previous is None or node.destination != previous.destination)), None)
-        self.nuschel = eventually(registered, "Nuschel did not register with the accessibility registry", timeout=45)
+        self.nuschl = eventually(registered, "Nuschl did not register with the accessibility registry", timeout=45)
 
     def xdo(self, *arguments):
         subprocess.run(["xdotool", *map(str, arguments)], env=self.env, check=True, timeout=10)
@@ -169,7 +169,7 @@ class DesktopTest:
         """The first node with this role (None: any) and accessible name: equal
         to `name`, containing it (partial), or accepted by it (a function)."""
         matches = name if callable(name) else (lambda label: name in label) if partial else name.__eq__
-        for node, node_role, label, _ in items(self.nuschel):
+        for node, node_role, label, _ in items(self.nuschl):
             if (role is None or node_role == role) and matches(label):
                 return node
         return None
@@ -185,7 +185,7 @@ class DesktopTest:
         return self.find(role, name, partial) is None
 
     def write_tree(self, name):
-        lines = [f"{role}: {label!r}" for _, role, label, _ in items(self.nuschel)]
+        lines = [f"{role}: {label!r}" for _, role, label, _ in items(self.nuschl)]
         (self.output / name).write_text("\n".join(lines) + "\n")
 
     def connected(self):
@@ -266,7 +266,7 @@ class DesktopTest:
         with recording.open("wb") as output:
             recorder = subprocess.Popen([
                 str(self.args.pulse_bin / "parec"), "--server=unix:" + str(self.socket),
-                "--device=nuschel_fixture.monitor", "--raw", "--format=float32le", "--rate=48000",
+                "--device=nuschl_fixture.monitor", "--raw", "--format=float32le", "--rate=48000",
                 "--channels=2", "--latency-msec=20", "--process-time-msec=10",
             ], stdout=output, stderr=(self.output / "recorder.log").open("a"), start_new_session=True)
             try:
@@ -279,7 +279,7 @@ class DesktopTest:
                 terminate(recorder)
         data = recording.read_bytes()
         samples = struct.unpack("<%df" % (len(data) // 4), data)
-        assert rms(samples) > 0.01, "Nuschel did not decode/play the reference audio"
+        assert rms(samples) > 0.01, "Nuschl did not decode/play the reference audio"
 
     def inject_tone(self, seconds=1):
         """A tone into the microphone."""
@@ -287,7 +287,7 @@ class DesktopTest:
         data = struct.pack("<%df" % (2 * len(mono)), *[value for sample in mono for value in (sample, sample)])
         subprocess.run([
             str(self.args.pulse_bin / "pacat"), "--server=unix:" + str(self.socket),
-            "--playback", "--device=nuschel_microphone", "--raw", "--format=float32le", "--rate=48000",
+            "--playback", "--device=nuschl_microphone", "--raw", "--format=float32le", "--rate=48000",
             "--channels=2", "--latency-msec=20", "--process-time-msec=10",
         ], input=data, capture_output=True, check=True, timeout=10)
 
@@ -299,7 +299,7 @@ class DesktopTest:
         def capturing():
             sources = {source["index"]: source["name"] for source in self.pulse_json("sources")}
             recorded = {sources.get(stream["source"]) for stream in self.pulse_json("source-outputs")}
-            return {"nuschel_microphone.monitor", "nuschel_fixture.monitor"} <= recorded
+            return {"nuschl_microphone.monitor", "nuschl_fixture.monitor"} <= recorded
 
         eventually(capturing, "microphone and echo reference did not become ready", timeout=30)
         time.sleep(0.5)
@@ -389,18 +389,18 @@ class DesktopTest:
         self.fill_field("Server address", self.args.host)
         self.fill_field("Port", str(self.args.port))
         self.fill_field("Server name", "Fixture Mumble")
-        self.fill_field("Username", "NuschelDesktop")
+        self.fill_field("Username", "NuschlDesktop")
         self.fill_field("Server password", "not-saved-fixture-password", role="password text")
         # Off, so that the restart below starts offline with saved history.
-        self.press("Connect when Nuschel starts", role="toggle button")
+        self.press("Connect when Nuschl starts", role="toggle button")
         self.press("Add and connect")
         self.wait_for("label", "Confirm server certificate")
-        assert not any(user["name"] == "NuschelDesktop" for user in self.peer.users.values())
+        assert not any(user["name"] == "NuschlDesktop" for user in self.peer.users.values())
         self.capture("certificate")
         self.press("Trust certificate and connect")
         # Connecting starts the desktop's workers and its TLS session: on a busy
         # two-core VM that takes longer than the peer's default wait.
-        gui = self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschelDesktop",
+        gui = self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschlDesktop",
                              timeout=60)["user"]
         session = gui["session"]
         self.connected()
@@ -408,7 +408,7 @@ class DesktopTest:
         assert not self.pulse_json("source-outputs"), "muted startup opened a microphone"
         bookmark = json.loads((self.profile / "config/servers.json").read_text())[0]
         assert (bookmark["name"], bookmark["host"], bookmark["port"], bookmark["username"]) == \
-            ("Fixture Mumble", self.args.host, self.args.port, "NuschelDesktop"), bookmark
+            ("Fixture Mumble", self.args.host, self.args.port, "NuschlDesktop"), bookmark
         assert bookmark["certificate_sha256"] == pin
         assert bookmark.get("auto_connect") is False, f"the server connects at start: {bookmark}"
         assert "not-saved-fixture-password" not in json.dumps(bookmark) and "password" not in bookmark
@@ -423,7 +423,7 @@ class DesktopTest:
         self.type_message(body)
         self.xdo("key", "Return")
         eventually(lambda: self.has_message(body), "desktop composer lost newlines or failed to save/send")
-        sent = self.peer.wait(lambda event: event["kind"] == "text" and event["author"] == "NuschelDesktop")
+        sent = self.peer.wait(lambda event: event["kind"] == "text" and event["author"] == "NuschlDesktop")
         assert sent["target"] == {"kind": "channel", "id": 2}, f"the message did not go to Development: {sent}"
         reply = "PEERHISTORYMARKER\n\n```rust\nfn legacy_server() {}\n```"
         self.peer.send(kind="text", channel=2, body=reply)
@@ -488,10 +488,10 @@ class DesktopTest:
         self.wait_for("label", "Disconnected")
         self.browse_development()
         self.wait_for("list item", marker, partial=True)
-        assert not any(user["name"] == "NuschelDesktop" for user in self.peer.users.values())
+        assert not any(user["name"] == "NuschlDesktop" for user in self.peer.users.values())
         self.capture("offline-history")
         self.press("Connect")
-        self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschelDesktop", timeout=60)
+        self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschlDesktop", timeout=60)
         self.connected()
         assert (self.profile / "data/identity/identity.json").read_bytes() == identity
         print("Saved server/certificate/client identity and offline nested-channel history survived restart.", flush=True)
@@ -586,7 +586,7 @@ if __name__ == "__main__":
                         help="dbus-daemon for the private session bus")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="nuschel-desktop-mumble-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-desktop-mumble-") as temporary:
         test = DesktopTest(args, Path(temporary), args.output)
         try:
             test.run()

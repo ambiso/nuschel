@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The headless client SDK every Nuschel client shares (docs/clients.md, "The
+//! The headless client SDK every Nuschl client shares (docs/clients.md, "The
 //! SDK"): timelines, conversations and server state, and the policies that
 //! decide them. Plain data only, no runtime and no clock: it builds for
 //! `wasm32-unknown-unknown`, and platform adapters execute what it decides.
@@ -24,7 +24,7 @@ pub mod tree;
 pub mod voice;
 pub use client::{Client, Focus, Notification, SecondServer, SendError, Update};
 pub use navigation::*;
-pub use nuschel_core::model;
+pub use nuschl_core::model;
 
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +62,7 @@ pub struct RouteEffects {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProcessingProvider {
     Upstream,
-    Nuschel,
+    Nuschl,
     /// Unknown upstream processing is never treated as confirmed absence.
     Bypass,
 }
@@ -77,12 +77,12 @@ pub struct AudioPlan {
 }
 
 impl AudioPlan {
-    /// Pure policy. A platform adapter can only apply changes to Nuschel-owned resources.
+    /// Pure policy. A platform adapter can only apply changes to Nuschl-owned resources.
     pub fn for_route(effects: RouteEffects) -> Self {
         fn provider(state: EffectState) -> ProcessingProvider {
             match state {
                 EffectState::Active => ProcessingProvider::Upstream,
-                EffectState::Inactive => ProcessingProvider::Nuschel,
+                EffectState::Inactive => ProcessingProvider::Nuschl,
                 EffectState::Unknown => ProcessingProvider::Bypass,
             }
         }
@@ -123,7 +123,7 @@ mod tests {
         });
         assert_eq!(plan.echo_cancellation, ProcessingProvider::Upstream);
         assert!(plan.reconnect_own_playback_reference);
-        assert_eq!(plan.noise_suppression, ProcessingProvider::Nuschel);
+        assert_eq!(plan.noise_suppression, ProcessingProvider::Nuschl);
         assert_eq!(plan.gain_control, ProcessingProvider::Bypass);
         assert!(plan.uncertain);
     }

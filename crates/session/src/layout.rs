@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Where Nuschel keeps its files ([`Layout`]), and the move from the places
+//! Where Nuschl keeps its files ([`Layout`]), and the move from the places
 //! earlier versions used ([`migrate`]).
 //!
 //! On Linux and the BSDs the folders follow the XDG Base Directory
@@ -8,22 +8,22 @@
 //!
 //! | Folder | Default | Holds |
 //! | --- | --- | --- |
-//! | `$XDG_CONFIG_HOME/nuschel` | `~/.config/nuschel` | what you edit or keep with your dotfiles: `settings.json`, `servers.json` (the bookmarks), `managed.json`. No keys, no caches. |
-//! | `$XDG_DATA_HOME/nuschel` | `~/.local/share/nuschel` | `identity/` (the Mumble certificate and its private key), `keys/` (the crypto worker's sealed keystore), `history/` (the storage worker's database), `nuschel-policy.json` (the servers' security records) |
-//! | `$XDG_STATE_HOME/nuschel` | `~/.local/state/nuschel` | `last-channels.json`, `update-state.json` |
-//! | `$XDG_CACHE_HOME/nuschel` | `~/.cache/nuschel` | `channels.json` (channel trees for browsing offline) and `icons.json` (server icons); safe to delete |
+//! | `$XDG_CONFIG_HOME/nuschl` | `~/.config/nuschl` | what you edit or keep with your dotfiles: `settings.json`, `servers.json` (the bookmarks), `managed.json`. No keys, no caches. |
+//! | `$XDG_DATA_HOME/nuschl` | `~/.local/share/nuschl` | `identity/` (the Mumble certificate and its private key), `keys/` (the crypto worker's sealed keystore), `history/` (the storage worker's database), `nuschl-policy.json` (the servers' security records) |
+//! | `$XDG_STATE_HOME/nuschl` | `~/.local/state/nuschl` | `last-channels.json`, `update-state.json` |
+//! | `$XDG_CACHE_HOME/nuschl` | `~/.cache/nuschl` | `channels.json` (channel trees for browsing offline) and `icons.json` (server icons); safe to delete |
 //!
 //! macOS keeps configuration and data in `~/Library/Application
-//! Support/org.Nuschel.Nuschel` (state in its `state` folder) and the cache in
-//! `~/Library/Caches/org.Nuschel.Nuschel`. Windows keeps configuration in
-//! `%APPDATA%\Nuschel\Nuschel\config`, data in `%LOCALAPPDATA%\Nuschel\Nuschel\data`
+//! Support/org.Nuschl.Nuschl` (state in its `state` folder) and the cache in
+//! `~/Library/Caches/org.Nuschl.Nuschl`. Windows keeps configuration in
+//! `%APPDATA%\Nuschl\Nuschl\config`, data in `%LOCALAPPDATA%\Nuschl\Nuschl\data`
 //! (state in its `state` folder) and the cache in
-//! `%LOCALAPPDATA%\Nuschel\Nuschel\cache`. `--profile-dir DIR` puts the four
+//! `%LOCALAPPDATA%\Nuschl\Nuschl\cache`. `--profile-dir DIR` puts the four
 //! under `DIR`, as `config`, `data`, `state` and `cache`.
 //!
 //! The storage and crypto workers may write anywhere in their folders, so each
 //! has one of its own with nothing else in it, and neither reaches the other's
-//! (`nuschel_ipc::host`). Folders are created owner-only (0700) when first
+//! (`nuschl_ipc::host`). Folders are created owner-only (0700) when first
 //! needed, files 0600.
 //!
 //! ## Moving from earlier versions
@@ -39,7 +39,7 @@
 //!   removed. An interrupted move leaves the old file, or both, and the next
 //!   start finishes it;
 //! - never over something at the new place: where both exist and differ, the
-//!   new place is used, the old one is left alone and Nuschel says so;
+//!   new place is used, the old one is left alone and Nuschl says so;
 //! - holding the old identity lock, which earlier versions take to read or
 //!   create the identity, so that two instances never move or create it at once;
 //! - the history first, its sidecars before the database. Until the history
@@ -55,7 +55,7 @@ use std::{
 };
 
 /// The folder name under each XDG base directory.
-const APPLICATION: &str = "nuschel";
+const APPLICATION: &str = "nuschl";
 /// Folders under the data folder.
 const HISTORY: &str = "history";
 const IDENTITY: &str = "identity";
@@ -69,7 +69,7 @@ pub(crate) const UPDATE_STATE: &str = "update-state.json";
 /// How long to wait for another instance that holds the identity lock.
 const PATIENCE: Duration = Duration::from_secs(30);
 
-/// Nuschel's four folders. Each holds what its kind should hold and nothing
+/// Nuschl's four folders. Each holds what its kind should hold and nothing
 /// else; the subfolders of `data` are [`Layout::history`],
 /// [`Layout::identity`] and [`Layout::keys`].
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +78,7 @@ pub struct Layout {
     pub config: PathBuf,
     /// The identity, the keys, the history and the security records.
     pub data: PathBuf,
-    /// Where Nuschel resumes from: the last channels, the update check.
+    /// Where Nuschl resumes from: the last channels, the update check.
     pub state: PathBuf,
     /// Channel trees and server icons: safe to delete at any time.
     pub cache: PathBuf,
@@ -87,16 +87,29 @@ pub struct Layout {
 impl Layout {
     /// This user's folders on this platform.
     pub fn system() -> io::Result<Self> {
+        Self::system_named(APPLICATION, "Nuschl")
+    }
+
+    pub(crate) fn legacy_system() -> io::Result<Self> {
+        Self::system_named("nuschel", "Nuschel")
+    }
+
+    fn system_named(application: &str, display: &str) -> io::Result<Self> {
+        let _ = display;
         #[cfg(all(unix, not(target_os = "macos")))]
         {
             let base = directories::BaseDirs::new()
                 .ok_or_else(|| io::Error::other("could not find the home directory"))?;
-            Ok(Self::xdg(|name| std::env::var_os(name), base.home_dir()))
+            Ok(Self::xdg_named(
+                |name| std::env::var_os(name),
+                base.home_dir(),
+                application,
+            ))
         }
         #[cfg(not(all(unix, not(target_os = "macos"))))]
         {
             // macOS and Windows have no state folder of their own.
-            let paths = directories::ProjectDirs::from("org", "Nuschel", "Nuschel")
+            let paths = directories::ProjectDirs::from("org", display, display)
                 .ok_or_else(|| io::Error::other("could not find the application data directory"))?;
             let data = paths.data_local_dir().to_owned();
             Ok(Self {
@@ -113,10 +126,14 @@ impl Layout {
     /// The XDG Base Directory folders of `home`, with the variables `var`
     /// returns (`std::env::var_os` outside tests).
     pub fn xdg(var: impl Fn(&str) -> Option<OsString>, home: &Path) -> Self {
+        Self::xdg_named(var, home, APPLICATION)
+    }
+
+    fn xdg_named(var: impl Fn(&str) -> Option<OsString>, home: &Path, application: &str) -> Self {
         let base = |name: &str, default: &str| {
             absolute(var(name))
                 .unwrap_or_else(|| home.join(default))
-                .join(APPLICATION)
+                .join(application)
         };
         Self {
             config: base("XDG_CONFIG_HOME", ".config"),
@@ -199,7 +216,7 @@ pub fn xdg_config_dirs(var: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
 
 /// Create `directory` and any missing parents owner-only, and make an
 /// existing `directory` owner-only as well (the XDG specification asks for
-/// 0700 on base directories Nuschel creates).
+/// 0700 on base directories Nuschl creates).
 pub fn create_private_dir(directory: &Path) -> io::Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -224,7 +241,7 @@ pub(crate) struct Places {
     pub identity: PathBuf,
     /// The crypto worker's folder.
     pub keys: PathBuf,
-    /// The folder of nuschel-policy.json.
+    /// The folder of nuschl-policy.json.
     pub policy: PathBuf,
     /// update-state.json.
     pub update_state: PathBuf,
@@ -301,7 +318,7 @@ pub(crate) fn migrate(layout: &Layout, servers: &dyn SplitServers) -> (Places, M
         Ok(lock) => lock,
         Err(error) => {
             report.problems.push(format!(
-                "Nuschel could not take {} to move its files to their new places ({error}). \
+                "Nuschl could not take {} to move its files to their new places ({error}). \
                  It uses them where they are and tries again on the next start.",
                 lock_path.display()
             ));
@@ -314,7 +331,7 @@ pub(crate) fn migrate(layout: &Layout, servers: &dyn SplitServers) -> (Places, M
     move_history(layout, &old, &mut report);
     if history_place(layout, &old, &mut Migration::default()) == layout.data {
         report.problems.push(format!(
-            "Nuschel could not move the history out of {}, so everything else stays where \
+            "Nuschl could not move the history out of {}, so everything else stays where \
              it was until it can.",
             layout.data.display()
         ));
@@ -425,8 +442,8 @@ fn history_place(layout: &Layout, old: &Old, report: &mut Migration) -> PathBuf 
     if old.history == layout.data && !only_history(&layout.data) {
         report.problems.push(format!(
             "The history in {} could not be moved, and the folder now holds more than the \
-             history, so the storage worker may not have it. Nuschel keeps a new history in {} \
-             and leaves the earlier one where it is; quit every other Nuschel and start it \
+             history, so the storage worker may not have it. Nuschl keeps a new history in {} \
+             and leaves the earlier one where it is; quit every other Nuschl and start it \
              again to move it.",
             layout.data.display(),
             new.display()
@@ -458,7 +475,7 @@ fn move_history(layout: &Layout, old: &Old, report: &mut Migration) {
     }
     if exists(&new.join(HISTORY_FILE)) {
         report.problems.push(format!(
-            "There is a history in {} and an earlier one in {}. Nuschel uses the first and \
+            "There is a history in {} and an earlier one in {}. Nuschl uses the first and \
              leaves the earlier one alone.",
             new.display(),
             old.history.display()
@@ -583,7 +600,7 @@ fn settle_move(
             "{what} was copied from {from_shown} to {to_shown}, and the old copy removed."
         )),
         Ok(Outcome::Copied { link: Some(target) }) => report.problems.push(format!(
-            "{what} was a link at {from_shown} to {}. Nuschel copied it to {to_shown} and \
+            "{what} was a link at {from_shown} to {}. Nuschl copied it to {to_shown} and \
              removed the link; the original is still at {}, so remove it if it should not \
              be there (a dotfiles repository, for example).",
             target.display(),
@@ -591,10 +608,10 @@ fn settle_move(
         )),
         Ok(Outcome::Conflict) => report.problems.push(format!(
             "{what} is in {to_shown}, and an older copy that differs from it is in \
-             {from_shown}. Nuschel uses the first and leaves the other alone."
+             {from_shown}. Nuschl uses the first and leaves the other alone."
         )),
         Err(error) => report.problems.push(format!(
-            "{what} could not be moved from {from_shown} to {to_shown} ({error}). Nuschel \
+            "{what} could not be moved from {from_shown} to {to_shown} ({error}). Nuschl \
              tries again on the next start."
         )),
     }
@@ -894,7 +911,7 @@ fn sweep(layout: &Layout) {
 }
 
 /// Lock `path` (created 0600), waiting a while for another holder.
-fn take_lock(path: &Path) -> io::Result<fs::File> {
+pub(crate) fn take_lock(path: &Path) -> io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -910,7 +927,7 @@ fn take_lock(path: &Path) -> io::Result<fs::File> {
             Err(fs::TryLockError::WouldBlock) => {
                 return Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
-                    "another Nuschel holds it",
+                    "another Nuschl holds it",
                 ));
             }
             Err(fs::TryLockError::Error(error)) => return Err(error),
@@ -953,7 +970,7 @@ mod tests {
 
     fn temporary(name: &str) -> PathBuf {
         let path =
-            std::env::temp_dir().join(format!("nuschel-layout-{name}-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("nuschl-layout-{name}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&path).unwrap();
         path
     }
@@ -970,19 +987,16 @@ mod tests {
     fn xdg_variables_apply_only_when_absolute() {
         let home = Path::new("/home/ada");
         let defaults = Layout::xdg(environment(&[]), home);
-        assert_eq!(defaults.config, home.join(".config/nuschel"));
-        assert_eq!(defaults.data, home.join(".local/share/nuschel"));
-        assert_eq!(defaults.state, home.join(".local/state/nuschel"));
-        assert_eq!(defaults.cache, home.join(".cache/nuschel"));
-        assert_eq!(
-            defaults.history(),
-            home.join(".local/share/nuschel/history")
-        );
+        assert_eq!(defaults.config, home.join(".config/nuschl"));
+        assert_eq!(defaults.data, home.join(".local/share/nuschl"));
+        assert_eq!(defaults.state, home.join(".local/state/nuschl"));
+        assert_eq!(defaults.cache, home.join(".cache/nuschl"));
+        assert_eq!(defaults.history(), home.join(".local/share/nuschl/history"));
         assert_eq!(
             defaults.identity(),
-            home.join(".local/share/nuschel/identity")
+            home.join(".local/share/nuschl/identity")
         );
-        assert_eq!(defaults.keys(), home.join(".local/share/nuschel/keys"));
+        assert_eq!(defaults.keys(), home.join(".local/share/nuschl/keys"));
         // Empty and relative values are invalid and ignored.
         let invalid = Layout::xdg(
             environment(&[
@@ -1006,10 +1020,10 @@ mod tests {
         assert_eq!(
             (set.config, set.data, set.state, set.cache),
             (
-                "/c/nuschel".into(),
-                "/d/nuschel".into(),
-                "/s/nuschel".into(),
-                "/k/nuschel".into()
+                "/c/nuschl".into(),
+                "/d/nuschl".into(),
+                "/s/nuschl".into(),
+                "/k/nuschl".into()
             )
         );
         assert_eq!(
@@ -1029,14 +1043,14 @@ mod tests {
         );
     }
 
-    /// The `directories` crate, which Nuschel used before and still uses on
+    /// The `directories` crate, which Nuschl used before and still uses on
     /// macOS and Windows, reads the variables the same way (dirs-sys ignores
     /// relative and empty values): the folders do not move under anyone.
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn xdg_folders_agree_with_the_directories_crate() {
         let ours = Layout::system().unwrap();
-        let theirs = directories::ProjectDirs::from("org", "Nuschel", "Nuschel").unwrap();
+        let theirs = directories::ProjectDirs::from("org", "Nuschl", "Nuschl").unwrap();
         assert_eq!(ours.config, theirs.config_dir());
         assert_eq!(ours.data, theirs.data_local_dir());
         assert_eq!(ours.cache, theirs.cache_dir());
@@ -1059,11 +1073,11 @@ mod tests {
         assert!(shared.check().is_ok());
         // ...inside a worker's folder it is not.
         let nested = Layout::xdg(
-            environment(&[("XDG_CACHE_HOME", "/home/ada/.local/share/nuschel/history")]),
+            environment(&[("XDG_CACHE_HOME", "/home/ada/.local/share/nuschl/history")]),
             home,
         );
         let error = nested.check().unwrap_err().to_string();
-        assert!(error.contains("/history/nuschel lies inside"), "{error}");
+        assert!(error.contains("/history/nuschl lies inside"), "{error}");
     }
 
     #[test]
@@ -1122,7 +1136,7 @@ mod tests {
     #[test]
     fn folders_move_into_an_empty_place_only() {
         let root = temporary("folders");
-        let (from, to) = (root.join("nuschel-identity"), root.join("data/keys"));
+        let (from, to) = (root.join("nuschl-identity"), root.join("data/keys"));
         fs::create_dir_all(&from).unwrap();
         fs::write(from.join("store.key"), [7; 32]).unwrap();
         fs::write(from.join("keystore"), b"sealed").unwrap();

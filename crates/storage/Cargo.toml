@@ -1,5 +1,5 @@
 [package]
-name = "nuschel-storage"
+name = "nuschl-storage"
 description = "SQLx SQLite/PostgreSQL persistence, confined to the storage worker"
 version.workspace = true
 edition.workspace = true
@@ -9,8 +9,8 @@ publish.workspace = true
 
 [dependencies]
 base64 = "0.22"
-nuschel-core.workspace = true
-nuschel-ipc.workspace = true
+nuschl-core.workspace = true
+nuschl-ipc.workspace = true
 sqlx = { version = "0.9.0", default-features = false, features = [
   "runtime-tokio",
   "sqlite-bundled",

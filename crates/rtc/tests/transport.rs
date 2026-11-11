@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Deterministic ICE/DTLS/SRTP exchange: datagrams stay in memory, no public STUN.
-use nuschel_rtc::{
+use nuschl_rtc::{
     Error, Event, Frame, Kind, MAX_DATAGRAM_BYTES, MAX_OPUS_BYTES, MAX_SDP_BYTES, Output, Peer,
 };
 use std::{

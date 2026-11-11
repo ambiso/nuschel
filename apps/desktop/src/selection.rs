@@ -16,8 +16,8 @@ use crate::{
     theme::{ACCENT, tint},
 };
 use gpui_kit::*;
-use nuschel_client::timeline::Message;
-use nuschel_session::{
+use nuschl_client::timeline::Message;
+use nuschl_session::{
     config::MumbleUrl,
     connection::{Command, TextTarget},
 };
@@ -307,16 +307,16 @@ impl Desktop {
         .detach();
     }
 
-    /// A click on a link: mumble links and share links are Nuschel's own,
+    /// A click on a link: mumble links and share links are Nuschl's own,
     /// others go to the system.
     pub fn open_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if !nuschel_core::allowed_link(url) {
+        if !nuschl_core::allowed_link(url) {
             return;
         }
         if !url
             .get(..9)
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("mumble://"))
-            && nuschel_core::share::ShareLink::parse(url).is_err()
+            && nuschl_core::share::ShareLink::parse(url).is_err()
         {
             cx.open_url(url);
             return;

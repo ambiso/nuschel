@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: EUPL-1.2
--- Messages of Nuschel servers carry their per-conversation sequence number,
+-- Messages of Nuschl servers carry their per-conversation sequence number,
 -- so a message seen live and again in a fetched history page is stored once;
 -- edits and deletions find their row by it. A deleted message stays as a
 -- tombstone without text. All three are NULL for local observations.

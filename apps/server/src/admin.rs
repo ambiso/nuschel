@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! `nuscheld admin` (docs/server.md, "Administration"): operator commands
+//! `nuschld admin` (docs/server.md, "Administration"): operator commands
 //! that work offline on the database, through the storage worker as the server
 //! does. They take the operator lock first, so they refuse to run while a
 //! server (or another admin command) uses the database: both keep the state in
@@ -16,7 +16,7 @@ use crate::{
     timefmt::iso8601,
 };
 use clap::{Args, Subcommand};
-use nuschel_ipc::server::{
+use nuschl_ipc::server::{
     Anchor, HistoryVisibility, MAX_RETENTION_DAYS, MessageKind, PageQuery, Retention,
     ServerStorageRequest as Request, ServerStorageResponse as Response,
 };
@@ -717,7 +717,7 @@ async fn export(opened: &Opened, id: Id, name: &str) -> Result<serde_json::Value
         after = last;
         for mut row in page.rows {
             if cutoff.is_some_and(|cutoff| row.sent_ms < cutoff)
-                && nuschel_ipc::server::expirable(&row)
+                && nuschl_ipc::server::expirable(&row)
             {
                 row.content.clear();
                 row.reply_to = None;

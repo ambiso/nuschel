@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Build the signed update manifest and the flat release assets.
 
-    make-update.py --version 0.2.0 --base-url https://github.com/ambiso/nuschel/releases/download/v0.2.0/ \
-        --platform windows-x86_64=result-windows/bin --platform macos-universal=Nuschel.app \
+    make-update.py --version 0.2.0 --base-url https://github.com/ambiso/nuschl/releases/download/v0.2.0/ \
+        --platform windows-x86_64=result-windows/bin --platform macos-universal=Nuschl.app \
         --output dist [--sign-key path/to/minisign.secret]
 
 Every file of each installation becomes one release asset named
@@ -73,7 +73,7 @@ def main():
     target.write_text(json.dumps(manifest, indent=1) + "\n")
     if args.sign_key:
         subprocess.run([args.rsign, "sign", "-W", "-s", str(args.sign_key), "-x", str(target) + ".minisig",
-                        "-t", f"nuschel {args.version}", str(target)], check=True, stdout=subprocess.DEVNULL)
+                        "-t", f"nuschl {args.version}", str(target)], check=True, stdout=subprocess.DEVNULL)
     print(json.dumps({name: len(entries) for name, entries in platforms.items()}))
 
 

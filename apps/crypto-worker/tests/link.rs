@@ -6,7 +6,7 @@
 mod common;
 
 use common::*;
-use nuschel_ipc::crypto::{CryptoRequest, CryptoResponse, IdentityView, RecoveryPolicy};
+use nuschl_ipc::crypto::{CryptoRequest, CryptoResponse, IdentityView, RecoveryPolicy};
 
 fn view(response: CryptoResponse) -> IdentityView {
     match response {

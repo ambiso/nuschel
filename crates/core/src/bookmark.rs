@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Saved servers: where a server is, who we are there, the certificate pin
 //! and the channel tree cached for offline browsing. Plain data every client
-//! shares; native platforms keep them in `servers.json` (`nuschel-session`).
+//! shares; native platforms keep them in `servers.json` (`nuschl-session`).
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -29,7 +29,7 @@ pub struct ServerBookmark {
     /// Access tokens grant ACL group membership; sent with every login.
     #[serde(default)]
     pub tokens: Vec<String>,
-    /// Connect when Nuschel starts, self-muted and deafened.
+    /// Connect when Nuschl starts, self-muted and deafened.
     #[serde(default = "connect_on_startup")]
     pub auto_connect: bool,
     /// The server website's icon (its favicon), decoded and shrunk.
@@ -38,7 +38,7 @@ pub struct ServerBookmark {
     /// When the icon was last looked for (milliseconds since the epoch).
     #[serde(default)]
     pub icon_checked_ms: i64,
-    /// The channel you were last in; rejoined when Nuschel connects again.
+    /// The channel you were last in; rejoined when Nuschl connects again.
     #[serde(default)]
     pub last_channel: Option<u32>,
     /// Declared in managed.json: its name, address, username, tokens and

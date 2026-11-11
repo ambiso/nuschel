@@ -8,7 +8,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_math::{Error, MAX_HEIGHT, MAX_PIXELS, MAX_WIDTH, Renderer, latex};
+use nuschl_math::{Error, MAX_HEIGHT, MAX_PIXELS, MAX_WIDTH, Renderer, latex};
 
 thread_local! {
     // One per worker, as the math worker keeps one.

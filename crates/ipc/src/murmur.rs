@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! A Murmur (mumble-server) database, as the storage worker reads it for
-//! `nuscheld --import-murmur`. The worker opens the file read-only and decodes
+//! `nuschld --import-murmur`. The worker opens the file read-only and decodes
 //! only storage formats (blobs to addresses, dates to text, the 1.6 schema's
 //! group references to Murmur's group strings); every value is still
-//! untrusted, and `nuscheld` validates it with its own rules. The worker
+//! untrusted, and `nuschld` validates it with its own rules. The worker
 //! streams [`MurmurFrame`]s on stdout, each below the frame limit.
 use serde::{Deserialize, Serialize};
 

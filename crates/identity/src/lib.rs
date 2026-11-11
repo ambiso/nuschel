@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Nuschel's persistent, cross-server, multi-device identity (docs/e2ee.md §3, §4).
+//! Nuschl's persistent, cross-server, multi-device identity (docs/e2ee.md §3, §4).
+//!
+//! The 2026-11-11 Nuschel → Nuschl rename changes all application crypto
+//! domain labels to `nuschl`. Vectors are regenerated under this namespace;
+//! old experimental identities, proofs, MLS state and encrypted objects are
+//! intentionally incompatible. The client archives old crypto stores.
 //!
 //! ```text
 //! identity root (hybrid ML-DSA-65 + Ed25519)          fingerprint = the identity

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The storage worker as `nuscheld` uses it (`--server`, its IPC on stdin and
+//! The storage worker as `nuschld` uses it (`--server`, its IPC on stdin and
 //! stdout), against a throwaway PostgreSQL and against SQLite, with the same
 //! script: migrations, history pages, idempotency, edits, deletions,
 //! retention, live-only heads, erasure and purging.
 //!
-//! PostgreSQL comes from `initdb` and `postgres` in `NUSCHEL_POSTGRES_BIN` or on
+//! PostgreSQL comes from `initdb` and `postgres` in `NUSCHL_POSTGRES_BIN` or on
 //! `PATH`; it runs from a temporary directory and listens only on a unix
 //! socket there. Without those binaries the PostgreSQL test is skipped with a
 //! message; `just test-postgres` runs it with PostgreSQL from nixpkgs.
-use nuschel_ipc::{
+use nuschl_ipc::{
     Envelope, read_frame,
     server::{
         Anchor, MessageKind, PageQuery, Retention, ServerStorageRequest as Request,
@@ -23,9 +23,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-const WORKER: &str = env!("CARGO_BIN_EXE_nuschel-storage-worker");
+const WORKER: &str = env!("CARGO_BIN_EXE_nuschl-storage-worker");
 
-/// One storage worker process, spoken to as `nuscheld` does.
+/// One storage worker process, spoken to as `nuschld` does.
 struct Worker {
     child: Child,
     input: ChildStdin,
@@ -439,7 +439,7 @@ struct Postgres {
 
 impl Postgres {
     fn binary(name: &str) -> Option<PathBuf> {
-        let configured = std::env::var_os("NUSCHEL_POSTGRES_BIN").map(PathBuf::from);
+        let configured = std::env::var_os("NUSCHL_POSTGRES_BIN").map(PathBuf::from);
         let path = std::env::var_os("PATH").unwrap_or_default();
         configured
             .into_iter()
@@ -454,12 +454,12 @@ impl Postgres {
         eprintln!("testing on PostgreSQL from {}", postgres.display());
         // A unix socket path has at most about 100 bytes.
         let mut directory = tempfile::Builder::new()
-            .prefix("nuschel-pg")
+            .prefix("nuschl-pg")
             .tempdir()
             .ok()?;
         if directory.path().as_os_str().len() > 80 {
             directory = tempfile::Builder::new()
-                .prefix("nuschel-pg")
+                .prefix("nuschl-pg")
                 .tempdir_in("/tmp")
                 .ok()?;
         }
@@ -469,7 +469,7 @@ impl Postgres {
             .arg(&data)
             .args([
                 "-U",
-                "nuschel",
+                "nuschl",
                 "-A",
                 "trust",
                 "-E",
@@ -503,7 +503,7 @@ impl Postgres {
 
     fn url(&self) -> String {
         format!(
-            "postgresql://nuschel@localhost/postgres?host={}",
+            "postgresql://nuschl@localhost/postgres?host={}",
             self.directory.path().display()
         )
     }
@@ -549,7 +549,7 @@ impl Drop for Postgres {
 fn the_server_schema_through_the_worker_on_postgresql() {
     let Some(postgres) = Postgres::start() else {
         eprintln!(
-            "SKIPPED: PostgreSQL (initdb, postgres) is not on PATH or in NUSCHEL_POSTGRES_BIN; \
+            "SKIPPED: PostgreSQL (initdb, postgres) is not on PATH or in NUSCHL_POSTGRES_BIN; \
              run `just test-postgres` to test the PostgreSQL schema"
         );
         return;
@@ -559,7 +559,7 @@ fn the_server_schema_through_the_worker_on_postgresql() {
     let mut worker = Worker::start(&url_file);
     exercise(&mut worker);
     // A second worker on the same database: the migrations are idempotent and
-    // the data is shared (nuscheld runs four).
+    // the data is shared (nuschld runs four).
     drop(worker);
     let mut again = Worker::start(&url_file);
     private_ban_survived(&mut again);

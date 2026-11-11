@@ -5,7 +5,7 @@
 //! design relies on: the hybrid post-quantum ciphersuite, a three-party group with
 //! removal, forward secrecy and post-compromise security as far as OpenMLS exposes
 //! them, a server-side delivery service that validates handshake messages without
-//! being a member, binding a group to a Nuschel conversation, and an encrypted,
+//! being a member, binding a group to a Nuschl conversation, and an encrypted,
 //! transactional store behind OpenMLS's storage interface.
 //!
 //! Signing uses libcrux's Ed25519 through [`DeviceSigner`], so the spike does not
@@ -45,22 +45,22 @@ pub const SUITE: Ciphersuite = Ciphersuite::MLS_256_XWING_CHACHA20POLY1305_SHA25
 pub const CLASSIC: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519;
 
 /// Group context extension (private-use range, RFC 9420 section 17.3) that binds an
-/// MLS group to one Nuschel server conversation.
+/// MLS group to one Nuschl server conversation.
 pub const CONVERSATION_EXTENSION: u16 = 0xF4E0;
 
-/// Credential type (private-use range) for a Nuschel device credential: the device's
+/// Credential type (private-use range) for a Nuschl device credential: the device's
 /// leaf signature key certified by the user's identity key.
 pub const DEVICE_CREDENTIAL: u16 = 0xF4E1;
 
-/// The OpenMLS provider a Nuschel crypto worker would use: libcrux for all
+/// The OpenMLS provider a Nuschl crypto worker would use: libcrux for all
 /// cryptography and randomness, and a storage the worker controls (here OpenMLS's
 /// in-memory map, persisted encrypted by [`store::EncryptedStore`]).
-pub struct NuschelProvider {
+pub struct NuschlProvider {
     crypto: CryptoProvider,
     storage: MemoryStorage,
 }
 
-impl NuschelProvider {
+impl NuschlProvider {
     pub fn new() -> Self {
         Self::with_storage(MemoryStorage::default())
     }
@@ -73,13 +73,13 @@ impl NuschelProvider {
     }
 }
 
-impl Default for NuschelProvider {
+impl Default for NuschlProvider {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl OpenMlsProvider for NuschelProvider {
+impl OpenMlsProvider for NuschlProvider {
     type CryptoProvider = CryptoProvider;
     type RandProvider = CryptoProvider;
     type StorageProvider = MemoryStorage;
@@ -182,7 +182,7 @@ impl ConversationBinding {
     }
 }
 
-/// Capabilities every Nuschel leaf announces.
+/// Capabilities every Nuschl leaf announces.
 pub fn capabilities(suite: Ciphersuite) -> Capabilities {
     Capabilities::builder()
         .ciphersuites(vec![suite])
@@ -191,8 +191,8 @@ pub fn capabilities(suite: Ciphersuite) -> Capabilities {
         .build()
 }
 
-/// The group context extensions of a Nuschel group: the binding, and required
-/// capabilities so that no member without Nuschel's extension and credential type
+/// The group context extensions of a Nuschl group: the binding, and required
+/// capabilities so that no member without Nuschl's extension and credential type
 /// can be added.
 pub fn group_context_extensions(binding: &ConversationBinding) -> Extensions<GroupContext> {
     Extensions::from_vec(vec![
@@ -217,7 +217,7 @@ pub fn wire_policy() -> WireFormatPolicy {
 pub struct Device {
     pub name: String,
     pub suite: Ciphersuite,
-    pub provider: NuschelProvider,
+    pub provider: NuschlProvider,
     pub identity: Rc<UserIdentity>,
     pub keys: DeviceKeys,
     pub credential: CredentialWithKey,
@@ -244,7 +244,7 @@ impl Device {
         Self {
             name: name.into(),
             suite,
-            provider: NuschelProvider::new(),
+            provider: NuschlProvider::new(),
             credential: CredentialWithKey {
                 credential,
                 signature_key: keys.signer.public().into(),
@@ -376,7 +376,7 @@ impl Device {
 /// Verifies one member's credential chain against its MLS leaf signature key.
 pub fn member_device(member: &Member) -> Result<VerifiedDevice, &'static str> {
     if member.credential.credential_type() != CredentialType::Other(DEVICE_CREDENTIAL) {
-        return Err("not a Nuschel device credential");
+        return Err("not a Nuschl device credential");
     }
     verify_chain(
         member.credential.serialized_content(),

@@ -11,7 +11,7 @@ use crate::{
     document::{self, clean},
     keys,
 };
-use nuschel_client::{
+use nuschl_client::{
     Client,
     conversation::Entry,
     model::{TextTarget, User},
@@ -20,7 +20,7 @@ use nuschel_client::{
     server::{ServerState, Status},
     timeline::{Message, MessageStatus},
 };
-use nuschel_core::model::RejectKind;
+use nuschl_core::model::RejectKind;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Position, Rect},
@@ -693,7 +693,7 @@ fn draw_overlay(frame: &mut Frame, app: &App, cursor: &mut Option<Position>) {
         Some(Overlay::Finder { input, selected }) => {
             let inner = dialog(frame, "Find a channel, person or conversation", 76, 16);
             let items = app.finder_items(input.text());
-            let at = nuschel_client::finder::selected_index(selected.as_ref(), &items);
+            let at = nuschl_client::finder::selected_index(selected.as_ref(), &items);
             let [field, hint, list] = Layout::vertical([
                 Constraint::Length(1),
                 Constraint::Length(1),
@@ -724,7 +724,7 @@ fn draw_overlay(frame: &mut Frame, app: &App, cursor: &mut Option<Position>) {
                         .unwrap_or_default();
                     let place = match &item.target {
                         _ if item.path.is_empty() => String::new(),
-                        nuschel_client::finder::Target::Channel(_) => {
+                        nuschl_client::finder::Target::Channel(_) => {
                             format!(" in {}", clean(&item.path))
                         }
                         _ => format!(" {}", clean(&item.path)),

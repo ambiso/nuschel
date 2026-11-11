@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 [package]
-name = "nuschel-witness"
-description = "The project auditor for Nuschel's key transparency: checks every akd epoch of a server's log and cosigns its checkpoints (docs/witness.md)"
+name = "nuschl-witness"
+description = "The project auditor for Nuschl's key transparency: checks every akd epoch of a server's log and cosigns its checkpoints (docs/witness.md)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,13 +12,13 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [[bin]]
-name = "nuschel-witness"
+name = "nuschl-witness"
 path = "src/main.rs"
 
 [dependencies]
-nuschel-kt.workspace = true
+nuschl-kt.workspace = true
 # The enrolment check reads a server's hello (its key-transparency log).
-nuschel-protocol.workspace = true
+nuschl-protocol.workspace = true
 clap = { version = "4.6.7", features = ["derive"] }
 getrandom = "0.4.3"
 # HTTP/1.1 request heads; the body is length-delimited and bounded.

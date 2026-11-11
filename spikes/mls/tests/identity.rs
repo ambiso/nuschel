@@ -4,11 +4,11 @@
 
 use std::rc::Rc;
 
-use nuschel_mls_spike::ds::DeliveryService;
-use nuschel_mls_spike::identity::*;
-use nuschel_mls_spike::pins::ConversationPins;
-use nuschel_mls_spike::sim::Client;
-use nuschel_mls_spike::*;
+use nuschl_mls_spike::ds::DeliveryService;
+use nuschl_mls_spike::identity::*;
+use nuschl_mls_spike::pins::ConversationPins;
+use nuschl_mls_spike::sim::Client;
+use nuschl_mls_spike::*;
 use openmls_traits::types::SignatureScheme;
 
 const SERVER: [u8; 32] = [7; 32];

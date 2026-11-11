@@ -5,7 +5,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_protocol::{
+use nuschl_protocol::{
     relay::{self, Context, Datagram, Delivery, PingBudget, ServerInfo},
     udp,
 };

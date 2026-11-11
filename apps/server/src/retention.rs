@@ -8,7 +8,7 @@
 //! only, nothing stored, no history pages.
 //!
 //! Expiry runs hourly on its own storage worker and tombstones expirable rows
-//! in batches (`nuschel_ipc::server::expirable` is the hook for records that
+//! in batches (`nuschl_ipc::server::expirable` is the hook for records that
 //! must stay); history pages hide expired content at once, so a message older
 //! than its conversation's retention is never served, whenever the timer runs.
 use crate::{
@@ -18,10 +18,10 @@ use crate::{
     state::State,
     storage::StorageHandle,
 };
-use nuschel_ipc::server::{
+use nuschl_ipc::server::{
     EXPIRE_BATCH, Retention, ServerStorageRequest as Request, ServerStorageResponse as Response,
 };
-use nuschel_protocol::nuschel::v1;
+use nuschl_protocol::nuschl::v1;
 use std::{sync::Arc, time::Duration};
 
 /// How often expiry runs.
@@ -121,7 +121,7 @@ pub fn wire(retention: Retention) -> (u32, bool) {
 /// A `ChannelSettings` retention: `Some(None)` follows the server default,
 /// `None` is malformed.
 pub fn from_wire(setting: &v1::Retention) -> Option<Option<Retention>> {
-    use nuschel_ipc::server::MAX_RETENTION_DAYS;
+    use nuschl_ipc::server::MAX_RETENTION_DAYS;
     use v1::retention::Kind;
     match setting.kind? {
         Kind::ServerDefault(_) => Some(None),

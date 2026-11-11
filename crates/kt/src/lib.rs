@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Key transparency for Nuschel servers (docs/e2ee.md §5).
+//! Key transparency for Nuschl servers (docs/e2ee.md §5).
 //!
-//! Each Nuschel server runs one verifiable key directory. It maps [`Label`]s (account
+//! The 2026-11-11 Nuschel → Nuschl rename changes all application crypto
+//! domain labels to `nuschl`. Vectors are regenerated under this namespace;
+//! old experimental identities, proofs, MLS state and encrypted objects are
+//! intentionally incompatible. The client archives old crypto stores.
+//!
+//! Each Nuschl server runs one verifiable key directory. It maps [`Label`]s (account
 //! ids, identity fingerprints, user names) to versioned [`DirectoryValue`]s (for an
 //! account: an [`AccountBinding`], the identity root public key and a commitment to the
-//! identity's device roster, from `nuschel-identity`), publishes the changes in epochs,
+//! identity's device roster, from `nuschl-identity`), publishes the changes in epochs,
 //! and signs a [`SignedHead`] for every epoch with its identity key.
 //! Clients check that what the server tells them is what it tells everyone, in the
 //! manner of Signal's automatic key verification.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: EUPL-1.2
-"""A disposable Windows 11 VM for testing Nuschel's Windows build.
+"""A disposable Windows 11 VM for testing Nuschl's Windows build.
 
     windows_vm.py up [--iso PATH]     install Windows unattended (first run) and boot it
     windows_vm.py run 'Get-Process'   run PowerShell in the logged-in desktop session
@@ -10,8 +10,8 @@
     windows_vm.py click X Y | type TEXT | key ctrl-alt-delete
     windows_vm.py status | pause | resume | down
 
-State (disk, firmware variables, sockets) lives in $NUSCHEL_WINDOWS_VM_DIR,
-default ~/vms/nuschel-windows; keep it out of backups and off the RAM-backed
+State (disk, firmware variables, sockets) lives in $NUSCHL_WINDOWS_VM_DIR,
+default ~/vms/nuschl-windows; keep it out of backups and off the RAM-backed
 /tmp. The guest has no network except forwards into host loopback:
 10.0.2.100:80 (this harness), 10.0.2.100:64738 (a test Murmur, --murmur-port)
 and 10.0.2.100:PORT to 127.0.0.1:PORT for each --forward PORT (e.g. a
@@ -35,7 +35,7 @@ import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent / "windows_vm"
-STATE = Path(os.environ.get("NUSCHEL_WINDOWS_VM_DIR", Path.home() / "vms" / "nuschel-windows"))
+STATE = Path(os.environ.get("NUSCHL_WINDOWS_VM_DIR", Path.home() / "vms" / "nuschl-windows"))
 OVMF_FLAKE_ATTR = "nixpkgs#OVMF.fd"
 XORRISO_FLAKE_ATTR = "nixpkgs#xorriso"
 REPO = Path(__file__).resolve().parents[1]
@@ -189,7 +189,7 @@ def daemon(args: argparse.Namespace) -> None:
             shutil.copyfile(HERE / name, staging / name)
         xorriso = nix_file(XORRISO_FLAKE_ATTR, "bin/xorriso")
         subprocess.check_call(
-            [str(xorriso), "-as", "mkisofs", "-quiet", "-V", "NUSCHELVM", "-J", "-r", "-o", str(seed), str(staging)]
+            [str(xorriso), "-as", "mkisofs", "-quiet", "-V", "NUSCHLVM", "-J", "-r", "-o", str(seed), str(staging)]
         )
     jobs = Jobs()
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), http_handler(jobs, files))
@@ -205,7 +205,7 @@ def daemon(args: argparse.Namespace) -> None:
     qmp_path.unlink(missing_ok=True)
     command = [
         "qemu-system-x86_64",
-        "-name", "nuschel-windows",
+        "-name", "nuschl-windows",
         "-machine", "q35,accel=kvm",
         "-cpu", "host",
         "-smp", str(args.cpus),

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The quick switcher (Ctrl+K, Cmd+K on macOS): channels, people and direct
 //! conversations of every server, found by a few typed letters. What is
-//! listed and in which order is the SDK's (`nuschel_client::finder`); this is
+//! listed and in which order is the SDK's (`nuschl_client::finder`); this is
 //! its field, list and keys.
 use crate::{
     assets::icon,
@@ -13,7 +13,7 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_client::{
+use nuschl_client::{
     Conversation,
     finder::{self, Item, Target},
 };
@@ -69,7 +69,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        use nuschel_session::config::ShortcutAction;
+        use nuschl_session::config::ShortcutAction;
         match crate::shortcuts::app_action(&self.settings, keystroke) {
             Some(ShortcutAction::Find) => {
                 if self.finder.is_open() {
@@ -211,7 +211,7 @@ impl Desktop {
     }
 
     /// Everything the switcher can go to, best match for `query` first
-    /// (the SDK decides: `nuschel_client::finder`).
+    /// (the SDK decides: `nuschl_client::finder`).
     fn finder_items(&self, query: &str) -> Vec<Item> {
         finder::items(&self.client, &self.finder.recent, query)
     }

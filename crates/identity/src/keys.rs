@@ -30,7 +30,7 @@ use crate::crypto::{self, Secret32, composite, ed25519, mldsa65, xwing};
 use crate::{Error, hpke};
 
 /// Domain-separation label of [`HybridPublicKey::fingerprint`].
-pub(crate) const FINGERPRINT_LABEL: &str = "nuschel/identity-fingerprint/v1";
+pub(crate) const FINGERPRINT_LABEL: &str = "nuschl/identity-fingerprint/v1";
 
 /// A signature algorithm identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -102,7 +102,7 @@ fn hex(bytes: &[u8]) -> String {
 /// encoding. Pins, safety numbers, credentials and key transparency name it.
 ///
 /// ```text
-/// identity = SHA-256(uint8(31) || "nuschel/identity-fingerprint/v1" || HybridPublicKey)
+/// identity = SHA-256(uint8(31) || "nuschl/identity-fingerprint/v1" || HybridPublicKey)
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IdentityFingerprint([u8; 32]);

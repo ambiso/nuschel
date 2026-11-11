@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Screenshots of a Nuschel server's minimum-version policy (docs/extension.md,
-"Minimum versions"), against a private loopback nuscheld, in a private headless
+"""Screenshots of a Nuschl server's minimum-version policy (docs/extension.md,
+"Minimum versions"), against a private loopback nuschld, in a private headless
 GNOME Shell (never the user's session).
 
-    NUSCHEL_WL_TMP=/tmp python3 tests/version_screenshots.py <binaries> --output DIR
+    NUSCHL_WL_TMP=/tmp python3 tests/version_screenshots.py <binaries> --output DIR
 
 Three scenes, each with the server restarted under another policy: a recommended
 version above this client's (a notice, and the same after "Dismiss"), a minimum above it
@@ -24,7 +24,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gnome_session import GnomeSession  # noqa: E402
-from local_nuscheld import Nuscheld, eventually, free_port  # noqa: E402
+from local_nuschld import Nuschld, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
 
 # The recommendation's "Dismiss", in window screenshot pixels.
@@ -65,11 +65,11 @@ def main():
         ("version-02-required", f'[history]\nminimum_client = "{newer}"\nminimum_client_from = {deadline}\n'),
         ("version-03-refused", f'[history]\nminimum_client = "{newer}"\n'),
     ]
-    with tempfile.TemporaryDirectory(prefix="nuschel-version-screens-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-version-screens-") as temporary:
         root = Path(temporary)
         port = free_port()
         (root / "server").mkdir()
-        server = Nuscheld(args.binaries, root / "server", port)
+        server = Nuschld(args.binaries, root / "server", port)
         server.seed()
         shell = GnomeSession(args.gnome_shell, width + 160, height + 100,
                              log=(args.output / "gnome-shell.log").open("w"))
@@ -87,28 +87,28 @@ def main():
                 if pin is None:
                     pin = certificate_pin(args.binaries, "127.0.0.1", port, root / "probe")
                     register(args.binaries, port, pin, "Andi", profile)
-                    bookmark = {"id": str(uuid.uuid4()), "name": "Nuschel test server", "host": "127.0.0.1",
+                    bookmark = {"id": str(uuid.uuid4()), "name": "Nuschl test server", "host": "127.0.0.1",
                                 "port": port, "username": "Andi", "certificate_sha256": pin}
                     (profile / "config/servers.json").write_text(json.dumps([bookmark]))
                 log = (args.output / f"{name}.log").open("w")
-                app = subprocess.Popen([str(args.binaries / "nuschel"), "--profile-dir", str(profile),
+                app = subprocess.Popen([str(args.binaries / "nuschl"), "--profile-dir", str(profile),
                                         f"mumble://Andi@127.0.0.1:{port}/Lobby"],
-                                       env=shell.app_environment() | {"RUST_LOG": "nuschel=info"},
+                                       env=shell.app_environment() | {"RUST_LOG": "nuschl=info"},
                                        stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-                eventually(lambda: app.poll() is None and shell.window("Nuschel"), "Nuschel window did not appear")
+                eventually(lambda: app.poll() is None and shell.window("Nuschl"), "Nuschl window did not appear")
 
                 def placed():
-                    shell.place("Nuschel", 40, 40, width, height)
+                    shell.place("Nuschl", 40, 40, width, height)
                     time.sleep(0.3)
-                    window = shell.window("Nuschel")
+                    window = shell.window("Nuschl")
                     return window["width"] == width and window["height"] == height
 
-                eventually(placed, "Nuschel window could not be placed")
+                eventually(placed, "Nuschl window could not be placed")
                 time.sleep(5.0)
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 shell.click(window["x"] - 12 + width // 2, window["y"] - 12 + 140)
                 time.sleep(0.5)
-                window = shell.window("Nuschel")
+                window = shell.window("Nuschl")
                 path = shell.screenshot(args.output / f"{name}.png",
                                         crop=(window["x"] - 12, window["y"] - 12,
                                               window["width"] + 24, window["height"] + 24))

@@ -4,13 +4,13 @@
 1. Jitter buffer: a tone sent with timing jitter, reordering and 5% loss must
    play back without long gaps.
 2. Echo route: with a system echo canceller (module-echo-cancel) as the
-   default microphone, Nuschel must not stack its own canceller and must route
+   default microphone, Nuschl must not stack its own canceller and must route
    only its own playback to the canceller's reference sink; Always on / Off and
    per-microphone overrides must be honoured.
 3. Adaptive controller: a microphone driven to full scale is reported as
    clipping, and no system level is changed.
 4. Echo test (Settings): with the speakers looped into the microphone at a
-   realistic -31 dB, Nuschel's canceller must remove most of the echo and
+   realistic -31 dB, Nuschl's canceller must remove most of the echo and
    keep the voice gate mostly shut, and the test must show that without it
    the echo would be sent.
 5. Double talk: while the far end plays, the user's own speech must not be
@@ -83,7 +83,7 @@ class Pulse:
 class Worker:
     def __init__(self, binary, pulse):
         env = {"PULSE_SERVER": f"unix:{pulse.socket}", "XDG_RUNTIME_DIR": str(pulse.root),
-               "NUSCHEL_AUDIO_BACKEND": "pulse", "PATH": os.environ.get("PATH", "")}
+               "NUSCHL_AUDIO_BACKEND": "pulse", "PATH": os.environ.get("PATH", "")}
         self.process = subprocess.Popen([str(binary), "--live"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
         self.events = []
         self.reader = threading.Thread(target=self._read, daemon=True)
@@ -177,7 +177,7 @@ def check_jitter(binary, pulse, reference, output):
 def sink_of_our_stream(pulse):
     sinks = {sink["index"]: sink["name"] for sink in pulse.ctl("list", "sinks", json_output=True)}
     inputs = pulse.ctl("list", "sink-inputs", json_output=True)
-    ours = [entry for entry in inputs if "nuschel" in json.dumps(entry.get("properties", {})).lower()
+    ours = [entry for entry in inputs if "nuschl" in json.dumps(entry.get("properties", {})).lower()
             or entry.get("properties", {}).get("application.name") not in ("", None)]
     return [sinks.get(entry["sink"]) for entry in ours or inputs]
 
@@ -192,8 +192,8 @@ def check_echo_routes(binary, pulse):
     assert "ec_sink" in sink_of_our_stream(pulse), "playback did not go to the canceller's reference sink"
     assert pulse.ctl("get-default-sink").strip() == "speakers", "system default sink was changed"
     worker.stop()
-    print("System echo canceller recognised; only Nuschel's playback was routed to its reference.", flush=True)
-    for mode, expected in (("on", "nuschel"), ("off", "none")):
+    print("System echo canceller recognised; only Nuschl's playback was routed to its reference.", flush=True)
+    for mode, expected in (("on", "nuschl"), ("off", "none")):
         worker = start(binary, pulse, False, {"echo_cancellation": mode})
         devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
         assert devices["echo"]["kind"] == expected, (mode, devices["echo"])
@@ -201,12 +201,12 @@ def check_echo_routes(binary, pulse):
     override = {"device_overrides": {devices["input"]: "on"}}
     worker = start(binary, pulse, False, override)
     devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
-    assert devices["echo"]["kind"] == "nuschel", devices["echo"]
+    assert devices["echo"]["kind"] == "nuschl", devices["echo"]
     worker.stop()
     pulse.ctl("set-default-source", "mic.monitor")
     worker = start(binary, pulse, muted=False)
     devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
-    assert devices["echo"]["kind"] == "nuschel" and devices["output"].endswith(":speakers"), devices
+    assert devices["echo"]["kind"] == "nuschl" and devices["output"].endswith(":speakers"), devices
     worker.stop()
     print("Echo modes, per-microphone override and plain microphones passed.", flush=True)
 
@@ -400,11 +400,11 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     reference = ReferenceOpus(args.opus_library)
-    with tempfile.TemporaryDirectory(prefix="nuschel-media-", dir=os.environ.get("NUSCHEL_SHORT_TMP")) as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-media-", dir=os.environ.get("NUSCHL_SHORT_TMP")) as temporary:
         pulse = Pulse(args.pulse_bin, Path(temporary))
         try:
-            only = os.environ.get("NUSCHEL_MEDIA_ONLY")
-            worker = args.binaries / "nuschel-media-worker"
+            only = os.environ.get("NUSCHL_MEDIA_ONLY")
+            worker = args.binaries / "nuschl-media-worker"
             if only in (None, "jitter"):
                 check_jitter(worker, pulse, reference, args.output)
             if only in (None, "echo_routes"):

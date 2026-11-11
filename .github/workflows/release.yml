@@ -53,11 +53,11 @@ jobs:
         run: |
           mkdir -p install/windows/licenses dist
           cp result-windows/bin/*.exe install/windows/
-          cp result-windows/share/licenses/nuschel/EUPL-1.2 install/windows/licenses/
-          cp -r result-macos/Nuschel.app install/Nuschel.app
+          cp result-windows/share/licenses/nuschl/EUPL-1.2 install/windows/licenses/
+          cp -r result-macos/Nuschl.app install/Nuschl.app
           chmod -R u+w install
-          (cd install/windows && nix shell nixpkgs#zip -c zip -qr "../../dist/nuschel-$VERSION-windows-x86_64.zip" .)
-          (cd install && nix shell nixpkgs#zip -c zip -qry "../dist/nuschel-$VERSION-macos-universal.zip" Nuschel.app)
+          (cd install/windows && nix shell nixpkgs#zip -c zip -qr "../../dist/nuschl-$VERSION-windows-x86_64.zip" .)
+          (cd install && nix shell nixpkgs#zip -c zip -qry "../dist/nuschl-$VERSION-macos-universal.zip" Nuschl.app)
 
       - name: Signed update manifest
         env:
@@ -71,7 +71,7 @@ jobs:
             --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
             --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" \
             --platform windows-x86_64=install/windows \
-            --platform macos-universal=install/Nuschel.app \
+            --platform macos-universal=install/Nuschl.app \
             --output dist --sign-key "$key"
           nix shell nixpkgs#rsign2 -c rsign verify -p crates/update/update-key.pub -x dist/update.json.minisig dist/update.json
 
@@ -81,4 +81,4 @@ jobs:
         run: |
           prerelease=()
           case "$VERSION" in *-*) prerelease=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" dist/* --title "Nuschel $VERSION" --generate-notes "${prerelease[@]}"
+          gh release create "$GITHUB_REF_NAME" dist/* --title "Nuschl $VERSION" --generate-notes "${prerelease[@]}"

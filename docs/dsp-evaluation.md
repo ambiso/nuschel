@@ -1,6 +1,6 @@
 # Evaluation of the Rust audio stack
 
-Nuschel's media worker uses memory-safe ports instead of the C/C++ originals:
+Nuschl's media worker uses memory-safe ports instead of the C/C++ originals:
 [opus-pure](https://crates.io/crates/opus-pure) for Opus,
 [Sonora](https://crates.io/crates/sonora) for WebRTC's high-pass filter, AEC3 and AGC2, and
 [nnnoiseless](https://crates.io/crates/nnnoiseless) for RNNoise. This page records
@@ -12,9 +12,9 @@ how they were evaluated and what the measurements show. All numbers are from
 | What | Command |
 | --- | --- |
 | Opus against libopus | `python3 tests/opus_eval.py <bin> --opus-library <libopus.so>` (also in the VM suite) |
-| AEC3 in a reverberant room, CPU cost | `cargo test --release -p nuschel-media-worker -- --ignored --nocapture evaluation` |
-| JSON IPC cost per voice packet | `cargo test --release -p nuschel-ipc -- --ignored --nocapture voice_ipc_cost` |
-| Device callbacks never allocate | `cargo test -p nuschel-media-worker device_callbacks_never_allocate` |
+| AEC3 in a reverberant room, CPU cost | `cargo test --release -p nuschl-media-worker -- --ignored --nocapture evaluation` |
+| JSON IPC cost per voice packet | `cargo test --release -p nuschl-ipc -- --ignored --nocapture voice_ipc_cost` |
+| Device callbacks never allocate | `cargo test -p nuschl-media-worker device_callbacks_never_allocate` |
 | Live controller, jitter buffer, echo routing | `tests/media_live.py` (VM suite) |
 
 libopus is loaded only by the test process, through ctypes, as a reference.

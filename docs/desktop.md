@@ -1,12 +1,12 @@
 # The desktop client
 
-What the Nuschel desktop app does, in more detail than the README. How it is built is
+What the Nuschl desktop app does, in more detail than the README. How it is built is
 in [architecture.md](architecture.md); how to install it is in [install.md](install.md).
 
 ## Servers and connecting
 
-Nuschel connects to stock Mumble servers (tested against 1.5, 1.4 and 1.3) and to
-Nuschel's own server, `nuscheld` ([server.md](server.md)), over TLS with a persistent
+Nuschl connects to stock Mumble servers (tested against 1.5, 1.4 and 1.3) and to
+Nuschl's own server, `nuschld` ([server.md](server.md)), over TLS with a persistent
 client certificate. The certificate is your identity on Mumble servers. It is
 RSA-2048, so that stock Mumble can import it; **Settings → Identity** imports and
 exports it as PKCS#12.
@@ -14,12 +14,12 @@ exports it as PKCS#12.
 - **+** in the server rail adds a server; a `mumble://` link opens one (and joins
   the channel in its path). **Connect** uses the saved details; the cog beside the
   server name edits them.
-- Saved servers connect when Nuschel starts (a switch per server), self-muted and
-  deafened until you unmute. **Settings → General** can start Nuschel at login,
+- Saved servers connect when Nuschl starts (a switch per server), self-muted and
+  deafened until you unmute. **Settings → General** can start Nuschl at login,
   minimised.
 - A self-signed server certificate needs your confirmation before any credentials
   are sent; accepted fingerprints are saved. An invite link can carry the
-  fingerprint and the server's policy (`mumble://…?fp=sha256:…&policy=nuschel`), which
+  fingerprint and the server's policy (`mumble://…?fp=sha256:…&policy=nuschl`), which
   pins them before the first connection.
 - Server passwords stay in memory for the connection attempt only.
 - Lost connections reconnect with backoff, rejoin your channel with its mute state,
@@ -57,16 +57,16 @@ automatic gain control, all in Rust:
   other programs are removed from your microphone too. The recording is made only
   while the microphone is open and never leaves the device (macOS asks for system
   audio permission).
-- **On Linux** Nuschel follows PipeWire's graph upstream from the microphone. A
+- **On Linux** Nuschl follows PipeWire's graph upstream from the microphone. A
   system echo canceller (PipeWire or PulseAudio echo-cancel) anywhere in the chain
-  replaces Nuschel's and gets Nuschel's playback as its reference; a noise suppressor
-  there (an RNNoise filter chain, say) replaces Nuschel's suppressor. A
+  replaces Nuschl's and gets Nuschl's playback as its reference; a noise suppressor
+  there (an RNNoise filter chain, say) replaces Nuschl's suppressor. A
   per-microphone override remains.
 - **Settings → Microphone test** meters the microphone, plays back what others would
   hear, and runs an echo test, without a server and without unmuting; nothing is
   sent.
 - An adaptive controller watches for playback stutters, residual echo and a clipping
-  microphone. It adjusts only Nuschel's own buffer and voice gate, and tells you what
+  microphone. It adjusts only Nuschl's own buffer and voice gate, and tells you what
   it cannot fix.
 - If the audio service fails, only the media worker restarts; the connection and
   mute state stay. Volume mixers name each stream (microphone, voice chat, echo
@@ -101,7 +101,7 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
   backend). LaTeX between `$…$` and `$$…$$` is typeset ([math.md](math.md)).
 - Inline images are decoded in a sandboxed worker. Ctrl+V pastes an image: it is
   re-encoded in the worker to fit the server's limit and sent the way stock Mumble
-  sends it. Other files go through the paperclip or a drop: Nuschel offers them
+  sends it. Other files go through the paperclip or a drop: Nuschl offers them
   peer to peer, with a magic-wormhole code in the message that stock Mumble users
   can use with any wormhole client, and shows offers as file cards.
 
@@ -122,15 +122,15 @@ servers cannot enforce address privacy for other users.
 Local history is on by default, on stock Mumble servers too. There it contains the
 messages your device saw, not those sent while you were offline.
 
-On a Nuschel server, history comes from the server: all of it that you may read,
+On a Nuschl server, history comes from the server: all of it that you may read,
 including messages from before you joined, fetched in bounded pages as you scroll.
 Pages you fetched are kept on your device by their sequence number for offline
 reading and search: edits overwrite them, deleted messages stay as tombstones
 without text.
 
-## On a Nuschel server
+## On a Nuschl server
 
-With Nuschel clients, `nuscheld` negotiates its extension ([extension.md](extension.md)):
+With Nuschl clients, `nuschld` negotiates its extension ([extension.md](extension.md)):
 
 - durable server history that new members can read (kept forever unless the server
   or a channel sets a shorter retention, or "none" for live-only channels), sends
@@ -142,18 +142,18 @@ With Nuschel clients, `nuscheld` negotiates its extension ([extension.md](extens
 - direct messages between registered users are stored by the server, so they reach
   someone who is offline and come back with their history.
 
-Nuschel never falls back to plain Mumble with a server that once offered the
-extension. Like Signal, a server can require a current client: older Nuschel
+Nuschl never falls back to plain Mumble with a server that once offered the
+extension. Like Signal, a server can require a current client: older Nuschl
 versions are told to update and, after an announced date, refused
 (`minimum_client`, [server.md](server.md)). Stock Mumble clients are not affected.
 
-## Your Nuschel identity
+## Your Nuschl identity
 
-Besides the Mumble certificate, Nuschel users have an identity of their own,
+Besides the Mumble certificate, Nuschl users have an identity of their own,
 independent of any server ([e2ee.md](e2ee.md)): a hybrid ML-DSA-65 + Ed25519 root
 key certifying each device, kept in the sandboxed crypto worker. Servers with key
-transparency (`kt/1`, on by default in `nuscheld`) publish it in a log, as in
-Signal's automatic key verification. Nuschel pins contacts on first use, checks them
+transparency (`kt/1`, on by default in `nuschld`) publish it in a log, as in
+Signal's automatic key verification. Nuschl pins contacts on first use, checks them
 against the log, shows "Verified (same identity as on …)" across servers, and flags
 a changed key or a server that lies about it. Safety numbers allow verification in
 person. End-to-end encryption with MLS builds on this; its direct messages are an
@@ -177,23 +177,23 @@ and leaves. Tab steps through a message's links (the line under the composer say
 where each leads) and Enter opens one, or a message's only link. Typing while the
 timeline has focus goes to the composer.
 
-## Where Nuschel keeps its files
+## Where Nuschl keeps its files
 
-On Linux Nuschel follows the XDG Base Directory specification (unset, empty or
+On Linux Nuschl follows the XDG Base Directory specification (unset, empty or
 relative variables fall back to the defaults):
 
 | Folder | Holds |
 | --- | --- |
-| `$XDG_CONFIG_HOME/nuschel` (`~/.config/nuschel`) | `settings.json`, `servers.json` (bookmarks and accepted certificates), `managed.json`: safe to keep with your dotfiles |
-| `$XDG_DATA_HOME/nuschel` (`~/.local/share/nuschel`) | `identity/` (your Mumble certificate and its private key), `keys/` (end-to-end keys), `history/` (local history), `nuschel-policy.json` (servers' security records): back this up, keep it private |
-| `$XDG_STATE_HOME/nuschel` (`~/.local/state/nuschel`) | last channel per server, the update check |
-| `$XDG_CACHE_HOME/nuschel` (`~/.cache/nuschel`) | channel trees and server icons: safe to delete |
+| `$XDG_CONFIG_HOME/nuschl` (`~/.config/nuschl`) | `settings.json`, `servers.json` (bookmarks and accepted certificates), `managed.json`: safe to keep with your dotfiles |
+| `$XDG_DATA_HOME/nuschl` (`~/.local/share/nuschl`) | `identity/` (your Mumble certificate and its private key), `keys/` (end-to-end keys), `history/` (local history), `nuschl-policy.json` (servers' security records): back this up, keep it private |
+| `$XDG_STATE_HOME/nuschl` (`~/.local/state/nuschl`) | last channel per server, the update check |
+| `$XDG_CACHE_HOME/nuschl` (`~/.cache/nuschl`) | channel trees and server icons: safe to delete |
 
-`nuschel/managed.json` in `$XDG_CONFIG_DIRS` (`/etc/xdg`) is read as well
+`nuschl/managed.json` in `$XDG_CONFIG_DIRS` (`/etc/xdg`) is read as well
 ([install.md](install.md#home-manager)). macOS uses
-`~/Library/Application Support/org.Nuschel.Nuschel` (state in its `state` folder) and
-`~/Library/Caches/org.Nuschel.Nuschel`; Windows `%APPDATA%\Nuschel\Nuschel\config`,
-`%LOCALAPPDATA%\Nuschel\Nuschel\data` (and `data\state`) and `…\cache`.
+`~/Library/Application Support/org.Nuschl.Nuschl` (state in its `state` folder) and
+`~/Library/Caches/org.Nuschl.Nuschl`; Windows `%APPDATA%\Nuschl\Nuschl\config`,
+`%LOCALAPPDATA%\Nuschl\Nuschl\data` (and `data\state`) and `…\cache`.
 `--profile-dir DIR` puts the four under `DIR/config`, `data`, `state` and `cache`.
 Folders are created owner-only (0700) when first needed. Which worker can reach what:
 [SECURITY.md](../SECURITY.md#where-secrets-live).
@@ -202,14 +202,14 @@ Earlier versions kept the identity, keys, security records and caches in the
 configuration folder. The first start moves each file to its new place (renamed, or
 copied, synced and only then removed), never over a newer one, and logs what moved;
 an interrupted move finishes on the next start, and anything that cannot be moved is
-used where it is and reported. Quit older Nuschel instances first: one still running
-would create a fresh identity in the old place, which Nuschel then reports and leaves
+used where it is and reported. Quit older Nuschl instances first: one still running
+would create a fresh identity in the old place, which Nuschl then reports and leaves
 alone. A downgrade does not find the moved identity; copy
-`~/.local/share/nuschel/identity/identity.json` back to `~/.config/nuschel` for it.
+`~/.local/share/nuschl/identity/identity.json` back to `~/.config/nuschl` for it.
 
 ## Troubleshooting
 
-**A broken configuration file.** Nuschel never overwrites a configuration file it
+**A broken configuration file.** Nuschl never overwrites a configuration file it
 cannot read: a broken `settings.json` or `servers.json` is renamed to
 `settings.json.invalid` (or `.invalid.1`, …), and the app starts without it and says
 so. An invalid `managed.json` is reported and ignored until it is fixed.

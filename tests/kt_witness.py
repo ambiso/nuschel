@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Witnessed key transparency against a running nuscheld that submits to a running
-nuschel-witness (docs/witness.md, docs/e2ee.md §5.9): a client that requires the
+"""Witnessed key transparency against a running nuschld that submits to a running
+nuschl-witness (docs/witness.md, docs/e2ee.md §5.9): a client that requires the
 witness sees the server's log witnessed once the auditor has caught up, and finds
 a contact whose registration number and name labels name their account; a client
 that requires a witness the server does not reach sees "Automatic verification
@@ -8,7 +8,7 @@ unavailable", and first contact still proceeds.
 
     python3 tests/kt_witness.py <binaries> --host server --witness-key FILE --other-key FILE
 
-The key files hold C2SP verifier keys (`nuschel-witness vkey`).
+The key files hold C2SP verifier keys (`nuschl-witness vkey`).
 """
 import argparse
 import secrets
@@ -53,7 +53,7 @@ def main():
     witness = args.witness_key.read_text().strip()
     other = args.other_key.read_text().strip()
     token = secrets.token_hex(3)
-    with tempfile.TemporaryDirectory(prefix="nuschel-kt-witness-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-kt-witness-") as temporary:
         root = Path(temporary)
         pin = certificate_pin(args.binaries, args.host, args.port, root / "probe")
         alice_name, bob_name, carol_name = f"Alice{token}", f"Bob{token}", f"Carol{token}"

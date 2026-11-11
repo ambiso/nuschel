@@ -36,8 +36,8 @@
 //!   Rows of channels this device is not a member of are only counted
 //!   ([`MlsEvent::Activity`]): every reader learns where conversations happen.
 use crate::identity::{Context, Reply};
-use nuschel_ipc::crypto::{ConversationView, CryptoRequest, CryptoResponse, MlsOutgoing, Received};
-use nuschel_protocol::nuschel::{
+use nuschl_ipc::crypto::{ConversationView, CryptoRequest, CryptoResponse, MlsOutgoing, Received};
+use nuschl_protocol::nuschl::{
     self, kind,
     v1::{self, error::Code},
 };
@@ -75,7 +75,7 @@ fn busy_delay(reply: &Reply) -> Option<Duration> {
 /// the server's unsigned edit/delete fields may change text or local history.
 /// The display label comes from a verified device certificate, with a stable
 /// identity discriminator. Server nickname metadata is not an authenticated name.
-pub fn authenticated_sender_label(sender: &nuschel_ipc::crypto::MemberView) -> String {
+pub fn authenticated_sender_label(sender: &nuschl_ipc::crypto::MemberView) -> String {
     format!(
         "{} · {}",
         sender.device_name,
@@ -408,7 +408,7 @@ impl Context {
         if let Reply::Frame(kind::DIRECT_LIST, payload) = reply
             && let Ok(list) = v1::DirectList::decode(payload)
         {
-            for direct in list.directs.iter().take(nuschel::MAX_DIRECTS) {
+            for direct in list.directs.iter().take(nuschl::MAX_DIRECTS) {
                 if let (Some(conversation), Some(account)) =
                     (id16(&direct.conversation), id16(&direct.account))
                 {
@@ -487,7 +487,7 @@ impl Context {
                 return Ok(());
             }
             let mut done = Vec::new();
-            for welcome in welcomes.into_iter().take(nuschel::MAX_MLS_WELCOMES) {
+            for welcome in welcomes.into_iter().take(nuschl::MAX_MLS_WELCOMES) {
                 done.push(welcome.id.clone());
                 self.mls_join(welcome).await?;
             }
@@ -597,7 +597,7 @@ impl Context {
                 let mut packages = v1::MlsKeyPackages::decode(payload)
                     .map_err(|_| crate::Error::Protocol("invalid key packages".into()))?
                     .key_packages;
-                packages.truncate(nuschel::MAX_MLS_CLAIM_PACKAGES);
+                packages.truncate(nuschl::MAX_MLS_CLAIM_PACKAGES);
                 Ok(packages)
             }
             _ => Ok(Vec::new()),
@@ -648,7 +648,7 @@ impl Context {
                 }
             }
         }
-        let reply = reply.unwrap_or(Reply::Error(nuschel::error(0, Code::Busy, 0)));
+        let reply = reply.unwrap_or(Reply::Error(nuschl::error(0, Code::Busy, 0)));
         let (accepted, seq) = match reply {
             Reply::Frame(kind::MLS_ACK, payload) => {
                 let ack = v1::MlsAck::decode(payload)
@@ -793,7 +793,7 @@ impl Context {
                         request_id,
                         conversation: conversation.to_vec(),
                         anchor: Some(v1::history_request::Anchor::After(after)),
-                        limit: nuschel::MAX_PAGE_MESSAGES as u32,
+                        limit: nuschl::MAX_PAGE_MESSAGES as u32,
                     }
                     .encode_to_vec()
                 })
@@ -803,8 +803,8 @@ impl Context {
                     .map_err(|_| crate::Error::Protocol("invalid history page".into()))?,
                 _ => return Ok(()),
             };
-            if page.messages.len() > nuschel::MAX_PAGE_MESSAGES
-                || !page.messages.iter().all(nuschel::valid_message)
+            if page.messages.len() > nuschl::MAX_PAGE_MESSAGES
+                || !page.messages.iter().all(nuschl::valid_message)
             {
                 return Err(crate::Error::Protocol("invalid history page".into()));
             }
@@ -859,7 +859,7 @@ impl Context {
         if message.kind == v1::message::Kind::Void as i32 {
             return Ok(());
         }
-        if !nuschel::is_mls_format(message.format) {
+        if !nuschl::is_mls_format(message.format) {
             // §7.2: plaintext for a pinned conversation is refused.
             self.mls_emit(MlsEvent::PlaintextRefused {
                 conversation,
@@ -1090,7 +1090,7 @@ impl Context {
                                 Some(seq) => v1::history_request::Anchor::Before(seq),
                                 None => v1::history_request::Anchor::Latest(true),
                             }),
-                            limit: nuschel::MAX_PAGE_MESSAGES as u32,
+                            limit: nuschl::MAX_PAGE_MESSAGES as u32,
                         }
                         .encode_to_vec()
                     })
@@ -1099,8 +1099,8 @@ impl Context {
                     let page = v1::HistoryPage::decode(payload).map_err(|_| {
                         crate::Error::Protocol("invalid encrypted history page".into())
                     })?;
-                    if page.messages.len() > nuschel::MAX_PAGE_MESSAGES
-                        || !page.messages.iter().all(nuschel::valid_message)
+                    if page.messages.len() > nuschl::MAX_PAGE_MESSAGES
+                        || !page.messages.iter().all(nuschl::valid_message)
                     {
                         return Err(crate::Error::Protocol(
                             "invalid encrypted history page".into(),
@@ -1117,13 +1117,13 @@ impl Context {
             }
             MlsCommand::DecryptPage { page } => {
                 if self.mls().pages.len() >= 8 {
-                    let mut error = nuschel::error(page.request_id, Code::Busy, 1000);
+                    let mut error = nuschl::error(page.request_id, Code::Busy, 1000);
                     error.detail =
                         "Encrypted history is waiting for keys; retry this page shortly.".into();
                     let _ = self
                         .events
-                        .send(crate::connection::SessionEvent::Nuschel(
-                            crate::connection::NuschelEvent::Error(error),
+                        .send(crate::connection::SessionEvent::Nuschl(
+                            crate::connection::NuschlEvent::Error(error),
                         ))
                         .await;
                 } else {
@@ -1386,7 +1386,7 @@ impl Context {
             }
             let mut unauthenticated = Vec::new();
             for message in &mut page.messages {
-                if !nuschel::is_mls_format(message.format) {
+                if !nuschl::is_mls_format(message.format) {
                     unauthenticated.push(message.seq);
                     message.content = "The server supplied unencrypted content in an encrypted conversation; it was refused.".into();
                     self.mls_emit(MlsEvent::PlaintextRefused {
@@ -1469,8 +1469,8 @@ impl Context {
                 message.archive.clear();
             }
             self.events
-                .send(crate::connection::SessionEvent::Nuschel(
-                    crate::connection::NuschelEvent::DecryptedPage {
+                .send(crate::connection::SessionEvent::Nuschl(
+                    crate::connection::NuschlEvent::DecryptedPage {
                         page,
                         unauthenticated,
                     },

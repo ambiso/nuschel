@@ -6,9 +6,9 @@ use gpui_kit::{
 };
 use std::{borrow::Cow, future::Future, sync::Arc};
 
-/// Nuschel's application icon, also installed for the desktop and converted
+/// Nuschl's application icon, also installed for the desktop and converted
 /// for Windows and macOS by nix/desktop-files.nix.
-const APP_ICON: &[u8] = include_bytes!("../assets/nuschel.svg");
+const APP_ICON: &[u8] = include_bytes!("../assets/nuschl.svg");
 
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {

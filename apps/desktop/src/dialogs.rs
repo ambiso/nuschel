@@ -375,7 +375,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                 )
                 .child(
                     div().text_sm().text_color(color(TEXT_MUTED)).child(
-                        text!("Any Mumble server works. Nuschel servers add persistent chat later.")
+                        text!("Any Mumble server works. Nuschl servers add persistent chat later.")
                             .with_id("dialog-subtitle"),
                     ),
                 ),
@@ -407,7 +407,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                 .child(field("server-password-field", "Password (optional)", &form.password))
                 .child(div().when(form.managed, |row| row.opacity(0.5)).child(crate::settings::toggle(
                     "server-auto-connect",
-                    "Connect when Nuschel starts",
+                    "Connect when Nuschl starts",
                     "You join muted and deafened until you unmute.".into(),
                     form.auto_connect,
                     std::rc::Rc::new(|this, _, _| {
@@ -503,7 +503,7 @@ pub fn empty(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
             div()
                 .text_2xl()
                 .font_weight(FontWeight::BOLD)
-                .child(text!("Welcome to Nuschel").with_id("welcome-heading")),
+                .child(text!("Welcome to Nuschl").with_id("welcome-heading")),
         )
         .child(
             div()

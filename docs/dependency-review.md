@@ -18,7 +18,7 @@ platforms. First-party source forbids unsafe code; dependencies require separate
 | Desktop | GPUI Kit without default component/assets features | Native rendering exception, not a message HTML or embedded-browser runtime |
 | TLS | rustls with ring | Explicit crypto exception; no OpenSSL dependency |
 | WebRTC trial | str0m 0.25, defaults disabled, `rust-crypto` | Rust protocol core forbids unsafe; codecs stay in workers; DTLS crypto exception described below |
-| Windows worker sandbox | Own adapter `nuschel-sandbox-windows` over `windows-sys` | The one first-party crate with unsafe code; crates that wrap AppContainers were reviewed and rejected in docs/windows-sandbox.md |
+| Windows worker sandbox | Own adapter `nuschl-sandbox-windows` over `windows-sys` | The one first-party crate with unsafe code; crates that wrap AppContainers were reviewed and rejected in docs/windows-sandbox.md |
 
 The live media worker owns CPAL streams, per-speaker Opus decoders, mixing, resampling,
 RNNoise and Sonora echo cancellation. It detects upstream effects, selects its own
@@ -26,7 +26,7 @@ processing and monitors the result; unknown upstream effects are not treated as
 absent. Native Windows/macOS effect detection and validation on real hardware remain
 open, with per-device overrides available.
 
-str0m is confined to `nuschel-rtc`, with examples and native WebRTC bindings disabled.
+str0m is confined to `nuschl-rtc`, with examples and native WebRTC bindings disabled.
 Its `rust-crypto` feature selects the RustCrypto SRTP/hash provider, but its dimpl 0.9
 DTLS dependency also enables AWS-LC through the `rcgen` feature. dimpl's default
 provider prefers AWS-LC when both backends are enabled. Consequently DTLS and
@@ -61,16 +61,16 @@ native Windows/macOS device-wide buffer settings are left to the OS.
 ## Unmaintained transitive dependencies
 
 The following are unmaintained advisories, not vulnerability or unsoundness waivers.
-They cannot be removed merely by updating Nuschel's direct dependencies at these
+They cannot be removed merely by updating Nuschl's direct dependencies at these
 versions. The allowlist names each advisory explicitly and explains its owner. New
 advisories against the same packages are still checked.
 
 | Advisory | Dependency and reason to retain temporarily |
 | --- | --- |
-| [RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141) | Syntect 5.3 uses bincode 1.3.3 for trusted bundled syntax/theme dumps; Nuschel accepts no external dumps |
+| [RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141) | Syntect 5.3 uses bincode 1.3.3 for trusted bundled syntax/theme dumps; Nuschl accepts no external dumps |
 | [RUSTSEC-2024-0384](https://rustsec.org/advisories/RUSTSEC-2024-0384) | gpui-base 0.9 uses instant; wait for its web-time migration |
 | [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436) | paste is a transitive compile-time macro dependency of the selected native/DSP stack |
-| [RUSTSEC-2026-0206](https://rustsec.org/advisories/RUSTSEC-2026-0206) | GPUI's usvg stack uses rustybuzz; Nuschel's message view accepts neither SVG nor remote fonts |
+| [RUSTSEC-2026-0206](https://rustsec.org/advisories/RUSTSEC-2026-0206) | GPUI's usvg stack uses rustybuzz; Nuschl's message view accepts neither SVG nor remote fonts |
 | [RUSTSEC-2026-0192](https://rustsec.org/advisories/RUSTSEC-2026-0192) | GPUI's font stack uses ttf-parser; replace through an upstream font-stack update |
 | [RUSTSEC-2026-0371](https://rustsec.org/advisories/RUSTSEC-2026-0371) | GPUI/accessibility dependencies use zbus_names from the zbus 5 family |
 | [RUSTSEC-2026-0370](https://rustsec.org/advisories/RUSTSEC-2026-0370) | The same stack uses zvariant; functionality moved into zbus 6 |

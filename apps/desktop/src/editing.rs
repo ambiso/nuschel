@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Editing and deleting messages on Nuschel servers (docs/extension.md §6).
+//! Editing and deleting messages on Nuschl servers (docs/extension.md §6).
 //! Stock Mumble has neither, so nothing here is offered there. Authors edit
 //! and delete their own messages (registered accounts only, as the server
 //! requires); moderators delete others' only where the server's policy says
@@ -10,7 +10,7 @@ use crate::{
     state::{Desktop, Status},
 };
 use gpui_kit::*;
-use nuschel_client::{Client, platform::ChangeRequest};
+use nuschl_client::{Client, platform::ChangeRequest};
 
 /// The message the composer is editing, and what it held before.
 pub struct Editing {
@@ -171,7 +171,7 @@ impl Desktop {
         if text.trim().is_empty() {
             return;
         }
-        if text.len() > nuschel_protocol::nuschel::MAX_CONTENT_BYTES {
+        if text.len() > nuschl_protocol::nuschl::MAX_CONTENT_BYTES {
             self.client.servers[server].notice = Some("The edited message exceeds 64 KiB.".into());
             return;
         }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The project auditor's checks (`nuschel-witness`, docs/e2ee.md §5.9): a witness that
+//! The project auditor's checks (`nuschl-witness`, docs/e2ee.md §5.9): a witness that
 //! also verifies every akd transition before it cosigns, so its cosignature means
 //! "this is the only epoch log I saw for this origin, and every epoch in it is an
 //! append-only update of the one before".
@@ -13,7 +13,7 @@
 //!
 //! The auditor starts every log at epoch 0, which must be akd's empty directory, so
 //! nothing in a log escapes its checks. Which log an origin has is decided once, by
-//! the network enrolment check in `nuschel-witness`; afterwards a submission with
+//! the network enrolment check in `nuschl-witness`; afterwards a submission with
 //! another descriptor for that origin is refused.
 
 use super::note::{LogNoteKey, Note};

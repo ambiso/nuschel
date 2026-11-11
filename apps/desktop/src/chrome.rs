@@ -181,7 +181,7 @@ pub fn title_bar(title: SharedString, window: &Window, cx: &mut Context<Desktop>
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(color(TEXT_MUTED))
-                .child(text!("Nuschel").with_id("app-name")),
+                .child(text!("Nuschl").with_id("app-name")),
         )
         .child(
             div()

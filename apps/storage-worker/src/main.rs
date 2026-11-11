@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 use clap::{ArgGroup, Parser};
-use nuschel_ipc::{
+use nuschl_ipc::{
     Envelope, StorageRequest, StorageResponse, read_frame,
     server::{ServerStorageRequest as Request, ServerStorageResponse as Response},
     write_frame,
 };
-use nuschel_storage::{
+use nuschl_storage::{
     History,
     server::{OperatorLock, ServerStore},
 };
@@ -16,7 +16,7 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(about = "Nuschel SQLx storage worker; receives requests on inherited stdin/stdout")]
+#[command(about = "Nuschl SQLx storage worker; receives requests on inherited stdin/stdout")]
 #[command(group(ArgGroup::new("database-config").required(true).args(["database", "database_url_file", "read_murmur"])))]
 struct Arguments {
     /// A local SQLite path selected by the trusted supervisor.
@@ -28,10 +28,10 @@ struct Arguments {
     /// Connect, apply checked migrations, and exit without entering the IPC loop.
     #[arg(long)]
     check_database: bool,
-    /// Serve `nuscheld`'s server state (channels, ACLs, users, bans) instead of history.
+    /// Serve `nuschld`'s server state (channels, ACLs, users, bans) instead of history.
     #[arg(long)]
     server: bool,
-    /// Read this Murmur database (read-only, untrusted) for `nuscheld
+    /// Read this Murmur database (read-only, untrusted) for `nuschld
     /// --import-murmur`, write it to stdout as frames and exit.
     #[arg(long, conflicts_with_all = ["database", "database_url_file", "server", "check_database"])]
     read_murmur: Option<PathBuf>,
@@ -47,7 +47,7 @@ struct Arguments {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // On Windows, the launch stage starts this worker again in its AppContainer.
     #[cfg(windows)]
-    nuschel_sandbox_windows::launch_if_requested();
+    nuschl_sandbox_windows::launch_if_requested();
     serve()
 }
 
@@ -199,7 +199,7 @@ async fn read_murmur(
     path: &std::path::Path,
     server: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use nuschel_ipc::murmur::MurmurFrame;
+    use nuschl_ipc::murmur::MurmurFrame;
     let mut output = io::stdout().lock();
     let mut sequence = 0_u64;
     let mut emit = |frame: MurmurFrame| {
@@ -212,7 +212,7 @@ async fn read_murmur(
     let confinement =
         confine(path).unwrap_or_else(|error| format!("reader: not confined ({error})"));
     let _ = emit(MurmurFrame::Notes(vec![confinement]));
-    if let Err(error) = nuschel_storage::murmur::read(path, server, &mut emit).await {
+    if let Err(error) = nuschl_storage::murmur::read(path, server, &mut emit).await {
         let _ = emit(MurmurFrame::Failed(error.clone()));
         return Err(error.into());
     }
@@ -280,7 +280,7 @@ async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::err
         match lock {
             Some(lock) => Some(lock),
             None if arguments.check_database => {
-                return Err("another process (a running nuscheld?) holds the database".into());
+                return Err("another process (a running nuschld?) holds the database".into());
             }
             None => return serve_held(),
         }
@@ -298,7 +298,7 @@ async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::err
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     while let Some(request) = read_frame::<Request>(&mut input)? {
-        let done = |result: Result<(), nuschel_storage::Error>| result.map(|()| Response::Done);
+        let done = |result: Result<(), nuschl_storage::Error>| result.map(|()| Response::Done);
         let payload = match request.payload {
             Request::Load => store.load().await.map(Response::Snapshot),
             Request::LoadUsers { after } => store.load_users(after).await.map(Response::Users),

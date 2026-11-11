@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! A scriptable real client for diagnostics and stock-server interoperability tests.
 use clap::Parser;
-use nuschel_protocol::{nuschel::v1, voice::VoicePacket};
-use nuschel_session::{
+use nuschl_protocol::{nuschl::v1, voice::VoicePacket};
+use nuschl_session::{
     Error,
     config::{Profile, ServerBookmark},
     connection::{
-        self, Command, ConnectOptions, MessageRate, NuschelEvent, NuschelRequest, SessionEvent,
+        self, Command, ConnectOptions, MessageRate, NuschlEvent, NuschlRequest, SessionEvent,
         TextTarget,
     },
     identity::{CryptoHandle, IdentityCommand, IdentityEvent, IdentitySetup},
@@ -64,16 +64,16 @@ struct Arguments {
     /// The server's text burst (murmur.ini `messageburst`).
     #[arg(long, default_value_t = MessageRate::default().burst)]
     message_burst: u32,
-    /// Refuse to log in unless the server speaks the Nuschel protocol (what an
-    /// invite's `policy=nuschel` or an earlier connection would require).
+    /// Refuse to log in unless the server speaks the Nuschl protocol (what an
+    /// invite's `policy=nuschl` or an earlier connection would require).
     #[arg(long)]
-    require_nuschel: bool,
+    require_nuschl: bool,
     /// The crypto worker's directory: publish and check identities on servers with
     /// key transparency (`kt/1`). The worker runs in its sandbox, beside this binary.
     #[arg(long)]
     identity_dir: Option<PathBuf>,
     /// Require this key-transparency witness (a C2SP verifier key from
-    /// `nuschel-witness vkey`) of every server; repeatable (docs/witness.md).
+    /// `nuschl-witness vkey`) of every server; repeatable (docs/witness.md).
     #[arg(long = "kt-witness")]
     kt_witnesses: Vec<String>,
     /// How old the witnesses' cosignatures may be, in hours.
@@ -176,7 +176,7 @@ enum Input {
         #[serde(default)]
         end: bool,
     },
-    /// Nuschel servers: send to a conversation (32 hex digits); `key` makes a
+    /// Nuschl servers: send to a conversation (32 hex digits); `key` makes a
     /// retry idempotent.
     ChatSend {
         request_id: u64,
@@ -184,7 +184,7 @@ enum Input {
         content: String,
         key: Option<String>,
     },
-    /// Nuschel servers: a history page; `before`/`after`/`around` a seq, else the latest.
+    /// Nuschl servers: a history page; `before`/`after`/`around` a seq, else the latest.
     History {
         request_id: u64,
         conversation: String,
@@ -198,24 +198,24 @@ enum Input {
         request_id: u64,
         conversations: Vec<String>,
     },
-    /// Nuschel servers: replace our message `target` (a seq) in a conversation.
+    /// Nuschl servers: replace our message `target` (a seq) in a conversation.
     ChatEdit {
         request_id: u64,
         conversation: String,
         target: u64,
         content: String,
     },
-    /// Nuschel servers: delete message `target` (ours, or as a moderator).
+    /// Nuschl servers: delete message `target` (ours, or as a moderator).
     ChatDelete {
         request_id: u64,
         conversation: String,
         target: u64,
     },
-    /// Nuschel servers: we are typing in a conversation.
+    /// Nuschl servers: we are typing in a conversation.
     Typing {
         conversation: String,
     },
-    /// Nuschel servers: open (or create) the direct conversation with a
+    /// Nuschl servers: open (or create) the direct conversation with a
     /// registered user, and list ours.
     OpenDirect {
         request_id: u64,
@@ -224,12 +224,12 @@ enum Input {
     ListDirect {
         request_id: u64,
     },
-    /// Nuschel servers: we read a conversation up to `seq`.
+    /// Nuschl servers: we read a conversation up to `seq`.
     ReadMarker {
         conversation: String,
         seq: u64,
     },
-    /// Nuschel servers: text to a direct conversation (32 hex digits), sent
+    /// Nuschl servers: text to a direct conversation (32 hex digits), sent
     /// like the desktop's (paced, idempotent, acknowledged).
     DirectText {
         conversation: String,
@@ -319,42 +319,42 @@ fn direct_json(direct: &v1::Direct) -> serde_json::Value {
     json!({"conversation":hex(&direct.conversation), "user_id":direct.user_id, "name":direct.name,
         "head":direct.head, "read":direct.read})
 }
-fn nuschel_json(event: &NuschelEvent) -> serde_json::Value {
+fn nuschl_json(event: &NuschlEvent) -> serde_json::Value {
     match event {
-        NuschelEvent::Error(error) => {
-            json!({"kind":"nuschel_error", "request_id":error.request_id, "code":error.code, "detail":error.detail})
+        NuschlEvent::Error(error) => {
+            json!({"kind":"nuschl_error", "request_id":error.request_id, "code":error.code, "detail":error.detail})
         }
-        NuschelEvent::Ack(ack) => {
+        NuschlEvent::Ack(ack) => {
             json!({"kind":"chat_ack", "request_id":ack.request_id, "conversation":hex(&ack.conversation), "seq":ack.seq})
         }
-        NuschelEvent::Chat(event) => {
+        NuschlEvent::Chat(event) => {
             json!({"kind":"chat", "conversation":hex(&event.conversation), "message":event.message.as_ref().map(message_json)})
         }
-        NuschelEvent::Page(page) | NuschelEvent::DecryptedPage { page, .. } => {
+        NuschlEvent::Page(page) | NuschlEvent::DecryptedPage { page, .. } => {
             json!({"kind":"history_page", "request_id":page.request_id, "conversation":hex(&page.conversation),
             "messages":page.messages.iter().map(message_json).collect::<Vec<_>>(), "more_before":page.more_before,
             "more_after":page.more_after, "restricted":page.restricted, "head":page.head})
         }
-        NuschelEvent::Subscribed(subscribed) => {
+        NuschlEvent::Subscribed(subscribed) => {
             json!({"kind":"subscribed", "request_id":subscribed.request_id,
             "conversations":subscribed.conversations.iter().map(|state| json!({"conversation":hex(&state.conversation), "head":state.head, "read":state.read})).collect::<Vec<_>>()})
         }
-        NuschelEvent::Unsubscribed(gone) => {
+        NuschlEvent::Unsubscribed(gone) => {
             json!({"kind":"unsubscribed", "conversation":hex(&gone.conversation)})
         }
-        NuschelEvent::Typing(typing) => {
+        NuschlEvent::Typing(typing) => {
             json!({"kind":"typing", "conversation":hex(&typing.conversation), "session":typing.session})
         }
-        NuschelEvent::DirectOpened(opened) => {
+        NuschlEvent::DirectOpened(opened) => {
             json!({"kind":"direct_opened", "request_id":opened.request_id, "direct":opened.direct.as_ref().map(direct_json)})
         }
-        NuschelEvent::DirectList(list) => {
+        NuschlEvent::DirectList(list) => {
             json!({"kind":"direct_list", "request_id":list.request_id, "directs":list.directs.iter().map(direct_json).collect::<Vec<_>>()})
         }
-        NuschelEvent::ReadMarker(marker) => {
+        NuschlEvent::ReadMarker(marker) => {
             json!({"kind":"read_marker", "conversation":hex(&marker.conversation), "seq":marker.seq})
         }
-        other => json!({"kind":"nuschel", "event":format!("{other:?}")}),
+        other => json!({"kind":"nuschl", "event":format!("{other:?}")}),
     }
 }
 fn identity_json(event: &IdentityEvent) -> serde_json::Value {
@@ -413,7 +413,7 @@ async fn offline(
     crypto: CryptoHandle,
     username: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use nuschel_ipc::crypto::{CryptoRequest, CryptoResponse};
+    use nuschl_ipc::crypto::{CryptoRequest, CryptoResponse};
     let (lines, mut input) = mpsc::channel::<Vec<u8>>(8);
     std::thread::spawn(move || {
         let mut stdin = io::stdin().lock();
@@ -443,7 +443,7 @@ async fn offline(
             }) => CryptoRequest::LinkJoin {
                 code,
                 pake: unhex(&pake),
-                device_name: device_name.unwrap_or_else(|| format!("{username} (nuschel-cli)")),
+                device_name: device_name.unwrap_or_else(|| format!("{username} (nuschl-cli)")),
             },
             Ok(Input::LinkApprove { pake, device_keys }) => CryptoRequest::LinkApprove {
                 pake: unhex(&pake),
@@ -503,8 +503,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .clone()
             .ok_or("--offline needs --identity-dir")?;
         let crypto = CryptoHandle::start(
-            nuschel_session::workers::sibling("nuschel-crypto-worker")
-                .unwrap_or_else(|_| "nuschel-crypto-worker".into()),
+            nuschl_session::workers::sibling("nuschl-crypto-worker")
+                .unwrap_or_else(|_| "nuschl-crypto-worker".into()),
             directory,
         );
         return offline(crypto, &args.username).await;
@@ -552,23 +552,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             per_second: args.message_limit,
         },
         resend: Vec::new(),
-        required: nuschel_session::sticky::Requirement {
-            nuschel: args.require_nuschel,
+        required: nuschl_session::sticky::Requirement {
+            nuschl: args.require_nuschl,
             ..Default::default()
         },
         crypto: args.identity_dir.clone().map(|directory| IdentitySetup {
             crypto: CryptoHandle::start(
-                nuschel_session::workers::sibling("nuschel-crypto-worker")
-                    .unwrap_or_else(|_| "nuschel-crypto-worker".into()),
+                nuschl_session::workers::sibling("nuschl-crypto-worker")
+                    .unwrap_or_else(|_| "nuschl-crypto-worker".into()),
                 directory,
             ),
-            device_name: format!("{} (nuschel-cli)", args.username),
-            recovery: nuschel_ipc::crypto::RecoveryPolicy::Never,
-            witnessing: nuschel_ipc::crypto::KeyTransparencySettings {
+            device_name: format!("{} (nuschl-cli)", args.username),
+            recovery: nuschl_ipc::crypto::RecoveryPolicy::Never,
+            witnessing: nuschl_ipc::crypto::KeyTransparencySettings {
                 witnesses: args
                     .kt_witnesses
                     .iter()
-                    .map(|key| nuschel_ipc::crypto::WitnessSetting {
+                    .map(|key| nuschl_ipc::crypto::WitnessSetting {
                         key: key.clone(),
                         enabled: true,
                     })
@@ -816,7 +816,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     conversation,
                     content,
                     key,
-                }) => Command::Nuschel(NuschelRequest::Send(v1::ChatSend {
+                }) => Command::Nuschl(NuschlRequest::Send(v1::ChatSend {
                     request_id,
                     conversation: unhex(&conversation),
                     idempotency_key: key
@@ -841,7 +841,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         (_, _, Some(seq)) => Anchor::Around(seq),
                         _ => Anchor::Latest(true),
                     };
-                    Command::Nuschel(NuschelRequest::History(v1::HistoryRequest {
+                    Command::Nuschl(NuschlRequest::History(v1::HistoryRequest {
                         request_id,
                         conversation: unhex(&conversation),
                         anchor: Some(anchor),
@@ -851,7 +851,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(Input::Subscribe {
                     request_id,
                     conversations,
-                }) => Command::Nuschel(NuschelRequest::Subscribe(v1::Subscribe {
+                }) => Command::Nuschl(NuschlRequest::Subscribe(v1::Subscribe {
                     request_id,
                     conversations: conversations.iter().map(|id| unhex(id)).collect(),
                 })),
@@ -860,7 +860,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     conversation,
                     target,
                     content,
-                }) => Command::Nuschel(NuschelRequest::Edit(v1::ChatEdit {
+                }) => Command::Nuschl(NuschlRequest::Edit(v1::ChatEdit {
                     request_id,
                     conversation: unhex(&conversation),
                     target,
@@ -871,13 +871,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     request_id,
                     conversation,
                     target,
-                }) => Command::Nuschel(NuschelRequest::Delete(v1::ChatDelete {
+                }) => Command::Nuschl(NuschlRequest::Delete(v1::ChatDelete {
                     request_id,
                     conversation: unhex(&conversation),
                     target,
                 })),
                 Ok(Input::Typing { conversation }) => {
-                    Command::Nuschel(NuschelRequest::Typing(v1::Typing {
+                    Command::Nuschl(NuschlRequest::Typing(v1::Typing {
                         conversation: unhex(&conversation),
                         session: 0,
                     }))
@@ -885,18 +885,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(Input::OpenDirect {
                     request_id,
                     user_id,
-                }) => Command::Nuschel(NuschelRequest::OpenDirect(v1::OpenDirect {
+                }) => Command::Nuschl(NuschlRequest::OpenDirect(v1::OpenDirect {
                     request_id,
                     user_id,
                 })),
                 Ok(Input::ReadMarker { conversation, seq }) => {
-                    Command::Nuschel(NuschelRequest::ReadMarker(v1::ReadMarker {
+                    Command::Nuschl(NuschlRequest::ReadMarker(v1::ReadMarker {
                         conversation: unhex(&conversation),
                         seq,
                     }))
                 }
                 Ok(Input::ListDirect { request_id }) => {
-                    Command::Nuschel(NuschelRequest::ListDirect(v1::ListDirect { request_id }))
+                    Command::Nuschl(NuschlRequest::ListDirect(v1::ListDirect { request_id }))
                 }
                 Ok(Input::DirectText { conversation, body }) => {
                     match <[u8; 16]>::try_from(unhex(&conversation).as_slice()) {
@@ -938,7 +938,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             },
             Some(event) = events.recv() => output(match event {
                 SessionEvent::PeerCertificate(sha256) => json!({"kind":"peer_certificate", "sha256":sha256}),
-                SessionEvent::Negotiated(negotiated) => json!({"kind":"negotiated", "nuschel":negotiated.nuschel, "capabilities":negotiated.capabilities,
+                SessionEvent::Negotiated(negotiated) => json!({"kind":"negotiated", "nuschl":negotiated.nuschl, "capabilities":negotiated.capabilities,
                     "policy":negotiated.policy.map(|policy| json!({"moderators_delete":policy.moderators_delete, "edit_limit":policy.edit_limit}))}),
                 SessionEvent::Channel(channel) => json!({"kind":"channel", "channel":channel}),
                 SessionEvent::ChannelRemoved(id) => json!({"kind":"channel_removed", "channel":id}),
@@ -964,7 +964,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::UnsupportedCodec { session } => json!({"kind":"unsupported_codec", "session":session}),
                 SessionEvent::Outbox { sent, total } => json!({"kind":"outbox", "sent":sent, "total":total}),
                 SessionEvent::ChannelInfo { channel, info } => json!({"kind":"channel_info", "channel":channel, "conversation":hex(&info.conversation), "visibility":info.visibility}),
-                SessionEvent::Nuschel(event) => nuschel_json(&event),
+                SessionEvent::Nuschl(event) => nuschl_json(&event),
                 SessionEvent::ChatPending(pending) => json!({"kind":"chat_pending", "target":pending.target, "key":hex(&pending.key)}),
                 SessionEvent::ChatAcked { key, seq } => json!({"kind":"chat_acked", "key":hex(&key), "seq":seq}),
                 SessionEvent::ChatFailed { key, reason } => json!({"kind":"chat_failed", "key":hex(&key), "reason":reason}),

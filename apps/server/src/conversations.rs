@@ -10,11 +10,11 @@
 //! `since_access` intervals before the handler's lock is released
 //! ([`State::finish`]).
 use crate::{authz::Action, state::State};
-use nuschel_ipc::server::{HistoryVisibility, Retention, ServerStorageRequest as Request};
-use nuschel_protocol::nuschel::{self, kind, v1};
+use nuschl_ipc::server::{HistoryVisibility, Retention, ServerStorageRequest as Request};
+use nuschl_protocol::nuschl::{self, kind, v1};
 use std::collections::{BTreeSet, HashMap};
 
-pub type Id = nuschel::Id;
+pub type Id = nuschl::Id;
 
 pub fn hex(id: &Id) -> String {
     crate::tls::hex(id)
@@ -222,7 +222,7 @@ impl State {
             self.users.get(session).is_some_and(|user| {
                 user.extension
                     .as_ref()
-                    .is_some_and(|extension| extension.has(nuschel::capability::HISTORY))
+                    .is_some_and(|extension| extension.has(nuschl::capability::HISTORY))
             })
         };
         let mut out = BTreeSet::new();
@@ -259,7 +259,7 @@ impl State {
                 !user
                     .extension
                     .as_ref()
-                    .is_some_and(|extension| extension.has(nuschel::capability::HISTORY))
+                    .is_some_and(|extension| extension.has(nuschl::capability::HISTORY))
             })
         };
         let mut out = BTreeSet::new();

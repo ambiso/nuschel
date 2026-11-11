@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! A conversation: a channel's chat, or a direct conversation (stock Mumble's
-//! text to a session, or a Nuschel server's stored conversation between two
+//! text to a session, or a Nuschl server's stored conversation between two
 //! accounts). Its timeline, unread count, read marker, who is typing, and
 //! the activity lines (joins, moves, moderation, connection gaps) shown
 //! among its messages.
@@ -45,11 +45,11 @@ pub struct ConversationState {
     pub max_users: u32,
     /// Raw, untrusted Mumble HTML; only the content worker renders it.
     pub description_raw: String,
-    /// Its conversation on a Nuschel server, and the read marker sent last.
+    /// Its conversation on a Nuschl server, and the read marker sent last.
     pub conversation: Option<[u8; 16]>,
     pub encryption: Option<EncryptionState>,
     pub read_seq: i64,
-    /// Who is typing here (Nuschel servers), by session, and when they last
+    /// Who is typing here (Nuschl servers), by session, and when they last
     /// said so (the platform's monotonic milliseconds).
     pub typing: BTreeMap<u32, u64>,
 }
@@ -271,7 +271,7 @@ impl ConversationState {
 mod tests {
     use super::*;
     use crate::timeline::IncomingMessage;
-    use nuschel_core::{ChatMessage, MessageDocument};
+    use nuschl_core::{ChatMessage, MessageDocument};
 
     fn message(author: &str, at: i64) -> IncomingMessage {
         IncomingMessage::plain(

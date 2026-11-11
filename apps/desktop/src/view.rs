@@ -18,8 +18,8 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_client::{HistorySource, SessionSecurity, conversation::Entry};
-use nuschel_session::connection::{TextTarget, User};
+use nuschl_client::{HistorySource, SessionSecurity, conversation::Entry};
+use nuschl_session::connection::{TextTarget, User};
 use std::{collections::HashMap, rc::Rc};
 
 impl Render for Desktop {
@@ -1171,7 +1171,7 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
     // A short state fits beside the controls; the full audio message is the tooltip.
     let detail = server.audio_status.clone();
     let listening = this.client.server_index(&server.id).is_some_and(|index| {
-        this.client.voice_role(index) == nuschel_client::voice::Role::Listening
+        this.client.voice_role(index) == nuschl_client::voice::Role::Listening
     });
     let status = if !connected {
         server.status_label().to_string()
@@ -1190,9 +1190,9 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
         "Talking".into()
     } else if detail.starts_with("Audio ready") {
         match transmit {
-            nuschel_core::audio::TransmitMode::VoiceActivity => "Voice activity",
-            nuschel_core::audio::TransmitMode::PushToTalk => "Push to talk",
-            nuschel_core::audio::TransmitMode::Continuous => "Transmitting",
+            nuschl_core::audio::TransmitMode::VoiceActivity => "Voice activity",
+            nuschl_core::audio::TransmitMode::PushToTalk => "Push to talk",
+            nuschl_core::audio::TransmitMode::Continuous => "Transmitting",
         }
         .into()
     } else {
@@ -1754,7 +1754,7 @@ fn conversation(
                         && server.has_mumble_voice()
                         && is_channel
                         && !in_this_voice
-                        && server.may_try(channel.id, nuschel_session::model::permission::ENTER),
+                        && server.may_try(channel.id, nuschl_session::model::permission::ENTER),
                     |header| {
                         header.child(styled_button(
                             "join-voice",
@@ -1860,11 +1860,11 @@ fn conversation(
                                 move |this, _, cx| {
                                     this.update_settings(|settings| {
                                         settings.audio.transmit =
-                                            nuschel_core::audio::TransmitMode::PushToTalk
+                                            nuschl_core::audio::TransmitMode::PushToTalk
                                     });
                                     this.client.servers[index].suggestion = None;
                                     if !this.settings.shortcuts.contains_key(
-                                        &nuschel_session::config::ShortcutAction::PushToTalk,
+                                        &nuschl_session::config::ShortcutAction::PushToTalk,
                                     ) {
                                         this.open_settings();
                                     }
@@ -2111,7 +2111,7 @@ fn timeline_intro(
         )
         .child(
             div().text_sm().text_color(color(TEXT_MUTED)).child(
-                // Honest per conversation: stock direct messages on a Nuschel
+                // Honest per conversation: stock direct messages on a Nuschl
                 // server are what this device saw.
                 text!(match server.history_source {
                     HistorySource::ServerArchive if server.archived(channel) => "Server history",
@@ -2527,7 +2527,7 @@ fn update_bar(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     use crate::update::UpdateState;
     let (text, action): (String, Option<AnyElement>) = match &this.update {
         UpdateState::Available(update) => (
-            format!("Nuschel {} is available.", update.version),
+            format!("Nuschl {} is available.", update.version),
             Some(styled_button(
                 "install-update",
                 "Update and restart",
@@ -2862,9 +2862,9 @@ fn message_row(
 /// conversation keeps its shape (and its author's header when it led a group).
 fn tombstone_row(
     this: &Desktop,
-    message: &nuschel_client::timeline::Message,
+    message: &nuschl_client::timeline::Message,
     index: usize,
-    deletion: nuschel_client::timeline::Deletion,
+    deletion: nuschl_client::timeline::Deletion,
     author: Option<&User>,
     grouped: bool,
 ) -> AnyElement {
@@ -3001,7 +3001,7 @@ fn composer(
                 }
             }),
         )
-        // Up in an empty composer edits our last message (Nuschel servers).
+        // Up in an empty composer edits our last message (Nuschl servers).
         .capture_action(
             cx.listener(|this, _: &gpui_kit::base::input::MoveUp, window, cx| {
                 if this.edit_last(window, cx) {

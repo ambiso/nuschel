@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The client SDK in the browser (docs/web.md): wasm-bindgen bindings over
-//! `nuschel-client`, and connections to Mumble and Nuschel servers through the
+//! `nuschl-client`, and connections to Mumble and Nuschl servers through the
 //! web relay's tunnel with TLS in WebAssembly. Built with `just wasm-client`;
 //! the Svelte client in web/app loads it.
 //!

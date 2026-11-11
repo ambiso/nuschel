@@ -126,8 +126,8 @@ impl OpenMlsProvider for Provider {
     }
 }
 
-/// What every Nuschel leaf supports: the suite, the binding extension and the
-/// Nuschel credential type.
+/// What every Nuschl leaf supports: the suite, the binding extension and the
+/// Nuschl credential type.
 pub(crate) fn capabilities() -> Capabilities {
     Capabilities::builder()
         .ciphersuites(vec![SUITE])
@@ -143,9 +143,9 @@ pub(crate) fn capabilities() -> Capabilities {
 
 /// The external sender's credential: the server, named by nothing more than this
 /// label (its key is what members check, against the pinned key-transparency log).
-pub(crate) const SERVER_SENDER: &[u8] = b"nuschel-server";
+pub(crate) const SERVER_SENDER: &[u8] = b"nuschl-server";
 
-/// The binding, required capabilities so that no member without Nuschel's
+/// The binding, required capabilities so that no member without Nuschl's
 /// extension and credential type can be added, and the server as the one external
 /// sender (docs/e2ee.md §6.2): its key-transparency head-signing key (Ed25519),
 /// which every client already pins, signs the removals it proposes.
@@ -243,7 +243,7 @@ pub(crate) fn key_package_in(bytes: &[u8]) -> Result<KeyPackageIn, Error> {
     Ok(package)
 }
 
-/// A member as the application sees it: leaf index, the Nuschel device credential
+/// A member as the application sees it: leaf index, the Nuschl device credential
 /// bytes and the leaf signature key, which the credential must certify.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemberInfo {
@@ -254,7 +254,7 @@ pub struct MemberInfo {
 
 pub(crate) fn member_info(member: &Member) -> Result<MemberInfo, Error> {
     if member.credential.credential_type() != CredentialType::Other(CREDENTIAL_TYPE) {
-        return Err(Error::Invalid("a member without a Nuschel credential"));
+        return Err(Error::Invalid("a member without a Nuschl credential"));
     }
     Ok(MemberInfo {
         index: member.index.u32(),

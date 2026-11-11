@@ -24,7 +24,7 @@ pub enum TlsVersion {
 #[serde(rename_all = "snake_case")]
 pub enum Security {
     /// Stock Mumble clients are admitted; there is no end-to-end encryption.
-    /// Nuschel clients get the extension's unencrypted extras (server history,
+    /// Nuschl clients get the extension's unencrypted extras (server history,
     /// edits, typing, durable direct messages), which they label "not end-to-end
     /// encrypted".
     #[default]
@@ -106,7 +106,7 @@ pub enum RetentionWord {
     None,
 }
 
-/// Persistent history for Nuschel clients (docs/extension.md §4–§9).
+/// Persistent history for Nuschl clients (docs/extension.md §4–§9).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct History {
@@ -140,7 +140,7 @@ pub struct History {
     pub network_page_bytes_per_minute: u32,
     /// Networks (CIDR, such as `10.0.0.0/8`) exempt from the per-network limits.
     pub unlimited_networks: Vec<String>,
-    /// Nuschel client versions ("1.0.0"; docs/extension.md, "Minimum
+    /// Nuschl client versions ("1.0.0"; docs/extension.md, "Minimum
     /// versions"). Below `recommended_client` clients suggest an update; below
     /// `minimum_client` they are refused, from `minimum_client_from` on if it
     /// is set (until then admitted and shown the date). Self-reported and
@@ -232,11 +232,11 @@ impl Default for History {
 impl History {
     /// The server's default retention (docs/extension.md §6), within
     /// `max_retention_days`.
-    pub fn default_retention(&self) -> nuschel_ipc::server::Retention {
-        use nuschel_ipc::server::Retention;
+    pub fn default_retention(&self) -> nuschl_ipc::server::Retention {
+        use nuschl_ipc::server::Retention;
         let days = |days: u32| match days {
             0 => Retention::Forever,
-            days => Retention::Days(days.min(nuschel_ipc::server::MAX_RETENTION_DAYS)),
+            days => Retention::Days(days.min(nuschl_ipc::server::MAX_RETENTION_DAYS)),
         };
         let configured = match self.retention {
             Some(RetentionSetting::Word(RetentionWord::Forever)) => Retention::Forever,
@@ -248,11 +248,11 @@ impl History {
     }
 
     /// `max_retention_days` as a retention (forever when unset).
-    pub fn maximum_retention(&self) -> nuschel_ipc::server::Retention {
+    pub fn maximum_retention(&self) -> nuschl_ipc::server::Retention {
         match self.max_retention_days {
-            0 => nuschel_ipc::server::Retention::Forever,
-            days => nuschel_ipc::server::Retention::Days(
-                days.min(nuschel_ipc::server::MAX_RETENTION_DAYS),
+            0 => nuschl_ipc::server::Retention::Forever,
+            days => nuschl_ipc::server::Retention::Days(
+                days.min(nuschl_ipc::server::MAX_RETENTION_DAYS),
             ),
         }
     }
@@ -275,7 +275,7 @@ pub enum KtHistoryAccess {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Kt {
-    /// Run the directory and offer `kt/1` to Nuschel clients.
+    /// Run the directory and offer `kt/1` to Nuschl clients.
     pub enabled: bool,
     /// The head-signing key, which is the server's identity key: a file with 32
     /// random bytes or 64 hex digits. Without it one is generated once in
@@ -297,12 +297,12 @@ pub struct Kt {
     pub history: KtHistoryAccess,
     /// The names clients reach this server under, `host:port` as in their
     /// bookmarks (`chat.example.org:64738`): each is an origin of the epoch log,
-    /// `<host>:<port>/nuschel-kt/v1`, whose checkpoints the witnesses cosign
+    /// `<host>:<port>/nuschl-kt/v1`, whose checkpoints the witnesses cosign
     /// (docs/witness.md). Without one, nothing is submitted and replies carry no
     /// checkpoint; clients that require witnesses then show "Automatic
     /// verification unavailable".
     pub origins: Vec<String>,
-    /// Submit to the built-in witnesses (`nuschel_kt::DEFAULT_WITNESSES`, empty
+    /// Submit to the built-in witnesses (`nuschl_kt::DEFAULT_WITNESSES`, empty
     /// until the project auditor is deployed).
     pub default_witnesses: bool,
     /// More witnesses to submit to.
@@ -314,13 +314,13 @@ pub struct Kt {
     pub witness_refresh_interval: u64,
 }
 
-/// A witness `nuscheld` submits its epochs to (`[[kt.witnesses]]`).
+/// A witness `nuschld` submits its epochs to (`[[kt.witnesses]]`).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KtWitness {
-    /// Its C2SP verifier key (`nuschel-witness vkey`).
+    /// Its C2SP verifier key (`nuschl-witness vkey`).
     pub key: String,
-    /// Its base URL; submissions go to `<url>/nuschel-kt/v1/add-epochs`.
+    /// Its base URL; submissions go to `<url>/nuschl-kt/v1/add-epochs`.
     pub url: String,
 }
 
@@ -370,7 +370,7 @@ impl Default for Mls {
         Self {
             claims_per_minute: 30,
             uploads_per_minute: 10,
-            welcome_days: nuschel_e2ee::INACTIVE_DEVICE_DAYS as u32,
+            welcome_days: nuschl_e2ee::INACTIVE_DEVICE_DAYS as u32,
             sweep_interval: 60,
         }
     }
@@ -396,8 +396,8 @@ pub struct Config {
     /// certificate is generated once and kept in `state_directory`.
     pub certificate: Option<PathBuf>,
     pub private_key: Option<PathBuf>,
-    /// The storage worker executable; defaults to `nuschel-storage-worker`
-    /// next to `nuscheld`.
+    /// The storage worker executable; defaults to `nuschl-storage-worker`
+    /// next to `nuschld`.
     pub storage_worker: Option<PathBuf>,
 
     /// The root channel's name (murmur.ini `registerName`).
@@ -497,7 +497,7 @@ pub struct Config {
 #[serde(default, deny_unknown_fields)]
 pub struct ShareLinks {
     /// The web host this server's links point at (`web.example.org`, running
-    /// `services.nuschel-web`); empty: the one the client is set to use.
+    /// `services.nuschl-web`); empty: the one the client is set to use.
     pub web_host: String,
 }
 
@@ -511,7 +511,7 @@ impl Default for Config {
             ],
             port: 64738,
             state_directory: PathBuf::from("."),
-            database: PathBuf::from("nuscheld.sqlite3"),
+            database: PathBuf::from("nuschld.sqlite3"),
             database_url_file: None,
             certificate: None,
             private_key: None,
@@ -691,7 +691,7 @@ impl Config {
                 .rsplit_once(':')
                 .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok())
                 && *origin == origin.to_ascii_lowercase()
-                && nuschel_kt::witness::origin(origin).is_some();
+                && nuschl_kt::witness::origin(origin).is_some();
             if !valid {
                 return Err(ConfigError::Invalid(format!(
                     "kt.origins: {origin:?} is not a lower-case host:port"
@@ -699,7 +699,7 @@ impl Config {
             }
         }
         for witness in &kt.witnesses {
-            if let Err(error) = nuschel_kt::witness::note::CosignerKey::from_vkey(&witness.key) {
+            if let Err(error) = nuschl_kt::witness::note::CosignerKey::from_vkey(&witness.key) {
                 return Err(ConfigError::Invalid(format!(
                     "kt.witnesses: the key {:?} is not an ML-DSA-44 verifier key: {error}",
                     witness.key.chars().take(40).collect::<String>()
@@ -825,8 +825,8 @@ impl Config {
     }
 }
 
-/// The example shipped as `nuscheld.example.toml`, also used by tests.
-pub const EXAMPLE: &str = include_str!("../nuscheld.example.toml");
+/// The example shipped as `nuschld.example.toml`, also used by tests.
+pub const EXAMPLE: &str = include_str!("../nuschld.example.toml");
 
 #[cfg(test)]
 mod tests {
@@ -908,7 +908,7 @@ mod tests {
 
     #[test]
     fn retention_is_forever_by_default_and_explicit_otherwise() {
-        use nuschel_ipc::server::Retention;
+        use nuschl_ipc::server::Retention;
         let retention = |text: &str| {
             Config::from_toml(text)
                 .map_err(|error| error.to_string())

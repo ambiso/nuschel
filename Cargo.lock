@@ -6914,7 +6914,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel"
+name = "nuschl"
 version = "0.1.0"
 dependencies = [
  "ashpd",
@@ -6926,12 +6926,12 @@ dependencies = [
  "gpui-pre",
  "image",
  "jiff",
- "nuschel-client",
- "nuschel-core",
- "nuschel-ipc",
- "nuschel-protocol",
- "nuschel-session",
- "nuschel-update",
+ "nuschl-client",
+ "nuschl-core",
+ "nuschl-ipc",
+ "nuschl-protocol",
+ "nuschl-session",
+ "nuschl-update",
  "serde_json",
  "tokio",
  "tracing",
@@ -6941,14 +6941,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-cli"
+name = "nuschl-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "nuschel-ipc",
- "nuschel-protocol",
- "nuschel-session",
- "nuscheld",
+ "nuschl-ipc",
+ "nuschl-protocol",
+ "nuschl-session",
+ "nuschld",
  "serde",
  "serde_json",
  "tempfile",
@@ -6956,29 +6956,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-client"
+name = "nuschl-client"
 version = "0.1.0"
 dependencies = [
- "nuschel-core",
- "nuschel-ipc",
- "nuschel-protocol",
- "nuschel-session",
+ "nuschl-core",
+ "nuschl-ipc",
+ "nuschl-protocol",
+ "nuschl-session",
  "serde",
  "serde_json",
  "tokio",
 ]
 
 [[package]]
-name = "nuschel-client-wasm"
+name = "nuschl-client-wasm"
 version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-util",
  "js-sys",
- "nuschel-client",
- "nuschel-core",
- "nuschel-protocol",
- "nuschel-web-relay",
+ "nuschl-client",
+ "nuschl-core",
+ "nuschl-protocol",
+ "nuschl-web-relay",
  "prost",
  "rcgen",
  "ring",
@@ -6998,33 +6998,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-content"
+name = "nuschl-content"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "html5ever 0.40.1",
  "image",
  "markup5ever_rcdom 0.40.1+unofficial",
- "nuschel-core",
+ "nuschl-core",
  "pulldown-cmark",
  "syntect",
  "thiserror 2.0.21",
 ]
 
 [[package]]
-name = "nuschel-content-worker"
+name = "nuschl-content-worker"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "nuschel-content",
- "nuschel-core",
- "nuschel-ipc",
- "nuschel-sandbox-windows",
+ "nuschl-content",
+ "nuschl-core",
+ "nuschl-ipc",
+ "nuschl-sandbox-windows",
  "tokio",
 ]
 
 [[package]]
-name = "nuschel-core"
+name = "nuschl-core"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -7034,18 +7034,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-crypto-worker"
+name = "nuschl-crypto-worker"
 version = "0.1.0"
 dependencies = [
- "nuschel-e2ee",
- "nuschel-identity",
- "nuschel-ipc",
- "nuschel-kt",
- "nuschel-protocol",
- "nuschel-sandbox-windows",
- "nuschel-session",
- "nuschel-witness",
- "nuscheld",
+ "nuschl-e2ee",
+ "nuschl-identity",
+ "nuschl-ipc",
+ "nuschl-kt",
+ "nuschl-protocol",
+ "nuschl-sandbox-windows",
+ "nuschl-session",
+ "nuschl-witness",
+ "nuschld",
  "serde",
  "serde_json",
  "tempfile",
@@ -7054,11 +7054,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-e2ee"
+name = "nuschl-e2ee"
 version = "0.1.0"
 dependencies = [
  "libcrux-sha2 0.0.9",
- "nuschel-identity",
+ "nuschl-identity",
  "openmls",
  "openmls_libcrux_crypto",
  "openmls_memory_storage",
@@ -7069,7 +7069,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-files"
+name = "nuschl-files"
 version = "0.1.0"
 dependencies = [
  "ring",
@@ -7078,7 +7078,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-identity"
+name = "nuschl-identity"
 version = "0.1.0"
 dependencies = [
  "curve25519-dalek 4.1.3",
@@ -7099,11 +7099,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-ipc"
+name = "nuschl-ipc"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "nuschel-core",
+ "nuschl-core",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -7112,7 +7112,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-kt"
+name = "nuschl-kt"
 version = "0.1.0"
 dependencies = [
  "akd",
@@ -7124,7 +7124,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "libcrux-ml-dsa",
- "nuschel-identity",
+ "nuschl-identity",
  "sha2 0.10.9",
  "thiserror 2.0.21",
  "tokio",
@@ -7132,11 +7132,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-legacy-html"
+name = "nuschl-legacy-html"
 version = "0.1.0"
 
 [[package]]
-name = "nuschel-math"
+name = "nuschl-math"
 version = "0.1.0"
 dependencies = [
  "comemo",
@@ -7149,26 +7149,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-math-worker"
+name = "nuschl-math-worker"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "nuschel-ipc",
- "nuschel-math",
- "nuschel-sandbox-windows",
+ "nuschl-ipc",
+ "nuschl-math",
+ "nuschl-sandbox-windows",
  "tokio",
 ]
 
 [[package]]
-name = "nuschel-media-worker"
+name = "nuschl-media-worker"
 version = "0.1.0"
 dependencies = [
  "allocation-counter",
  "cpal",
  "nnnoiseless",
- "nuschel-core",
- "nuschel-ipc",
- "nuschel-sandbox-windows",
+ "nuschl-core",
+ "nuschl-ipc",
+ "nuschl-sandbox-windows",
  "opus-pure",
  "pipewire",
  "rtrb",
@@ -7177,7 +7177,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-protocol"
+name = "nuschl-protocol"
 version = "0.1.0"
 dependencies = [
  "aes 0.8.4",
@@ -7189,7 +7189,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-rtc"
+name = "nuschl-rtc"
 version = "0.1.0"
 dependencies = [
  "str0m",
@@ -7197,19 +7197,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-rtc-probe"
+name = "nuschl-rtc-probe"
 version = "0.1.0"
 dependencies = [
- "nuschel-rtc",
+ "nuschl-rtc",
 ]
 
 [[package]]
-name = "nuschel-sandbox-windows"
+name = "nuschl-sandbox-windows"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "nuschel-core",
- "nuschel-ipc",
+ "nuschl-core",
+ "nuschl-ipc",
  "serde",
  "serde_json",
  "tokio",
@@ -7217,15 +7217,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-session"
+name = "nuschl-session"
 version = "0.1.0"
 dependencies = [
  "bytes",
  "directories",
- "nuschel-core",
- "nuschel-ipc",
- "nuschel-legacy-html",
- "nuschel-protocol",
+ "nuschl-core",
+ "nuschl-ipc",
+ "nuschl-legacy-html",
+ "nuschl-protocol",
+ "nuschl-sandbox-windows",
  "p12-keystore",
  "prost",
  "rcgen",
@@ -7234,6 +7235,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1 0.11.0",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
@@ -7242,12 +7244,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-storage"
+name = "nuschl-storage"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "nuschel-core",
- "nuschel-ipc",
+ "nuschl-core",
+ "nuschl-ipc",
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
@@ -7255,20 +7257,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-storage-worker"
+name = "nuschl-storage-worker"
 version = "0.1.0"
 dependencies = [
  "clap",
  "landlock",
- "nuschel-ipc",
- "nuschel-sandbox-windows",
- "nuschel-storage",
+ "nuschl-ipc",
+ "nuschl-sandbox-windows",
+ "nuschl-storage",
  "tempfile",
  "tokio",
 ]
 
 [[package]]
-name = "nuschel-transfer-worker"
+name = "nuschl-transfer-worker"
 version = "0.1.0"
 dependencies = [
  "async-executor",
@@ -7277,26 +7279,26 @@ dependencies = [
  "blocking",
  "futures",
  "magic-wormhole",
- "nuschel-ipc",
- "nuschel-sandbox-windows",
+ "nuschl-ipc",
+ "nuschl-sandbox-windows",
 ]
 
 [[package]]
-name = "nuschel-tui"
+name = "nuschl-tui"
 version = "0.1.0"
 dependencies = [
  "clap",
  "jiff",
- "nuschel-client",
- "nuschel-core",
- "nuschel-session",
+ "nuschl-client",
+ "nuschl-core",
+ "nuschl-session",
  "ratatui",
  "tokio",
  "unicode-width",
 ]
 
 [[package]]
-name = "nuschel-update"
+name = "nuschl-update"
 version = "0.1.0"
 dependencies = [
  "cap-std",
@@ -7312,13 +7314,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-web-relay"
+name = "nuschl-web-relay"
 version = "0.1.0"
 dependencies = [
  "bytes",
  "clap",
  "futures-util",
- "nuschel-protocol",
+ "nuschl-protocol",
  "prost",
  "rand 0.9.5",
  "rcgen",
@@ -7335,14 +7337,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-witness"
+name = "nuschl-witness"
 version = "0.1.0"
 dependencies = [
  "clap",
  "getrandom 0.4.3",
  "httparse",
- "nuschel-kt",
- "nuschel-protocol",
+ "nuschl-kt",
+ "nuschl-protocol",
  "rcgen",
  "rustls",
  "sha2 0.10.9",
@@ -7356,7 +7358,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuscheld"
+name = "nuschld"
 version = "0.1.0"
 dependencies = [
  "argon2",
@@ -7364,13 +7366,13 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "clap",
- "nuschel-e2ee",
- "nuschel-identity",
- "nuschel-ipc",
- "nuschel-kt",
- "nuschel-legacy-html",
- "nuschel-protocol",
- "nuschel-session",
+ "nuschl-e2ee",
+ "nuschl-identity",
+ "nuschl-ipc",
+ "nuschl-kt",
+ "nuschl-legacy-html",
+ "nuschl-protocol",
+ "nuschl-session",
  "prost",
  "rcgen",
  "regex",

@@ -23,11 +23,11 @@ function page(fragment) {
 }
 
 test("landing page preserves pins and supported policies, including encoded keys", () => {
-  for (const policy of ["policy=nuschel", "pol%69cy=nuschel", "policy=nuschel+nuschel", "policy=nuschel%2Bnuschel"]) {
+  for (const policy of ["policy=nuschl", "pol%69cy=nuschl", "policy=nuschl+nuschl", "policy=nuschl%2Bnuschl"]) {
     const element = page(`s=voice.example.org&fp=sha256:${"AB".repeat(32)}&${policy}`);
     assert.equal(element("actions").hidden, false);
     for (const id of ["open-app", "open-web"]) {
-      assert.match(element(id).href, /policy=nuschel/);
+      assert.match(element(id).href, /policy=nuschl/);
       assert.match(element(id).href, new RegExp(`fp=sha256:${"ab".repeat(32)}`));
     }
   }
@@ -35,9 +35,9 @@ test("landing page preserves pins and supported policies, including encoded keys
 
 test("landing page refuses ambiguous or unsupported security requirements", () => {
   for (const fragment of [
-    "s=voice.example.org&policy=nuschel&policy=",
-    "s=voice.example.org&policy=&pol%69cy=nuschel",
-    "s=voice.example.org&policy=nuschel+future",
+    "s=voice.example.org&policy=nuschl&policy=",
+    "s=voice.example.org&policy=&pol%69cy=nuschl",
+    "s=voice.example.org&policy=nuschl+future",
     "s=voice.example.org&policy=future",
     "s=voice.example.org&%73=other.example",
     "s=voice.example.org&fp=sha256:bad",

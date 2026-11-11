@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Log in to a server that imported tests/fixtures/murmur-1.5.sql (`nuscheld
+"""Log in to a server that imported tests/fixtures/murmur-1.5.sql (`nuschld
 --import-murmur`) with the real client: Murmur's PBKDF2 and SHA-1 passwords work,
 a wrong one does not, and the imported channel tree is there."""
 import argparse
@@ -25,7 +25,7 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=64738)
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="nuschel-murmur-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="nuschl-murmur-") as temporary:
         root = Path(temporary)
         pin = certificate_pin(args.binaries, args.host, args.port, root / "probe")
         alice = login(args.binaries, args.host, args.port, pin, root, "alice", "hunter2")

@@ -44,9 +44,9 @@ pub struct MathImage {
     pub coverage: String,
 }
 
-/// The longest formula sent, in bytes (`nuschel_math::latex::MAX_SOURCE_BYTES`).
+/// The longest formula sent, in bytes (`nuschl_math::latex::MAX_SOURCE_BYTES`).
 pub const MAX_TEX_BYTES: usize = 4096;
-/// The largest image accepted back (`nuschel_math::MAX_WIDTH` and so on).
+/// The largest image accepted back (`nuschl_math::MAX_WIDTH` and so on).
 pub const MAX_WIDTH: u32 = 4096;
 pub const MAX_HEIGHT: u32 = 1024;
 pub const MAX_PIXELS: u32 = 2 * 1024 * 1024;

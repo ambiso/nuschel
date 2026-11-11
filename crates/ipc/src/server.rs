@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Server state between `nuscheld` and its storage worker: channels with their
+//! Server state between `nuschld` and its storage worker: channels with their
 //! ACLs and groups, links, registered users, blobs and bans. The server keeps
 //! the authoritative state in memory and writes through; the worker owns the
 //! database (SQLite or PostgreSQL) and its credential.
@@ -140,7 +140,7 @@ pub struct StoredMessage {
     pub author_account: Option<String>,
     pub author_user_id: Option<u32>,
     pub author_name: String,
-    /// `nuschel.v1.Format`.
+    /// `nuschl.v1.Format`.
     pub format: u8,
     pub content: String,
     pub reply_to: Option<u64>,
@@ -250,7 +250,7 @@ pub fn expirable(row: &StoredMessage) -> bool {
         && row.format != FORMAT_MLS_HANDSHAKE
 }
 
-/// `nuschel.v1.Format.MLS_HANDSHAKE`: MLS commits and proposals, which retention
+/// `nuschl.v1.Format.MLS_HANDSHAKE`: MLS commits and proposals, which retention
 /// and the erase keep (members catch up through them).
 pub const FORMAT_MLS_HANDSHAKE: u8 = 4;
 
@@ -591,13 +591,13 @@ pub enum ServerStorageRequest {
         query: PageQuery,
     },
     /// Whether this worker holds the operator lock (`--operator-lock`): `Done`,
-    /// or `Held` when another process (a running `nuscheld`, `nuscheld admin`)
+    /// or `Held` when another process (a running `nuschld`, `nuschld admin`)
     /// has it; such a worker never opened the database and answers everything
     /// with `Held`.
     OperatorLock,
-    /// Key transparency (nuschel-kt's `KtStore`, docs/e2ee.md §5.2): the values of
+    /// Key transparency (nuschl-kt's `KtStore`, docs/e2ee.md §5.2): the values of
     /// these keys, in order (`KtValues`). Keys and values are base64; the record layout
-    /// belongs to nuschel-kt and `nuscheld`, and the worker never interprets it.
+    /// belongs to nuschl-kt and `nuschld`, and the worker never interprets it.
     KtGet {
         keys: Vec<String>,
     },
@@ -606,8 +606,8 @@ pub enum ServerStorageRequest {
         prefix: String,
     },
     /// Insert or overwrite every record in one transaction: all or none (`Done`).
-    /// An empty value deletes the key (nuschel-kt never writes one; the MLS
-    /// delivery service in `nuscheld` uses it for consumed key packages and
+    /// An empty value deletes the key (nuschl-kt never writes one; the MLS
+    /// delivery service in `nuschld` uses it for consumed key packages and
     /// fetched Welcomes).
     KtWrite {
         records: Vec<(String, String)>,

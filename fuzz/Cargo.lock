@@ -3239,33 +3239,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-client"
+name = "nuschl-client"
 version = "0.1.0"
 dependencies = [
- "nuschel-core",
- "nuschel-ipc",
- "nuschel-protocol",
- "nuschel-session",
+ "nuschl-core",
+ "nuschl-ipc",
+ "nuschl-protocol",
+ "nuschl-session",
  "serde",
  "tokio",
 ]
 
 [[package]]
-name = "nuschel-content"
+name = "nuschl-content"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "html5ever",
  "image",
  "markup5ever_rcdom",
- "nuschel-core",
+ "nuschl-core",
  "pulldown-cmark",
  "syntect",
  "thiserror 2.0.21",
 ]
 
 [[package]]
-name = "nuschel-core"
+name = "nuschl-core"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -3274,39 +3274,40 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-e2ee"
+name = "nuschl-e2ee"
 version = "0.1.0"
 dependencies = [
  "libcrux-sha2 0.0.9",
- "nuschel-identity",
+ "nuschl-identity",
  "openmls",
  "openmls_libcrux_crypto",
  "openmls_memory_storage",
  "openmls_traits",
+ "rayon",
  "thiserror 2.0.21",
  "zeroize",
 ]
 
 [[package]]
-name = "nuschel-fuzz"
+name = "nuschl-fuzz"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
  "image",
  "libfuzzer-sys",
- "nuschel-client",
- "nuschel-content",
- "nuschel-core",
- "nuschel-e2ee",
- "nuschel-identity",
- "nuschel-ipc",
- "nuschel-kt",
- "nuschel-legacy-html",
- "nuschel-math",
- "nuschel-protocol",
- "nuschel-session",
- "nuscheld",
+ "nuschl-client",
+ "nuschl-content",
+ "nuschl-core",
+ "nuschl-e2ee",
+ "nuschl-identity",
+ "nuschl-ipc",
+ "nuschl-kt",
+ "nuschl-legacy-html",
+ "nuschl-math",
+ "nuschl-protocol",
+ "nuschl-session",
+ "nuschld",
  "opus-pure",
  "prost",
  "pulldown-cmark",
@@ -3314,7 +3315,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-identity"
+name = "nuschl-identity"
 version = "0.1.0"
 dependencies = [
  "curve25519-dalek 4.1.3",
@@ -3335,11 +3336,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-ipc"
+name = "nuschl-ipc"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "nuschel-core",
+ "nuschl-core",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3348,7 +3349,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-kt"
+name = "nuschl-kt"
 version = "0.1.0"
 dependencies = [
  "akd",
@@ -3359,7 +3360,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.4.3",
  "libcrux-ml-dsa",
- "nuschel-identity",
+ "nuschl-identity",
  "sha2 0.10.9",
  "thiserror 2.0.21",
  "tokio",
@@ -3367,11 +3368,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-legacy-html"
+name = "nuschl-legacy-html"
 version = "0.1.0"
 
 [[package]]
-name = "nuschel-math"
+name = "nuschl-math"
 version = "0.1.0"
 dependencies = [
  "comemo",
@@ -3384,7 +3385,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-protocol"
+name = "nuschl-protocol"
 version = "0.1.0"
 dependencies = [
  "aes 0.8.4",
@@ -3396,15 +3397,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuschel-session"
+name = "nuschl-session"
 version = "0.1.0"
 dependencies = [
  "bytes",
  "directories",
- "nuschel-core",
- "nuschel-ipc",
- "nuschel-legacy-html",
- "nuschel-protocol",
+ "nuschl-core",
+ "nuschl-ipc",
+ "nuschl-legacy-html",
+ "nuschl-protocol",
  "p12-keystore",
  "prost",
  "rcgen",
@@ -3421,7 +3422,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nuscheld"
+name = "nuschld"
 version = "0.1.0"
 dependencies = [
  "argon2",
@@ -3429,12 +3430,12 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "clap",
- "nuschel-e2ee",
- "nuschel-identity",
- "nuschel-ipc",
- "nuschel-kt",
- "nuschel-legacy-html",
- "nuschel-protocol",
+ "nuschl-e2ee",
+ "nuschl-identity",
+ "nuschl-ipc",
+ "nuschl-kt",
+ "nuschl-legacy-html",
+ "nuschl-protocol",
  "prost",
  "rcgen",
  "regex",

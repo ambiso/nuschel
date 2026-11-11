@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 [package]
-name = "nuschel-e2ee"
-description = "MLS for Nuschel (docs/e2ee.md §6): OpenMLS with the libcrux provider behind Nuschel's own types; the only crate that uses the OpenMLS API"
+name = "nuschl-e2ee"
+description = "MLS for Nuschl (docs/e2ee.md §6): OpenMLS with the libcrux provider behind Nuschl's own types; the only crate that uses the OpenMLS API"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,7 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-nuschel-identity.workspace = true
+nuschl-identity.workspace = true
 # OpenMLS 0.9.2 with its libcrux provider. The provider and hpke-rs-libcrux are
 # patched onto the fixed libcrux crates (vendor/openmls_libcrux_crypto,
 # vendor/hpke-rs-libcrux; RUSTSEC-2026-0329/-0330/-0331) until an OpenMLS release

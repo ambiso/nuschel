@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Proof sizes and timings at 10k and 100k accounts. Ignored by default; run with
-//! `cargo test -p nuschel-kt --release --test perf -- --ignored --nocapture
+//! `cargo test -p nuschl-kt --release --test perf -- --ignored --nocapture
 //! --test-threads 1`. Uses a 4-thread runtime (the machine is shared).
 
 mod common;
 
 use common::*;
-use nuschel_kt::*;
+use nuschl_kt::*;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 

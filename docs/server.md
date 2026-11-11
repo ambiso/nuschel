@@ -1,23 +1,23 @@
-# The Nuschel server (`nuscheld`)
+# The Nuschl server (`nuschld`)
 
-`nuscheld` is a Mumble-compatible server: protocol 1.5, with the legacy UDP voice
+`nuschld` is a Mumble-compatible server: protocol 1.5, with the legacy UDP voice
 format for 1.4 and 1.3 clients. Stock Mumble clients use it like a stock Murmur:
 certificates and passwords, channels, ACLs and groups with Murmur's semantics, text,
 whisper and shout, listeners, and voice over UDP and the TCP tunnel, with state in
 SQLite or PostgreSQL behind the storage worker. It routes Opus voice without
-decoding it. Nuschel clients also get the Nuschel extension (docs/extension.md,
+decoding it. Nuschl clients also get the Nuschl extension (docs/extension.md,
 phase 2 of the roadmap): durable conversations, server history, edits and
 deletions, subscriptions, read markers and direct conversations. The `vm-server`
-check runs Nuschel's protocol suites and the stock Mumble GUI against it (Tests,
+check runs Nuschl's protocol suites and the stock Mumble GUI against it (Tests,
 below).
 
 ## Running it
 
 ```sh
-nuscheld --config nuscheld.toml          # see apps/server/nuscheld.example.toml
-nuscheld --config nuscheld.toml --check-config
-nuscheld --config nuscheld.toml admin users list     # operator commands, see Administration
-nuscheld --config nuscheld.toml admin import-murmur /var/lib/mumble-server/mumble-server.sqlite
+nuschld --config nuschld.toml          # see apps/server/nuschld.example.toml
+nuschld --config nuschld.toml --check-config
+nuschld --config nuschld.toml admin users list     # operator commands, see Administration
+nuschld --config nuschld.toml admin import-murmur /var/lib/mumble-server/mumble-server.sqlite
 ```
 
 Every configuration key is optional; names and defaults follow murmur.ini
@@ -29,12 +29,12 @@ Every configuration key is optional; names and defaults follow murmur.ini
 
 - **Security mode** (a server-level switch, docs/e2ee.md §10, answer 7).
   `security = "compatible"` (the default for now) admits stock clients and has no
-  end-to-end encryption at all; Nuschel clients get the extension's plaintext extras
+  end-to-end encryption at all; Nuschl clients get the extension's plaintext extras
   (server history, edits, typing, durable direct messages) and label them "not
   end-to-end encrypted". `security = "e2ee"` needs key transparency (`[kt]`, on by
   default) and:
   - turns stock clients away at the connection stage (a `Reject` they can show,
-    their `Authenticate` never read), and Nuschel clients that do not agree on
+    their `Authenticate` never read), and Nuschl clients that do not agree on
     `e2ee/1` at `Authenticate` (`WrongVersion`);
   - runs the MLS delivery service (`mls/1`): every conversation is an MLS group;
   - refuses plaintext: `ChatSend`, `ChatEdit` and `ChatDelete` (`unsupported`) and
@@ -50,7 +50,7 @@ Every configuration key is optional; names and defaults follow murmur.ini
 - **Secrets** come from files: `password_file`, `superuser_password_file`,
   `database_url_file`, `private_key`, `kt.signing_key_file`, `kt.vrf_secret_file`.
   The NixOS module passes them through systemd `LoadCredential`
-  (`services.nuschel.kt.signingKeyFile`, `vrfSecretFile`, …) and refuses Nix store
+  (`services.nuschl.kt.signingKeyFile`, `vrfSecretFile`, …) and refuses Nix store
   paths.
 - **Certificate.** Without `certificate`/`private_key`, a self-signed ECDSA
   certificate is generated once in `state_directory` (key file 0600). Clients pin
@@ -114,7 +114,7 @@ Every configuration key is optional; names and defaults follow murmur.ini
   channels, connections, logins, rejected logins, control messages and bytes, voice
   packets and bytes in and out, rate-limited messages and whisper packets dropped
   for the fan-out budget. Counts only, no names or addresses
-  (`journalctl -u nuschel | grep statistics`).
+  (`journalctl -u nuschl | grep statistics`).
 - **End-to-end encryption** (`[mls]`, docs/e2ee.md "Phase 4
   prototype"): in end-to-end mode the server offers `mls/1` and runs the MLS delivery
   service (`claims_per_minute` 30, `uploads_per_minute` 10, `welcome_days` 90). There
@@ -130,10 +130,10 @@ Every configuration key is optional; names and defaults follow murmur.ini
   (`network_pages_per_minute`, `network_page_bytes_per_minute`,
   `unlimited_networks`) and the client versions below.
 - **Client versions** (`[history]`, docs/extension.md "Minimum versions"), as Signal
-  keeps its clients current. `recommended_client = "0.2.0"`: older Nuschel clients
-  suggest an update (users can dismiss it). `minimum_client = "0.2.0"`: older Nuschel
+  keeps its clients current. `recommended_client = "0.2.0"`: older Nuschl clients
+  suggest an update (users can dismiss it). `minimum_client = "0.2.0"`: older Nuschl
   clients are refused at `Authenticate` with `Reject` `WrongVersion` ("This server
-  requires Nuschel 0.2.0 or newer. Update Nuschel to connect."). With
+  requires Nuschl 0.2.0 or newer. Update Nuschl to connect."). With
   `minimum_client_from = 2026-12-01` (a date, midnight UTC; quoted or not) they are
   admitted until that date and see it in a warning they cannot dismiss; without it
   the minimum applies at once. A client that reports no version counts as older than
@@ -146,14 +146,14 @@ Every configuration key is optional; names and defaults follow murmur.ini
 ## The NixOS module
 
 The flake exports `nixosModules.default` and a headless `packages.<system>.server`
-containing `nuscheld` and the storage worker, without the GPUI and audio stack. The
+containing `nuschld` and the storage worker, without the GPUI and audio stack. The
 module defaults to SQLite and also supports PostgreSQL, either through
 `database.urlFile` (a runtime credential file with the URL) or local peer
 authentication:
 
 ```nix
-imports = [ inputs.nuschel.nixosModules.default ];
-services.nuschel = {
+imports = [ inputs.nuschl.nixosModules.default ];
+services.nuschl = {
   enable = true;
   security = "compatible"; # stock Mumble clients, no end-to-end encryption (yet)
   openFirewall = true; # off by default
@@ -168,16 +168,16 @@ Other options include `listenAddresses`, `port`, `settings` (the TOML keys above
 described in [nix/module.nix](../nix/module.nix). Secrets are runtime files passed
 with `LoadCredential`, never Nix store values.
 
-The module (`services.nuschel`, nix/module.nix) generates the TOML file
+The module (`services.nuschl`, nix/module.nix) generates the TOML file
 from `settings` (never secrets), runs a database preflight under the operator lock
-(so the service does not start while `nuscheld admin` uses the database), and
+(so the service does not start while `nuschld admin` uses the database), and
 hardens the unit
 (DynamicUser, a private state directory, no capabilities, system call filter,
 `SocketBindAllow` for the server port only).
 
 ## Importing a Murmur server
 
-`nuscheld admin import-murmur PATH` (or the flag `--import-murmur PATH`) moves a
+`nuschld admin import-murmur PATH` (or the flag `--import-murmur PATH`) moves a
 Murmur (mumble-server) server into this one: registered users with their passwords, certificate hashes, last channels,
 comments and avatars; the channel tree with descriptions, positions, user limits and
 ACL inheritance; ACL entries, groups and members (inherit and inheritable flags);
@@ -216,7 +216,7 @@ It prints a report and exits.
   (names 4 KiB, hashes and salts 256 bytes, numbers and dates 64 bytes, comments,
   descriptions, avatars and settings 1 MiB), and every value is decoded by its actual
   type, so a malformed row is reported, not fatal; values over their cap, and blobs
-  beyond 256 MiB in total, are dropped and reported. `nuscheld` then applies its
+  beyond 256 MiB in total, are dropped and reported. `nuschld` then applies its
   own rules: `username_pattern` and `channel_name_pattern`, unique names (users
   regardless of case, siblings exactly), the text limits for comments and
   descriptions, `image_message_length` for avatars (Mumble's pre-1.2.3 raw avatars are
@@ -247,36 +247,36 @@ It prints a report and exits.
   (Murmur keeps their volume), Murmur's log table, and settings without an
   equivalent (listed in the report).
 
-On NixOS, `services.nuschel.importMurmur.databaseFile` runs the import once, in its
-own unit (`nuschel-import-murmur.service`, without a start timeout) before the
+On NixOS, `services.nuschl.importMurmur.databaseFile` runs the import once, in its
+own unit (`nuschl-import-murmur.service`, without a start timeout) before the
 server: the file is copied into the state directory for the dynamic user, imported,
 and removed; `murmur-imported` in the state directory records that it ran. If the
 import fails or refuses (the server already has state; `importMurmur.replaceExisting`
-replaces it), `nuschel.service` does not start and the journal says why; nothing
+replaces it), `nuschl.service` does not start and the journal says why; nothing
 retries in a loop.
 
 ## Administration
 
-`nuscheld admin` works offline on the database, through the storage worker as
+`nuschld admin` works offline on the database, through the storage worker as
 the server does, and changes it with the server's own state code (validation,
 cascades, persistence). Options before `admin` (`--config`, `--state-directory`,
 `--sqlite-path`, `--database-url-file`) select the database as for the server.
 
 ```sh
-nuscheld --config nuscheld.toml admin check-config     # also: does the database open, is it in use
-nuscheld --config nuscheld.toml admin users list
-nuscheld --config nuscheld.toml admin users show Alice  # or '#3'
-nuscheld --config nuscheld.toml admin users rename Alice Alicia
-nuscheld --config nuscheld.toml admin users remove Alice --yes
-printf %s 'secret' | nuscheld --config nuscheld.toml admin users set-password '#0'   # SuperUser
-nuscheld --config nuscheld.toml admin channels list
-nuscheld --config nuscheld.toml admin channels retention Lobby 30 --yes   # forever, none, default, days
-nuscheld --config nuscheld.toml admin bans list
-nuscheld --config nuscheld.toml admin bans add --address 192.0.2.0/24 --reason spam --duration 3600
-nuscheld --config nuscheld.toml admin bans remove 0
-nuscheld --config nuscheld.toml admin history export Lobby --output lobby.json
-nuscheld --config nuscheld.toml admin history erase-user Alice --yes   # GDPR requests
-nuscheld --config nuscheld.toml admin import-murmur murmur.sqlite   # see Importing a Murmur server
+nuschld --config nuschld.toml admin check-config     # also: does the database open, is it in use
+nuschld --config nuschld.toml admin users list
+nuschld --config nuschld.toml admin users show Alice  # or '#3'
+nuschld --config nuschld.toml admin users rename Alice Alicia
+nuschld --config nuschld.toml admin users remove Alice --yes
+printf %s 'secret' | nuschld --config nuschld.toml admin users set-password '#0'   # SuperUser
+nuschld --config nuschld.toml admin channels list
+nuschld --config nuschld.toml admin channels retention Lobby 30 --yes   # forever, none, default, days
+nuschld --config nuschld.toml admin bans list
+nuschld --config nuschld.toml admin bans add --address 192.0.2.0/24 --reason spam --duration 3600
+nuschld --config nuschld.toml admin bans remove 0
+nuschld --config nuschld.toml admin history export Lobby --output lobby.json
+nuschld --config nuschld.toml admin history erase-user Alice --yes   # GDPR requests
+nuschld --config nuschld.toml admin import-murmur murmur.sqlite   # see Importing a Murmur server
 ```
 
 - **Subcommands, not a second binary**: one executable to deploy and keep at
@@ -362,9 +362,9 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
   - A stock client's direct message was archived in the accounts' direct
     conversation (with `archive_stock_direct_messages`) after checking only the
     connection it named, and then delivered to all of the account's
-    connections; a Nuschel client's send to the same conversation needs
+    connections; a Nuschl client's send to the same conversation needs
     TextMessage in the channel of each of them. The stock path now archives
-    only when the Nuschel send would be allowed (`Action::SendDirect`);
+    only when the Nuschl send would be allowed (`Action::SendDirect`);
     otherwise the named connection gets the message live, as from Murmur.
   - Key-transparency histories were authorised once, when requested, while
     history pages are checked again when they are sent. A binding history is
@@ -415,9 +415,9 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
   after it sends voice over UDP. After five seconds without a good packet the
   server asks for the client's nonce (at most every five seconds); a flood of
   undecryptable packets pauses decryption for that address.
-- **Persistence.** `nuscheld` links no database code (deny.toml keeps SQLx in
-  `nuschel-storage` and that crate in the storage worker). It starts
-  `nuschel-storage-worker --server` and writes every change through an ordered
+- **Persistence.** `nuschld` links no database code (deny.toml keeps SQLx in
+  `nuschl-storage` and that crate in the storage worker). It starts
+  `nuschl-storage-worker --server` and writes every change through an ordered
   queue (`crates/ipc/src/server.rs` defines the messages); the worker owns the
   database and its credential. Startup loads channels, ACLs, links, bans and
   registered users (in pages); comments, avatars and channel listeners are loaded
@@ -449,7 +449,7 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
   truthful; the user also gets a `PermissionDenied` for Listen in that channel.
   Stock clients log it ("You were denied Listen privileges in …"); its reason
   ("Listening to … stopped: the permission to listen there was removed.") is
-  what Nuschel shows, and Nuschel clients can tell it from a refused request by
+  what Nuschl shows, and Nuschl clients can tell it from a refused request by
   its arriving unasked, right after the removal. No extension message was
   added: the stock messages say it to both kinds of client. A registered user's
   remembered listener is forgotten as well (a listener the user saw end does not
@@ -469,7 +469,7 @@ Write's implications, meta groups `all auth strong in out none sub,a,b,c`, the
 from `i32::MAX`, text limits in UTF-16 units with the `<img>` exception, the
 leaky bucket for `messagelimit`/`messageburst`, and blobs announced by hash from
 128 bytes on. The client test suites run unchanged against stock Murmur and
-`nuscheld` (see Tests).
+`nuschld` (see Tests).
 
 Deliberate differences:
 
@@ -554,20 +554,20 @@ autoban (Murmur's 10 attempts in 120 s → 300 s) and IP and certificate bans ar
 checked before a connection gets anywhere. The accept loop backs off on
 descriptor exhaustion.
 
-## The Nuschel extension
+## The Nuschl extension
 
-- **Negotiation.** `tls.rs` selects ALPN `nuschel/1` (and accepts `mumble`); the
+- **Negotiation.** `tls.rs` selects ALPN `nuschl/1` (and accepts `mumble`); the
   connection's `Negotiation` (extension.rs) accepts the client's hello once before
   `Authenticate` and freezes the capabilities; ALPN without a hello closes the
   connection before the credentials are decoded, a hello without ALPN is ignored.
-  `nuschel/1` connections get a `Version` with the server's hello and policy. The
-  client's hello carries its version; `Negotiation::refusal` turns away a Nuschel
+  `nuschl/1` connections get a `Version` with the server's hello and policy. The
+  client's hello carries its version; `Negotiation::refusal` turns away a Nuschl
   client below `minimum_client` from `minimum_client_from` on, before the
   credentials are decoded.
 - **Dispatch.** `State::handle` passes frames in 0x4E00–0x4EFF to
   `State::extension_frame` (chat.rs), which processes them only for connections that
   negotiated the needed capability; caps per type come from the header
-  (`nuschel::client_limit`) and again after decoding; at most 16 requests in flight.
+  (`nuschl::client_limit`) and again after decoding; at most 16 requests in flight.
 - **Conversations** (conversations.rs): channels' `conversation_id`, direct
   conversations per pair of accounts, and archives of deleted permanent channels
   (SuperUser only); temporary channels' history is purged with them. Registered users
@@ -578,7 +578,7 @@ descriptor exhaustion.
 - **Writes** are assigned their `seq` under the lock and queued to the history writer
   (history.rs), which stores them in order and then, under the lock, acknowledges,
   fans out to current readers and sends stock clients their copy (made with
-  `nuschel-legacy-html`, checked by Murmur's text rules). Stock senders' channel
+  `nuschl-legacy-html`, checked by Murmur's text rules). Stock senders' channel
   messages are stored as `legacy_html` (`State::text_message`).
 - **Pages** go to the history reader through a bounded queue; the result is clipped
   again if `authz_epoch` moved and dropped if `can_read` no longer holds.
@@ -600,7 +600,7 @@ descriptor exhaustion.
   conversation by conversation in batches of 1,000, so neither chat writes nor
   pages queue behind it and no single statement holds SQLite's write lock for long;
   pages hide content past the retention immediately. What may expire is one
-  predicate (`nuschel_ipc::server::expirable` and the worker's `expirable!` SQL),
+  predicate (`nuschl_ipc::server::expirable` and the worker's `expirable!` SQL),
   the hook where records the server must keep (MLS commits) are exempted. A
   live-only ("none") conversation stores no rows: its messages are acknowledged and
   delivered, and only its highest `seq` is recorded (`history_heads`). Expired and
@@ -610,7 +610,7 @@ descriptor exhaustion.
   backups keep whatever they captured.
 - **Key transparency** (kt.rs): `kt/1` requests are authorised under the lock (own
   account for publications, registered targets for lookups, the owner and contacts
-  for histories, per-type rate limits) and queued to one task, which owns nuschel-kt's
+  for histories, per-type rate limits) and queued to one task, which owns nuschl-kt's
   `AkdDirectory` on the `kt_records` table through a fourth storage worker. It checks
   each publication (the root's device-signing certificate, the devices, revocations
   and the identity's statement for this account and log), keeps the record behind
@@ -618,7 +618,7 @@ descriptor exhaustion.
   and re-signs the head every `refresh_interval`.
 
 - **MLS delivery service** (mls.rs): `mls/1` requests are authorised through
-  authz.rs under the lock and processed by one task through nuschel-e2ee (`PublicGroup` per
+  authz.rs under the lock and processed by one task through nuschl-e2ee (`PublicGroup` per
   group, structural checks before OpenMLS, `catch_unwind`): the key package directory,
   epoch fencing with `STALE_EPOCH`, commits and application messages as rows of the
   conversation's `seq` stream, Welcome mailboxes with push, join info; state in the
@@ -627,22 +627,22 @@ descriptor exhaustion.
 - **Share links** (share.rs, `share/1`, docs/web.md): random 16-byte tokens that open
   a channel, optionally with an access token for a private channel and an expiry,
   issued, resolved and revoked under the lock and kept in the key-value table under
-  `S`. `[share_links] web_host` names the web host (`services.nuschel-web`) the
+  `S`. `[share_links] web_host` names the web host (`services.nuschl-web`) the
   server's links point at.
 
 ## Tests
 
 | Command | What it covers |
 | --- | --- |
-| `cargo test -p nuscheld` | authorisation (authz.rs: every action against seven kinds of actor, the three decisions that were made two ways, and a guard that no permission check lives elsewhere), strong certificates (chains to a configured authority, through intermediates, expired, other authorities, self-signed; and over loopback with `UserStats`), ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames; the Murmur import (tests/fixtures/murmur-1.5.json: both password formats over loopback, the upgrade to argon2id, malformed rows reported, a non-empty server refused, `--replace-existing`, the ACLs in effect), listeners kept across reconnects and restarts, listeners that lose Listen (an ACL edit, a temporary token, unregistration) ended for stock and Nuschel clients with live delivery and pages stopped and others left alone, certificate reload (a broken one keeps the old) and `minimum_tls_version`, the temporary-channel cap and the whisper budget, clients before 1.2.2, the statistics counters; tests/obfuscation.rs: no client address in the log with `obfuscate` |
-| `cargo test -p nuscheld --test admin` | `nuscheld admin` on a stopped server's state: users (list, show, rename, set a password, remove with its ACL entries), channel retention (refused without `--yes` when it removes messages), bans, exporting a channel (0600, nothing past the retention), erasing a user |
-| `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends, the minimum-version policy (an old session refused with `Outdated` and never retried, a hello without a version refused, stock clients admitted, admitted and told the date before it, a recommendation) |
-| `cargo test -p nuscheld --test mls` | the MLS delivery service with raw protocol clients and real identities: a direct conversation end to end, idempotent resends, stale epochs, hostile key packages, strangers, plaintext refusal, a restart |
-| `cargo test -p nuschel-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |
-| `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase, retention batches and live-only heads; the key-transparency table; channel listeners and their cascades |
-| `cargo test -p nuschel-storage murmur` | the Murmur reader on Murmur 1.5's own schema (tests/fixtures/murmur-1.5.sql, which also produces the import test's input) and 1.6's layout, malformed rows as notes, other virtual servers, files that are not Murmur databases or are damaged |
-| `just test-postgres` (`cargo test -p nuschel-storage-worker --test postgres`) | the storage worker as `nuscheld` drives it, on SQLite and on a throwaway PostgreSQL from nixpkgs (`initdb` in a temporary directory, a unix socket only, no TCP): migrations, users, history pages, idempotency, edits, deletions, retention, live-only heads, erasure, purging, a second worker on the same database, and the operator lock (one holder; the others answer `Held` without opening the database). Without `initdb`/`postgres` on `PATH` (or in `NUSCHEL_POSTGRES_BIN`) the PostgreSQL half says SKIPPED and passes |
-| `cargo test -p nuschel-crypto-worker` | key transparency end to end: nuscheld, the session and the crypto worker in its sandbox (publish and look up, TOFU and verification, key changes, the self-monitoring alarm, a forked and a replaced log), and the worker against a malicious directory in process |
-| `python3 tests/with_local_nuscheld.py <bins> tests/<suite>.py <bins> --port PORT …` | `mumble_client.py`, `udp_voice.py`, `protocol_features.py` against nuscheld; `with_local_murmur.py` runs the same scripts against stock Murmur |
-| `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), key transparency (`tests/key_transparency.py`, keys as credentials and generated), and the stock Mumble GUI (login with a Nuschel-exported certificate, voice both ways); the statistics line, SIGHUP, and `services.nuschel.importMurmur` importing the Murmur fixture into a fresh database, then logins with its PBKDF2 and SHA-1 passwords (tests/murmur_import.py) |
+| `cargo test -p nuschld` | authorisation (authz.rs: every action against seven kinds of actor, the three decisions that were made two ways, and a guard that no permission check lives elsewhere), strong certificates (chains to a configured authority, through intermediates, expired, other authorities, self-signed; and over loopback with `UserStats`), ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschl connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames; the Murmur import (tests/fixtures/murmur-1.5.json: both password formats over loopback, the upgrade to argon2id, malformed rows reported, a non-empty server refused, `--replace-existing`, the ACLs in effect), listeners kept across reconnects and restarts, listeners that lose Listen (an ACL edit, a temporary token, unregistration) ended for stock and Nuschl clients with live delivery and pages stopped and others left alone, certificate reload (a broken one keeps the old) and `minimum_tls_version`, the temporary-channel cap and the whisper budget, clients before 1.2.2, the statistics counters; tests/obfuscation.rs: no client address in the log with `obfuscate` |
+| `cargo test -p nuschld --test admin` | `nuschld admin` on a stopped server's state: users (list, show, rename, set a password, remove with its ACL entries), channel retention (refused without `--yes` when it removes messages), bans, exporting a channel (0600, nothing past the retention), erasing a user |
+| `cargo test -p nuschld --test extension` | the extension between `nuschl-session` and `nuschld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends, the minimum-version policy (an old session refused with `Outdated` and never retried, a hello without a version refused, stock clients admitted, admitted and told the date before it, a recommendation) |
+| `cargo test -p nuschld --test mls` | the MLS delivery service with raw protocol clients and real identities: a direct conversation end to end, idempotent resends, stale epochs, hostile key packages, strangers, plaintext refusal, a restart |
+| `cargo test -p nuschl-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |
+| `cargo test -p nuschl-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase, retention batches and live-only heads; the key-transparency table; channel listeners and their cascades |
+| `cargo test -p nuschl-storage murmur` | the Murmur reader on Murmur 1.5's own schema (tests/fixtures/murmur-1.5.sql, which also produces the import test's input) and 1.6's layout, malformed rows as notes, other virtual servers, files that are not Murmur databases or are damaged |
+| `just test-postgres` (`cargo test -p nuschl-storage-worker --test postgres`) | the storage worker as `nuschld` drives it, on SQLite and on a throwaway PostgreSQL from nixpkgs (`initdb` in a temporary directory, a unix socket only, no TCP): migrations, users, history pages, idempotency, edits, deletions, retention, live-only heads, erasure, purging, a second worker on the same database, and the operator lock (one holder; the others answer `Held` without opening the database). Without `initdb`/`postgres` on `PATH` (or in `NUSCHL_POSTGRES_BIN`) the PostgreSQL half says SKIPPED and passes |
+| `cargo test -p nuschl-crypto-worker` | key transparency end to end: nuschld, the session and the crypto worker in its sandbox (publish and look up, TOFU and verification, key changes, the self-monitoring alarm, a forked and a replaced log), and the worker against a malicious directory in process |
+| `python3 tests/with_local_nuschld.py <bins> tests/<suite>.py <bins> --port PORT …` | `mumble_client.py`, `udp_voice.py`, `protocol_features.py` against nuschld; `with_local_murmur.py` runs the same scripts against stock Murmur |
+| `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), key transparency (`tests/key_transparency.py`, keys as credentials and generated), and the stock Mumble GUI (login with a Nuschl-exported certificate, voice both ways); the statistics line, SIGHUP, and `services.nuschl.importMurmur` importing the Murmur fixture into a fresh database, then logins with its PBKDF2 and SHA-1 passwords (tests/murmur_import.py) |
 | `just fuzz server_messages [seconds]` (SECURITY.md, "Fuzzing") | also `control_frames`, `relay`, `crypt`, `extension_messages`, `kt_messages` |

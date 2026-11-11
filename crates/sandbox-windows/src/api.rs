@@ -75,6 +75,13 @@ pub(crate) trait Api {
         sid: *mut PSID,
     ) -> HRESULT;
 
+    /// DeleteAppContainerProfile (userenv.dll): removes the calling user's
+    /// profile; a nonexistent profile is success. See the Microsoft API docs.
+    ///
+    /// # Safety
+    /// `name` points to a NUL-terminated UTF-16 string, read during the call.
+    unsafe fn delete_app_container_profile(&self, name: PCWSTR) -> HRESULT;
+
     /// [DeriveAppContainerSidFromAppContainerName](https://learn.microsoft.com/en-us/windows/win32/api/userenv/nf-userenv-deriveappcontainersidfromappcontainername)
     /// (Windows 8): the SID of profile `name`. ReactOS does not implement it.
     ///
@@ -444,8 +451,8 @@ mod win32 {
                 DACL_SECURITY_INFORMATION, DeriveCapabilitySidsFromName, FreeSid, GetLengthSid,
                 IsValidSid,
                 Isolation::{
-                    CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
-                    GetAppContainerFolderPath,
+                    CreateAppContainerProfile, DeleteAppContainerProfile,
+                    DeriveAppContainerSidFromAppContainerName, GetAppContainerFolderPath,
                 },
                 PSECURITY_DESCRIPTOR, PSID,
             },
@@ -499,6 +506,11 @@ mod win32 {
             unsafe {
                 CreateAppContainerProfile(name, display_name, description, ptr::null(), 0, sid)
             }
+        }
+
+        unsafe fn delete_app_container_profile(&self, name: PCWSTR) -> HRESULT {
+            // SAFETY: the caller upholds the trait contract.
+            unsafe { DeleteAppContainerProfile(name) }
         }
 
         unsafe fn derive_app_container_sid_from_app_container_name(

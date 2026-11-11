@@ -14,13 +14,13 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-pub use nuschel_client::search::Scope;
-use nuschel_client::{
+pub use nuschl_client::search::Scope;
+use nuschl_client::{
     Conversation,
     search::{Hit, Located},
     timeline::Page,
 };
-use nuschel_core::{SearchCursor, SearchPage, search::Query};
+use nuschl_core::{SearchCursor, SearchPage, search::Query};
 use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
@@ -50,7 +50,7 @@ pub struct SearchView {
     _changes: Subscription,
 }
 
-/// A result as the SDK names it (`nuschel_client::search`), with its local time.
+/// A result as the SDK names it (`nuschl_client::search`), with its local time.
 struct SearchHit {
     hit: Hit,
     time: String,
@@ -308,7 +308,7 @@ impl Desktop {
             Ok(Located::Found { position, id }) => (position, id),
             Ok(Located::Reopen { .. }) => {
                 self.client.servers[index].notice =
-                    Some(nuschel_client::search::OPENS_ONLINE.into());
+                    Some(nuschl_client::search::OPENS_ONLINE.into());
                 return;
             }
             Err(notice) => {

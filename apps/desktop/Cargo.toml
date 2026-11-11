@@ -1,6 +1,6 @@
 [package]
-name = "nuschel"
-description = "Nuschel GPUI desktop shell"
+name = "nuschl"
+description = "Nuschl GPUI desktop shell"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,12 +16,12 @@ gpui-kit = { version = "0.9.0", default-features = false }
 gpui-profiler = { package = "gpui-pre", version = "=0.3.11", optional = true, features = ["profiler"] }
 image = { version = "0.25", default-features = false }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
-nuschel-client.workspace = true
-nuschel-core.workspace = true
-nuschel-ipc.workspace = true
-nuschel-protocol.workspace = true
-nuschel-session.workspace = true
-nuschel-update.workspace = true
+nuschl-client.workspace = true
+nuschl-core.workspace = true
+nuschl-ipc.workspace = true
+nuschl-protocol.workspace = true
+nuschl-session.workspace = true
+nuschl-update.workspace = true
 serde_json = "1.0.154"
 tokio = { version = "1.54.1", features = [
   "rt",
