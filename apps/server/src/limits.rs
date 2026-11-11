@@ -106,6 +106,45 @@ impl ByteBucket {
     }
 }
 
+/// A budget of units per second, refilled continuously; a second's worth may
+/// be spent at once (the whisper fan-out budget).
+#[derive(Clone, Debug)]
+pub struct Budget {
+    per_second: u64,
+    available: u64,
+    since: Instant,
+}
+
+impl Budget {
+    pub fn new(per_second: u64, now: Instant) -> Self {
+        Self {
+            per_second: per_second.max(1),
+            available: per_second.max(1),
+            since: now,
+        }
+    }
+
+    /// Spend `units` if they are available. A full budget pays for anything,
+    /// so a request larger than a second's worth is not refused for ever.
+    pub fn take(&mut self, units: u64, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.since).as_micros();
+        let refill = elapsed.saturating_mul(u128::from(self.per_second)) / 1_000_000;
+        if refill > 0 {
+            self.since = now;
+            self.available = self
+                .available
+                .saturating_add(u64::try_from(refill).unwrap_or(u64::MAX))
+                .min(self.per_second);
+        }
+        if units <= self.available || self.available == self.per_second {
+            self.available = self.available.saturating_sub(units);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 const SLOTS: usize = 360;
 
 /// Murmur's `BandwidthRecord`: the last 360 voice packets with their arrival
@@ -188,6 +227,22 @@ impl BandwidthRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fanout_budget_refills_per_second_and_pays_for_one_oversized_request() {
+        let start = Instant::now();
+        let mut budget = Budget::new(100, start);
+        assert!(budget.take(60, start));
+        assert!(!budget.take(60, start));
+        assert!(budget.take(40, start));
+        assert!(!budget.take(1, start));
+        // Half a second refills half.
+        assert!(budget.take(50, start + Duration::from_millis(500)));
+        assert!(!budget.take(1, start + Duration::from_millis(500)));
+        // A full budget pays for more than a second's worth once.
+        assert!(budget.take(1000, start + Duration::from_secs(5)));
+        assert!(!budget.take(1, start + Duration::from_secs(5)));
+    }
 
     #[test]
     fn leaky_bucket_allows_a_burst_then_the_steady_rate() {

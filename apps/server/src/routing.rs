@@ -8,10 +8,16 @@ use crate::{
     state::State,
 };
 use nuschel_protocol::{
+    control::permission_denied::DenyType,
     crypt, encode_tunnel, kind,
     relay::{self, Audio, Context, Datagram, Delivery},
 };
-use std::{net::SocketAddr, ops::Range, time::Instant};
+use std::{
+    net::SocketAddr,
+    ops::Range,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Receiver {
@@ -155,6 +161,19 @@ impl State {
             true
         });
         let loopback = audio.target == relay::TARGET_LOOPBACK;
+        // Whisper and shout targets share a global fan-out budget; a packet
+        // over it reaches nobody (not an arbitrary subset), and the speaker
+        // learns why, at most every ten seconds.
+        if audio.target != relay::TARGET_NORMAL
+            && !loopback
+            && let Some(budget) = self.fanout.as_mut()
+            && !budget.take(scratch.receivers.len() as u64, Instant::now())
+        {
+            self.counters.fanout_dropped.fetch_add(1, Ordering::Relaxed);
+            self.scratch = scratch;
+            self.fanout_notice(speaker);
+            return;
+        }
         // Positional data is only passed between users of the same game context.
         let context = self
             .users
@@ -209,6 +228,30 @@ impl State {
             user.plugin_context = context;
         }
         self.scratch = scratch;
+    }
+
+    /// Tell a speaker that a whisper exceeded the fan-out budget (at most
+    /// every ten seconds).
+    fn fanout_notice(&mut self, speaker: u32) {
+        let now = Instant::now();
+        let Some(user) = self.users.get_mut(&speaker) else {
+            return;
+        };
+        if user
+            .fanout_notice
+            .is_some_and(|last| now.saturating_duration_since(last) < Duration::from_secs(10))
+        {
+            return;
+        }
+        user.fanout_notice = Some(now);
+        self.deny_with(
+            speaker,
+            DenyType::Text,
+            Some(
+                "The server is busy: your whisper did not reach its listeners. Try again shortly.",
+            ),
+            None,
+        );
     }
 
     /// Murmur's receiver selection, before deafness and self are filtered.

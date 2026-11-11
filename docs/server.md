@@ -293,8 +293,27 @@ Deliberate differences:
   for all control messages and a query bucket for permission and blob queries,
   per-address and pending-connection caps, and a bounded argon2id queue (a busy
   server answers `AuthenticatorFail`, "try again later").
+- **Temporary channels per user and the whisper fan-out budget.** Fixed caps cost
+  availability too (a large event, a legitimate shout to a big tree), so these are
+  generous by default, configurable (0 turns them off), and fail only the request
+  that exceeds them, with a reason, never the connection; resource limits on the
+  process (`LimitNOFILE` in the NixOS unit; `MemoryMax`, `CPUQuota` or traffic
+  shaping where the operator sets them) stay the main defence. The review suggested
+  three temporary channels; 16 leaves room for people who keep a few rooms open for
+  others. `temporary_channels_per_user` (16) counts the temporary
+  channels one account or certificate has created that still exist, so nobody fills
+  `channel_count_limit` alone; one more is refused with `PermissionDenied` (Text:
+  "You already have 16 temporary channels…"). `whisper_fanout_per_second`
+  (500,000, a second's worth at once) is shared by all whisper and shout targets:
+  a target can reach a whole tree, so a few speakers could otherwise make the
+  server send more than its link carries. A packet over the budget reaches nobody
+  rather than an arbitrary part of the target (to the listeners it is packet loss),
+  the speaker is told why at most every ten seconds, and the drops are counted.
+  Channel voice is not counted; the per-user `max_bandwidth` bounds what each
+  speaker sends in.
 - Not implemented: Ice/gRPC, external authenticators, `strong` certificates (no
-  CA store; the group never matches), email login, rolling statistics, behaviour specific to clients older than 1.2.2, recording
+  CA store; the group never matches), email login, rolling statistics, behaviour
+  specific to clients older than 1.2.2, recording
   notices for clients older than 1.2.3, the pre-1.4 Opus/CELT codec switching.
 
 ## Security measures

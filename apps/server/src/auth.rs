@@ -775,5 +775,6 @@ pub(crate) fn new_user(
         permission_sent: HashMap::new(),
         last_permission_check: None,
         last_activity: now,
+        fanout_notice: None,
     }
 }

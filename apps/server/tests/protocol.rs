@@ -1718,3 +1718,154 @@ async fn tls_13_can_be_required() {
     superuser(fixture.address(), &identity()).await;
     assert!(Config::from_toml("minimum_tls_version = \"1.1\"").is_err());
 }
+
+/// `temporary_channels_per_user`: one more is refused with the reason, and
+/// a channel that goes away frees the slot.
+#[tokio::test]
+async fn temporary_channels_per_user_are_capped_with_a_reason() {
+    let fixture = Fixture::start("temporary_channels_per_user = 2").await;
+    let (admin_id, guest_id) = (identity(), identity());
+    let mut admin = superuser(fixture.address(), &admin_id).await;
+    let mut guest = Client::connect(fixture.address(), Options::new("Guest", &guest_id))
+        .await
+        .unwrap();
+    let create = |name: &str| proto::ChannelState {
+        parent: Some(0),
+        name: Some(name.into()),
+        temporary: Some(true),
+        ..Default::default()
+    };
+    admin.send(kind::CHANNEL_STATE, &create("One")).await;
+    let one = admin
+        .expect::<proto::ChannelState>(kind::CHANNEL_STATE, |c| c.name.as_deref() == Some("One"))
+        .await
+        .channel_id
+        .unwrap();
+    // The guest stays in One, so it outlives the admin's move to Two.
+    guest
+        .send(
+            kind::USER_STATE,
+            &proto::UserState {
+                channel_id: Some(one),
+                ..Default::default()
+            },
+        )
+        .await;
+    let session = guest.session;
+    guest
+        .expect::<proto::UserState>(kind::USER_STATE, move |s| {
+            s.session == Some(session) && s.channel_id == Some(one)
+        })
+        .await;
+    admin.send(kind::CHANNEL_STATE, &create("Two")).await;
+    admin
+        .expect::<proto::ChannelState>(kind::CHANNEL_STATE, |c| c.name.as_deref() == Some("Two"))
+        .await;
+    admin.send(kind::CHANNEL_STATE, &create("Three")).await;
+    let denied = admin
+        .expect::<proto::PermissionDenied>(kind::PERMISSION_DENIED, |_| true)
+        .await;
+    assert_eq!(denied.r#type(), proto::permission_denied::DenyType::Text);
+    assert!(
+        denied.reason().contains("2 temporary channels"),
+        "{denied:?}"
+    );
+    // The guest leaves One, which goes away; now there is room again.
+    guest
+        .send(
+            kind::USER_STATE,
+            &proto::UserState {
+                channel_id: Some(0),
+                ..Default::default()
+            },
+        )
+        .await;
+    admin
+        .expect::<proto::ChannelRemove>(kind::CHANNEL_REMOVE, |r| r.channel_id == one)
+        .await;
+    admin.send(kind::CHANNEL_STATE, &create("Three")).await;
+    admin
+        .expect::<proto::ChannelState>(kind::CHANNEL_STATE, |c| c.name.as_deref() == Some("Three"))
+        .await;
+}
+
+/// `whisper_fanout_per_second`: a whispered packet over the budget reaches
+/// nobody and the speaker is told why; channel voice is not counted.
+#[tokio::test]
+async fn whispers_over_the_fanout_budget_are_dropped_with_a_notice() {
+    let fixture = Fixture::start("whisper_fanout_per_second = 2").await;
+    let (alice_id, bob_id, carol_id) = (identity(), identity(), identity());
+    let mut alice = Client::connect(fixture.address(), Options::new("Alice", &alice_id))
+        .await
+        .unwrap();
+    let mut bob = Client::connect(fixture.address(), Options::new("Bob", &bob_id))
+        .await
+        .unwrap();
+    let mut carol = Client::connect(fixture.address(), Options::new("Carol", &carol_id))
+        .await
+        .unwrap();
+    for client in [&mut alice, &mut bob, &mut carol] {
+        client.sync().await;
+    }
+    alice
+        .send(
+            kind::VOICE_TARGET,
+            &proto::VoiceTarget {
+                id: Some(1),
+                targets: vec![proto::voice_target::Target {
+                    session: vec![bob.session, carol.session],
+                    ..Default::default()
+                }],
+            },
+        )
+        .await;
+    alice.sync().await;
+    let opus = [0xf8, 0xff, 0xfe, 0x01];
+    // Two receivers: the whole budget.
+    alice
+        .send_raw(&encode_tunnel(&voice(1, 1, &opus)))
+        .await
+        .unwrap();
+    assert!(bob.receives(kind::UDP_TUNNEL, WAIT).await.is_some());
+    assert!(carol.receives(kind::UDP_TUNNEL, WAIT).await.is_some());
+    alice
+        .send_raw(&encode_tunnel(&voice(1, 2, &opus)))
+        .await
+        .unwrap();
+    let denied = alice
+        .expect::<proto::PermissionDenied>(kind::PERMISSION_DENIED, |_| true)
+        .await;
+    assert_eq!(denied.r#type(), proto::permission_denied::DenyType::Text);
+    assert!(denied.reason().contains("busy"), "{denied:?}");
+    assert!(
+        bob.receives(kind::UDP_TUNNEL, Duration::from_millis(300))
+            .await
+            .is_none()
+    );
+    // A second drop within ten seconds is not announced again.
+    alice
+        .send_raw(&encode_tunnel(&voice(1, 3, &opus)))
+        .await
+        .unwrap();
+    assert!(
+        alice
+            .receives(kind::PERMISSION_DENIED, Duration::from_millis(300))
+            .await
+            .is_none()
+    );
+    // Talking in the channel is not limited by it.
+    alice
+        .send_raw(&encode_tunnel(&voice(0, 4, &opus)))
+        .await
+        .unwrap();
+    assert!(bob.receives(kind::UDP_TUNNEL, WAIT).await.is_some());
+    assert!(
+        fixture
+            .running
+            .server
+            .counters
+            .fanout_dropped
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 2
+    );
+}

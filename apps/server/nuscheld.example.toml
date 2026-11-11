@@ -90,6 +90,13 @@ broadcast_listener_volume_adjustments = false
 connections_per_address = 16
 max_pending_connections = 256
 max_queued_bytes = 8388608
+# Temporary channels one account or certificate may have at once (0: unlimited);
+# one more is refused with a reason.
+temporary_channels_per_user = 16
+# Voice datagrams per second all whisper and shout targets may fan out to together
+# (0: unlimited). A whispered packet over it reaches nobody and the speaker is told.
+# Channel voice is not counted.
+whisper_fanout_per_second = 500000
 
 [autoban]
 # Connection attempts from one address within timeframe seconds before it is banned

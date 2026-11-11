@@ -280,6 +280,8 @@ pub struct User {
     pub permission_sent: HashMap<u32, u32>,
     pub last_permission_check: Option<u32>,
     pub last_activity: Instant,
+    /// When the user was last told that a whisper exceeded the fan-out budget.
+    pub fanout_notice: Option<Instant>,
 }
 
 impl User {
@@ -362,6 +364,9 @@ pub struct Channel {
     pub users: Vec<u32>,
     /// Sessions listening to this channel.
     pub listeners: BTreeSet<u32>,
+    /// Who created a temporary channel: `#id` for a registered user, `$hash`
+    /// for a certificate (`temporary_channels_per_user`).
+    pub creator: Option<String>,
     pub conversation_id: [u8; 16],
     pub history_visibility: HistoryVisibility,
 }
@@ -386,6 +391,7 @@ impl Channel {
             links: BTreeSet::new(),
             users: Vec::new(),
             listeners: BTreeSet::new(),
+            creator: None,
             conversation_id: random(),
             history_visibility: HistoryVisibility::Members,
         }
@@ -741,6 +747,8 @@ pub struct Counters {
     pub extension_frames: AtomicU64,
     pub unknown_frames: AtomicU64,
     pub rate_limited: AtomicU64,
+    /// Whispered packets dropped for the fan-out budget.
+    pub fanout_dropped: AtomicU64,
 }
 
 pub struct State {
@@ -774,6 +782,8 @@ pub struct State {
     pub authz_pending: conversations::Pending,
     /// History pages per network and account (page_limits.rs).
     pub page_limits: crate::page_limits::NetworkLimits,
+    /// `whisper_fanout_per_second`, if set.
+    pub fanout: Option<crate::limits::Budget>,
 
     /// The key-transparency directory's queue, when `kt/1` is offered.
     pub kt: Option<crate::kt::KtHandle>,
@@ -781,6 +791,9 @@ pub struct State {
 
 impl State {
     pub fn new(settings: Arc<Settings>, storage: StorageHandle, counters: Arc<Counters>) -> Self {
+        let fanout = (settings.config.whisper_fanout_per_second > 0).then(|| {
+            crate::limits::Budget::new(settings.config.whisper_fanout_per_second, Instant::now())
+        });
         Self {
             page_limits: crate::page_limits::NetworkLimits::new(&settings.config.history),
             settings,
@@ -801,6 +814,7 @@ impl State {
             history: crate::history::Queues::detached(),
             authz_epoch: 0,
             authz_pending: Default::default(),
+            fanout,
             kt: None,
         }
     }

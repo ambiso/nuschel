@@ -494,8 +494,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] IP obfuscation in logs (2026-11-11): `obfuscate = true`, HMAC-SHA256 tokens
          under a per-start key (Murmur's 32-bit key is reversible).
    - [ ] CA-verified ("strong") certificates.
-   - [ ] A per-user cap on temporary channels and a global budget for shout fan-out;
-         rolling statistics; clients older than 1.2.2.
+   - [x] A per-user cap on temporary channels and a global budget for shout fan-out
+         (2026-11-11): `temporary_channels_per_user` (16), `whisper_fanout_per_second`
+         (500,000); generous, configurable, failing only the request with a reason
+         (docs/server.md, "Limits").
+   - [ ] Rolling statistics; clients older than 1.2.2.
    - [ ] Chat in the stock-client VM check (needs typing into the stock window).
    - [ ] Review deviations: permission checks inline per handler (one engine) rather
          than one `authorize()` module; one mutex instead of an actor.

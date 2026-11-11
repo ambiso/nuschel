@@ -328,6 +328,14 @@ pub struct Config {
     pub max_pending_connections: u32,
     /// Bytes queued for one client before it is disconnected as too slow.
     pub max_queued_bytes: usize,
+    /// Temporary channels one user (account or certificate) may have at once;
+    /// 0 is unlimited. Past it, creating another is refused with a reason.
+    pub temporary_channels_per_user: u32,
+    /// Voice datagrams per second all whisper and shout targets together may
+    /// fan out to (a second's worth may come at once); 0 is unlimited. Past
+    /// it, a whispered packet is dropped for all its receivers and the
+    /// speaker is told, at most every ten seconds. Channel voice is not counted.
+    pub whisper_fanout_per_second: u64,
     /// "1.2" (the default; Mumble clients built against OpenSSL before
     /// 1.1.1 speak nothing newer) or "1.3", which keeps client certificates
     /// off the wire in the clear.
@@ -395,6 +403,8 @@ impl Default for Config {
             connections_per_address: 16,
             max_pending_connections: 256,
             max_queued_bytes: 8 * 1024 * 1024,
+            temporary_channels_per_user: 16,
+            whisper_fanout_per_second: 500_000,
             minimum_tls_version: TlsVersion::Tls12,
             obfuscate: false,
             autoban: Autoban::default(),

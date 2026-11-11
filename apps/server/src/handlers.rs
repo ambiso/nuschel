@@ -1855,11 +1855,39 @@ impl State {
             self.deny_type(source, DenyType::TemporaryChannel);
             return;
         }
+        // One user's temporary channels are capped, so nobody fills
+        // channel_count_limit alone; the request fails with the reason.
+        let creator = temporary.then(|| match (user_id, &hash) {
+            (Some(id), _) => format!("#{id}"),
+            (None, hash) => format!("${}", hash.as_deref().unwrap_or_default()),
+        });
+        let per_user = self.settings.config.temporary_channels_per_user as usize;
+        if per_user > 0
+            && let Some(creator) = &creator
+            && self
+                .channels
+                .0
+                .values()
+                .filter(|channel| channel.temporary && channel.creator.as_ref() == Some(creator))
+                .count()
+                >= per_user
+        {
+            self.deny_with(
+                source,
+                DenyType::Text,
+                Some(&format!(
+                    "You already have {per_user} temporary channels, the most this server allows"
+                )),
+                None,
+            );
+            return;
+        }
         let Some(id) = self.new_channel_id(temporary) else {
             return;
         };
         let mut channel = Channel::new(id, Some(parent), name);
         channel.temporary = temporary;
+        channel.creator = creator;
         channel.position = message.position();
         channel.max_users = message.max_users.unwrap_or(0);
         channel.set_description(message.description.clone().unwrap_or_default());
