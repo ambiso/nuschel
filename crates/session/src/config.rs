@@ -470,6 +470,15 @@ impl Profile {
             .map_err(|error| error.to_string())?
             .to_pkcs12(password)
     }
+
+    /// Write the exported identity to `path`, readable by the owner only. The
+    /// password may be empty, so the file is as secret as the key. It is
+    /// written beside the target and renamed over it: an existing file never
+    /// keeps wider permissions, and a failed export leaves no partial key.
+    pub fn export_identity_to(&self, path: &Path, password: &str) -> Result<(), String> {
+        let bytes = self.export_identity(password)?;
+        atomic_private_write(path, &bytes).map_err(|error| error.to_string())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -695,6 +704,21 @@ mod tests {
         assert!(ClientIdentity::from_pkcs12(&exported, "wrong").is_err());
         let other = Profile::open(Some(root.join("other"))).unwrap();
         let imported = other.import_identity(&exported, "secret").unwrap();
+        // A written export replaces an existing file with an owner-only one.
+        let file = root.join("exported.p12");
+        fs::write(&file, b"world-readable").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+            profile.export_identity_to(&file, "").unwrap();
+            let mode = fs::metadata(&file).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        #[cfg(not(unix))]
+        profile.export_identity_to(&file, "").unwrap();
+        let written = ClientIdentity::from_pkcs12(&fs::read(&file).unwrap(), "").unwrap();
+        assert_eq!(written.certificate, original.certificate);
         assert_eq!(imported.certificate, original.certificate);
         assert_eq!(
             other.identity().unwrap().mumble_hash(),

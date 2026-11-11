@@ -157,10 +157,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Arguments::parse();
     let profile = Profile::open(args.profile_dir)?;
     if let Some(path) = &args.export_certificate {
-        let bytes = profile
-            .export_identity(&args.certificate_password)
+        profile
+            .export_identity_to(path, &args.certificate_password)
             .map_err(io::Error::other)?;
-        std::fs::write(path, bytes)?;
         output(json!({"kind":"certificate_exported", "hash":profile.identity()?.mumble_hash()}))?;
         return Ok(());
     }
