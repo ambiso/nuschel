@@ -76,9 +76,10 @@ Later (reported):
       encrypted design (chunked, resumable; magic-wormhole cannot resume).
 - [ ] Files on Nuschel servers: designed in docs/files.md (2026-11-11): *kept* files
       on the server, *live* files relayed from the sender's device, one encrypted
-      format with per-chunk Merkle proofs. Decisions needed from the user:
-      docs/files.md §11 (default size boundary and quota, live share lifetime, direct
-      connections, wormhole codes for stock users, recipients as sources).
+      format with per-chunk Merkle proofs (prototyped in `crates/files`). Decisions
+      needed from the user: docs/files.md §11 (default size boundary and quota, live
+      share lifetime, direct connections, wormhole codes for stock users, recipients
+      as sources).
 - [ ] File transfer follow-ups: Settings controls for the rendezvous/relay servers,
       `wss://` rendezvous (the crate's TLS option pulls an old rustls), a rendezvous
       keepalive for codes waiting for hours, post "no longer available" when Nuschel

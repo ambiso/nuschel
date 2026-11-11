@@ -5824,6 +5824,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschel-files"
+version = "0.1.0"
+dependencies = [
+ "ring",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "nuschel-identity"
 version = "0.1.0"
 dependencies = [

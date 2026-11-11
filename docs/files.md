@@ -1,8 +1,9 @@
 # Files on Nuschel servers (`files/1`)
 
-Status: design for review (2026-11-11); nothing here is implemented yet. It replaces
-the sketch in [docs/extension.md](extension.md) §8 and [docs/e2ee.md](e2ee.md) §6.8,
-which now point here, and settles the security review's D9
+Status: design for review (2026-11-11). Only the object format (§4.1) is implemented,
+as a prototype with tests in `crates/files` (`nuschel-files`). It replaces the sketch
+in [docs/extension.md](extension.md) §8 and [docs/e2ee.md](e2ee.md) §6.8, which now
+point here, and settles the security review's D9
 ([docs/reviews/2026-11-11-server-security.md](reviews/2026-11-11-server-security.md)).
 Open questions for the user are in §11.
 
@@ -381,7 +382,7 @@ no space until the original changes.
 
 ## 4. End-to-end encryption and the object format
 
-### 4.1 The object format
+### 4.1 The object format (prototype: `crates/files`)
 
 One format for both classes and both server modes:
 
@@ -649,7 +650,10 @@ Stock clients do not speak `files/1`; the server makes their copy of a message
 
 ## 8. Implementation outline
 
-1. `nuschel-files`: the object format, proofs, Padmé (§4.1).
+1. `nuschel-files`: the object format, proofs, Padmé (§4.1). Done as a prototype: a
+   pure library on ring (no I/O), 13 tests including RFC 9162 tree shapes for 1–260
+   leaves against a naive implementation, tampering cases and two frozen roots that a
+   separate Python implementation reproduces.
 2. Server: object records, references and reference counting with retention and
    erasure, `FileOpen`, `ChatSend.attachments`, the bulk connection with tickets, kept
    uploads by pull, downloads of kept objects, quotas and the disk reserve.

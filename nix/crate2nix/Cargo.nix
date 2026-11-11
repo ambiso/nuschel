@@ -113,6 +113,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschel-files" = rec {
+      packageId = "nuschel-files";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschel-files";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschel-identity" = rec {
       packageId = "nuschel-identity";
       build = internal.buildRustCrateWithFeatures {
@@ -19067,6 +19077,28 @@ rec {
             name = "tokio";
             packageId = "tokio";
             features = [ "macros" "rt-multi-thread" "time" "sync" ];
+          }
+        ];
+
+      };
+      "nuschel-files" = rec {
+        crateName = "nuschel-files";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/files; };
+        libName = "nuschel_files";
+        dependencies = [
+          {
+            name = "ring";
+            packageId = "ring";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
           }
         ];
 

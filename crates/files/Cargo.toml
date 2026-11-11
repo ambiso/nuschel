@@ -1,0 +1,18 @@
+[package]
+name = "nuschel-files"
+description = "The files/1 object format: encrypted 64 KiB chunks with Merkle proofs (docs/files.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# ChaCha20-Poly1305, SHA-256 and the system random source. ring is already the TLS
+# provider of the client and the server.
+ring = "0.17.14"
+thiserror = "2.0.21"
+zeroize = "1.9.1"
