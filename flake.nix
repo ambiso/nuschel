@@ -101,6 +101,9 @@
             || lib.hasSuffix "update-key.pub" path
             # Vendored GPUI crates keep their shaders, headers and README.
             || lib.hasInfix "/vendor/gpui-pre" path
+            # Vendored libraries also include their README in rustdoc. Cargo's
+            # source filter does not retain mixed-case names such as Readme.md.
+            || (lib.hasInfix "/vendor/" path && lib.hasSuffix ".md" path)
             || lib.hasPrefix "LICENSE" (builtins.baseNameOf path);
         };
         nativeBuildInputs = [
