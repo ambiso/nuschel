@@ -22,6 +22,7 @@ nuschel-legacy-html.workspace = true
 # publish to it.
 nuschel-identity.workspace = true
 nuschel-kt.workspace = true
+nuschel-e2ee.workspace = true
 async-trait = "0.1.92"
 argon2 = { version = "0.5.3", default-features = false, features = [
   "alloc",

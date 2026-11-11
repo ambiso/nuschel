@@ -24,6 +24,12 @@ ignore = [
   { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.38 namespaces in Typst's citation styles, math worker only, unreachable as RUSTSEC-2026-0194" },
   { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml (serde_yaml) behind Typst's yaml() and bibliographies, removed from the math worker's Typst library; its formulas cannot contain code" },
   { id = "RUSTSEC-2024-0320", reason = "yaml-rust loads syntect syntax definitions in Typst's raw-text highlighting, which formulas from the math worker's LaTeX converter never use" },
+  # mls branch only (docs/e2ee.md §1.4, "Phase 4 prototype"): openmls_libcrux_crypto
+  # 0.4.0 pins these through hpke-rs-libcrux 0.7.0 (`=0.0.9`). Remove all three with
+  # the OpenMLS release that moves to hpke-rs 0.8; this branch is not merged before.
+  { id = "RUSTSEC-2026-0329", reason = "mls branch: libcrux-hmac-drbg 0.0.1 (OpenMLS 0.9.2's RNG) panics on some output lengths; OpenMLS asks only for fixed lengths. Remove with the next OpenMLS release" },
+  { id = "RUSTSEC-2026-0330", reason = "mls branch: libcrux-kem 0.0.9 panics on short X-Wing keys; nuschel-e2ee::prevalidate checks every key package and tree before OpenMLS sees it, and calls run under catch_unwind (panic = unwind). Remove with the next OpenMLS release" },
+  { id = "RUSTSEC-2026-0331", reason = "mls branch: libcrux-kem 0.0.9 panics on short X-Wing seeds; seeds are derived internally by OpenMLS, never taken from input. Remove with the next OpenMLS release" },
   { id = "RUSTSEC-2023-0071", reason ="rsa (Marvin timing side channel in private-key operations) only generates the local Mumble client key; TLS signing uses ring, and no RSA decryption or signing runs on untrusted input" },
 ]
 
@@ -142,9 +148,32 @@ deny = [
   ], reason = "The one first-party crate with unsafe code (Win32 AppContainer launch) runs only as the workers' own launch stage" },
   { name = "nuschel-identity", wrappers = [
     "nuschel-kt",
+    "nuschel-e2ee",
     "nuscheld",
     "nuschel-crypto-worker",
   ], reason = "Identity secrets live in the crypto worker; the server only verifies what clients publish" },
+  { name = "openmls", wrappers = [
+    "nuschel-e2ee",
+  ], reason = "The OpenMLS API is used only inside nuschel-e2ee, so a release bump touches one crate (docs/e2ee.md §8.1)" },
+  { name = "openmls_libcrux_crypto", wrappers = [
+    "openmls",
+    "nuschel-e2ee",
+  ], reason = "OpenMLS's crypto provider, used only through nuschel-e2ee" },
+  { name = "openmls_memory_storage", wrappers = [
+    "openmls",
+    "openmls_libcrux_crypto",
+    "nuschel-e2ee",
+  ], reason = "OpenMLS's storage, used only through nuschel-e2ee" },
+  { name = "openmls_traits", wrappers = [
+    "openmls",
+    "openmls_libcrux_crypto",
+    "openmls_memory_storage",
+    "nuschel-e2ee",
+  ], reason = "OpenMLS's traits, used only through nuschel-e2ee" },
+  { name = "nuschel-e2ee", wrappers = [
+    "nuscheld",
+    "nuschel-crypto-worker",
+  ], reason = "MLS state belongs to the crypto worker, and the delivery service's public view to the server (docs/e2ee.md §8.1)" },
 ]
 
 [sources]

@@ -18,6 +18,7 @@ path = "src/main.rs"
 nuschel-identity.workspace = true
 nuschel-ipc.workspace = true
 nuschel-kt.workspace = true
+nuschel-e2ee.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 zeroize = "1.9.1"
