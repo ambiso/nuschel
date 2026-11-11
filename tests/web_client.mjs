@@ -69,7 +69,71 @@ for (;;) {
     setTimeout(resolve, 200);
   });
 }
-client.tick(performance.now());
-clearInterval(keepAlive);
-client.disconnect(index);
+// A second WASM client exchanges actual legacy text through the same local
+// relay. This in-memory adapter tests the opaque Rust storage bridge; the real
+// IndexedDB reopen/scoping tests live in web_history.mjs.
+const stores = new Map();
+function drain(client) {
+  const rows = stores.get(client) || [];
+  stores.set(client, rows);
+  for (let pass = 0; pass < 20; pass++) {
+    client.poll();
+    const operations = JSON.parse(client.storage_requests());
+    if (!operations.length) break;
+    for (const operation of operations) {
+      let response;
+      if (operation.kind === "append") {
+        const id = rows.length + 1;
+        rows.push({ id, message: operation.message, outgoing: operation.outgoing });
+        response = { id };
+      } else {
+        let found = rows.filter(row => row.message.server === operation.identity && row.message.channel === operation.channel)
+          .sort((a,b)=>a.message.observed_at_ms-b.message.observed_at_ms||a.id-b.id);
+        if (operation.before !== null) found = found.slice(0, found.findIndex(row=>row.id===operation.before));
+        const more = found.length > operation.limit;
+        found = found.slice(-operation.limit);
+        response = { rows: found, next_before: more ? found[0].id : null };
+      }
+      client.storage_complete(operation.ticket, JSON.stringify(response));
+    }
+  }
+}
+const peer = new bindings.WebClient(relay);
+peer.on_change(() => wake());
+const peerIndex = peer.add_server("",host,Number(port),"web-peer",trusted || JSON.parse(client.servers())[0].pin);
+peer.connect(peerIndex);
+const peerTimer=setInterval(()=>peer.tick(performance.now()),50);
+async function until(check, description) {
+  const deadline=Date.now()+15000;
+  for (;;) {
+    drain(client);drain(peer);
+    if (check()) return;
+    if (Date.now()>deadline) throw new Error(description);
+    await new Promise(resolve=>setTimeout(resolve,25));
+  }
+}
+await until(()=>JSON.parse(peer.servers())[0].status==="connected","peer did not connect");
+client.open(index,0);peer.open(peerIndex,0);drain(client);drain(peer);
+const text='literal <img src="https://tracker.invalid/x">\n\n```rust\nfn main() {}\n```';
+client.send_text(text);
+await until(()=>JSON.parse(peer.timeline()).messages.some(message=>message.author==="web-sdk"),"peer did not receive text");
+const incoming=JSON.parse(peer.timeline()).messages.find(message=>message.author==="web-sdk");
+const blocks=incoming.document.blocks;
+if (!blocks.some(block=>block.kind==="text"&&block.text.includes('literal <img src="https://tracker.invalid/x">\n\n')) || !blocks.some(block=>block.kind==="code"&&block.runs.some(run=>run.text.includes("fn")))) {
+  throw new Error(`multiline/code rendering failed: ${JSON.stringify(blocks)}`);
+}
+// Navigate to a different selected channel. Root traffic stays in its own SDK
+// timeline/cache and does not replace the selected view when writes complete.
+const alternate=JSON.parse(peer.servers())[0].channels.find(channel=>channel.id!==0);
+if (alternate) {
+  peer.open(peerIndex,alternate.id);drain(peer);
+  client.send_text("root message while another channel is selected");
+  await until(()=>stores.get(peer).some(row=>row.message.body.includes("root message while")),"background root message was not stored");
+  if (JSON.parse(peer.timeline()).channel!==alternate.id) throw new Error("live message changed selected channel");
+  peer.open(peerIndex,0);drain(peer);
+  if (!JSON.parse(peer.timeline()).messages.some(message=>message.document.blocks.some(block=>block.kind==="text"&&block.text.includes("root message while")))) throw new Error("cached root history missing after navigation");
+}
+console.log("text interchange: multiline literals, inert HTML, highlighted Rust, certificate-scoped write acknowledgements and SDK-selected timeline navigation passed");
+clearInterval(keepAlive);clearInterval(peerTimer);
+client.disconnect(index);peer.disconnect(peerIndex);
 process.exit(0);

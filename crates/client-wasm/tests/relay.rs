@@ -8,6 +8,7 @@ use nuschl_client::input::ServerEvent;
 use nuschl_client_wasm::session::{Event, Login, Session};
 use nuschl_protocol::{control as proto, decode_control, encode_control, kind, tunnel};
 use nuschl_web_relay::{Config, Relay, config::Ports};
+use prost::Message as _;
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

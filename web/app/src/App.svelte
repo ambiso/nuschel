@@ -17,7 +17,8 @@
   let showAdd = $state(true);
   let body = $state("");
   let expanded = $state(new Map());
-  let messagesElement;
+  let messagesElement = $state();
+  let initialState = true;
   let follow = true;
   let worker;
   let requestId = 0;
@@ -54,7 +55,10 @@
         servers = data.servers;
         timeline = data.timeline;
         for (const update of data.updates) if (update.kind === "error") error = update.message;
-        if (servers.length && !link.host) showAdd = false;
+        if (initialState) {
+          if (servers.length && !link.host) showAdd = false;
+          initialState = false;
+        }
         const changed = prior?.server !== timeline?.server || prior?.channel !== timeline?.channel;
         if (changed) {
           follow = true;

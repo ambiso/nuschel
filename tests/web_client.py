@@ -46,11 +46,12 @@ def main():
             eventually(listening, "the relay did not start")
             result = subprocess.run([args.node, str(ROOT / "tests/web_client.mjs"), str(args.sdk),
                                      f"ws://127.0.0.1:{relay_port}/relay", "127.0.0.1", str(murmur.port)],
-                                    capture_output=True, text=True, timeout=60)
+                                    capture_output=True, text=True, timeout=120)
             print(result.stdout, end="")
             print(result.stderr, end="", file=sys.stderr)
             assert result.returncode == 0, "the web client did not connect"
             assert "connected channels=" in result.stdout and "web-sdk" in result.stdout
+            assert "text interchange:" in result.stdout
             # The relay logs no payloads: nothing of the login is in its log.
             assert "web-sdk" not in (root / "relay.log").read_text()
             print("web client: connected through the relay with TLS in WebAssembly")
