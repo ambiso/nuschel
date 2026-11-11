@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Window chrome. GNOME and other compositors without server-side decorations
 //! expect the application to draw its title bar, controls and resize edges.
-use crate::{assets::icon, state::Desktop, theme::*};
+use crate::{
+    assets::{app_icon, icon},
+    state::Desktop,
+    theme::*,
+};
 use gpui_kit::{prelude::*, *};
 
 /// Invisible border around client-decorated windows that carries the shadow
@@ -174,19 +178,7 @@ pub fn title_bar(title: SharedString, window: &Window, cx: &mut Context<Desktop>
                 }
             })
         })
-        .child(
-            div()
-                .size(px(20.))
-                .rounded(px(6.))
-                .bg(color(ACCENT))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(color(0xffffff))
-                .child(text!("N").with_id("brand")),
-        )
+        .child(app_icon(px(20.)))
         .child(
             div()
                 .text_sm()

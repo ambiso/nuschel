@@ -141,7 +141,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     WindowDecorations::Server
                 }),
                 window_min_size: Some(size(px(860.), px(520.))),
+                // The desktop entry's name: shells use it to find the icon.
                 app_id: Some("org.nuschel.Nuschel".into()),
+                // Only X11 takes the icon from the window. Windows loads it
+                // from the executable (build.rs), macOS from the bundle.
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                icon: assets::window_icon(cx),
                 ..Default::default()
             };
             let minimised = arguments.autostart;

@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
-use crate::{assets::icon, state::Desktop, theme::*};
+use crate::{
+    assets::{app_icon, icon},
+    state::Desktop,
+    theme::*,
+};
 use gpui_kit::{
     base::input::{Input, InputState},
     prelude::*,
@@ -312,17 +316,7 @@ pub fn empty(cx: &mut Context<Desktop>) -> AnyElement {
         .items_center()
         .gap_4()
         .bg(color(MAIN))
-        .child(
-            div()
-                .size(px(72.))
-                .rounded(px(20.))
-                .bg(color(ACCENT))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(color(0xffffff))
-                .child(icon("headphones", 36., color(0xffffff))),
-        )
+        .child(app_icon(px(72.)))
         .child(
             div()
                 .text_2xl()
