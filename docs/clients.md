@@ -166,6 +166,12 @@ Moved, in this order, each step leaving the desktop working:
    (`Client::open_url`, which the desktop uses too) and trusting a certificate
    (`Client::trust_certificate`). The desktop keeps writing the servers before it
    reconnects after a trust (it rolls the pin back if that fails).
+8. Encrypted conversation state and commands: `ConversationState::encryption`,
+   `Request::OpenEncrypted` and `Request::SendEncrypted`. The native adapter maps
+   crypto-worker events to SDK encryption state, pending sends and decrypted rows;
+   plaintext delivered to an encrypted conversation is refused. This is experimental
+   text encryption, not encrypted voice. The `e2ee/1` capability requires protected
+   conversations; the SDK blocks unprotected Mumble voice there.
 
 Left, in the order they should move:
 
@@ -174,14 +180,10 @@ Left, in the order they should move:
   types live in `nuschl-ipc::crypto`, which needs tokio. Move the crypto worker's
   message types to a crate that builds for the browser, then the state to the SDK.
   The version notice (`version_notice.rs`) goes with it.
-- **End-to-end direct conversations** (`mls/1`, opt-in): the driver reports
-  `nuschl_session::mls::MlsEvent`s as `native::Native::Mls`; the desktop keeps each
-  conversation's lock (`ServerUi::e2ee`) and opens groups with `MlsCommand`s. In the
-  SDK they become a conversation's lock state in `ConversationState`, sends through
-  the crypto worker as a `Request` settled like pending sends (by key, then seq), and
-  decrypted rows as `IncomingMessage`s into the same timeline (plaintext the server
-  pushes into a pinned conversation stays out). The `mls` capability is already
-  `ServerState::mls`.
+- **Encrypted conversation platform adapters**: the shared state and commands exist
+  (step 8), but mobile and browser still need a reviewed crypto adapter. Native
+  `MlsEvent`s also reach the desktop for identity/trust UI; moving those remaining
+  screens is separate from the conversation model.
 - **Administration** (ACLs, bans, registered users, channel edits, user actions,
   comments and avatars, listening, whisper targets, context actions): the desktop
   still sends `nuschl_session::connection::Command`s to the driver itself; each

@@ -44,10 +44,10 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Build for Windows (cross)
-        run: nix build .#windows -o result-windows -L
+        run: nix build .#windows -o result-windows -L --cores 2
 
       - name: Build for macOS (cross, universal app)
-        run: nix build .#macos-app -o result-macos -L
+        run: nix build .#macos-app -o result-macos -L --cores 2
 
       - name: Arrange the installations
         run: |
@@ -56,8 +56,8 @@ jobs:
           cp result-windows/share/licenses/nuschl/EUPL-1.2 install/windows/licenses/
           cp -r result-macos/Nuschl.app install/Nuschl.app
           chmod -R u+w install
-          (cd install/windows && nix shell nixpkgs#zip -c zip -qr "../../dist/nuschl-$VERSION-windows-x86_64.zip" .)
-          (cd install && nix shell nixpkgs#zip -c zip -qry "../dist/nuschl-$VERSION-macos-universal.zip" Nuschl.app)
+          (cd install/windows && nix shell --cores 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zip -c zip -qr "../../dist/nuschl-$VERSION-windows-x86_64.zip" .)
+          (cd install && nix shell --cores 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zip -c zip -qry "../dist/nuschl-$VERSION-macos-universal.zip" Nuschl.app)
 
       - name: Signed update manifest
         env:
@@ -66,14 +66,14 @@ jobs:
           key="$RUNNER_TEMP/update-key.secret"
           trap 'rm -f "$key"' EXIT
           printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
-          nix shell nixpkgs#rsign2 nixpkgs#python3 -c python3 release/make-update.py \
+          nix shell --cores 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#rsign2 nixpkgs#python3 -c python3 release/make-update.py \
             --version "$VERSION" \
             --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
             --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" \
             --platform windows-x86_64=install/windows \
             --platform macos-universal=install/Nuschl.app \
             --output dist --sign-key "$key"
-          nix shell nixpkgs#rsign2 -c rsign verify -p crates/update/update-key.pub -x dist/update.json.minisig dist/update.json
+          nix shell --cores 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#rsign2 -c rsign verify -p crates/update/update-key.pub -x dist/update.json.minisig dist/update.json
 
       - name: Publish
         env:

@@ -261,12 +261,12 @@ Moving an earlier version's profile keeps these boundaries: the storage worker g
 the data folder as a whole only while an earlier version's history in it could not
 be moved, and then nothing else moves into it and everything is used where it was;
 once the folder holds more than that history, the storage worker gets a new
-`history/` folder instead. Remaining: on Windows, earlier versions granted their
-storage container (named after the whole data folder) Modify on that folder,
-inherited by what has been created in it since, including the identity and keys
-folders' contents. No current worker runs in that container, only an earlier
-version's storage worker would (after a downgrade); revoking the old grant is in
-TODO.md.
+`history/` folder instead. On Windows, the rename migration retires the old
+`nuschel.*` containers and removes their path grants, including the earlier broad
+storage grant on the data folder, before moving the profile. A short-lived storage
+worker performs this Win32 operation; failure aborts migration. Mock regression
+tests cover retirement, but migration from a real earlier Windows installation
+still needs a native VM test (TODO.md).
 
 ## Fuzzing
 

@@ -71,9 +71,12 @@ The history and keys directories are siblings in `%LOCALAPPDATA%\Nuschl\Nuschl\d
 the Mumble identity, which no worker is granted. Versions before that layout kept the
 history directly in `data` and the keys in `%APPDATA%\Nuschl\Nuschl\config\nuschl-identity`;
 the first start moves them, and the new directories get containers of their own
-(their names hash the path). The grant an earlier version gave its storage container
-on `data` itself stays, inherited by what is created there since; no current worker
-runs in that container (SECURITY.md, "Where secrets live").
+(their names hash the path). During the Nuschel-to-Nuschl rename, a short-lived
+storage worker retires the old containers and removes their path grants, including
+the earlier broad storage grant on `data`; migration fails if retirement fails
+(`crates/session/src/rename.rs`). Mock tests cover this path; native migration from
+an earlier Windows installation remains to be tested (SECURITY.md, "Where secrets
+live").
 
 Decisions:
 
