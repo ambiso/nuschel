@@ -421,9 +421,15 @@ Nuschel-only servers and a minimum client version.
          independent text-channel subscriptions, retention.
    - [ ] Client side: server history replaces local-only history for such servers;
          the history source label already exists (`HistorySource::ServerArchive`).
-3. **Identity**
-   - [ ] Per-user identity keys (Ed25519 now, ML-DSA when available), separate
-         from the Mumble RSA certificate; device keys under the user identity.
+3. **Identity** (persistent, cross-server and multi-device; user, 2026-11-11)
+   - [ ] A user identity independent of any server: an identity root signing key
+         (Ed25519 now, hybrid Ed25519 + ML-DSA-65 when available) certifying
+         per-device keys; each device has its own signing key and an X-Wing
+         (ML-KEM-768 + X25519) key for device linking, history sharing and first
+         contact. Separate from the Mumble RSA certificate.
+   - [ ] Device linking (QR / short code), revocation of lost devices, recovery.
+   - [ ] The same identity on every Nuschel server, bound per server in its
+         key-transparency log; verification over the identity root holds everywhere.
    - [ ] Trust on first use: pin a contact's identity key on first sight; a changed
          key is shown, never silently accepted.
    - [ ] Optional out-of-band verification: safety numbers and QR codes; verified
