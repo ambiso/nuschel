@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "nuschel-identity"
+description = "Persistent cross-server, multi-device identity: keys, certificates, safety numbers, device linking and the encrypted keystore (docs/e2ee.md §3, §4)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Point validation only (canonical, prime-order Ed25519 keys and SPAKE2 elements);
+# already in the tree through spake2.
+curve25519-dalek = "4.1.3"
+getrandom = "0.4.3"
+# HPKE (RFC 9180) with X-Wing for device linking and key delivery to a device.
+hpke-rs = "0.8.0"
+hpke-rs-libcrux = "0.8.0"
+libcrux-chacha20poly1305 = "0.0.10"
+libcrux-ed25519 = "0.0.10"
+libcrux-hkdf = "0.0.9"
+libcrux-hmac = "0.0.9"
+# 0.0.10 fixes RUSTSEC-2026-0330 and RUSTSEC-2026-0331 (docs/e2ee.md §1.4).
+libcrux-kem = "0.0.10"
+libcrux-ml-dsa = { version = "0.0.11", default-features = false, features = ["std", "mldsa65"] }
+libcrux-sha2 = "0.0.9"
+spake2 = "0.4.0"
+subtle = "2.6.1"
+thiserror = "2.0.21"
+zeroize = "1.9.1"
