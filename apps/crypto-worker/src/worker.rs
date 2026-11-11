@@ -316,37 +316,39 @@ impl Worker {
     // ---- identity ----
 
     fn identity_view(&self, created: bool) -> IdentityView {
-        let Some(keystore) = &self.keystore else {
-            return IdentityView::default();
+        let mut view = match &self.keystore {
+            Some(keystore) => IdentityView {
+                fingerprint: Some(keystore.identity().fingerprint().to_hex()),
+                device_name: keystore
+                    .device_certificate()
+                    .display_name()
+                    .as_str()
+                    .to_owned(),
+                created,
+                recovery_pending: self.recovery.is_some(),
+                recoverable: keystore.recovery_blob().is_some(),
+                can_link: keystore.device_signing().is_some(),
+                alarms: Vec::new(),
+            },
+            None => IdentityView::default(),
         };
-        IdentityView {
-            fingerprint: Some(keystore.identity().fingerprint().to_hex()),
-            device_name: keystore
-                .device_certificate()
-                .display_name()
-                .as_str()
-                .to_owned(),
-            created,
-            recovery_pending: self.recovery.is_some(),
-            recoverable: keystore.recovery_blob().is_some(),
-            can_link: keystore.device_signing().is_some(),
-            alarms: self
-                .state
-                .servers
-                .iter()
-                .filter_map(|(key, entry)| {
-                    entry
-                        .alarm
-                        .as_ref()
-                        .or(entry.misbehaviour.as_ref())
-                        .map(|reason| OwnKeyAlarm {
-                            server: key.clone(),
-                            label: entry.label.clone(),
-                            reason: reason.clone(),
-                        })
-                })
-                .collect(),
-        }
+        view.alarms = self
+            .state
+            .servers
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .alarm
+                    .as_ref()
+                    .or(entry.misbehaviour.as_ref())
+                    .map(|reason| OwnKeyAlarm {
+                        server: key.clone(),
+                        label: entry.label.clone(),
+                        reason: reason.clone(),
+                    })
+            })
+            .collect();
+        view
     }
 
     fn own_fingerprint(&self) -> Option<IdentityFingerprint> {
