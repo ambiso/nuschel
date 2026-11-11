@@ -60,7 +60,8 @@ let
 in
 {
   inherit project;
-  # The programs of the desktop package, each built from cached crates.
+  # The programs of the desktop package (with the terminal client), each
+  # built from cached crates.
   binaries = map (member: project.workspaceMembers.${member}.build) [
     "nuschel"
     "nuschel-cli"
@@ -70,6 +71,7 @@ in
     "nuschel-media-worker"
     "nuschel-storage-worker"
     "nuschel-transfer-worker"
+    "nuschel-tui"
     "nuscheld"
   ];
 }

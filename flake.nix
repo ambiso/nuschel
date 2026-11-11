@@ -210,6 +210,10 @@
           done
           makeWrapper "$out/libexec/nuschel/nuschel" "$out/bin/nuschel" "''${runtimeFlags[@]}"
           wrapProgram "$out/bin/nuschel-cli" "''${runtimeFlags[@]}"
+          # The terminal client finds the workers beside it in bin; the
+          # wrapper gives their sandbox bubblewrap and the media worker its
+          # audio libraries.
+          wrapProgram "$out/bin/nuschel-tui" "''${runtimeFlags[@]}"
           # Desktop entry and hicolor icons; shells match the window by its app id.
           cp -R --no-preserve=mode ${
             (import ./nix/desktop-files.nix { inherit pkgs; }).linux
@@ -433,6 +437,15 @@
           })
           // {
             meta.description = "Nuschel Mumble desktop client";
+          };
+        # `nix run .#tui -- mumble://name@host`: the terminal client.
+        apps.tui =
+          (flake-utils.lib.mkApp {
+            drv = package;
+            exePath = "/bin/nuschel-tui";
+          })
+          // {
+            meta.description = "Nuschel in a terminal";
           };
         checks = {
           build = package;
