@@ -508,9 +508,12 @@ identity, and the RSA key is never used for anything end-to-end.
   byte order, 68 bytes); scanning compares both and says which side differs.
 - **Verified state** belongs to the identity: verified once, it shows on every server,
   in DMs and in member lists, until the root changes.
-- **Automatic verification** (§5) shows "verified automatically" when KT passes, as
-  Signal does. Manual verification is stronger: it does not trust the server and its
-  auditors.
+- **Automatic verification** (§5): Signal shows its check mark only on request, with
+  all its auditors' signatures, and only for contacts whose phone number is known.
+  Nuschel shows no "verified automatically" state; a contact checked by KT is "not
+  verified" until compared, and "Automatic verification unavailable" when the
+  server's log is not witnessed (§5.9). Manual verification is stronger: it does not
+  trust the server and its witnesses.
 
 ## 5. Key transparency
 
@@ -519,7 +522,11 @@ identity, and the RSA key is never used for anything end-to-end.
 **Decision: each Nuschel server runs one verifiable key directory**, modelled on
 Signal's [automatic key verification](https://signal.org/blog/automatic-key-verification/)
 (2026-08-11), which is based on an earlier IETF KEYTRANS draft and runs in
-third-party-auditing mode with Cloudflare and Trail of Bits as auditors.
+third-party-auditing mode: clients require a head from each of three auditors (run
+by Signal, Cloudflare and Trail of Bits), auditor heads at most 7 days old, the
+server's head within ±24 h, and a tree size can never be re-signed with another time
+(libsignal `verify.rs`, `env.rs`; docs/reviews/2026-11-11-key-transparency.md §2.1).
+Nuschel's counterpart is witnessing (§5.9).
 
 Labels (VRF-hidden):
 
@@ -527,11 +534,17 @@ Labels (VRF-hidden):
 - `id:<root fingerprint>` → hash of the identity record: root key, current
   device-signing certificate (generation), device certificates, revocations, Mumble
   bindings;
-- `name:<registered user name>` → account id.
+- `name:<registered user name>` → account id;
+- `reg:<registration number>` → account id.
 
-The records themselves come from the directory API; KT commits to their hashes. The
-server publishes a new epoch at most every 10 s while changes are pending, and hourly
-otherwise, so that a fresh signed head always exists. Heads are signed with the
+`acct:`, `name:` and `reg:` are published (`name:` and `reg:` since witnessing, §5.9;
+before, names and numbers were mapped outside the log, which KEYTRANS calls
+"equivalent to not using KT at all"); `id:` is reserved. The records themselves come
+from the directory API; KT commits to their hashes. The server publishes a new epoch
+at most every 10 s while changes are pending, and re-signs its head hourly
+otherwise. That bounds an honest server's staleness, not a malicious one's: the
+server can re-sign an old epoch with a new time, so freshness against a malicious
+server comes from the witnesses' cosignatures (§5.9). Heads are signed with the
 server's identity key, the same key extension.md §3 names as the log key; it is pinned
 like the server (sticky, carried in invites).
 
@@ -635,15 +648,20 @@ verifiers would be new.
   head for the conversation's server includes it in an MLS application message
   (`kt_head`). Members check it against the heads they know: two different heads for
   the same epoch are, both being server-signed, a proof of equivocation. The client
-  shows an alarm and keeps the evidence. Apple's Contact Key Verification gossips heads
-  inside messages in the same way.
+  shows an alarm and keeps the evidence. **Not a defence against a targeted MITM**:
+  the server that replaces a whole conversation relays the gossip too (review §5.2);
+  it stays a cheap extra against accidental or partial forks. Apple gossips log
+  hashes "in the encrypted part of a small percentage of messages", but also
+  verifies log consistency on the device, and iMessage's per-device encryption keeps
+  the real devices in a conversation, unlike an MLS full MITM.
 - **Across servers**: identity records for the same root must agree across servers (the
   device-signing key signs them, so a server can only omit or delay). Clients compare
   generations and revocations between the servers they use and flag a stale server.
-- **Third-party auditors** (optional per server): the operator lists auditor keys in
-  the `NuschelHello`; clients pin the list (sticky) and then require an auditor
-  countersignature on a head no older than 7 days, Signal's bound. Without auditors,
-  gossip and monitoring are the defence. Who runs auditors is open question 9.
+- **Witnesses** (§5.9, decided as option B): a small fixed set every client checks,
+  led by the project auditor `nuschel-witness`; each server submits its own epochs
+  and serves the cosignatures. Without witnesses there is no split-view defence
+  (gossip over the operator's own channel is not the out-of-band channel KEYTRANS
+  architecture §3.3 requires); until the auditor is deployed, that is today's state.
 - **As implemented:** the payload is `HeadGossip { version 1, type 6, SignedHead }`,
   150 bytes, attached when the sender's latest head is newer than any head seen in the
   conversation and a day has passed (`should_gossip`). `check_gossip` compares it with
@@ -657,7 +675,7 @@ verifiers would be new.
 
 | When | Check |
 | --- | --- |
-| Every connection | The server's signed head: signature, freshness (< 25 h), append-only since the last head seen (audit proof, or an auditor's countersignature) |
+| Every connection | The server's signed head: signature, freshness, append-only since the last head seen (audit proof). With witnesses required, freshness is the cosignatures' (< 24 h) and the head must be the newest leaf of the cosigned checkpoint (§5.9); without, the server's own time (< 25 h). The first head of a log is accepted without audit (with witnesses: only if cosigned) |
 | On connect and every 24 h | Self-monitoring: history proofs for the user's own `acct:` and `id:` labels; any version not made by the user's devices raises the alarm in §4 |
 | First contact, new member identity in a roster | Lookup proofs for `acct:` and `id:`; the account's root must equal the credential's `identity` |
 | Every new device in a roster | The device certificate's hash is in the identity record at an epoch ≥ its addition. Until included (≤ 1 min) the device shows as "pending"; after that, failure is a warning, and a direct conversation blocks |
@@ -680,10 +698,14 @@ steps between signed heads (`head_at`).
 
   | Errors | Class | Shown |
   | --- | --- | --- |
-  | Bad head signature, head of another log, stale head (> 25 h) or from the future, rollback (an older head replayed), invalid lookup or history proof, response for another label, malformed message or value, unauthenticated "not found", certificates not matching the roster commitment or not verifying under the bound root | Failure | First: nothing, retry within a day. Again: "Automatic verification unavailable" |
+  | Bad head signature, head of another log, stale head (> 25 h) or from the future, rollback (an older head replayed), invalid lookup or history proof, response for another label, malformed message or value, unauthenticated "not found", certificates not matching the roster commitment or not verifying under the bound root, a checkpoint that is not the log's or does not contain the head, a head older than the witnessed checkpoint's newest leaf, a `reg:` or `name:` label naming another account | Failure | First: nothing, retry within a day. Again: "Automatic verification unavailable" |
   | Equivocation, stale signing (both with signed evidence), failed audit between two signed heads, a history that contradicts an earlier verified one, a version that went back | Server misbehaviour | Alarm; the evidence is kept |
   | A version of an own label with a value the user's devices did not make | Own-key alarm | Blocking "This wasn't me: revoke" |
 
+  Missing or stale witness cosignatures are not an error of the head (§5.9): the
+  head is checked as without witnesses, and the server's view is "Automatic
+  verification unavailable" (contacts show it; their new devices are not added to
+  existing conversations).
   A failed audit counts as misbehaviour because the server signed both heads and a
   correct server can always connect them. A KT-consistent rebinding is a key change
   per §4: a verified direct contact blocks sending until accepted (the verified pin is
@@ -706,6 +728,7 @@ messages re-encode to the same bytes (the fuzz target checks this).
 | 5 | `AuditResponse`: epochs, the roots in between, suite proof | ≤ 4096 epochs, ≤ 32 MiB |
 | 6 | `HeadGossip` | 150 bytes |
 | 7 | `Evidence`: kind, two heads | 299 bytes |
+| 8–11 | Witnessing: `EpochLeaf`, `WitnessedHead`, `AddEpochs`, the auditor's `LogState` (docs/witness.md "Formats") | |
 
 Suite 1's proof encodings (node labels, membership and non-membership proofs, VRF
 proofs, update, history and append-only proofs) are specified in
@@ -752,9 +775,37 @@ A client audits each epoch it skipped at about 0.5 to 1 KB per changed leaf (one
 leaf per new label, two per change; each costs the siblings along its path that it
 does not share with the others). On a quiet server
 that is negligible; on a busy one (an epoch every 10 s) a client offline for a day
-would download megabytes, which is when auditor countersignatures (§5.3) should replace
-client audits. Clients never audit from epoch 0: the first head is trusted on first
-use, like the server's key.
+would download megabytes. Clients never audit from epoch 0: the first head is trusted
+on first use, like the server's key; with witnesses required it must be cosigned,
+and the project auditor has audited the log from epoch 0 (§5.9).
+
+### 5.9 Witnessing (option B, 2026-11-11)
+
+Decided by the user (§10, answer 9; review "Answers"), operated as described in
+[docs/witness.md](witness.md):
+
+- **Epoch log.** Each server keeps an RFC 6962 tree whose leaf `i` is akd epoch
+  `i`'s root (`EpochLeaf`), stored with each epoch, and signs C2SP checkpoints of it
+  with its log key under the origin `<host>:<port>/nuschel-kt/v1`.
+- **Witnesses.** The project auditor (`nuschel-witness`) verifies every akd
+  transition from epoch 0 and cosigns with ML-DSA-44 (C2SP type 0x06); it holds one
+  log per origin, checked against the server's hello. Servers submit their own
+  epochs (`[kt] origins`, `[[kt.witnesses]]`, `DEFAULT_WITNESSES`), keep the
+  verified cosignatures and attach the newest cosigned checkpoint with an inclusion
+  proof to every head they serve (`kt-witness/1`). Clients never contact witnesses.
+- **Clients** require the built-in witnesses (`DEFAULT_WITNESSES`, **empty until the
+  auditor is deployed**) and those in `key_transparency`; while none is required,
+  nothing changes. Otherwise a head is witnessed if its checkpoint carries fresh
+  cosignatures (24 h, proposed) and it is the checkpoint's newest leaf; pending for
+  up to ten minutes after an epoch; otherwise "Automatic verification unavailable",
+  which blocks only adding contacts' new devices to existing conversations (proposed;
+  a setting), while first contact proceeds as "not verified". A checkpoint that
+  contradicts the head fails it.
+- **Names and numbers** are labels (§5.1); lookups by number prove both, owners
+  monitor theirs.
+- **Clock.** A head signed more than an hour in the future (after a clock jump) is
+  signed again at the newest time that is not, instead of every later head
+  following it into the future; witnessed clients do not use `issued_at`.
 
 ## 6. MLS integration
 

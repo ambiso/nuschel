@@ -175,3 +175,17 @@ publishes_per_minute = 6
 # Who may fetch an account's history besides its owner: "contacts" (direct
 # conversations and the same channel) or "members" (everyone).
 history = "contacts"
+# Witnessing (docs/witness.md): the names clients reach this server under
+# (host:port, lower case), each an origin of the epoch log the witnesses cosign.
+# Without one, nothing is submitted.
+origins = []
+# Submit to Nuschel's built-in witnesses (the project auditor, once deployed).
+default_witnesses = true
+# Seconds between submissions while new epochs wait, and between refreshes of an
+# unchanged checkpoint's cosignatures.
+witness_interval = 60
+witness_refresh_interval = 3600
+# More witnesses (`nuschel-witness vkey` gives the key):
+# [[kt.witnesses]]
+# key = "witness.example.org/nuschel-kt+5d32ee69+BuajLAZT…"
+# url = "https://witness.example.org"

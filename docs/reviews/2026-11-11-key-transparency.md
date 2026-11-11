@@ -981,6 +981,16 @@ structural benefit (a witnessable log of roots) without switching.
 
 ## 7. Recommendation and work plan
 
+**Status (2026-11-11).** Built for option B as the user decided (see "Answers" in
+§8 and [docs/witness.md](../witness.md)): steps 1–10, the clock fix of step 12, and
+the docs of step 13; off until step 14. Dropped by the decision: the server-witness
+role (`kt.witness_role`, C6, the `KtConsistency` and `KtWitness*` messages and the
+`kt_witness` hello field); 0x4E30–0x4E35 stay reserved. Changed while building: epoch
+leaves carry no time (freshness comes only from witnesses), the auditor audits every
+log from epoch 0 instead of trusting its first state, and the submission carries
+akd's proof alone (the leaves follow from its roots). Step 11 (history cost) is
+open, as is the desktop settings page of step 7.
+
 Keep akd. Make split-view resistance a requirement: the project auditor as the default
 required witness once deployed, an epoch log so witnesses can serve, witness timestamps
 as the freshness bound, server witnesses as client-picked additions. Keep client-side

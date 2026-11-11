@@ -123,6 +123,15 @@ state directory). Back both up: a lost VRF secret means a new log, which every c
 that pinned the old one treats as misbehaviour until it is reset. Records behind
 published bindings are never deleted.
 
+`nuschel-witness` (docs/witness.md) holds the key clients trust to vouch for every
+server's log: an ML-DSA-44 seed from `LoadCredential` or generated once (0600) in its
+state directory; back it up. It parses submissions with nuschel-kt's strict decoder
+(bounded bodies, per-origin and enrolment rate limits) and runs akd's verifiers as
+the clients do; its only outbound connections are enrolment checks to the
+submitted origin's `host:port`, never to private or loopback addresses unless
+configured. `nuscheld`'s submissions verify every cosignature against the configured
+key before serving it.
+
 The transfer worker (magic-wormhole file offers) is the one worker with network
 access: rendezvous and transit relay, plus only the offered file read-only. The
 peer's transit hints decide where it connects (inherent to magic-wormhole), and the
@@ -245,6 +254,7 @@ lock is the main lock cut down) give hostile input to every parser that takes it
 | `client_messages` | a hostile server's frames into the client session's state |
 | `relay`, `crypt`, `voice`, `voice_playback` | voice: the server's relay, OCB2 decryption, the client's decoding, the media worker's jitter buffer and Opus decoder |
 | `identity`, `kt` | identity and key-transparency encodings and verifiers |
+| `kt_witness` | witnessing's formats: C2SP signed notes, checkpoints and verifier keys, `WitnessedHead` through the client's check, the auditor's `AddEpochs` through its check and its state files |
 | `transfer_offer`, `mumble_url`, `policy_file` | file offers in messages, `mumble://` links and invites, `nuschel-policy.json` |
 | `math`, `math_tokens` | LaTeX through the converter, its check, Typst and the rasteriser; message text through the formula grammar (tokens are the bytes typed, never from code, the text unchanged) |
 

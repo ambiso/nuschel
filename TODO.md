@@ -822,17 +822,19 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
            without being a member.
          - Voice: one MLS group per voice channel of the devices present or
            listening (SFrame keys from it).
-         - Key transparency witnesses, option B (docs/reviews/2026-11-11-key-
-           transparency.md §5, §7, "Answers"): each server keeps a small checkpoint
-           log of its akd heads and collects cosignatures itself from a small fixed
-           witness set that every client checks, led by one project-run auditor
-           (`nuschel-witness`, enabled by default once the user deploys it: built
-           now, switched on by its key and endpoint; configurable in global settings
-           and Home Manager; a NixOS module that is easy to set up). Cosignatures in
-           ML-DSA-44; user names and registration numbers in the log. Proposed,
-           awaiting the user: a 24 h freshness bound; when the cosignature is
-           missing, show "Automatic verification unavailable" and block only adding
-           new devices to existing conversations.
+         - Key transparency witnesses, option B: **built** (2026-11-11,
+           docs/witness.md, docs/e2ee.md §5.9). Each server keeps an epoch log of
+           its akd heads, submits it to the witnesses and serves their ML-DSA-44
+           cosignatures; `nuschel-witness` audits every akd step from epoch 0 and
+           has a NixOS module (`nixosModules.witness`, nginx and ACME); clients
+           take `key_transparency` from the settings (and Home Manager's
+           `programs.nuschel.keyTransparency`); `reg:` and `name:` labels are
+           published, checked on first contact and monitored by their owners.
+           **Off until the user deploys the auditor** and puts its key and URL in
+           `DEFAULT_WITNESSES` (one entry; docs/witness.md "Switching it on").
+           Still open: the user's answer on the proposed 24 h bound and on
+           blocking only new devices (both settings now); a desktop settings
+           page for witnesses; history-proof growth (review G7).
    - [x] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, which only the
          crypto worker and `nuscheld` link; no advisory ignores (patched instead).
          SECURITY.md: libcrux SIMD `unsafe` in the exceptions table.

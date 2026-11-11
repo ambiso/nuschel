@@ -109,6 +109,19 @@ separate protobuf package (`nuschel.v1`) in `crates/protocol`.
 - Voice, channel and user state stay Mumble messages. Video and screen sharing are
   not carried on this connection (see docs/architecture.md, WebRTC).
 
+Message types are reserved in ranges, one per feature:
+
+| Range | Feature |
+| --- | --- |
+| 0x4E00–0x4E13 | Chat, history, subscriptions, typing, direct conversations (`history/1`, `subscribe/1`, `typing/1`) |
+| 0x4E14–0x4E1F | Key transparency (`kt/1`) |
+| 0x4E20–0x4E2C | MLS (`mls/1`) |
+| 0x4E2D–0x4E2F, 0x4E80–0x4E8F | MLS channels |
+| 0x4E30–0x4E35 | Key-transparency witnesses (`kt-witness/1`); none used yet, the witnessed data travels in fields of the `kt/1` replies |
+| 0x4E40–0x4E5F | Files (`files/1`) |
+| 0x4E60–0x4E67 | Knocking |
+| 0x4E68–0x4E7F | Spam holds and moderation queue |
+
 ## 3. Identifiers
 
 - **Server.** Its TLS certificate pin (trust on first use) and, from phase 3, a server
@@ -476,6 +489,18 @@ the wire definition):
   also audits and heads) and `kt.publishes_per_minute` (6). A missing account, one
   without a binding, and a history the requester may not see are the same
   `not_found`.
+- **Witnessed key transparency** (`kt-witness/1`, docs/witness.md, docs/e2ee.md
+  §5.9): needs `kt/1` and is offered with it; sticky. No message types of its own
+  (0x4E30–0x4E35 are reserved): `KtStatus`, `KtLookup` and `KtHistory` gain `origin`,
+  the server as the client reaches it (`host:port`, lower case); their replies gain
+  `witnessed`, a nuschel-kt `WitnessedHead` (≤ 72 KiB: the newest cosigned
+  checkpoint under that origin and the head's inclusion proof; empty when the server
+  has no such origin). `KtStatusReply` carries the requester's `user_id` and `name`
+  (the `name:` label's lower-case name); `KtLookupReply` the lookups of the user's
+  `reg:` and `name:` labels (`registration`, `name_lookup`, `name`) at the same head;
+  `KtHistory.label` asks for the requester's own `reg:` or `name:` history (anyone
+  else's is `not_found`). Lookup replies are now at most 1.5 MiB, status replies
+  74 KiB.
 - **MLS** (`mls/1`, docs/e2ee.md "Phase 4 prototype"): needs `kt/1`
   (a client refuses `mls/1` without it); messages `0x4E20`–`0x4E2C` (key package upload,
   status and claim; `MlsCommit` with an optional group init, `MlsAck`, `MlsSend`;

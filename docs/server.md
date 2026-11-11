@@ -85,6 +85,15 @@ Every configuration key is optional; names and defaults follow murmur.ini
   `publish_interval` (10 s) and `refresh_interval` (an hour) pace epochs and re-signed
   heads; `history = "contacts"` (default) or `"members"` says who may fetch an
   account's history besides its owner.
+  Every registered user's registration number and lower-case name are published as
+  `reg:` and `name:` labels (renames release the old name). **Witnessing**
+  (docs/witness.md): `origins` lists the `host:port` names clients use (NixOS: the
+  host's FQDN and port); the server submits its epoch log to the built-in witnesses
+  (`default_witnesses`, none until the project auditor is deployed) and to
+  `[[kt.witnesses]]` (`key`, `url`), every `witness_interval` (60 s) while epochs are
+  new and every `witness_refresh_interval` (an hour) otherwise, over HTTPS with the
+  webpki roots, and attaches their cosignatures to the heads it serves
+  (`kt-witness/1`). The journal says when a witness starts or stops cosigning.
 - **Statistics.** Every `statistics_interval` seconds (300; 0 turns it off) the log
   gets one `statistics` line with what happened in that interval: users online,
   channels, connections, logins, rejected logins, control messages and bytes, voice
