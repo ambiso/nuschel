@@ -245,7 +245,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                 .flex()
                 .flex_col()
                 .gap_4()
-                .child(field("server-name-field", "Server name", &form.name))
+                // The address comes first (and has focus); the name follows it.
                 .child(
                     div()
                         .flex()
@@ -253,6 +253,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                         .child(div().flex_1().child(field("server-host-field", "Hostname or IP address", &form.host)))
                         .child(div().w(px(110.)).child(field("server-port-field", "Port", &form.port))),
                 )
+                .child(field("server-name-field", "Server name", &form.name))
                 .child(field("server-username-field", "Username", &form.username))
                 .child(field("server-password-field", "Password (optional)", &form.password))
                 .child(crate::settings::toggle(

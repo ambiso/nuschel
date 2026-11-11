@@ -234,6 +234,10 @@ def main():
                 click(59, 227)
                 time.sleep(1.0)
                 shot("02-add-server")
+                # The address has focus, and the name follows it.
+                shell.type("voice.example.org")
+                time.sleep(0.6)
+                shot("02a-add-server-typed")
                 shell.key("Escape")
                 time.sleep(0.5)
             if want("settings"):
