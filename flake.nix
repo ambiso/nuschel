@@ -253,6 +253,10 @@
         # The desktop package from per-crate derivations (crate2nix): a change
         # rebuilds only the crates that depend on it.
         crates = import ./nix/crate2nix.nix { inherit pkgs toolchain; };
+        # Explicit operator/CI tool; never included in client worker payloads.
+        updateSigner = crates.project.workspaceMembers."nuschl-update-worker".build.override {
+          features = [ "signer" ];
+        };
         # What nix/crate2nix/Cargo.nix was generated from: Cargo.lock and every
         # manifest. `just crate2nix` records it; a check compares.
         crate2nixInputs =
@@ -441,6 +445,11 @@
         packages.default-crane = cranePackage;
         packages.server = serverPackage;
         packages.witness = witnessPackage;
+        packages.update-signer = updateSigner;
+        apps.update-signer = flake-utils.lib.mkApp {
+          drv = updateSigner;
+          exePath = "/bin/nuschl-update-sign";
+        };
         packages.windows = windowsPackage;
         packages.macos-universal = macUniversal;
         packages.macos-app = macApp;

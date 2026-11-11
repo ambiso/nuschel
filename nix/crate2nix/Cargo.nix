@@ -323,6 +323,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-update-worker" = rec {
+      packageId = "nuschl-update-worker";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-update-worker";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-web-relay" = rec {
       packageId = "nuschl-web-relay";
       build = internal.buildRustCrateWithFeatures {
@@ -3490,10 +3500,17 @@ rec {
             name = "hybrid-array";
             packageId = "hybrid-array";
           }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
         ];
         features = {
           "zeroize" = [ "dep:zeroize" ];
         };
+        resolvedDefaultFeatures = [ "zeroize" ];
       };
       "block-padding 0.3.3" = rec {
         crateName = "block-padding";
@@ -7993,6 +8010,12 @@ rec {
             packageId = "ctutils";
             optional = true;
           }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
         ];
         features = {
           "blobby" = [ "dep:blobby" ];
@@ -8005,7 +8028,7 @@ rec {
           "rand_core" = [ "common/rand_core" ];
           "zeroize" = [ "dep:zeroize" "block-buffer?/zeroize" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "block-api" "default" "mac" "oid" ];
+        resolvedDefaultFeatures = [ "alloc" "block-api" "default" "mac" "oid" "zeroize" ];
       };
       "dimpl" = rec {
         crateName = "dimpl";
@@ -20981,6 +21004,12 @@ rec {
             usesDefaultFeatures = false;
             features = [ "digest" ];
           }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
         ];
         devDependencies = [
           {
@@ -20997,7 +21026,7 @@ rec {
           "rand_core" = [ "common/rand_core" "signature/rand_core" ];
           "zeroize" = [ "dep:zeroize" "hybrid-array/zeroize" "module-lattice/zeroize" "shake/zeroize" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "getrandom" "pkcs8" "rand_core" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "getrandom" "pkcs8" "rand_core" "zeroize" ];
       };
       "ml-kem" = rec {
         crateName = "ml-kem";
@@ -21068,11 +21097,17 @@ rec {
             packageId = "num-traits";
             usesDefaultFeatures = false;
           }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
         ];
         features = {
           "zeroize" = [ "array/zeroize" "dep:zeroize" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "ctutils" ];
+        resolvedDefaultFeatures = [ "alloc" "ctutils" "zeroize" ];
       };
       "moxcms" = rec {
         crateName = "moxcms";
@@ -23934,6 +23969,79 @@ rec {
           }
         ];
 
+      };
+      "nuschl-update-worker" = rec {
+        crateName = "nuschl-update-worker";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "nuschl-update-sign";
+            path = "src/bin/sign.rs";
+            requiredFeatures = [ "signer" ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/update-worker; };
+        libName = "nuschl_update_worker";
+        dependencies = [
+          {
+            name = "curve25519-dalek";
+            packageId = "curve25519-dalek 4.1.3";
+          }
+          {
+            name = "ed25519-dalek";
+            packageId = "ed25519-dalek";
+            usesDefaultFeatures = false;
+            features = [ "std" "zeroize" ];
+          }
+          {
+            name = "getrandom";
+            packageId = "getrandom 0.4.3";
+            optional = true;
+            features = [ "sys_rng" ];
+          }
+          {
+            name = "hex";
+            packageId = "hex";
+          }
+          {
+            name = "ml-dsa";
+            packageId = "ml-dsa";
+            usesDefaultFeatures = false;
+            features = [ "alloc" "zeroize" ];
+          }
+          {
+            name = "nuschl-update";
+            packageId = "nuschl-update";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+        ];
+        features = {
+          "signer" = [ "dep:getrandom" "ml-dsa/rand_core" ];
+        };
+        resolvedDefaultFeatures = [ "default" "signer" ];
       };
       "nuschl-web-relay" = rec {
         crateName = "nuschl-web-relay";
@@ -36037,6 +36145,7 @@ rec {
           "default" = [ "alloc" ];
           "zeroize" = [ "digest/zeroize" "sponge-cursor/zeroize" ];
         };
+        resolvedDefaultFeatures = [ "zeroize" ];
       };
       "sharded-slab" = rec {
         crateName = "sharded-slab";
@@ -36962,9 +37071,18 @@ rec {
         authors = [
           "RustCrypto Developers"
         ];
+        dependencies = [
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
         features = {
           "zeroize" = [ "dep:zeroize" ];
         };
+        resolvedDefaultFeatures = [ "zeroize" ];
       };
       "sqlx" = rec {
         crateName = "sqlx";

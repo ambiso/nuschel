@@ -7,6 +7,30 @@ platforms. First-party source forbids unsafe code; dependencies require separate
 
 ## Processing choices
 
+The update-key tooling uses RustCrypto `ml-dsa` 0.1.2 (ML-DSA-44 and its
+SHAKE/Keccak stack) and `ed25519-dalek` 2.2.0 for Ed25519. `ed25519` supplies
+formats/traits; dalek supplies the implementation. The optional signing tool
+keeps these engines outside the UI/updater parent, and production verification
+is being moved to two independently confined algorithm processes with a
+mandatory parent-side AND. This prototype does not yet replace the minisign
+release path. The v2 trust store has no production key enrolled.
+
+RustCrypto ML-DSA 0.1.2 is newer than the fixes for the disclosed
+[decomposition timing issue](https://github.com/advisories/GHSA-hcp2-x6j4-29j7)
+and [repeated hint-index acceptance](https://github.com/RustCrypto/signatures/security/advisories/GHSA-5x2r-hc65-25f9).
+Its documentation states that it has not been independently audited. SHAKE is
+the actual FIPS 204 XOF here; a crate being RustCrypto or implementing FIPS 204
+does not make it an audited/FIPS-validated module or wholly memory-safe.
+`hybrid-array` executes unsafe array operations; curve/hash backends may use
+unsafe optimized code. This justifies the worker boundary, not a new UI crypto
+exception. Explicit canonical/prime-order point and scalar checks precede
+dalek's strict verification even if AKD unifies `legacy_compatibility`.
+
+Existing MLS/identity libcrux and TLS provider exceptions remain separate. This
+change does not select OpenMLS's older RustCrypto test provider, change protocol
+algorithms globally, or relax the crypto-bigint advisory policy below. See the
+[key-tool format and operator contract](../apps/update-worker/README.md).
+
 | Component | Initial choice | Review boundary |
 | --- | --- | --- |
 | Mumble protobuf | Prost, generated from vendored schemas | Framing limits precede decoding; native sessions use bounded Tokio queues and TLS |

@@ -1016,6 +1016,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
@@ -2470,6 +2471,7 @@ dependencies = [
  "const-oid 0.10.2",
  "crypto-common 0.2.2",
  "ctutils",
+ "zeroize",
 ]
 
 [[package]]
@@ -6451,6 +6453,7 @@ dependencies = [
  "pkcs8 0.11.0",
  "shake",
  "signature 3.0.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -6476,6 +6479,7 @@ dependencies = [
  "ctutils",
  "hybrid-array",
  "num-traits",
+ "zeroize",
 ]
 
 [[package]]
@@ -7286,6 +7290,23 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "ureq",
+]
+
+[[package]]
+name = "nuschl-update-worker"
+version = "0.1.0"
+dependencies = [
+ "curve25519-dalek 4.1.3",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
+ "hex",
+ "ml-dsa",
+ "nuschl-update",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]
@@ -10788,6 +10809,9 @@ name = "sponge-cursor"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "sqlx"

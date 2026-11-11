@@ -62,6 +62,9 @@ deny = [
     "nuschl-rtc",
   ], reason = "Keep the WebRTC implementation behind the encoded-media transport boundary" },
   { name = "openssl", reason = "Use rustls for transport security" },
+  { name = "ml-dsa", wrappers = [
+    "nuschl-update-worker",
+  ], reason = "RustCrypto ML-DSA update verification/signing executes only in isolated verifier binaries or the explicit operator/CI signing tool" },
   { name = "rsa", wrappers = [
     "nuschl-session",
   ], reason = "RSA key generation only; private-key operations use ring (RUSTSEC-2023-0071)" },

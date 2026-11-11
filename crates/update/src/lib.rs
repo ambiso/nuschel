@@ -20,6 +20,9 @@
 //! Linux installations update through their package manager (e.g. Nix) and
 //! are not handled here.
 
+pub mod auth_format;
+pub mod trust;
+
 use cap_std::{ambient_authority, fs::Dir};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
