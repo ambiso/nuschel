@@ -10,6 +10,10 @@ Every file of each installation becomes one release asset named
 `<platform>--<path with / as __>`; `update.json` lists them with size and
 SHA-256, and `update.json.minisig` signs it (rsign2/minisign format). The
 updater in the app verifies the signature with the key in crates/update/update-key.pub.
+
+`update.json` also carries the release time (`released`, Unix seconds, now by
+default). Installed copies refuse a manifest released before the newest one
+they have seen, so each release must be stamped later than the previous one.
 """
 import argparse
 import hashlib
@@ -19,6 +23,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 
 def files_of(root):
@@ -38,6 +43,8 @@ def main():
     parser.add_argument("--base-url", required=True, help="where the assets will be downloadable")
     parser.add_argument("--platform", action="append", default=[], metavar="NAME=DIR")
     parser.add_argument("--notes")
+    parser.add_argument("--released", type=int, default=int(time.time()),
+                        help="release time in Unix seconds (default: now)")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sign-key", type=Path, help="minisign secret key (unencrypted)")
     parser.add_argument("--rsign", default=shutil.which("rsign") or "rsign")
@@ -57,7 +64,9 @@ def main():
         if not entries:
             sys.exit(f"{name}: no files in {directory}")
         platforms[name] = entries
-    manifest = {"version": args.version, "platforms": platforms}
+    if args.released > time.time() + 24 * 60 * 60:
+        sys.exit("--released lies in the future: clients would refuse the next releases until then")
+    manifest = {"version": args.version, "released": args.released, "platforms": platforms}
     if args.notes:
         manifest["notes"] = args.notes
     target = args.output / "update.json"

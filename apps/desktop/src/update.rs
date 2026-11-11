@@ -2,7 +2,11 @@
 //! In-app updates on Windows and macOS (see the `nuschel-update` crate): a
 //! check shortly after start and every few hours, a banner when a newer
 //! signed release exists, and download, swap and restart on request.
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+    time::Duration,
+};
 
 pub use nuschel_update::Update;
 
@@ -52,8 +56,18 @@ pub fn cleanup() {
     }
 }
 
+/// The newest update manifest seen, remembered next to the settings.
+static STATE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Set once at start, with the profile's configuration folder.
+pub fn remember_state_in(config_dir: &Path) {
+    let _ = STATE.set(config_dir.join("update-state.json"));
+}
+
 pub fn check() -> Result<Option<Update>, String> {
-    nuschel_update::check(root().as_deref(), env!("CARGO_PKG_VERSION")).map_err(|e| e.to_string())
+    let state = STATE.get().ok_or("the update state location is not set")?;
+    nuschel_update::check(root().as_deref(), env!("CARGO_PKG_VERSION"), state)
+        .map_err(|e| e.to_string())
 }
 
 pub fn install(update: &Update, mut progress: impl FnMut(u64, u64)) -> Result<(), String> {

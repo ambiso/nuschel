@@ -98,6 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let profile = Profile::open(arguments.profile_dir)?;
+    update::remember_state_in(&profile.config_dir);
     let bookmarks = profile.load_servers()?;
     let startup = arguments
         .url

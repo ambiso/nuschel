@@ -8,7 +8,9 @@
 //! 1. fetches both and verifies the signature against the release key built
 //!    into the binary (plus `update-key.pub` beside the executable, which is
 //!    no extra trust: whoever can write there can replace the program);
-//! 2. offers versions newer than its own only (no downgrades);
+//! 2. offers versions newer than its own only (no downgrades), and refuses a
+//!    manifest released before the newest one it has already accepted, so an
+//!    old signed manifest cannot be replayed to hold it at an older release;
 //! 3. downloads each file into a staging directory inside the installation,
 //!    checking size and hash;
 //! 4. swaps files by renaming, moving the old ones aside (Windows allows
@@ -19,7 +21,7 @@
 //! are not handled here.
 
 use cap_std::{ambient_authority, fs::Dir};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
@@ -63,6 +65,13 @@ pub enum Error {
     Corrupt(String),
     #[error("the installation folder is not writable: {0}")]
     NotWritable(String),
+    #[error(
+        "the update server offered {0}, older than a release already seen; \
+         it may be replaying an old manifest"
+    )]
+    Stale(String),
+    #[error("could not read the update state {0}")]
+    State(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -71,6 +80,8 @@ pub enum Error {
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub version: String,
+    /// Release time in Unix seconds by the signer's clock.
+    pub released: u64,
     #[serde(default)]
     pub notes: Option<String>,
     pub platforms: BTreeMap<String, Vec<FileEntry>>,
@@ -212,6 +223,54 @@ fn safe_relative(path: &str) -> Result<PathBuf, Error> {
     }
 }
 
+/// The newest manifest this installation has accepted, kept next to the
+/// settings. Only release times from signed manifests are compared, never
+/// the local clock, so a wrong system time changes nothing.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Seen {
+    pub version: semver::Version,
+    pub released: u64,
+}
+
+/// Accept `manifest` only if neither its release time nor its version is
+/// older than the newest manifest seen before, and remember it.
+pub fn remember(state: &Path, manifest: &Manifest) -> Result<(), Error> {
+    let version = semver::Version::parse(&manifest.version)
+        .map_err(|error| Error::Manifest(format!("version: {error}")))?;
+    let current = Seen {
+        version,
+        released: manifest.released,
+    };
+    let seen = match fs::File::open(state) {
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            file.take(4096).read_to_end(&mut bytes)?;
+            Some(
+                serde_json::from_slice::<Seen>(&bytes)
+                    .map_err(|error| Error::State(format!("{}: {error}", state.display())))?,
+            )
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(seen) = &seen {
+        if current.released < seen.released || current.version < seen.version {
+            return Err(Error::Stale(manifest.version.clone()));
+        }
+        if *seen == current {
+            return Ok(());
+        }
+    }
+    // Durable before it replaces the old state: a damaged file fails closed.
+    let temporary = state.with_extension(format!("{}.tmp", unique()));
+    let mut file = fs::File::create(&temporary)?;
+    file.write_all(&serde_json::to_vec(&current).map_err(std::io::Error::other)?)?;
+    file.sync_all()?;
+    fs::rename(&temporary, state)?;
+    Ok(())
+}
+
 /// Whether `candidate` is newer than `current`.
 pub fn is_newer(candidate: &str, current: &str) -> bool {
     match (
@@ -255,12 +314,13 @@ pub fn base_url() -> String {
     url
 }
 
-/// Ask the release server for a newer version for this platform.
-pub fn check(root: Option<&Path>, current: &str) -> Result<Option<Update>, Error> {
+/// Ask the release server for a newer version for this platform. `state` is
+/// where the newest manifest seen is remembered (see [`remember`]).
+pub fn check(root: Option<&Path>, current: &str, state: &Path) -> Result<Option<Update>, Error> {
     let Some(platform) = platform() else {
         return Ok(None);
     };
-    check_at(&base_url(), &trusted_keys(root), platform, current)
+    check_at(&base_url(), &trusted_keys(root), platform, current, state)
 }
 
 pub fn check_at(
@@ -268,12 +328,14 @@ pub fn check_at(
     keys: &[minisign_verify::PublicKey],
     platform: &str,
     current: &str,
+    state: &Path,
 ) -> Result<Option<Update>, Error> {
     let agent = agent();
     let manifest = fetch(&agent, &format!("{base}{MANIFEST}"), MAX_MANIFEST)?;
     let signature = fetch(&agent, &format!("{base}{MANIFEST}.minisig"), 4096)?;
     let signature = String::from_utf8(signature).map_err(|_| Error::Signature)?;
     let (manifest, files) = verify(&manifest, &signature, keys, platform)?;
+    remember(state, &manifest)?;
     if !is_newer(&manifest.version, current) {
         return Ok(None);
     }
@@ -467,6 +529,7 @@ mod tests {
     fn manifest(version: &str, path: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "version": version,
+            "released": 1_800_000_000,
             "platforms": { "windows-x86_64": [{
                 "path": path, "url": "https://example.invalid/a",
                 "sha256": "00".repeat(32), "size": 1
@@ -545,6 +608,52 @@ mod tests {
                 "{path:?}: {result:?}"
             );
         }
+    }
+
+    #[test]
+    fn manifests_without_a_release_time_are_refused() {
+        let (secret, public) = keypair();
+        let body = br#"{"version":"9.0.0","platforms":{"windows-x86_64":[]}}"#;
+        let result = verify(body, &sign(&secret, body), &[public], "windows-x86_64");
+        assert!(matches!(result, Err(Error::Manifest(_))), "{result:?}");
+    }
+
+    #[test]
+    fn a_replayed_older_manifest_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("update-state.json");
+        let release = |version: &str, released| Manifest {
+            version: version.into(),
+            released,
+            notes: None,
+            platforms: BTreeMap::new(),
+        };
+        remember(&state, &release("0.2.0", 100)).unwrap();
+        remember(&state, &release("0.3.0", 200)).unwrap();
+        // Checking again finds the same manifest.
+        remember(&state, &release("0.3.0", 200)).unwrap();
+        // Still newer than an installed 0.1.0, but older than what was seen.
+        for (version, released) in [("0.2.0", 100), ("0.2.9", 300), ("0.4.0", 150)] {
+            assert!(
+                matches!(
+                    remember(&state, &release(version, released)),
+                    Err(Error::Stale(_))
+                ),
+                "{version} {released}"
+            );
+        }
+        remember(&state, &release("0.4.0", 300)).unwrap();
+        let seen: Seen = serde_json::from_slice(&fs::read(&state).unwrap()).unwrap();
+        assert_eq!(
+            (seen.version.to_string(), seen.released),
+            ("0.4.0".into(), 300)
+        );
+        // A damaged state fails closed rather than forgetting what was seen.
+        fs::write(&state, b"{").unwrap();
+        assert!(matches!(
+            remember(&state, &release("0.5.0", 400)),
+            Err(Error::State(_))
+        ));
     }
 
     #[test]
@@ -665,6 +774,7 @@ mod tests {
         let body = b"new program".to_vec();
         let manifest = serde_json::to_vec(&serde_json::json!({
             "version": "9.1.0",
+            "released": 1_800_000_000,
             "platforms": { "windows-x86_64": [{
                 "path": "nuschel.exe", "url": format!("{base}nuschel.exe"),
                 "sha256": hex(&Sha256::digest(&body)), "size": body.len()
@@ -695,11 +805,13 @@ mod tests {
                 stream.write_all(&reply).unwrap();
             }
         });
-        let update = check_at(&base, &[public], "windows-x86_64", "0.1.0")
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("update-state.json");
+        let update = check_at(&base, &[public], "windows-x86_64", "0.1.0", &state)
             .unwrap()
             .expect("a newer version");
         assert_eq!(update.version.to_string(), "9.1.0");
-        let root = tempfile::tempdir().unwrap();
+        assert!(state.exists());
         fs::write(root.path().join("nuschel.exe"), b"old").unwrap();
         let mut reported = 0;
         let staged = download(&update, root.path(), |done, _| reported = done).unwrap();
