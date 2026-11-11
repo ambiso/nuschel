@@ -17,6 +17,7 @@ desktop (GPUI) exists; the terminal, Android, iOS and web clients are queued.
 - **Terminal client** (ratatui), the SDK's second consumer after the desktop: cheap,
   usable over SSH, and the test that the SDK really is UI-independent.
 - **Web client in Svelte**, with the SDK compiled to WASM in a Web Worker.
+- **The project domain is nuschl.eu** (user, 2026-11-11), after the rename to nuschl.
 - **The web client is served from one domain the project runs**, not by each server.
   Users already trust the project for the software they run, so the web client adds no
   new party to trust, and an origin that stays the same lets the browser keep one

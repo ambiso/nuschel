@@ -958,9 +958,12 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         builds stop interoperating; acceptable in early development);
       - repository: the user renames `ambiso/nuschel` on GitHub (redirects), then the
         jj remote is updated; README, docs and the screenshot regenerate;
-      - domain: nuschl.eu proposed as the project domain (passkey relying party, app
-        links, share links, web client origin; changing it later breaks passkeys and
-        browser identities), awaiting the user;
+      - domain: **nuschl.eu** is the project domain (user, 2026-11-11): passkey
+        relying party, app links, share links, the web client's origin and the
+        default witness and backup service. Changing it later breaks passkeys and
+        browser identities. Registered as a private individual, with auto-renew, a
+        multi-year term and 2FA on the registrar account (.eu deletes at expiry and
+        needs EU/EEA citizenship or residence);
       - verify: workspace build, clippy, tests, fmt, deny, crate2nix check, every VM
         check, screenshots, the accessibility test, and a migration test from an
         existing nuschel profile.
