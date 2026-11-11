@@ -159,6 +159,7 @@
           install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
           install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
           install -Dm644 ${./vendor/pulseaudio/LICENSE.md} "$out/share/licenses/nuschel/pulseaudio-MIT"
+          install -Dm644 ${./vendor/cpal/LICENSE} "$out/share/licenses/nuschel/cpal-Apache-2.0"
         ''
         + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
           runtimeFlags=(--prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}"

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*"]
-exclude = ["vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu"]
+exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu"]
 default-members = ["apps/desktop", "apps/server"]
 
 [workspace.metadata.crane]
@@ -43,6 +43,8 @@ codegen-units = 1
 strip = "debuginfo"
 
 [patch.crates-io]
+# Stream names and roles for volume mixers (see vendor/cpal/NUSCHEL-PATCHES.md).
+cpal = { path = "vendor/cpal" }
 pulseaudio = { path = "vendor/pulseaudio" }
 # Cross-compilation fixes for GPUI's platform crates (see vendor/*/NUSCHEL-PATCH.md).
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

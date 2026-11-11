@@ -169,7 +169,7 @@ impl Transmit {
 /// diagnostic for users: it opens the microphone briefly and sends nothing.
 pub fn probe_route() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, _rx) = mpsc::sync_channel(64);
-    let (_devices, route) = open_devices(tx, true, &AudioSettings::default(), None)?;
+    let (_devices, route) = open_devices(tx, true, &AudioSettings::default(), None, &CALL)?;
     let report = serde_json::json!({
         "input": route.input,
         "output": route.output,
@@ -244,7 +244,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut upstream_noise = false;
     loop {
         if devices.is_none() && state_known && !deafened && Instant::now() >= retry_at {
-            match open_devices(tx.clone(), !muted, &settings, only_host.as_deref()) {
+            let labels = if preview { &CHECK } else { &CALL };
+            match open_devices(tx.clone(), !muted, &settings, only_host.as_deref(), labels) {
                 Ok((opened, route)) => {
                     // Without a microphone the canceller has nothing to do.
                     let echo =
@@ -726,11 +727,28 @@ fn chain_settings(settings: &AudioSettings, upstream_noise: bool) -> AudioSettin
     settings
 }
 
+/// What volume mixers (pavucontrol, GNOME Settings, Helvum) call the streams.
+struct Labels {
+    microphone: &'static str,
+    playback: &'static str,
+}
+
+const CALL: Labels = Labels {
+    microphone: "Microphone",
+    playback: "Voice chat",
+};
+/// The audio check in Settings: echo test and the processed voice played back.
+const CHECK: Labels = Labels {
+    microphone: "Microphone test",
+    playback: "Audio test",
+};
+
 fn open_devices(
     tx: SyncSender<Event>,
     capture: bool,
     settings: &AudioSettings,
     only_host: Option<&str>,
+    labels: &Labels,
 ) -> Result<(Devices, Route), String> {
     let mut hosts = vec![];
     #[cfg(target_os = "linux")]
@@ -754,9 +772,8 @@ fn open_devices(
     }
     let mut errors = Vec::new();
     for id in hosts {
-        match cpal::host_from_id(id)
-            .map_err(|error| error.to_string())
-            .and_then(|host| open_host(&host, tx.clone(), capture, settings))
+        match connect(id)
+            .and_then(|mut host| open_host(&mut host, tx.clone(), capture, settings, labels))
         {
             Ok(opened) => return Ok(opened),
             Err(error) => {
@@ -767,6 +784,55 @@ fn open_devices(
         }
     }
     Err(errors.join("; "))
+}
+
+/// Connect to an audio server as Nuschel, the application mixers show.
+fn connect(id: cpal::HostId) -> Result<cpal::Host, String> {
+    #[cfg(target_os = "linux")]
+    let host = {
+        let application = || cpal::ApplicationInfo {
+            name: "Nuschel".into(),
+            icon_name: Some("org.nuschel.Nuschel".into()),
+        };
+        match id {
+            cpal::HostId::PipeWire => {
+                cpal::platform::PipeWireHost::with_application(application()).map(cpal::Host::from)
+            }
+            cpal::HostId::PulseAudio => {
+                cpal::platform::PulseAudioHost::with_application(application())
+                    .map(cpal::Host::from)
+            }
+            id => cpal::host_from_id(id),
+        }
+    };
+    #[cfg(not(target_os = "linux"))]
+    let host = cpal::host_from_id(id);
+    host.map_err(|error| error.to_string())
+}
+
+/// Name the streams built next from `host`'s devices. PipeWire also gets the
+/// communication role, as stock Mumble sets; PulseAudio's equivalent
+/// ("phone") would pause music for as long as Nuschel is in a call
+/// (module-role-cork), so it is left out there.
+fn label(host: &mut cpal::Host, name: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        let metadata = |role| cpal::StreamMetadata {
+            name: Some(name.into()),
+            role,
+        };
+        // Names come from Nuschel's constants and device names: a NUL byte
+        // (refused) only costs the label.
+        let _ = match host.as_inner_mut() {
+            cpal::platform::HostInner::PipeWire(host) => {
+                host.set_stream_metadata(metadata(Some(cpal::StreamRole::Communication)))
+            }
+            cpal::platform::HostInner::PulseAudio(host) => host.set_stream_metadata(metadata(None)),
+            _ => Ok(()),
+        };
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (host, name);
 }
 
 fn device_id(device: &cpal::Device) -> Option<String> {
@@ -811,10 +877,11 @@ pub fn paired_reference<'a>(source_id: &str, sinks: &'a [AudioDevice]) -> Option
 }
 
 fn open_host(
-    host: &cpal::Host,
+    host: &mut cpal::Host,
     tx: SyncSender<Event>,
     capture: bool,
     settings: &AudioSettings,
+    labels: &Labels,
 ) -> Result<(Devices, Route), String> {
     let all: Vec<cpal::Device> = host
         .devices()
@@ -901,6 +968,7 @@ fn open_host(
     let clock = Clock::new();
     let (capture_stamper, capture_timeline) = reference::stamped();
     let mut capture_consumer = None;
+    label(host, labels.microphone);
     let input = capture
         .then(|| input_device.clone())
         .flatten()
@@ -991,6 +1059,7 @@ fn open_host(
         },
         clock,
     );
+    label(host, labels.playback);
     let stream = by_format!(
         config.sample_format(),
         output_stream(
@@ -1094,7 +1163,7 @@ fn pulse_device_names() -> Option<(Vec<String>, Vec<String>)> {
     if !pulse_running() {
         return None;
     }
-    let host = cpal::host_from_id(cpal::HostId::PulseAudio).ok()?;
+    let host = connect(cpal::HostId::PulseAudio).ok()?;
     let (mut sources, mut sinks) = (Vec::new(), Vec::new());
     for device in host.devices().ok()? {
         let Some(id) = device_id(&device) else {
@@ -1117,7 +1186,7 @@ fn resolve_pulse_default(input: bool) -> Option<(String, String)> {
     if !pulse_running() {
         return None;
     }
-    let host = cpal::host_from_id(cpal::HostId::PulseAudio).ok()?;
+    let host = connect(cpal::HostId::PulseAudio).ok()?;
     let device = if input {
         host.default_input_device()
     } else {
@@ -1185,7 +1254,7 @@ where
 /// canceller's reference: PipeWire captures the sink, PulseAudio records its
 /// monitor source, WASAPI and Core Audio (process tap) record in loopback.
 fn record_output(
-    host: &cpal::Host,
+    host: &mut cpal::Host,
     all: &[cpal::Device],
     output: &cpal::Device,
     output_id: Option<&str>,
@@ -1196,6 +1265,19 @@ fn record_output(
     if host.id() == cpal::HostId::Alsa {
         return Err("ALSA cannot record an output device".into());
     }
+    // A readable name for what is recorded; the default sink's own name where
+    // cpal only offers a virtual "default" entry.
+    #[cfg(target_os = "linux")]
+    let name = (output_id
+        .map(backend_name)
+        .is_none_or(|name| name == "output_default"))
+    .then(|| resolve_pulse_default(false).map(|(_, name)| name))
+    .flatten()
+    .unwrap_or_else(|| device_name(output));
+    #[cfg(not(target_os = "linux"))]
+    let name = device_name(output);
+    let description = format!("Echo reference (what {name} plays)");
+    label(host, &description);
     #[cfg(target_os = "linux")]
     let pulse_monitor = (host.id() == cpal::HostId::PulseAudio)
         .then(|| {
@@ -1208,7 +1290,8 @@ fn record_output(
             let monitor = format!("{sink}.monitor");
             // A connection of its own: cpal's PulseAudio client stops a stream
             // playing into a sink while the same connection records its monitor.
-            let separate = cpal::host_from_id(cpal::HostId::PulseAudio).ok()?;
+            let mut separate = connect(cpal::HostId::PulseAudio).ok()?;
+            label(&mut separate, &description);
             let devices: Vec<cpal::Device> = separate.devices().ok()?.collect();
             devices.into_iter().find(|device| {
                 device.supports_input()
@@ -1278,17 +1361,6 @@ fn record_output(
         build_recording(&device, stream_config, tx, callback)
     )?;
     stream.play().map_err(|error| error.to_string())?;
-    // A readable name for what is recorded; the default sink's own name where
-    // cpal only offers a virtual "default" entry.
-    #[cfg(target_os = "linux")]
-    let name = (output_id
-        .map(backend_name)
-        .is_none_or(|name| name == "output_default"))
-    .then(|| resolve_pulse_default(false).map(|(_, name)| name))
-    .flatten()
-    .unwrap_or_else(|| device_name(output));
-    #[cfg(not(target_os = "linux"))]
-    let name = device_name(output);
     Ok((
         stream,
         Reference {

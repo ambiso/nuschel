@@ -4748,7 +4748,7 @@ rec {
         crateName = "cpal";
         version = "0.18.2";
         edition = "2021";
-        sha256 = "1wc1hsppf4mavq6vyd2aqngyni3k76pij8dbwkid6hkv6b8fh0kg";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/cpal; };
         dependencies = [
           {
             name = "alsa";
