@@ -71,8 +71,8 @@
             || lib.hasSuffix "emoji.txt" path
             # The release signing key the updater trusts.
             || lib.hasSuffix "update-key.pub" path
-            # Vendored GPUI platform crates keep their shaders and headers.
-            || lib.hasInfix "/vendor/gpui-pre-" path
+            # Vendored GPUI crates keep their shaders, headers and README.
+            || lib.hasInfix "/vendor/gpui-pre" path
             || lib.hasPrefix "LICENSE" (builtins.baseNameOf path);
         };
         nativeBuildInputs = [
@@ -123,7 +123,7 @@
             cp -R ${pulseSource} "$out/vendor/pulseaudio"
             chmod -R u+w "$out/vendor/pulseaudio"
             # GPUI compiles against these patched crates during the dependency pass.
-            for crate in gpui-pre-windows gpui-pre-apple; do
+            for crate in gpui-pre gpui-pre-windows gpui-pre-apple; do
               rm -rf "$out/vendor/$crate"
               cp -R ${./vendor}/$crate "$out/vendor/$crate"
               chmod -R u+w "$out/vendor/$crate"

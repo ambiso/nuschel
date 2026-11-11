@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*"]
-exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu"]
+exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu", "vendor/gpui-pre"]
 default-members = ["apps/desktop", "apps/server"]
 
 [workspace.metadata.crane]
@@ -51,3 +51,5 @@ gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 # Colour emoji on Linux (vendor/gpui-pre-wgpu/NUSCHEL-PATCH.md).
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
+# Window zoom (Ctrl+= / Ctrl+-) scaling everything like a browser (vendor/gpui-pre/NUSCHEL-PATCH.md).
+gpui-pre = { path = "vendor/gpui-pre" }

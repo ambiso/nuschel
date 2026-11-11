@@ -9925,7 +9925,7 @@ rec {
         crateName = "gpui-pre";
         version = "0.3.11";
         edition = "2024";
-        sha256 = "0zc83m1h404gx360ffhpf13qq242kafzc1npjqmgzb7jmdqwf0wk";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/gpui-pre; };
         libName = "gpui";
         libPath = "src/gpui.rs";
         authors = [
