@@ -476,6 +476,14 @@ the wire definition):
   also audits and heads) and `kt.publishes_per_minute` (6). A missing account, one
   without a binding, and a history the requester may not see are the same
   `not_found`.
+- **MLS** (`mls/1`, docs/e2ee.md "Phase 4 prototype"): needs `kt/1`
+  (a client refuses `mls/1` without it); messages `0x4E20`–`0x4E2C` (key package upload,
+  status and claim; `MlsCommit` with an optional group init, `MlsAck`, `MlsSend`;
+  Welcome push, fetch and acknowledgement; join info), `Error` code `STALE_EPOCH` with
+  the group's `epoch` and the conversation's `head`, and the row formats
+  `MLS_APPLICATION`/`MLS_HANDSHAKE` with the MLS message in `Message.mls`, so commits
+  and application messages share the conversation's `seq` stream and history pages.
+  A conversation with a group takes no plaintext sends, edits or deletions.
 
 ## Desktop client (2026-11-11)
 

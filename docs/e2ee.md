@@ -4,7 +4,10 @@ Status: design for review (2026-11-11). Phase 3 (identity and key transparency, 
 MLS) is implemented: `nuschel-identity`, `nuschel-kt`, the crypto worker
 (`apps/crypto-worker`), the `kt/1` directory in `nuscheld` and the client flow in
 `nuschel-session` and the desktop; "Phase 3 as implemented" at the end lists what the
-implementation settled. Phase 4 (MLS) is design only. It covers roadmap phases 3
+implementation settled. Phases 4a (delivery service) and 4b (direct conversations) are
+prototyped on the `mls` branch on OpenMLS 0.9.2, which is not merged until an OpenMLS
+release with the draft's code points and fixed libcrux crates exists (§1.1, §1.4);
+"Phase 4 prototype" at the end describes it. It covers roadmap phases 3
 (identity, key transparency) and 4 (MLS) in TODO.md, "Nuschel server", and builds on
 the framing, identifiers and policies of [docs/extension.md](extension.md). Claims
 marked *(spike)* are checked by tests in [`spikes/mls`](../spikes/mls), a standalone
@@ -1158,9 +1161,10 @@ on flash become unreadable once the old key is gone from the OS credential store
   tls_codec, hpke-rs, the libcrux family, libcrux-ml-dsa; for KT: akd and akd_core
   (blake3 with `pure`, protobuf 3, dalek curves); for linking: spake2. All MIT or
   Apache-2.0.
-- `cargo deny` currently fails on three libcrux advisories pinned by
-  openmls_libcrux_crypto 0.4.0 (§1.4). Do not add ignores; wait for the release that
-  moves to hpke-rs 0.8.
+- `cargo deny` fails on three libcrux advisories pinned by openmls_libcrux_crypto
+  0.4.0 (§1.4). `main` adds no ignores; the `mls` branch ignores exactly these three,
+  commented and to be removed with the release that moves to hpke-rs 0.8, and is not
+  merged before it.
 - `rayon` (from OpenMLS) starts a thread pool in the crypto worker; its CPU limit must
   allow for it.
 
@@ -1274,3 +1278,255 @@ the log-structured store of §8.3); credential verification uses the device rost
 (§5.4) reuses the contact lookup; head gossip rides in application messages; key-change
 blocking moves from the profile into the conversation's send path; and device linking
 publishes the new roster with the existing `KtPublish`.
+
+## Phase 4 prototype (`mls` branch, 2026-11-11)
+
+Phases 4a (delivery service) and 4b (direct conversations) run end to end on OpenMLS
+0.9.2. **This branch is not merged into `main`** until an OpenMLS release carries the
+draft's code points and the fixed libcrux crates (§1.1, §1.4); nothing persistent may
+depend on what it creates. How to bump is at the end of this section.
+
+### What exists
+
+| Component | What it does |
+| --- | --- |
+| `crates/e2ee` (`nuschel-e2ee`) | The only crate that uses the OpenMLS API (deny.toml confines `openmls*` to it, and it to `nuscheld` and the crypto worker). [`SUITE`] is the one ciphersuite constant; `binding` the conversation binding; `prevalidate` a strict parser of key packages, ratchet trees and message framing that runs before OpenMLS; `envelope` §6.4; `ds` the delivery service's `PublicGroup` view; `client` a device's groups |
+| `nuscheld` (`apps/server/src/mls.rs`) | `mls/1`: the key package directory, the Welcome mailboxes, the group registry with epoch fencing, the shared `seq` stream, join info (see "The delivery service") |
+| `nuschel-crypto-worker` (`apps/crypto-worker/src/mls.rs`) | The OpenMLS state, credential checks against key-transparency rosters, pins, envelopes and chains, the lock; persisted sealed |
+| `nuschel-session` (`crates/session/src/mls.rs`) | Moves bytes between the server and the worker inside the key-transparency driver: key package uploads, Welcomes, creating a direct conversation's group, sending, catching up in `seq` order |
+| `nuschel-cli` | `e2ee_open`, `e2ee_send`, `e2ee_status`, `e2ee_sync` and `e2ee_*` events: the test driver |
+| Desktop | Opens a direct conversation's group on `mls/1` servers and shows its lock (§7.4) in the conversation header; MLS rows never reach the timeline as text |
+
+**Wire** (docs/extension.md conventions; `crates/protocol/proto/nuschel.proto`):
+capability `mls/1` (requires `kt/1`, sticky like every capability; a client refuses a
+server that offers `mls/1` without `kt/1`); messages `0x4E20`–`0x4E2C`:
+`MlsKeyPackageUpload` → `MlsKeyPackageStatus`, `MlsKeyPackageClaim` → `MlsKeyPackages`,
+`MlsCommit` (with an optional `MlsGroupInit` that registers a new group) → `MlsAck`,
+`MlsSend` → `MlsAck`, `MlsWelcomePush`, `MlsWelcomeFetch` → `MlsWelcomes`,
+`MlsWelcomeAck` → `Done`, `MlsJoinInfoRequest` → `MlsJoinInfo`. `Error` gains
+`STALE_EPOCH` with the group's `epoch` and the conversation's `head`. Commits,
+proposals and application messages are rows of the conversation's stream with formats
+`MLS_HANDSHAKE` (4) and `MLS_APPLICATION` (3), the MLS message in `Message.mls`, so a
+history page `after(seq)` replays everything in order (§6.10). Limits per type
+(`crates/protocol/src/nuschel/mod.rs`): a key package 4 KiB, 16 per upload and 50 kept
+per device; a commit or proposal 2 MiB, an application message 80 KiB, a Welcome 2
+MiB, a GroupInfo 256 KiB, a tree 2 MiB, 32 Welcomes per fetch.
+
+### Decisions made while building it
+
+Where §6–§10 left room, with the reason:
+
+1. **Suite.** `MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519` under OpenMLS's
+   provisional code point **0x004F** (`nuschel_e2ee::SUITE`, `SUITE_ID`, marked
+   *provisional* in code). It works end to end on 0.9.2 and is the suite this document
+   targets (open question 11, recommendation taken); 0x004D (ChaCha20) is not in the
+   draft.
+2. **Hostile input.** libcrux-kem 0.0.9 panics when it decodes an X-Wing public key
+   shorter than 1216 bytes (RUSTSEC-2026-0330); OpenMLS 0.9.2 accepts such a key in a
+   validly signed key package, and the panic hits whoever encapsulates to it later
+   (`crates/e2ee/tests/flow.rs` demonstrates both). So `prevalidate` checks every HPKE
+   key a key package, a ratchet tree or a commit's resulting tree can carry (exact
+   length), Ed25519 key and signature lengths, a 172-byte Nuschel credential in every
+   leaf, the suite, minimal variable-length integers and no trailing bytes, before any
+   OpenMLS call. Every OpenMLS call on input also runs under `catch_unwind`
+   (`nuschel_e2ee::guard`): no profile sets `panic = "abort"`, so this contains other
+   panics in the server and the worker; prevalidation is what stops the known ones. A
+   panic never happens under the server's state lock: MLS work runs in its own task.
+3. **Binding.** 54 bytes: version, the server's **key-transparency log id** (it hashes
+   the server identity key and the VRF key, and the client already pins the
+   descriptor), the conversation id, the generation and the kind (direct or channel).
+   The policy fields of §6.1 come with channels (version 2). Group id = conversation ‖
+   generation (20 bytes).
+4. **No tree in Welcomes or GroupInfo.** Commits are made without the ratchet tree
+   extension; the server serves its own tree (`MlsJoinInfo`), the joiner checks it
+   structurally and requires the staged Welcome's members to be exactly the tree's
+   leaves. The server refuses a GroupInfo that carries a tree.
+5. **What the server checks on a commit.** Framing, epoch (`STALE_EPOCH`), OpenMLS's
+   validation of the PublicMessage against the sender's leaf, then after merging: every
+   key in the new tree, the binding unchanged, the uploaded GroupInfo naming exactly the
+   server's new group context and signed by its signer leaf (the index read from the
+   to-be-signed part, since 0.9.2 keeps `signer()` private), no tree in it, a
+   well-formed external key if any, and a Welcome addressed to exactly the key packages
+   the commit adds (`KeyPackageRef`s). Any failure rolls the group back. The group's
+   state is restored with `PublicGroup::load` from OpenMLS's own records, never with
+   `from_external`, which would re-check leaf lifetimes and lock a long-lived group out.
+6. **Ordering for the committer.** With `max_past_epochs = 0`, merging a commit forgets
+   the old epoch. Application messages stored just before our own commit belong to the
+   old epoch, so after the server's ack the session hands the worker every row before
+   the commit's `seq` first, and only then lets it merge.
+7. **Idempotency.** An application message's idempotency body is the conversation,
+   format and key, not the ciphertext: a resend after `STALE_EPOCH` re-encrypts the same
+   envelope (same counter and chain) for the new epoch, and must return the original
+   `seq` if the first attempt was stored. A commit retried with the same key and bytes
+   gets its original ack; the client also recognises its own pending commit in the
+   stream (lost ack) and merges it.
+8. **Credentials and key changes** (§3.3, §4, §5.4). Every member must carry a Nuschel
+   credential naming our identity or the direct conversation peer's pinned identity and
+   verifying against that identity's KT roster (contacts now keep the verified record).
+   A stranger, a bad signature, a key mismatch or a revoked device is refused: nothing
+   is merged or joined, and the conversation is blocked (amber). A device of a known
+   identity that the roster does not list yet is merged (so the device stays in sync)
+   but sending is blocked with a visible reason until a lookup confirms it; a verified
+   contact's identity change blocks sending too. The worker reports accounts whose
+   roster has devices outside the group (`ConversationView::missing`); the session
+   claims their key packages and adds them.
+9. **Pins** (§7.2). A conversation with a group is pinned in the worker: a Welcome for a
+   pinned, active conversation is refused, a binding for another server or conversation
+   or generation is refused, plaintext rows in the stream are refused and never shown
+   (`MlsEvent::PlaintextRefused`). The server refuses plaintext sends, edits and
+   deletions in a conversation that has a group, and stores no stock direct messages
+   in it (`UNSUPPORTED`).
+10. **Key packages.** Batches of 8 with a last-resort package; refilled below 4 one-time
+    packages. Uploads are refused until the account's KT binding is published (the
+    credential's identity must be the bound one and the device in its roster), so the
+    session retries with backoff.
+11. **Worker persistence.** The OpenMLS records and every conversation's state (pins,
+    cursor, chains, pending commit, outgoing envelopes) are one sealed file, `mls`,
+    rewritten atomically before each answer, so a crash cannot leave a merged commit
+    with an old cursor. It stands in for the log-structured store of §8.3, which remains
+    to be written (whole-file rewrites leave old ciphertext on disk until the weekly
+    re-keying of §8.3 exists).
+12. **Open questions** (§10), taken as recommended where it cost nothing: the 1000-device
+    cap is `nuschel_e2ee::MAX_GROUP_DEVICES`, enforced by the server and the client; the
+    90-day bound is `INACTIVE_DEVICE_DAYS` (commits stay in the stream: retention and
+    `--erase-user` never tombstone `MLS_HANDSHAKE` rows; removing inactive devices is not
+    implemented); the device-signing key stays where phase 3 put it (the first device),
+    as linking does not exist yet.
+
+### The delivery service
+
+`apps/server/src/mls.rs`, built like the key-transparency task: requests are authorised
+under the state lock and processed in one task that owns the groups, through
+nuschel-e2ee only; answers go out under the lock. It runs only with `kt/1` and
+`[mls] enabled` (default on; `claims_per_minute` 30, `uploads_per_minute` 10,
+`max_devices` 1000 capped at the group limit, `welcome_days` 90).
+
+- **Key packages.** An upload is refused (`NOT_FOUND`) until the account has a
+  published KT binding; each package's credential must name the bound identity and
+  certify its leaf key, and its device must be in the account's current record and not
+  revoked. One device per upload, at most 50 one-time packages per device (the oldest
+  are dropped). Claims are for one's own account or a direct-conversation partner;
+  each device of the target's roster gives one package, a one-time one if any (consumed),
+  else its last-resort one. Both are rate-limited per account.
+- **Commits** (direct conversations; channels answer `UNSUPPORTED`). A creation
+  registers the group from its epoch-0 GroupInfo and tree, and is answered
+  `STALE_EPOCH` when the conversation already has a group (unless it is a retry). Every
+  member after a commit must belong to one of the conversation's two KT-bound
+  identities, and a Welcome must be routable to key packages this server handed out.
+  One commit per group is in flight (others get `BUSY`). The last 64 (account, key)
+  pairs per group are remembered: the same commit gets its original ack, a different
+  one `IDEMPOTENCY_CONFLICT`. Commits share the text rate bucket.
+- **The stream.** The `seq` is assigned under the lock; the row is stored by the
+  history writer; then the sender gets `MlsAck`, readers get the `ChatEvent`, and the
+  task saves the group and the Welcome mailbox entries and pushes the Welcome to
+  connections that fetched that device's mailbox. If storing fails, the group rolls
+  back and the sender gets `BUSY`. Application messages are fenced under the lock
+  against a per-conversation epoch cache, from their framing alone, so every message
+  of epoch N gets a lower `seq` than the commit that ends N.
+- **Join info** for readers of the conversation: epoch, the newest GroupInfo, the
+  server's tree and the latest commit's `seq`.
+- **Persistence**, without new tables: the server's key-value table (`kt_records`, its
+  own storage worker), uppercase prefixes that never meet nuschel-kt's (lowercase) or
+  kt.rs's (`R`, `C`); an empty value deletes a key.
+
+  | Key | Value |
+  | --- | --- |
+  | `E` ‖ group id | epoch, latest commit `seq`, conversation (read at start) |
+  | `G` ‖ group id | conversation, commit `seq`, recent commit keys, the group's state (loaded on first use) |
+  | `P` ‖ account ‖ device ‖ time ‖ n | a one-time key package |
+  | `L` ‖ account ‖ device | the last-resort key package |
+  | `K` ‖ key package ref | account, device, last-resort flag (Welcome routing) |
+  | `W` ‖ account ‖ device ‖ id | a waiting Welcome |
+
+  Commits and application messages are history rows; their MLS message is base64 in
+  the text column (`row_content`), which a binary column replaces later.
+
+### Tests
+
+| Command | What it covers |
+| --- | --- |
+| `cargo test -p nuschel-e2ee` | Envelope encoding and chains, prevalidation, the binding; in process: a direct conversation through the `DeliveryGroup`, stale epochs and a losing concurrent commit, restore of both halves, replay refused, the DS refusing what does not fit (wrong GroupInfo rolls back, another server's binding), a validly signed key package with a 32-byte X-Wing init key refused before libcrux (and OpenMLS 0.9.2 shown to accept it and libcrux-kem 0.0.9 to panic on it), a tree with a short key refused |
+| `cargo test -p nuschel-crypto-worker --test mls` | The worker against a delivery service in the test (in the style of `tests/malicious.rs`): two and three devices (a second device of one identity made with its device-signing key, standing in for linking), restarts, a server that drops, reorders, replays and forks, stale epoch with the same envelope resent, a stranger's commit refused, a device KT does not list (blocked, then unblocked by a lookup), a hostile key package, a Welcome for a pinned conversation, concurrent creations, a lost ack settled by the stream, removal |
+| `cargo test -p nuscheld --test mls` | The delivery service over the wire with raw protocol clients and real identities: upload, claim, creation, Welcome push, fetch and ack, join info, a message decrypted by the other side and a history page with both row formats; idempotent resends of the creation and of a message; `STALE_EPOCH` with epoch and head for an old-epoch message and a racing commit, catch-up and resend; plaintext and edits refused; hostile key packages (a short X-Wing init key as one-time and last-resort package, garbage, another identity's) refused while the server keeps serving; a claim without a direct conversation and a commit adding a third identity refused; the mailbox, epoch and fencing after a restart. Storage tests: delete on empty value, commits surviving expiry and erase |
+| `cargo test -p nuschel-cli --test e2ee` (after `cargo build -p nuschel-crypto-worker`) | Two `nuschel-cli` processes with sandboxed crypto workers through `nuscheld` on loopback: key packages, the group created by `e2ee_open`, the Welcome pushed, messages both ways in order, offline delivery read by a new worker process, plaintext into the conversation refused |
+| `python3 tests/with_local_nuscheld.py <bins> tests/e2ee_direct.py <bins> --port PORT` | The same as a script; `--state DIR` and `--phase second` check the group and stream after a server restart. `vm-server` runs it on SQLite across a restart and on PostgreSQL |
+| `fuzz/fuzz_targets/mls.rs` | Prevalidation, key package checks, Welcome routing, envelopes (one encoding), the `mls/1` messages, and the DS paths on a fixture group that garbage must never move |
+
+### Bumping OpenMLS
+
+When a release carries the draft's code points and hpke-rs-libcrux 0.8 (fixed
+libcrux-kem and libcrux-hmac-drbg):
+
+1. `crates/e2ee/Cargo.toml`: the four `openmls*` versions; keep
+   `draft-ietf-mls-pq-ciphersuites`; never enable OpenMLS's `async` feature (it
+   switches every storage-touching call to `async fn` in every crate of the build) or
+   `legacy-pq-key-derivation`.
+2. `nuschel_e2ee::SUITE` and `SUITE_ID`: the release's variant for
+   `MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519`. As of 2026-11-11 OpenMLS `main`
+   still names it 0x004F ("provisional"), with the X-Wing HPKE KEM id moved to 0x647a
+   and X-Wing key derivation following draft-ietf-hpke-pq; no variant uses the draft's
+   0x0010 yet. If the release keeps 0x004F, the wire id does not change but the key
+   derivation does: prototype state is unreadable either way.
+3. deny.toml: delete the three `RUSTSEC-2026-0329/-0330/-0331` ignores; `cargo deny
+   check` must pass without them. `just crate2nix`.
+4. API changes on OpenMLS `main` that touch this code (from its changelog; check
+   against the release):
+   - `Capabilities` lose their defaults (#2205): every list except versions is empty
+     unless set. `provider::capabilities` sets suites, extensions and credentials; check
+     that proposals need no entry, and handle the new `CapabilitiesPolicy`.
+   - `KeyPackageBuilder::mark_as_last_resort` moves to an `app_data_dictionary`
+     component under `extensions-draft` (#2133): `prevalidate::LAST_RESORT_EXTENSION`
+     (0x000a) and the directory's last-resort detection follow it.
+   - `KeyPackageIn::validate` gains error variants (#2206, #2133) and
+     `validate_with_lifetime_policy` (#2257); `LeafNodeLifetimePolicy::VerifyAt` is new.
+     `PublicGroup::from_external_with_lifetime_policy` and
+     `process_message_with_lifetime_policy` exist.
+   - `VerifiableGroupInfo::signer` becomes public (#2275): replace
+     `ds::group_info_signer`, which reads the index from the to-be-signed bytes.
+   - Exported secrets become `ExportedSecret<T>` (#2202); `CommitBuilder::load_psks`
+     may be named `load_psk` (#2242); `PublicGroup::validate_key_package_for_add`
+     (#2167) can replace part of the directory's own checks.
+   - MSRV 1.94 (#2234; the workspace is on 1.95).
+5. Run `cargo test -p nuschel-e2ee` first: the short-key test must now see libcrux
+   refuse the key instead of panicking, and the flow tests show whether the API
+   changes above were complete; then the worker, server and CLI tests above and
+   `vm-server`.
+6. Discard prototype state rather than migrate it: worker `mls` files, the server's
+   MLS records and its `MLS_HANDSHAKE`/`MLS_APPLICATION` rows. Nothing persistent was
+   allowed to depend on 0x004F.
+
+### What remains for 4b to ship
+
+- **Device linking** (§3.4, phase 3c) and **multi-device publishing**: the worker can
+  only hold the identity of the device that created it. The MLS layer handles several
+  devices per identity (tested in process with a second device certified by the
+  device-signing key), but a real second device needs linking, publishing a roster
+  with every own device, and self-monitoring that accepts bindings made by the
+  identity's other devices. Until then the CLI tests use one device per identity.
+- **Desktop timeline**: the desktop shows the lock and opens the group, but does not
+  yet send through `MlsCommand::Send` or show decrypted messages
+  (`MlsEvent::Received`) in its timeline and local history.
+- Self-updates (§6.5), removing revoked and inactive devices (§3.6), key-transparency
+  head gossip inside MLS (§5.3), typing and read markers as MLS messages (§6.3 items
+  4–5), external proposals and every channel feature (4c).
+- The log-structured worker store of §8.3 (forward secrecy on disk), and a binary
+  column for MLS rows instead of base64 in `content`.
+- A KT-`Unavailable` contact turns the lock amber but does not block sending (§5.5 says
+  messages stay encrypted to the pinned keys, which is what happens).
+- Server: if a commit's storage fails, application messages accepted for the new
+  epoch in that window become undecryptable gaps; `K` references of unused packages
+  and unfetched mailbox entries are pruned only lazily; loaded groups stay in memory;
+  commits have no rate limit of their own beyond the text bucket and the 16 requests in
+  flight; a large group's state may exceed the key-value table's 4 MiB value limit.
+
+### Risks
+
+- OpenMLS 0.9.2 with libcrux-kem 0.0.9: prevalidation covers the known panics
+  (X-Wing public keys decoded from key packages and trees); an unknown panic elsewhere
+  is contained by `catch_unwind` in the server's MLS task and in the worker, but would
+  still fail the request.
+- The X-Wing key derivation changes on OpenMLS `main` (draft-ietf-hpke-pq): groups made
+  now cannot be carried over, which is why nothing persistent may depend on them.
+- The server is trusted for availability only, as designed: it can withhold Welcomes
+  or drop messages (shown as gaps), and the lock turns amber; it cannot add a device
+  the identity's KT roster does not list without blocking the conversation.

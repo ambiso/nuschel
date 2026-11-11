@@ -84,6 +84,11 @@ Every configuration key is optional; names and defaults follow murmur.ini
   packets and bytes in and out, rate-limited messages and whisper packets dropped
   for the fan-out budget. Counts only, no names or addresses
   (`journalctl -u nuschel | grep statistics`).
+- **End-to-end encryption** (`[mls]`, docs/e2ee.md "Phase 4
+  prototype"): with key transparency on, the server offers `mls/1` and runs the MLS
+  delivery service (`enabled`, `claims_per_minute` 30, `uploads_per_minute` 10,
+  `max_devices` 1000, `welcome_days` 90). `security = "e2ee"` (rejecting stock clients)
+  is still refused at start.
 - **History** (`[history]`): kept forever by default (`retention = "forever"`; or
   `"none"`, not archived, or a number of days; channels may set their own, see
   Retention below, never more than `max_retention_days`); guests read
@@ -553,6 +558,14 @@ descriptor exhaustion.
   each binding beside the log, publishes waiting bindings every `publish_interval`
   and re-signs the head every `refresh_interval`.
 
+- **MLS delivery service** (mls.rs, `mls` branch): `mls/1` requests are authorised
+  under the lock and processed by one task through nuschel-e2ee (`PublicGroup` per
+  group, structural checks before OpenMLS, `catch_unwind`): the key package directory,
+  epoch fencing with `STALE_EPOCH`, commits and application messages as rows of the
+  conversation's `seq` stream, Welcome mailboxes with push, join info; state in the
+  key-value table under uppercase prefixes. A conversation with a group refuses
+  plaintext. Details in docs/e2ee.md "Phase 4 prototype".
+
 ## Tests
 
 | Command | What it covers |
@@ -560,6 +573,7 @@ descriptor exhaustion.
 | `cargo test -p nuscheld` | authorisation (authz.rs: every action against seven kinds of actor, the three decisions that were made two ways, and a guard that no permission check lives elsewhere), strong certificates (chains to a configured authority, through intermediates, expired, other authorities, self-signed; and over loopback with `UserStats`), ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames; the Murmur import (tests/fixtures/murmur-1.5.json: both password formats over loopback, the upgrade to argon2id, malformed rows reported, a non-empty server refused, `--replace-existing`, the ACLs in effect), listeners kept across reconnects and restarts, listeners that lose Listen (an ACL edit, a temporary token, unregistration) ended for stock and Nuschel clients with live delivery and pages stopped and others left alone, certificate reload (a broken one keeps the old) and `minimum_tls_version`, the temporary-channel cap and the whisper budget, clients before 1.2.2, the statistics counters; tests/obfuscation.rs: no client address in the log with `obfuscate` |
 | `cargo test -p nuscheld --test admin` | `nuscheld admin` on a stopped server's state: users (list, show, rename, set a password, remove with its ACL entries), channel retention (refused without `--yes` when it removes messages), bans, exporting a channel (0600, nothing past the retention), erasing a user |
 | `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends, the minimum-version policy (an old session refused with `Outdated` and never retried, a hello without a version refused, stock clients admitted, admitted and told the date before it, a recommendation) |
+| `cargo test -p nuscheld --test mls` | the MLS delivery service with raw protocol clients and real identities: a direct conversation end to end, idempotent resends, stale epochs, hostile key packages, strangers, plaintext refusal, a restart |
 | `cargo test -p nuschel-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |
 | `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase, retention batches and live-only heads; the key-transparency table; channel listeners and their cascades |
 | `cargo test -p nuschel-storage murmur` | the Murmur reader on Murmur 1.5's own schema (tests/fixtures/murmur-1.5.sql, which also produces the import test's input) and 1.6's layout, malformed rows as notes, other virtual servers, files that are not Murmur databases or are damaged |

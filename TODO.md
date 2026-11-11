@@ -727,21 +727,28 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          0.9.2 pins libcrux crates with RUSTSEC-2026-0329/-0330/-0331 (a hostile
          key package can crash the crypto worker) and an X-Wing suite code point
          that is not in the IETF draft; `main` already has both fixed. Prototype
-         against 0.9.2 meanwhile.
-   - [ ] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, the crypto
-         worker and `nuscheld` (akd, `nuschel-kt` and `nuschel-identity` are
-         already confined). SECURITY.md: libcrux SIMD `unsafe` in the exceptions
-         table.
-   - [ ] OpenMLS + libcrux in the crypto worker (which exists since phase 3, with a
-         sealed state store); key packages published to the server.
-   - [ ] Delivery service in the server: ordered handshake messages per group, key
-         package directory, welcome delivery.
+         against 0.9.2 meanwhile. The bump steps are in docs/e2ee.md.
+   - [x] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, which only the
+         crypto worker and `nuscheld` link (`mls` branch, with the three advisory
+         ignores to remove at the bump). SECURITY.md: libcrux SIMD `unsafe` in the
+         exceptions table.
+   - [x] OpenMLS + libcrux in the crypto worker (sealed `mls` file); key packages
+         published to the server (`mls` branch).
+   - [x] Delivery service in the server: `PublicGroup` per group, epoch fencing,
+         one `seq` stream with commits, key package directory, Welcome mailboxes,
+         join info (`mls` branch).
    - [ ] One MLS group per conversation; membership follows ACL changes; direct
-         messages as two-party groups.
+         messages as two-party groups (direct conversations done on the `mls`
+         branch; channels are 4c).
+   - [ ] Device linking (§3.4) and multi-device key-transparency publishing, so an
+         identity can have more than one real device.
+   - [ ] Desktop: send through the crypto worker and show decrypted messages in the
+         timeline (the lock in the header exists).
    - [ ] Encrypted messages, files (the file-transfer design for Nuschel servers) and
          history archive with an explicit historical-access policy.
    - [ ] Strict mode: no legacy clients in end-to-end channels, no downgrades; a
-         green lock only after authenticated MLS establishment.
+         green lock only after authenticated MLS establishment (pins, plaintext
+         refusal and the lock exist for direct conversations on the `mls` branch).
    - [ ] Media later: SFrame with MLS-exported keys (with the WebRTC work below).
 5. **Moderation and operations**
    - [ ] Moderation tools on top of E2EE (reports, membership removal), metrics.
