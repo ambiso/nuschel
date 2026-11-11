@@ -92,9 +92,15 @@ def check_workers(binaries):
         {"kind": "encode_image", "image": base64.b64encode(png(64, 48)).decode(), "limit": 131072},
         {"kind": "legacy_html", "html": "<b>bold</b><br/>&amp; more"},
     ])
-    assert image["status"] == "encoded" and image["value"].startswith('<img src="data:image/'), image
-    assert legacy == {"status": "prepared", "value": {
-        "source": "bold\n& more", "document": {"blocks": [{"kind": "text", "text": "bold\n& more"}]}}}, legacy
+    assert image["status"] == "encoded", image
+    assert image["value"]["html"].startswith('<img src="data:image/'), image
+    assert image["value"]["thumbnail"]["kind"] == "image", image
+    # Legacy HTML keeps its formatting: markers in the prepared source, spans in the document.
+    assert legacy["status"] == "prepared", legacy
+    assert legacy["value"]["source"] == "\ufffcb\ufffcbold\ufffc/b\ufffc\n& more", legacy
+    [block] = legacy["value"]["document"]["blocks"]
+    assert block["kind"] == "text" and block["text"] == "bold\n& more", legacy
+    assert [(span["start"], span["end"], span["style"]["bold"]) for span in block["spans"]] == [(0, 4, True)], legacy
     assert rendered["status"] == "rendered"
     blocks = rendered["value"]["blocks"]
     assert blocks[0]["text"] == "first\n\nsecond\n"
