@@ -38,6 +38,13 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
 
+# Dependencies keep line tables only (file:line in backtraces and stepping, no variable
+# or type information): a debug build of nuschel-content was 349 MB instead of 457 MB
+# (2026-11-11); our own crates keep full debug info. To debug inside one dependency, rebuild just that crate with
+# `cargo build --config 'profile.dev.package."<crate>".debug=true'`.
+[profile.dev.package."*"]
+debug = "line-tables-only"
+
 # RSA key generation is unusably slow unoptimised; tests and debug builds create identities.
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
