@@ -172,6 +172,10 @@
           done
           makeWrapper "$out/libexec/nuschel/nuschel" "$out/bin/nuschel" "''${runtimeFlags[@]}"
           wrapProgram "$out/bin/nuschel-cli" "''${runtimeFlags[@]}"
+          # Desktop entry and hicolor icons; shells match the window by its app id.
+          cp -R --no-preserve=mode ${
+            (import ./nix/desktop-files.nix { inherit pkgs; }).linux
+          }/share/. "$out/share/"
         '';
         # Whole-workspace build (crane): kept for comparison and as a fallback.
         cranePackage = craneLib.buildPackage (
@@ -348,6 +352,7 @@
                 <key>CFBundleIdentifier</key><string>org.nuschel.Nuschel</string>
                 <key>CFBundleName</key><string>Nuschel</string>
                 <key>CFBundleDisplayName</key><string>Nuschel</string>
+                <key>CFBundleIconFile</key><string>Nuschel</string>
                 <key>CFBundlePackageType</key><string>APPL</string>
                 <key>CFBundleShortVersionString</key><string>$version</string>
                 <key>CFBundleVersion</key><string>$version</string>
@@ -359,6 +364,9 @@
               </plist>
               PLIST
               install -Dm644 ${./LICENSE} "$app/Contents/Resources/EUPL-1.2"
+              install -Dm644 ${
+                (import ./nix/desktop-files.nix { inherit pkgs; }).macIcon
+              } "$app/Contents/Resources/Nuschel.icns"
               rcodesign sign "$app"
             '';
       in
