@@ -1086,6 +1086,24 @@ the user deploys the auditor and releases its key (C0).
 5. **Cosignature algorithm:** Ed25519 now (C2SP witnesses and the rest of KT today) with
    ML-DSA-44 later, or ML-DSA-44 from the start for the project auditor?
 
+### Answers (user, 2026-11-11)
+
+- **Witness model: option B only.** A small fixed set of witnesses (the project
+  auditor, perhaps a few more) that every client checks; **each server collects its
+  own cosignatures** by submitting its checkpoints to the witnesses, so clients never
+  relay heads between their servers and no server learns which other servers a user is
+  on. The user: "lets just build B - it's the simplest and the least can go wrong with
+  it." Not built: clients relaying heads between their own servers (option A), and
+  arbitrary operators as policy witnesses (option C). Question 3 is therefore moot.
+- **Witnesses are easy to set up on NixOS** (a module with sensible defaults).
+- **Names under KT: yes**, user names and registration numbers are published in the
+  log; renames become visible entries. Contacts stay keyed by identity (and local
+  nicknames by identity) after first contact.
+- **Cosignatures: ML-DSA-44 from the start** where possible.
+- Still open: question 1 (proposed: 24 hours) and question 2 (proposed: show
+  "Automatic verification unavailable"; block only adding new devices to an existing
+  conversation; first contact proceeds as "not verified").
+
 ## 9. Proposed corrections to docs/e2ee.md
 
 Not applied here.

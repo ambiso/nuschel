@@ -1202,9 +1202,13 @@ on flash become unreadable once the old key is gone from the OS credential store
    channel's voice group as a sender when it sets up the voice target. Voice: one MLS
    group per voice channel of exactly the devices present or listening (confirmed).
 8. **Inactive devices:** removed after 90 days.
-9. **Auditors:** every Nuschel server a client is connected to acts as a witness for
-   the others (the client chooses witnesses, never the witnessed server), plus **one
-   project-run auditor, enabled by default**. The user will deploy it later, so
+9. **Auditors:** a small fixed set of witnesses that every client checks (option B
+   in docs/reviews/2026-11-11-key-transparency.md §5), led by **one project-run
+   auditor, enabled by default**; each server collects its own cosignatures, so no
+   server learns which other servers a user is on (the earlier idea of the user's other
+   servers witnessing each other is dropped: simplest, least can go wrong). Witnesses
+   are easy to deploy on NixOS. User names and registration numbers go into the log;
+   cosignatures use ML-DSA-44 from the start. The user will deploy it later, so
    everything is built to switch on once its key and endpoint exist; it is
    configurable in the client's global settings and the Home Manager module, and
    deployable with a NixOS module. Protocol: docs/reviews/2026-11-11-key-transparency.md.
