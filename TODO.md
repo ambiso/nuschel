@@ -495,8 +495,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          expired content from the local cache too.
    - [x] Server: per-channel and "none" retention (forever by default; a shortening
          needs confirmation and applies to existing messages; `max_retention_days`).
-   - [ ] Server: history rate limits per address prefix; a PostgreSQL unit test (only
-         the VM covers it).
+   - [x] Server: history rate limits per network (IPv4 /24, IPv6 /56) and per
+         account, failing the single page with `retry_after_ms`.
+   - [ ] Server: a PostgreSQL unit test (only the VM covers it).
+   - [ ] Session and desktop: honour `retry_after_ms` on `rate_limited` and `busy`
+         (history pages today fail without a retry).
    - [ ] Capability negotiation in the Mumble handshake (extension message range or
          `Version` fields) and a protocol version with a minimum-version policy.
    - [ ] Persistent history: server message ids, network pagination with ACL checks

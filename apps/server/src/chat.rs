@@ -736,6 +736,13 @@ impl State {
         {
             return Err((Code::RateLimited, extension.page_bytes.retry_after_ms()));
         }
+        // And per network (or account), so connections cannot multiply it.
+        if let Some(key) = self.page_key(session)
+            && let Err(retry) = self.page_limits.page(key, Instant::now())
+        {
+            self.counters.rate_limited.fetch_add(1, Ordering::Relaxed);
+            return Err((Code::RateLimited, retry));
+        }
         if !self.can_read(session, &id) {
             return Err(fail(Code::NotFound));
         }
@@ -777,6 +784,12 @@ impl State {
             return Err((Code::Busy, 500));
         }
         Ok(())
+    }
+
+    /// Whose per-network page budget a connection draws from (page_limits.rs).
+    fn page_key(&self, session: u32) -> Option<crate::page_limits::Key> {
+        let user = self.users.get(&session)?;
+        self.page_limits.key(user.address.ip(), user.account)
     }
 
     /// A page came back: re-check against the current authorisation state
@@ -837,6 +850,9 @@ impl State {
             .and_then(|user| user.extension.as_mut())
         {
             extension.page_bytes.spend(bytes, Instant::now());
+        }
+        if let Some(key) = self.page_key(session) {
+            self.page_limits.spend(key, bytes, Instant::now());
         }
         self.send(
             session,

@@ -17,6 +17,7 @@ pub mod handlers;
 pub mod history;
 pub mod kt;
 pub mod limits;
+pub mod page_limits;
 pub mod password;
 pub mod retention;
 pub mod routing;

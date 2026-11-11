@@ -2096,6 +2096,46 @@ async fn the_server_default_and_maximum_retention() {
 }
 
 #[tokio::test]
+async fn history_pages_are_limited_per_network_and_account() {
+    let fixture =
+        Fixture::start("[history]\nguests = \"full\"\nnetwork_pages_per_minute = 6").await;
+    // Two unregistered connections from 127.0.0.0/24 share a burst of two.
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let root = alice.conversations[&0];
+    alice.page(root, latest(), 10).await;
+    bob.page(root, latest(), 10).await;
+    let limited = alice.history(root, latest(), 10).await;
+    assert_eq!(error_code(&limited), Some(v1::error::Code::RateLimited));
+    let NuschelEvent::Error(error) = limited else {
+        unreachable!()
+    };
+    assert!(
+        (1..=10_000).contains(&error.retry_after_ms),
+        "a hint the client can honour: {}",
+        error.retry_after_ms
+    );
+    // A registered user has a budget of their own, and the connection stays.
+    let mut carol = nuschel(&fixture, "Carol", 2).await;
+    carol.register().await;
+    carol.page(root, latest(), 10).await;
+    carol.page(root, latest(), 10).await;
+    alice.send(root, "still connected").await;
+    drop((alice, bob, carol));
+    // Exempt networks are not limited per network.
+    let fixture = fixture
+        .restart(
+            "[history]\nguests = \"full\"\nnetwork_pages_per_minute = 6\n\
+             unlimited_networks = [\"127.0.0.0/8\"]",
+        )
+        .await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    for _ in 0..5 {
+        alice.page(root, latest(), 10).await;
+    }
+}
+
+#[tokio::test]
 async fn stock_direct_messages_are_kept_only_when_the_operator_says_so() {
     for archive in [false, true] {
         let fixture = Fixture::start(&format!(

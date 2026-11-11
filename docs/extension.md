@@ -400,8 +400,15 @@ the wire definition):
   `Subscribe`, ≤ 256 subscriptions per connection and 1,024 per account, ≤ 1,024
   direct conversations per account, pages ≤ 100 rows and 256 KiB of content, pages and
   bytes per minute per connection (`history.pages_per_minute`,
-  `page_bytes_per_minute`). History pages are not yet limited per address prefix;
-  `connections_per_address` bounds them.
+  `page_bytes_per_minute`) and per network: an IPv4 /24 or IPv6 /56 for unregistered
+  users, the account for registered ones, so a busy NAT never locks out its
+  registered users (`network_pages_per_minute`, 600 with a burst of 200, and
+  `network_page_bytes_per_minute`, 64 MiB; `unlimited_networks` exempts networks).
+  Following the user's view that arbitrary limits themselves cost availability,
+  the defaults are generous and exceeding them fails only that request, with
+  `rate_limited` and a `retry_after_ms` for the client to honour; nothing is
+  disconnected and there is no server-wide cap. Search stays client-side (§6); a
+  server-side search would draw from the same budgets.
 - **Guests**: `history.guests = none | full` (no `since_connect`).
 - **Direct conversations** are opened by registration number, created on first use,
   and need Murmur's TextMessage permission in the online peer's channel; a deleted

@@ -114,6 +114,14 @@ pub struct History {
     /// History pages per minute per connection, and their bytes.
     pub pages_per_minute: u32,
     pub page_bytes_per_minute: u32,
+    /// History pages per minute, and their bytes, per network (an IPv4 /24 or
+    /// IPv6 /56) for unregistered users and per account for registered ones
+    /// (page_limits.rs). Exceeding them fails the single request with a
+    /// `retry_after_ms`.
+    pub network_pages_per_minute: u32,
+    pub network_page_bytes_per_minute: u32,
+    /// Networks (CIDR, such as `10.0.0.0/8`) exempt from the per-network limits.
+    pub unlimited_networks: Vec<String>,
     /// Advisory client versions announced to Nuschel clients ("1.0.0").
     pub minimum_client: Option<String>,
     pub recommended_client: Option<String>,
@@ -132,6 +140,9 @@ impl Default for History {
             notify_stock_clients: true,
             pages_per_minute: 120,
             page_bytes_per_minute: 16 * 1024 * 1024,
+            network_pages_per_minute: 600,
+            network_page_bytes_per_minute: 64 * 1024 * 1024,
+            unlimited_networks: Vec::new(),
             minimum_client: None,
             recommended_client: None,
         }
@@ -495,6 +506,15 @@ impl Config {
             return Err(ConfigError::Invalid(
                 "history.retention = 0 is ambiguous; use \"forever\" or \"none\"".into(),
             ));
+        }
+        if let Some(network) = history
+            .unlimited_networks
+            .iter()
+            .find(|network| crate::page_limits::parse_cidr(network).is_none())
+        {
+            return Err(ConfigError::Invalid(format!(
+                "history.unlimited_networks: {network:?} is not a network like 10.0.0.0/8"
+            )));
         }
         if self.max_queued_bytes < 64 * 1024 {
             return Err(ConfigError::Invalid(

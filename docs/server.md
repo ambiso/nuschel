@@ -52,7 +52,9 @@ Every configuration key is optional; names and defaults follow murmur.ini
   none (`guests = "none"`); stock clients are told in the welcome text and when they
   enter a channel with history (`notify_stock_clients`); stock senders' direct
   messages are not stored (`archive_stock_direct_messages`); `edit_limit`,
-  `moderators_delete`, page limits and advisory client versions.
+  `moderators_delete`, page limits per connection and per network
+  (`network_pages_per_minute`, `network_page_bytes_per_minute`,
+  `unlimited_networks`) and advisory client versions.
 
 The NixOS module (`services.nuschel`, nix/module.nix) generates the TOML file
 from `settings` (never secrets), runs a database preflight, and hardens the unit
@@ -200,6 +202,16 @@ descriptor exhaustion.
   messages are stored as `legacy_html` (`State::text_message`).
 - **Pages** go to the history reader through a bounded queue; the result is clipped
   again if `authz_epoch` moved and dropped if `can_read` no longer holds.
+- **Page limits** (page_limits.rs): besides each connection's buckets, a token
+  bucket per network (IPv4 /24, IPv6 /56) for unregistered users and per account
+  for registered ones, for pages and for their bytes (charged once read, so a large
+  page puts the bucket in debt). A /24 because IPv4 addresses are shared and one
+  operator's hosts usually sit together; a /56 because residential IPv6 customers
+  get a /56 or /48, so a /64 would hand one customer hundreds of budgets, while a
+  /48 would lump several customers together. Exceeding a bucket fails that page with
+  `rate_limited` and the milliseconds until it refills; buckets are bounded in
+  number (idle ones go first, and beyond 65,536 they are forgotten, failing open to
+  the per-connection limits).
 - **Retention** (retention.rs, docs/extension.md §6): each conversation keeps its
   own retention (`history_retention`, set by `ChannelSettings` with Write on the
   channel and kept by a deleted channel's archive) or the server default, capped by

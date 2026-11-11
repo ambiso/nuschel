@@ -118,6 +118,12 @@ archive_stock_direct_messages = false
 notify_stock_clients = true
 pages_per_minute = 120
 page_bytes_per_minute = 16777216
+# Also per network (IPv4 /24, IPv6 /56) for unregistered users and per account
+# for registered ones; exceeding it fails the single page with a retry hint.
+network_pages_per_minute = 600
+network_page_bytes_per_minute = 67108864
+# Networks exempt from the per-network limits, such as ["10.0.0.0/8"].
+unlimited_networks = []
 # minimum_client = "0.1.0"
 # recommended_client = "0.1.0"
 
