@@ -24,6 +24,11 @@ exports it as PKCS#12.
 - Server passwords stay in memory for the connection attempt only.
 - Lost connections reconnect with backoff, rejoin your channel with its mute state,
   and mark the gap in the timeline.
+- Unread messages outside the visible part of the server rail or channel list show
+  an **↑ unread** or **↓ unread** button, red when they include mentions. Click it
+  to open the nearest unread conversation in that direction. It browses text and
+  leaves voice where it is. A closed branch includes its descendants' unread count;
+  jumping to a hidden conversation opens the branch.
 
 ## Voice
 

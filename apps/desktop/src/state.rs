@@ -216,8 +216,11 @@ pub struct Desktop {
     pub composer: Entity<TextareaState>,
     pub scroll: ScrollHandle,
     pub channel_scroll: ScrollHandle,
+    pub server_scroll: ScrollHandle,
+    pub unread: crate::unread::Navigation,
     chat_motion: SmoothScroll,
     channel_motion: SmoothScroll,
+    server_motion: SmoothScroll,
     /// The open dialog's scrolling (one dialog at a time), and which dialog
     /// this and the previous frame showed, so a newly opened one starts at the top.
     pub modal_scroll: ScrollHandle,
@@ -503,8 +506,11 @@ impl Desktop {
             composer,
             scroll: ScrollHandle::new(),
             channel_scroll: ScrollHandle::new(),
+            server_scroll: ScrollHandle::new(),
+            unread: Default::default(),
             chat_motion: SmoothScroll::default(),
             channel_motion: SmoothScroll::default(),
+            server_motion: SmoothScroll::default(),
             modal_scroll: ScrollHandle::new(),
             modal_motion: SmoothScroll::default(),
             nested: Nested::default(),
@@ -757,6 +763,7 @@ impl Desktop {
             .selection()
             .is_none_or(|selection| selection.server != server.id)
         {
+            self.unread.reset_channels();
             self.channel_motion.cancel();
             self.channel_scroll.set_offset(point(px(0.), px(0.)));
         }
@@ -884,6 +891,33 @@ impl Desktop {
             self.schedule_scroll_frame(window, cx);
         }
     }
+
+    pub fn smooth_server_scroll(
+        &mut self,
+        event: &ScrollEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.server_motion.wheel(
+            &self.server_scroll,
+            event,
+            window.line_height(),
+            cx.reduce_motion(),
+        ) {
+            cx.stop_propagation();
+            cx.notify();
+        }
+        self.schedule_scroll_frame(window, cx);
+    }
+
+    pub fn cancel_channel_scroll(&mut self) {
+        self.channel_motion.cancel();
+    }
+
+    pub fn reveal_server(&mut self, slot: usize) {
+        self.server_motion.cancel();
+        self.server_scroll.scroll_to_item(slot);
+    }
     /// A wheel step or touchpad motion in the open dialog, over `list` (one
     /// of the lists that scroll inside it) or elsewhere. It moves either the
     /// list or the dialog, never both (see `scrolling::WheelRun`).
@@ -918,6 +952,7 @@ impl Desktop {
         if self.scroll_frame_pending
             || !(self.chat_motion.active()
                 || self.channel_motion.active()
+                || self.server_motion.active()
                 || self.modal_motion.active()
                 || self.nested.active())
         {
@@ -932,6 +967,7 @@ impl Desktop {
                     this.chat_motion.shift(this.anchor.take_shift());
                     let changed = this.chat_motion.advance(&this.scroll)
                         | this.channel_motion.advance(&this.channel_scroll)
+                        | this.server_motion.advance(&this.server_scroll)
                         | this.modal_motion.advance(&this.modal_scroll)
                         | this.nested.advance();
                     if changed {

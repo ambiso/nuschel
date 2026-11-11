@@ -26,6 +26,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -228,21 +229,32 @@ class VoiceTest:
             (self.root / name).mkdir()
             murmur = Murmur(self.args.murmur, self.root / name, port)
             murmur.seed()
+            if self.args.unread_navigation:
+                with sqlite3.connect(murmur.database) as database:
+                    database.executemany(
+                        "INSERT OR IGNORE INTO channels (server_id, channel_id, parent_id, name, inheritacl)"
+                        " VALUES (1, ?, 0, ?, 1)",
+                        [(100 + n, f"Unread room {n:02}") for n in range(50)])
             murmur.start()
             self.murmurs.append(murmur)
             pin = certificate_pin(self.args.binaries, "127.0.0.1", port, self.root / f"probe-{name}")
             peer = Client(self.args.binaries, "127.0.0.1", port, pin, f"{name}Peer", self.root / f"peer-{name}")
-            peer.send(kind="join", channel=1)
+            peer.send(kind="join", channel=149 if self.args.unread_navigation else 1)
             self.peers[name] = peer
             bookmarks.append(dict(id=str(uuid.uuid4()), name=name, host="127.0.0.1", port=port, username="Andi",
-                                  certificate_sha256=pin, auto_connect=True, last_channel=1))
+                                  certificate_sha256=pin, auto_connect=True,
+                                  last_channel=149 if self.args.unread_navigation else 1))
+        if self.args.unread_navigation:
+            bookmarks[1:1] = [dict(id=str(uuid.uuid4()), name=f"Offline {n:02}", host="127.0.0.1",
+                                   port=64738, username="Andi", auto_connect=False) for n in range(20)]
         self.sequence = 0
         profile = self.root / "profile"
         (profile / "config").mkdir(parents=True)
         (profile / "config/servers.json").write_text(json.dumps(bookmarks))
         (profile / "config/settings.json").write_text(json.dumps({
+            "server_icons": False,
             "audio": {"transmit": "push_to_talk"},
-            "shortcuts": {"push-to-talk": "f9", "toggle-mute": "f10"},
+            "shortcuts": {"push-to-talk": "f9", "toggle-mute": "f10", "toggle-deafen": "f11"},
             "appearance": {"theme": "dark"}}))
         app_env = env | {"NUSCHEL_AUDIO_BACKEND": "pulse", "RUST_LOG": os.environ.get("NUSCHEL_TEST_LOG", "nuschel=info")}
         app = self.app = self.spawn([str(self.args.binaries / "nuschel"), "--profile-dir", str(profile)], app_env,
@@ -261,12 +273,15 @@ class VoiceTest:
         # Starting: both servers joined muted and deafened, and nothing plays or records.
         for server in self.peers:
             self.peers[server].wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "Andi"
-                                    and e["user"]["channel"] == 1, timeout=40)
+                                    and e["user"]["channel"] == (149 if self.args.unread_navigation else 1), timeout=40)
             self.sees(server, muted=True, deafened=True)
         time.sleep(1)
         assert not self.playback_streams() and not self.microphone_open(), "a deafened start opened audio"
         self.shot("1-deafened")
         print("Started on both servers muted and deafened, with no audio stream open.", flush=True)
+        if self.args.unread_navigation:
+            self.check_unread_navigation()
+            return
 
         # Listening on both: one worker, one playback stream; both are heard.
         for server in ("Alpha", "Beta"):
@@ -361,6 +376,26 @@ class VoiceTest:
         print(f"Unmuting the other server asked first: Cancel kept it muted, 'Only on' moved the voice, "
               f"'Speak on both' reached both: {sent}.", flush=True)
 
+        # Repeated deafen presses must not leave a deafened talk server
+        # transmitting, even while older self-state echoes are arriving.
+        for _ in range(7):
+            self.shell.key("F11")
+        for server in self.peers:
+            self.sees(server, muted=True, deafened=True)
+        eventually(lambda: not self.microphone_open(), "rapid Deafen left capture open", timeout=20)
+        assert self.transmit() == {"Alpha": 0, "Beta": 0}, "deafened servers received captured voice"
+        self.press("push button", "Undeafen")
+        self.press("push button", "Unmute")
+        self.wait_capturing("Beta did not resume after rapid Deafen")
+        sent = self.transmit()
+        assert sent["Alpha"] == 0 and sent["Beta"] >= 20, sent
+        self.sees("Alpha", muted=True, deafened=True)
+        self.select("Alpha")
+        self.press("push button", "Undeafen")
+        self.press("push button", "Unmute")
+        self.select("Beta")
+        print("Rapid Deafen closed capture and stopped both routes; Beta resumed without undeafening Alpha.", flush=True)
+
         # The shortcut mutes both talk servers, and unmutes both; a deafened
         # one is left alone. Once asked, Beta unmutes without a question.
         self.shell.key("F10")
@@ -399,6 +434,54 @@ class VoiceTest:
         self.shot("6-recovered")
         print("A crashed media worker came back: talk server, listening and push-to-talk as before.", flush=True)
 
+    def check_unread_navigation(self):
+        """Off-screen unread channels and servers, opened without joining voice."""
+        selected = 1 << 23  # ATSPI_STATE_SELECTED
+
+        def is_selected(name):
+            return bool(self.find("tree item", name).call("Accessible", "GetState")[0][0] & selected)
+
+        self.select("Alpha")
+        self.press("tree item", "Lobby")
+        self.peers["Alpha"].send(kind="text", channel=149, body="Andi: bottom channel notification")
+        below = self.find("push button", "Unread channels below:", prefix=True)
+        assert "including mentions" in below.name, below.name
+        # Move the voice elsewhere before using the unread jump. The jump must
+        # browse the old channel's text, not move voice back there.
+        self.press("push button", "Join voice")
+        eventually(lambda: self.own("Alpha")["channel"] == 1, "voice did not move to Lobby")
+        self.shot("7-unread-channel-below")
+        self.press("push button", "Unread channels below:", prefix=True)
+        eventually(lambda: is_selected("Unread room 49"), "unread jump did not select its conversation")
+        assert self.own("Alpha")["channel"] == 1, "unread channel jump joined voice"
+
+        self.peers["Beta"].send(kind="text", channel=149, body="Andi: bottom server notification")
+        below = self.find("push button", "Unread servers below:", prefix=True)
+        assert "including mentions" in below.name, below.name
+        self.shot("8-unread-server-below")
+        self.press("push button", "Unread servers below:", prefix=True)
+        eventually(lambda: is_selected("Unread room 49"), "server jump did not select its unread conversation")
+        assert self.own("Beta")["channel"] == 149
+        self.peers["Alpha"].send(kind="text", channel=1, body="Andi: top server notification")
+        self.find("push button", "Unread servers above:", prefix=True)
+        self.shot("9-unread-server-above")
+        self.press("push button", "Unread servers above:", prefix=True)
+        eventually(lambda: is_selected("Lobby"), "server jump did not open the unread Lobby")
+        assert self.own("Alpha")["channel"] == 1
+
+        self.press("tree item", "Unread room 49")
+        window = self.shell.window("Nuschel")
+        self.shell.wheel(window["x"] + 200, window["y"] + 350, 100)
+        time.sleep(0.5)
+        self.peers["Alpha"].send(kind="text", channel=1, body="Andi: top channel notification")
+        self.find("push button", "Unread channels above:", prefix=True)
+        self.shot("10-unread-channel-above")
+        self.press("push button", "Unread channels above:", prefix=True)
+        eventually(lambda: is_selected("Lobby"), "upward jump did not select Lobby")
+        assert self.own("Alpha")["channel"] == 1
+        assert not self.playback_streams() and not self.microphone_open()
+        print("Unread indicators in both directions on both lists opened the right text without joining voice.", flush=True)
+
     def close(self):
         for peer in self.peers.values():
             try:
@@ -427,6 +510,8 @@ def main():
     parser.add_argument("--opus-library", type=Path, required=True)
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--unread-navigation", action="store_true",
+                        help="test off-screen unread navigation, with twenty offline rail entries and fifty rooms")
     args = parser.parse_args()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)

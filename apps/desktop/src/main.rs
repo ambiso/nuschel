@@ -38,6 +38,7 @@ mod theme;
 mod timeline_keys;
 mod transfer;
 mod typing;
+mod unread;
 mod update;
 mod version_notice;
 mod view;

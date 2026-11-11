@@ -49,7 +49,11 @@ a message's links, a letter typed into the composer). `voice_servers.py` (voice 
 loopback Murmurs at once, operated over AT-SPI in the private GNOME Shell with a private
 PulseAudio: one media worker, both servers heard, push-to-talk only to the talk server,
 "Speak on two servers?", the mute shortcut, a crashed worker coming back; screenshots of
-the rail and the voice card in each state). Against a loopback `nuscheld`:
+the rail and the voice card in each state). It also hammers Deafen and checks that
+both routes stop and capture closes, then that one route can resume while the other
+stays deafened. `voice_servers.py --unread-navigation` instead adds twenty offline
+rail entries and fifty rooms and checks both directions of both unread indicators,
+mentions and text-only jumps over AT-SPI, with screenshots. Against a loopback `nuscheld`:
 `with_local_nuscheld.py <binaries> nuschel_conversations.py <binaries> --port PORT`
 (edits, deletions and their authorisation, typing, direct conversations, with
 `nuschel-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,

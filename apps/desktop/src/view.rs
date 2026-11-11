@@ -11,6 +11,7 @@ use crate::{
     selection::{self, BlockText, Caret, HoveredLink, SelectionArea, TextBox, Texts},
     state::{ChannelRow, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
+    unread::{self, Lane},
 };
 use gpui_kit::{
     base::{Scrollbar, ScrollbarMode, input::Textarea},
@@ -167,6 +168,29 @@ impl Render for Desktop {
 }
 
 fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop>) -> AnyElement {
+    let unread_servers = this
+        .client
+        .servers
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, server)| {
+            let first = server.channels.iter().find(|channel| channel.unread > 0)?;
+            Some(unread::Candidate {
+                slot,
+                target: unread::Target {
+                    server: server.id.clone(),
+                    channel: first.id,
+                },
+                count: server.channels.iter().fold(0_usize, |count, channel| {
+                    count.saturating_add(channel.unread)
+                }),
+                mention: server
+                    .channels
+                    .iter()
+                    .any(|channel| channel.unread > 0 && channel.unread_mention),
+            })
+        })
+        .collect();
     let servers = this
         .client
         .servers
@@ -186,6 +210,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                 .sum();
             div()
                 .id(("server-slot", index))
+                .flex_shrink_0()
                 .relative()
                 .w_full()
                 .flex()
@@ -332,7 +357,36 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         .flex()
         .flex_col()
         .items_center()
-        .children(servers)
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .relative()
+                .child(
+                    div()
+                        .id("server-list")
+                        .role(Role::List)
+                        .aria_label("Servers")
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .overflow_y_scroll()
+                        .track_scroll(&this.server_scroll)
+                        .on_scroll(cx.listener(|this, event, window, cx| {
+                            this.smooth_server_scroll(event, window, cx)
+                        }))
+                        .children(servers),
+                )
+                .child(unread::overlay(
+                    this,
+                    Lane::Servers,
+                    &this.server_scroll,
+                    unread_servers,
+                    cx,
+                )),
+        )
         .child(
             div()
                 .w(px(32.))
@@ -427,16 +481,23 @@ fn sidebar(
 ) -> AnyElement {
     let server = &this.client.servers[server_index];
     let voice_channel = server.voice_channel();
+    let unread_channels = unread::channels(server);
+    let folded: HashMap<_, _> = unread_channels
+        .iter()
+        .map(|candidate| (candidate.slot, candidate))
+        .collect();
     let rows = server
         .tree_rows()
         .into_iter()
-        .map(|row| match row {
+        .enumerate()
+        .map(|(position, row)| match row {
             TreeRow::Channel(row) => channel_row(
                 this,
                 server_index,
                 row,
                 row.index == selected_channel,
                 voice_channel,
+                folded.get(&(position + 1)).copied(),
                 cx,
             ),
             TreeRow::User { session, depth } => match server.users.get(&session) {
@@ -446,6 +507,7 @@ fn sidebar(
             TreeRow::Listener { session, depth } => match server.users.get(&session) {
                 Some(user) => div()
                     .id(("listener-row", session as usize))
+                    .flex_shrink_0()
                     .role(Role::TreeItem)
                     .aria_label(format!(
                         "{} is listening",
@@ -490,6 +552,7 @@ fn sidebar(
                 .aria_label(channel.name.clone())
                 .aria_selected(selected)
                 .h(px(30.))
+                .flex_shrink_0()
                 .px_2()
                 .flex()
                 .items_center()
@@ -610,30 +673,25 @@ fn sidebar(
                         .role(Role::Tree)
                         .aria_label("Channels")
                         .size_full()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
                         .overflow_y_scroll()
                         .track_scroll(&this.channel_scroll)
                         .pl_2()
                         .pr_3()
                         .pt_3()
                         .pb_4()
-                        .child(
-                            div()
-                                .id("channel-rows")
-                                .min_h_full()
-                                .flex()
-                                .flex_col()
-                                .gap(px(2.))
-                                .on_scroll(cx.listener(|this, event, window, cx| {
-                                    this.smooth_scroll(true, event, window, cx)
-                                }))
-                                .child(section_label("channels-heading", "VOICE CHANNELS"))
-                                .children(rows)
-                                .when(!directs.is_empty(), |list| {
-                                    list.child(div().h_3())
-                                        .child(section_label("direct-heading", "DIRECT MESSAGES"))
-                                        .children(directs)
-                                }),
-                        ),
+                        .on_scroll(cx.listener(|this, event, window, cx| {
+                            this.smooth_scroll(true, event, window, cx)
+                        }))
+                        .child(section_label("channels-heading", "VOICE CHANNELS"))
+                        .children(rows)
+                        .when(!directs.is_empty(), |list| {
+                            list.child(div().h_3().flex_shrink_0())
+                                .child(section_label("direct-heading", "DIRECT MESSAGES"))
+                                .children(directs)
+                        }),
                 )
                 .child(
                     div().absolute().inset_0().child(
@@ -650,7 +708,14 @@ fn sidebar(
                                     .thumb_active(|thumb| thumb.bg(color(TEXT_MUTED)))
                             }),
                     ),
-                ),
+                )
+                .child(unread::overlay(
+                    this,
+                    Lane::Channels,
+                    &this.channel_scroll,
+                    unread_channels,
+                    cx,
+                )),
         )
         .when_some(
             crate::voice::card(this, server_index, cx),
@@ -662,6 +727,7 @@ fn sidebar(
 
 fn section_label(id: &'static str, label: &'static str) -> AnyElement {
     div()
+        .flex_shrink_0()
         .px_2()
         .pb_1()
         .text_xs()
@@ -684,6 +750,7 @@ fn channel_row(
     }: ChannelRow,
     selected: bool,
     voice_channel: Option<u32>,
+    unread: Option<&unread::Candidate>,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let server = &this.client.servers[server_index];
@@ -692,6 +759,8 @@ fn channel_row(
     let collapsed = !expanded;
     let in_voice = voice_channel == Some(id);
     let full_name = entry.name.clone();
+    let unread_count = unread.map_or(entry.unread, |unread| unread.count);
+    let mention = unread.map_or(entry.unread_mention, |unread| unread.mention);
     div()
         .id(("channel-row", id as usize))
         .role(Role::TreeItem)
@@ -795,14 +864,14 @@ fn channel_row(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .when(in_voice || entry.unread > 0, |name| {
+                .when(in_voice || unread_count > 0, |name| {
                     name.font_weight(FontWeight::SEMIBOLD)
                 })
-                .when(entry.unread > 0, |name| name.text_color(color(TEXT)))
+                .when(unread_count > 0, |name| name.text_color(color(TEXT)))
                 .id(("channel-name", id as usize))
                 .child(entry.name.clone()),
         )
-        .children(unread_badge(entry))
+        .children(unread_badge_count(entry.id, unread_count, mention))
         .when(!entry.links.is_empty(), |row| {
             row.child(
                 div()
@@ -1215,22 +1284,22 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
 
 /// How many messages arrived out of sight; red for mentions and direct messages.
 fn unread_badge(channel: &crate::state::ChannelView) -> Option<AnyElement> {
-    (channel.unread > 0).then(|| {
-        let count = if channel.unread > 99 {
+    unread_badge_count(channel.id, channel.unread, channel.unread_mention)
+}
+
+fn unread_badge_count(id: u32, unread: usize, mention: bool) -> Option<AnyElement> {
+    (unread > 0).then(|| {
+        let count = if unread > 99 {
             "99+".to_string()
         } else {
-            channel.unread.to_string()
+            unread.to_string()
         };
         div()
-            .id(("unread", channel.id as usize))
+            .id(("unread", id as usize))
             .aria_label(format!(
                 "{} unread {}",
-                channel.unread,
-                if channel.unread == 1 {
-                    "message"
-                } else {
-                    "messages"
-                }
+                unread,
+                if unread == 1 { "message" } else { "messages" }
             ))
             .flex_shrink_0()
             .min_w(px(18.))
@@ -1243,11 +1312,7 @@ fn unread_badge(channel: &crate::state::ChannelView) -> Option<AnyElement> {
             .text_xs()
             .font_weight(FontWeight::BOLD)
             .text_color(color(WHITE))
-            .bg(color(if channel.unread_mention {
-                DANGER
-            } else {
-                ACCENT
-            }))
+            .bg(color(if mention { DANGER } else { ACCENT }))
             .child(count)
             .into_any_element()
     })

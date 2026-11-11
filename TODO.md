@@ -23,6 +23,11 @@ Reported while testing (2026-11-10/11):
       before sending. Private-send failures clear on recovery; temporary notices
       expire after ten seconds and have an accessible Dismiss button (2026-11-11).
 
+- [x] Off-screen unread messages: the server rail and channel browser have named,
+      clickable above/below indicators, red for mentions. They open the nearest
+      unread text conversation without joining voice; collapsed branches roll up
+      hidden unread counts and expand when a jump targets a hidden child.
+
 - [x] Rapidly pressing Deafen could leave SDK/visible state deafened but unmuted:
       sparse Mumble snapshots now infer mute from deafness, and delayed server
       echoes cannot overwrite newer local privacy choices. Routing revisions and
