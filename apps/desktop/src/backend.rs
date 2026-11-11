@@ -89,7 +89,7 @@ pub fn direct_conversation_key(conversation: &[u8; 16]) -> String {
 
 /// Server history pages asked for, by request id: server, ticket, cursor,
 /// and where the page is kept in local history.
-type ServerPages = BTreeMap<u64, (String, HistoryTicket, Option<i64>, Option<CacheKey>)>;
+type ServerPages = BTreeMap<u64, (String, HistoryTicket, Page, Option<CacheKey>)>;
 static SERVER_PAGES: std::sync::Mutex<ServerPages> = std::sync::Mutex::new(BTreeMap::new());
 
 fn server_pages() -> std::sync::MutexGuard<'static, ServerPages> {
@@ -148,12 +148,16 @@ async fn render_server_page(
     cache: Option<&CacheKey>,
 ) -> (
     Vec<RenderedMessage>,
-    Option<i64>,
+    (Option<i64>, Option<i64>),
     Vec<nuschel_core::ServerRecord>,
 ) {
     let next_before = page
         .more_before
         .then(|| page.messages.first().map(|message| message.seq as i64))
+        .flatten();
+    let next_after = page
+        .more_after
+        .then(|| page.messages.last().map(|message| message.seq as i64))
         .flatten();
     let shown: Vec<v1::Message> = page
         .messages
@@ -211,7 +215,7 @@ async fn render_server_page(
             deleted,
         });
     }
-    (out, next_before, records)
+    (out, (next_before, next_after), records)
 }
 pub enum Event {
     /// The crypto worker's answer to [`Backend::identity`].
@@ -700,18 +704,23 @@ impl Backend {
         );
         Ok(generation)
     }
-    /// A page of a Nuschel server's history (`before` a seq, or the latest).
+    /// A page of a Nuschel server's history: before a seq (or the latest),
+    /// after one, or around one (a search result); ids are seqs.
     pub fn server_history(
         &self,
         server: String,
         conversation: [u8; 16],
         (ticket, cache): (HistoryTicket, Option<CacheKey>),
-        before: Option<i64>,
+        page: Page,
     ) -> Result<(), String> {
+        use v1::history_request::Anchor;
         let request_id = request_id();
-        let anchor = match before {
-            Some(seq) => v1::history_request::Anchor::Before(seq.max(0) as u64),
-            None => v1::history_request::Anchor::Latest(true),
+        let seq = |seq: i64| seq.max(0) as u64;
+        let anchor = match page {
+            Page::Before(Some(before)) => Anchor::Before(seq(before)),
+            Page::Before(None) => Anchor::Latest(true),
+            Page::After(after) => Anchor::After(seq(after)),
+            Page::Around(around) => Anchor::Around(seq(around)),
         };
         {
             let mut pages = server_pages();
@@ -719,7 +728,7 @@ impl Backend {
             while pages.len() >= 64 {
                 pages.pop_first();
             }
-            pages.insert(request_id, (server.clone(), ticket, before, cache));
+            pages.insert(request_id, (server.clone(), ticket, page, cache));
         }
         let result = self.command(
             &server,
@@ -1308,13 +1317,17 @@ async fn connect_once(
                 },
                 SessionEvent::Nuschel(NuschelEvent::Page(page)) => {
                     let asked = server_pages().remove(&page.request_id);
-                    if let Some((server, ticket, before, cache)) = asked {
+                    if let Some((server, ticket, asked, cache)) = asked {
                         let (events, storage) = (events.clone(), storage.clone());
                         tokio::spawn(async move {
-                            let (messages, next_before, records) = render_server_page(page, cache.as_ref()).await;
+                            let (messages, (next_before, next_after), records) = render_server_page(page, cache.as_ref()).await;
                             // Kept for offline reading and search.
                             if !records.is_empty() { let _ = storage.send(StorageCommand::StoreServer { records }).await; }
-                            let _ = events.send(Event::History { server, ticket, before, messages, next_before }).await;
+                            let event = match asked {
+                                Page::Before(before) => Event::History { server, ticket, before, messages, next_before },
+                                page => Event::HistoryWindow { server, ticket, page, messages, next_before, next_after },
+                            };
+                            let _ = events.send(event).await;
                         });
                     }
                 },

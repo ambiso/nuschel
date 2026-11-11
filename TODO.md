@@ -608,6 +608,12 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          storage worker on a throwaway PostgreSQL from nixpkgs).
    - [ ] Session and desktop: honour `retry_after_ms` on `rate_limited` and `busy`
          (history pages today fail without a retry).
+   - [ ] A burst of sends stalls: 30 messages queued at once by `nuschel-cli` against
+         a loopback `nuscheld` (Murmur's default text limit) get 3–8 acknowledgements,
+         then nothing for 20 s, neither an acknowledgement nor `chat_failed`; the
+         same with binaries from before 2026-11-11's desktop work. One at a time
+         works. Not investigated (the session's outbox pacing and retries against the
+         server's text bucket and its 16 requests in flight).
    - [x] Capability negotiation in the Mumble handshake: ALPN `nuschel/1` plus the
          hello in `Version` (field 7200), frozen at `Authenticate`, fail-closed
          (extension.rs, the session's sticky policy), with the protocol version in

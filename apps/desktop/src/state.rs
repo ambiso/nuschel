@@ -2684,7 +2684,7 @@ impl Desktop {
                 server.id.clone(),
                 conversation,
                 (ticket, cache),
-                before,
+                crate::backend::Page::Before(before),
             ),
             // Until the server names the conversation, nothing loads.
             None if server.history_source == HistorySource::ServerArchive

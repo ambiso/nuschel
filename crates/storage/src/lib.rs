@@ -40,7 +40,9 @@ type Row = (
     Option<i64>,
     Option<i64>,
 );
-type RankedRow = (i64, String, String, String, i64, String, i64);
+/// A search hit: a row's message, its score, and its seq (Nuschel servers),
+/// by which a server-history timeline finds it.
+type RankedRow = (i64, String, String, String, i64, String, i64, Option<i64>);
 
 // Pages run in time order, then by row ID: a server's history page fetched
 // later stores older messages under higher IDs than live ones stored before.
@@ -70,7 +72,7 @@ const INDEX_POSTGRES: &str = "UPDATE message_search SET document = to_tsvector('
 // bodies. Parameters: $1 the full-text query, $2 the time scores are for, $3
 // the servers, $4 the channel or NULL, $5 an author LIKE pattern, $6 and $7
 // the cursor's score and ID, $8 the limit.
-const SEARCH_SQLITE: &str = r"SELECT m.id, m.server, m.channel, m.author, m.observed_at_ms, m.body, page.score FROM (
+const SEARCH_SQLITE: &str = r"SELECT m.id, m.server, m.channel, m.author, m.observed_at_ms, m.body, page.score, m.seq FROM (
     SELECT id, score FROM (
         SELECT s.id AS id, CAST(1000000000.0 / (1.0 + length(s.visible) / 1000.0) / (1.0 + MAX(0, $2 - m.observed_at_ms) / 2592000000.0) AS INTEGER) AS score
         FROM message_fts JOIN message_search s ON s.id = message_fts.rowid JOIN messages m ON m.id = s.id
@@ -78,7 +80,7 @@ const SEARCH_SQLITE: &str = r"SELECT m.id, m.server, m.channel, m.author, m.obse
             AND ($4 IS NULL OR m.channel = $4) AND s.author LIKE $5 ESCAPE '\'
     ) WHERE score < $6 OR (score = $6 AND id < $7) ORDER BY score DESC, id DESC LIMIT $8
 ) page JOIN messages m ON m.id = page.id ORDER BY page.score DESC, page.id DESC";
-const SEARCH_POSTGRES: &str = r"SELECT m.id, m.server, m.channel, m.author, m.observed_at_ms, m.body, page.score FROM (
+const SEARCH_POSTGRES: &str = r"SELECT m.id, m.server, m.channel, m.author, m.observed_at_ms, m.body, page.score, m.seq FROM (
     SELECT id, score FROM (
         SELECT s.id AS id, (ts_rank(s.document, q, 1)::float8 * 1000000000.0::float8 / (1.0::float8 + GREATEST(0, $2 - m.observed_at_ms)::float8 / 2592000000.0::float8))::bigint AS score
         FROM message_search s JOIN messages m ON m.id = s.id, to_tsquery('simple', $1) q
@@ -88,10 +90,10 @@ const SEARCH_POSTGRES: &str = r"SELECT m.id, m.server, m.channel, m.author, m.ob
 ) page JOIN messages m ON m.id = page.id ORDER BY page.score DESC, page.id DESC";
 // `from:` alone: that author's messages, newest first. $1 the servers, $2
 // the channel or NULL, $3 the author pattern, $4 the cursor's ID, $5 the limit.
-const AUTHOR_SQLITE: &str = r"SELECT m.id, m.server, m.channel, m.author, m.observed_at_ms, m.body, 0 FROM message_search s JOIN messages m ON m.id = s.id
+const AUTHOR_SQLITE: &str = r"SELECT m.id, m.server, m.channel, m.author, m.observed_at_ms, m.body, 0, m.seq FROM message_search s JOIN messages m ON m.id = s.id
     WHERE s.server IN (SELECT value FROM json_each($1)) AND ($2 IS NULL OR m.channel = $2)
         AND s.author LIKE $3 ESCAPE '\' AND s.id < $4 ORDER BY s.id DESC LIMIT $5";
-const AUTHOR_POSTGRES: &str = r"SELECT m.id, m.server, m.channel, m.author, m.observed_at_ms, m.body, 0::bigint FROM message_search s JOIN messages m ON m.id = s.id
+const AUTHOR_POSTGRES: &str = r"SELECT m.id, m.server, m.channel, m.author, m.observed_at_ms, m.body, 0::bigint, m.seq FROM message_search s JOIN messages m ON m.id = s.id
     WHERE s.server = ANY($1) AND ($2::text IS NULL OR m.channel = $2)
         AND s.author LIKE $3 ESCAPE '\' AND s.id < $4 ORDER BY s.id DESC LIMIT $5";
 
@@ -885,7 +887,7 @@ impl History {
         let mut budget = Budget::default();
         let mut hits = Vec::new();
         let mut last = None;
-        for (id, server, channel, author, observed_at_ms, body, score) in
+        for (id, server, channel, author, observed_at_ms, body, score, seq) in
             rows.into_iter().take(limit)
         {
             let hit = entry((
@@ -895,7 +897,7 @@ impl History {
                 author,
                 observed_at_ms,
                 visible(&body),
-                None,
+                seq,
                 None,
                 None,
             ));
@@ -1808,6 +1810,11 @@ mod tests {
             Ok::<_, Error>(page.hits.iter().map(|hit| hit.id).collect::<Vec<_>>())
         };
         assert_eq!(search("message 2").await?, [stored[1]]);
+        // A hit says its seq, by which a server-history timeline finds it.
+        let hits = history
+            .search(&["nuschel".to_string()], Some("3"), "message 2", None, 100)
+            .await?;
+        assert_eq!(hits.hits[0].seq, Some(2));
 
         // An edit overwrites the text and what search finds.
         assert!(history.edit("nuschel", "3", 2, "edited words", 650).await?);

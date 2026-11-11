@@ -504,4 +504,8 @@ How the desktop uses the extension, and the decisions taken while the user was a
   message gets its seq when acknowledged. Local pages run in time order (ties by row
   id) because pages fetched later hold older messages than rows stored before them.
   Direct conversations are stored under `conversation:<id>`, channels under their
-  channel id, which Mumble reuses (see TODO.md).
+  channel id, which Mumble reuses (see TODO.md). Search runs over this local copy; a
+  result in a conversation shown from server history opens by its seq, with the
+  server's page around it (`around`) when it is not loaded, and newer pages
+  (`after`) as the reader scrolls down; a stock message there that the server never
+  stored cannot be opened.

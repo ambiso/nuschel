@@ -16,7 +16,7 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_client::{Conversation, HistorySource, HistoryTicket};
+use nuschel_client::{Conversation, HistoryTicket};
 use nuschel_core::{SearchCursor, SearchPage, search::Query};
 use nuschel_session::connection::TextTarget;
 use std::{
@@ -65,6 +65,8 @@ struct SearchHit {
     server: String,
     storage_key: String,
     id: i64,
+    /// Its seq on a Nuschel server (whose timeline counts in seqs).
+    seq: Option<i64>,
     place: String,
     server_name: String,
     author: String,
@@ -322,6 +324,7 @@ impl Desktop {
                 server: server.id.clone(),
                 storage_key: key,
                 id: hit.id,
+                seq: hit.seq,
                 place,
                 server_name: server.name.clone(),
                 author,
@@ -339,7 +342,11 @@ impl Desktop {
         let Some(hit) = search.results.get(index) else {
             return;
         };
-        let (server, key, id) = (hit.server.clone(), hit.storage_key.clone(), hit.id);
+        let (server, key, id) = (
+            hit.server.clone(),
+            hit.storage_key.clone(),
+            (hit.id, hit.seq),
+        );
         search.hidden = true;
         self.composer
             .update(cx, |input, cx| input.focus(window, cx));
@@ -352,7 +359,7 @@ impl Desktop {
         &mut self,
         server: &str,
         storage_key: &str,
-        id: i64,
+        (id, seq): (i64, Option<i64>),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -384,6 +391,18 @@ impl Desktop {
             return;
         };
         let channel = self.servers[index].channels[position].id;
+        // A server-history timeline counts in seqs: a kept message is found
+        // there by its seq, and pages come from the server.
+        let archived = self.servers[index].archived(&self.servers[index].channels[position]);
+        let id = match (archived, seq) {
+            (true, Some(seq)) => seq,
+            (true, None) => {
+                self.servers[index].notice =
+                    Some("That message is not in the server's history.".into());
+                return;
+            }
+            (false, _) => id,
+        };
         let conversation = Conversation {
             server: server.to_string(),
             channel,
@@ -416,6 +435,8 @@ impl Desktop {
             return;
         };
         let server = &mut self.servers[index];
+        let archived = server.archived(&server.channels[position]);
+        let source = server.history_source;
         let channel = &mut server.channels[position];
         channel.loading = true;
         let ticket = self.navigation.browse(
@@ -423,15 +444,30 @@ impl Desktop {
                 server: server.id.clone(),
                 channel: channel.id,
             },
-            HistorySource::LocalObserved,
+            source,
         );
-        if let Err(error) = self.backend.history_page(
-            server.id.clone(),
-            identity,
-            channel.storage_key.clone(),
-            ticket,
-            page,
-        ) {
+        let requested = match channel.conversation.filter(|_| archived) {
+            Some(conversation) => {
+                let cache = crate::backend::CacheKey {
+                    identity,
+                    channel: channel.storage_key.clone(),
+                };
+                self.backend.server_history(
+                    server.id.clone(),
+                    conversation,
+                    (ticket, Some(cache)),
+                    page,
+                )
+            }
+            None => self.backend.history_page(
+                server.id.clone(),
+                identity,
+                channel.storage_key.clone(),
+                ticket,
+                page,
+            ),
+        };
+        if let Err(error) = requested {
             channel.loading = false;
             self.older_paused = true;
             self.error = Some(error);

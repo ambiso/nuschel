@@ -304,6 +304,33 @@ def main():
             assert any(row[0] == f"conversation:{direct}" and "around this afternoon" in row[2] for row in rows), rows
             seqs = [(row[0], row[1]) for row in rows]
             assert len(seqs) == len(set(seqs)), f"kept twice: {rows}"
+
+            # Search finds what the pages kept; after a reconnect the result,
+            # older than the latest page, opens from the server's history
+            # around it (by seq).
+            # One at a time: a burst of sends stalls (TODO.md).
+            for n in range(1, 51):
+                ada.say(f"Filler message {n}")
+            ada.client.process.kill()
+            server.stop()
+            server.start()
+            ada = Ada(args.binaries, port, pin, root)
+            ada.client.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "Andi", timeout=60)
+            time.sleep(3.0)
+            shell.press("Control_L", "k")
+            time.sleep(0.5)
+            shell.type("Development")
+            time.sleep(0.5)
+            shell.key("Return")
+            time.sleep(2.0)
+            shell.press("Control_L", "f")
+            time.sleep(0.8)
+            shell.type("release notes")
+            time.sleep(1.5)
+            shot("conversation-11-search")
+            click(600, 300)
+            time.sleep(2.0)
+            shot("conversation-12-search-jumped")
             print("Conversations on a Nuschel server: ok", flush=True)
         finally:
             if ada:
