@@ -1,0 +1,384 @@
+# SPDX-License-Identifier: EUPL-1.2
+# Build-only authority: no signing secrets and no release-write permission.
+# Release calls this at its own commit; manual dispatch can prove packaging first.
+name: Platform builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      retention-days:
+        description: Days to retain downloadable CI builds (1–30)
+        type: number
+        default: 7
+  workflow_call:
+    inputs:
+      retention-days:
+        description: Days to retain downloadable CI builds (1–30)
+        type: number
+        default: 7
+    outputs:
+      linux-artifact:
+        description: Nix build evidence and static web site, not portable Linux binaries
+        value: ${{ jobs.linux.outputs.artifact }}
+      windows-artifact:
+        description: install.tar rooted at windows/, plus metadata and checksums
+        value: ${{ jobs.windows.outputs.artifact }}
+      macos-artifact:
+        description: install.tar rooted at Nuschl.app/, plus metadata and checksums
+        value: ${{ jobs.macos.outputs.artifact }}
+
+permissions:
+  contents: read
+
+# No automatic tag trigger: the publishing workflow is the sole tag entry point.
+# Do not share its concurrency group, which can cancel a reusable caller.
+concurrency:
+  group: platform-builds-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    outputs:
+      artifact: ${{ steps.names.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prepare this disposable runner's disk
+        run: |
+          # These preinstalled SDKs are unused: every build tool comes from Nix.
+          # This never runs on a developer machine or a self-hosted runner.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          mkdir -p "$RUNNER_TEMP/build-logs"
+          free_bytes=$(df --output=avail -B1 "$RUNNER_TEMP" | tail -n 1)
+          if (( free_bytes < 20 * 1024 * 1024 * 1024 )); then
+            echo 'Fewer than 20 GiB free; use a runner with more disk for this build.' >&2
+            exit 1
+          fi
+          df -h "$RUNNER_TEMP"
+          retention='${{ inputs.retention-days }}'
+          if ! [[ "$retention" =~ ^([1-9]|[12][0-9]|30)$ ]]; then
+            echo 'retention-days must be an integer between 1 and 30' >&2
+            exit 1
+          fi
+
+      - uses: cachix/install-nix-action@2126ae7fc54c9df00dd18f7f18754393182c73cd # v31.9.1
+        with:
+          extra_nix_config: |
+            cores = 2
+            max-jobs = 2
+            build-dir = /nix/var/nix/builds
+
+      - name: Prepare disk-backed Nix scratch
+        run: sudo mkdir -p /nix/var/nix/builds
+
+      - name: Restore and save this platform's Nix cache
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nuschl-nix-v1-linux-nix-${{ hashFiles('flake.lock', 'Cargo.lock') }}-${{ github.sha }}
+          restore-prefixes-first-match: nuschl-nix-v1-linux-nix-
+          # Best effort, after removing this job's result roots. Nix retains live
+          # roots; this is not a hard runner-disk or repository-cache guarantee.
+          gc-max-store-size-linux: 3G
+          purge: false
+
+      - name: Name the exact-commit artifact
+        id: names
+        run: echo "artifact=nuschl-linux-nix-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Build Linux desktop, terminal and native helpers
+        run: nix build .#default -o result-linux --cores 2 --max-jobs 2 -L 2>&1 | tee "$RUNNER_TEMP/build-logs/default.log"
+
+      - name: Build the server package
+        run: nix build .#server -o result-server --cores 2 --max-jobs 2 -L 2>&1 | tee "$RUNNER_TEMP/build-logs/server.log"
+
+      - name: Build the web relay and site with browser SDK
+        run: |
+          nix build .#web-relay -o result-web-relay --cores 2 --max-jobs 2 -L 2>&1 | tee "$RUNNER_TEMP/build-logs/web-relay.log"
+          nix build .#web-site -o result-web-site --cores 2 --max-jobs 2 -L 2>&1 | tee "$RUNNER_TEMP/build-logs/web-site.log"
+
+      - name: Check formatting, dependency policy and generated graph
+        run: |
+          nix build --cores 2 --max-jobs 2 --no-link -L \
+            .#checks.x86_64-linux.fmt .#checks.x86_64-linux.deny \
+            .#checks.x86_64-linux.audit .#checks.x86_64-linux.crate2nix-current \
+            2>&1 | tee "$RUNNER_TEMP/build-logs/policy.log"
+
+      - name: Arrange Nix evidence and static web site
+        run: |
+          mkdir -p dist
+          nix path-info --json ./result-linux ./result-server ./result-web-relay ./result-web-site > dist/nix-paths.json
+          tar -C result-web-site -cf dist/web-site.tar .
+          printf 'Linux native programs require Nix; this artifact contains no portable native archive.\nInstall the exact source with:\n  nix run github:%s/%s\nBuild the server with:\n  nix build github:%s/%s#server\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REPOSITORY" "$GITHUB_SHA" > dist/INSTALL-NIX.txt
+          cp flake.lock dist/flake.lock
+          (cd dist && sha256sum web-site.tar nix-paths.json INSTALL-NIX.txt flake.lock > SHA256SUMS)
+
+      - name: Record source and build coverage
+        env:
+          BUILD_PLATFORM: linux-nix
+        run: |
+          nix shell --cores 2 --max-jobs 2 --inputs-from . nixpkgs#python3 --command python3 - <<'PYCODE'
+          import json, os, pathlib, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+          record = {
+              'repository': os.environ['GITHUB_REPOSITORY'], 'commit': os.environ['GITHUB_SHA'],
+              'version': version, 'platform': os.environ['BUILD_PLATFORM'],
+              'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'host': 'x86_64-linux', 'os_code_signed': False,
+              'native_platform_runtime_tested_by_this_job': False,
+              'macos_ad_hoc_signature': os.environ['BUILD_PLATFORM'] == 'macos-universal',
+          }
+          pathlib.Path('dist/build-info.json').write_text(json.dumps(record, indent=2) + '\n')
+          PYCODE
+          (cd dist && sha256sum build-info.json >> SHA256SUMS)
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.names.outputs.artifact }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+          compression-level: 6
+
+      - name: Remove only this job's result roots before cache GC
+        if: always()
+        run: |
+          for result in result-linux result-server result-web-relay result-web-site; do
+            if [[ -L "$result" ]]; then rm "$result"; fi
+          done
+
+      - name: Upload build diagnostics even after a failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nuschl-linux-nix-logs-${{ github.sha }}
+          path: ${{ runner.temp }}/build-logs/
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.retention-days }}
+
+  windows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    outputs:
+      artifact: ${{ steps.names.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prepare this disposable runner's disk
+        run: |
+          # These preinstalled SDKs are unused: every build tool comes from Nix.
+          # This never runs on a developer machine or a self-hosted runner.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          mkdir -p "$RUNNER_TEMP/build-logs"
+          free_bytes=$(df --output=avail -B1 "$RUNNER_TEMP" | tail -n 1)
+          if (( free_bytes < 20 * 1024 * 1024 * 1024 )); then
+            echo 'Fewer than 20 GiB free; use a runner with more disk for this build.' >&2
+            exit 1
+          fi
+          df -h "$RUNNER_TEMP"
+          retention='${{ inputs.retention-days }}'
+          if ! [[ "$retention" =~ ^([1-9]|[12][0-9]|30)$ ]]; then
+            echo 'retention-days must be an integer between 1 and 30' >&2
+            exit 1
+          fi
+
+      - uses: cachix/install-nix-action@2126ae7fc54c9df00dd18f7f18754393182c73cd # v31.9.1
+        with:
+          extra_nix_config: |
+            cores = 2
+            max-jobs = 2
+            build-dir = /nix/var/nix/builds
+
+      - name: Prepare disk-backed Nix scratch
+        run: sudo mkdir -p /nix/var/nix/builds
+
+      - name: Restore and save this platform's Nix cache
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nuschl-nix-v1-windows-x86_64-${{ hashFiles('flake.lock', 'Cargo.lock') }}-${{ github.sha }}
+          restore-prefixes-first-match: nuschl-nix-v1-windows-x86_64-
+          # Best effort, after removing this job's result roots. Nix retains live
+          # roots; this is not a hard runner-disk or repository-cache guarantee.
+          gc-max-store-size-linux: 3G
+          purge: false
+
+      - name: Name the exact-commit artifact
+        id: names
+        run: echo "artifact=nuschl-windows-x86_64-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-build Windows desktop and every packaged helper
+        run: nix build .#windows -o result-windows --cores 2 --max-jobs 2 -L 2>&1 | tee "$RUNNER_TEMP/build-logs/windows.log"
+
+      - name: Arrange the Windows installation without losing file modes
+        run: |
+          mkdir -p install/windows/licenses dist
+          cp result-windows/bin/*.exe install/windows/
+          cp -R result-windows/share/licenses/nuschl/. install/windows/licenses/
+          test -f install/windows/nuschl.exe
+          # Tar preserves the install tree when Actions downloads the artifact.
+          tar -C install -cf dist/install.tar windows
+          (cd dist && sha256sum install.tar > SHA256SUMS)
+
+      - name: Record source and build coverage
+        env:
+          BUILD_PLATFORM: windows-x86_64
+        run: |
+          nix shell --cores 2 --max-jobs 2 --inputs-from . nixpkgs#python3 --command python3 - <<'PYCODE'
+          import json, os, pathlib, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+          record = {
+              'repository': os.environ['GITHUB_REPOSITORY'], 'commit': os.environ['GITHUB_SHA'],
+              'version': version, 'platform': os.environ['BUILD_PLATFORM'],
+              'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'host': 'x86_64-linux', 'os_code_signed': False,
+              'native_platform_runtime_tested_by_this_job': False,
+              'macos_ad_hoc_signature': os.environ['BUILD_PLATFORM'] == 'macos-universal',
+          }
+          pathlib.Path('dist/build-info.json').write_text(json.dumps(record, indent=2) + '\n')
+          PYCODE
+          (cd dist && sha256sum build-info.json >> SHA256SUMS)
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.names.outputs.artifact }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+          compression-level: 6
+
+      - name: Remove only this job's result roots before cache GC
+        if: always()
+        run: |
+          for result in result-windows; do
+            if [[ -L "$result" ]]; then rm "$result"; fi
+          done
+
+      - name: Upload build diagnostics even after a failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nuschl-windows-x86_64-logs-${{ github.sha }}
+          path: ${{ runner.temp }}/build-logs/
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.retention-days }}
+
+  macos:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    outputs:
+      artifact: ${{ steps.names.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prepare this disposable runner's disk
+        run: |
+          # These preinstalled SDKs are unused: every build tool comes from Nix.
+          # This never runs on a developer machine or a self-hosted runner.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          mkdir -p "$RUNNER_TEMP/build-logs"
+          free_bytes=$(df --output=avail -B1 "$RUNNER_TEMP" | tail -n 1)
+          if (( free_bytes < 20 * 1024 * 1024 * 1024 )); then
+            echo 'Fewer than 20 GiB free; use a runner with more disk for this build.' >&2
+            exit 1
+          fi
+          df -h "$RUNNER_TEMP"
+          retention='${{ inputs.retention-days }}'
+          if ! [[ "$retention" =~ ^([1-9]|[12][0-9]|30)$ ]]; then
+            echo 'retention-days must be an integer between 1 and 30' >&2
+            exit 1
+          fi
+
+      - uses: cachix/install-nix-action@2126ae7fc54c9df00dd18f7f18754393182c73cd # v31.9.1
+        with:
+          extra_nix_config: |
+            cores = 2
+            max-jobs = 2
+            build-dir = /nix/var/nix/builds
+
+      - name: Prepare disk-backed Nix scratch
+        run: sudo mkdir -p /nix/var/nix/builds
+
+      - name: Restore and save this platform's Nix cache
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7
+        with:
+          primary-key: nuschl-nix-v1-macos-universal-${{ hashFiles('flake.lock', 'Cargo.lock') }}-${{ github.sha }}
+          restore-prefixes-first-match: nuschl-nix-v1-macos-universal-
+          # Best effort, after removing this job's result roots. Nix retains live
+          # roots; this is not a hard runner-disk or repository-cache guarantee.
+          gc-max-store-size-linux: 3G
+          purge: false
+
+      - name: Name the exact-commit artifact
+        id: names
+        run: echo "artifact=nuschl-macos-universal-$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-build both macOS architectures and the universal app
+        run: nix build .#macos-app -o result-macos --cores 2 --max-jobs 2 -L 2>&1 | tee "$RUNNER_TEMP/build-logs/macos.log"
+
+      - name: Preserve the complete ad-hoc-signed bundle
+        run: |
+          mkdir -p install dist
+          cp -R result-macos/Nuschl.app install/Nuschl.app
+          test -x install/Nuschl.app/Contents/MacOS/nuschl
+          test -f install/Nuschl.app/Contents/_CodeSignature/CodeResources
+          tar -C install -cf dist/install.tar Nuschl.app
+          (cd dist && sha256sum install.tar > SHA256SUMS)
+
+      - name: Record source and build coverage
+        env:
+          BUILD_PLATFORM: macos-universal
+        run: |
+          nix shell --cores 2 --max-jobs 2 --inputs-from . nixpkgs#python3 --command python3 - <<'PYCODE'
+          import json, os, pathlib, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+          record = {
+              'repository': os.environ['GITHUB_REPOSITORY'], 'commit': os.environ['GITHUB_SHA'],
+              'version': version, 'platform': os.environ['BUILD_PLATFORM'],
+              'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'host': 'x86_64-linux', 'os_code_signed': False,
+              'native_platform_runtime_tested_by_this_job': False,
+              'macos_ad_hoc_signature': os.environ['BUILD_PLATFORM'] == 'macos-universal',
+          }
+          pathlib.Path('dist/build-info.json').write_text(json.dumps(record, indent=2) + '\n')
+          PYCODE
+          (cd dist && sha256sum build-info.json >> SHA256SUMS)
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.names.outputs.artifact }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+          compression-level: 6
+
+      - name: Remove only this job's result roots before cache GC
+        if: always()
+        run: |
+          for result in result-macos; do
+            if [[ -L "$result" ]]; then rm "$result"; fi
+          done
+
+      - name: Upload build diagnostics even after a failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nuschl-macos-universal-logs-${{ github.sha }}
+          path: ${{ runner.temp }}/build-logs/
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.retention-days }}
+
