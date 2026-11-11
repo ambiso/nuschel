@@ -509,6 +509,35 @@ pub async fn set_superuser_password(
     Ok(())
 }
 
+/// A registered user by name or `#id`, for administrative commands.
+pub fn find_account(state: &State, user: &str) -> Result<(conversations::Id, String), StartError> {
+    match user.strip_prefix('#').map(str::parse::<u32>) {
+        Some(Ok(id)) => state.registry.users.get(&id),
+        _ => state.registry.by_name(user),
+    }
+    .map(|registered| (registered.account, registered.name.clone()))
+    .ok_or_else(|| StartError::Storage(format!("no registered user {user}")))
+}
+
+/// The operator's erase (docs/extension.md §9): every message stored by an
+/// account becomes a tombstone without content. Copies already on clients
+/// (Nuschel caches, stock clients' logs) remain.
+pub async fn erase_account(
+    storage: &StorageHandle,
+    account: conversations::Id,
+) -> Result<u64, StartError> {
+    match storage
+        .request(nuschel_ipc::server::ServerStorageRequest::HistoryErase {
+            account: conversations::hex(&account),
+            deleted_ms: crate::chat::now_ms(),
+        })
+        .await
+    {
+        Some(nuschel_ipc::server::ServerStorageResponse::Count(count)) => Ok(count),
+        _ => Err(StartError::Storage("could not erase the messages".into())),
+    }
+}
+
 /// The default backend: the storage worker next to this executable.
 pub fn default_backend(settings: &Settings) -> io::Result<Backend> {
     let worker = match &settings.config.storage_worker {

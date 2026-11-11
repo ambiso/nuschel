@@ -44,6 +44,10 @@ struct Arguments {
     /// Read a new SuperUser password from standard input, store it and exit.
     #[arg(long)]
     set_superuser_password: bool,
+    /// Erase every stored message by this registered user (name, or `#id`)
+    /// and exit: they become tombstones without content (GDPR requests).
+    #[arg(long, value_name = "USER")]
+    erase_user: Option<String>,
 }
 
 fn settings(arguments: &Arguments) -> Result<Settings, Box<dyn std::error::Error>> {
@@ -105,6 +109,16 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         server::set_superuser_password(&mut state, password, &settings).await?;
         storage.flush().await;
         println!("SuperUser password set");
+        return Ok(());
+    }
+    if let Some(user) = &arguments.erase_user {
+        let storage = storage::start(backend);
+        let counters = Default::default();
+        let state = server::load_state_for_admin(&settings, &storage, &counters).await?;
+        let (account, name) = server::find_account(&state, user)?;
+        let erased = server::erase_account(&storage, account).await?;
+        storage.flush().await;
+        println!("erased {erased} messages by {name}");
         return Ok(());
     }
     let running = server::start(settings, backend).await?;

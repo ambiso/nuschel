@@ -639,10 +639,7 @@ impl State {
 
     /// Store a stock client's message in a channel's conversation; Nuschel
     /// readers get it once stored (docs/extension.md §4).
-    pub fn store_stock(&mut self, source: u32, channel: u32, html: &str, fallback: &bytes::Bytes) {
-        let Some(id) = self.conversation_of_channel(channel) else {
-            return;
-        };
+    pub fn store_stock(&mut self, source: u32, id: Id, html: &str, fallback: &bytes::Bytes) {
         if html.len() > nuschel::MAX_LEGACY_CONTENT_BYTES {
             // Too large to keep: Nuschel users in the channel see it live only.
             self.stored(
@@ -975,6 +972,24 @@ impl State {
         })
     }
 
+    /// The direct conversation of two accounts, created on first use.
+    pub fn direct_conversation(&mut self, me: Id, peer: Id) -> Id {
+        if let Some(id) = self.conversations.direct(me, peer) {
+            return id;
+        }
+        let id: Id = random();
+        self.conversations.add_direct(id, me, peer);
+        let (a, b) = Conversations::pair(me, peer);
+        self.history.write(Request::HistoryCreateDirect {
+            direct: StoredDirect {
+                conversation: hex(&id),
+                account_a: hex(&a),
+                account_b: hex(&b),
+            },
+        });
+        id
+    }
+
     fn open_direct(&mut self, session: u32, message: v1::OpenDirect) -> Result<(), Failure> {
         self.extension_limited(session, |extension| &mut extension.requests)?;
         let me = self
@@ -989,25 +1004,12 @@ impl State {
             .map(|user| user.account)
             .filter(|peer| *peer != me)
             .ok_or(fail(Code::NotFound))?;
-        let id = match self.conversations.direct(me, peer) {
-            Some(id) => id,
-            None => {
-                if self.conversations.directs_of(&me).len() >= MAX_DIRECTS {
-                    return Err(fail(Code::LimitReached));
-                }
-                let id: Id = random();
-                self.conversations.add_direct(id, me, peer);
-                let (a, b) = Conversations::pair(me, peer);
-                self.history.write(Request::HistoryCreateDirect {
-                    direct: StoredDirect {
-                        conversation: hex(&id),
-                        account_a: hex(&a),
-                        account_b: hex(&b),
-                    },
-                });
-                id
-            }
-        };
+        if self.conversations.direct(me, peer).is_none()
+            && self.conversations.directs_of(&me).len() >= MAX_DIRECTS
+        {
+            return Err(fail(Code::LimitReached));
+        }
+        let id = self.direct_conversation(me, peer);
         let direct = self.direct(&id, &me);
         self.send(
             session,

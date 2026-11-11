@@ -1517,6 +1517,24 @@ impl State {
                 readers.extend(self.readers(&id));
             }
         }
+        // Direct messages from stock senders are kept only if the operator
+        // chose to (docs/extension.md §9), between two accounts.
+        let mut directs = BTreeSet::new();
+        if self.settings.config.history.archive_stock_direct_messages
+            && let Some(sender) = self.users.get(&source).and_then(|user| user.account)
+        {
+            for session in &message.session {
+                if let Some(peer) = self.users.get(session).and_then(|user| user.account)
+                    && peer != sender
+                {
+                    directs.insert(peer);
+                }
+            }
+            for peer in &directs {
+                let id = self.direct_conversation(sender, *peer);
+                readers.extend(self.readers(&id));
+            }
+        }
         for session in recipients {
             if readers.contains(&session) {
                 continue;
@@ -1526,7 +1544,15 @@ impl State {
             }
         }
         for channel in reached {
-            self.store_stock(source, channel, &message.message, &frame);
+            if let Some(id) = self.conversation_of_channel(channel) {
+                self.store_stock(source, id, &message.message, &frame);
+            }
+        }
+        if let Some(sender) = self.users.get(&source).and_then(|user| user.account) {
+            for peer in directs {
+                let id = self.direct_conversation(sender, peer);
+                self.store_stock(source, id, &message.message, &frame);
+            }
         }
     }
 

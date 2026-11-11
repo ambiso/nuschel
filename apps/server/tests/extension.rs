@@ -1770,3 +1770,88 @@ async fn stock_clients_are_told_that_text_is_kept() {
             .await
     );
 }
+
+#[tokio::test]
+async fn the_operator_erases_a_users_messages() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let root = alice.conversations[&0];
+    alice.send(root, "personal data").await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    bob.register().await;
+    bob.send(root, "stays").await;
+    let (account, name) =
+        nuscheld::server::find_account(&fixture.running.server.lock(), "alice").unwrap();
+    assert_eq!(name, "Alice");
+    let erased = nuscheld::server::erase_account(&fixture.running.server.storage, account).await;
+    assert_eq!(erased.unwrap(), 1);
+    let page = bob.page(root, latest(), 10).await;
+    assert!(page.messages[0].content.is_empty() && page.messages[0].deleted_ms > 0);
+    assert_eq!(page.messages[0].delete_reason, 3);
+    assert_eq!(page.messages[1].content, "stays");
+}
+
+#[tokio::test]
+async fn stock_direct_messages_are_kept_only_when_the_operator_says_so() {
+    for archive in [false, true] {
+        let fixture = Fixture::start(&format!(
+            "[history]\narchive_stock_direct_messages = {archive}"
+        ))
+        .await;
+        let mut alice = nuschel(&fixture, "Alice", 0).await;
+        alice.register().await;
+        let mut carol = Raw::login(fixture.address(), "Carol").await;
+        carol
+            .send(
+                kind::USER_STATE,
+                &proto::UserState {
+                    user_id: Some(0),
+                    ..Default::default()
+                },
+            )
+            .await;
+        loop {
+            let frame = carol.until(kind::USER_STATE).await.unwrap();
+            let state = proto::UserState::decode(frame.payload).unwrap();
+            if state.name.is_none() && state.user_id.is_some_and(|id| id != u32::MAX) {
+                break;
+            }
+        }
+        carol
+            .send(
+                kind::TEXT_MESSAGE,
+                &proto::TextMessage {
+                    session: vec![alice.session],
+                    message: "psst".into(),
+                    ..Default::default()
+                },
+            )
+            .await;
+        if archive {
+            let event = alice.chat().await;
+            let message = event.message.unwrap();
+            assert_eq!(message.format, v1::Format::LegacyHtml as i32);
+            assert_eq!(message.content, "psst");
+            let kind = fixture
+                .running
+                .server
+                .lock()
+                .conversations
+                .kind(&event.conversation.try_into().unwrap());
+            assert!(matches!(
+                kind,
+                Some(nuscheld::conversations::Kind::Direct(..))
+            ));
+        } else {
+            let text = alice
+                .wait(|event| match event {
+                    SessionEvent::Text(text) => Some(text.body.clone()),
+                    _ => None,
+                })
+                .await;
+            assert_eq!(text, "psst");
+            assert!(fixture.store.lock().unwrap().history.messages.is_empty());
+        }
+    }
+}
