@@ -613,6 +613,9 @@ pub struct Registry {
     /// Registration ids are never reused, even after an account is deleted:
     /// ACL entries and group memberships refer to them.
     pub next_id: u32,
+    /// Bumped on every insertion and removal (key transparency follows names and
+    /// numbers by it, crate::kt).
+    pub generation: u64,
 }
 
 impl Registry {
@@ -624,12 +627,14 @@ impl Registry {
         self.by_name.insert(user.name.to_lowercase(), user.id);
         self.by_account.insert(user.account, user.id);
         self.users.insert(user.id, user);
+        self.generation += 1;
     }
 
     pub fn remove(&mut self, id: u32) -> Option<Registered> {
         let user = self.users.remove(&id)?;
         self.by_name.remove(&user.name.to_lowercase());
         self.by_account.remove(&user.account);
+        self.generation += 1;
         Some(user)
     }
 

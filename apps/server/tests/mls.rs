@@ -381,7 +381,14 @@ impl Connection {
     async fn publish(&mut self, user: &mut User) {
         let id = request_id();
         let status = self
-            .request(nk::KT_STATUS, &v1::KtStatus { request_id: id }, id)
+            .request(
+                nk::KT_STATUS,
+                &v1::KtStatus {
+                    request_id: id,
+                    origin: String::new(),
+                },
+                id,
+            )
             .await;
         user.account = v1::KtStatusReply::decode(status.payload)
             .unwrap()

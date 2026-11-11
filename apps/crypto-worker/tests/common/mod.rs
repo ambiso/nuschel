@@ -81,6 +81,9 @@ impl Client {
     pub fn connect(&mut self, dir: &Dir, account: [u8; 16], head: &SignedHead) -> HeadOutcome {
         self.account = account;
         match self.ask(CryptoRequest::Connect {
+            witnessed: None,
+            witnessing: Default::default(),
+            registration: None,
             server: CryptoServer {
                 key: self.server.into(),
                 label: format!("Label of {}", self.server),
@@ -117,6 +120,10 @@ impl Client {
     pub async fn contact(&mut self, dir: &Dir, person: &Person) -> ContactView {
         let lookup = dir.lookup(&person.label()).await.unwrap();
         match self.ask(CryptoRequest::Contact {
+            witnessed: None,
+            registration: Vec::new(),
+            name_lookup: Vec::new(),
+            name: None,
             server: self.server.into(),
             account: person.account.to_vec(),
             lookup: lookup.encode().unwrap(),
@@ -133,6 +140,10 @@ impl Client {
     pub async fn contact_as(&mut self, dir: &Dir, person: &Person, user_id: u32) -> ContactView {
         let lookup = dir.lookup(&person.label()).await.unwrap();
         match self.ask(CryptoRequest::Contact {
+            witnessed: None,
+            registration: Vec::new(),
+            name_lookup: Vec::new(),
+            name: None,
             server: self.server.into(),
             account: person.account.to_vec(),
             lookup: lookup.encode().unwrap(),
@@ -148,6 +159,7 @@ impl Client {
     pub async fn history(&mut self, dir: &Dir, person: &Person, bytes: Vec<u8>) -> ContactView {
         let _ = dir;
         match self.ask(CryptoRequest::ContactHistory {
+            witnessed: None,
             server: self.server.into(),
             account: person.account.to_vec(),
             history: bytes,

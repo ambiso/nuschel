@@ -18,10 +18,10 @@ use std::{
 
 /// A set of the capabilities this server implements.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Capabilities(u8);
+pub struct Capabilities(u32);
 
 impl Capabilities {
-    fn bit(name: &str) -> u8 {
+    fn bit(name: &str) -> u32 {
         capability::ALL
             .iter()
             .position(|known| *known == name)
@@ -202,7 +202,7 @@ pub fn server_capabilities(kt: bool, mls: bool) -> Capabilities {
     Capabilities::from_names(
         capability::ALL
             .into_iter()
-            .filter(|name| kt || *name != capability::KT)
+            .filter(|name| kt || (*name != capability::KT && *name != capability::KT_WITNESS))
             .filter(|name| *name != capability::MLS || (kt && mls)),
     )
 }

@@ -347,12 +347,12 @@ impl Context {
     /// Looks up the peer and (once per connection) our own account, so the
     /// worker has both rosters.
     async fn mls_rosters(&mut self, peer: [u8; 16]) -> Result<(), crate::Error> {
-        self.check_contact(None, Some(peer), true).await?;
+        self.check_contact(None, Some(peer), true, None).await?;
         let own = id16(&self.account);
         if let Some(own) = own
             && !self.mls().own_checked
         {
-            self.check_contact(None, Some(own), false).await?;
+            self.check_contact(None, Some(own), false, None).await?;
             self.mls().own_checked = true;
         }
         Ok(())

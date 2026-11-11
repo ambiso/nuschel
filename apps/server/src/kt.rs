@@ -25,6 +25,14 @@
 //!   channel now), or everyone with `history = "members"`; checked again when
 //!   the answer is sent, as history pages are. Audits and heads: anyone. Each
 //!   kind has its own rate limit.
+//! - **Names and registration numbers** (`kt-witness/1`, docs/e2ee.md §5.9): every
+//!   registered user's `reg:<number>` and `name:<lower-case name>` labels name
+//!   their account, published with the bindings; a rename releases the old name
+//!   (a visible entry). What was published is kept as `N ‖ label` records, so a
+//!   restart publishes only what changed meanwhile. Lookups by number carry both
+//!   proofs; owners monitor their own.
+//! - **Witnessing** (crate::kt_witness): replies carry the newest cosigned
+//!   checkpoint of the epoch log with the head's inclusion proof.
 use crate::{
     authz::Action,
     config::{Kt as KtConfig, KtHistoryAccess},
@@ -42,8 +50,8 @@ use nuschel_identity::{
 use nuschel_ipc::server::{ServerStorageRequest as Request, ServerStorageResponse as Response};
 use nuschel_kt::{
     AccountBinding, AccountId, AkdDirectory, Directory, DirectoryError, DirectoryValue,
-    Ed25519HeadSigner, KtStore, Label, LogId, MAX_AUDIT_SPAN, RosterCommitment, StoreError,
-    VrfSecret, roster_for_binding,
+    Ed25519HeadSigner, KtStore, Label, LogId, MAX_AUDIT_SPAN, NameBinding, RosterCommitment,
+    SignedHead, StoreError, VrfSecret, roster_for_binding,
 };
 use nuschel_protocol::{
     ControlFrame,
@@ -71,6 +79,8 @@ const MAX_UPDATES_PER_EPOCH: usize = 1000;
 const GET_CHUNK: usize = 10_000;
 const PREFIX_RECORD: u8 = b'R';
 const PREFIX_CURRENT: u8 = b'C';
+/// `N ‖ label` → the `reg:` or `name:` value last published for it.
+const PREFIX_LABEL: u8 = b'N';
 
 // ---- keys ----
 
@@ -238,14 +248,53 @@ impl KtStore for StorageKt {
 
 // ---- requests ----
 
+/// A registered user's number and `name:` label name (lower case).
+#[derive(Clone, Debug)]
+pub struct Registration {
+    pub user_id: u32,
+    pub name: String,
+}
+
+impl Registration {
+    fn labels(&self) -> (Label, Option<Label>) {
+        (
+            Label::Registration(self.user_id),
+            Label::name(self.name.clone()),
+        )
+    }
+}
+
 /// What a connection asked for, already authorised under the state lock.
+/// `origin` is the index of the configured origin the client reaches the server
+/// under (crate::kt_witness), if any.
 pub enum Job {
-    Status { account: Option<Id> },
-    Publish { account: Id, publish: v1::KtPublish },
-    Lookup { account: Id },
-    History { account: Id },
-    Audit { from: u64, to: u64 },
-    Head { epoch: u64 },
+    Status {
+        account: Option<Id>,
+        origin: Option<usize>,
+        registration: Option<Registration>,
+    },
+    Publish {
+        account: Id,
+        publish: v1::KtPublish,
+    },
+    Lookup {
+        account: Id,
+        origin: Option<usize>,
+        registration: Option<Registration>,
+    },
+    History {
+        account: Id,
+        origin: Option<usize>,
+        label: Label,
+        kind: v1::KtLabel,
+    },
+    Audit {
+        from: u64,
+        to: u64,
+    },
+    Head {
+        epoch: u64,
+    },
 }
 
 pub struct Task {
@@ -271,6 +320,7 @@ pub struct KtHandle {
     pub descriptor: Vec<u8>,
     pub log_id: LogId,
     pub history: KtHistoryAccess,
+    pub witnesses: Option<Arc<crate::kt_witness::Witnesses>>,
 }
 
 impl KtHandle {
@@ -286,13 +336,20 @@ impl KtHandle {
             descriptor,
             log_id,
             history: KtHistoryAccess::Contacts,
+            witnesses: None,
         }
+    }
+
+    /// The configured origin a client named (`host:port`).
+    pub fn origin(&self, requested: &str) -> Option<usize> {
+        self.witnesses.as_ref()?.origin_index(requested)
     }
 }
 
 /// The task's end, started once the server exists.
 pub struct Service {
-    directory: AkdDirectory<StorageKt>,
+    directory: Arc<AkdDirectory<StorageKt>>,
+    witnesses: Arc<crate::kt_witness::Witnesses>,
     store: StorageKt,
     log_id: LogId,
     tasks: mpsc::Receiver<Task>,
@@ -302,6 +359,11 @@ pub struct Service {
     pending: BTreeMap<Id, (DirectoryValue, [u8; 32])>,
     /// When the newest head was signed.
     last_head: Instant,
+    /// `reg:` and `name:` values as published, and those waiting for an epoch.
+    labels: BTreeMap<Label, DirectoryValue>,
+    pending_labels: BTreeMap<Label, DirectoryValue>,
+    /// The registry generation the labels follow.
+    registry_generation: Option<u64>,
 }
 
 /// Opens (or creates) the log.
@@ -325,6 +387,17 @@ pub async fn open(
         .latest_head()
         .await
         .map_err(|error| StartError::Storage(format!("key transparency: {error}")))?;
+    let mut labels = BTreeMap::new();
+    for (key, value) in store
+        .scan_prefix(&[PREFIX_LABEL])
+        .await
+        .map_err(|error| StartError::Storage(format!("key transparency: {error}")))?
+    {
+        if let (Ok(label), Ok(value)) = (Label::decode(&key[1..]), DirectoryValue::decode(&value)) {
+            labels.insert(label, value);
+        }
+    }
+    let witnesses = Arc::new(crate::kt_witness::Witnesses::new(config));
     let age = Duration::from_millis(now_ms().saturating_sub(latest.issued_at_ms));
     let (tasks, receiver) = mpsc::channel(QUEUE);
     let log_id = descriptor.log_id();
@@ -339,9 +412,11 @@ pub async fn open(
             descriptor: descriptor.encode(),
             log_id,
             history: config.history,
+            witnesses: Some(witnesses.clone()),
         },
         Service {
-            directory,
+            directory: Arc::new(directory),
+            witnesses,
             store,
             log_id,
             tasks: receiver,
@@ -349,6 +424,9 @@ pub async fn open(
             refresh_interval: Duration::from_secs(config.refresh_interval),
             pending: BTreeMap::new(),
             last_head: Instant::now().checked_sub(age).unwrap_or_else(Instant::now),
+            labels,
+            pending_labels: BTreeMap::new(),
+            registry_generation: None,
         },
     ))
 }
@@ -443,6 +521,7 @@ impl Service {
     pub async fn run(mut self, server: Arc<Server>) {
         let mut tick = tokio::time::interval(self.publish_interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let pusher = tokio::spawn(self.witnesses.clone().run(self.directory.clone()));
         loop {
             tokio::select! {
                 task = self.tasks.recv() => {
@@ -450,13 +529,58 @@ impl Service {
                     let reply = self.answer(task.request_id, task.job).await;
                     server.lock().kt_answer(task.session, task.request_id, reply);
                 }
-                _ = tick.tick() => self.publish_or_refresh().await,
+                _ = tick.tick() => {
+                    self.follow_registry(&server);
+                    self.publish_or_refresh().await;
+                }
             }
         }
+        pusher.abort();
+    }
+
+    /// The `reg:` and `name:` values the registry implies, compared with what was
+    /// published: changes wait for the next epoch. A released name stays released
+    /// until someone registers it again.
+    fn follow_registry(&mut self, server: &Server) {
+        let users: Vec<(u32, Id, String)> = {
+            let state = server.lock();
+            if self.registry_generation == Some(state.registry.generation) {
+                return;
+            }
+            self.registry_generation = Some(state.registry.generation);
+            state
+                .registry
+                .users
+                .values()
+                .map(|user| (user.id, user.account, user.name.to_lowercase()))
+                .collect()
+        };
+        let mut wanted: BTreeMap<Label, DirectoryValue> = BTreeMap::new();
+        for (id, account, name) in users {
+            let value = NameBinding::Account(AccountId(account)).to_value();
+            wanted.insert(Label::Registration(id), value.clone());
+            // Names longer than a label holds stay outside the log.
+            if let Some(label) = Label::name(name) {
+                wanted.insert(label, value);
+            }
+        }
+        let released = NameBinding::Released.to_value();
+        let mut changes = BTreeMap::new();
+        for (label, value) in &self.labels {
+            if !wanted.contains_key(label) && *value != released {
+                changes.insert(label.clone(), released.clone());
+            }
+        }
+        for (label, value) in wanted {
+            if self.labels.get(&label) != Some(&value) {
+                changes.insert(label, value);
+            }
+        }
+        self.pending_labels = changes;
     }
 
     async fn publish_or_refresh(&mut self) {
-        if !self.pending.is_empty() {
+        if !self.pending.is_empty() || !self.pending_labels.is_empty() {
             self.publish().await;
         } else if self.last_head.elapsed() >= self.refresh_interval {
             match self.directory.refresh_head(now_ms()).await {
@@ -475,18 +599,38 @@ impl Service {
             .take(MAX_UPDATES_PER_EPOCH)
             .map(|(account, entry)| (*account, entry.clone()))
             .collect();
+        let names: Vec<(Label, DirectoryValue)> = self
+            .pending_labels
+            .iter()
+            .take(MAX_UPDATES_PER_EPOCH - batch.len())
+            .map(|(label, value)| (label.clone(), value.clone()))
+            .collect();
         let updates = batch
             .iter()
             .map(|(account, (value, _))| (label(account), value.clone()))
+            .chain(names.iter().cloned())
             .collect();
         match self.directory.publish(updates, now_ms()).await {
             Ok(head) => {
-                let pointers = batch
+                let mut pointers: Vec<(Vec<u8>, Vec<u8>)> = batch
                     .iter()
                     .map(|(account, (_, hash))| (current_key(account), hash.to_vec()))
                     .collect();
+                for (label, value) in &names {
+                    if let Ok(encoded) = label.encode() {
+                        let mut key = vec![PREFIX_LABEL];
+                        key.extend(encoded);
+                        pointers.push((key, value.encode()));
+                    }
+                }
                 if let Err(error) = self.store.write(pointers).await {
                     tracing::error!(%error, "could not record the published bindings");
+                }
+                for (label, value) in names {
+                    if self.pending_labels.get(&label) == Some(&value) {
+                        self.pending_labels.remove(&label);
+                    }
+                    self.labels.insert(label, value);
                 }
                 for (account, (_, hash)) in &batch {
                     if self
@@ -504,6 +648,18 @@ impl Service {
         }
     }
 
+    /// The witnessed checkpoint for a head, for clients of `origin`.
+    async fn witnessed(&self, origin: Option<usize>, head: &SignedHead) -> Vec<u8> {
+        match origin {
+            Some(origin) => self
+                .witnesses
+                .witnessed(&self.directory, origin, head.epoch)
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
     async fn current(&self, account: &Id) -> Result<Option<[u8; 32]>, Code> {
         let pointer = self
             .store
@@ -515,7 +671,11 @@ impl Service {
 
     async fn answer(&mut self, request_id: u64, job: Job) -> Result<Reply, Code> {
         match job {
-            Job::Status { account } => {
+            Job::Status {
+                account,
+                origin,
+                registration,
+            } => {
                 let head = self
                     .directory
                     .latest_head()
@@ -524,7 +684,10 @@ impl Service {
                 Ok(Reply::Status(v1::KtStatusReply {
                     request_id,
                     account: account.map(|a| a.to_vec()).unwrap_or_default(),
+                    witnessed: self.witnessed(origin, &head).await,
                     head: head.encode(),
+                    user_id: registration.as_ref().map(|r| r.user_id),
+                    name: registration.map(|r| r.name).unwrap_or_default(),
                 }))
             }
             Job::Publish { account, publish } => {
@@ -551,12 +714,38 @@ impl Service {
                     current,
                 }))
             }
-            Job::Lookup { account } => {
+            Job::Lookup {
+                account,
+                origin,
+                registration,
+            } => {
                 let response = self
                     .directory
                     .lookup(&label(&account))
                     .await
                     .map_err(directory_failure)?;
+                let witnessed = self.witnessed(origin, &response.head).await;
+                // The user's number and name, from the same epoch (this task also
+                // publishes, so nothing moves in between); a label still waiting
+                // for its epoch is left out.
+                let mut registration_lookup = Vec::new();
+                let mut name_lookup = Vec::new();
+                let mut name = String::new();
+                if let Some(registration) = registration {
+                    let (number, named) = registration.labels();
+                    if let Ok(found) = self.directory.lookup(&number).await
+                        && found.head == response.head
+                    {
+                        registration_lookup = found.encode().map_err(|_| Code::TooLarge)?;
+                    }
+                    if let Some(named) = named
+                        && let Ok(found) = self.directory.lookup(&named).await
+                        && found.head == response.head
+                    {
+                        name_lookup = found.encode().map_err(|_| Code::TooLarge)?;
+                        name = registration.name;
+                    }
+                }
                 let record = match self.current(&account).await? {
                     Some(hash) => self
                         .store
@@ -571,27 +760,38 @@ impl Service {
                     account: account.to_vec(),
                     response: response.encode().map_err(|_| Code::TooLarge)?,
                     record,
+                    witnessed,
+                    registration: registration_lookup,
+                    name_lookup,
+                    name,
                 };
                 if reply.encoded_len() > MAX_KT_LOOKUP_REPLY_BYTES {
                     return Err(Code::TooLarge);
                 }
                 Ok(Reply::Lookup(reply))
             }
-            Job::History { account } => {
-                let response = self
+            Job::History {
+                account,
+                origin,
+                label,
+                kind,
+            } => {
+                let history = self
                     .directory
-                    .history(&label(&account))
+                    .history(&label)
                     .await
-                    .map_err(directory_failure)?
-                    .encode()
-                    .map_err(|_| Code::TooLarge)?;
-                if response.len() + 64 > MAX_KT_REPLY_BYTES {
+                    .map_err(directory_failure)?;
+                let witnessed = self.witnessed(origin, &history.head).await;
+                let response = history.encode().map_err(|_| Code::TooLarge)?;
+                if response.len() + witnessed.len() + 64 > MAX_KT_REPLY_BYTES {
                     return Err(Code::TooLarge);
                 }
                 Ok(Reply::History(v1::KtHistoryReply {
                     request_id,
                     account: account.to_vec(),
                     response,
+                    witnessed,
+                    label: kind as i32,
                 }))
             }
             Job::Audit { from, to } => {
@@ -652,7 +852,7 @@ impl State {
         let (request_id, request) = match frame.kind {
             kind::KT_STATUS => {
                 let message = decoded!(v1::KtStatus);
-                (message.request_id, Pending::Status)
+                (message.request_id, Pending::Status(message.origin))
             }
             kind::KT_PUBLISH => {
                 let message = decoded!(v1::KtPublish);
@@ -660,11 +860,18 @@ impl State {
             }
             kind::KT_LOOKUP => {
                 let message = decoded!(v1::KtLookup);
-                (message.request_id, Pending::Lookup(message.target))
+                (
+                    message.request_id,
+                    Pending::Lookup(message.target, message.origin),
+                )
             }
             kind::KT_HISTORY => {
                 let message = decoded!(v1::KtHistory);
-                (message.request_id, Pending::History(message.account))
+                let label = message.label();
+                (
+                    message.request_id,
+                    Pending::History(message.account, message.origin, label),
+                )
             }
             kind::KT_AUDIT => {
                 let message = decoded!(v1::KtAudit);
@@ -732,12 +939,33 @@ impl State {
         account.ok_or((Code::NotFound, 0))
     }
 
+    /// A configured origin, if the client named one and this server witnesses.
+    fn kt_origin(&self, requested: &str) -> Option<usize> {
+        if requested.is_empty() || requested.len() > 255 {
+            return None;
+        }
+        self.kt.as_ref()?.origin(requested)
+    }
+
+    /// The registration behind an account, for its `reg:` and `name:` labels.
+    fn kt_registration(&self, account: &Id) -> Option<Registration> {
+        self.registry
+            .by_account(account)
+            .map(|registered| Registration {
+                user_id: registered.id,
+                name: registered.name.to_lowercase(),
+            })
+    }
+
     fn kt_authorise(&mut self, session: u32, request: Pending) -> Result<Job, Failure> {
         Ok(match request {
-            Pending::Status => {
+            Pending::Status(origin) => {
                 self.authorize(session, Action::KtStatus)?;
+                let account = self.users.get(&session).and_then(|user| user.account);
                 Job::Status {
-                    account: self.users.get(&session).and_then(|user| user.account),
+                    account,
+                    origin: self.kt_origin(&origin),
+                    registration: account.and_then(|account| self.kt_registration(&account)),
                 }
             }
             Pending::Publish(publish) => {
@@ -759,17 +987,42 @@ impl State {
                 }
                 Job::Publish { account, publish }
             }
-            Pending::Lookup(target) => {
+            Pending::Lookup(target, origin) => {
                 self.kt_limited(session, |e| &mut e.kt_lookups)?;
                 let account = self.kt_account(target)?;
                 self.authorize(session, Action::KtLookup { account: &account })?;
-                Job::Lookup { account }
+                Job::Lookup {
+                    account,
+                    origin: self.kt_origin(&origin),
+                    registration: self.kt_registration(&account),
+                }
             }
-            Pending::History(account) => {
+            Pending::History(account, origin, kind) => {
                 self.kt_limited(session, |e| &mut e.kt_histories)?;
                 let account = nuschel::id(&account).ok_or((Code::Malformed, 0))?;
                 self.authorize(session, Action::KtHistory { account: &account })?;
-                Job::History { account }
+                let label = match kind {
+                    v1::KtLabel::Account => label(&account),
+                    // Numbers and names: only one's own, for self-monitoring.
+                    _ => {
+                        let own = self.users.get(&session).and_then(|user| user.account);
+                        let registration = own
+                            .filter(|own| *own == account)
+                            .and_then(|own| self.kt_registration(&own))
+                            .ok_or((Code::NotFound, 0))?;
+                        let (number, name) = registration.labels();
+                        match kind {
+                            v1::KtLabel::Registration => number,
+                            _ => name.ok_or((Code::NotFound, 0))?,
+                        }
+                    }
+                };
+                Job::History {
+                    account,
+                    origin: self.kt_origin(&origin),
+                    label,
+                    kind,
+                }
             }
             Pending::Audit(from, to) => {
                 self.kt_limited(session, |e| &mut e.kt_histories)?;
@@ -822,10 +1075,10 @@ impl State {
 
 /// A decoded request before authorisation.
 enum Pending {
-    Status,
+    Status(String),
     Publish(v1::KtPublish),
-    Lookup(Option<v1::kt_lookup::Target>),
-    History(Vec<u8>),
+    Lookup(Option<v1::kt_lookup::Target>, String),
+    History(Vec<u8>, String, v1::KtLabel),
     Audit(u64, u64),
     Head(u64),
 }

@@ -778,6 +778,11 @@ pub async fn run(
                 .extension
                 .as_ref()
                 .is_some_and(|capabilities| capabilities.iter().any(|c| c == nuschel::capability::MLS)),
+            witness: state.extension.as_ref().is_some_and(|capabilities| {
+                capabilities
+                    .iter()
+                    .any(|c| c == nuschel::capability::KT_WITNESS)
+            }),
             server: nuschel_ipc::crypto::CryptoServer {
                 key: crate::sticky::key(&options.server.host, options.server.port),
                 label: if options.server.name.is_empty() {
@@ -916,6 +921,8 @@ struct KtLink {
     setup: crate::identity::IdentitySetup,
     /// `mls/1` was negotiated: the driver also runs end-to-end conversations.
     mls: bool,
+    /// `kt-witness/1` was negotiated (docs/e2ee.md §5.9).
+    witness: bool,
     server: nuschel_ipc::crypto::CryptoServer,
     running: Option<KtRunning>,
 }
@@ -962,6 +969,8 @@ impl KtLink {
             commands: commands_rx,
             events: events.clone(),
             mls,
+            witness: self.witness,
+            witnessing: self.setup.witnessing.clone(),
         }));
         self.running = Some(KtRunning {
             frames,

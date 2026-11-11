@@ -17,6 +17,7 @@ pub mod fuzzing;
 pub mod handlers;
 pub mod history;
 pub mod kt;
+pub mod kt_witness;
 pub mod limits;
 pub mod mls;
 pub mod murmur;

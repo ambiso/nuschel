@@ -29,6 +29,36 @@ pub mod base64_bytes {
     }
 }
 
+/// Optional bytes as a base64 string or `null`.
+pub mod base64_option {
+    use base64::Engine as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        bytes: &Option<Vec<u8>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match bytes {
+            Some(bytes) => {
+                serializer.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
+            }
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Vec<u8>>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|text| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(text)
+                    .map_err(serde::de::Error::custom)
+            })
+            .transpose()
+    }
+}
+
 /// Several byte strings as base64.
 pub mod base64_list {
     use base64::Engine as _;
@@ -63,6 +93,8 @@ pub const MAX_DEVICE_NAME: usize = 64;
 pub const MAX_REASON: usize = 512;
 /// A key-transparency reply as the server may send it (docs/extension.md).
 pub const MAX_KT_BYTES: usize = 6 * 1024 * 1024;
+/// A `WitnessedHead` (`kt-witness/1`).
+pub const MAX_WITNESSED: usize = 72 * 1024;
 pub const MAX_CERTIFICATE: usize = 8 * 1024;
 pub const MAX_RECORD_ENTRIES: usize = 32;
 /// MLS (docs/e2ee.md §6): any one MLS message, Welcome, GroupInfo or tree.
@@ -97,6 +129,112 @@ pub enum RecoveryPolicy {
     Require,
     /// No recovery key: the identity root exists only during creation.
     Never,
+}
+
+/// Which witnesses the client requires of every server's key-transparency log
+/// (docs/e2ee.md §5.9, `key_transparency` in settings.json and managed.json).
+/// The crypto worker combines it with the built-in witnesses
+/// (`nuschel_kt::DEFAULT_WITNESSES`, empty until the project auditor is
+/// deployed): while the result is empty, nothing is required and nothing changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct KeyTransparencySettings {
+    /// Require the built-in witnesses.
+    pub default_witnesses: bool,
+    /// More witnesses (C2SP verifier keys from `nuschel-witness vkey`), or
+    /// built-in ones with `enabled: false` to turn them off.
+    pub witnesses: Vec<WitnessSetting>,
+    /// How many of the enabled witnesses must have cosigned; unset: all of them.
+    /// Clients that require `k` of the same `n` witnesses are only safe from
+    /// split views if `2k > n`.
+    pub required: Option<u32>,
+    /// How old the newest cosignatures may be, in hours (1 to 168). Proposed:
+    /// 24, so a frozen view lasts at most a day.
+    pub max_age_hours: u32,
+    /// While a server's log is not witnessed, refuse to add contacts' new devices
+    /// to existing end-to-end conversations (proposed: on). First contact still
+    /// proceeds, as "not verified".
+    pub block_new_devices: bool,
+}
+
+impl Default for KeyTransparencySettings {
+    fn default() -> Self {
+        Self {
+            default_witnesses: true,
+            witnesses: Vec::new(),
+            required: None,
+            max_age_hours: 24,
+            block_new_devices: true,
+        }
+    }
+}
+
+/// Most witnesses in [`KeyTransparencySettings`] (signed notes carry at least 16).
+pub const MAX_WITNESSES: usize = 16;
+/// Longest verifier key (an ML-DSA-44 key in base64 is about 1.8 KB).
+pub const MAX_WITNESS_KEY: usize = 4096;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessSetting {
+    /// `<name>+<key id>+<base64 key>`.
+    pub key: String,
+    #[serde(default = "enabled")]
+    pub enabled: bool,
+}
+
+fn enabled() -> bool {
+    true
+}
+
+impl KeyTransparencySettings {
+    /// Within bounds; `Err` names the first violation. Keys are parsed by the
+    /// worker; this checks their shape (`name+id+key`, a name without spaces).
+    pub fn check(&self) -> Result<(), &'static str> {
+        if self.witnesses.len() > MAX_WITNESSES {
+            return Err("at most 16 witnesses");
+        }
+        if !(1..=168).contains(&self.max_age_hours) {
+            return Err("max_age_hours is 1 to 168");
+        }
+        if self.required.is_some_and(|r| r as usize > MAX_WITNESSES) {
+            return Err("required is at most 16");
+        }
+        for witness in &self.witnesses {
+            let mut parts = witness.key.splitn(3, '+');
+            let shaped = witness.key.len() <= MAX_WITNESS_KEY
+                && parts.next().is_some_and(|name| {
+                    !name.is_empty()
+                        && name.len() <= 255
+                        && !name.chars().any(|c| c.is_whitespace() || c.is_control())
+                })
+                && parts
+                    .next()
+                    .is_some_and(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+                && parts.next().is_some_and(|key| !key.is_empty());
+            if !shaped {
+                return Err("a witness key is not name+id+key");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether a server's view is witnessed (docs/e2ee.md §5.9).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "witness", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WitnessStatus {
+    /// No witness is required (nothing configured): as before.
+    #[default]
+    Off,
+    /// Cosigned by the required witnesses; fresh until `until_ms`.
+    Witnessed { until_ms: u64 },
+    /// The newest epoch waits for its cosignatures (minutes).
+    Pending,
+    /// "Automatic verification unavailable": cosignatures missing, stale or
+    /// unreachable. Messages keep using pinned keys; contacts' new devices are not
+    /// added to existing conversations (if configured).
+    Unavailable { reason: String },
 }
 
 /// The certificates behind a binding (`KtRecord` on the wire).
@@ -141,6 +279,16 @@ pub enum CryptoRequest {
         account: Vec<u8>,
         #[serde(with = "base64_bytes")]
         head: Vec<u8>,
+        /// With `kt-witness/1`: the head's `WitnessedHead` (possibly empty); `None`
+        /// when the server does not offer witnessing.
+        #[serde(default, with = "base64_option")]
+        witnessed: Option<Vec<u8>>,
+        /// The witnesses to require (settings).
+        #[serde(default)]
+        witnessing: KeyTransparencySettings,
+        /// Our registration number and `name:` label name there, to monitor.
+        #[serde(default)]
+        registration: Option<(u32, String)>,
     },
     /// A newer head (the target of `NeedAudit`, or one in between) with the audit
     /// proof from the latest accepted head: `Head`, or `NeedAudit` for the rest.
@@ -170,6 +318,19 @@ pub enum CryptoRequest {
         server: String,
         #[serde(with = "base64_bytes")]
         history: Vec<u8>,
+        #[serde(default, with = "base64_option")]
+        witnessed: Option<Vec<u8>>,
+    },
+    /// Self-monitoring of our registration number (`name: None`) or name label:
+    /// every version since the first that names our account must name it
+    /// (`Monitor`).
+    MonitorLabel {
+        server: String,
+        name: Option<String>,
+        #[serde(with = "base64_bytes")]
+        history: Vec<u8>,
+        #[serde(default, with = "base64_option")]
+        witnessed: Option<Vec<u8>>,
     },
     /// A contact's lookup and the record behind it: `Contact`.
     Contact {
@@ -185,6 +346,17 @@ pub enum CryptoRequest {
         /// later shows another account for it is flagged.
         #[serde(default)]
         user_id: Option<u32>,
+        #[serde(default, with = "base64_option")]
+        witnessed: Option<Vec<u8>>,
+        /// With `kt-witness/1`: the lookups of the `reg:` label of `user_id` and of
+        /// the `name:` label of `name` (the name shown, lower case), each naming
+        /// `account` at the same head.
+        #[serde(default, with = "base64_bytes")]
+        registration: Vec<u8>,
+        #[serde(default, with = "base64_bytes")]
+        name_lookup: Vec<u8>,
+        #[serde(default)]
+        name: Option<String>,
     },
     /// A contact's history: `Contact`.
     ContactHistory {
@@ -193,6 +365,8 @@ pub enum CryptoRequest {
         account: Vec<u8>,
         #[serde(with = "base64_bytes")]
         history: Vec<u8>,
+        #[serde(default, with = "base64_option")]
+        witnessed: Option<Vec<u8>>,
     },
     /// The server had nothing (not found, unauthenticated) or refused: `Contact`.
     ContactUnavailable {
@@ -411,6 +585,13 @@ impl CryptoRequest {
                 Err("idempotency key")
             }
         };
+        let witnessed = |bytes: &Option<Vec<u8>>| {
+            at_most(
+                bytes.as_ref().map_or(0, Vec::len),
+                MAX_WITNESSED,
+                "witnessed checkpoint",
+            )
+        };
         let packages = |list: &[Vec<u8>]| {
             at_most(list.len(), MAX_MLS_PACKAGES, "key packages")?;
             list.iter()
@@ -429,6 +610,9 @@ impl CryptoRequest {
                 descriptor,
                 account: own,
                 head,
+                witnessed: w,
+                witnessing,
+                registration,
             } => {
                 server(&s.key)?;
                 at_most(s.label.len(), MAX_LABEL, "server label")?;
@@ -436,6 +620,13 @@ impl CryptoRequest {
                 if !own.is_empty() {
                     account(own)?;
                 }
+                witnessed(w)?;
+                witnessing.check()?;
+                at_most(
+                    registration.as_ref().map_or(0, |(_, name)| name.len()),
+                    MAX_LABEL,
+                    "name",
+                )?;
                 at_most(head.len(), 1024, "head")
             }
             Self::Advance {
@@ -461,8 +652,24 @@ impl CryptoRequest {
                 server(s)?;
                 at_most(value.len(), 8192, "value")
             }
-            Self::Monitor { server: s, history } => {
+            Self::Monitor {
+                server: s,
+                history,
+                witnessed: w,
+            } => {
                 server(s)?;
+                witnessed(w)?;
+                at_most(history.len(), MAX_KT_BYTES, "history")
+            }
+            Self::MonitorLabel {
+                server: s,
+                name,
+                history,
+                witnessed: w,
+            } => {
+                server(s)?;
+                witnessed(w)?;
+                at_most(name.as_ref().map_or(0, String::len), MAX_LABEL, "name")?;
                 at_most(history.len(), MAX_KT_BYTES, "history")
             }
             Self::Contact {
@@ -470,10 +677,18 @@ impl CryptoRequest {
                 account: a,
                 lookup,
                 record,
+                witnessed: w,
+                registration,
+                name_lookup,
+                name,
                 ..
             } => {
                 server(s)?;
                 account(a)?;
+                witnessed(w)?;
+                at_most(registration.len(), MAX_KT_BYTES, "registration lookup")?;
+                at_most(name_lookup.len(), MAX_KT_BYTES, "name lookup")?;
+                at_most(name.as_ref().map_or(0, String::len), MAX_LABEL, "name")?;
                 at_most(lookup.len(), MAX_KT_BYTES, "lookup")?;
                 if let Some(record) = record {
                     at_most(
@@ -496,9 +711,11 @@ impl CryptoRequest {
                 server: s,
                 account: a,
                 history,
+                witnessed: w,
             } => {
                 server(s)?;
                 account(a)?;
+                witnessed(w)?;
                 at_most(history.len(), MAX_KT_BYTES, "history")
             }
             Self::ContactUnavailable {
@@ -676,8 +893,13 @@ pub struct OwnKeyAlarm {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HeadOutcome {
-    /// The head is the latest accepted one now.
-    Accepted { epoch: u64 },
+    /// The head is the latest accepted one now; `witness`: whether the server's
+    /// view is witnessed (docs/e2ee.md §5.9).
+    Accepted {
+        epoch: u64,
+        #[serde(default)]
+        witness: WitnessStatus,
+    },
     /// Fetch `KtAudit { from, to }` (bisecting with `KtHead` if it is too large) and
     /// send it with `Advance`.
     NeedAudit { from: u64, to: u64 },
@@ -1006,6 +1228,10 @@ mod tests {
     #[test]
     fn requests_round_trip_with_base64_bytes() {
         let request = CryptoRequest::Contact {
+            witnessed: None,
+            registration: Vec::new(),
+            name_lookup: Vec::new(),
+            name: None,
             server: "voice.example.org:64738".into(),
             account: vec![7; 16],
             lookup: vec![1, 2, 3],
@@ -1042,6 +1268,9 @@ mod tests {
         };
         assert!(short_account.check().is_err());
         let guest = CryptoRequest::Connect {
+            witnessed: None,
+            witnessing: Default::default(),
+            registration: None,
             server: CryptoServer {
                 key: "s".into(),
                 label: "S".into(),

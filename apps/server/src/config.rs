@@ -287,6 +287,33 @@ pub struct Kt {
     pub histories_per_minute: u32,
     pub publishes_per_minute: u32,
     pub history: KtHistoryAccess,
+    /// The names clients reach this server under, `host:port` as in their
+    /// bookmarks (`chat.example.org:64738`): each is an origin of the epoch log,
+    /// `<host>:<port>/nuschel-kt/v1`, whose checkpoints the witnesses cosign
+    /// (docs/witness.md). Without one, nothing is submitted and replies carry no
+    /// checkpoint; clients that require witnesses then show "Automatic
+    /// verification unavailable".
+    pub origins: Vec<String>,
+    /// Submit to the built-in witnesses (`nuschel_kt::DEFAULT_WITNESSES`, empty
+    /// until the project auditor is deployed).
+    pub default_witnesses: bool,
+    /// More witnesses to submit to.
+    pub witnesses: Vec<KtWitness>,
+    /// Seconds between submissions while new epochs wait for cosignatures.
+    pub witness_interval: u64,
+    /// Seconds after which an unchanged checkpoint is submitted again, so that
+    /// its cosignatures stay fresh (clients accept them for a day by default).
+    pub witness_refresh_interval: u64,
+}
+
+/// A witness `nuscheld` submits its epochs to (`[[kt.witnesses]]`).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KtWitness {
+    /// Its C2SP verifier key (`nuschel-witness vkey`).
+    pub key: String,
+    /// Its base URL; submissions go to `<url>/nuschel-kt/v1/add-epochs`.
+    pub url: String,
 }
 
 impl Default for Kt {
@@ -301,6 +328,11 @@ impl Default for Kt {
             histories_per_minute: 60,
             publishes_per_minute: 6,
             history: KtHistoryAccess::Contacts,
+            origins: Vec::new(),
+            default_witnesses: true,
+            witnesses: Vec::new(),
+            witness_interval: 60,
+            witness_refresh_interval: 3600,
         }
     }
 }
@@ -621,6 +653,38 @@ impl Config {
             return Err(ConfigError::Invalid(
                 "kt.publish_interval must be nonzero and at most kt.refresh_interval".into(),
             ));
+        }
+        if kt.witness_interval == 0 || kt.witness_refresh_interval < kt.witness_interval {
+            return Err(ConfigError::Invalid(
+                "kt.witness_interval must be nonzero and at most kt.witness_refresh_interval"
+                    .into(),
+            ));
+        }
+        for origin in &kt.origins {
+            let valid = origin
+                .rsplit_once(':')
+                .is_some_and(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok())
+                && *origin == origin.to_ascii_lowercase()
+                && nuschel_kt::witness::origin(origin).is_some();
+            if !valid {
+                return Err(ConfigError::Invalid(format!(
+                    "kt.origins: {origin:?} is not a lower-case host:port"
+                )));
+            }
+        }
+        for witness in &kt.witnesses {
+            if let Err(error) = nuschel_kt::witness::note::CosignerKey::from_vkey(&witness.key) {
+                return Err(ConfigError::Invalid(format!(
+                    "kt.witnesses: the key {:?} is not an ML-DSA-44 verifier key: {error}",
+                    witness.key.chars().take(40).collect::<String>()
+                )));
+            }
+            if !(witness.url.starts_with("https://") || witness.url.starts_with("http://")) {
+                return Err(ConfigError::Invalid(format!(
+                    "kt.witnesses: {:?} is not an http(s) URL",
+                    witness.url
+                )));
+            }
         }
         for (name, path) in [
             ("kt.signing_key_file", &kt.signing_key_file),

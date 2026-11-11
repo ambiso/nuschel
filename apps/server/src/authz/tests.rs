@@ -1301,6 +1301,8 @@ fn key_transparency_histories_are_checked_again_when_answered() {
     };
     let answer = |request_id| {
         Ok(Reply::History(v1::KtHistoryReply {
+            witnessed: Vec::new(),
+            label: 0,
             request_id,
             account: owner_account.to_vec(),
             response: vec![1, 2, 3],

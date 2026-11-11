@@ -969,6 +969,10 @@ impl Worker {
         if let Some(reason) = &entry.blocked {
             return Err(reason.clone());
         }
+        // Key transparency without fresh witness cosignatures (crate::witness).
+        if let Some(reason) = self.new_devices_blocked(server) {
+            return Err(reason);
+        }
         let peer = array16(&entry.peer, "an account id")?;
         let rosters = self.rosters(server, &peer)?;
         let present: BTreeSet<[u8; 16]> = self

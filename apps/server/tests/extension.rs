@@ -660,7 +660,14 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
     assert!(negotiated.nuschel);
     assert_eq!(
         negotiated.capabilities,
-        ["history/1", "subscribe/1", "typing/1", "kt/1", "mls/1"]
+        [
+            "history/1",
+            "subscribe/1",
+            "typing/1",
+            "kt/1",
+            "mls/1",
+            "kt-witness/1"
+        ]
     );
     // The key-transparency log comes with `kt/1`.
     assert_eq!(negotiated.kt_log.len(), 71);

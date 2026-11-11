@@ -316,6 +316,7 @@ mod tests {
                     nuschel_protocol::nuschel::v1::KtLookup {
                         request_id: round + 3,
                         target: Some(nuschel_protocol::nuschel::v1::kt_lookup::Target::UserId(1)),
+                        origin: "127.0.0.1:64738".into(),
                     }
                     .encode_to_vec(),
                 ),
@@ -324,6 +325,7 @@ mod tests {
                     nuschel_protocol::nuschel::v1::KtHistory {
                         request_id: round + 4,
                         account: vec![1; 16],
+                        ..Default::default()
                     }
                     .encode_to_vec(),
                 ),

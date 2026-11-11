@@ -36,7 +36,11 @@ pub mod capability {
     /// MLS (docs/e2ee.md §6): the delivery service, key packages, Welcome
     /// mailboxes. Needs `kt/1`; sticky like every capability.
     pub const MLS: &str = "mls/1";
-    pub const ALL: [&str; 5] = [HISTORY, SUBSCRIBE, TYPING, KT, MLS];
+    /// Witnessed key transparency (docs/e2ee.md §5.9): checkpoints of the
+    /// server's epoch log with cosignatures attached to heads, and `reg:` and
+    /// `name:` labels. Needs `kt/1`; sticky like every capability.
+    pub const KT_WITNESS: &str = "kt-witness/1";
+    pub const ALL: [&str; 6] = [HISTORY, SUBSCRIBE, TYPING, KT, MLS, KT_WITNESS];
 }
 
 /// Message types.
@@ -114,8 +118,11 @@ pub const MAX_KT_REVOCATIONS: usize = 32;
 pub const MAX_KT_CERTIFICATE_BYTES: usize = 8 * 1024;
 /// A `KtPublish` from a client.
 pub const MAX_KT_PUBLISH_BYTES: usize = 256 * 1024;
-/// A lookup reply: the proof (nuschel-kt allows 256 KiB) and the record.
-pub const MAX_KT_LOOKUP_REPLY_BYTES: usize = 512 * 1024;
+/// A nuschel-kt `WitnessedHead` in a reply (`kt-witness/1`).
+pub const MAX_KT_WITNESSED_BYTES: usize = 72 * 1024;
+/// A lookup reply: up to three proofs (nuschel-kt allows 256 KiB each), the
+/// record and the witnessed checkpoint.
+pub const MAX_KT_LOOKUP_REPLY_BYTES: usize = 1536 * 1024;
 /// History and audit replies; a server answers `TOO_LARGE` beyond this, and
 /// clients audit shorter spans.
 pub const MAX_KT_REPLY_BYTES: usize = 6 * 1024 * 1024;
@@ -216,6 +223,7 @@ pub fn server_limit(kind: u16) -> usize {
         KT_LOOKUP_REPLY => MAX_KT_LOOKUP_REPLY_BYTES,
         KT_HISTORY_REPLY | KT_AUDIT_REPLY => MAX_KT_REPLY_BYTES,
         KT_PUBLISHED => 8 * 1024,
+        KT_STATUS_REPLY => MAX_KT_WITNESSED_BYTES + 2048,
         _ => 1024,
     }
     .min(MAX_CONTROL_BYTES)

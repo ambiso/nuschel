@@ -3,7 +3,9 @@
 //! key-transparency log, the heads it accepted, its own binding and
 //! self-monitoring checkpoint, and trust on first use per contact; per identity,
 //! where it was verified out of band. Sealed under the store key as JSON.
-use nuschel_ipc::crypto::{ContactState, KtRecordBytes, RecoveryPolicy, base64_bytes, base64_list};
+use nuschel_ipc::crypto::{
+    ContactState, KeyTransparencySettings, KtRecordBytes, RecoveryPolicy, base64_bytes, base64_list,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -29,6 +31,34 @@ pub struct State {
     /// lookups of our own account; published with this one (crate::link).
     #[serde(default, with = "base64_list")]
     pub own_devices: Vec<Vec<u8>>,
+    /// The witnesses the user requires (settings; docs/e2ee.md §5.9), as the
+    /// session last passed them.
+    #[serde(default)]
+    pub witnessing: KeyTransparencySettings,
+}
+
+/// Whether a server's view is witnessed (crate::witness).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Witness {
+    /// The server offers `kt-witness/1`.
+    pub offered: bool,
+    /// The newest epoch a fresh checkpoint covered, and until when that holds.
+    pub covered_epoch: Option<u64>,
+    pub until_ms: u64,
+    /// Since when the newest head waits for cosignatures.
+    pub pending_since_ms: Option<u64>,
+    /// Why the last check found no fresh cosignatures, if it did not.
+    pub failure: Option<String>,
+}
+
+/// A self-monitored `reg:` or `name:` label: the first version that named our
+/// account, from which on every version must.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabelCheckpoint {
+    pub version: u64,
+    pub epoch: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,6 +116,14 @@ pub struct ServerState {
     /// behind one is worth a notice.
     #[serde(default)]
     pub aliases: BTreeMap<u32, String>,
+    #[serde(default)]
+    pub witness: Witness,
+    /// Our registration number and name there, and their monitoring checkpoints
+    /// (by label: `reg` or `name:<name>`).
+    #[serde(default)]
+    pub registration: Option<(u32, String)>,
+    #[serde(default)]
+    pub labels: BTreeMap<String, LabelCheckpoint>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

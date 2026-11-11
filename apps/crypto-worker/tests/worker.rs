@@ -166,7 +166,7 @@ async fn the_schedule_publishes_monitors_and_rechecks_daily() {
     let head = dir.latest_head().await.unwrap();
     assert!(matches!(
         bob.connect(&dir, [2; 16], &head),
-        HeadOutcome::Accepted { epoch: 1 }
+        HeadOutcome::Accepted { epoch: 1, .. }
     ));
     let due = |bob: &mut Client, connected: bool| match bob.ask(CryptoRequest::Due {
         server: bob.server.into(),
@@ -183,6 +183,7 @@ async fn the_schedule_publishes_monitors_and_rechecks_daily() {
     let history = dir.history(&person.label()).await.unwrap();
     assert!(matches!(
         bob.ask(CryptoRequest::Monitor {
+            witnessed: None,
             server: bob.server.into(),
             history: history.encode().unwrap(),
         }),
@@ -215,6 +216,9 @@ async fn guests_and_strangers_are_refused_and_bounds_hold() {
     guest.connect(&dir, [0; 16], &head);
     // An empty account means a guest: nothing to publish.
     guest.ask(CryptoRequest::Connect {
+        witnessed: None,
+        witnessing: Default::default(),
+        registration: None,
         server: nuschel_ipc::crypto::CryptoServer {
             key: SERVER.into(),
             label: "x".into(),
@@ -234,6 +238,7 @@ async fn guests_and_strangers_are_refused_and_bounds_hold() {
     // Unknown servers, oversized fields and short account ids are refused.
     assert!(matches!(
         guest.ask(CryptoRequest::Monitor {
+            witnessed: None,
             server: "unknown:1".into(),
             history: Vec::new(),
         }),
@@ -256,6 +261,9 @@ async fn guests_and_strangers_are_refused_and_bounds_hold() {
     ));
     // A malformed descriptor is a failure, and pins nothing.
     let outcome = guest.ask(CryptoRequest::Connect {
+        witnessed: None,
+        witnessing: Default::default(),
+        registration: None,
         server: nuschel_ipc::crypto::CryptoServer {
             key: "other:1".into(),
             label: "x".into(),

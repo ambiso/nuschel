@@ -29,7 +29,7 @@ async fn a_wrong_or_stale_head_is_refused_and_never_accepted() {
     // The genuine head is then accepted: the forged one left no trace.
     assert!(matches!(
         client.connect(&dir, [0; 16], &head),
-        HeadOutcome::Accepted { epoch: 0 }
+        HeadOutcome::Accepted { epoch: 0, .. }
     ));
     // A day and two hours later, the same head is stale.
     client.at(T0 + 26 * 3600 * 1000);
@@ -139,7 +139,7 @@ async fn a_server_that_cannot_prove_its_new_head_extends_the_old_one_is_caught()
     let honest_head = honest.latest_head().await.unwrap();
     assert!(matches!(
         bob.connect(&honest, [0; 16], &honest_head),
-        HeadOutcome::Accepted { epoch: 1 }
+        HeadOutcome::Accepted { epoch: 1, .. }
     ));
 }
 
@@ -178,6 +178,10 @@ async fn hidden_changes_wrong_accounts_and_foreign_records_are_not_accepted() {
     // A lookup proof for another account is refused.
     let wrong = dir.lookup(&bob_person.label()).await.unwrap();
     let CryptoResponse::Contact(view) = bob.ask(CryptoRequest::Contact {
+        witnessed: None,
+        registration: Vec::new(),
+        name_lookup: Vec::new(),
+        name: None,
         server: SERVER.into(),
         account: alice.account.to_vec(),
         lookup: wrong.encode().unwrap(),
@@ -199,6 +203,10 @@ async fn hidden_changes_wrong_accounts_and_foreign_records_are_not_accepted() {
     let mut carol = Client::new();
     carol.sync(&dir).await;
     let CryptoResponse::Contact(view) = carol.ask(CryptoRequest::Contact {
+        witnessed: None,
+        registration: Vec::new(),
+        name_lookup: Vec::new(),
+        name: None,
         server: SERVER.into(),
         account: alice.account.to_vec(),
         lookup: lookup.encode().unwrap(),
@@ -250,6 +258,7 @@ async fn a_binding_that_came_and_went_is_shown_and_self_monitoring_catches_it() 
 
     // Alice's own check: consistent.
     let monitor = |alice: &mut Client, history: Vec<u8>| match alice.ask(CryptoRequest::Monitor {
+        witnessed: None,
         server: SERVER.into(),
         history,
     }) {

@@ -16,7 +16,7 @@ use nuschel_ipc::{
     Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
     crypto::{
         ContactView, CryptoRequest, CryptoResponse, CryptoServer, HeadOutcome, IdentityView,
-        KtRecordBytes, MonitorOutcome, RecoveryPolicy,
+        KeyTransparencySettings, KtRecordBytes, MonitorOutcome, RecoveryPolicy,
     },
     write_frame,
 };
@@ -196,6 +196,9 @@ pub struct IdentitySetup {
     /// device into a group, so plaintext direct conversations keep working;
     /// groups joined earlier keep working either way.
     pub e2ee_direct: bool,
+    /// The witnesses to require of key-transparency logs (`key_transparency` in
+    /// the settings; docs/e2ee.md §5.9).
+    pub witnessing: KeyTransparencySettings,
 }
 
 /// What the frontend asks about identities on this server.
@@ -207,6 +210,9 @@ pub enum IdentityCommand {
         user_id: Option<u32>,
         account: Option<[u8; 16]>,
         direct: bool,
+        /// The name the server shows for them (not a local nickname): on a
+        /// `kt-witness/1` server, its `name:` label must name the same account.
+        name: Option<String>,
     },
     /// The user compared safety numbers out of band.
     MarkVerified {
@@ -266,6 +272,9 @@ pub struct Driver {
     pub events: mpsc::Sender<crate::connection::SessionEvent>,
     /// With `mls/1`: end-to-end conversations (crate::mls).
     pub mls: Option<MlsLink>,
+    /// `kt-witness/1` was negotiated (docs/e2ee.md §5.9).
+    pub witness: bool,
+    pub witnessing: KeyTransparencySettings,
 }
 
 /// The `mls/1` side of the driver: frontend commands and server pushes (Welcomes,
@@ -295,6 +304,12 @@ pub(crate) struct Context {
     pub(crate) mls: Option<crate::mls::MlsState>,
     /// Key packages and new groups (opt-in, [`IdentitySetup::e2ee_direct`]).
     pub(crate) mls_enabled: bool,
+    /// `kt-witness/1`: replies carry witnessed checkpoints, and our number and name
+    /// labels are monitored.
+    witness: bool,
+    witnessing: KeyTransparencySettings,
+    /// Our registration number and name label, from the status reply.
+    registration: Option<(u32, String)>,
 }
 
 /// A server reply, or its error.
@@ -435,27 +450,47 @@ impl Context {
         Err(Error::Worker("the log kept moving".into()))
     }
 
+    /// What a reply's `witnessed` field means to the worker: `None` without
+    /// `kt-witness/1`.
+    fn witnessed(&self, bytes: Vec<u8>) -> Option<Vec<u8>> {
+        self.witness.then_some(bytes)
+    }
+
+    /// The origin to name in requests: the server as we reach it.
+    fn origin(&self) -> String {
+        if self.witness {
+            self.server.key.clone()
+        } else {
+            String::new()
+        }
+    }
+
     async fn connect(&mut self, descriptor: Vec<u8>) -> Result<bool, Error> {
-        let (account, head) = match self
+        let origin = self.origin();
+        let status = match self
             .ask(kind::KT_STATUS, |request_id| {
-                v1::KtStatus { request_id }.encode_to_vec()
+                v1::KtStatus { request_id, origin }.encode_to_vec()
             })
             .await?
         {
-            Reply::Frame(kind::KT_STATUS_REPLY, payload) => {
-                let status = v1::KtStatusReply::decode(payload)
-                    .map_err(|_| Error::Protocol("invalid status".into()))?;
-                (status.account, status.head)
-            }
+            Reply::Frame(kind::KT_STATUS_REPLY, payload) => v1::KtStatusReply::decode(payload)
+                .map_err(|_| Error::Protocol("invalid status".into()))?,
             _ => return Err(Error::Protocol("the server gave no status".into())),
         };
-        self.account = account.clone();
+        self.account = status.account.clone();
+        self.registration = match (self.witness, status.user_id) {
+            (true, Some(user_id)) if status.account.len() == 16 => Some((user_id, status.name)),
+            _ => None,
+        };
         let mut outcome = match self
             .worker(CryptoRequest::Connect {
                 server: self.server.clone(),
                 descriptor,
-                account,
-                head,
+                account: status.account,
+                head: status.head,
+                witnessed: self.witnessed(status.witnessed),
+                witnessing: self.witnessing.clone(),
+                registration: self.registration.clone(),
             })
             .await?
         {
@@ -531,21 +566,36 @@ impl Context {
         Ok(())
     }
 
-    async fn history(&mut self, account: Vec<u8>) -> Result<Result<Vec<u8>, v1::Error>, Error> {
+    /// A history and its witnessed checkpoint.
+    async fn history(
+        &mut self,
+        account: Vec<u8>,
+    ) -> Result<Result<(Vec<u8>, Option<Vec<u8>>), v1::Error>, Error> {
+        self.label_history(account, v1::KtLabel::Account).await
+    }
+
+    async fn label_history(
+        &mut self,
+        account: Vec<u8>,
+        label: v1::KtLabel,
+    ) -> Result<Result<(Vec<u8>, Option<Vec<u8>>), v1::Error>, Error> {
+        let origin = self.origin();
         match self
             .ask(kind::KT_HISTORY, move |request_id| {
                 v1::KtHistory {
                     request_id,
                     account,
+                    origin,
+                    label: label as i32,
                 }
                 .encode_to_vec()
             })
             .await?
         {
             Reply::Frame(kind::KT_HISTORY_REPLY, payload) => {
-                Ok(Ok(v1::KtHistoryReply::decode(payload)
-                    .map_err(|_| Error::Protocol("invalid history reply".into()))?
-                    .response))
+                let reply = v1::KtHistoryReply::decode(payload)
+                    .map_err(|_| Error::Protocol("invalid history reply".into()))?;
+                Ok(Ok((reply.response, self.witnessed(reply.witnessed))))
             }
             Reply::Error(error) => Ok(Err(error)),
             Reply::Frame(..) => Err(Error::Protocol("unexpected reply".into())),
@@ -559,11 +609,13 @@ impl Context {
         let Ok(account) = <[u8; 16]>::try_from(self.account.as_slice()) else {
             return Ok(());
         };
+        let origin = self.origin();
         let reply = self
             .ask(kind::KT_LOOKUP, move |request_id| {
                 v1::KtLookup {
                     request_id,
                     target: Some(v1::kt_lookup::Target::Account(account.to_vec())),
+                    origin,
                 }
                 .encode_to_vec()
             })
@@ -572,6 +624,7 @@ impl Context {
             && let Ok(reply) = v1::KtLookupReply::decode(payload)
             && reply.account == account
         {
+            let witnessed = self.witnessed(reply.witnessed);
             let _ = self
                 .checked(CryptoRequest::Contact {
                     server: self.server.key.clone(),
@@ -580,6 +633,10 @@ impl Context {
                     record: reply.record.map(record_bytes),
                     direct: false,
                     user_id: None,
+                    witnessed,
+                    registration: Vec::new(),
+                    name_lookup: Vec::new(),
+                    name: None,
                 })
                 .await;
         }
@@ -590,7 +647,7 @@ impl Context {
         if self.account.len() != 16 {
             return Ok(());
         }
-        let history = match self.history(self.account.clone()).await? {
+        let (history, witnessed) = match self.history(self.account.clone()).await? {
             Ok(history) => history,
             // Nothing published yet: the publication is still waiting for its epoch.
             Err(error) if error.code == Code::NotFound as i32 => return Ok(()),
@@ -606,6 +663,7 @@ impl Context {
             .checked(CryptoRequest::Monitor {
                 server: self.server.key.clone(),
                 history,
+                witnessed,
             })
             .await?
         {
@@ -613,6 +671,38 @@ impl Context {
                 self.publication_pending = !current;
             }
             self.emit(IdentityEvent::Monitor(outcome)).await;
+        }
+        self.monitor_labels().await
+    }
+
+    /// Our registration number and name in the log (`kt-witness/1`): they must name
+    /// our account from the first check on. Only problems are reported.
+    async fn monitor_labels(&mut self) -> Result<(), Error> {
+        let Some((_, name)) = self.registration.clone() else {
+            return Ok(());
+        };
+        for (label, name) in [
+            (v1::KtLabel::Registration, None),
+            (v1::KtLabel::Name, Some(name)),
+        ] {
+            let (history, witnessed) = match self.label_history(self.account.clone(), label).await?
+            {
+                Ok(history) => history,
+                // Not published yet (it waits for the next epoch).
+                Err(_) => continue,
+            };
+            if let CryptoResponse::Monitor(outcome) = self
+                .checked(CryptoRequest::MonitorLabel {
+                    server: self.server.key.clone(),
+                    name,
+                    history,
+                    witnessed,
+                })
+                .await?
+                && !matches!(outcome, MonitorOutcome::Consistent { .. })
+            {
+                self.emit(IdentityEvent::Monitor(outcome)).await;
+            }
         }
         Ok(())
     }
@@ -622,6 +712,7 @@ impl Context {
         user_id: Option<u32>,
         account: Option<[u8; 16]>,
         direct: bool,
+        name: Option<String>,
     ) -> Result<(), Error> {
         // A safety number needs our identity: made on first need (also for guests,
         // who publish nothing).
@@ -644,11 +735,13 @@ impl Context {
             (None, Some(user_id)) => v1::kt_lookup::Target::UserId(user_id),
             (None, None) => return Ok(()),
         };
+        let origin = self.origin();
         let reply = self
             .ask(kind::KT_LOOKUP, move |request_id| {
                 v1::KtLookup {
                     request_id,
                     target: Some(target),
+                    origin,
                 }
                 .encode_to_vec()
             })
@@ -658,6 +751,7 @@ impl Context {
                 let reply = v1::KtLookupReply::decode(payload)
                     .map_err(|_| Error::Protocol("invalid lookup reply".into()))?;
                 let account = reply.account.clone();
+                let witnessed = self.witnessed(reply.witnessed);
                 self.checked(CryptoRequest::Contact {
                     server: self.server.key.clone(),
                     account: account.clone(),
@@ -665,6 +759,10 @@ impl Context {
                     record: reply.record.map(record_bytes),
                     direct,
                     user_id: account_given.is_none().then_some(user_id).flatten(),
+                    witnessed,
+                    registration: reply.registration,
+                    name_lookup: reply.name_lookup,
+                    name,
                 })
                 .await?
             }
@@ -706,7 +804,7 @@ impl Context {
         user_id: Option<u32>,
         account: Vec<u8>,
     ) -> Result<(), Error> {
-        let history = match self.history(account.clone()).await? {
+        let (history, witnessed) = match self.history(account.clone()).await? {
             Ok(history) => history,
             // Not a contact in the server's eyes (or nothing published): the lookup stands.
             Err(_) => return Ok(()),
@@ -716,6 +814,7 @@ impl Context {
                 server: self.server.key.clone(),
                 account,
                 history,
+                witnessed,
             })
             .await?
         {
@@ -760,7 +859,8 @@ impl Context {
                 user_id,
                 account,
                 direct,
-            } => return self.check_contact(user_id, account, direct).await,
+                name,
+            } => return self.check_contact(user_id, account, direct, name).await,
             IdentityCommand::MarkVerified { account } => {
                 self.worker(CryptoRequest::MarkVerified {
                     server,
@@ -842,6 +942,8 @@ pub async fn drive(driver: Driver) {
         mut commands,
         events,
         mls,
+        witness,
+        witnessing,
     } = driver;
     let (mut mls_commands, mut pushes, mls_enabled) = match mls {
         Some(link) => (Some(link.commands), Some(link.pushes), link.enabled),
@@ -861,6 +963,9 @@ pub async fn drive(driver: Driver) {
         identity_ready: false,
         mls: None,
         mls_enabled,
+        witness,
+        witnessing,
+        registration: None,
     };
     let healthy = match context.connect(descriptor.clone()).await {
         Ok(accepted) => accepted,

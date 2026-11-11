@@ -73,6 +73,13 @@ struct Arguments {
     /// `mls/1` servers): upload key packages and let `e2ee_open` create groups.
     #[arg(long)]
     e2ee: bool,
+    /// Require this key-transparency witness (a C2SP verifier key from
+    /// `nuschel-witness vkey`) of every server; repeatable (docs/witness.md).
+    #[arg(long = "kt-witness")]
+    kt_witnesses: Vec<String>,
+    /// How old the witnesses' cosignatures may be, in hours.
+    #[arg(long, default_value_t = 24)]
+    kt_witness_max_age_hours: u32,
     /// Do not connect: serve device-linking commands (`link_offer`, `link_join`,
     /// `link_approve`, `link_complete`) with the crypto worker of `--identity-dir`
     /// only. `--host` and `--username` are not used.
@@ -234,6 +241,9 @@ enum Input {
         user_id: u32,
         #[serde(default)]
         direct: bool,
+        /// The name the server shows for them, checked against its `name:` label.
+        #[serde(default)]
+        name: Option<String>,
     },
     /// Mark an account (32 hex digits) verified, or accept its new identity.
     IdentityVerify {
@@ -540,6 +550,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             device_name: format!("{} (nuschel-cli)", args.username),
             recovery: nuschel_ipc::crypto::RecoveryPolicy::Never,
             e2ee_direct: args.e2ee,
+            witnessing: nuschel_ipc::crypto::KeyTransparencySettings {
+                witnesses: args
+                    .kt_witnesses
+                    .iter()
+                    .map(|key| nuschel_ipc::crypto::WitnessSetting {
+                        key: key.clone(),
+                        enabled: true,
+                    })
+                    .collect(),
+                max_age_hours: args.kt_witness_max_age_hours,
+                ..Default::default()
+            },
         }),
     };
     let (tx, rx) = mpsc::channel(32);
@@ -571,13 +593,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     temporary,
                 },
                 Ok(Input::Register) => Command::RegisterSelf,
-                Ok(Input::IdentityCheck { user_id, direct }) => {
-                    Command::Identity(IdentityCommand::Check {
-                        user_id: Some(user_id),
-                        account: None,
-                        direct,
-                    })
-                }
+                Ok(Input::IdentityCheck {
+                    user_id,
+                    direct,
+                    name,
+                }) => Command::Identity(IdentityCommand::Check {
+                    user_id: Some(user_id),
+                    account: None,
+                    direct,
+                    name,
+                }),
                 Ok(Input::IdentityVerify { account: id }) => match account(&id) {
                     Some(account) => Command::Identity(IdentityCommand::MarkVerified { account }),
                     None => {

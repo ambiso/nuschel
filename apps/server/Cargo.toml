@@ -77,6 +77,9 @@ toml = { version = "1.2.1", default-features = false, features = [
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 zeroize = "1.9.1"
+# Submissions to key-transparency witnesses (crate::kt_witness), over HTTPS with
+# rustls and the webpki roots; already in the tree (nuschel-update).
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 # Loopback tests between the real client session and this server.

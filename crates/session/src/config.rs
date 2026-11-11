@@ -260,6 +260,11 @@ pub struct ClientSettings {
     /// Off until the client sends and shows them; once a conversation has a group
     /// the server takes no plaintext there.
     pub e2ee_direct_messages: bool,
+    /// Which witnesses every server's key-transparency log must be cosigned by,
+    /// and what happens without them (docs/e2ee.md §5.9). The built-in project
+    /// auditor is included unless `default_witnesses` is false; until it is
+    /// deployed nothing is required.
+    pub key_transparency: nuschel_ipc::crypto::KeyTransparencySettings,
 }
 
 /// Light or dark, or as the desktop prefers.
@@ -349,6 +354,7 @@ impl Default for ClientSettings {
             appearance: AppearanceSettings::default(),
             recovery_key: Default::default(),
             e2ee_direct_messages: false,
+            key_transparency: Default::default(),
         }
     }
 }
@@ -398,6 +404,25 @@ impl ClientSettings {
         if !self.wormhole_relay.starts_with("tcp://") || self.wormhole_relay.len() > 256 {
             self.wormhole_relay = nuschel_core::transfer::PUBLIC_RELAY.into();
         }
+        // Witnesses whose keys are not even shaped like one are dropped; the crypto
+        // worker parses the rest and ignores keys that do not verify as ML-DSA-44.
+        let mut witnessing = std::mem::take(&mut self.key_transparency);
+        witnessing
+            .witnesses
+            .truncate(nuschel_ipc::crypto::MAX_WITNESSES);
+        witnessing.witnesses.retain(|witness| {
+            nuschel_ipc::crypto::KeyTransparencySettings {
+                witnesses: vec![witness.clone()],
+                ..Default::default()
+            }
+            .check()
+            .is_ok()
+        });
+        witnessing.max_age_hours = witnessing.max_age_hours.clamp(1, 168);
+        witnessing.required = witnessing
+            .required
+            .map(|r| r.min(nuschel_ipc::crypto::MAX_WITNESSES as u32));
+        self.key_transparency = witnessing;
         self
     }
     pub fn volume_for(&self, hash: Option<&str>) -> f32 {

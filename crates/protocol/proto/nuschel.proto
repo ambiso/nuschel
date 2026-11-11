@@ -370,6 +370,11 @@ message Done {
 // 0x4E14 -> KtStatusReply or Error.
 message KtStatus {
   uint64 request_id = 1;
+  // With `kt-witness/1`: the server as the client reaches it (`host:port`, lower
+  // case: the session's sticky key), so that attached checkpoints name the
+  // origin `<host>:<port>/nuschel-kt/v1` the client checks (docs/e2ee.md §5.9).
+  // Also in `KtLookup` and `KtHistory`.
+  string origin = 2;
 }
 
 // 0x4E15
@@ -379,6 +384,16 @@ message KtStatusReply {
   bytes account = 2;
   // The newest signed head (nuschel-kt `SignedHead`).
   bytes head = 3;
+  // With `kt-witness/1`: nuschel-kt `WitnessedHead` for `head`: the newest
+  // cosigned checkpoint of the server's epoch log under the requested origin
+  // and the head's inclusion proof (at most 72 KiB). Empty when the server has
+  // no checkpoint under that origin. Also in `KtLookupReply` and
+  // `KtHistoryReply`, for their heads.
+  bytes witnessed = 4;
+  // With `kt-witness/1`, for registered requesters: their registration number
+  // and the name their `name:` label carries (lower case), which they monitor.
+  optional uint32 user_id = 5;
+  string name = 6;
 }
 
 // The certificates behind an account's binding: what the log's roster
@@ -423,6 +438,7 @@ message KtLookup {
     // An account id (16 bytes).
     bytes account = 3;
   }
+  string origin = 4;
 }
 
 // 0x4E19
@@ -432,6 +448,14 @@ message KtLookupReply {
   // nuschel-kt `LookupResponse` for the account's `acct:` label.
   bytes response = 3;
   KtRecord record = 4;
+  bytes witnessed = 5;
+  // With `kt-witness/1`, for a lookup by registration number: the
+  // `LookupResponse` of its `reg:` label, whose value names `account`; and of
+  // the `name:` label of the user's current name (`name`, lower case). All
+  // three responses carry the same head.
+  bytes registration = 6;
+  bytes name_lookup = 7;
+  string name = 8;
 }
 
 // 0x4E1A -> KtHistoryReply or Error. Only for the requester's own account
@@ -439,6 +463,16 @@ message KtLookupReply {
 message KtHistory {
   uint64 request_id = 1;
   bytes account = 2;
+  string origin = 3;
+  // With `kt-witness/1`: which of the account's labels; the `reg:` and `name:`
+  // labels only for the requester's own account (self-monitoring).
+  KtLabel label = 4;
+}
+
+enum KtLabel {
+  KT_LABEL_ACCOUNT = 0;
+  KT_LABEL_REGISTRATION = 1;
+  KT_LABEL_NAME = 2;
 }
 
 // 0x4E1B
@@ -447,6 +481,8 @@ message KtHistoryReply {
   bytes account = 2;
   // nuschel-kt `HistoryResponse`.
   bytes response = 3;
+  bytes witnessed = 4;
+  KtLabel label = 5;
 }
 
 // 0x4E1C -> KtAuditReply or Error (`TOO_LARGE`: audit a shorter span, with

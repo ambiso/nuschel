@@ -342,12 +342,21 @@ pub fn check(this: &mut Desktop, server: usize, user_id: u32, direct: bool) {
     if let Some(ui) = this.ui_of_mut(server) {
         ui.identity.checking.insert(user_id, true);
     }
+    // The name the server shows (never a local nickname): its `name:` label must
+    // name the same account on witnessed servers.
+    let name = this
+        .client
+        .servers
+        .get(server)
+        .and_then(|state| state.online(user_id))
+        .map(|user| user.name.clone());
     this.run(
         server,
         Command::Identity(IdentityCommand::Check {
             user_id: Some(user_id),
             account: None,
             direct,
+            name,
         }),
     );
 }

@@ -19,9 +19,9 @@ use nuschel_ipc::crypto::{
 use nuschel_kt::{
     AccountBinding, AccountId, Assessment, AuditResponse, ContactTrust, DirectoryValue, ErrorClass,
     GossipOutcome, HeadGossip, HistoryResponse, IdentityRecord, KnownHeads, KtError, Label,
-    LogDescriptor, LookupResponse, MonitorCheckpoint, Observation, Relation, SignedHead,
-    VerifiedHead, check_freshness, check_gossip, monitor_own, should_gossip, verify_account_record,
-    verify_audit, verify_head, verify_history, verify_lookup,
+    LogDescriptor, LookupResponse, MonitorCheckpoint, NameBinding, Observation, Relation,
+    SignedHead, VerifiedHead, check_freshness, check_gossip, monitor_own, should_gossip,
+    verify_account_record, verify_audit, verify_head, verify_history, verify_lookup,
 };
 use std::io;
 use zeroize::Zeroizing;
@@ -208,7 +208,22 @@ impl Worker {
                 descriptor,
                 account,
                 head,
-            } => CryptoResponse::Head(self.connect(server, descriptor, account, &head)?),
+                witnessed,
+                witnessing,
+                registration,
+            } => {
+                if self.state.witnessing != witnessing {
+                    self.state.witnessing = witnessing;
+                }
+                CryptoResponse::Head(self.connect(
+                    server,
+                    descriptor,
+                    account,
+                    &head,
+                    witnessed.as_deref(),
+                    registration,
+                )?)
+            }
             CryptoRequest::Advance {
                 server,
                 head,
@@ -233,7 +248,25 @@ impl Worker {
                 let _ = current;
                 CryptoResponse::Done
             }
-            CryptoRequest::Monitor { server, history } => match self.monitor(&server, &history)? {
+            CryptoRequest::Monitor {
+                server,
+                history,
+                witnessed,
+            } => match self.monitor(&server, &history, witnessed.as_deref())? {
+                Ok(outcome) => CryptoResponse::Monitor(outcome),
+                Err(NeedAudit { from, to }) => CryptoResponse::NeedAudit { from, to },
+            },
+            CryptoRequest::MonitorLabel {
+                server,
+                name,
+                history,
+                witnessed,
+            } => match self.monitor_label(
+                &server,
+                name.as_deref(),
+                &history,
+                witnessed.as_deref(),
+            )? {
                 Ok(outcome) => CryptoResponse::Monitor(outcome),
                 Err(NeedAudit { from, to }) => CryptoResponse::NeedAudit { from, to },
             },
@@ -244,9 +277,27 @@ impl Worker {
                 record,
                 direct,
                 user_id,
+                witnessed,
+                registration,
+                name_lookup,
+                name,
             } => {
                 let account = account_id(&account)?;
-                match self.contact(&server, account, &lookup, record.as_ref(), direct)? {
+                let names = Names {
+                    user_id,
+                    registration: &registration,
+                    name: name.as_deref(),
+                    name_lookup: &name_lookup,
+                };
+                match self.contact(
+                    &server,
+                    account,
+                    &lookup,
+                    record.as_ref(),
+                    direct,
+                    witnessed.as_deref(),
+                    names,
+                )? {
                     Some(NeedAudit { from, to }) => CryptoResponse::NeedAudit { from, to },
                     None => {
                         if let Some(user_id) = user_id {
@@ -260,9 +311,10 @@ impl Worker {
                 server,
                 account,
                 history,
+                witnessed,
             } => {
                 let account = account_id(&account)?;
-                match self.contact_history(&server, account, &history)? {
+                match self.contact_history(&server, account, &history, witnessed.as_deref())? {
                     Some(NeedAudit { from, to }) => CryptoResponse::NeedAudit { from, to },
                     None => CryptoResponse::Contact(self.view(&server, &account)),
                 }
@@ -497,6 +549,8 @@ impl Worker {
         descriptor: Vec<u8>,
         account: Vec<u8>,
         head: &[u8],
+        witnessed: Option<&[u8]>,
+        registration: Option<(u32, String)>,
     ) -> Result<HeadOutcome, String> {
         if let Err(error) = LogDescriptor::decode(&descriptor) {
             return Ok(HeadOutcome::Failed {
@@ -526,14 +580,24 @@ impl Worker {
             entry.published.clear();
             entry.checkpoint = None;
             entry.alarm = None;
+            entry.labels.clear();
         }
-        let outcome = self.check_head(&server.key, head)?;
+        if entry.registration != registration {
+            entry.registration = registration;
+            entry.labels.clear();
+        }
+        let outcome = self.check_head(&server.key, head, witnessed)?;
         self.save()?;
         Ok(outcome)
     }
 
     /// A head the server presents as its newest.
-    fn check_head(&mut self, key: &str, bytes: &[u8]) -> Result<HeadOutcome, String> {
+    fn check_head(
+        &mut self,
+        key: &str,
+        bytes: &[u8],
+        witnessed: Option<&[u8]>,
+    ) -> Result<HeadOutcome, String> {
         let (descriptor, mut known) = self.log(key)?;
         let head = match SignedHead::decode(bytes)
             .map_err(KtError::from)
@@ -542,11 +606,12 @@ impl Worker {
             Ok(head) => head,
             Err(error) => return self.head_failure(key, error),
         };
-        match self.accept_head(key, &mut known, &head) {
+        match self.accept_head(key, &mut known, &descriptor, &head, witnessed) {
             Ok(()) => {
                 self.store_heads(key, &known)?;
                 Ok(HeadOutcome::Accepted {
                     epoch: head.epoch(),
+                    witness: self.witness_status(key),
                 })
             }
             Err(Step::Audit(NeedAudit { from, to })) => Ok(HeadOutcome::NeedAudit { from, to }),
@@ -555,14 +620,19 @@ impl Worker {
     }
 
     /// Fresh, and consistent with every accepted head; a newer one needs an audit
-    /// first and becomes the target.
+    /// first and becomes the target. Fresh: by the witnesses' cosignatures when
+    /// they vouch for it (crate::witness), otherwise by the server's signing time.
     fn accept_head(
         &mut self,
         key: &str,
         known: &mut KnownHeads,
+        descriptor: &LogDescriptor,
         head: &VerifiedHead,
+        witnessed: Option<&[u8]>,
     ) -> Result<(), Step> {
-        check_freshness(head, self.now(), Default::default())?;
+        if !self.check_witness(key, descriptor, head, witnessed)? {
+            check_freshness(head, self.now(), Default::default())?;
+        }
         match known.classify_from_server(head)? {
             Relation::First | Relation::Known => {
                 known.record(head.clone())?;
@@ -619,9 +689,15 @@ impl Worker {
                 }
                 self.store_heads(key, &known)?;
                 self.server_mut(key)?.target.clear();
-                HeadOutcome::Accepted { epoch: latest }
+                HeadOutcome::Accepted {
+                    epoch: latest,
+                    witness: self.witness_status(key),
+                }
             }
-            Err(_) => HeadOutcome::Accepted { epoch: latest },
+            Err(_) => HeadOutcome::Accepted {
+                epoch: latest,
+                witness: self.witness_status(key),
+            },
         };
         self.save()?;
         Ok(outcome)
@@ -699,6 +775,7 @@ impl Worker {
         &mut self,
         key: &str,
         bytes: &[u8],
+        witnessed: Option<&[u8]>,
     ) -> Result<Result<MonitorOutcome, NeedAudit>, String> {
         let (descriptor, mut known) = self.log(key)?;
         let entry = self.server(key)?;
@@ -711,7 +788,7 @@ impl Worker {
             Ok(history) => history,
             Err(error) => return Ok(Ok(self.monitor_failure(key, error)?)),
         };
-        match self.accept_head(key, &mut known, &history.head) {
+        match self.accept_head(key, &mut known, &descriptor, &history.head, witnessed) {
             Ok(()) => self.store_heads(key, &known)?,
             Err(Step::Audit(audit)) => return Ok(Err(audit)),
             Err(Step::Kt(error)) => return Ok(Ok(self.monitor_failure(key, error)?)),
@@ -767,6 +844,107 @@ impl Worker {
             }
             Err(error) => Ok(Ok(self.monitor_failure(key, error)?)),
         }
+    }
+
+    /// Self-monitoring of our `reg:` label (`name: None`) or `name:` label: from the
+    /// first check on, every version must name our account (docs/e2ee.md §5.9).
+    fn monitor_label(
+        &mut self,
+        key: &str,
+        name: Option<&str>,
+        bytes: &[u8],
+        witnessed: Option<&[u8]>,
+    ) -> Result<Result<MonitorOutcome, NeedAudit>, String> {
+        let (descriptor, mut known) = self.log(key)?;
+        let entry = self.server(key)?;
+        let account = AccountId(account_id(&entry.account)?);
+        let (user_id, own_name) = entry
+            .registration
+            .clone()
+            .ok_or("no registration to monitor on this server")?;
+        let (label, slot, what) = match name {
+            None => (
+                Label::Registration(user_id),
+                "reg".to_owned(),
+                format!("your registration number #{user_id}"),
+            ),
+            Some(name) => {
+                let name = name.to_lowercase();
+                if name != own_name {
+                    return Err("not our name on this server".into());
+                }
+                let label = Label::name(name.clone()).ok_or("the name is too long for a label")?;
+                (label, format!("name:{name}"), format!("your name {name:?}"))
+            }
+        };
+        let history = match HistoryResponse::decode(bytes)
+            .map_err(KtError::from)
+            .and_then(|response| verify_history(&descriptor, &label, &response))
+        {
+            Ok(history) => history,
+            Err(error) => return Ok(Ok(self.monitor_failure(key, error)?)),
+        };
+        match self.accept_head(key, &mut known, &descriptor, &history.head, witnessed) {
+            Ok(()) => self.store_heads(key, &known)?,
+            Err(Step::Audit(audit)) => return Ok(Err(audit)),
+            Err(Step::Kt(error)) => return Ok(Ok(self.monitor_failure(key, error)?)),
+        }
+        let ours = |value: &DirectoryValue| matches!(NameBinding::from_value(value), Ok(NameBinding::Account(named)) if named == account);
+        let baseline = match self.server(key)?.labels.get(&slot) {
+            Some(checkpoint) => match history.version(checkpoint.version) {
+                Some(entry) if entry.epoch == checkpoint.epoch && ours(&entry.value) => {
+                    Some(checkpoint.version)
+                }
+                _ => {
+                    let error = KtError::HistoryRewritten {
+                        version: checkpoint.version,
+                    };
+                    return Ok(Ok(self.monitor_failure(key, error)?));
+                }
+            },
+            // The first check starts at the newest run of versions that name us; if
+            // the newest does not, ours is still waiting for its epoch.
+            None => history
+                .entries
+                .iter()
+                .take_while(|entry| ours(&entry.value))
+                .last()
+                .map(|entry| entry.version),
+        };
+        let latest = history.latest().clone();
+        let Some(baseline) = baseline else {
+            return Ok(Ok(MonitorOutcome::Consistent {
+                version: latest.version,
+                current: false,
+            }));
+        };
+        if let Some(bad) = history
+            .entries
+            .iter()
+            .rev()
+            .find(|entry| entry.version > baseline && !ours(&entry.value))
+        {
+            let reason = format!(
+                "The server bound {what} to another account (version {} at epoch {}). People \
+                 who look you up by it would reach someone else.",
+                bad.version, bad.epoch
+            );
+            self.server_mut(key)?.alarm = Some(reason.clone());
+            self.save()?;
+            return Ok(Ok(MonitorOutcome::OwnKeyAlarm { reason }));
+        }
+        self.server_mut(key)?.labels.insert(
+            slot,
+            crate::state::LabelCheckpoint {
+                version: latest.version,
+                epoch: latest.epoch,
+            },
+        );
+        self.save()?;
+        Ok(Ok(MonitorOutcome::Consistent {
+            version: latest.version,
+            current: true,
+        }))
     }
 
     fn monitor_failure(&mut self, key: &str, error: KtError) -> Result<MonitorOutcome, String> {
@@ -889,6 +1067,7 @@ impl Worker {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn contact(
         &mut self,
         key: &str,
@@ -896,6 +1075,8 @@ impl Worker {
         lookup: &[u8],
         record: Option<&KtRecordBytes>,
         direct: bool,
+        witnessed: Option<&[u8]>,
+        names: Names<'_>,
     ) -> Result<Option<NeedAudit>, String> {
         let (descriptor, mut known) = self.log(key)?;
         self.contact_entry(key, &account)?.direct |= direct;
@@ -906,24 +1087,33 @@ impl Worker {
         let mut roster = None;
         let mut value = Vec::new();
         let observation = match verified {
-            Ok((head, entry)) => match self.accept_head(key, &mut known, &head) {
-                Ok(()) => {
-                    self.store_heads(key, &known)?;
-                    match check_record(&descriptor, account, &entry.value, record) {
-                        Ok((root, root_key)) => {
-                            roster = Some((root, root_key));
-                            value = entry.value.encode();
-                            Observation::Lookup {
-                                root,
-                                version: entry.version,
+            Ok((head, entry)) => {
+                match self.accept_head(key, &mut known, &descriptor, &head, witnessed) {
+                    Ok(()) => {
+                        self.store_heads(key, &known)?;
+                        let named = match witnessed {
+                            Some(_) => check_names(&descriptor, &head, account, &names),
+                            // Servers without `kt-witness/1` publish no names.
+                            None => Ok(()),
+                        };
+                        match named
+                            .and_then(|()| check_record(&descriptor, account, &entry.value, record))
+                        {
+                            Ok((root, root_key)) => {
+                                roster = Some((root, root_key));
+                                value = entry.value.encode();
+                                Observation::Lookup {
+                                    root,
+                                    version: entry.version,
+                                }
                             }
+                            Err(error) => Observation::Failed(error),
                         }
-                        Err(error) => Observation::Failed(error),
                     }
+                    Err(Step::Audit(audit)) => return Ok(Some(audit)),
+                    Err(Step::Kt(error)) => Observation::Failed(error),
                 }
-                Err(Step::Audit(audit)) => return Ok(Some(audit)),
-                Err(Step::Kt(error)) => Observation::Failed(error),
-            },
+            }
             Err(error) => Observation::Failed(error),
         };
         self.observe(key, &account, observation)?;
@@ -973,6 +1163,7 @@ impl Worker {
         key: &str,
         account: [u8; 16],
         bytes: &[u8],
+        witnessed: Option<&[u8]>,
     ) -> Result<Option<NeedAudit>, String> {
         let (descriptor, mut known) = self.log(key)?;
         let label = Label::Account(AccountId(account));
@@ -981,14 +1172,16 @@ impl Worker {
             .map_err(KtError::from)
             .and_then(|response| verify_history(&descriptor, &label, &response));
         let observation = match history {
-            Ok(history) => match self.accept_head(key, &mut known, &history.head) {
-                Ok(()) => {
-                    self.store_heads(key, &known)?;
-                    Observation::from_history(Ok(history), checked)
+            Ok(history) => {
+                match self.accept_head(key, &mut known, &descriptor, &history.head, witnessed) {
+                    Ok(()) => {
+                        self.store_heads(key, &known)?;
+                        Observation::from_history(Ok(history), checked)
+                    }
+                    Err(Step::Audit(audit)) => return Ok(Some(audit)),
+                    Err(Step::Kt(error)) => Observation::Failed(error),
                 }
-                Err(Step::Audit(audit)) => return Ok(Some(audit)),
-                Err(Step::Kt(error)) => Observation::Failed(error),
-            },
+            }
             Err(error) => Observation::Failed(error),
         };
         self.observe(key, &account, observation)?;
@@ -1103,6 +1296,18 @@ impl Worker {
             },
             (state, _) => state.clone(),
         };
+        // Without fresh cosignatures, nobody on this server is verified
+        // automatically (docs/e2ee.md §5.9); pinned keys keep working.
+        let state = match (state, self.witness_status(key)) {
+            (
+                state @ (ContactState::Unverified | ContactState::Verified { .. }),
+                nuschel_ipc::crypto::WitnessStatus::Unavailable { reason },
+            ) => ContactState::Unavailable {
+                reason,
+                verified: matches!(state, ContactState::Verified { .. }),
+            },
+            (state, _) => state,
+        };
         let (safety_number, qr) = match (self.own_fingerprint(), theirs) {
             (Some(own), Some(theirs)) if !own_account => (
                 Some(SafetyNumber::new(&own, &theirs).to_string()),
@@ -1203,6 +1408,58 @@ impl Worker {
             Err(error) => format!("dropped: {error}"),
         })
     }
+}
+
+/// What a lookup by registration number carries besides the account's own proof.
+pub(crate) struct Names<'a> {
+    pub user_id: Option<u32>,
+    pub registration: &'a [u8],
+    pub name: Option<&'a str>,
+    pub name_lookup: &'a [u8],
+}
+
+/// The `reg:` label of the number the user looked someone up by, and the `name:`
+/// label of the name shown for them, must name the account the server returned, at
+/// the same head (docs/e2ee.md §5.9). Without them the server could answer "alice"
+/// or "#5" with an account of its own, consistently in the log.
+fn check_names(
+    descriptor: &LogDescriptor,
+    head: &VerifiedHead,
+    account: [u8; 16],
+    names: &Names<'_>,
+) -> Result<(), KtError> {
+    let check = |label: Label, bytes: &[u8], what: String| -> Result<(), KtError> {
+        if bytes.is_empty() {
+            return Err(KtError::NameMismatch {
+                what: format!("{what} (the server sent no proof)"),
+            });
+        }
+        let response = LookupResponse::decode(bytes)?;
+        let (named_head, entry) = verify_lookup(descriptor, &label, &response)?;
+        if named_head.signed() != head.signed() {
+            return Err(KtError::NameMismatch {
+                what: format!("{what} (a proof at another epoch)"),
+            });
+        }
+        match NameBinding::from_value(&entry.value) {
+            Ok(NameBinding::Account(named)) if named == AccountId(account) => Ok(()),
+            _ => Err(KtError::NameMismatch { what }),
+        }
+    };
+    if let Some(user_id) = names.user_id {
+        check(
+            Label::Registration(user_id),
+            names.registration,
+            format!("registration #{user_id}"),
+        )?;
+    }
+    if let Some(name) = names.name {
+        let name = name.to_lowercase();
+        if let Some(label) = Label::name(name.clone()) {
+            check(label, names.name_lookup, format!("the name {name:?}"))?;
+        }
+    }
+    Ok(())
 }
 
 /// The record behind a verified binding (docs/e2ee.md §3.8): the identity's own

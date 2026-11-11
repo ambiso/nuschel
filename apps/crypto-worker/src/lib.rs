@@ -27,6 +27,7 @@ pub mod link;
 pub mod mls;
 pub mod state;
 pub mod store;
+pub mod witness;
 pub mod worker;
 
 pub use store::{KeySource, Store};

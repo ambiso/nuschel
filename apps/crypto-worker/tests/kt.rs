@@ -143,6 +143,7 @@ impl User {
             message_rate: Default::default(),
             required: Requirement::default(),
             crypto: kt.then(|| IdentitySetup {
+                witnessing: Default::default(),
                 crypto: self.crypto.clone(),
                 device_name: format!("{}'s laptop", self.name),
                 recovery: RecoveryPolicy::Offer,
@@ -262,6 +263,7 @@ impl Session {
             !matches!(event, SessionEvent::Identity(IdentityEvent::Contact { .. }))
         });
         self.command(IdentityCommand::Check {
+            name: None,
             user_id: Some(user_id),
             account: None,
             direct,
@@ -485,8 +487,10 @@ async fn a_forked_log_and_a_replaced_log_are_detected() {
     else {
         panic!("the forked log was accepted")
     };
+    // (The fresh log may already hold an epoch of names and numbers.)
     assert!(
-        reason.contains("signed epoch 0 after") || reason.contains("two different roots"),
+        (reason.contains("signed epoch") && reason.contains("after"))
+            || reason.contains("two different roots"),
         "{reason}"
     );
     // The worker keeps the evidence and reports it with the identity.
@@ -560,6 +564,9 @@ async fn forged_publication(server: &Server, user_id: u32, directory: &Path) -> 
     // The operator's worker needs a head to accept the log: any signed head will do.
     let status = server_head(server);
     let response = worker.handle(nuschel_ipc::crypto::CryptoRequest::Connect {
+        witnessed: None,
+        witnessing: Default::default(),
+        registration: None,
         server: nuschel_ipc::crypto::CryptoServer {
             key: "operator".into(),
             label: "operator".into(),
