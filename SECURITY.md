@@ -22,7 +22,7 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | SQLx PostgreSQL backend | Server persistence on a managed database | Storage worker; database credentials and a scoped database connection |
 | TLS crypto provider | Cryptographic implementation and CPU-specific acceleration | Session/server authority; bounded protocol framing and reviewed provider |
 | OS sandbox/process APIs | Establish restricted worker execution | Small supervisor adapter; prefer safe Rust wrappers (`win32job` for Windows job objects) |
-| `nuschel-sandbox-windows` (Win32 calls via `windows-sys`) | No maintained safe wrapper creates AppContainer processes with an explicit handle list and job limits (docs/windows-sandbox.md) | The workers' own launch stage only, before any input is read (`cargo-deny` allows only the five workers to depend on it). Each Win32 function is one trait method whose `# Safety` is Microsoft's documented contract (cross-checked with ReactOS); unsafe calls only in `os.rs`, one per block with a `SAFETY:` argument, behind guards that release what Windows allocates exactly once; pure logic in unsafe-free modules; no `as` casts. The launch steps run under Miri (Linux and Windows targets) against a mock of Win32 that fails every call in turn; an independent review found and fixed the issues listed in docs/windows-sandbox.md |
+| `nuschel-sandbox-windows` (Win32 calls via `windows-sys`) | No maintained safe wrapper creates AppContainer processes with an explicit handle list and job limits (docs/windows-sandbox.md) | The workers' own launch stage only, before any input is read (`cargo-deny` allows only the six workers to depend on it). Each Win32 function is one trait method whose `# Safety` is Microsoft's documented contract (cross-checked with ReactOS); unsafe calls only in `os.rs`, one per block with a `SAFETY:` argument, behind guards that release what Windows allocates exactly once; pure logic in unsafe-free modules; no `as` casts. The launch steps run under Miri (Linux and Windows targets) against a mock of Win32 that fails every call in turn; an independent review found and fixed the issues listed in docs/windows-sandbox.md |
 | `aes` (OCB2 voice crypto) | Mumble's UDP voice encryption; AES-NI intrinsics | Session authority; fixed-size blocks, keys from the TLS control channel |
 | `rsa` (identity generation only) | Stock Mumble imports only RSA client certificates | Generates the local Mumble client key only; TLS signing uses ring, so the Marvin timing issue (RUSTSEC-2023-0071) in private-key operations never runs on untrusted input; `cargo-deny` confines the crate to `nuschel-session` |
 | `image` decoders (PNG, JPEG, GIF) | Inline images and avatars from untrusted peers | Content worker only, with dimension and allocation limits; the UI receives raw RGBA |
@@ -160,7 +160,7 @@ again inside it, suspended, then assigned to a job, then resumed; it waits and p
 on the exit code. It reads no untrusted input, and it refuses (exit 125) rather than
 start a worker unconfined, as Linux refuses without bwrap.
 
-Content, storage and crypto get no capabilities, so no network at all, and run as
+Content, math, storage and crypto get no capabilities, so no network at all, and run as
 less privileged AppContainers: unlike a full one, they cannot read what Windows grants
 every AppContainer, such as the user's environment variables in the registry. Media gets
 `microphone`; transfer gets `internetClient` and `privateNetworkClientServer`
@@ -175,8 +175,8 @@ unchanged. Only the standard handles
 (and that file) are inherited, through an explicit handle list; there is no console.
 The worker is created inside its job, which kills it when the launch stage exits or
 is killed (the supervisor's kill-on-close job holds the launch stage), admits one process (the child-process
-policy refuses process creation too), limits committed memory (512 MiB content, 1 GiB
-the others) and content's CPU time as on Linux, and blocks the clipboard, global atoms,
+policy refuses process creation too), limits committed memory (512 MiB content and
+math, 1 GiB the others) and content's and math's CPU time as on Linux, and blocks the clipboard, global atoms,
 other processes' USER handles, desktop switching and system settings. Extension-point
 DLLs, non-system fonts and remote or low-label images are refused.
 

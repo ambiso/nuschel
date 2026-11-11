@@ -54,6 +54,7 @@ command-line quoting and the per-worker policies are unit-tested on every platfo
 | Worker | AppContainer profile | Kind | Capabilities | Files | Committed memory |
 | --- | --- | --- | --- | --- | --- |
 | content | `nuschel.content` | less privileged | none | none | 512 MiB, plus the request's CPU seconds |
+| math | `nuschel.math` | less privileged | none | none | 512 MiB, and 120 CPU seconds over its life (it is restarted), as on Linux |
 | storage | `nuschel.storage.<hash of the directory>` | less privileged | none | the history directory's contents (the directory itself: list, add, delete entries) | 1 GiB |
 | crypto | `nuschel.crypto.<hash of the directory>` | less privileged | none | its `nuschel-identity` directory's contents (likewise) | 1 GiB |
 | media | `nuschel.media` | full | `microphone` | none | 1 GiB |
@@ -67,10 +68,10 @@ also gets everything granted to "ALL APPLICATION PACKAGES"; a less privileged on
 
 Decisions:
 
-- **Less privileged AppContainers for content, storage and crypto.** The VM check
+- **Less privileged AppContainers for content, math, storage and crypto.** The VM check
   showed that a full AppContainer can read the user's environment variables in the
   registry (`HKCU\Environment`, granted to "ALL APPLICATION PACKAGES"), where some
-  people keep tokens. These three workers need nothing of what that group is
+  people keep tokens. These four workers need nothing of what that group is
   granted, so they opt out of it, and they then cannot read that key either (nor
   start Winsock). Media and transfer stay full AppContainers: COM, which WASAPI
   needs, fails with "access denied" in a less privileged one (CPAL panics), and so
@@ -144,7 +145,7 @@ already in the dependency graph). It does not use the workspace lints, because
 and `multiple_unsafe_ops_per_block` (one unsafe operation per block, each with a
 `SAFETY:` comment), `as_conversions`, `ptr_as_ptr`, `ptr_cast_constness`,
 `borrow_as_ptr` and the `cast_possible_*` lints are errors. `cargo-deny` lets only the
-five worker crates depend on it. On other platforms it compiles to a constant.
+six worker crates depend on it. On other platforms it compiles to a constant.
 
 ## Safety argument
 
@@ -290,6 +291,13 @@ page says a job with UI limits cannot be nested), which matters because the
 desktop's kill-on-close job usually holds the launch stage before it creates the
 worker. The same holds with the job attached at creation (`JOB_LIST`), checked
 again after the review fixes.
+
+The math worker (added later) passed the same probes in its less privileged
+AppContainer (`--only math`): every attempt in the table denied, `HKCU\Environment`
+too and Winsock not starting, its job showing one process, 512 MiB, 120 CPU seconds
+and all eight UI restrictions; the real worker rendered a formula. Each probe also
+reads its job's CPU limit: 5 seconds for content (its request budget), 120 for math,
+none for the others.
 
 After the review fixes, in the VM: every check above passed again, nested and not,
 including a file the host received from the transfer worker (read through the

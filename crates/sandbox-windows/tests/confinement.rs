@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Windows only: every worker's sandbox, checked from the inside.
 //!
-//! `confinement.exe [--nested] [--connect HOST:PORT] [--workers DIR [--rendezvous ws://HOST:PORT/v1
+//! `confinement.exe [--only KIND] [--nested] [--connect HOST:PORT] [--workers DIR [--rendezvous ws://HOST:PORT/v1
 //! --relay tcp://HOST:PORT [--code-file PATH] [--receive CODE --expect TEXT]]]`
 //!
 //! This binary starts itself through `nuschel_ipc::host`'s real sandbox
@@ -12,7 +12,7 @@
 //! open another process to query or end it, commit more memory than its job
 //! allows, read the user's environment and autostart keys in the registry or
 //! write a key there, and read the clipboard (the test puts text there first). With `--workers`, the real workers then do their jobs in the
-//! same sandboxes: content decodes an image, storage writes and reads
+//! same sandboxes: content decodes an image, math renders a formula, storage writes and reads
 //! history, crypto creates an identity, media opens the default devices and
 //! transfer offers a file (reaching `--rendezvous` if one is given; with
 //! `--code-file` it writes the code there and waits until someone has
@@ -32,9 +32,12 @@ fn main() {
     nuschel_sandbox_windows::launch_if_requested();
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let probe = ["--probe", "--database", "--data", "--live", "--file-handle"];
+    // The math worker takes no arguments: a run without any is a probe only
+    // inside an AppContainer.
     if arguments
         .first()
         .is_some_and(|first| probe.contains(&first.as_str()))
+        || (arguments.is_empty() && windows::is_app_container())
     {
         windows::probe();
         return;
@@ -54,7 +57,9 @@ mod windows {
         ContentRequest, ContentResponse, Envelope, LiveMediaEvent, LiveMediaRequest,
         StorageRequest, StorageResponse, TransferEvent, TransferRequest, WormholeServers,
         crypto::{CryptoRequest, CryptoResponse, RecoveryPolicy},
-        host, write_frame,
+        host,
+        math::{MathRequest, MathResponse},
+        write_frame,
     };
     use serde_json::{Value, json};
     use tokio::{
@@ -253,11 +258,17 @@ mod windows {
             "read": limits_read != 0 && interface_read != 0,
             "active_processes": limits.BasicLimitInformation.ActiveProcessLimit,
             "memory": limits.ProcessMemoryLimit,
+            // User-mode CPU seconds, 0 without a limit.
+            "cpu": if limits.BasicLimitInformation.LimitFlags & 2 == 0 {
+                0
+            } else {
+                limits.BasicLimitInformation.PerProcessUserTimeLimit / 10_000_000
+            },
             "interface": interface.UIRestrictionsClass,
         })
     }
 
-    fn is_app_container() -> bool {
+    pub fn is_app_container() -> bool {
         use windows_sys::Win32::{
             Foundation::{CloseHandle, HANDLE},
             Security::{GetTokenInformation, TOKEN_QUERY, TokenIsAppContainer},
@@ -423,6 +434,11 @@ mod windows {
                 request(None, 640 * mib),
             ),
             (
+                "math",
+                host::math_sandbox_command(&me),
+                request(None, 640 * mib),
+            ),
+            (
                 "storage",
                 host::storage_sandbox_command(&me, &storage),
                 request(Some(&storage), 1200 * mib),
@@ -443,7 +459,11 @@ mod windows {
                 request(None, 1200 * mib),
             ),
         ];
+        let only = option(arguments, "--only");
         for (kind, command, request) in probes {
+            if only.as_deref().is_some_and(|only| only != kind) {
+                continue;
+            }
             let report = match command {
                 Ok(command) => run_probe(command, &request).await,
                 Err(error) => Err(error.to_string()),
@@ -469,14 +489,22 @@ mod windows {
             // Its own job, as seen from inside: one process, the memory
             // limit, all eight UI restrictions.
             let job = &report["job"];
-            let memory: u64 = if kind == "content" {
+            let memory: u64 = if kind == "content" || kind == "math" {
                 512 << 20
             } else {
                 1 << 30
             };
+            // Content gets its request's budget (5 s here), math 120 s for
+            // its whole life, the others no CPU limit.
+            let cpu: i64 = match kind {
+                "content" => 5,
+                "math" => 120,
+                _ => 0,
+            };
             let effective = job["read"] == true
                 && job["active_processes"] == 1
                 && job["memory"] == memory
+                && job["cpu"] == cpu
                 && job["interface"] == 0xff;
             checks.report(
                 kind,
@@ -664,6 +692,33 @@ mod windows {
             relay: option(arguments, "--relay").unwrap_or_else(|| "tcp://10.0.2.100:4001".into()),
             direct: false,
         };
+
+        let only = option(arguments, "--only");
+        let wanted = |kind: &str| only.as_deref().is_none_or(|only| only == kind);
+
+        if wanted("math") {
+            let rendered = async {
+                let command =
+                    host::math_sandbox_command(&worker("math")).map_err(|e| e.to_string())?;
+                let (mut child, _containment) = spawn(command)?;
+                let request = MathRequest {
+                    tex: r"\frac{a}{b} + \sqrt{x^2}".into(),
+                    display: false,
+                    size: 16.0,
+                };
+                send(&mut child, 1, request).await?;
+                match receive::<MathResponse>(&mut child).await? {
+                    MathResponse::Rendered(image) => {
+                        Ok(format!("{}×{} pixels", image.width, image.height))
+                    }
+                    other => Err(format!("{other:?}")),
+                }
+            };
+            checks.report("math", "renders a formula", rendered.await);
+        }
+        if only.is_some() {
+            return;
+        }
 
         let image = format!("data:image/png;base64,{PNG}");
         let decoded =

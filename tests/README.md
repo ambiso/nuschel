@@ -57,7 +57,7 @@ except forwards into host loopback (the harness on 10.0.2.100:80, a test Murmur 
 `crates/sandbox-windows/tests/confinement.rs` checks every worker's AppContainer from
 the inside (docs/windows-sandbox.md). Cross-build it with the workers
 (`cargo test --target x86_64-pc-windows-gnu -p nuschel-sandbox-windows --test
-confinement --no-run`), copy the test executable and the five worker executables
+confinement --no-run`), copy the test executable and the six worker executables
 into one folder in the guest (`windows_vm.py push`, then `Invoke-WebRequest`), and
 run `confinement.exe --workers <folder>` there. It starts itself through
 `nuschel_ipc::host`'s real commands as each worker kind; inside, it must fail to read
@@ -65,7 +65,7 @@ a file it creates in Documents, list or write the profile, `C:\Users\Public` or 
 user's TEMP, connect to 10.0.2.100:80 (only transfer may), start a process, open the
 test's own process to query or terminate it, commit more memory than its job
 allows, read the clipboard (the test puts text there first) or the autostart key, or
-create a registry key; content, storage and crypto (less privileged AppContainers)
+create a registry key; content, math, storage and crypto (less privileged AppContainers)
 must also fail to read `HKCU\Environment`, which media and transfer can (printed, not
 failed). Storage and crypto must write their directory and transfer must read its
 offered file by handle. Each probe also reads its own job's limits from inside (one
