@@ -77,15 +77,21 @@ let
     def issue(identity, reason):
         issues.append({'name': identity[0], 'version': identity[1], 'reason': reason})
 
+    copied_paths = {}
     def copy_text(path, destination):
         if not path.is_file() or path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024:
             raise ValueError('missing, symlinked or oversized attribution file: ' + str(path))
         data = path.read_bytes()
         if not data.strip() or b'\0' in data:
             raise ValueError('empty or binary attribution file: ' + str(path))
+        digest = hashlib.sha256(data).hexdigest()
+        key = str(destination).casefold()
+        if key in copied_paths and copied_paths[key] != digest:
+            raise ValueError('conflicting attribution destination (including Windows case folding): ' + str(destination))
+        copied_paths[key] = digest
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(data)
-        return hashlib.sha256(data).hexdigest()
+        return digest
 
     def notice_file(path, root):
         relative = path.relative_to(root)
