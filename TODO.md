@@ -1057,6 +1057,14 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       to open (the PulseAudio client waits ~1.8 s per recording stream; not yet
       investigated), so unmuting is heard late there. The terminal client has
       `/speak here|both` controls and keeps voice disabled under `--no-audio`.
+- [x] **Pre-rename integration checkpoint** (2026-11-11): all five resumed tracks,
+      private-recipient/deafen/unread fixes and relay-only privacy are integrated.
+      Native workspace: 814 passed, zero failures, 11 baseline ignored; fmt/Clippy,
+      WASM/browser build and live private-server smoke, deny/audit, crate2nix,
+      Home Manager evaluation, server-only package/tests and Nix Clippy passed.
+      All four VM suites passed (details above). Independent E2EE and server
+      address-privacy reviews are clear; encrypted history remains experimental
+      with its explicit 4d/4e limitations. No rename has been performed.
 - [ ] **Rename Nuschel → nuschl** (user, 2026-11-11; "nuschl is mumbled nuschel"),
       queued as a sync point: start no new agents, merge the running ones, rename on
       a quiet tree, verify, push, then start the next wave. Checklist:
