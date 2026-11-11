@@ -651,21 +651,26 @@ mod windows_policies {
     use std::path::Path;
 
     /// No capabilities, no files: decoding happens on what arrives over stdin.
+    /// Content, storage and crypto are less privileged AppContainers (LPAC):
+    /// they are not even given what Windows grants every AppContainer.
     pub fn content(cpu_seconds: u64) -> Policy {
         Policy {
             profile: "nuschel.content".into(),
+            less_privileged: true,
             memory: CONTENT,
             cpu_seconds: Some(cpu_seconds),
             ..Policy::default()
         }
     }
 
-    /// Like content: no capabilities, no files; it parses untrusted LaTeX.
+    /// Like content (a less privileged AppContainer): no capabilities, no
+    /// files; it parses untrusted LaTeX.
     /// It lives long, so its CPU limit covers its whole life (it is
     /// restarted when it runs out), as on Linux.
     pub fn math() -> Policy {
         Policy {
             profile: "nuschel.math".into(),
+            less_privileged: true,
             memory: CONTENT,
             cpu_seconds: Some(120),
             ..Policy::default()
@@ -676,6 +681,7 @@ mod windows_policies {
     pub fn storage(directory: &Path) -> Policy {
         Policy {
             profile: scoped_profile("nuschel.storage", directory),
+            less_privileged: true,
             writable: vec![directory.to_owned()],
             memory: PERSISTENT,
             ..Policy::default()
@@ -686,6 +692,7 @@ mod windows_policies {
     pub fn crypto(directory: &Path) -> Policy {
         Policy {
             profile: scoped_profile("nuschel.crypto", directory),
+            less_privileged: true,
             writable: vec![directory.to_owned()],
             memory: PERSISTENT,
             ..Policy::default()
@@ -693,7 +700,8 @@ mod windows_policies {
     }
 
     /// Audio endpoints through the Windows audio service; the microphone
-    /// capability lets it capture. No network, no files.
+    /// capability lets it capture. No network, no files. A full AppContainer:
+    /// COM, which WASAPI needs, refuses a less privileged one.
     pub fn media() -> Policy {
         Policy {
             profile: "nuschel.media".into(),
@@ -706,7 +714,8 @@ mod windows_policies {
     /// Outgoing connections to the Internet (rendezvous, relay, peers) and
     /// connections to and from the local network (direct transit between
     /// peers on one LAN), but no inbound connections from the Internet; an
-    /// offer reads its one file through a handle, never by path.
+    /// offer reads its one file through a handle, never by path. A full
+    /// AppContainer: Winsock refuses a less privileged one.
     pub fn transfer(file: Option<&Path>) -> Policy {
         Policy {
             profile: "nuschel.transfer".into(),
@@ -904,6 +913,11 @@ mod tests {
             );
         }
         assert!(media.cpu_seconds.is_none() && storage.cpu_seconds.is_none());
+        // Everything but audio and the network runs as a less privileged AppContainer.
+        for policy in [&content, &math, &storage, &keys] {
+            assert!(policy.less_privileged, "{policy:?}");
+        }
+        assert!(!media.less_privileged && !send.less_privileged);
     }
 
     /// Runs only on macOS: the profiles must actually load and confine.

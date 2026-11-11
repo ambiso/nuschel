@@ -74,6 +74,7 @@ use windows_sys::{
                 CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DETACHED_PROCESS,
                 DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
                 INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+                PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY,
                 PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                 PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
                 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ResumeThread,
@@ -89,6 +90,9 @@ use windows_sys::{
 const MODIFY: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
 /// `PROCESS_CREATION_CHILD_PROCESS_RESTRICTED` (winbase.h): no child processes.
 const CHILD_PROCESS_RESTRICTED: u32 = 0x01;
+/// `PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT` (winbase.h): a less
+/// privileged AppContainer, outside "ALL APPLICATION PACKAGES".
+const ALL_APPLICATION_PACKAGES_OPT_OUT: u32 = 0x01;
 /// `PROCESS_CREATION_MITIGATION_POLICY_*_ALWAYS_ON` (winnt.h): no legacy
 /// extension DLLs (AppInit and similar), no non-system fonts, no images from
 /// remote shares or with a low mandatory label.
@@ -220,6 +224,7 @@ fn launch(policy: &Policy, mut arguments: Vec<OsString>) -> io::Result<u32> {
         &arguments,
         &container,
         &capabilities,
+        policy.less_privileged,
         &inherited,
         stdio,
         &environment(&folder),
@@ -745,6 +750,17 @@ impl<'a> Attributes<'a> {
         }
     }
 
+    fn all_application_packages_policy(&mut self, value: &'a u32) -> io::Result<()> {
+        // SAFETY: the attribute takes a DWORD, borrowed for 'a.
+        unsafe {
+            self.update(
+                PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY,
+                ptr::from_ref(value).cast(),
+                size_of::<u32>(),
+            )
+        }
+    }
+
     fn mitigation_policy(&mut self, value: &'a u64) -> io::Result<()> {
         // SAFETY: the attribute takes a DWORD64, borrowed for 'a.
         unsafe {
@@ -808,6 +824,7 @@ fn spawn(
     arguments: &[OsString],
     container: &Sid,
     capabilities: &[Sid],
+    less_privileged: bool,
     inherited: &[HANDLE],
     stdio: [HANDLE; 3],
     environment: &[u16],
@@ -835,13 +852,17 @@ fn spawn(
     };
     let child_policy = CHILD_PROCESS_RESTRICTED;
     let mitigations = MITIGATIONS;
-    let mut attributes = Attributes::new(4)?;
+    let packages_policy = ALL_APPLICATION_PACKAGES_OPT_OUT;
+    let mut attributes = Attributes::new(5)?;
     attributes.security_capabilities(&security)?;
     if !inherited.is_empty() {
         attributes.handle_list(inherited)?;
     }
     attributes.child_process_policy(&child_policy)?;
     attributes.mitigation_policy(&mitigations)?;
+    if less_privileged {
+        attributes.all_application_packages_policy(&packages_policy)?;
+    }
     let startup = STARTUPINFOEXW {
         StartupInfo: STARTUPINFOW {
             cb: size_of::<STARTUPINFOEXW>() as u32,

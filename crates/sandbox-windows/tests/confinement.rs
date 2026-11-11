@@ -9,8 +9,9 @@
 //! probe, it tries what a compromised worker would: read a file in the user's
 //! Documents, list the user's profile, write outside its directory, connect
 //! to `--connect` (default 10.0.2.100:80, the VM harness), start a process,
-//! open another process to query or end it, and commit more memory than its
-//! job allows. With `--workers`, the real workers then do their jobs in the
+//! open another process to query or end it, commit more memory than its job
+//! allows, read the user's environment and autostart keys in the registry or
+//! write a key there, and read the clipboard (the test puts text there first). With `--workers`, the real workers then do their jobs in the
 //! same sandboxes: content decodes an image, storage writes and reads
 //! history, crypto creates an identity, media opens the default devices and
 //! transfer offers a file (reaching `--rendezvous` if one is given; with
@@ -88,12 +89,17 @@ mod windows {
             report["write_own_directory"] = outcome(std::fs::write(&file, b"ok")).into();
         }
         let address = text("connect");
-        let connect = address
-            .parse()
-            .map_err(std::io::Error::other)
-            .and_then(|address| {
-                std::net::TcpStream::connect_timeout(&address, Duration::from_secs(4))
-            });
+        // In a less privileged AppContainer Winsock itself fails to start,
+        // and std panics; that is a denial too.
+        let connect = std::panic::catch_unwind(|| {
+            address
+                .parse()
+                .map_err(std::io::Error::other)
+                .and_then(|address| {
+                    std::net::TcpStream::connect_timeout(&address, Duration::from_secs(4))
+                })
+        })
+        .unwrap_or_else(|_| Err(std::io::Error::other("Winsock unavailable")));
         report["connect"] = outcome(connect.map(drop)).into();
         let spawned = std::process::Command::new(r"C:\Windows\System32\cmd.exe")
             .args(["/c", "exit 0"])
@@ -113,6 +119,11 @@ mod windows {
         )
         .into();
         drop(memory);
+        report["read_user_environment"] = outcome(read_key(r"Environment")).into();
+        report["read_autostart"] =
+            outcome(read_key(r"Software\Microsoft\Windows\CurrentVersion\Run")).into();
+        report["write_registry"] = outcome(create_key(r"Software\NuschelSandboxProbe")).into();
+        report["read_clipboard"] = outcome(clipboard_text()).into();
         // The transfer probe was handed a file by handle; it must read it.
         let arguments: Vec<String> = std::env::args().collect();
         if let Some(position) = arguments.iter().position(|a| a == "--file-handle") {
@@ -130,6 +141,73 @@ mod windows {
         let mut output = std::io::stdout().lock();
         writeln!(output, "{report}").ok();
         output.flush().ok();
+    }
+
+    /// Opens `HKEY_CURRENT_USER\\<path>` for reading.
+    fn read_key(path: &str) -> std::io::Result<()> {
+        use windows_sys::Win32::System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW,
+        };
+        let path: Vec<u16> = path.encode_utf16().chain([0]).collect();
+        let mut key: HKEY = std::ptr::null_mut();
+        // SAFETY: a NUL-terminated name and an out-pointer to a local.
+        let error =
+            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, KEY_READ, &mut key) };
+        if error != 0 {
+            return Err(std::io::Error::from_raw_os_error(error as i32));
+        }
+        // SAFETY: the key opened above, closed once.
+        unsafe { RegCloseKey(key) };
+        Ok(())
+    }
+
+    /// Creates (and leaves) `HKEY_CURRENT_USER\\<path>`.
+    fn create_key(path: &str) -> std::io::Result<()> {
+        use windows_sys::Win32::System::Registry::{
+            HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCloseKey,
+            RegCreateKeyExW,
+        };
+        let path: Vec<u16> = path.encode_utf16().chain([0]).collect();
+        let mut key: HKEY = std::ptr::null_mut();
+        // SAFETY: a NUL-terminated name, no class or security attributes, and
+        // out-pointers to locals.
+        let error = unsafe {
+            RegCreateKeyExW(
+                HKEY_CURRENT_USER,
+                path.as_ptr(),
+                0,
+                std::ptr::null(),
+                REG_OPTION_NON_VOLATILE,
+                KEY_WRITE,
+                std::ptr::null(),
+                &mut key,
+                std::ptr::null_mut(),
+            )
+        };
+        if error != 0 {
+            return Err(std::io::Error::from_raw_os_error(error as i32));
+        }
+        // SAFETY: the key created above, closed once.
+        unsafe { RegCloseKey(key) };
+        Ok(())
+    }
+
+    /// Whether this process can get text from the clipboard.
+    fn clipboard_text() -> std::io::Result<()> {
+        use windows_sys::Win32::System::DataExchange::{
+            CloseClipboard, GetClipboardData, OpenClipboard,
+        };
+        const CF_UNICODETEXT: u32 = 13;
+        // SAFETY: no window; fails if another process holds the clipboard.
+        if unsafe { OpenClipboard(std::ptr::null_mut()) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: the clipboard is open; the handle is only compared to null.
+        let data = unsafe { GetClipboardData(CF_UNICODETEXT) };
+        let error = std::io::Error::last_os_error();
+        // SAFETY: opened above.
+        unsafe { CloseClipboard() };
+        if data.is_null() { Err(error) } else { Ok(()) }
     }
 
     fn is_app_container() -> bool {
@@ -225,6 +303,10 @@ mod windows {
             .build()
             .expect("runtime");
         let mut checks = Checks { failures: 0 };
+        // Only a probe that cannot read text the test itself can read means anything.
+        if let Err(error) = clipboard_text() {
+            println!("     the clipboard holds no text for this test ({error}); set some first");
+        }
         runtime.block_on(run(arguments, &mut checks));
         println!("{} failed check(s)", checks.failures);
         i32::from(checks.failures > 0)
@@ -320,8 +402,27 @@ mod windows {
                 "query_other_process",
                 "terminate_other_process",
                 "commit_over_limit",
+                "read_autostart",
+                "write_registry",
+                "read_clipboard",
             ] {
                 checks.expect(kind, check, "denied", &field(check));
+            }
+            // Every full AppContainer may read HKCU\Environment; the less
+            // privileged ones may not.
+            if kind == "media" || kind == "transfer" {
+                let environment = field("read_user_environment");
+                println!(
+                    "     {kind:<9} {:<24} {environment} (full AppContainer)",
+                    "read_user_environment"
+                );
+            } else {
+                checks.expect(
+                    kind,
+                    "read_user_environment",
+                    "denied",
+                    &field("read_user_environment"),
+                );
             }
             let network = if kind == "transfer" {
                 "allowed"

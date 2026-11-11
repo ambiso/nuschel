@@ -39,6 +39,10 @@ pub struct Policy {
     pub memory: u64,
     /// User-mode CPU seconds before the job ends the worker.
     pub cpu_seconds: Option<u64>,
+    /// A less privileged AppContainer (LPAC): not in "ALL APPLICATION
+    /// PACKAGES", so nothing granted to every AppContainer (such as the
+    /// user's environment variables in the registry) is granted to it.
+    pub less_privileged: bool,
 }
 
 impl Policy {
@@ -66,6 +70,9 @@ impl Policy {
             arguments.push("--cpu".into());
             arguments.push(seconds.to_string().into());
         }
+        if self.less_privileged {
+            arguments.push("--less-privileged".into());
+        }
         arguments.push("--".into());
         arguments
     }
@@ -89,6 +96,10 @@ impl Policy {
                 break;
             }
             let option = option.to_string_lossy().into_owned();
+            if option == "--less-privileged" {
+                policy.less_privileged = true;
+                continue;
+            }
             let value = arguments
                 .next()
                 .ok_or_else(|| format!("{option} needs a value"))?;
@@ -194,6 +205,7 @@ mod tests {
             file: Some(r"C:\Users\a\Documents\offer.zip".into()),
             memory: 1 << 30,
             cpu_seconds: Some(7),
+            less_privileged: true,
         };
         let mut arguments = policy.arguments();
         assert_eq!(arguments[0], LAUNCH_FLAG);
