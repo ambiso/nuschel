@@ -45,6 +45,9 @@ message Policy {
   Guests guests = 5;
   // How often one message may be edited.
   uint32 edit_limit = 6;
+  // Moderators (Write on a channel) may delete others' messages there
+  // (`history.moderators_delete`); clients offer it only then.
+  bool moderators_delete = 7;
   // The default is "none": not archived, live delivery only.
   bool live_only = 8;
 }

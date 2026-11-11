@@ -202,6 +202,7 @@ pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>) -> v1::Hello {
                 GuestHistory::Full => v1::policy::Guests::Full,
             } as i32,
             edit_limit: history.edit_limit,
+            moderators_delete: history.moderators_delete,
             live_only,
         }),
     }

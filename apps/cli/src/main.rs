@@ -182,6 +182,38 @@ enum Input {
         request_id: u64,
         conversations: Vec<String>,
     },
+    /// Nuschel servers: replace our message `target` (a seq) in a conversation.
+    ChatEdit {
+        request_id: u64,
+        conversation: String,
+        target: u64,
+        content: String,
+    },
+    /// Nuschel servers: delete message `target` (ours, or as a moderator).
+    ChatDelete {
+        request_id: u64,
+        conversation: String,
+        target: u64,
+    },
+    /// Nuschel servers: we are typing in a conversation.
+    Typing {
+        conversation: String,
+    },
+    /// Nuschel servers: open (or create) the direct conversation with a
+    /// registered user, and list ours.
+    OpenDirect {
+        request_id: u64,
+        user_id: u32,
+    },
+    ListDirect {
+        request_id: u64,
+    },
+    /// Nuschel servers: text to a direct conversation (32 hex digits), sent
+    /// like the desktop's (paced, idempotent, acknowledged).
+    DirectText {
+        conversation: String,
+        body: String,
+    },
     /// Key transparency (with `--identity-dir`): check a registered user.
     IdentityCheck {
         user_id: u32,
@@ -210,7 +242,11 @@ fn message_json(message: &v1::Message) -> serde_json::Value {
     let author = message.author.clone().unwrap_or_default();
     json!({"seq":message.seq, "kind":message.kind, "target":message.target, "author":author.name,
         "user_id":author.user_id, "format":message.format, "content":message.content,
-        "deleted":message.deleted_ms != 0, "edits":message.edits})
+        "deleted":message.deleted_ms != 0, "edits":message.edits, "delete_reason":message.delete_reason})
+}
+fn direct_json(direct: &v1::Direct) -> serde_json::Value {
+    json!({"conversation":hex(&direct.conversation), "user_id":direct.user_id, "name":direct.name,
+        "head":direct.head, "read":direct.read})
 }
 fn nuschel_json(event: &NuschelEvent) -> serde_json::Value {
     match event {
@@ -234,6 +270,18 @@ fn nuschel_json(event: &NuschelEvent) -> serde_json::Value {
         }
         NuschelEvent::Unsubscribed(gone) => {
             json!({"kind":"unsubscribed", "conversation":hex(&gone.conversation)})
+        }
+        NuschelEvent::Typing(typing) => {
+            json!({"kind":"typing", "conversation":hex(&typing.conversation), "session":typing.session})
+        }
+        NuschelEvent::DirectOpened(opened) => {
+            json!({"kind":"direct_opened", "request_id":opened.request_id, "direct":opened.direct.as_ref().map(direct_json)})
+        }
+        NuschelEvent::DirectList(list) => {
+            json!({"kind":"direct_list", "request_id":list.request_id, "directs":list.directs.iter().map(direct_json).collect::<Vec<_>>()})
+        }
+        NuschelEvent::ReadMarker(marker) => {
+            json!({"kind":"read_marker", "conversation":hex(&marker.conversation), "seq":marker.seq})
         }
         other => json!({"kind":"nuschel", "event":format!("{other:?}")}),
     }
@@ -534,6 +582,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     request_id,
                     conversations: conversations.iter().map(|id| unhex(id)).collect(),
                 })),
+                Ok(Input::ChatEdit {
+                    request_id,
+                    conversation,
+                    target,
+                    content,
+                }) => Command::Nuschel(NuschelRequest::Edit(v1::ChatEdit {
+                    request_id,
+                    conversation: unhex(&conversation),
+                    target,
+                    format: v1::Format::Text as i32,
+                    content,
+                })),
+                Ok(Input::ChatDelete {
+                    request_id,
+                    conversation,
+                    target,
+                }) => Command::Nuschel(NuschelRequest::Delete(v1::ChatDelete {
+                    request_id,
+                    conversation: unhex(&conversation),
+                    target,
+                })),
+                Ok(Input::Typing { conversation }) => {
+                    Command::Nuschel(NuschelRequest::Typing(v1::Typing {
+                        conversation: unhex(&conversation),
+                        session: 0,
+                    }))
+                }
+                Ok(Input::OpenDirect {
+                    request_id,
+                    user_id,
+                }) => Command::Nuschel(NuschelRequest::OpenDirect(v1::OpenDirect {
+                    request_id,
+                    user_id,
+                })),
+                Ok(Input::ListDirect { request_id }) => {
+                    Command::Nuschel(NuschelRequest::ListDirect(v1::ListDirect { request_id }))
+                }
+                Ok(Input::DirectText { conversation, body }) => {
+                    match <[u8; 16]>::try_from(unhex(&conversation).as_slice()) {
+                        Ok(id) => Command::SendText {
+                            target: TextTarget::DirectConversation(id),
+                            body,
+                            expected_peer: None,
+                        },
+                        Err(_) => {
+                            let _ = output(
+                                json!({"kind":"error", "message":"conversation must be 32 hex digits"}),
+                            );
+                            continue;
+                        }
+                    }
+                }
                 Ok(Input::Disconnect) => Command::Disconnect,
                 Err(error) => {
                     let _ = output(json!({"kind":"error", "message":error.to_string()}));
@@ -585,7 +685,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::Outbox { sent, total } => json!({"kind":"outbox", "sent":sent, "total":total}),
                 SessionEvent::ChannelInfo { channel, info } => json!({"kind":"channel_info", "channel":channel, "conversation":hex(&info.conversation), "visibility":info.visibility}),
                 SessionEvent::Nuschel(event) => nuschel_json(&event),
-                SessionEvent::ChatPending(pending) => json!({"kind":"chat_pending", "channel":pending.channel, "key":hex(&pending.key)}),
+                SessionEvent::ChatPending(pending) => json!({"kind":"chat_pending", "target":pending.target, "key":hex(&pending.key)}),
                 SessionEvent::ChatAcked { key, seq } => json!({"kind":"chat_acked", "key":hex(&key), "seq":seq}),
                 SessionEvent::ChatFailed { key, reason } => json!({"kind":"chat_failed", "key":hex(&key), "reason":reason}),
                 SessionEvent::ConversationState { channel, head, read } => json!({"kind":"conversation_state", "channel":channel, "head":head, "read":read}),

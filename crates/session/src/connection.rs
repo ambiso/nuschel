@@ -82,6 +82,9 @@ const BLOBS_NOTICE: &str = "This server sent more than 64 MiB of comments, descr
 pub enum TextTarget {
     Channel(u32),
     Direct(u32),
+    /// A direct conversation on a Nuschel server (`OpenDirect`), by its id:
+    /// stored, and reachable while the other account is offline.
+    DirectConversation([u8; 16]),
 }
 
 #[derive(Clone, Debug)]
@@ -104,7 +107,8 @@ pub struct IncomingText {
 /// server stores it once.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingChat {
-    pub channel: u32,
+    /// A channel, or a direct conversation (`TextTarget::DirectConversation`).
+    pub target: TextTarget,
     pub conversation: [u8; 16],
     pub key: [u8; 16],
     pub content: String,
@@ -933,6 +937,9 @@ struct State {
     extension: Option<Vec<String>>,
     /// Channel → conversation id (Nuschel servers).
     conversations: BTreeMap<u32, [u8; 16]>,
+    /// Our direct conversations (Nuschel servers), from `DirectList`,
+    /// `DirectOpened` and messages in conversations not known before.
+    directs: BTreeMap<[u8; 16], v1::Direct>,
     /// Our sends in flight by request id, with their attempts.
     sending: BTreeMap<u64, (PendingChat, u32)>,
     subscribed: BTreeSet<u32>,
@@ -966,6 +973,7 @@ impl Default for State {
             outbox: Outbox::new(MessageRate::default()),
             extension: None,
             conversations: BTreeMap::new(),
+            directs: BTreeMap::new(),
             sending: BTreeMap::new(),
             subscribed: BTreeSet::new(),
             next_request: 0,
@@ -1599,24 +1607,30 @@ impl State {
                     )
                     .await;
                 }
-                let chat = match target {
-                    TextTarget::Channel(channel) if self.history() => self
-                        .conversations
-                        .get(&channel)
-                        .filter(|_| body.len() <= nuschel::MAX_CONTENT_BYTES)
-                        .map(|conversation| {
-                            (
-                                PendingChat {
-                                    channel,
-                                    conversation: *conversation,
-                                    key: random_key(),
-                                    content: body.clone(),
-                                },
-                                false,
-                            )
-                        }),
+                let conversation = match target {
+                    TextTarget::Channel(channel) if self.history() => {
+                        self.conversations.get(&channel).copied()
+                    }
+                    TextTarget::DirectConversation(id)
+                        if self.history() && self.directs.contains_key(&id) =>
+                    {
+                        Some(id)
+                    }
                     _ => None,
                 };
+                let chat = conversation
+                    .filter(|_| body.len() <= nuschel::MAX_CONTENT_BYTES)
+                    .map(|conversation| {
+                        (
+                            PendingChat {
+                                target: target.clone(),
+                                conversation,
+                                key: random_key(),
+                                content: body.clone(),
+                            },
+                            false,
+                        )
+                    });
                 self.outbox.push(Outgoing {
                     target,
                     expected_peer,
@@ -1690,12 +1704,16 @@ impl State {
             .map(|user| user.name.clone())
             .unwrap_or_default();
         emit(events, SessionEvent::ChatPending(pending.clone())).await?;
+        let peer = match pending.target {
+            TextTarget::DirectConversation(id) => self.direct_peer(&id),
+            _ => None,
+        };
         emit(
             events,
             SessionEvent::Text(IncomingText {
-                target: TextTarget::Channel(pending.channel),
+                target: pending.target.clone(),
                 author,
-                peer: None,
+                peer,
                 body: pending.content,
                 html: false,
                 outgoing: true,
@@ -1742,7 +1760,7 @@ impl State {
                         .insert(error.request_id, (pending.clone(), attempts));
                     self.outbox.charge(Instant::now());
                     self.outbox.push(Outgoing {
-                        target: TextTarget::Channel(pending.channel),
+                        target: pending.target.clone(),
                         expected_peer: None,
                         wire: String::new(),
                         body: String::new(),
@@ -1786,42 +1804,122 @@ impl State {
                 let Some(message) = chat.message else {
                     return Ok(());
                 };
-                match (self.channel_of(&chat.conversation), message.kind) {
-                    (Some(channel), kind) if kind == v1::message::Kind::Message as i32 => {
-                        let author = message.author.unwrap_or_default();
-                        let peer = self
-                            .users
-                            .values()
-                            .find(|user| {
-                                author.user_id != 0 && user.user_id == Some(author.user_id)
-                            })
-                            .cloned();
-                        emit(
-                            events,
-                            SessionEvent::Text(IncomingText {
-                                target: TextTarget::Channel(channel),
-                                author: if author.name.is_empty() {
-                                    "Deleted user".into()
-                                } else {
-                                    author.name
-                                },
-                                peer,
-                                body: message.content,
-                                html: message.format == v1::Format::LegacyHtml as i32,
-                                outgoing: false,
-                                observed_at_ms: message.sent_ms,
-                                seq: Some(message.seq),
-                                pending: None,
-                            }),
-                        )
-                        .await?;
-                    }
-                    _ => {}
+                if message.kind != v1::message::Kind::Message as i32 {
+                    return Ok(());
                 }
+                let target = match self.channel_of(&chat.conversation) {
+                    Some(channel) => TextTarget::Channel(channel),
+                    None => {
+                        let Some(id) = nuschel::id(&chat.conversation) else {
+                            return Ok(());
+                        };
+                        // Not a channel's: one of our direct conversations,
+                        // perhaps new (the server delivers those only to
+                        // its two accounts). Ask for the list to be sure.
+                        if !self.directs.contains_key(&id) {
+                            let author = message.author.clone().unwrap_or_default();
+                            let own = self
+                                .own_session
+                                .and_then(|own| self.users.get(&own))
+                                .and_then(|user| user.user_id);
+                            if own.is_some_and(|own| own != author.user_id)
+                                && self.directs.len() < nuschel::MAX_DIRECTS
+                            {
+                                self.directs.insert(
+                                    id,
+                                    v1::Direct {
+                                        conversation: id.to_vec(),
+                                        user_id: author.user_id,
+                                        name: author.name,
+                                        account: author.account,
+                                        ..Default::default()
+                                    },
+                                );
+                            }
+                            self.next_request += 1;
+                            self.outbound.push((
+                                nuschel::kind::LIST_DIRECT,
+                                v1::ListDirect {
+                                    request_id: INTERNAL | self.next_request,
+                                }
+                                .encode_to_vec(),
+                            ));
+                        }
+                        TextTarget::DirectConversation(id)
+                    }
+                };
+                let author = message.author.unwrap_or_default();
+                let own = self
+                    .own_session
+                    .and_then(|own| self.users.get(&own))
+                    .and_then(|user| user.user_id);
+                // From our own account on another device.
+                let outgoing = author.user_id != 0 && own == Some(author.user_id);
+                let peer = match target {
+                    TextTarget::DirectConversation(id) if outgoing => self.direct_peer(&id),
+                    _ => self
+                        .users
+                        .values()
+                        .find(|user| author.user_id != 0 && user.user_id == Some(author.user_id))
+                        .cloned(),
+                };
+                emit(
+                    events,
+                    SessionEvent::Text(IncomingText {
+                        target,
+                        author: if author.name.is_empty() {
+                            "Deleted user".into()
+                        } else {
+                            author.name
+                        },
+                        peer,
+                        body: message.content,
+                        html: message.format == v1::Format::LegacyHtml as i32,
+                        outgoing,
+                        observed_at_ms: message.sent_ms,
+                        seq: Some(message.seq),
+                        pending: None,
+                    }),
+                )
+                .await?;
+            }
+            NuschelEvent::DirectList(list) => {
+                for direct in &list.directs {
+                    if let Some(id) = nuschel::id(&direct.conversation) {
+                        self.directs.insert(id, direct.clone());
+                    }
+                }
+                emit(
+                    events,
+                    SessionEvent::Nuschel(NuschelEvent::DirectList(list)),
+                )
+                .await?;
+            }
+            NuschelEvent::DirectOpened(opened) => {
+                if let Some(direct) = &opened.direct
+                    && let Some(id) = nuschel::id(&direct.conversation)
+                    && (self.directs.len() < nuschel::MAX_DIRECTS || self.directs.contains_key(&id))
+                {
+                    self.directs.insert(id, direct.clone());
+                }
+                emit(
+                    events,
+                    SessionEvent::Nuschel(NuschelEvent::DirectOpened(opened)),
+                )
+                .await?;
             }
             other => emit(events, SessionEvent::Nuschel(other)).await?,
         }
         Ok(())
+    }
+
+    /// The other account of a direct conversation, if it is online.
+    fn direct_peer(&self, id: &[u8; 16]) -> Option<User> {
+        let user_id = self.directs.get(id)?.user_id;
+        self.users
+            .values()
+            .find(|user| user_id != 0 && user.user_id == Some(user_id))
+            .cloned()
     }
 
     fn channel_of(&self, conversation: &[u8]) -> Option<u32> {
@@ -1913,6 +2011,16 @@ impl State {
                     return emit(events, SessionEvent::Notice("The recipient disconnected or changed. Open a new private conversation.".into())).await;
                 }
                 message.session.push(id);
+            }
+            // Only through the extension (`send_chat`).
+            TextTarget::DirectConversation(_) => {
+                return emit(
+                    events,
+                    SessionEvent::Notice(
+                        "This direct conversation is not available on this connection.".into(),
+                    ),
+                )
+                .await;
             }
         }
         self.queue(kind::TEXT_MESSAGE, &message);
@@ -2039,10 +2147,35 @@ impl State {
                     self.subscribe(channels);
                     // What an earlier connection could not get acknowledged,
                     // with the same keys: the server stores each once.
+                    // Our direct conversations (unread counts, and where
+                    // messages from others belong).
+                    self.next_request += 1;
+                    self.outbound.push((
+                        nuschel::kind::LIST_DIRECT,
+                        v1::ListDirect {
+                            request_id: INTERNAL | self.next_request,
+                        }
+                        .encode_to_vec(),
+                    ));
                     for pending in std::mem::take(&mut self.resend) {
-                        if self.conversations.get(&pending.channel) == Some(&pending.conversation) {
+                        // A direct conversation outlives connections; the
+                        // server refuses it if it went.
+                        let known = match pending.target {
+                            TextTarget::Channel(channel) => {
+                                self.conversations.get(&channel) == Some(&pending.conversation)
+                            }
+                            TextTarget::DirectConversation(id) => id == pending.conversation,
+                            TextTarget::Direct(_) => false,
+                        };
+                        if known {
+                            if let TextTarget::DirectConversation(id) = pending.target {
+                                self.directs.entry(id).or_insert_with(|| v1::Direct {
+                                    conversation: id.to_vec(),
+                                    ..Default::default()
+                                });
+                            }
                             self.outbox.push(Outgoing {
-                                target: TextTarget::Channel(pending.channel),
+                                target: pending.target.clone(),
                                 expected_peer: None,
                                 wire: String::new(),
                                 body: String::new(),
@@ -3507,6 +3640,114 @@ mod tests {
         assert_eq!(target.targets[0].session, [9]);
         let listen = proto::UserState::decode(state.outbound[2].1.as_slice()).unwrap();
         assert_eq!(listen.listening_channel_add, [0]);
+    }
+
+    #[tokio::test]
+    async fn direct_conversations_carry_sends_and_messages_from_others() {
+        let mut state = State {
+            own_session: Some(7),
+            extension: Some(vec![nuschel::capability::HISTORY.into()]),
+            ..State::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        for (session, name, user_id) in [(7, "Ada", 1), (9, "Bob", 2)] {
+            let user = proto::UserState {
+                session: Some(session),
+                name: Some(name.into()),
+                user_id: Some(user_id),
+                ..Default::default()
+            };
+            state
+                .handle(frame(kind::USER_STATE, user), &tx)
+                .await
+                .unwrap();
+        }
+        while rx.try_recv().is_ok() {}
+        // Unknown until the server names it: nothing goes out.
+        let send = |body: &str| Command::SendText {
+            target: TextTarget::DirectConversation([5; 16]),
+            body: body.into(),
+            expected_peer: None,
+        };
+        state.command(send("too early"), &tx).await.unwrap();
+        assert!(state.outbound.is_empty());
+        let Ok(SessionEvent::Notice(_)) = rx.try_recv() else {
+            panic!("no notice")
+        };
+        let list = v1::DirectList {
+            request_id: 0,
+            directs: vec![v1::Direct {
+                conversation: vec![5; 16],
+                user_id: 2,
+                name: "Bob".into(),
+                ..Default::default()
+            }],
+        };
+        state
+            .nuschel(NuschelEvent::DirectList(list), &tx)
+            .await
+            .unwrap();
+        while rx.try_recv().is_ok() {}
+        state.command(send("hi Bob"), &tx).await.unwrap();
+        let [(nuschel::kind::CHAT_SEND, wire)] = state.outbound.as_slice() else {
+            panic!("one ChatSend: {:?}", state.outbound)
+        };
+        let wire = v1::ChatSend::decode(wire.as_slice()).unwrap();
+        assert_eq!(
+            (wire.conversation.as_slice(), wire.content.as_str()),
+            (&[5; 16][..], "hi Bob")
+        );
+        let Ok(SessionEvent::ChatPending(pending)) = rx.try_recv() else {
+            panic!("not pending")
+        };
+        assert_eq!(pending.target, TextTarget::DirectConversation([5; 16]));
+        let Ok(SessionEvent::Text(echo)) = rx.try_recv() else {
+            panic!("no outgoing echo")
+        };
+        assert_eq!(echo.target, TextTarget::DirectConversation([5; 16]));
+        assert_eq!(echo.peer.map(|peer| peer.session), Some(9));
+        // A message in a conversation not known before is a new direct one.
+        state.outbound.clear();
+        let chat = v1::ChatEvent {
+            conversation: vec![6; 16],
+            message: Some(v1::Message {
+                seq: 1,
+                author: Some(v1::Author {
+                    user_id: 3,
+                    name: "Cy".into(),
+                    ..Default::default()
+                }),
+                content: "hello".into(),
+                format: v1::Format::Text as i32,
+                ..Default::default()
+            }),
+        };
+        state.nuschel(NuschelEvent::Chat(chat), &tx).await.unwrap();
+        let Ok(SessionEvent::Nuschel(NuschelEvent::Chat(_))) = rx.try_recv() else {
+            panic!("no chat event")
+        };
+        let Ok(SessionEvent::Text(text)) = rx.try_recv() else {
+            panic!("no text")
+        };
+        assert_eq!(
+            (text.target, text.author.as_str(), text.seq, text.outgoing),
+            (
+                TextTarget::DirectConversation([6; 16]),
+                "Cy",
+                Some(1),
+                false
+            )
+        );
+        assert!(state.directs.contains_key(&[6; 16]));
+        assert_eq!(
+            state
+                .outbound
+                .iter()
+                .map(|(kind, _)| *kind)
+                .collect::<Vec<_>>(),
+            [nuschel::kind::LIST_DIRECT],
+            "the list is asked for again"
+        );
     }
 
     #[tokio::test]
