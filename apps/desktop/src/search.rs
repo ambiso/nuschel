@@ -6,8 +6,7 @@
 use crate::{
     assets::icon,
     dialogs::{Tone, styled_button},
-    names,
-    state::{Desktop, ServerView, accessible, local_time},
+    state::{Desktop, accessible, local_time},
     theme::{self, *},
 };
 use gpui_kit::{
@@ -15,31 +14,22 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_client::{Conversation, timeline::Page};
+pub use nuschel_client::search::Scope;
+use nuschel_client::{
+    Conversation,
+    search::{Hit, Located},
+    timeline::Page,
+};
 use nuschel_core::{SearchCursor, SearchPage, search::Query};
-use nuschel_session::connection::TextTarget;
 use std::{
-    collections::HashMap,
-    ops::Range,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
 /// How long the message a result opened stays highlighted.
 const HIGHLIGHT: Duration = Duration::from_millis(2500);
-/// Bytes of a result's text shown around its first match.
-const SNIPPET: usize = 240;
-/// Servers one search covers (the storage worker's limit).
-const MAX_SERVERS: usize = 64;
 
 static REQUESTS: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Scope {
-    Conversation,
-    Server,
-    All,
-}
 
 pub struct SearchView {
     input: Entity<InputState>,
@@ -60,18 +50,17 @@ pub struct SearchView {
     _changes: Subscription,
 }
 
+/// A result as the SDK names it (`nuschel_client::search`), with its local time.
 struct SearchHit {
-    server: String,
-    storage_key: String,
-    id: i64,
-    /// Its seq on a Nuschel server (whose timeline counts in seqs).
-    seq: Option<i64>,
-    place: String,
-    server_name: String,
-    author: String,
+    hit: Hit,
     time: String,
-    snippet: String,
-    highlights: Vec<Range<usize>>,
+}
+
+impl std::ops::Deref for SearchHit {
+    type Target = Hit;
+    fn deref(&self) -> &Hit {
+        &self.hit
+    }
 }
 
 /// The message a result opened, highlighted for a moment once in view.
@@ -180,42 +169,13 @@ impl Desktop {
     }
 
     /// The history identities and the conversation (storage key) a search
-    /// covers.
+    /// covers (the SDK decides).
     fn search_scope(&self) -> Result<(Vec<String>, Option<String>), &'static str> {
-        let unknown = "Connect to this server once to search its history.";
-        let search = self.search.as_ref().ok_or(unknown)?;
-        let server = self
-            .client
-            .servers
-            .iter()
-            .find(|server| server.id == search.origin.server)
-            .ok_or(unknown)?;
-        match search.scope {
-            Scope::Conversation => {
-                let channel = server
-                    .channels
-                    .iter()
-                    .find(|channel| channel.id == search.origin.channel)
-                    .ok_or(unknown)?;
-                Ok((
-                    vec![server.history_identity().ok_or(unknown)?],
-                    Some(channel.storage_key.clone()),
-                ))
-            }
-            Scope::Server => Ok((vec![server.history_identity().ok_or(unknown)?], None)),
-            Scope::All => {
-                let servers: Vec<String> = self
-                    .client
-                    .servers
-                    .iter()
-                    .filter_map(|server| server.history_identity())
-                    .collect();
-                if servers.len() > MAX_SERVERS {
-                    return Err("Search covers at most 64 servers at once.");
-                }
-                Ok((servers, None))
-            }
-        }
+        let search = self
+            .search
+            .as_ref()
+            .ok_or("Connect to this server once to search its history.")?;
+        self.client.search_scope(&search.origin, search.scope)
     }
 
     /// Search again if the query, scope or place changed.
@@ -275,7 +235,6 @@ impl Desktop {
         result: Result<SearchPage, String>,
         cx: &App,
     ) {
-        let (servers, settings) = (&self.client.servers, &self.settings);
         let Some(search) = self
             .search
             .as_mut()
@@ -291,48 +250,15 @@ impl Desktop {
                 return;
             }
         };
-        let query = Query::parse(&search.query(cx));
-        let identities: HashMap<String, &ServerView> = servers
-            .iter()
-            .filter_map(|server| Some((server.history_identity()?, server)))
-            .collect();
         search.indexing = page.indexing;
         search.next = page.next;
-        for hit in page.hits {
-            let Some(server) = identities.get(&hit.message.server) else {
-                continue;
-            };
-            let key = hit.message.channel;
-            let channel = server
-                .channels
-                .iter()
-                .find(|channel| channel.storage_key == key);
-            let peer = channel.and_then(|channel| channel.direct_peer.as_ref());
-            let place = match (channel, peer) {
-                (Some(channel), _) if matches!(channel.target, TextTarget::Channel(_)) => {
-                    format!("#{}", channel.name)
-                }
-                (_, Some(peer)) => format!("@ {}", names::display_name(peer, settings)),
-                (Some(channel), None) => channel.name.clone(),
-                (None, _) if key.starts_with("direct:") => "Earlier direct conversation".into(),
-                (None, _) => "Earlier channel".into(),
-            };
-            let (snippet, highlights) = snippet(&hit.message.body, &query);
-            // Your nickname for someone online under that name.
-            let author = names::author(&hit.message.author, server.users.values(), peer);
-            let author = names::author_name(&hit.message.author, author, settings).to_string();
-            search.results.push(SearchHit {
-                server: server.id.clone(),
-                storage_key: key,
-                id: hit.id,
-                seq: hit.seq,
-                place,
-                server_name: server.name.clone(),
-                author,
-                time: local_time(hit.message.observed_at_ms),
-                snippet,
-                highlights,
-            });
+        let query = search.query(cx);
+        let hits = self.client.search_hits(page.hits, &query);
+        if let Some(search) = &mut self.search {
+            search.results.extend(hits.into_iter().map(|hit| SearchHit {
+                time: local_time(hit.observed_at_ms),
+                hit,
+            }));
         }
     }
 
@@ -372,44 +298,25 @@ impl Desktop {
         else {
             return;
         };
-        let find = |this: &Self| {
-            this.client.servers[index]
-                .channels
-                .iter()
-                .position(|channel| channel.storage_key == storage_key)
-        };
-        let mut position = find(self);
+        let mut located = self.client.locate(index, storage_key, (id, seq));
         // An earlier direct conversation, with someone who is online again.
-        if position.is_none()
-            && let Some(hash) = storage_key.strip_prefix("direct:")
-            && let Some(session) = self.client.servers[index]
-                .users
-                .values()
-                .find(|user| user.certificate_hash.as_deref() == Some(hash))
-                .map(|user| user.session)
-        {
+        if let Ok(Located::Reopen { session }) = located {
             self.open_direct(index, session, window, cx);
-            position = find(self);
+            located = self.client.locate(index, storage_key, (id, seq));
         }
-        let Some(position) = position else {
-            self.client.servers[index].notice =
-                Some("That conversation opens once the person is online again.".into());
-            return;
-        };
-        let channel = self.client.servers[index].channels[position].id;
-        // A server-history timeline counts in seqs: a kept message is found
-        // there by its seq, and pages come from the server.
-        let archived =
-            self.client.servers[index].archived(&self.client.servers[index].channels[position]);
-        let id = match (archived, seq) {
-            (true, Some(seq)) => seq,
-            (true, None) => {
+        let (position, id) = match located {
+            Ok(Located::Found { position, id }) => (position, id),
+            Ok(Located::Reopen { .. }) => {
                 self.client.servers[index].notice =
-                    Some("That message is not in the server's history.".into());
+                    Some(nuschel_client::search::OPENS_ONLINE.into());
                 return;
             }
-            (false, _) => id,
+            Err(notice) => {
+                self.client.servers[index].notice = Some(notice.into());
+                return;
+            }
         };
+        let channel = self.client.servers[index].channels[position].id;
         let conversation = Conversation {
             server: server.to_string(),
             channel,
@@ -417,21 +324,18 @@ impl Desktop {
         if self.client.navigation.selection() != Some(&conversation) {
             self.browse_channel(index, channel, window, cx);
         }
-        self.client.focus.following = false;
         self.jumped = Some(Jumped {
             conversation,
             id,
             until: None,
         });
-        let loaded = self.client.servers[index].channels[position]
-            .timeline
-            .messages
-            .iter()
-            .any(|message| message.id == Some(id));
-        if loaded {
-            self.reveal_jumped(cx);
-        } else {
-            self.request_page(index, position, Page::Around(id));
+        match self.client.show_message(index, position, id) {
+            Ok(true) => self.reveal_jumped(cx),
+            Ok(false) => {}
+            Err(error) => {
+                self.older_paused = true;
+                self.error = Some(error);
+            }
         }
         cx.notify();
     }
@@ -525,51 +429,6 @@ pub fn mark_jumped(this: &Desktop, id: Option<i64>, row: AnyElement) -> AnyEleme
         .bg(tint(ACCENT, 0x30))
         .child(row)
         .into_any_element()
-}
-
-/// The largest character boundary of `text` at or below `index`.
-fn boundary(text: &str, mut index: usize) -> usize {
-    index = index.min(text.len());
-    while !text.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
-}
-
-/// A result's text on one line, from a little before its first match, and
-/// where the query's words are in it.
-fn snippet(text: &str, query: &Query) -> (String, Vec<Range<usize>>) {
-    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let highlights = query.highlights(&line);
-    let first = highlights.first().map_or(0, |range| range.start);
-    let start = if first > SNIPPET / 4 {
-        // At a word boundary, about 60 bytes ahead of the match.
-        let from = boundary(&line, first - SNIPPET / 4);
-        line[from..first]
-            .find(' ')
-            .map_or(from, |space| from + space + 1)
-    } else {
-        0
-    };
-    let mut end = boundary(&line, start + SNIPPET);
-    if end < line.len()
-        && let Some(space) = line[start..end].rfind(' ')
-        && start + space > first
-    {
-        end = start + space;
-    }
-    let ellipsis = if start > 0 { "…" } else { "" };
-    let shift = ellipsis.len();
-    let mut snippet = format!("{ellipsis}{}", &line[start..end]);
-    if end < line.len() {
-        snippet.push('…');
-    }
-    let highlights = highlights
-        .into_iter()
-        .filter(|range| range.start >= start && range.end <= end)
-        .map(|range| range.start - start + shift..range.end - start + shift)
-        .collect();
-    (snippet, highlights)
 }
 
 fn scope_tab(
@@ -811,26 +670,4 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             )
             .into_any_element(),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Query, snippet};
-
-    #[test]
-    fn snippets_start_near_the_first_match() {
-        let text = format!(
-            "{} needle in\n\nthe   haystack {}",
-            "hay ".repeat(40),
-            "straw ".repeat(60)
-        );
-        let (long, highlights) = snippet(&text, &Query::parse("needle"));
-        assert!(long.starts_with("…hay ") && long.ends_with('…'), "{long}");
-        assert!(long.contains("needle in the haystack"), "{long}");
-        assert_eq!(highlights.len(), 1);
-        assert_eq!(&long[highlights[0].clone()], "needle");
-        let (short, highlights) = snippet("Ärger mit dem Server", &Query::parse("serv"));
-        assert_eq!(short, "Ärger mit dem Server");
-        assert_eq!(&short[highlights[0].clone()], "Server");
-    }
 }
