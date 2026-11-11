@@ -540,11 +540,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          once full; packets now come from the event queue, the tone plays until the
          first packet (up to 180 s), then is counted for 60 s. Passed in vm-server at
          host load ~6-11; not yet seen at a load like the failing run's ~47.
-   - [ ] Listen revoked (an ACL edit, a token gone) does not end an existing channel
-         listener, as in Murmur: it keeps hearing voice and text, and keeps
-         `can_read` through the listener (review D3.4). Decide whether re-evaluation
-         should drop listeners that lost Listen (stock clients are told by a
-         `UserState` with `listening_channel_remove`).
+   - [x] Listen revoked ends the listener (user, 2026-11-11: "no", a listener must not
+         keep receiving or reading; review D3.4): after every authorisation change a
+         listener whose user lost Listen ends, with Murmur's `UserState`
+         (`listening_channel_remove`) to everyone and a `PermissionDenied` for Listen
+         to the user, whose reason Nuschel shows; its stored row goes too; live
+         delivery stops and `can_read` through it ends (pages in flight fail).
+         docs/server.md, "Listeners follow Listen".
    - [ ] A deleted channel's archive can be read by SuperUser but not moderated
          (`Action::Moderate` covers live channels); only `nuscheld admin history
          erase-user` removes messages there. Decide whether SuperUser moderates it.

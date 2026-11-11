@@ -1338,6 +1338,120 @@ fn key_transparency_histories_are_checked_again_when_answered() {
     assert_eq!(error.code(), v1::error::Code::NotFound);
 }
 
+// ---- listeners follow Listen (the user's decision on review D3.4) ----
+
+fn listening(f: &Fixture, session: u32) -> Vec<u32> {
+    f.state.users[&session].listening.keys().copied().collect()
+}
+
+/// What `session` was told about its listeners: the channels a `UserState`
+/// about it removed, and the channels of `PermissionDenied`s for Listen.
+fn told(f: &mut Fixture, viewer: u32, session: u32) -> (Vec<u32>, Vec<u32>) {
+    let (mut removed, mut denied) = (Vec::new(), Vec::new());
+    for (kind, payload) in f.received(viewer) {
+        if kind == kind::USER_STATE
+            && let Ok(state) = <proto::UserState as prost::Message>::decode(payload.clone())
+            && state.session == Some(session)
+        {
+            removed.extend(state.listening_channel_remove);
+        } else if kind == kind::PERMISSION_DENIED
+            && let Ok(message) = <proto::PermissionDenied as prost::Message>::decode(payload)
+            && message.permission == Some(perm::LISTEN)
+        {
+            denied.extend(message.channel_id);
+        }
+    }
+    (removed, denied)
+}
+
+/// A listener that only a temporary access token allowed ends with the
+/// message that carried the token (Murmur keeps it).
+#[test]
+fn a_listener_a_temporary_token_allowed_ends_with_its_message() {
+    let mut f = Fixture::new(Config::default());
+    if let Some(private) = f.state.channels.get_mut(PRIVATE) {
+        private
+            .node
+            .acls
+            .push(entry("#secret", None, perm::LISTEN, 0));
+    }
+    f.state.invalidate();
+    let (registered, member) = (f.actor("registered"), f.actor("member"));
+    f.handle(
+        member,
+        kind::USER_STATE,
+        &proto::UserState {
+            listening_channel_add: vec![LOBBY],
+            ..Default::default()
+        },
+    );
+    assert_eq!(listening(&f, member), [LOBBY]);
+    f.received(registered);
+    f.handle(
+        registered,
+        kind::USER_STATE,
+        &proto::UserState {
+            listening_channel_add: vec![PRIVATE],
+            temporary_access_tokens: vec!["secret".into()],
+            ..Default::default()
+        },
+    );
+    assert!(listening(&f, registered).is_empty());
+    assert!(
+        !f.state
+            .channels
+            .get(PRIVATE)
+            .is_some_and(|private| private.listeners.contains(&registered))
+    );
+    assert_eq!(
+        told(&mut f, registered, registered),
+        (vec![PRIVATE], vec![PRIVATE])
+    );
+    assert_eq!(listening(&f, member), [LOBBY], "another listener stays");
+}
+
+/// Unregistering takes the account's ACL entries with it; a listener only
+/// such an entry allowed ends, and everyone is told.
+#[test]
+fn a_listener_ends_when_unregistering_takes_its_listen_away() {
+    let mut f = Fixture::new(Config::default());
+    let (superuser, registered, guest) = (
+        f.actor("superuser"),
+        f.actor("registered"),
+        f.actor("guest"),
+    );
+    if let Some(private) = f.state.channels.get_mut(PRIVATE) {
+        private
+            .node
+            .acls
+            .push(entry("", Some(REGISTERED), perm::LISTEN, 0));
+    }
+    f.state.invalidate();
+    f.handle(
+        registered,
+        kind::USER_STATE,
+        &proto::UserState {
+            listening_channel_add: vec![PRIVATE],
+            ..Default::default()
+        },
+    );
+    assert_eq!(listening(&f, registered), [PRIVATE]);
+    f.received(guest);
+    f.handle(
+        superuser,
+        kind::USER_LIST,
+        &proto::UserList {
+            users: vec![proto::user_list::User {
+                user_id: REGISTERED,
+                ..Default::default()
+            }],
+        },
+    );
+    assert!(!f.state.registry.users.contains_key(&REGISTERED));
+    assert!(listening(&f, registered).is_empty());
+    assert_eq!(told(&mut f, guest, registered), (vec![PRIVATE], vec![]));
+}
+
 // ---- nothing else decides ----
 
 /// The ACL engine's evaluation and the cache are private to authz (the

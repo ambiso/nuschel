@@ -25,7 +25,7 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, VecDeque},
     net::SocketAddr,
     sync::{
         Arc, Mutex, OnceLock,
@@ -1393,6 +1393,214 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
         alice.session,
         nuscheld::authz::Action::ReadHistory(&conversation)
     ));
+}
+
+/// Listeners follow Listen (the user's decision on review D3.4; Murmur keeps
+/// them): an ACL edit that takes Listen away ends the listener of a Nuschel
+/// client and of a stock client at once. Both learn it as from Murmur and by a
+/// `PermissionDenied`; live text stops; the channel is no longer readable
+/// through the listener, neither for new pages nor for one in flight; the
+/// remembered listener is forgotten; a listener that keeps Listen stays.
+#[tokio::test]
+async fn a_listener_that_loses_listen_ends_for_stock_and_nuschel_clients() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let alice_id = alice.register().await;
+    let mut carol = nuschel(&fixture, "Carol", 1).await;
+    let carol_id = carol.register().await;
+    let mut bob = nuschel(&fixture, "Bob", 2).await;
+    bob.register().await;
+    let mut dave = Raw::login(fixture.address(), "Dave").await;
+    let dave_session = {
+        let state = fixture.running.server.lock();
+        state
+            .users
+            .values()
+            .find(|user| user.name == "Dave")
+            .unwrap()
+            .session
+    };
+    // Nobody may enter: listening is the only way to read the channel.
+    let (radio, conversation) =
+        fixture.add_channel("Radio", vec![entry("all", None, 0, perm::ENTER)], vec![]);
+    {
+        // Announced and stored as an administrator's new channel would be.
+        let state = fixture.running.server.lock();
+        state.persist_channel(radio);
+        let message = state.channel_state(state.channels.get(radio).unwrap(), 0);
+        state.broadcast_channel_state(&message);
+    }
+    for client in [&mut alice, &mut carol] {
+        client
+            .wait(|event| match event {
+                SessionEvent::Channel(channel) if channel.id == radio => Some(()),
+                _ => None,
+            })
+            .await;
+        client
+            .command(Command::Listen {
+                channel: radio,
+                listen: true,
+            })
+            .await;
+    }
+    dave.send(
+        kind::USER_STATE,
+        &proto::UserState {
+            session: Some(dave_session),
+            listening_channel_add: vec![radio],
+            ..Default::default()
+        },
+    )
+    .await;
+    let listeners = || {
+        fixture
+            .running
+            .server
+            .lock()
+            .channels
+            .get(radio)
+            .unwrap()
+            .listeners
+            .clone()
+    };
+    for _ in 0..200 {
+        if listeners().len() == 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert_eq!(listeners().len(), 3);
+    assert_eq!(
+        alice.subscribe(&[conversation]).await.conversations.len(),
+        1
+    );
+    assert_eq!(
+        error_code(&alice.history(conversation, latest(), 10).await),
+        None
+    );
+    bob.send(conversation, "before").await;
+    assert_eq!(alice.chat().await.message.unwrap().content, "before");
+    assert_eq!(carol.chat().await.message.unwrap().content, "before");
+    assert!(dave.text().await.message.contains("before"));
+    // Remembered listeners are written behind the state lock: wait for them.
+    let stored = |id: u32, expected: Vec<(u32, f32)>| {
+        let storage = fixture.running.server.storage.clone();
+        async move {
+            for _ in 0..200 {
+                if storage.user_listeners(id).await == expected {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            false
+        }
+    };
+    assert!(stored(alice_id, vec![(radio, 1.0)]).await);
+    // A page authorised now and finished after the revocation.
+    let page = nuscheld::history::Read {
+        session: alice.session,
+        request_id: 4343,
+        conversation,
+        query: nuschel_ipc::server::PageQuery {
+            conversation: nuscheld::conversations::hex(&conversation),
+            anchor: nuschel_ipc::server::Anchor::Latest,
+            limit: 10,
+            ranges: vec![(1, u64::MAX)],
+            max_bytes: 1024,
+        },
+        epoch: fixture.running.server.lock().authz_epoch,
+        clipped: false,
+    };
+
+    // Listen goes for everyone but Carol.
+    fixture.edit_channel(radio, |channel| {
+        channel.node.acls.push(entry("all", None, 0, perm::LISTEN));
+        channel
+            .node
+            .acls
+            .push(entry("", Some(carol_id), perm::LISTEN, 0));
+    });
+    assert_eq!(listeners(), BTreeSet::from([carol.session]));
+    // The Nuschel client is told why, then loses the subscription.
+    let told = alice
+        .wait(|event| match event {
+            SessionEvent::PermissionDenied(text) => Some(text.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(told.contains("Radio") && told.contains("stopped"), "{told}");
+    alice
+        .wait(|event| match event {
+            SessionEvent::Nuschel(NuschelEvent::Unsubscribed(gone))
+                if gone.conversation == conversation.to_vec() =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+    // The stock client the Murmur way, and by a PermissionDenied for Listen.
+    loop {
+        let frame = dave.until(kind::USER_STATE).await.expect("a UserState");
+        let state = proto::UserState::decode(frame.payload).unwrap();
+        if state.session == Some(dave_session) && !state.listening_channel_remove.is_empty() {
+            assert_eq!(state.listening_channel_remove, [radio]);
+            assert_eq!(state.actor, None);
+            break;
+        }
+    }
+    let denied = proto::PermissionDenied::decode(
+        dave.until(kind::PERMISSION_DENIED)
+            .await
+            .expect("a PermissionDenied")
+            .payload,
+    )
+    .unwrap();
+    assert_eq!(denied.permission, Some(perm::LISTEN));
+    assert_eq!(denied.channel_id, Some(radio));
+    assert_eq!(denied.session, Some(dave_session));
+    assert_eq!(
+        denied.r#type,
+        Some(proto::permission_denied::DenyType::Permission as i32)
+    );
+    // Live delivery stops for them, not for Carol.
+    bob.send(conversation, "after").await;
+    assert_eq!(carol.chat().await.message.unwrap().content, "after");
+    assert!(!alice.arrives(QUIET, is_chat).await);
+    assert!(
+        timeout(QUIET, dave.until(kind::TEXT_MESSAGE))
+            .await
+            .is_err(),
+        "the stock client still got the channel's text"
+    );
+    // No history through the listener: new pages and the one in flight.
+    assert_eq!(
+        error_code(&alice.history(conversation, latest(), 10).await),
+        Some(v1::error::Code::NotFound)
+    );
+    fixture.running.server.lock().page_read(
+        page,
+        Some(nuschel_ipc::server::StoredPage {
+            rows: vec![nuschel_ipc::server::StoredMessage {
+                conversation: nuscheld::conversations::hex(&conversation),
+                seq: 1,
+                content: "secret".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    );
+    let answer = alice
+        .wait(|event| match event {
+            SessionEvent::Nuschel(event) if request_of(event) == Some(4343) => Some(event.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(error_code(&answer), Some(v1::error::Code::NotFound));
+    // The remembered listener is forgotten; Carol's stays.
+    assert!(stored(alice_id, vec![]).await);
+    assert!(stored(carol_id, vec![(radio, 1.0)]).await);
 }
 
 #[tokio::test]

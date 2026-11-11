@@ -230,8 +230,10 @@ impl State {
                 self.remove_channel(id, None);
             }
         }
-        // Subscriptions and access intervals follow every authorisation
-        // change before the lock is released (docs/extension.md §5).
+        // Listeners, then subscriptions and access intervals, follow every
+        // authorisation change before the lock is released (docs/extension.md
+        // §5): a listener that lost Listen no longer makes its channel readable.
+        self.revoke_listeners();
         self.reevaluate();
     }
 
@@ -678,10 +680,7 @@ impl State {
             })
             .collect();
         for &channel in &removals {
-            self.remove_listener(target, channel);
-            if let Some(id) = self.users.get(&target).and_then(|user| user.user_id) {
-                self.storage.remove_listener(id, channel);
-            }
+            self.forget_listener(target, channel);
             routing_changed = true;
         }
         message.listening_channel_remove = removals;
@@ -821,6 +820,15 @@ impl State {
             channel.listeners.insert(session);
         }
         self.authz_changed(Scope::Session(session));
+    }
+
+    /// End a listener, and forget it if the user is registered (Murmur's
+    /// `channel_listeners`).
+    pub(crate) fn forget_listener(&mut self, session: u32, channel: u32) {
+        self.remove_listener(session, channel);
+        if let Some(id) = self.users.get(&session).and_then(|user| user.user_id) {
+            self.storage.remove_listener(id, channel);
+        }
     }
 
     fn remove_listener(&mut self, session: u32, channel: u32) {

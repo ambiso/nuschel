@@ -15,9 +15,9 @@
 //! only here: its evaluation functions are private to this module, as are the
 //! effective-permission cache and the lookups built on it. What this module
 //! also owns: reporting effective permissions to clients (`PermissionQuery`,
-//! `ServerSync`) and keeping `suppress` in step with Speak after a change
-//! (Murmur's `clearACLCache`), and which part of a conversation a reader may
-//! see (`since_access`).
+//! `ServerSync`), keeping `suppress` in step with Speak after a change
+//! (Murmur's `clearACLCache`) and listeners in step with Listen, and which
+//! part of a conversation a reader may see (`since_access`).
 //!
 //! What is not decided here: limits and validation (sizes, counts, rate
 //! limits, name rules, a channel's user limit), which depend on the request
@@ -739,6 +739,83 @@ impl State {
                 );
             }
         }
+    }
+
+    /// A listener whose user no longer has Listen on its channel ends at once
+    /// (the user's decision on review D3.4; Murmur keeps it): checked after
+    /// every change to authorisation state (`authz_epoch` moved), before the
+    /// lock is released ([`State::finish`]), so live text and voice stop and
+    /// the channel is no longer readable through it. Everyone learns it as
+    /// from Murmur, a `UserState` with `listening_channel_remove` (no actor);
+    /// the user also gets a `PermissionDenied` for Listen in that channel
+    /// (stock clients log "You were denied Listen privileges in …"), whose
+    /// reason Nuschel shows: listening stopped, the permission was removed.
+    /// A registered user's remembered listener is forgotten too.
+    pub fn revoke_listeners(&mut self) {
+        if self.listeners_epoch == self.authz_epoch {
+            return;
+        }
+        let mut revoked: Vec<(u32, Vec<u32>)> = Vec::new();
+        for user in self.users.values() {
+            let channels: Vec<u32> = user
+                .listening
+                .keys()
+                .copied()
+                .filter(|&channel| {
+                    !self.allowed(
+                        user.session,
+                        Action::Listen {
+                            user: user.session,
+                            channel,
+                        },
+                    )
+                })
+                .collect();
+            if !channels.is_empty() {
+                revoked.push((user.session, channels));
+            }
+        }
+        for (session, channels) in &revoked {
+            for &channel in channels {
+                self.forget_listener(*session, channel);
+            }
+            self.broadcast(
+                kind::USER_STATE,
+                &proto::UserState {
+                    session: Some(*session),
+                    listening_channel_remove: channels.clone(),
+                    ..Default::default()
+                },
+                None,
+            );
+            for &channel in channels {
+                let name = self
+                    .channels
+                    .get(channel)
+                    .map(|channel| channel.name.clone())
+                    .unwrap_or_default();
+                self.send(
+                    *session,
+                    kind::PERMISSION_DENIED,
+                    &proto::PermissionDenied {
+                        permission: Some(perm::LISTEN),
+                        channel_id: Some(channel),
+                        session: Some(*session),
+                        r#type: Some(DenyType::Permission as i32),
+                        reason: Some(format!(
+                            "Listening to {name} stopped: the permission to listen there was removed."
+                        )),
+                        ..Default::default()
+                    },
+                );
+            }
+            tracing::info!(user = %self.log_name(*session), ?channels, "ended listeners that lost Listen");
+        }
+        if !revoked.is_empty() {
+            // Whisper and shout target caches list listeners.
+            self.generation += 1;
+        }
+        self.listeners_epoch = self.authz_epoch;
     }
 
     fn flush_permission_cache(&mut self, session: u32) {

@@ -786,6 +786,8 @@ pub struct State {
     /// re-checked when it moved.
     pub authz_epoch: u64,
     pub authz_pending: conversations::Pending,
+    /// `authz_epoch` when listeners were last checked against Listen.
+    pub listeners_epoch: u64,
     /// History pages per network and account (page_limits.rs).
     pub page_limits: crate::page_limits::NetworkLimits,
     /// `whisper_fanout_per_second`, if set.
@@ -819,6 +821,7 @@ impl State {
             conversations: Conversations::default(),
             history: crate::history::Queues::detached(),
             authz_epoch: 0,
+            listeners_epoch: 0,
             authz_pending: Default::default(),
             fanout,
             kt: None,

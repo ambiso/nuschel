@@ -288,7 +288,8 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
   permission tests appear anywhere else. The same module reports permissions
   to clients (`PermissionQuery`, `ServerSync`), keeps `suppress` in step with
   Speak after every change, and says what part of a `since_access`
-  conversation a reader sees. Moving the checks there turned up three places
+  conversation a reader sees. It also ends listeners that lost Listen (below).
+  Moving the checks there turned up three places
   where one decision was made two ways; they now agree:
   - Temporary access tokens (`UserState.temporary_access_tokens`) were removed
     after their message without the re-evaluation every other credential
@@ -371,6 +372,26 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
   limits are checked again then; a listener that fails stays stored for when it is
   allowed. Listeners in temporary channels and those of unregistered users end with
   the connection; a user who registers keeps the current ones.
+- **Listeners follow Listen** (the user's decision on review D3.4, 2026-11-11;
+  Murmur keeps a listener whatever happens to Listen). After every change to
+  authorisation state (an ACL or group edit, tokens, a temporary token gone,
+  registration or unregistration, a move, a reparented or removed channel:
+  whenever `authz_epoch` moved), before the lock is released, each listener whose
+  user no longer has Listen on its channel ends: it hears no more voice or text
+  from the next packet on, and the channel is no longer readable through it, so
+  subscriptions that needed it end and pages in flight fail when they come back
+  (`can_read` again). Everyone learns it as from Murmur, a `UserState` with
+  `listening_channel_remove` and no actor, so stock clients' channel trees stay
+  truthful; the user also gets a `PermissionDenied` for Listen in that channel.
+  Stock clients log it ("You were denied Listen privileges in …"); its reason
+  ("Listening to … stopped: the permission to listen there was removed.") is
+  what Nuschel shows, and Nuschel clients can tell it from a refused request by
+  its arriving unasked, right after the removal. No extension message was
+  added: the stock messages say it to both kinds of client. A registered user's
+  remembered listener is forgotten as well (a listener the user saw end does not
+  come back at the next login); one that fails while the user is offline is
+  skipped at login and stays stored, as above. A listener that only a temporary
+  access token allowed therefore ends with the message that carried the token.
 
 ## Compatibility with Murmur
 
@@ -388,6 +409,9 @@ leaky bucket for `messagelimit`/`messageburst`, and blobs announced by hash from
 
 Deliberate differences:
 
+- **Listeners end when Listen goes** (see "Listeners follow Listen" above);
+  Murmur keeps them, so on Murmur a listener keeps hearing a channel its user
+  may no longer listen to.
 - **Ghost takeover.** An unregistered name in use is only taken over by the same
   certificate (or, both without certificates, the same address). Murmur lets any
   connection from the same address take it.
@@ -533,7 +557,7 @@ descriptor exhaustion.
 
 | Command | What it covers |
 | --- | --- |
-| `cargo test -p nuscheld` | authorisation (authz.rs: every action against seven kinds of actor, the three decisions that were made two ways, and a guard that no permission check lives elsewhere), strong certificates (chains to a configured authority, through intermediates, expired, other authorities, self-signed; and over loopback with `UserStats`), ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames; the Murmur import (tests/fixtures/murmur-1.5.json: both password formats over loopback, the upgrade to argon2id, malformed rows reported, a non-empty server refused, `--replace-existing`, the ACLs in effect), listeners kept across reconnects and restarts, certificate reload (a broken one keeps the old) and `minimum_tls_version`, the temporary-channel cap and the whisper budget, clients before 1.2.2, the statistics counters; tests/obfuscation.rs: no client address in the log with `obfuscate` |
+| `cargo test -p nuscheld` | authorisation (authz.rs: every action against seven kinds of actor, the three decisions that were made two ways, and a guard that no permission check lives elsewhere), strong certificates (chains to a configured authority, through intermediates, expired, other authorities, self-signed; and over loopback with `UserStats`), ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames; the Murmur import (tests/fixtures/murmur-1.5.json: both password formats over loopback, the upgrade to argon2id, malformed rows reported, a non-empty server refused, `--replace-existing`, the ACLs in effect), listeners kept across reconnects and restarts, listeners that lose Listen (an ACL edit, a temporary token, unregistration) ended for stock and Nuschel clients with live delivery and pages stopped and others left alone, certificate reload (a broken one keeps the old) and `minimum_tls_version`, the temporary-channel cap and the whisper budget, clients before 1.2.2, the statistics counters; tests/obfuscation.rs: no client address in the log with `obfuscate` |
 | `cargo test -p nuscheld --test admin` | `nuscheld admin` on a stopped server's state: users (list, show, rename, set a password, remove with its ACL entries), channel retention (refused without `--yes` when it removes messages), bans, exporting a channel (0600, nothing past the retention), erasing a user |
 | `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends, the minimum-version policy (an old session refused with `Outdated` and never retried, a hello without a version refused, stock clients admitted, admitted and told the date before it, a recommendation) |
 | `cargo test -p nuschel-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |

@@ -191,7 +191,9 @@ stock client would silently erase (or, for a deny, open) it.
 
 - **`can_read(user, conversation)` = Enter on the channel ∨ the user is in the
   channel ∨ listening to it**, evaluated with persistent credentials only (registered
-  account, certificate, persistent access tokens). Extension-only policy (history
+  account, certificate, persistent access tokens). Listening counts only while the
+  user has Listen there: a listener that loses Listen ends at once (docs/server.md,
+  "Listeners follow Listen"), so it never keeps a channel readable. Extension-only policy (history
   visibility, guest access, moderation) lives in channel and server properties
   outside the Mumble permission bitmask.
 - **Guests.** Unregistered users read no history by default (`history.guests = none`;
@@ -215,8 +217,9 @@ stock client would silently erase (or, for a deny, open) it.
 - **One owner of authorisation state.** A single task owns channels, ACLs, groups,
   memberships and tokens, with a version counter (`authz_epoch`). Every change that
   can affect reading re-evaluates subscriptions: ACL edits, user moves, joining or
-  leaving a listening channel, token changes, registration and unregistration,
-  channel reparenting (inheritance), deletion. Fan-out of new messages, history pages
+  leaving a listening channel (including a listener the server ends because Listen
+  went), token changes, registration and unregistration, channel reparenting
+  (inheritance), deletion. Fan-out of new messages, history pages
   in flight and listeners all check against the current epoch; a history page is
   re-checked just before it is sent.
 - `Subscribe { conversations }` / `Unsubscribe`, bounded per connection and per
