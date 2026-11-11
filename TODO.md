@@ -174,9 +174,23 @@ Later (reported):
       (focus window, next server, whisper).
 - [ ] `tests/accessibility.py --gnome-shell` is flaky on main: whole subtrees (the
       "Disconnect" button, groups of on-screen messages) are sometimes missing once the
-      app goes idle; root cause in GPUI or AccessKit not found.
+      app goes idle; root cause in GPUI or AccessKit not found. Under Xvfb the first
+      snapshot could also miss "Disconnect" when taken before the voice card had come;
+      it now waits for the voice controls (2026-11-11).
 - [ ] Orca's structural navigation by list item ("No more list items") needs AT-SPI
       Collection support in AccessKit (upstream).
+- [ ] "Chat processing is overloaded; some received messages could not be saved"
+      (received messages past the content queue are dropped, by design) is cleared by
+      the next message that is saved (`HistoryRecovered` clears every "Local
+      history" error), so the loss passes unnoticed. Keep it until dismissed, or
+      mark the gap in the timeline as reconnects do. Found 2026-11-11, when a slow
+      VM dropped 47 of 150 messages; received messages are now prepared in batches
+      (one content worker per burst), which keeps up with such a burst.
+- [ ] AccessKit's AT-SPI adapter (accesskit_atspi_common 0.19) leaves out two things
+      GPUI hands it, so Orca cannot know them (found 2026-11-11 by the AT-SPI desktop
+      suites): a text field's contents (GPUI-kit sets the value; no Text interface is
+      offered) and whether a channel-tree branch is open (`aria_expanded` becomes no
+      EXPANDABLE/EXPANDED state). Upstream, or a patched adapter.
 - [x] Links inside messages from the keyboard: Tab walks the current message's links
       (the composer's footer line names each and where it leads, as a polite status),
       Enter opens it, or a message's only link, as a click would; Space still expands.
@@ -353,7 +367,13 @@ are not concealed (`apps/media-worker/src/live.rs`).
       residual echo, and the gain hold ducked the user.
 - [ ] The PulseAudio media_live rig still varies (8-44 dB): its echo path is a loopback
       between two independently clocked null sinks, whose delay drifts. Check on real
-      hardware with Settings → Echo test; consider AEC3's clock-drift settings.
+      hardware with Settings → Echo test; consider AEC3's clock-drift settings. It is
+      what fails vm-smoke under host load (2026-11-11, other builds on a 24-core
+      host): at loads of ~27-47 the better of two runs removed 3, 14, 4 and 8 dB
+      (sent 38%, 27%, 16%, 22%) in four runs; at ~11-25 it passed twice. The loopback
+      (`adjust_time=0`) glitches when the VM is starved. The check now prefers an
+      attempt meeting both limits, rather than choosing by "sent" alone and losing
+      a passing attempt to one with worse echo reduction.
 - [ ] macOS: the process tap asks for system audio permission; check the prompt and
       what happens when it is refused (the own-playback reference should take over).
 - [ ] cpal's PulseAudio client stops a stream playing into a sink while the same
@@ -575,11 +595,31 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Chat in the stock-client VM check (2026-11-11): xdotool types into the stock
          window's chat bar and the Nuschel peer receives it from StockUser; the peer's
          message is read back from the stock client's log (F6, copy, xclip).
-   - [ ] `vm-smoke` had been red since the content worker's answers changed shape
-         (workers.py, then the RTC probe's path; both fixed 2026-11-11). It now stops
-         at desktop_mumble.py: OCR does not read the welcome screen's "Add a server"
-         button. Make the desktop suites find UI by AT-SPI rather than OCR, and run
-         every VM check before merging so none rots unnoticed.
+   - [ ] `vm-smoke` final full rerun pending (2026-11-11), red since the content
+         worker's answers changed shape; the rebased desktop and recovery suites
+         have passed, and the accessibility suite still needs its final proof.
+         One product bug: on a slow machine a burst of
+         received messages outran the content worker (one sandbox start per
+         message) and what overflowed its queue was dropped; they are now prepared
+         in batches (fix(client), see "Chat processing is overloaded" above). The
+         rest were stale tests: workers.py and rtc_probe.py (the RTC probe's
+         package); OCR could not read the welcome screen's "Add a server" since
+         the system theme became the default
+         (fbc0df5: under Xvfb that is light, and the binarisation was made for dark
+         text); the new-server form says "Add and connect", connects at start unless
+         switched off and an offline server's Connect connects directly (b8e8961);
+         Enter sends (e040e3c), so lines are joined with Shift+Enter; occupied
+         branches open on connect; the fixture's microphone was the speakers'
+         monitor, so the canceller rightly removed the test's voice as echo since
+         it cancels everything the speakers play (d758149); desktop_recovery's
+         `pgrep` never matched a sandboxed worker (run as /worker), so its worker
+         crashes killed nothing; accessibility.py's GrabFocus check (7c6e06a) never
+         ran under Xvfb, where no window manager gives the window focus; the
+         client VM lacked the xclip and xwd that stock_client.py uses (2296781). The
+         desktop suites now find controls over AT-SPI (`accessibility.py`'s helpers
+         on a private session bus); OCR reads only the long-name tooltip.
+   - [ ] Run every VM check (vm-smoke, vm-server, vm-home-manager) before merging,
+         so none rots unnoticed as vm-smoke did.
    - [x] `stock_client.py` under heavy host load (2026-11-11): the "0 packets" came
          from counting in a slice of a deque capped at 1000 events, which stays empty
          once full; packets now come from the event queue, the tone plays until the
