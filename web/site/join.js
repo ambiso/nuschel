@@ -119,7 +119,7 @@
       status.textContent = "Opening Nuschl… If nothing happens, get the app below or join in the browser.";
     });
     const web = "t=" + link.token + "&" + fragment(link);
-    document.getElementById("open-web").href = "/#" + web;
+    document.getElementById("open-web").href = "/app/#" + web;
     document.getElementById("actions").hidden = false;
     document.getElementById("details").hidden = false;
     document.getElementById("detail-server").textContent = address;

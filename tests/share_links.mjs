@@ -26,6 +26,7 @@ test("landing page preserves pins and supported policies, including encoded keys
   for (const policy of ["policy=nuschl", "pol%69cy=nuschl", "policy=nuschl+nuschl", "policy=nuschl%2Bnuschl"]) {
     const element = page(`s=voice.example.org&fp=sha256:${"AB".repeat(32)}&${policy}`);
     assert.equal(element("actions").hidden, false);
+    assert.ok(element("open-web").href.startsWith("/app/#t="));
     for (const id of ["open-app", "open-web"]) {
       assert.match(element(id).href, /policy=nuschl/);
       assert.match(element(id).href, new RegExp(`fp=sha256:${"ab".repeat(32)}`));
