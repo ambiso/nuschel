@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! A scriptable real client for diagnostics and stock-server interoperability tests.
 use clap::Parser;
-use nuschel_protocol::voice::VoicePacket;
+use nuschel_protocol::{nuschel::v1, voice::VoicePacket};
 use nuschel_session::{
     Error,
     config::{Profile, ServerBookmark},
-    connection::{self, Command, ConnectOptions, MessageRate, SessionEvent, TextTarget},
+    connection::{
+        self, Command, ConnectOptions, MessageRate, NuschelEvent, NuschelRequest, SessionEvent,
+        TextTarget,
+    },
     model::{UserAction, VoiceTargetSpec},
 };
 use serde::Deserialize;
@@ -152,7 +155,69 @@ enum Input {
         #[serde(default)]
         end: bool,
     },
+    /// Nuschel servers: send to a conversation (32 hex digits); `key` makes a
+    /// retry idempotent.
+    ChatSend {
+        request_id: u64,
+        conversation: String,
+        content: String,
+        key: Option<String>,
+    },
+    /// Nuschel servers: a history page; `before`/`after`/`around` a seq, else the latest.
+    History {
+        request_id: u64,
+        conversation: String,
+        before: Option<u64>,
+        after: Option<u64>,
+        around: Option<u64>,
+        #[serde(default)]
+        limit: u32,
+    },
+    Subscribe {
+        request_id: u64,
+        conversations: Vec<String>,
+    },
     Disconnect,
+}
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len() / 2)
+        .filter_map(|index| u8::from_str_radix(text.get(index * 2..index * 2 + 2)?, 16).ok())
+        .collect()
+}
+fn message_json(message: &v1::Message) -> serde_json::Value {
+    let author = message.author.clone().unwrap_or_default();
+    json!({"seq":message.seq, "kind":message.kind, "target":message.target, "author":author.name,
+        "user_id":author.user_id, "format":message.format, "content":message.content,
+        "deleted":message.deleted_ms != 0, "edits":message.edits})
+}
+fn nuschel_json(event: &NuschelEvent) -> serde_json::Value {
+    match event {
+        NuschelEvent::Error(error) => {
+            json!({"kind":"nuschel_error", "request_id":error.request_id, "code":error.code, "detail":error.detail})
+        }
+        NuschelEvent::Ack(ack) => {
+            json!({"kind":"chat_ack", "request_id":ack.request_id, "conversation":hex(&ack.conversation), "seq":ack.seq})
+        }
+        NuschelEvent::Chat(event) => {
+            json!({"kind":"chat", "conversation":hex(&event.conversation), "message":event.message.as_ref().map(message_json)})
+        }
+        NuschelEvent::Page(page) => {
+            json!({"kind":"history_page", "request_id":page.request_id, "conversation":hex(&page.conversation),
+            "messages":page.messages.iter().map(message_json).collect::<Vec<_>>(), "more_before":page.more_before,
+            "more_after":page.more_after, "restricted":page.restricted, "head":page.head})
+        }
+        NuschelEvent::Subscribed(subscribed) => {
+            json!({"kind":"subscribed", "request_id":subscribed.request_id,
+            "conversations":subscribed.conversations.iter().map(|state| json!({"conversation":hex(&state.conversation), "head":state.head, "read":state.read})).collect::<Vec<_>>()})
+        }
+        NuschelEvent::Unsubscribed(gone) => {
+            json!({"kind":"unsubscribed", "conversation":hex(&gone.conversation)})
+        }
+        other => json!({"kind":"nuschel", "event":format!("{other:?}")}),
+    }
 }
 fn yes() -> bool {
     true
@@ -354,6 +419,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         volume: 1.,
                     },
                 },
+                Ok(Input::ChatSend {
+                    request_id,
+                    conversation,
+                    content,
+                    key,
+                }) => Command::Nuschel(NuschelRequest::Send(v1::ChatSend {
+                    request_id,
+                    conversation: unhex(&conversation),
+                    idempotency_key: key
+                        .map(|key| unhex(&key))
+                        .unwrap_or_else(|| connection::random_key().to_vec()),
+                    format: v1::Format::Text as i32,
+                    content,
+                    reply_to: 0,
+                })),
+                Ok(Input::History {
+                    request_id,
+                    conversation,
+                    before,
+                    after,
+                    around,
+                    limit,
+                }) => {
+                    use v1::history_request::Anchor;
+                    let anchor = match (before, after, around) {
+                        (Some(seq), _, _) => Anchor::Before(seq),
+                        (_, Some(seq), _) => Anchor::After(seq),
+                        (_, _, Some(seq)) => Anchor::Around(seq),
+                        _ => Anchor::Latest(true),
+                    };
+                    Command::Nuschel(NuschelRequest::History(v1::HistoryRequest {
+                        request_id,
+                        conversation: unhex(&conversation),
+                        anchor: Some(anchor),
+                        limit,
+                    }))
+                }
+                Ok(Input::Subscribe {
+                    request_id,
+                    conversations,
+                }) => Command::Nuschel(NuschelRequest::Subscribe(v1::Subscribe {
+                    request_id,
+                    conversations: conversations.iter().map(|id| unhex(id)).collect(),
+                })),
                 Ok(Input::Disconnect) => Command::Disconnect,
                 Err(error) => {
                     let _ = output(json!({"kind":"error", "message":error.to_string()}));
@@ -403,6 +512,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::UserNames(names) => json!({"kind":"user_names", "names":names}),
                 SessionEvent::UnsupportedCodec { session } => json!({"kind":"unsupported_codec", "session":session}),
                 SessionEvent::Outbox { sent, total } => json!({"kind":"outbox", "sent":sent, "total":total}),
+                SessionEvent::ChannelInfo { channel, info } => json!({"kind":"channel_info", "channel":channel, "conversation":hex(&info.conversation), "visibility":info.visibility}),
+                SessionEvent::Nuschel(event) => nuschel_json(&event),
             })?,
         }
     }

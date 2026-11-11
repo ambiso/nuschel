@@ -15,11 +15,13 @@ use sqlx::{
 };
 use std::{collections::HashMap, path::Path, str::FromStr, time::Duration};
 
+mod history;
+
 /// Its own migrations table, so a database can also hold the history schema.
 const MIGRATIONS_TABLE: &str = "_nuscheld_migrations";
 
 /// Upper bounds the worker enforces on what it stores, whatever the server sends.
-const MAX_NAME: usize = 1024;
+pub(crate) const MAX_NAME: usize = 1024;
 const MAX_TEXT: usize = 8 * 1024 * 1024;
 
 pub struct ServerStore {
@@ -28,15 +30,15 @@ pub struct ServerStore {
 
 fn visibility(text: &str) -> HistoryVisibility {
     match text {
-        "since_joining" => HistoryVisibility::SinceJoining,
-        _ => HistoryVisibility::All,
+        "since_access" | "since_joining" => HistoryVisibility::SinceAccess,
+        _ => HistoryVisibility::Members,
     }
 }
 
 fn visibility_text(value: HistoryVisibility) -> &'static str {
     match value {
-        HistoryVisibility::All => "all",
-        HistoryVisibility::SinceJoining => "since_joining",
+        HistoryVisibility::Members => "members",
+        HistoryVisibility::SinceAccess => "since_access",
     }
 }
 
@@ -44,7 +46,7 @@ fn id(value: i64) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
-fn too_long(text: &str, limit: usize) -> Result<(), Error> {
+pub(crate) fn too_long(text: &str, limit: usize) -> Result<(), Error> {
     if text.len() > limit {
         Err(Error::InvalidMessage)
     } else {
@@ -68,6 +70,7 @@ type GroupRow = (i64, String, i64, i64);
 type MemberRow = (i64, String, i64, i64);
 type UserRow = (
     i64,
+    Option<String>,
     String,
     Option<String>,
     Option<String>,
@@ -112,7 +115,13 @@ impl ServerStore {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .acquire_timeout(Duration::from_secs(5))
-            .connect_with(options.foreign_keys(true).pragma("trusted_schema", "OFF"))
+            // Edited and deleted message text is overwritten, not left in free pages.
+            .connect_with(
+                options
+                    .foreign_keys(true)
+                    .pragma("trusted_schema", "OFF")
+                    .pragma("secure_delete", "ON"),
+            )
             .await?;
         let mut migrator: Migrator = sqlx::migrate!("./server-migrations/sqlite");
         migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
@@ -251,7 +260,7 @@ impl ServerStore {
         let after = after.map_or(-1, i64::from);
         let rows: Vec<UserRow> = with_pool!(&self.pool, |pool| {
             sqlx::query_as(
-                "SELECT id, name, password_hash, certificate_hash, last_channel, last_active FROM users WHERE id > $1 ORDER BY id LIMIT $2",
+                "SELECT id, account, name, password_hash, certificate_hash, last_channel, last_active FROM users WHERE id > $1 ORDER BY id LIMIT $2",
             )
             .bind(after)
             .bind(i64::from(USER_PAGE))
@@ -261,9 +270,18 @@ impl ServerStore {
         Ok(rows
             .into_iter()
             .map(
-                |(id_, name, password_hash, certificate_hash, last_channel, last_active)| {
+                |(
+                    id_,
+                    account,
+                    name,
+                    password_hash,
+                    certificate_hash,
+                    last_channel,
+                    last_active,
+                )| {
                     StoredUser {
                         id: id(id_),
+                        account,
                         name,
                         password_hash,
                         certificate_hash,
@@ -390,7 +408,7 @@ impl ServerStore {
 
     pub async fn save_user(&self, user: &StoredUser) -> Result<(), Error> {
         too_long(&user.name, MAX_NAME)?;
-        for value in [&user.password_hash, &user.certificate_hash]
+        for value in [&user.password_hash, &user.certificate_hash, &user.account]
             .into_iter()
             .flatten()
         {
@@ -398,8 +416,8 @@ impl ServerStore {
         }
         with_pool!(&self.pool, |pool| {
             sqlx::query(
-                "INSERT INTO users (id, name, name_key, password_hash, certificate_hash, last_channel, last_active) VALUES ($1, $2, $3, $4, $5, $6, $7) \
-                 ON CONFLICT (id) DO UPDATE SET name = excluded.name, name_key = excluded.name_key, password_hash = excluded.password_hash, certificate_hash = excluded.certificate_hash, last_channel = excluded.last_channel, last_active = excluded.last_active",
+                "INSERT INTO users (id, name, name_key, password_hash, certificate_hash, last_channel, last_active, account) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (id) DO UPDATE SET name = excluded.name, name_key = excluded.name_key, password_hash = excluded.password_hash, certificate_hash = excluded.certificate_hash, last_channel = excluded.last_channel, last_active = excluded.last_active, account = excluded.account",
             )
             .bind(i64::from(user.id))
             .bind(&user.name)
@@ -408,6 +426,7 @@ impl ServerStore {
             .bind(&user.certificate_hash)
             .bind(user.last_channel.map(i64::from))
             .bind(user.last_active)
+            .bind(&user.account)
             .execute(pool)
             .await?;
             Ok(())
@@ -504,7 +523,7 @@ mod tests {
             max_users: 0,
             inherit_acl: true,
             conversation_id: format!("{id:032x}"),
-            history_visibility: HistoryVisibility::All,
+            history_visibility: HistoryVisibility::SinceAccess,
             acls: vec![StoredAcl {
                 apply_here: true,
                 apply_subs: false,
@@ -538,6 +557,7 @@ mod tests {
             store
                 .save_user(&StoredUser {
                     id: 1,
+                    account: Some("ab".repeat(16)),
                     name: "Alice".into(),
                     password_hash: None,
                     certificate_hash: Some("ab".into()),
@@ -570,6 +590,7 @@ mod tests {
         assert_eq!(snapshot.next_user_id, 7, "the high mark never goes down");
         let users = store.load_users(None).await?;
         assert_eq!(users[0].name, "Alice");
+        assert_eq!(users[0].account, Some("ab".repeat(16)));
         assert_eq!(store.user_blobs(1).await?.0, "hello");
         assert!(store.load_users(Some(1)).await?.is_empty());
         store.delete_channel(1).await?;

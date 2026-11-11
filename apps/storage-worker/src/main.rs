@@ -172,6 +172,94 @@ async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::err
                 .map(|(comment, texture)| Response::Blobs { comment, texture }),
             Request::SaveBans { bans } => done(store.save_bans(&bans).await),
             Request::SetNextUserId { id } => done(store.set_next_user_id(id).await),
+            Request::HistoryAppend { message } => store.history_append(&message).await,
+            Request::HistoryEdit {
+                target,
+                author_account,
+                format,
+                content,
+                edit_limit,
+                event,
+            } => {
+                store
+                    .history_edit(
+                        target,
+                        &author_account,
+                        format,
+                        &content,
+                        edit_limit,
+                        &event,
+                    )
+                    .await
+            }
+            Request::HistoryDelete {
+                target,
+                author_account,
+                reason,
+                event,
+            } => {
+                store
+                    .history_delete(target, author_account.as_deref(), reason, &event)
+                    .await
+            }
+            Request::HistoryPurge { conversation } => {
+                done(store.history_purge(&conversation).await)
+            }
+            Request::HistoryCreateDirect { direct } => {
+                done(store.history_create_direct(&direct).await)
+            }
+            Request::HistorySetAccess {
+                conversation,
+                account,
+                intervals,
+            } => done(
+                store
+                    .history_set_access(&conversation, &account, &intervals)
+                    .await,
+            ),
+            Request::HistoryForgetAccount { account } => {
+                done(store.history_forget_account(&account).await)
+            }
+            Request::HistorySetReadMarker {
+                account,
+                conversation,
+                seq,
+            } => done(
+                store
+                    .history_set_read_marker(&account, &conversation, seq)
+                    .await,
+            ),
+            Request::HistoryErase {
+                account,
+                deleted_ms,
+            } => store
+                .history_erase(&account, deleted_ms)
+                .await
+                .map(Response::Count),
+            Request::HistoryExpire {
+                before_ms,
+                deleted_ms,
+            } => store
+                .history_expire(before_ms, deleted_ms)
+                .await
+                .map(Response::Count),
+            Request::HistoryHeads { after } => store
+                .history_heads(after.as_deref())
+                .await
+                .map(Response::Heads),
+            Request::HistoryDirects { after } => store
+                .history_directs(after.as_deref())
+                .await
+                .map(Response::Directs),
+            Request::HistoryAccess { after } => store
+                .history_access(after.as_ref())
+                .await
+                .map(Response::Access),
+            Request::HistoryReadMarkers { account } => store
+                .history_read_markers(&account)
+                .await
+                .map(Response::ReadMarkers),
+            Request::HistoryPage { query } => store.history_page(&query).await.map(Response::Page),
         }
         .unwrap_or_else(|error| Response::Rejected(error.to_string()));
         write_frame(&mut output, &Envelope::new(request.request_id, payload))?;

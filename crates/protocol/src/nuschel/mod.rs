@@ -59,6 +59,9 @@ pub mod kind {
 pub const MAX_OUTSTANDING: usize = 16;
 /// Message text, in bytes of UTF-8.
 pub const MAX_CONTENT_BYTES: usize = 64 * 1024;
+/// A stored stock client's message (Mumble HTML, which may carry inline
+/// images up to the server's image limit); larger ones are not stored.
+pub const MAX_LEGACY_CONTENT_BYTES: usize = 1024 * 1024;
 pub const MAX_PAGE_MESSAGES: usize = 100;
 /// Content bytes in one history page; a larger message comes alone.
 pub const MAX_PAGE_BYTES: usize = 256 * 1024;
@@ -108,8 +111,8 @@ pub fn server_limit(kind: u16) -> usize {
     use kind::*;
     match kind {
         // A message larger than the byte cap comes alone.
-        HISTORY_PAGE => MAX_PAGE_BYTES + MAX_CONTENT_BYTES + MAX_PAGE_MESSAGES * 1024,
-        CHAT_EVENT => MAX_CONTENT_BYTES + 2048,
+        HISTORY_PAGE => MAX_PAGE_BYTES + MAX_LEGACY_CONTENT_BYTES + MAX_PAGE_MESSAGES * 1024,
+        CHAT_EVENT => MAX_LEGACY_CONTENT_BYTES + 2048,
         SUBSCRIBED => MAX_SUBSCRIBE_PER_MESSAGE * 64 + 32,
         DIRECT_LIST => MAX_DIRECTS * (MAX_NAME_BYTES + 96) + 32,
         DIRECT_OPENED => MAX_NAME_BYTES + 128,
@@ -257,7 +260,12 @@ pub fn encode(kind: u16, message: &impl prost::Message) -> Option<Bytes> {
 /// Bounds a decoded message from a server must satisfy (a hostile server
 /// cannot make the client hold more than these).
 pub fn valid_message(message: &v1::Message) -> bool {
-    message.content.len() <= MAX_CONTENT_BYTES
+    let limit = if message.format == v1::Format::LegacyHtml as i32 {
+        MAX_LEGACY_CONTENT_BYTES
+    } else {
+        MAX_CONTENT_BYTES
+    };
+    message.content.len() <= limit
         && message.author.as_ref().is_none_or(|author| {
             author.name.len() <= MAX_NAME_BYTES
                 && (author.account.is_empty() || author.account.len() == 16)

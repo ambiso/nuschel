@@ -6,12 +6,15 @@
 
 pub mod acl;
 pub mod auth;
+pub mod chat;
 pub mod config;
 pub mod connection;
+pub mod conversations;
 pub mod extension;
 #[doc(hidden)]
 pub mod fuzzing;
 pub mod handlers;
+pub mod history;
 pub mod limits;
 pub mod password;
 pub mod routing;

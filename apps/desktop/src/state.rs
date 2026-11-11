@@ -3211,7 +3211,9 @@ impl Desktop {
         let server = &mut self.servers[index];
         match event {
             // The backend keeps the sticky record; server history comes later.
-            SessionEvent::Negotiated(_) => {}
+            SessionEvent::Negotiated(_)
+            | SessionEvent::ChannelInfo { .. }
+            | SessionEvent::Nuschel(_) => {}
             SessionEvent::PeerCertificate(pin) => {
                 let identity = server.history_identity();
                 server.peer_sha256 = Some(pin.clone());

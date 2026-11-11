@@ -41,6 +41,7 @@ impl Harness {
         state.initialise_root();
         state.registry.insert(Registered {
             id: 1,
+            account: [1; 16],
             name: "Registered".into(),
             password_hash: None,
             certificate_hash: Some("ab".repeat(20)),

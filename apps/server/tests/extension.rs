@@ -10,7 +10,7 @@ use nuschel_protocol::{
 use nuschel_session::{
     Error as SessionError,
     config::{ClientIdentity, ServerBookmark},
-    connection::{self, Command, ConnectOptions, SessionEvent},
+    connection::{self, Command, ConnectOptions, NuschelEvent, NuschelRequest, SessionEvent},
     sticky::Requirement,
 };
 use nuscheld::{
@@ -25,8 +25,12 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
 };
 use std::{
+    collections::{HashMap, VecDeque},
     net::SocketAddr,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -110,7 +114,37 @@ struct Session {
     commands: mpsc::Sender<Command>,
     events: mpsc::Receiver<SessionEvent>,
     task: tokio::task::JoinHandle<Result<(), SessionError>>,
-    pub session: u32,
+    session: u32,
+    /// Events read while waiting for something else.
+    backlog: VecDeque<SessionEvent>,
+    /// Channel → conversation id, from the extension fields of ChannelState.
+    conversations: HashMap<u32, [u8; 16]>,
+}
+
+fn request_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+fn request_of(event: &NuschelEvent) -> Option<u64> {
+    match event {
+        NuschelEvent::Error(error) => Some(error.request_id),
+        NuschelEvent::Ack(ack) => Some(ack.request_id),
+        NuschelEvent::Page(page) => Some(page.request_id),
+        NuschelEvent::Subscribed(subscribed) => Some(subscribed.request_id),
+        NuschelEvent::DirectOpened(opened) => Some(opened.request_id),
+        NuschelEvent::DirectList(list) => Some(list.request_id),
+        NuschelEvent::Done(done) => Some(done.request_id),
+        _ => None,
+    }
+}
+
+fn latest() -> v1::history_request::Anchor {
+    v1::history_request::Anchor::Latest(true)
+}
+
+fn seqs(page: &v1::HistoryPage) -> Vec<u64> {
+    page.messages.iter().map(|message| message.seq).collect()
 }
 
 fn options(address: SocketAddr, pin: &str, name: &str, identity: usize) -> ConnectOptions {
@@ -140,6 +174,8 @@ impl Session {
             events,
             task,
             session: 0,
+            backlog: VecDeque::new(),
+            conversations: HashMap::new(),
         }
     }
 
@@ -164,7 +200,19 @@ impl Session {
     }
 
     async fn next(&mut self) -> Option<SessionEvent> {
-        timeout(WAIT, self.events.recv()).await.ok().flatten()
+        if let Some(event) = self.backlog.pop_front() {
+            return Some(event);
+        }
+        self.receive(WAIT).await
+    }
+
+    async fn receive(&mut self, wait: Duration) -> Option<SessionEvent> {
+        let event = timeout(wait, self.events.recv()).await.ok().flatten()?;
+        if let SessionEvent::ChannelInfo { channel, info } = &event {
+            self.conversations
+                .insert(*channel, info.conversation.clone().try_into().unwrap());
+        }
+        Some(event)
     }
 
     /// The error a session ended with.
@@ -177,18 +225,169 @@ impl Session {
             .expect_err("the session should fail")
     }
 
-    /// Wait for an event matching `pick`.
-    async fn wait<T>(&mut self, mut pick: impl FnMut(SessionEvent) -> Option<T>) -> T {
+    /// Wait for an event matching `pick`; others stay in the backlog.
+    async fn wait<T>(&mut self, mut pick: impl FnMut(&SessionEvent) -> Option<T>) -> T {
+        if let Some(index) = self.backlog.iter().position(|event| pick(event).is_some()) {
+            let event = self.backlog.remove(index).unwrap();
+            return pick(&event).unwrap();
+        }
         loop {
-            let event = self.next().await.expect("no matching session event");
-            if let Some(value) = pick(event) {
+            let Some(event) = self.receive(WAIT).await else {
+                let ended = if self.task.is_finished() {
+                    format!("{:?}", (&mut self.task).await)
+                } else {
+                    "no".into()
+                };
+                panic!("no matching session event (ended: {ended})");
+            };
+            if let Some(value) = pick(&event) {
                 return value;
             }
+            self.backlog.push_back(event);
+        }
+    }
+
+    /// Whether an event matching `pick` arrives within `wait` (others are kept).
+    async fn arrives(
+        &mut self,
+        wait: Duration,
+        mut pick: impl FnMut(&SessionEvent) -> bool,
+    ) -> bool {
+        if let Some(index) = self.backlog.iter().position(&mut pick) {
+            self.backlog.remove(index);
+            return true;
+        }
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let Some(event) = self.receive(left).await else {
+                return false;
+            };
+            if pick(&event) {
+                return true;
+            }
+            self.backlog.push_back(event);
         }
     }
 
     async fn command(&self, command: Command) {
         self.commands.send(command).await.unwrap();
+    }
+
+    /// Send an extension request and wait for its answer.
+    async fn request(&mut self, request: NuschelRequest) -> NuschelEvent {
+        let id = match &request {
+            NuschelRequest::Send(message) => message.request_id,
+            NuschelRequest::Edit(message) => message.request_id,
+            NuschelRequest::Delete(message) => message.request_id,
+            NuschelRequest::History(message) => message.request_id,
+            NuschelRequest::Subscribe(message) => message.request_id,
+            NuschelRequest::OpenDirect(message) => message.request_id,
+            NuschelRequest::ListDirect(message) => message.request_id,
+            NuschelRequest::ChannelSettings(message) => message.request_id,
+            _ => 0,
+        };
+        self.command(Command::Nuschel(request)).await;
+        self.wait(|event| match event {
+            SessionEvent::Nuschel(event) if request_of(event) == Some(id) => Some(event.clone()),
+            _ => None,
+        })
+        .await
+    }
+
+    async fn send_keyed(
+        &mut self,
+        conversation: [u8; 16],
+        key: [u8; 16],
+        content: &str,
+    ) -> NuschelEvent {
+        self.request(NuschelRequest::Send(v1::ChatSend {
+            request_id: request_id(),
+            conversation: conversation.to_vec(),
+            idempotency_key: key.to_vec(),
+            format: v1::Format::Text as i32,
+            content: content.into(),
+            reply_to: 0,
+        }))
+        .await
+    }
+
+    /// Send and expect an acknowledgement; returns the seq.
+    async fn send(&mut self, conversation: [u8; 16], content: &str) -> u64 {
+        match self
+            .send_keyed(conversation, connection::random_key(), content)
+            .await
+        {
+            NuschelEvent::Ack(ack) => ack.seq,
+            other => panic!("expected an acknowledgement, got {other:?}"),
+        }
+    }
+
+    async fn history(
+        &mut self,
+        conversation: [u8; 16],
+        anchor: v1::history_request::Anchor,
+        limit: u32,
+    ) -> NuschelEvent {
+        self.request(NuschelRequest::History(v1::HistoryRequest {
+            request_id: request_id(),
+            conversation: conversation.to_vec(),
+            anchor: Some(anchor),
+            limit,
+        }))
+        .await
+    }
+
+    async fn page(
+        &mut self,
+        conversation: [u8; 16],
+        anchor: v1::history_request::Anchor,
+        limit: u32,
+    ) -> v1::HistoryPage {
+        match self.history(conversation, anchor, limit).await {
+            NuschelEvent::Page(page) => page,
+            other => panic!("expected a page, got {other:?}"),
+        }
+    }
+
+    async fn subscribe(&mut self, conversations: &[[u8; 16]]) -> v1::Subscribed {
+        match self
+            .request(NuschelRequest::Subscribe(v1::Subscribe {
+                request_id: request_id(),
+                conversations: conversations.iter().map(|id| id.to_vec()).collect(),
+            }))
+            .await
+        {
+            NuschelEvent::Subscribed(subscribed) => subscribed,
+            other => panic!("expected Subscribed, got {other:?}"),
+        }
+    }
+
+    /// The next live chat event.
+    async fn chat(&mut self) -> v1::ChatEvent {
+        self.wait(|event| match event {
+            SessionEvent::Nuschel(NuschelEvent::Chat(chat)) => Some(chat.clone()),
+            _ => None,
+        })
+        .await
+    }
+
+    /// Register this connection's certificate; returns the registration number.
+    async fn register(&mut self) -> u32 {
+        self.command(Command::RegisterSelf).await;
+        let me = self.session;
+        self.wait(|event| match event {
+            SessionEvent::User(user) if user.session == me => user.user_id,
+            _ => None,
+        })
+        .await
+    }
+}
+
+fn error_code(event: &NuschelEvent) -> Option<v1::error::Code> {
+    match event {
+        NuschelEvent::Error(error) => v1::error::Code::try_from(error.code).ok(),
+        _ => None,
     }
 }
 
@@ -584,4 +783,599 @@ async fn extension_frames_before_authentication_close_the_connection() {
     raw.authenticate("Early").await;
     assert!(raw.closed().await);
     assert_eq!(fixture.users(), 0);
+}
+
+// ---- helpers for stages 2–5 ----
+
+/// A Nuschel connection to the fixture.
+async fn nuschel(fixture: &Fixture, name: &str, identity: usize) -> Session {
+    Session::connect(options(
+        fixture.address(),
+        &fixture.running.fingerprint,
+        name,
+        identity,
+    ))
+    .await
+    .0
+}
+
+impl Raw {
+    /// A stock client logged in (no ALPN, no hello).
+    async fn login(address: SocketAddr, name: &str) -> Self {
+        let mut raw = Self::connect(address, &[]).await;
+        raw.version(None).await;
+        raw.authenticate(name).await;
+        raw.until(kind::SERVER_SYNC).await.expect("stock login");
+        raw
+    }
+
+    async fn text(&mut self) -> proto::TextMessage {
+        let frame = self
+            .until(kind::TEXT_MESSAGE)
+            .await
+            .expect("a text message");
+        proto::TextMessage::decode(frame.payload).unwrap()
+    }
+}
+
+impl Fixture {
+    /// Add a channel under the root, as an administrator would, with these
+    /// ACL entries; returns its id and conversation.
+    fn add_channel(
+        &self,
+        name: &str,
+        acls: Vec<nuscheld::acl::AclEntry>,
+        groups: Vec<(&str, Vec<u32>)>,
+    ) -> (u32, [u8; 16]) {
+        let mut state = self.running.server.lock();
+        let id = state.channels.0.keys().max().unwrap() + 1;
+        let mut channel = nuscheld::state::Channel::new(id, Some(0), name.into());
+        channel.node.acls = acls;
+        for (group, members) in groups {
+            let mut entry = nuscheld::acl::Group::new();
+            entry.add = members.into_iter().collect();
+            channel.node.groups.insert(group.into(), entry);
+        }
+        let conversation = channel.conversation_id;
+        state.conversations.add_channel(conversation, id);
+        state.channels.0.insert(id, channel);
+        state.channels.get_mut(0).unwrap().children.push(id);
+        state.permissions_changed(None);
+        state.authz_changed(nuscheld::conversations::Scope::All);
+        state.finish();
+        (id, conversation)
+    }
+
+    /// Change a channel as an ACL edit would, then let the server re-evaluate.
+    fn edit_channel(&self, id: u32, edit: impl FnOnce(&mut nuscheld::state::Channel)) {
+        let mut state = self.running.server.lock();
+        edit(state.channels.get_mut(id).unwrap());
+        state.permissions_changed(None);
+        state.authz_changed(nuscheld::conversations::Scope::All);
+        state.finish();
+    }
+}
+
+fn entry(group: &str, user: Option<u32>, grant: u32, deny: u32) -> nuscheld::acl::AclEntry {
+    nuscheld::acl::AclEntry {
+        apply_here: true,
+        apply_subs: true,
+        user_id: user,
+        group: group.into(),
+        grant,
+        deny,
+    }
+}
+
+use nuscheld::acl::perm;
+
+const QUIET: Duration = Duration::from_millis(400);
+
+fn is_chat(event: &SessionEvent) -> bool {
+    matches!(event, SessionEvent::Nuschel(NuschelEvent::Chat(_)))
+}
+
+// ---- §4 sending, stock copies ----
+
+#[tokio::test]
+async fn messages_are_stored_acknowledged_and_copied_for_stock_clients() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let mut carol = Raw::login(fixture.address(), "Carol").await;
+    let root = alice.conversations[&0];
+    assert_eq!(bob.conversations[&0], root, "one conversation per channel");
+    let content = "hi <b> https://example.org\n```\ncode\n```";
+    assert_eq!(alice.send(root, content).await, 1);
+    let event = bob.chat().await;
+    let message = event.message.unwrap();
+    assert_eq!((message.seq, message.content.as_str()), (1, content));
+    assert_eq!(message.format, v1::Format::Text as i32);
+    assert_eq!(message.author.unwrap().name, "Alice");
+    // The stock copy is made by the server from the same text.
+    let text = carol.text().await;
+    assert_eq!(
+        text.message,
+        nuschel_legacy_html::legacy_body(content, true)
+    );
+    assert_eq!(text.actor, Some(alice.session));
+    assert_eq!(text.channel_id, [0]);
+    assert!(
+        !bob.arrives(QUIET, |event| matches!(event, SessionEvent::Text(_)))
+            .await,
+        "Nuschel clients get no TextMessage duplicate"
+    );
+    // A stock sender's message reaches Nuschel readers from history.
+    carol
+        .send(
+            kind::TEXT_MESSAGE,
+            &proto::TextMessage {
+                channel_id: vec![0, 0],
+                message: "<i>stock</i>".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+    for session in [&mut alice, &mut bob] {
+        let message = session.chat().await.message.unwrap();
+        assert_eq!(message.seq, 2);
+        assert_eq!(message.format, v1::Format::LegacyHtml as i32);
+        assert_eq!(message.content, "<i>stock</i>");
+    }
+    assert!(
+        !alice
+            .arrives(QUIET, |event| matches!(event, SessionEvent::Text(_)))
+            .await
+    );
+    let page = alice.page(root, latest(), 10).await;
+    assert_eq!(seqs(&page), [1, 2]);
+    assert_eq!(page.head, 2);
+    assert!(!page.more_before && !page.more_after && !page.restricted);
+}
+
+#[tokio::test]
+async fn retries_return_the_first_seq_and_conflicts_fail() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    alice.register().await;
+    bob.register().await;
+    let root = alice.conversations[&0];
+    let key = connection::random_key();
+    let first = alice.send_keyed(root, key, "once").await;
+    assert!(matches!(first, NuschelEvent::Ack(ref ack) if ack.seq == 1));
+    assert_eq!(bob.chat().await.message.unwrap().seq, 1);
+    let retry = alice.send_keyed(root, key, "once").await;
+    assert!(
+        matches!(retry, NuschelEvent::Ack(ref ack) if ack.seq == 1),
+        "{retry:?}"
+    );
+    let conflict = alice.send_keyed(root, key, "something else").await;
+    assert_eq!(
+        error_code(&conflict),
+        Some(v1::error::Code::IdempotencyConflict)
+    );
+    assert!(
+        !bob.arrives(QUIET, is_chat).await,
+        "a retry is not delivered twice"
+    );
+    // The seqs assigned to the retry and the conflict stay explicit.
+    let page = bob.page(root, latest(), 10).await;
+    let kinds: Vec<i32> = page.messages.iter().map(|message| message.kind).collect();
+    assert_eq!(seqs(&page), [1, 2, 3]);
+    assert_eq!(
+        kinds,
+        [
+            v1::message::Kind::Message as i32,
+            v1::message::Kind::Void as i32,
+            v1::message::Kind::Void as i32
+        ]
+    );
+    // Durable across a restart: the same account's retry still gets seq 1.
+    drop((alice, bob));
+    let fixture = fixture.restart("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let retry = alice.send_keyed(root, key, "once").await;
+    assert!(
+        matches!(retry, NuschelEvent::Ack(ref ack) if ack.seq == 1),
+        "{retry:?}"
+    );
+    assert_eq!(
+        alice.send(root, "next").await,
+        5,
+        "seq continues after a restart"
+    );
+    // Unregistered senders have no durable identity: no idempotency.
+    let mut guest = nuschel(&fixture, "Guest", 2).await;
+    let key = connection::random_key();
+    for expected in [6, 7] {
+        let ack = guest.send_keyed(root, key, "same").await;
+        assert!(
+            matches!(ack, NuschelEvent::Ack(ref ack) if ack.seq == expected),
+            "{ack:?}"
+        );
+    }
+}
+
+// ---- §6 history pages ----
+
+#[tokio::test]
+async fn history_pages_every_anchor_and_never_skip_at_the_byte_cap() {
+    let fixture = Fixture::start("text_message_length = 0\nimage_message_length = 0").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let root = alice.conversations[&0];
+    for n in 1..=10 {
+        alice.send(root, &format!("m{n}")).await;
+    }
+    use v1::history_request::Anchor;
+    let page = alice.page(root, latest(), 3).await;
+    assert_eq!(seqs(&page), [8, 9, 10]);
+    assert!(page.more_before && !page.more_after);
+    let page = alice.page(root, Anchor::Before(8), 3).await;
+    assert_eq!(seqs(&page), [5, 6, 7]);
+    assert!(page.more_before && page.more_after);
+    let page = alice.page(root, Anchor::After(7), 2).await;
+    assert_eq!(seqs(&page), [8, 9]);
+    assert!(page.more_before && page.more_after);
+    let page = alice.page(root, Anchor::After(9), 5).await;
+    assert_eq!(seqs(&page), [10]);
+    assert!(!page.more_after);
+    let page = alice.page(root, Anchor::Around(5), 4).await;
+    assert_eq!(seqs(&page), [4, 5, 6, 7]);
+    assert!(page.more_before && page.more_after);
+    let page = alice.page(root, Anchor::Before(1), 5).await;
+    assert!(page.messages.is_empty() && !page.more_before && page.more_after);
+    let page = alice.page(root, latest(), 0).await;
+    assert_eq!(page.messages.len(), 10, "0 means the default page size");
+    assert_eq!(
+        error_code(&alice.history(root, latest(), 101).await),
+        Some(v1::error::Code::Malformed)
+    );
+    // The byte cap ends a page early but never skips a message.
+    let big = "x".repeat(60_000);
+    for _ in 0..5 {
+        alice.send(root, &big).await;
+    }
+    let page = alice.page(root, latest(), 10).await;
+    assert_eq!(seqs(&page), [12, 13, 14, 15]);
+    assert!(page.more_before);
+    let page = alice.page(root, Anchor::Before(12), 10).await;
+    assert_eq!(seqs(&page), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    // A message larger than the cap comes alone (a stock client's).
+    let mut carol = Raw::login(fixture.address(), "Carol").await;
+    carol
+        .send(
+            kind::TEXT_MESSAGE,
+            &proto::TextMessage {
+                channel_id: vec![0],
+                message: "y".repeat(300_000),
+                ..Default::default()
+            },
+        )
+        .await;
+    alice.chat().await;
+    let page = alice.page(root, latest(), 10).await;
+    assert_eq!(seqs(&page), [16]);
+    assert!(page.more_before);
+}
+
+// ---- §2 limits and uniform errors ----
+
+#[tokio::test]
+async fn errors_are_uniform_and_ids_cannot_be_probed() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let (_, secret) = fixture.add_channel(
+        "Secret",
+        vec![entry("all", None, 0, perm::ENTER | perm::TEXT_MESSAGE)],
+        vec![],
+    );
+    let unknown = connection::random_key();
+    let mut details = Vec::new();
+    for conversation in [secret, unknown] {
+        for event in [
+            alice.history(conversation, latest(), 10).await,
+            alice
+                .send_keyed(conversation, connection::random_key(), "x")
+                .await,
+        ] {
+            let NuschelEvent::Error(error) = event else {
+                panic!("expected an error, got {event:?}");
+            };
+            assert_eq!(error.code, v1::error::Code::NotFound as i32);
+            details.push(error.detail);
+        }
+    }
+    details.dedup();
+    assert_eq!(details, [nuschel::detail(v1::error::Code::NotFound)]);
+    assert!(
+        alice
+            .subscribe(&[secret, unknown])
+            .await
+            .conversations
+            .is_empty()
+    );
+    let mut malformed = v1::HistoryRequest {
+        request_id: request_id(),
+        conversation: vec![1; 5],
+        anchor: Some(latest()),
+        limit: 1,
+    };
+    assert_eq!(
+        error_code(
+            &alice
+                .request(NuschelRequest::History(malformed.clone()))
+                .await
+        ),
+        Some(v1::error::Code::Malformed)
+    );
+    malformed.conversation = alice.conversations[&0].to_vec();
+    malformed.anchor = None;
+    malformed.request_id = request_id();
+    assert_eq!(
+        error_code(&alice.request(NuschelRequest::History(malformed)).await),
+        Some(v1::error::Code::Malformed)
+    );
+    // Over the wire: an unnegotiated capability and a server-only type are
+    // refused, never processed.
+    let mut raw = Raw::connect(fixture.address(), &[nuschel::ALPN]).await;
+    raw.version(Some(&["history/1"])).await;
+    raw.authenticate("Raw").await;
+    raw.until(kind::SERVER_SYNC).await.unwrap();
+    for (frame_kind, body) in [
+        (
+            nuschel::kind::TYPING,
+            v1::Typing {
+                conversation: vec![0; 16],
+                session: 0,
+            }
+            .encode_to_vec(),
+        ),
+        (
+            nuschel::kind::CHAT_ACK,
+            v1::ChatAck {
+                request_id: 7,
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        ),
+    ] {
+        raw.send_bytes(
+            &[
+                &frame_kind.to_be_bytes()[..],
+                &(body.len() as u32).to_be_bytes(),
+                &body,
+            ]
+            .concat(),
+        )
+        .await;
+        let error =
+            v1::Error::decode(raw.until(nuschel::kind::ERROR).await.unwrap().payload).unwrap();
+        assert_eq!(error.code, v1::error::Code::Unsupported as i32);
+    }
+    // An oversized frame from the header closes the connection.
+    raw.send_bytes(
+        &[
+            &nuschel::kind::HISTORY_REQUEST.to_be_bytes()[..],
+            &4096_u32.to_be_bytes(),
+        ]
+        .concat(),
+    )
+    .await;
+    assert!(raw.closed().await);
+}
+
+// ---- §5 who may read ----
+
+#[tokio::test]
+async fn guests_see_live_messages_but_read_no_history() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let mut guest = nuschel(&fixture, "Guest", 1).await;
+    let root = alice.conversations[&0];
+    alice.send(root, "live").await;
+    assert_eq!(guest.chat().await.message.unwrap().content, "live");
+    assert_eq!(
+        error_code(&guest.history(root, latest(), 10).await),
+        Some(v1::error::Code::NotFound)
+    );
+    assert!(guest.subscribe(&[root]).await.conversations.is_empty());
+    drop((alice, guest));
+    let fixture = fixture.restart("[history]\nguests = \"full\"").await;
+    let mut guest = nuschel(&fixture, "Guest", 1).await;
+    assert_eq!(seqs(&guest.page(root, latest(), 10).await), [1]);
+}
+
+#[tokio::test]
+async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let alice_id = alice.register().await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    bob.register().await;
+    let (channel, conversation) = fixture.add_channel("Side", vec![], vec![]);
+    let subscribed = alice.subscribe(&[conversation]).await;
+    assert_eq!(subscribed.conversations.len(), 1);
+    bob.send(conversation, "before").await;
+    assert_eq!(alice.chat().await.message.unwrap().content, "before");
+    // An ACL edit takes Enter away: unsubscribed, and nothing more arrives.
+    fixture.edit_channel(channel, |channel| {
+        channel
+            .node
+            .acls
+            .push(entry("", Some(alice_id), 0, perm::ENTER));
+    });
+    let gone = alice
+        .wait(|event| match event {
+            SessionEvent::Nuschel(NuschelEvent::Unsubscribed(gone)) => Some(gone.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(gone.conversation, conversation.to_vec());
+    bob.send(conversation, "after").await;
+    assert!(!alice.arrives(QUIET, is_chat).await);
+    assert_eq!(
+        error_code(&alice.history(conversation, latest(), 10).await),
+        Some(v1::error::Code::NotFound)
+    );
+    assert!(
+        alice
+            .subscribe(&[conversation])
+            .await
+            .conversations
+            .is_empty()
+    );
+    // A page authorised before a revocation and finished after it is
+    // re-checked and never sent.
+    fixture.edit_channel(channel, |channel| channel.node.acls.clear());
+    let page = nuscheld::history::Read {
+        session: alice.session,
+        request_id: 4242,
+        conversation,
+        query: nuschel_ipc::server::PageQuery {
+            conversation: nuscheld::conversations::hex(&conversation),
+            anchor: nuschel_ipc::server::Anchor::Latest,
+            limit: 10,
+            ranges: vec![(1, u64::MAX)],
+            max_bytes: 1024,
+        },
+        epoch: fixture.running.server.lock().authz_epoch,
+        clipped: false,
+    };
+    let rows = nuschel_ipc::server::StoredPage {
+        rows: vec![nuschel_ipc::server::StoredMessage {
+            conversation: nuscheld::conversations::hex(&conversation),
+            seq: 1,
+            content: "secret".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    fixture.edit_channel(channel, |channel| {
+        channel
+            .node
+            .acls
+            .push(entry("", Some(alice_id), 0, perm::ENTER));
+    });
+    fixture.running.server.lock().page_read(page, Some(rows));
+    let answer = alice
+        .wait(|event| match event {
+            SessionEvent::Nuschel(event) if request_of(event) == Some(4242) => Some(event.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(error_code(&answer), Some(v1::error::Code::NotFound));
+    // Being in the channel or listening still reads it (Mumble's live audience).
+    let mut state = fixture.running.server.lock();
+    assert!(!state.can_read(alice.session, &conversation));
+    state
+        .users
+        .get_mut(&alice.session)
+        .unwrap()
+        .listening
+        .insert(channel, 1.0);
+    assert!(state.can_read(alice.session, &conversation));
+}
+
+#[tokio::test]
+async fn since_access_shows_only_what_was_said_while_the_reader_had_access() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    let alice_id = alice.register().await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let bob_id = bob.register().await;
+    let (channel, conversation) = fixture.add_channel(
+        "Private",
+        vec![
+            entry("all", None, 0, perm::ENTER),
+            entry("members", None, perm::ENTER, 0),
+            entry("", Some(bob_id), perm::WRITE, 0),
+        ],
+        vec![("members", vec![alice_id, bob_id])],
+    );
+    // Bob (Write on the channel) switches it to since_access.
+    let done = bob
+        .request(NuschelRequest::ChannelSettings(v1::ChannelSettings {
+            request_id: request_id(),
+            channel,
+            visibility: v1::Visibility::SinceAccess as i32,
+        }))
+        .await;
+    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    let info = alice
+        .wait(|event| match event {
+            SessionEvent::ChannelInfo { channel: id, info } if *id == channel => Some(info.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(info.visibility, v1::Visibility::SinceAccess as i32);
+    let members = |state: &mut nuscheld::state::Channel, add: bool| {
+        let group = state.node.groups.get_mut("members").unwrap();
+        if add {
+            group.add.insert(alice_id);
+        } else {
+            group.add.remove(&alice_id);
+        }
+    };
+    bob.send(conversation, "m1").await;
+    bob.send(conversation, "m2").await;
+    fixture.edit_channel(channel, |channel| members(channel, false));
+    bob.send(conversation, "m3").await;
+    bob.send(conversation, "m4").await;
+    fixture.edit_channel(channel, |channel| members(channel, true));
+    bob.send(conversation, "m5").await;
+    use v1::history_request::Anchor;
+    let page = alice.page(conversation, latest(), 10).await;
+    assert_eq!(seqs(&page), [1, 2, 5]);
+    assert!(page.restricted);
+    // Every anchor is clipped; outside is indistinguishable from nothing.
+    assert_eq!(
+        seqs(&alice.page(conversation, Anchor::Around(3), 10).await),
+        [1, 2, 5]
+    );
+    assert_eq!(
+        seqs(&alice.page(conversation, Anchor::Before(5), 10).await),
+        [1, 2]
+    );
+    assert_eq!(
+        seqs(&alice.page(conversation, Anchor::After(2), 10).await),
+        [5]
+    );
+    assert_eq!(
+        seqs(&bob.page(conversation, latest(), 10).await),
+        [1, 2, 3, 4, 5]
+    );
+    // Someone admitted later reads only from then on.
+    let mut carol = nuschel(&fixture, "Carol", 2).await;
+    let carol_id = carol.register().await;
+    fixture.edit_channel(channel, |channel| {
+        channel
+            .node
+            .groups
+            .get_mut("members")
+            .unwrap()
+            .add
+            .insert(carol_id);
+    });
+    assert!(
+        carol
+            .page(conversation, Anchor::Around(1), 10)
+            .await
+            .messages
+            .is_empty()
+    );
+    bob.send(conversation, "m6").await;
+    assert_eq!(seqs(&carol.page(conversation, latest(), 10).await), [6]);
+    // The intervals are durable.
+    drop((alice, bob, carol));
+    let fixture = fixture.restart("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    assert_eq!(
+        seqs(&alice.page(conversation, latest(), 10).await),
+        [1, 2, 5, 6]
+    );
 }

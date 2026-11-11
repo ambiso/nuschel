@@ -1,0 +1,1126 @@
+// SPDX-License-Identifier: EUPL-1.2
+//! The extension's requests (docs/extension.md §2–§7): sending, edits and
+//! deletions, history pages, subscriptions, read markers, typing, direct
+//! conversations and channel settings; and what happens once a write is
+//! stored. Every request is bounded before and after decoding, counts against
+//! at most 16 in flight, and fails with one uniform error per cause: "no such
+//! conversation" and "not allowed" are the same answer.
+use crate::{
+    acl::perm,
+    conversations::{Conversations, Id, Kind, hex, parse},
+    history::{Delivery, Done, Read, Stock},
+    state::{State, random},
+    text,
+};
+use nuschel_ipc::server::{
+    Anchor, HistoryVisibility, MessageKind, PageQuery, ServerStorageRequest as Request,
+    ServerStorageResponse as Response, StoredDirect, StoredMessage, StoredPage,
+};
+use nuschel_protocol::{
+    ControlFrame, control as proto,
+    nuschel::{
+        self, MAX_CONTENT_BYTES, MAX_DIRECTS, MAX_PAGE_BYTES, MAX_SUBSCRIBE_PER_MESSAGE,
+        MAX_SUBSCRIPTIONS, capability, kind,
+        v1::{self, error::Code},
+    },
+};
+use prost::Message as _;
+use std::{
+    sync::atomic::Ordering,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
+
+type Failure = (Code, u64);
+
+fn fail(code: Code) -> Failure {
+    (code, 0)
+}
+
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            elapsed.as_millis().min(i64::MAX as u128) as i64
+        })
+}
+
+fn conversation(bytes: &[u8]) -> Result<Id, Failure> {
+    nuschel::id(bytes).ok_or(fail(Code::Malformed))
+}
+
+/// What an idempotency key was used for, to tell a retry from a conflict.
+fn body_hash(conversation: &Id, format: i32, reply_to: u64, content: &str) -> String {
+    let mut context = ring::digest::Context::new(&ring::digest::SHA256);
+    context.update(conversation);
+    context.update(&format.to_be_bytes());
+    context.update(&reply_to.to_be_bytes());
+    context.update(content.as_bytes());
+    crate::tls::hex(context.finish().as_ref())
+}
+
+fn wire_kind(kind: MessageKind) -> v1::message::Kind {
+    match kind {
+        MessageKind::Message => v1::message::Kind::Message,
+        MessageKind::Edit => v1::message::Kind::Edit,
+        MessageKind::Delete => v1::message::Kind::Delete,
+        MessageKind::Void => v1::message::Kind::Void,
+    }
+}
+
+impl State {
+    /// A stored row as clients see it; a deleted account's messages show no
+    /// name or registration number (a new registrant never inherits them).
+    pub fn wire_message(&self, row: StoredMessage) -> v1::Message {
+        let account = row.author_account.as_deref().and_then(parse);
+        let deleted = account.is_some_and(|account| self.registry.by_account(&account).is_none());
+        let author = (row.kind != MessageKind::Void).then(|| v1::Author {
+            account: account.map(|account| account.to_vec()).unwrap_or_default(),
+            user_id: if deleted {
+                0
+            } else {
+                row.author_user_id.unwrap_or(0)
+            },
+            name: if deleted {
+                String::new()
+            } else {
+                row.author_name
+            },
+        });
+        v1::Message {
+            seq: row.seq,
+            kind: wire_kind(row.kind) as i32,
+            target: row.target.unwrap_or(0),
+            author,
+            format: i32::from(row.format),
+            content: row.content,
+            reply_to: row.reply_to.unwrap_or(0),
+            sent_ms: row.sent_ms,
+            edited_ms: row.edited_ms.unwrap_or(0),
+            deleted_ms: row.deleted_ms.unwrap_or(0),
+            delete_reason: row.delete_reason.unwrap_or(0),
+            edits: row.edits,
+        }
+    }
+
+    fn extension_error(&self, session: u32, request_id: u64, (code, retry): Failure) {
+        self.send(
+            session,
+            kind::ERROR,
+            &nuschel::error(request_id, code, retry),
+        );
+    }
+
+    /// Answer a failed request and release its id.
+    fn failed(&mut self, session: u32, request_id: u64, failure: Failure) {
+        self.extension_error(session, request_id, failure);
+        self.end_request(session, request_id);
+    }
+
+    fn end_request(&mut self, session: u32, request_id: u64) {
+        if let Some(extension) = self
+            .users
+            .get_mut(&session)
+            .and_then(|user| user.extension.as_mut())
+        {
+            extension.end(request_id);
+        }
+    }
+
+    fn begin_request(&mut self, session: u32, request_id: u64) -> bool {
+        let Some(extension) = self
+            .users
+            .get_mut(&session)
+            .and_then(|user| user.extension.as_mut())
+        else {
+            return false;
+        };
+        match extension.begin(request_id) {
+            Ok(()) => true,
+            Err(code) => {
+                self.extension_error(session, request_id, fail(code));
+                false
+            }
+        }
+    }
+
+    /// Run a request that answers at once: begin, answer, release.
+    fn immediate(
+        &mut self,
+        session: u32,
+        request_id: u64,
+        run: impl FnOnce(&mut Self) -> Result<(), Failure>,
+    ) {
+        if !self.begin_request(session, request_id) {
+            return;
+        }
+        match run(self) {
+            Ok(()) => self.end_request(session, request_id),
+            Err(failure) => self.failed(session, request_id, failure),
+        }
+    }
+
+    /// Run a request whose answer comes from the history tasks; it keeps its
+    /// id until then.
+    fn deferred(
+        &mut self,
+        session: u32,
+        request_id: u64,
+        run: impl FnOnce(&mut Self) -> Result<(), Failure>,
+    ) {
+        if !self.begin_request(session, request_id) {
+            return;
+        }
+        if let Err(failure) = run(self) {
+            self.failed(session, request_id, failure);
+        }
+    }
+
+    fn text_limited(&mut self, session: u32) -> Result<(), Failure> {
+        if self.rate_limited(session) {
+            let retry = 1000 / u64::from(self.settings.config.message_limit.max(1));
+            return Err((Code::RateLimited, retry.max(1)));
+        }
+        Ok(())
+    }
+
+    fn extension_limited(
+        &mut self,
+        session: u32,
+        bucket: impl FnOnce(&mut crate::extension::Extension) -> &mut crate::limits::LeakyBucket,
+    ) -> Result<(), Failure> {
+        let limited = self
+            .users
+            .get_mut(&session)
+            .and_then(|user| user.extension.as_mut())
+            .is_none_or(|extension| bucket(extension).limited(Instant::now()));
+        if limited {
+            self.counters.rate_limited.fetch_add(1, Ordering::Relaxed);
+            return Err((Code::RateLimited, 1000));
+        }
+        Ok(())
+    }
+
+    fn author(&self, session: u32) -> (Option<Id>, Option<u32>, String) {
+        self.users
+            .get(&session)
+            .map_or((None, None, String::new()), |user| {
+                (user.account, user.user_id, user.name.clone())
+            })
+    }
+
+    /// A frame in the reserved block from an authenticated connection.
+    pub fn extension_frame(&mut self, session: u32, frame: &ControlFrame) {
+        let Some(extension) = self
+            .users
+            .get(&session)
+            .and_then(|user| user.extension.as_ref())
+        else {
+            // Nothing in the block is ever processed for a stock connection.
+            self.counters
+                .extension_frames
+                .fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let request_id = v1::Done::decode(frame.payload.clone()).map_or(0, |done| done.request_id);
+        let negotiated = nuschel::required_capability(frame.kind)
+            .is_some_and(|capability| extension.has(capability));
+        if !negotiated {
+            self.extension_error(session, request_id, fail(Code::Unsupported));
+            return;
+        }
+        macro_rules! decoded {
+            ($type:ty) => {
+                match <$type>::decode(frame.payload.clone()) {
+                    Ok(message) => message,
+                    Err(_) => {
+                        self.extension_error(session, request_id, fail(Code::Malformed));
+                        return;
+                    }
+                }
+            };
+        }
+        match frame.kind {
+            kind::CHAT_SEND => {
+                let message = decoded!(v1::ChatSend);
+                self.deferred(session, message.request_id, |state| {
+                    state.chat_send(session, message)
+                });
+            }
+            kind::CHAT_EDIT => {
+                let message = decoded!(v1::ChatEdit);
+                self.deferred(session, message.request_id, |state| {
+                    state.chat_edit(session, message)
+                });
+            }
+            kind::CHAT_DELETE => {
+                let message = decoded!(v1::ChatDelete);
+                self.deferred(session, message.request_id, |state| {
+                    state.chat_delete(session, message)
+                });
+            }
+            kind::HISTORY_REQUEST => {
+                let message = decoded!(v1::HistoryRequest);
+                self.deferred(session, message.request_id, |state| {
+                    state.history_request(session, message)
+                });
+            }
+            kind::SUBSCRIBE => {
+                let message = decoded!(v1::Subscribe);
+                self.immediate(session, message.request_id, |state| {
+                    state.subscribe(session, message)
+                });
+            }
+            kind::UNSUBSCRIBE => {
+                let message = decoded!(v1::Unsubscribe);
+                for id in message
+                    .conversations
+                    .iter()
+                    .take(MAX_SUBSCRIBE_PER_MESSAGE)
+                    .filter_map(|bytes| nuschel::id(bytes))
+                {
+                    self.unsubscribe(session, &id);
+                }
+            }
+            kind::READ_MARKER => {
+                let message = decoded!(v1::ReadMarker);
+                self.read_marker(session, message);
+            }
+            kind::TYPING => {
+                let message = decoded!(v1::Typing);
+                self.typing(session, message);
+            }
+            kind::OPEN_DIRECT => {
+                let message = decoded!(v1::OpenDirect);
+                self.immediate(session, message.request_id, |state| {
+                    state.open_direct(session, message)
+                });
+            }
+            kind::LIST_DIRECT => {
+                let message = decoded!(v1::ListDirect);
+                self.immediate(session, message.request_id, |state| {
+                    state.list_direct(session, message.request_id)
+                });
+            }
+            kind::CHANNEL_SETTINGS => {
+                let message = decoded!(v1::ChannelSettings);
+                self.immediate(session, message.request_id, |state| {
+                    state.channel_settings(session, message)
+                });
+            }
+            _ => self.extension_error(session, request_id, fail(Code::Unsupported)),
+        }
+    }
+
+    // ---- §4 sending ----
+
+    fn chat_send(&mut self, session: u32, message: v1::ChatSend) -> Result<(), Failure> {
+        let id = conversation(&message.conversation)?;
+        let key = nuschel::id(&message.idempotency_key).ok_or(fail(Code::Malformed))?;
+        if message.format != v1::Format::Text as i32 || message.content.is_empty() {
+            return Err(fail(Code::Malformed));
+        }
+        if message.content.len() > MAX_CONTENT_BYTES {
+            return Err(fail(Code::TooLarge));
+        }
+        self.text_limited(session)?;
+        if !self.can_write(session, &id) {
+            return Err(fail(Code::NotFound));
+        }
+        if message.reply_to > self.conversations.head(&id) {
+            return Err(fail(Code::Malformed));
+        }
+        // Stock users' copy is made here, from the same text, under Murmur's
+        // text rules (docs/extension.md §4).
+        let html =
+            nuschel_legacy_html::legacy_body(&message.content, self.settings.config.allow_html);
+        let html = match text::check(&html, self.text_limits()) {
+            Err(text::TooLong) => return Err(fail(Code::TooLarge)),
+            Ok(Some(changed)) => changed,
+            Ok(None) => html,
+        };
+        let (account, user_id, name) = self.author(session);
+        let seq = self.conversations.next_seq(id);
+        let row = StoredMessage {
+            conversation: hex(&id),
+            seq,
+            kind: MessageKind::Message,
+            author_account: account.map(|account| hex(&account)),
+            author_user_id: user_id,
+            author_name: name,
+            format: v1::Format::Text as u8,
+            reply_to: (message.reply_to > 0).then_some(message.reply_to),
+            sent_ms: now_ms(),
+            // Unregistered senders have no durable identity to scope a key to.
+            idempotency_key: account.map(|_| crate::tls::hex(&key)),
+            body_hash: account
+                .map(|_| body_hash(&id, message.format, message.reply_to, &message.content)),
+            content: message.content,
+            ..StoredMessage::default()
+        };
+        let wire = self.wire_message(row.clone());
+        self.history.store(
+            Request::HistoryAppend { message: row },
+            Done::Request {
+                session,
+                request_id: message.request_id,
+                conversation: id,
+                seq,
+                delivery: Delivery::Message {
+                    message: wire,
+                    stock: Some(Stock {
+                        actor: session,
+                        html,
+                    }),
+                },
+            },
+        );
+        Ok(())
+    }
+
+    fn chat_edit(&mut self, session: u32, message: v1::ChatEdit) -> Result<(), Failure> {
+        let id = conversation(&message.conversation)?;
+        if message.format != v1::Format::Text as i32 || message.content.is_empty() {
+            return Err(fail(Code::Malformed));
+        }
+        if message.content.len() > MAX_CONTENT_BYTES {
+            return Err(fail(Code::TooLarge));
+        }
+        self.text_limited(session)?;
+        let (account, user_id, name) = self.author(session);
+        // Unregistered authors cannot edit; only while they may still post.
+        let account = account.ok_or(fail(Code::NotFound))?;
+        if !self.can_write(session, &id)
+            || message.target == 0
+            || message.target > self.conversations.head(&id)
+        {
+            return Err(fail(Code::NotFound));
+        }
+        let seq = self.conversations.next_seq(id);
+        let sent_ms = now_ms();
+        let event = StoredMessage {
+            conversation: hex(&id),
+            seq,
+            kind: MessageKind::Edit,
+            target: Some(message.target),
+            author_account: Some(hex(&account)),
+            author_user_id: user_id,
+            author_name: name,
+            format: v1::Format::Text as u8,
+            sent_ms,
+            ..StoredMessage::default()
+        };
+        let mut wire = self.wire_message(event.clone());
+        wire.content.clone_from(&message.content);
+        wire.edited_ms = sent_ms;
+        self.history.store(
+            Request::HistoryEdit {
+                target: message.target,
+                author_account: hex(&account),
+                format: v1::Format::Text as u8,
+                content: message.content,
+                edit_limit: self.settings.config.history.edit_limit,
+                event,
+            },
+            Done::Request {
+                session,
+                request_id: message.request_id,
+                conversation: id,
+                seq,
+                delivery: Delivery::Event { message: wire },
+            },
+        );
+        Ok(())
+    }
+
+    fn chat_delete(&mut self, session: u32, message: v1::ChatDelete) -> Result<(), Failure> {
+        let id = conversation(&message.conversation)?;
+        self.text_limited(session)?;
+        let (account, user_id, name) = self.author(session);
+        let moderator = self.settings.config.history.moderators_delete
+            && matches!(self.conversations.kind(&id), Some(Kind::Channel(channel))
+                if self.has(session, channel, perm::WRITE));
+        // Authors may delete their own messages at any time, even after
+        // losing access; moderators any message in their channels.
+        if (account.is_none() && !moderator)
+            || self.conversations.kind(&id).is_none()
+            || message.target == 0
+            || message.target > self.conversations.head(&id)
+        {
+            return Err(fail(Code::NotFound));
+        }
+        let reason = u32::from(moderator);
+        let seq = self.conversations.next_seq(id);
+        let sent_ms = now_ms();
+        let event = StoredMessage {
+            conversation: hex(&id),
+            seq,
+            kind: MessageKind::Delete,
+            target: Some(message.target),
+            author_account: account.map(|account| hex(&account)),
+            author_user_id: user_id,
+            author_name: name,
+            sent_ms,
+            ..StoredMessage::default()
+        };
+        let mut wire = self.wire_message(event.clone());
+        wire.deleted_ms = sent_ms;
+        wire.delete_reason = reason;
+        self.history.store(
+            Request::HistoryDelete {
+                target: message.target,
+                author_account: if moderator {
+                    None
+                } else {
+                    account.map(|account| hex(&account))
+                },
+                reason,
+                event,
+            },
+            Done::Request {
+                session,
+                request_id: message.request_id,
+                conversation: id,
+                seq,
+                delivery: Delivery::Event { message: wire },
+            },
+        );
+        Ok(())
+    }
+
+    // ---- what happens once stored ----
+
+    /// Finish a stored write, in the order writes were queued.
+    pub fn stored(&mut self, done: Done, response: Option<Response>) {
+        match done {
+            Done::Nothing => {}
+            Done::Request {
+                session,
+                request_id,
+                conversation,
+                seq,
+                delivery,
+            } => {
+                let acknowledged = match response {
+                    Some(Response::Appended {
+                        duplicate: false, ..
+                    })
+                    | Some(Response::Done) => {
+                        self.deliver(&conversation, delivery, session);
+                        Ok(seq)
+                    }
+                    // A retry of a message stored before: its original seq.
+                    Some(Response::Appended {
+                        seq: original,
+                        duplicate: true,
+                    }) => Ok(original),
+                    Some(Response::Conflict) => Err(fail(Code::IdempotencyConflict)),
+                    Some(Response::Missing) => Err(fail(Code::NotFound)),
+                    Some(Response::LimitReached) => Err(fail(Code::LimitReached)),
+                    _ => Err((Code::Busy, 1000)),
+                };
+                match acknowledged {
+                    Ok(seq) => {
+                        self.send(
+                            session,
+                            kind::CHAT_ACK,
+                            &v1::ChatAck {
+                                request_id,
+                                conversation: conversation.to_vec(),
+                                seq,
+                                server_ms: now_ms(),
+                            },
+                        );
+                        self.end_request(session, request_id);
+                    }
+                    Err(failure) => self.failed(session, request_id, failure),
+                }
+            }
+            Done::Stock {
+                conversation,
+                message,
+                fallback,
+            } => match response {
+                Some(Response::Appended {
+                    duplicate: false, ..
+                }) => self.deliver(
+                    &conversation,
+                    Delivery::Message {
+                        message,
+                        stock: None,
+                    },
+                    0,
+                ),
+                // Not stored: Nuschel users in the channel still see it live.
+                _ => {
+                    for session in self.readers(&conversation) {
+                        if let Some(user) = self.users.get(&session) {
+                            user.link.send(fallback.clone());
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    /// Whether a connection may see `seq` live: always in the channel's live
+    /// audience, otherwise within its visible ranges.
+    fn sees(&self, session: u32, id: &Id, seq: u64) -> bool {
+        if let Some(Kind::Channel(channel)) = self.conversations.kind(id)
+            && self.users.get(&session).is_some_and(|user| {
+                user.channel == channel || user.listening.contains_key(&channel)
+            })
+        {
+            return true;
+        }
+        let (ranges, clipped) = self.visible_ranges(session, id);
+        !clipped || ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&seq))
+    }
+
+    /// Live fan-out, under the lock, to whoever may read the conversation now
+    /// (never `origin`, which has the acknowledgement).
+    fn deliver(&mut self, id: &Id, delivery: Delivery, origin: u32) {
+        let (message, stock) = match delivery {
+            Delivery::Message { message, stock } => (message, stock),
+            Delivery::Event { message } => (message, None),
+        };
+        // Events show a target's content: only to those who may see it.
+        let shown = if message.kind == v1::message::Kind::Message as i32 {
+            message.seq
+        } else {
+            message.target
+        };
+        let Some(frame) = nuschel::encode(
+            kind::CHAT_EVENT,
+            &v1::ChatEvent {
+                conversation: id.to_vec(),
+                message: Some(message),
+            },
+        ) else {
+            return;
+        };
+        for session in self.readers(id) {
+            if session != origin
+                && self.sees(session, id, shown)
+                && let Some(user) = self.users.get(&session)
+            {
+                user.link.send(frame.clone());
+            }
+        }
+        let Some(stock) = stock else {
+            return;
+        };
+        let audience: Vec<u32> = self
+            .stock_audience(id)
+            .into_iter()
+            .filter(|session| *session != origin)
+            .collect();
+        if audience.is_empty() {
+            return;
+        }
+        let mut text = proto::TextMessage {
+            actor: self.users.contains_key(&stock.actor).then_some(stock.actor),
+            message: stock.html,
+            ..Default::default()
+        };
+        match self.conversations.kind(id) {
+            Some(Kind::Channel(channel)) => text.channel_id.push(channel),
+            _ => text.session.clone_from(&audience),
+        }
+        if let Some(frame) =
+            nuschel_protocol::encode_control(nuschel_protocol::kind::TEXT_MESSAGE, &text)
+        {
+            for session in audience {
+                if let Some(user) = self.users.get(&session) {
+                    user.link.send(frame.clone());
+                }
+            }
+        }
+    }
+
+    /// Store a stock client's message in a channel's conversation; Nuschel
+    /// readers get it once stored (docs/extension.md §4).
+    pub fn store_stock(&mut self, source: u32, channel: u32, html: &str, fallback: &bytes::Bytes) {
+        let Some(id) = self.conversation_of_channel(channel) else {
+            return;
+        };
+        if html.len() > nuschel::MAX_LEGACY_CONTENT_BYTES {
+            // Too large to keep: Nuschel users in the channel see it live only.
+            self.stored(
+                Done::Stock {
+                    conversation: id,
+                    message: v1::Message::default(),
+                    fallback: fallback.clone(),
+                },
+                None,
+            );
+            return;
+        }
+        let (account, user_id, name) = self.author(source);
+        let seq = self.conversations.next_seq(id);
+        let row = StoredMessage {
+            conversation: hex(&id),
+            seq,
+            kind: MessageKind::Message,
+            author_account: account.map(|account| hex(&account)),
+            author_user_id: user_id,
+            author_name: name,
+            format: v1::Format::LegacyHtml as u8,
+            content: html.to_owned(),
+            sent_ms: now_ms(),
+            ..StoredMessage::default()
+        };
+        let message = self.wire_message(row.clone());
+        self.history.store(
+            Request::HistoryAppend { message: row },
+            Done::Stock {
+                conversation: id,
+                message,
+                fallback: fallback.clone(),
+            },
+        );
+    }
+
+    // ---- §6 history ----
+
+    fn history_request(
+        &mut self,
+        session: u32,
+        message: v1::HistoryRequest,
+    ) -> Result<(), Failure> {
+        use v1::history_request::Anchor as Wire;
+        let id = conversation(&message.conversation)?;
+        let anchor = match message.anchor {
+            Some(Wire::Latest(_)) => Anchor::Latest,
+            Some(Wire::Before(seq)) => Anchor::Before(seq),
+            Some(Wire::After(seq)) => Anchor::After(seq),
+            Some(Wire::Around(seq)) => Anchor::Around(seq),
+            None => return Err(fail(Code::Malformed)),
+        };
+        if message.limit as usize > nuschel::MAX_PAGE_MESSAGES {
+            return Err(fail(Code::Malformed));
+        }
+        self.extension_limited(session, |extension| &mut extension.pages)?;
+        if let Some(extension) = self
+            .users
+            .get_mut(&session)
+            .and_then(|user| user.extension.as_mut())
+            && extension.page_bytes.exhausted(Instant::now())
+        {
+            return Err((Code::RateLimited, extension.page_bytes.retry_after_ms()));
+        }
+        if !self.can_read(session, &id) {
+            return Err(fail(Code::NotFound));
+        }
+        let (ranges, clipped) = self.visible_ranges(session, &id);
+        let read = Read {
+            session,
+            request_id: message.request_id,
+            conversation: id,
+            query: PageQuery {
+                conversation: hex(&id),
+                anchor,
+                limit: if message.limit == 0 {
+                    50
+                } else {
+                    message.limit
+                },
+                ranges,
+                max_bytes: MAX_PAGE_BYTES as u32,
+            },
+            epoch: self.authz_epoch,
+            clipped,
+        };
+        if !self.history.read(read) {
+            return Err((Code::Busy, 500));
+        }
+        Ok(())
+    }
+
+    /// A page came back: re-check against the current authorisation state
+    /// (the epoch moved: `can_read` and the visible ranges again) and send it.
+    pub fn page_read(&mut self, read: Read, page: Option<StoredPage>) {
+        let (session, request_id, id) = (read.session, read.request_id, read.conversation);
+        if !self.users.contains_key(&session) {
+            return;
+        }
+        let Some(page) = page else {
+            self.failed(session, request_id, (Code::Busy, 1000));
+            return;
+        };
+        let (ranges, clipped) = if read.epoch == self.authz_epoch {
+            (read.query.ranges, read.clipped)
+        } else {
+            if !self.can_read(session, &id) {
+                self.failed(session, request_id, fail(Code::NotFound));
+                return;
+            }
+            self.visible_ranges(session, &id)
+        };
+        let visible = |seq: u64| ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&seq));
+        let before = page.rows.len();
+        let mut bytes = 0;
+        let messages: Vec<v1::Message> = page
+            .rows
+            .into_iter()
+            .filter(|row| visible(row.seq))
+            .map(|row| {
+                // An event about a message the reader may not see says nothing.
+                let row = match row.target {
+                    Some(target) if !visible(target) => {
+                        StoredMessage::void(&row.conversation, row.seq, row.sent_ms)
+                    }
+                    _ => row,
+                };
+                bytes += row.content.len() as u64;
+                self.wire_message(row)
+            })
+            .collect();
+        let dropped = messages.len() != before;
+        if let Some(extension) = self
+            .users
+            .get_mut(&session)
+            .and_then(|user| user.extension.as_mut())
+        {
+            extension.page_bytes.spend(bytes, Instant::now());
+        }
+        self.send(
+            session,
+            kind::HISTORY_PAGE,
+            &v1::HistoryPage {
+                request_id,
+                conversation: id.to_vec(),
+                messages,
+                more_before: page.more_before,
+                more_after: page.more_after,
+                restricted: clipped && (dropped || !page.more_before),
+                head: self.conversations.head(&id),
+            },
+        );
+        self.end_request(session, request_id);
+    }
+
+    // ---- §5 subscriptions ----
+
+    fn subscribe(&mut self, session: u32, message: v1::Subscribe) -> Result<(), Failure> {
+        if message.conversations.len() > MAX_SUBSCRIBE_PER_MESSAGE {
+            return Err(fail(Code::Malformed));
+        }
+        let ids = message
+            .conversations
+            .iter()
+            .map(|bytes| conversation(bytes))
+            .collect::<Result<Vec<Id>, Failure>>()?;
+        self.extension_limited(session, |extension| &mut extension.requests)?;
+        let account = self.users.get(&session).and_then(|user| user.account);
+        let mut account_total: usize = self
+            .users
+            .values()
+            .filter(|user| account.is_some() && user.account == account)
+            .filter_map(|user| user.extension.as_ref())
+            .map(|extension| extension.subscriptions.len())
+            .sum();
+        let mut accepted = Vec::new();
+        for id in ids {
+            if !self.can_read(session, &id) {
+                continue;
+            }
+            let Some(extension) = self
+                .users
+                .get_mut(&session)
+                .and_then(|user| user.extension.as_mut())
+            else {
+                break;
+            };
+            if !extension.subscriptions.contains(&id) {
+                if extension.subscriptions.len() >= MAX_SUBSCRIPTIONS
+                    || account_total >= crate::conversations::MAX_ACCOUNT_SUBSCRIPTIONS
+                {
+                    continue;
+                }
+                extension.subscriptions.insert(id);
+                account_total += 1;
+                self.conversations
+                    .subscribers
+                    .entry(id)
+                    .or_default()
+                    .insert(session);
+            }
+            accepted.push(v1::ConversationState {
+                conversation: id.to_vec(),
+                head: self.conversations.head(&id),
+                read: self.conversations.marker(account, &id),
+            });
+        }
+        self.send(
+            session,
+            kind::SUBSCRIBED,
+            &v1::Subscribed {
+                request_id: message.request_id,
+                conversations: accepted,
+            },
+        );
+        Ok(())
+    }
+
+    // ---- §7 read markers and typing ----
+
+    fn read_marker(&mut self, session: u32, message: v1::ReadMarker) {
+        if self
+            .extension_limited(session, |extension| &mut extension.markers)
+            .is_err()
+        {
+            return;
+        }
+        let Some(id) = nuschel::id(&message.conversation) else {
+            return;
+        };
+        let Some(account) = self.users.get(&session).and_then(|user| user.account) else {
+            return;
+        };
+        if !self.can_read(session, &id)
+            || message.seq > self.conversations.head(&id)
+            || message.seq <= self.conversations.marker(Some(account), &id)
+        {
+            return;
+        }
+        let markers = self.conversations.markers.entry(account).or_default();
+        if markers.len() >= 16_384 && !markers.contains_key(&id) {
+            return;
+        }
+        markers.insert(id, message.seq);
+        self.history.write(Request::HistorySetReadMarker {
+            account: hex(&account),
+            conversation: hex(&id),
+            seq: message.seq,
+        });
+        // Synced to the account's other devices.
+        let others: Vec<u32> = self
+            .users
+            .values()
+            .filter(|user| {
+                user.session != session
+                    && user.account == Some(account)
+                    && user
+                        .extension
+                        .as_ref()
+                        .is_some_and(|extension| extension.has(capability::HISTORY))
+            })
+            .map(|user| user.session)
+            .collect();
+        for other in others {
+            self.send(other, kind::READ_MARKER, &message);
+        }
+    }
+
+    fn typing(&mut self, session: u32, message: v1::Typing) {
+        let Some(id) = nuschel::id(&message.conversation) else {
+            return;
+        };
+        let now = Instant::now();
+        let Some(extension) = self
+            .users
+            .get_mut(&session)
+            .and_then(|user| user.extension.as_mut())
+        else {
+            return;
+        };
+        if extension
+            .typing
+            .get(&id)
+            .is_some_and(|last| now.duration_since(*last).as_secs() < 3)
+        {
+            return;
+        }
+        if extension.typing.len() >= 64 {
+            extension
+                .typing
+                .retain(|_, last| now.duration_since(*last).as_secs() < 3);
+        }
+        extension.typing.insert(id, now);
+        if !self.can_write(session, &id) {
+            return;
+        }
+        let typing = v1::Typing {
+            conversation: id.to_vec(),
+            session,
+        };
+        for reader in self.readers(&id) {
+            if reader != session
+                && self.users.get(&reader).is_some_and(|user| {
+                    user.extension
+                        .as_ref()
+                        .is_some_and(|extension| extension.has(capability::TYPING))
+                })
+            {
+                self.send(reader, kind::TYPING, &typing);
+            }
+        }
+    }
+
+    // ---- §3 direct conversations ----
+
+    fn direct(&self, id: &Id, me: &Id) -> Option<v1::Direct> {
+        let Some(Kind::Direct(a, b)) = self.conversations.kind(id) else {
+            return None;
+        };
+        let peer = if a == *me { b } else { a };
+        let registered = self.registry.by_account(&peer);
+        Some(v1::Direct {
+            conversation: id.to_vec(),
+            user_id: registered.map_or(0, |user| user.id),
+            name: registered.map(|user| user.name.clone()).unwrap_or_default(),
+            account: peer.to_vec(),
+            head: self.conversations.head(id),
+            read: self.conversations.marker(Some(*me), id),
+        })
+    }
+
+    fn open_direct(&mut self, session: u32, message: v1::OpenDirect) -> Result<(), Failure> {
+        self.extension_limited(session, |extension| &mut extension.requests)?;
+        let me = self
+            .users
+            .get(&session)
+            .and_then(|user| user.account)
+            .ok_or(fail(Code::NotFound))?;
+        let peer = self
+            .registry
+            .users
+            .get(&message.user_id)
+            .map(|user| user.account)
+            .filter(|peer| *peer != me)
+            .ok_or(fail(Code::NotFound))?;
+        let id = match self.conversations.direct(me, peer) {
+            Some(id) => id,
+            None => {
+                if self.conversations.directs_of(&me).len() >= MAX_DIRECTS {
+                    return Err(fail(Code::LimitReached));
+                }
+                let id: Id = random();
+                self.conversations.add_direct(id, me, peer);
+                let (a, b) = Conversations::pair(me, peer);
+                self.history.write(Request::HistoryCreateDirect {
+                    direct: StoredDirect {
+                        conversation: hex(&id),
+                        account_a: hex(&a),
+                        account_b: hex(&b),
+                    },
+                });
+                id
+            }
+        };
+        let direct = self.direct(&id, &me);
+        self.send(
+            session,
+            kind::DIRECT_OPENED,
+            &v1::DirectOpened {
+                request_id: message.request_id,
+                direct,
+            },
+        );
+        Ok(())
+    }
+
+    fn list_direct(&mut self, session: u32, request_id: u64) -> Result<(), Failure> {
+        self.extension_limited(session, |extension| &mut extension.requests)?;
+        let me = self
+            .users
+            .get(&session)
+            .and_then(|user| user.account)
+            .ok_or(fail(Code::NotFound))?;
+        let directs = self
+            .conversations
+            .directs_of(&me)
+            .iter()
+            .take(MAX_DIRECTS)
+            .filter_map(|id| self.direct(id, &me))
+            .collect();
+        self.send(
+            session,
+            kind::DIRECT_LIST,
+            &v1::DirectList {
+                request_id,
+                directs,
+            },
+        );
+        Ok(())
+    }
+
+    // ---- channel settings ----
+
+    /// A channel's extension properties for Nuschel connections.
+    pub fn channel_info(&self, channel: &crate::state::Channel) -> v1::ChannelInfo {
+        v1::ChannelInfo {
+            conversation: channel.conversation_id.to_vec(),
+            visibility: match channel.history_visibility {
+                HistoryVisibility::Members => v1::Visibility::Members,
+                HistoryVisibility::SinceAccess => v1::Visibility::SinceAccess,
+            } as i32,
+            retention_days: self.settings.config.history.retention_days,
+        }
+    }
+
+    /// Send a `ChannelState` to everyone; Nuschel connections also get the
+    /// channel's extension properties, stock clients never see them.
+    pub fn broadcast_channel_state(&self, message: &proto::ChannelState) {
+        let Some(plain) =
+            nuschel_protocol::encode_control(nuschel_protocol::kind::CHANNEL_STATE, message)
+        else {
+            return;
+        };
+        let extended = message
+            .channel_id
+            .and_then(|id| self.channels.get(id))
+            .and_then(|channel| nuschel::channel_state_frame(message, self.channel_info(channel)));
+        for user in self.users.values() {
+            match (&extended, &user.extension) {
+                (Some(frame), Some(_)) => user.link.send(frame.clone()),
+                _ => user.link.send(plain.clone()),
+            }
+        }
+    }
+
+    fn channel_settings(
+        &mut self,
+        session: u32,
+        message: v1::ChannelSettings,
+    ) -> Result<(), Failure> {
+        self.extension_limited(session, |extension| &mut extension.requests)?;
+        if self.channels.get(message.channel).is_none()
+            || !self.has(session, message.channel, perm::WRITE)
+        {
+            return Err(fail(Code::NotFound));
+        }
+        let visibility = match v1::Visibility::try_from(message.visibility) {
+            Ok(v1::Visibility::Members) => HistoryVisibility::Members,
+            Ok(v1::Visibility::SinceAccess) => HistoryVisibility::SinceAccess,
+            Err(_) => return Err(fail(Code::Malformed)),
+        };
+        let changed = self
+            .channels
+            .get_mut(message.channel)
+            .is_some_and(|channel| {
+                std::mem::replace(&mut channel.history_visibility, visibility) != visibility
+            });
+        if changed {
+            if visibility == HistoryVisibility::SinceAccess {
+                self.begin_since_access(message.channel);
+            }
+            // Pages in flight recompute what their readers may see.
+            self.authz_epoch += 1;
+            self.persist_channel(message.channel);
+            tracing::info!(actor = %self.log_name(session), channel = message.channel, ?visibility, "changed history visibility");
+            self.broadcast_channel_state(&proto::ChannelState {
+                channel_id: Some(message.channel),
+                ..Default::default()
+            });
+        }
+        self.send(
+            session,
+            kind::DONE,
+            &v1::Done {
+                request_id: message.request_id,
+            },
+        );
+        Ok(())
+    }
+}

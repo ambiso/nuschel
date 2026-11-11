@@ -407,7 +407,9 @@ async fn login_sends_murmurs_initial_state() {
         .find(|frame| frame.kind == kind::SERVER_SYNC)
         .unwrap();
     let sync = proto::ServerSync::decode(sync.payload.clone()).unwrap();
-    assert_eq!(sync.welcome_text.as_deref(), Some("hello"));
+    // Stock clients are told that text is kept (docs/extension.md §9).
+    let welcome = sync.welcome_text.clone().unwrap();
+    assert!(welcome.starts_with("hello<br/><br/>Text in this server's channels is kept"));
     assert!(sync.permissions() & 0x4 != 0, "Enter at the root");
     let me = client
         .seen

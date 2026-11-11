@@ -74,6 +74,11 @@ pub fn body_limit(settings: &Settings, kind: u16) -> Option<usize> {
             kind::REQUEST_BLOB | kind::PING | kind::CRYPT_SETUP | kind::PERMISSION_QUERY => {
                 4 * 1024
             }
+            // The extension's own caps (docs/extension.md §2), whether or not
+            // this connection negotiated it.
+            extension if kind::NUSCHEL_EXTENSION.contains(&extension) => {
+                nuschel_protocol::nuschel::client_limit(extension)
+            }
             _ => 16 * 1024,
         }
         .min(unlimited),

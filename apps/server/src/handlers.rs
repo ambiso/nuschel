@@ -4,10 +4,12 @@
 //! same `PermissionDenied` types, and the same broadcasts.
 use crate::{
     acl::{self, AclEntry, Group, perm},
-    state::{Ban, Channel, Registered, State, WhisperTarget, mapped, now_unix},
+    conversations::{Scope, hex},
+    state::{Ban, Channel, Registered, State, WhisperTarget, mapped, now_unix, random},
     text,
 };
 use bytes::Bytes;
+use nuschel_ipc::server::ServerStorageRequest as Storage;
 use nuschel_protocol::{ControlFrame, control as proto, kind};
 use proto::permission_denied::DenyType;
 use std::{
@@ -174,11 +176,7 @@ impl State {
             | kind::SERVER_CONFIG
             | kind::SUGGEST_CONFIG => {}
             other if kind::NUSCHEL_EXTENSION.contains(&other) => {
-                // Phase 2 dispatches the extension's messages here (only for
-                // connections that negotiated `nuschel/1`).
-                self.counters
-                    .extension_frames
-                    .fetch_add(1, Ordering::Relaxed);
+                self.extension_frame(session, &frame);
             }
             _ => {
                 self.counters.unknown_frames.fetch_add(1, Ordering::Relaxed);
@@ -187,8 +185,9 @@ impl State {
         self.finish();
     }
 
-    /// Murmur's `RATELIMIT`: the `messagelimit`/`messageburst` bucket.
-    fn rate_limited(&mut self, session: u32) -> bool {
+    /// Murmur's `RATELIMIT`: the `messagelimit`/`messageburst` bucket, which
+    /// the extension's sends and edits share.
+    pub(crate) fn rate_limited(&mut self, session: u32) -> bool {
         let limited = self
             .users
             .get_mut(&session)
@@ -222,6 +221,9 @@ impl State {
                 self.remove_channel(id, None);
             }
         }
+        // Subscriptions and access intervals follow every authorisation
+        // change before the lock is released (docs/extension.md §5).
+        self.reevaluate();
     }
 
     /// Remember a temporary channel that may have become empty.
@@ -247,6 +249,7 @@ impl State {
         }
         user.tokens = bounded_tokens(&message.tokens);
         self.permissions_changed(Some(session));
+        self.authz_changed(Scope::Session(session));
         let states: Vec<proto::ChannelState> = self
             .channels
             .0
@@ -765,11 +768,36 @@ impl State {
             }
         }
         self.permissions_changed(Some(session));
+        self.authz_changed(Scope::Session(session));
         self.remember_channel(session);
         self.send_permissions(session, channel, false);
         if let Some(parent) = self.channels.get(channel).and_then(Channel::parent) {
             self.send_permissions(session, parent, false);
         }
+        self.retention_notice(session, channel);
+    }
+
+    /// Stock clients cannot know that text is kept and readable by people who
+    /// join later; they are told when they enter a channel with history
+    /// (docs/extension.md §9).
+    pub fn retention_notice(&mut self, session: u32, channel: u32) {
+        let history = &self.settings.config.history;
+        if !history.notify_stock_clients
+            || self
+                .conversation_of_channel(channel)
+                .is_none_or(|id| self.conversations.head(&id) == 0)
+        {
+            return;
+        }
+        let Some(user) = self.users.get_mut(&session) else {
+            return;
+        };
+        if user.extension.is_some() || user.notified.len() >= 256 || !user.notified.insert(channel)
+        {
+            return;
+        }
+        let text = retention_text(history.retention_days);
+        self.text_to(session, &text);
     }
 
     fn add_listener(&mut self, session: u32, channel: u32) {
@@ -779,6 +807,7 @@ impl State {
         if let Some(channel) = self.channels.get_mut(channel) {
             channel.listeners.insert(session);
         }
+        self.authz_changed(Scope::Session(session));
     }
 
     fn remove_listener(&mut self, session: u32, channel: u32) {
@@ -788,6 +817,7 @@ impl State {
         if let Some(channel) = self.channels.get_mut(channel) {
             channel.listeners.remove(&session);
         }
+        self.authz_changed(Scope::Session(session));
     }
 
     /// Register a connected user (Murmur's `registerUser`).
@@ -800,8 +830,10 @@ impl State {
         }
         let id = self.registry.allocate_id();
         self.storage.set_next_user_id(self.registry.next_id);
+        let account = random();
         self.registry.insert(Registered {
             id,
+            account,
             name,
             password_hash: None,
             certificate_hash: user.certificate_hash.clone(),
@@ -812,7 +844,9 @@ impl State {
         let texture = user.texture.clone();
         if let Some(user) = self.users.get_mut(&session) {
             user.user_id = Some(id);
+            user.account = Some(account);
         }
+        self.authz_changed(Scope::Session(session));
         self.persist_registration(id);
         if !comment.is_empty() {
             self.storage.set_comment(id, comment);
@@ -907,6 +941,26 @@ impl State {
             for target in other.targets.values_mut() {
                 target.sessions.retain(|member| *member != session);
             }
+        }
+        if let Some(extension) = &user.extension {
+            for id in &extension.subscriptions {
+                if let Some(subscribers) = self.conversations.subscribers.get_mut(id) {
+                    subscribers.remove(&session);
+                    if subscribers.is_empty() {
+                        self.conversations.subscribers.remove(id);
+                    }
+                }
+            }
+        }
+        // Read markers are kept in memory while any of the account's
+        // connections is online.
+        if let Some(account) = user.account
+            && !self
+                .users
+                .values()
+                .any(|other| other.account == Some(account))
+        {
+            self.conversations.markers.remove(&account);
         }
         if let Some(id) = user.user_id
             && let Some(registered) = self.registry.users.get_mut(&id)
@@ -1017,10 +1071,22 @@ impl State {
     /// Murmur's `unregisterUser`: forget the account and every ACL entry and
     /// group membership naming it.
     fn unregister(&mut self, id: u32) {
-        if id == 0 || self.registry.remove(id).is_none() {
+        if id == 0 {
             return;
         }
+        let Some(removed) = self.registry.remove(id) else {
+            return;
+        };
         self.storage.delete_user(id);
+        // The account id is never reused: its direct conversations freeze and
+        // its messages show as a deleted user's; markers and intervals go.
+        self.conversations.markers.remove(&removed.account);
+        for accounts in self.conversations.access.values_mut() {
+            accounts.remove(&removed.account);
+        }
+        self.history.write(Storage::HistoryForgetAccount {
+            account: hex(&removed.account),
+        });
         let mut changed = Vec::new();
         for channel in self.channels.0.values_mut() {
             let before = (channel.node.acls.len(), channel.node.groups.clone());
@@ -1044,6 +1110,7 @@ impl State {
         if let Some(session) = online {
             if let Some(user) = self.users.get_mut(&session) {
                 user.user_id = None;
+                user.account = None;
             }
             self.broadcast(
                 kind::USER_STATE,
@@ -1056,6 +1123,7 @@ impl State {
             );
         }
         self.permissions_changed(None);
+        self.authz_changed(Scope::All);
     }
 
     fn query_users(&mut self, source: u32, message: proto::QueryUsers) {
@@ -1358,9 +1426,10 @@ impl State {
         }
     }
 
-    /// The single path every text message takes: permission checks, limits and
-    /// delivery. Persistent history (phase 2: per-conversation sequence
-    /// numbers, idempotency keys) slots in here.
+    /// The single path every stock text message takes: permission checks,
+    /// limits and delivery. Channel messages are also stored (format
+    /// `legacy_html`), and Nuschel readers get them from history once stored
+    /// (docs/extension.md §4); direct messages to sessions are not stored.
     fn text_message(&mut self, source: u32, mut message: proto::TextMessage) {
         if self.rate_limited(source) {
             return;
@@ -1379,8 +1448,19 @@ impl State {
         if message.channel_id.len() + message.tree_id.len() + message.session.len() > 4096 {
             return;
         }
+        // Murmur walks the tree once per listed id; duplicates cost nothing here.
+        for ids in [
+            &mut message.channel_id,
+            &mut message.tree_id,
+            &mut message.session,
+        ] {
+            ids.sort_unstable();
+            ids.dedup();
+        }
         message.actor = Some(source);
         let mut recipients = BTreeSet::new();
+        // Every channel the message reaches, to be stored there.
+        let mut reached = BTreeSet::new();
         for &channel in &message.channel_id {
             let Some(target) = self.channels.get(channel) else {
                 return;
@@ -1391,6 +1471,7 @@ impl State {
             }
             recipients.extend(target.users.iter().copied());
             recipients.extend(target.listeners.iter().copied());
+            reached.insert(channel);
         }
         let mut trees = Vec::new();
         for &channel in &message.tree_id {
@@ -1404,14 +1485,16 @@ impl State {
             trees.push(channel);
         }
         // Sub-channels without permission are skipped, together with what is below them.
+        let mut visited = BTreeSet::new();
         while let Some(channel) = trees.pop() {
-            if !self.has(source, channel, perm::TEXT_MESSAGE) {
+            if !visited.insert(channel) || !self.has(source, channel, perm::TEXT_MESSAGE) {
                 continue;
             }
             if let Some(target) = self.channels.get(channel) {
                 trees.extend(target.children.iter().copied());
                 recipients.extend(target.users.iter().copied());
                 recipients.extend(target.listeners.iter().copied());
+                reached.insert(channel);
             }
         }
         for &session in &message.session {
@@ -1427,10 +1510,23 @@ impl State {
         let Some(frame) = nuschel_protocol::encode_control(kind::TEXT_MESSAGE, &message) else {
             return;
         };
+        // Nuschel readers of the reached channels get the stored message.
+        let mut readers = BTreeSet::new();
+        for &channel in &reached {
+            if let Some(id) = self.conversation_of_channel(channel) {
+                readers.extend(self.readers(&id));
+            }
+        }
         for session in recipients {
+            if readers.contains(&session) {
+                continue;
+            }
             if let Some(user) = self.users.get(&session) {
                 user.link.send(frame.clone());
             }
+        }
+        for channel in reached {
+            self.store_stock(source, channel, &message.message, &frame);
         }
     }
 
@@ -1517,7 +1613,20 @@ impl State {
         if let Some(parent) = self.channels.get_mut(parent) {
             parent.children.retain(|child| *child != id);
         }
-        self.channels.0.remove(&id);
+        if let Some(channel) = self.channels.0.remove(&id) {
+            // A temporary channel's history goes with it; a permanent one's
+            // becomes administrator-only (docs/extension.md §3).
+            let conversation = channel.conversation_id;
+            if temporary {
+                self.conversations.remove(&conversation);
+                self.history.write(Storage::HistoryPurge {
+                    conversation: hex(&conversation),
+                });
+            } else {
+                self.conversations.archive(conversation);
+            }
+        }
+        self.authz_changed(Scope::All);
         for user in self.users.values_mut() {
             let mut emptied = Vec::new();
             for (target_id, target) in &mut user.targets {
@@ -1701,6 +1810,7 @@ impl State {
             channel.node.groups.insert("admin".into(), admins);
         }
         let description_hash = channel.description_hash;
+        self.conversations.add_channel(channel.conversation_id, id);
         self.channels.0.insert(id, channel);
         if let Some(parent) = self.channels.get_mut(parent) {
             parent.children.push(id);
@@ -1730,7 +1840,7 @@ impl State {
             message.description = None;
             message.description_hash = Some(hash.to_vec());
         }
-        self.broadcast(kind::CHANNEL_STATE, &message, None);
+        self.broadcast_channel_state(&message);
         if temporary {
             let mut state = proto::UserState {
                 session: Some(source),
@@ -1830,6 +1940,8 @@ impl State {
             if let Some(channel) = self.channels.get_mut(id) {
                 channel.node.parent = Some(parent);
             }
+            // Inheritance changed with the parent.
+            self.authz_changed(Scope::All);
             tracing::info!(actor = %self.log_name(source), channel = id, parent, "moved channel");
         }
         let Some(channel) = self.channels.get_mut(id) else {
@@ -2051,6 +2163,7 @@ impl State {
         channel.node.acls = acls;
         channel.node.inherit_acl = message.inherit_acls();
         self.permissions_changed(None);
+        self.authz_changed(Scope::All);
         let Some(user) = self.users.get(&source) else {
             return;
         };
@@ -2118,4 +2231,17 @@ pub fn bounded_tokens(tokens: &[String]) -> Vec<[u8; 32]> {
         }
     }
     out
+}
+
+/// What stock clients are told about retention (docs/extension.md §9).
+pub fn retention_text(days: u32) -> String {
+    let kept = match days {
+        0 => "kept without a time limit".to_owned(),
+        1 => "kept for 1 day".to_owned(),
+        days => format!("kept for {days} days"),
+    };
+    format!(
+        "Text in this server's channels is {kept}, and people who join a channel later can \
+         read it. Some users of this server receive messages without being shown in the channel."
+    )
 }

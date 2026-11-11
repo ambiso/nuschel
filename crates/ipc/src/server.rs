@@ -9,15 +9,18 @@ use serde::{Deserialize, Serialize};
 /// oversized frame.
 pub const USER_PAGE: u32 = 1000;
 
-/// Who may read a channel's history from before they could see it (phase 2,
-/// docs/extension.md); stored now so the schema does not have to change.
+/// Who may read a channel's earlier history (docs/extension.md §5).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HistoryVisibility {
     /// Members read the retained history, including messages from before they joined.
     #[default]
-    All,
-    SinceJoining,
+    #[serde(alias = "all")]
+    Members,
+    /// Only what was said while the reader could read the channel (the
+    /// recorded access intervals).
+    #[serde(alias = "since_joining")]
+    SinceAccess,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +67,10 @@ pub struct StoredChannel {
 #[serde(deny_unknown_fields)]
 pub struct StoredUser {
     pub id: u32,
+    /// The immutable 128-bit account id (32 hex digits); the registration
+    /// number is only Mumble's wire alias. Assigned by the server when missing.
+    #[serde(default)]
+    pub account: Option<String>,
     pub name: String,
     /// An argon2id PHC string.
     pub password_hash: Option<String>,
@@ -98,6 +105,245 @@ pub struct ServerSnapshot {
     pub bans: Vec<StoredBan>,
     /// Registration ids below this were handed out once and are never reused.
     pub next_user_id: u32,
+}
+
+/// Rows per history load page (heads, direct conversations, access intervals).
+pub const HISTORY_LOAD_PAGE: u32 = 1000;
+/// Rows in one history page (docs/extension.md §6).
+pub const MAX_HISTORY_ROWS: u32 = 100;
+/// Visible seq ranges one history page may be clipped to.
+pub const MAX_RANGES: usize = 64;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageKind {
+    #[default]
+    Message,
+    /// Refers to `target`, whose content was replaced.
+    Edit,
+    /// Refers to `target`, which became a tombstone.
+    Delete,
+    /// A sequence number that carries nothing (a retried send).
+    Void,
+}
+
+/// One row of a conversation's history. Ids are 32 lowercase hex digits.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredMessage {
+    pub conversation: String,
+    pub seq: u64,
+    pub kind: MessageKind,
+    pub target: Option<u64>,
+    pub author_account: Option<String>,
+    pub author_user_id: Option<u32>,
+    pub author_name: String,
+    /// `nuschel.v1.Format`.
+    pub format: u8,
+    pub content: String,
+    pub reply_to: Option<u64>,
+    /// Unix milliseconds.
+    pub sent_ms: i64,
+    pub edited_ms: Option<i64>,
+    pub edits: u32,
+    pub deleted_ms: Option<i64>,
+    /// 0 the author, 1 a moderator, 2 expired, 3 erased by the operator.
+    pub delete_reason: Option<u32>,
+    /// Scoped to (author account, conversation); never sent to other users and
+    /// not returned in pages.
+    pub idempotency_key: Option<String>,
+    /// SHA-256 of what the key was used for, to detect conflicting retries.
+    pub body_hash: Option<String>,
+}
+
+impl StoredMessage {
+    /// A row that only keeps `seq` explicit.
+    pub fn void(conversation: &str, seq: u64, sent_ms: i64) -> Self {
+        Self {
+            conversation: conversation.to_owned(),
+            seq,
+            kind: MessageKind::Void,
+            sent_ms,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Anchor {
+    Latest,
+    Before(u64),
+    After(u64),
+    Around(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageQuery {
+    pub conversation: String,
+    pub anchor: Anchor,
+    pub limit: u32,
+    /// Inclusive, sorted and disjoint seq ranges the reader may see.
+    pub ranges: Vec<(u64, u64)>,
+    /// Content bytes; a page ends early at this cap but never skips a row, and
+    /// the row nearest the anchor always comes, however large.
+    pub max_bytes: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredPage {
+    /// Chronological.
+    pub rows: Vec<StoredMessage>,
+    pub more_before: bool,
+    pub more_after: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredDirect {
+    pub conversation: String,
+    pub account_a: String,
+    pub account_b: String,
+}
+
+/// An interval in which an account could read a `since_access` channel.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredAccess {
+    pub conversation: String,
+    pub account: String,
+    pub start: u64,
+    /// `None` while open.
+    pub end: Option<u64>,
+}
+
+/// Rows in a seq range, nearest the anchor first; what [`page`] needs from a store.
+pub trait SeqRows {
+    type Error;
+    /// Rows with `lo <= seq <= hi`, descending or ascending, at most `limit`.
+    fn rows(
+        &mut self,
+        conversation: &str,
+        range: (u64, u64),
+        descending: bool,
+        limit: usize,
+    ) -> impl std::future::Future<Output = Result<Vec<StoredMessage>, Self::Error>>;
+}
+
+/// Rows in the visible ranges, from the anchor outwards.
+async fn visible<S: SeqRows>(
+    store: &mut S,
+    query: &PageQuery,
+    bound: (u64, u64),
+    descending: bool,
+    limit: usize,
+) -> Result<Vec<StoredMessage>, S::Error> {
+    let mut out = Vec::new();
+    let mut ranges: Vec<(u64, u64)> = query
+        .ranges
+        .iter()
+        .take(MAX_RANGES)
+        .filter_map(|&(lo, hi)| {
+            let (lo, hi) = (lo.max(bound.0), hi.min(bound.1));
+            (lo <= hi).then_some((lo, hi))
+        })
+        .collect();
+    if descending {
+        ranges.reverse();
+    }
+    for range in ranges {
+        if out.len() >= limit {
+            break;
+        }
+        let rows = store
+            .rows(&query.conversation, range, descending, limit - out.len())
+            .await?;
+        out.extend(rows);
+    }
+    Ok(out)
+}
+
+/// One history page (docs/extension.md §6): chronological, at most `limit`
+/// (≤ 100) rows, clipped to the visible ranges, ending early at the byte cap
+/// without ever skipping a row.
+pub async fn page<S: SeqRows>(store: &mut S, query: &PageQuery) -> Result<StoredPage, S::Error> {
+    let limit = query.limit.clamp(1, MAX_HISTORY_ROWS) as usize;
+    let all = (1, u64::MAX);
+    // `older` is nearest-first (descending), `newer` ascending.
+    let (mut older, mut newer, mut more_before, mut more_after) = match query.anchor {
+        Anchor::Latest | Anchor::Before(_) => {
+            let below = match query.anchor {
+                Anchor::Before(seq) => seq.saturating_sub(1),
+                _ => u64::MAX,
+            };
+            let mut rows = visible(store, query, (1, below), true, limit + 1).await?;
+            let more = rows.len() > limit;
+            rows.truncate(limit);
+            let after = match query.anchor {
+                Anchor::Before(seq) => !visible(store, query, (seq, u64::MAX), false, 1)
+                    .await?
+                    .is_empty(),
+                _ => false,
+            };
+            (rows, Vec::new(), more, after)
+        }
+        Anchor::After(seq) => {
+            let mut rows = visible(
+                store,
+                query,
+                (seq.saturating_add(1), u64::MAX),
+                false,
+                limit + 1,
+            )
+            .await?;
+            let more = rows.len() > limit;
+            rows.truncate(limit);
+            let before = !visible(store, query, (1, seq), true, 1).await?.is_empty();
+            (Vec::new(), rows, before, more)
+        }
+        Anchor::Around(seq) => {
+            let half = limit.div_ceil(2);
+            let mut below = visible(store, query, (1, seq), true, half + 1).await?;
+            let mut above = visible(
+                store,
+                query,
+                (seq.saturating_add(1), all.1),
+                false,
+                limit - half + 1,
+            )
+            .await?;
+            let more_before = below.len() > half;
+            let more_after = above.len() > limit - half;
+            below.truncate(half);
+            above.truncate(limit - half);
+            (below, above, more_before, more_after)
+        }
+    };
+    // The byte cap: drop from the far ends, never the row nearest the anchor.
+    let size = |rows: &[StoredMessage]| rows.iter().map(|row| row.content.len()).sum::<usize>();
+    let cap = query.max_bytes as usize;
+    while size(&older) + size(&newer) > cap && older.len() + newer.len() > 1 {
+        if newer.len() > older.len() || (older.len() <= 1 && !newer.is_empty()) {
+            newer.pop();
+            more_after = true;
+        } else {
+            older.pop();
+            more_before = true;
+        }
+    }
+    older.reverse();
+    older.extend(newer);
+    for row in &mut older {
+        row.idempotency_key = None;
+        row.body_hash = None;
+    }
+    Ok(StoredPage {
+        rows: older,
+        more_before,
+        more_after,
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -147,6 +393,78 @@ pub enum ServerStorageRequest {
     SetNextUserId {
         id: u32,
     },
+    /// Store a message (or a `Void` for its seq when the key was used before):
+    /// `Appended` or `Conflict`.
+    HistoryAppend {
+        message: StoredMessage,
+    },
+    /// Replace the content of the author's message `target` and store `event`
+    /// (or a `Void`): `Done`, `Missing` or `LimitReached`.
+    HistoryEdit {
+        target: u64,
+        author_account: String,
+        format: u8,
+        content: String,
+        edit_limit: u32,
+        event: StoredMessage,
+    },
+    /// Make `target` a tombstone, by its author (`author_account`) or a
+    /// moderator (`None`), and store `event` (or a `Void`): `Done` or `Missing`.
+    HistoryDelete {
+        target: u64,
+        author_account: Option<String>,
+        reason: u32,
+        event: StoredMessage,
+    },
+    /// Remove a conversation's history (a temporary channel went away).
+    HistoryPurge {
+        conversation: String,
+    },
+    HistoryCreateDirect {
+        direct: StoredDirect,
+    },
+    /// Replace an account's access intervals for a conversation.
+    HistorySetAccess {
+        conversation: String,
+        account: String,
+        intervals: Vec<(u64, Option<u64>)>,
+    },
+    /// An account was deleted: its read markers and access intervals go.
+    HistoryForgetAccount {
+        account: String,
+    },
+    /// Raise (never lower) an account's read marker.
+    HistorySetReadMarker {
+        account: String,
+        conversation: String,
+        seq: u64,
+    },
+    /// Tombstone every message by this account (the operator's erase): `Count`.
+    HistoryErase {
+        account: String,
+        deleted_ms: i64,
+    },
+    /// Tombstone messages sent before `before_ms` (retention): `Count`.
+    HistoryExpire {
+        before_ms: i64,
+        deleted_ms: i64,
+    },
+    /// Conversations with history and their highest seq, in pages.
+    HistoryHeads {
+        after: Option<String>,
+    },
+    HistoryDirects {
+        after: Option<String>,
+    },
+    HistoryAccess {
+        after: Option<(String, String, u64)>,
+    },
+    HistoryReadMarkers {
+        account: String,
+    },
+    HistoryPage {
+        query: PageQuery,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -166,4 +484,20 @@ pub enum ServerStorageResponse {
     },
     Done,
     Rejected(String),
+    Appended {
+        seq: u64,
+        /// The key was used before for the same message, stored as `seq`.
+        duplicate: bool,
+    },
+    /// The idempotency key was used before for a different message.
+    Conflict,
+    /// No such message, or not the requester's.
+    Missing,
+    LimitReached,
+    Count(u64),
+    Heads(Vec<(String, u64)>),
+    Directs(Vec<StoredDirect>),
+    Access(Vec<StoredAccess>),
+    ReadMarkers(Vec<(String, u64)>),
+    Page(StoredPage),
 }

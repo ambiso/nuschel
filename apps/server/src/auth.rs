@@ -98,7 +98,43 @@ pub async fn authenticate(
         Identity::Registered(id) if id > 0 => Some(server.storage.user_blobs(id).await),
         _ => None,
     };
+    // The account's read markers, unless another of its connections already
+    // loaded them (docs/extension.md §7).
+    let account = match identity {
+        Identity::Registered(id) => {
+            let state = server.lock();
+            state
+                .registry
+                .users
+                .get(&id)
+                .map(|user| user.account)
+                .filter(|account| !state.conversations.markers.contains_key(account))
+        }
+        _ => None,
+    };
+    let markers = match account {
+        Some(account) => Some((
+            account,
+            server
+                .history_reads
+                .history_read_markers(crate::conversations::hex(&account))
+                .await,
+        )),
+        None => None,
+    };
     let mut state = server.lock();
+    if let Some((account, markers)) = markers {
+        state
+            .conversations
+            .markers
+            .entry(account)
+            .or_insert_with(|| {
+                markers
+                    .into_iter()
+                    .filter_map(|(id, seq)| Some((crate::conversations::parse(&id)?, seq)))
+                    .collect()
+            });
+    }
     complete(&mut state, peer, message, name, password, identity, blobs)
 }
 
@@ -257,6 +293,9 @@ fn complete(
         user.set_comment(comment);
         user.set_texture(texture);
     }
+    user.account = user_id
+        .and_then(|id| state.registry.users.get(&id))
+        .map(|registered| registered.account);
     state.users.insert(session, user);
     state.invalidate();
 
@@ -369,12 +408,32 @@ fn send_initial_state(state: &mut State, session: u32, channel: u32, crypt: Cryp
              won't be able to talk or hear anyone. Please upgrade to a client with Opus support.",
         );
     }
-    // The channel tree, parents first, then the links.
+    // The channel tree, parents first, then the links. Nuschel connections
+    // also get each channel's conversation id and history properties.
     let order = state.channels.subtree(0);
+    let nuschel = state
+        .users
+        .get(&session)
+        .is_some_and(|user| user.extension.is_some());
     for &id in &order {
         if let Some(channel) = state.channels.get(id) {
             let message = state.channel_state(channel, session);
-            state.send(session, kind::CHANNEL_STATE, &message);
+            match nuschel
+                .then(|| {
+                    nuschel_protocol::nuschel::channel_state_frame(
+                        &message,
+                        state.channel_info(channel),
+                    )
+                })
+                .flatten()
+            {
+                Some(frame) => {
+                    if let Some(user) = state.users.get(&session) {
+                        user.link.send(frame);
+                    }
+                }
+                None => state.send(session, kind::CHANNEL_STATE, &message),
+            }
         }
     }
     for &id in &order {
@@ -429,14 +488,27 @@ fn send_initial_state(state: &mut State, session: u32, channel: u32, crypt: Cryp
         state.permissions(session, 0)
     };
     let config = &state.settings.config;
+    // Stock clients are told that text is kept (docs/extension.md §9).
+    let mut welcome = state.settings.welcome_text.clone();
+    if !nuschel && config.history.notify_stock_clients {
+        if !welcome.is_empty() {
+            welcome.push_str(if config.allow_html {
+                "<br/><br/>"
+            } else {
+                "\n\n"
+            });
+        }
+        welcome.push_str(&crate::handlers::retention_text(
+            config.history.retention_days,
+        ));
+    }
     state.send(
         session,
         kind::SERVER_SYNC,
         &proto::ServerSync {
             session: Some(session),
             max_bandwidth: Some(config.max_bandwidth),
-            welcome_text: (!state.settings.welcome_text.is_empty())
-                .then(|| state.settings.welcome_text.clone()),
+            welcome_text: (!welcome.is_empty()).then_some(welcome),
             permissions: Some(u64::from(permissions)),
         },
     );
@@ -517,6 +589,7 @@ impl State {
         {
             self.send_permissions(session, parent, false);
         }
+        self.authz_changed(crate::conversations::Scope::Session(session));
     }
 }
 
@@ -539,6 +612,8 @@ pub(crate) fn new_user(
         certificate_hash: peer.certificate_hash.clone(),
         certificates: peer.certificates.clone(),
         address: peer.address,
+        account: None,
+        notified: Default::default(),
         extension: peer
             .negotiation
             .freeze()

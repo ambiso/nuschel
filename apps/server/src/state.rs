@@ -6,6 +6,7 @@
 use crate::{
     acl::{self, AclEntry, Group, Node, Subject, Tree, perm},
     config::Settings,
+    conversations::{self, Conversations, Id},
     limits::{BandwidthRecord, LeakyBucket},
     storage::StorageHandle,
     text::utf16_len,
@@ -237,8 +238,12 @@ pub struct User {
     pub certificate_hash: Option<String>,
     pub certificates: Vec<Vec<u8>>,
     pub address: SocketAddr,
+    /// The immutable account id of a registered user.
+    pub account: Option<Id>,
     /// The Nuschel extension, when negotiated (docs/extension.md).
     pub extension: Option<Box<crate::extension::Extension>>,
+    /// Channels whose retention this stock client was told about.
+    pub notified: BTreeSet<u32>,
     pub info: ClientInfo,
     pub opus: bool,
     pub celt_versions: Vec<i32>,
@@ -382,7 +387,7 @@ impl Channel {
             users: Vec::new(),
             listeners: BTreeSet::new(),
             conversation_id: random(),
-            history_visibility: HistoryVisibility::All,
+            history_visibility: HistoryVisibility::Members,
         }
     }
 
@@ -408,7 +413,7 @@ impl Channel {
             position: self.position,
             max_users: self.max_users,
             inherit_acl: self.node.inherit_acl,
-            conversation_id: crate::tls::hex(&self.conversation_id),
+            conversation_id: conversations::hex(&self.conversation_id),
             history_visibility: self.history_visibility,
             acls: self
                 .node
@@ -445,7 +450,7 @@ impl Channel {
         channel.max_users = stored.max_users;
         channel.node.inherit_acl = stored.inherit_acl;
         channel.history_visibility = stored.history_visibility;
-        if let Some(id) = parse_hex_16(&stored.conversation_id) {
+        if let Some(id) = conversations::parse(&stored.conversation_id) {
             channel.conversation_id = id;
         }
         channel.node.acls = stored
@@ -477,17 +482,6 @@ impl Channel {
             .collect();
         channel
     }
-}
-
-fn parse_hex_16(text: &str) -> Option<[u8; 16]> {
-    if text.len() != 32 {
-        return None;
-    }
-    let mut out = [0; 16];
-    for (index, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(text.get(index * 2..index * 2 + 2)?, 16).ok()?;
-    }
-    Some(out)
 }
 
 #[derive(Default)]
@@ -585,6 +579,8 @@ impl Channels {
 #[derive(Clone, Debug)]
 pub struct Registered {
     pub id: u32,
+    /// Immutable and never reused; the registration number is only an alias.
+    pub account: Id,
     pub name: String,
     pub password_hash: Option<String>,
     pub certificate_hash: Option<String>,
@@ -596,6 +592,7 @@ impl Registered {
     pub fn to_stored(&self) -> StoredUser {
         StoredUser {
             id: self.id,
+            account: Some(conversations::hex(&self.account)),
             name: self.name.clone(),
             password_hash: self.password_hash.clone(),
             certificate_hash: self.certificate_hash.clone(),
@@ -610,6 +607,7 @@ impl Registered {
 pub struct Registry {
     pub users: BTreeMap<u32, Registered>,
     by_name: HashMap<String, u32>,
+    by_account: HashMap<Id, u32>,
     /// Registration ids are never reused, even after an account is deleted:
     /// ACL entries and group memberships refer to them.
     pub next_id: u32,
@@ -619,15 +617,24 @@ impl Registry {
     pub fn insert(&mut self, user: Registered) {
         if let Some(old) = self.users.get(&user.id) {
             self.by_name.remove(&old.name.to_lowercase());
+            self.by_account.remove(&old.account);
         }
         self.by_name.insert(user.name.to_lowercase(), user.id);
+        self.by_account.insert(user.account, user.id);
         self.users.insert(user.id, user);
     }
 
     pub fn remove(&mut self, id: u32) -> Option<Registered> {
         let user = self.users.remove(&id)?;
         self.by_name.remove(&user.name.to_lowercase());
+        self.by_account.remove(&user.account);
         Some(user)
+    }
+
+    pub fn by_account(&self, account: &Id) -> Option<&Registered> {
+        self.by_account
+            .get(account)
+            .and_then(|id| self.users.get(id))
     }
 
     pub fn by_name(&self, name: &str) -> Option<&Registered> {
@@ -757,6 +764,14 @@ pub struct State {
     /// Authenticated sessions by the address of their TLS connection, to bind
     /// UDP only to the address that authenticated.
     pub hosts: HashMap<IpAddr, Vec<u32>>,
+    /// Durable conversations, subscriptions, access intervals, read markers.
+    pub conversations: Conversations,
+    /// History writes and page reads (docs/extension.md §4, §6).
+    pub history: crate::history::Queues,
+    /// Counts changes to authorisation state; history pages in flight are
+    /// re-checked when it moved.
+    pub authz_epoch: u64,
+    pub authz_pending: conversations::Pending,
 }
 
 impl State {
@@ -776,6 +791,10 @@ impl State {
             scratch: Default::default(),
             emptied: Vec::new(),
             hosts: HashMap::new(),
+            conversations: Conversations::default(),
+            history: crate::history::Queues::detached(),
+            authz_epoch: 0,
+            authz_pending: Default::default(),
         }
     }
 
@@ -801,11 +820,13 @@ impl State {
             entry("auth", perm::MAKE_TEMP_CHANNEL),
             entry("all", perm::SELF_REGISTER),
         ];
+        self.conversations.add_channel(root.conversation_id, 0);
         self.channels.0.insert(0, root);
         self.persist_channel(0);
         if !self.registry.users.contains_key(&0) {
             self.registry.insert(Registered {
                 id: 0,
+                account: random(),
                 name: "SuperUser".into(),
                 password_hash: None,
                 certificate_hash: None,
@@ -836,6 +857,7 @@ impl State {
     pub fn invalidate(&mut self) {
         self.cache.get_mut().clear();
         self.generation += 1;
+        self.authz_epoch += 1;
     }
 
     pub fn permissions(&self, session: u32, channel: u32) -> u32 {

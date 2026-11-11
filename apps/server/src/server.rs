@@ -3,7 +3,7 @@
 //! UDP on every configured address, and run the accept and voice loops.
 use crate::{
     config::Settings,
-    connection, extension,
+    connection, conversations, extension, history,
     limits::LeakyBucket,
     password,
     state::{Ban, Channel, Counters, Registered, State},
@@ -67,6 +67,8 @@ pub struct Server {
     state: Mutex<State>,
     pub settings: Arc<Settings>,
     pub storage: StorageHandle,
+    /// The history reader's worker (pages, and read markers at login).
+    pub history_reads: StorageHandle,
     pub counters: Arc<Counters>,
     pub udp: Vec<Arc<UdpSocket>>,
     pub acceptor: TlsAcceptor,
@@ -265,6 +267,9 @@ fn build_channels(
         if channel.id == 0 {
             channel.node.parent = None;
         }
+        state
+            .conversations
+            .add_channel(channel.conversation_id, channel.id);
         state.channels.0.insert(channel.id, channel);
     }
     let ids: Vec<u32> = state.channels.0.keys().copied().collect();
@@ -377,13 +382,54 @@ pub async fn load_state_for_admin(
 ) -> Result<State, StartError> {
     let mut settings = settings.clone();
     settings.config.superuser_password_file = None;
-    load_state(&Arc::new(settings), storage, counters).await
+    load_state(&Arc::new(settings), storage, storage, counters).await
+}
+
+/// The history's conversations: heads, direct conversations, access
+/// intervals; history without a live channel is a deleted channel's archive.
+async fn load_history(state: &mut State, history: &StorageHandle) -> Result<(), StartError> {
+    let unavailable = || StartError::Storage("could not load the history".into());
+    let directs = history.history_directs().await.ok_or_else(unavailable)?;
+    for direct in directs {
+        if let (Some(id), Some(a), Some(b)) = (
+            conversations::parse(&direct.conversation),
+            conversations::parse(&direct.account_a),
+            conversations::parse(&direct.account_b),
+        ) {
+            state.conversations.add_direct(id, a, b);
+        }
+    }
+    for (conversation, head) in history.history_heads().await.ok_or_else(unavailable)? {
+        if let Some(id) = conversations::parse(&conversation) {
+            state.conversations.add_archived(id);
+            state.conversations.set_head(id, head);
+        }
+    }
+    for access in history.history_access().await.ok_or_else(unavailable)? {
+        if let (Some(id), Some(account)) = (
+            conversations::parse(&access.conversation),
+            conversations::parse(&access.account),
+        ) {
+            let intervals = state
+                .conversations
+                .access
+                .entry(id)
+                .or_default()
+                .entry(account)
+                .or_default();
+            if intervals.len() < conversations::MAX_INTERVALS {
+                intervals.push((access.start, access.end));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Load the state and set the SuperUser password from its file, if configured.
 async fn load_state(
     settings: &Arc<Settings>,
     storage: &StorageHandle,
+    history: &StorageHandle,
     counters: &Arc<Counters>,
 ) -> Result<State, StartError> {
     let snapshot = storage
@@ -397,18 +443,27 @@ async fn load_state(
     let mut state = State::new(settings.clone(), storage.clone(), counters.clone());
     build_channels(&mut state, snapshot.channels, snapshot.links);
     for user in users {
+        // Accounts from before the extension get their immutable id now.
+        let account = user.account.as_deref().and_then(conversations::parse);
+        let generated = account.is_none();
+        let id = user.id;
         state.registry.insert(Registered {
             id: user.id,
+            account: account.unwrap_or_else(crate::state::random),
             name: user.name,
             password_hash: user.password_hash,
             certificate_hash: user.certificate_hash,
             last_channel: user.last_channel,
             last_active: user.last_active,
         });
+        if generated {
+            state.persist_registration(id);
+        }
     }
     state.registry.next_id = snapshot.next_user_id;
     state.bans = snapshot.bans.into_iter().map(Ban::from_stored).collect();
     state.initialise_root();
+    load_history(&mut state, history).await?;
     if let Some(path) = &settings.config.superuser_password_file {
         let password = std::fs::read_to_string(path)?
             .trim_end_matches(['\r', '\n'])
@@ -478,9 +533,16 @@ pub fn default_backend(settings: &Settings) -> io::Result<Backend> {
 pub async fn start(settings: Settings, backend: Backend) -> Result<Running, StartError> {
     let settings = Arc::new(settings);
     prepare_files(&settings, &backend)?;
-    let storage = storage::start(backend);
+    // Three workers on one database: server state, history writes, history
+    // reads; a history page never waits behind a write, nor a chat behind a
+    // channel save.
+    let storage = storage::start(backend.clone());
+    let history_writer = storage::start(backend.clone());
+    let history_reads = storage::start(backend);
     let counters = Arc::new(Counters::default());
-    let state = load_state(&settings, &storage, &counters).await?;
+    let mut state = load_state(&settings, &storage, &history_reads, &counters).await?;
+    let (queues, receivers) = history::queues();
+    state.history = queues;
     if state
         .registry
         .users
@@ -532,6 +594,7 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         state: Mutex::new(state),
         settings: settings.clone(),
         storage,
+        history_reads: history_reads.clone(),
         counters,
         udp: sockets.clone(),
         acceptor,
@@ -554,12 +617,39 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     for (index, socket) in sockets.into_iter().enumerate() {
         tasks.push(tokio::spawn(udp::run(server.clone(), index, socket)));
     }
+    tasks.extend(history::spawn(
+        &server,
+        history_writer,
+        history_reads,
+        receivers,
+    ));
+    if settings.config.history.retention_days > 0 {
+        tasks.push(tokio::spawn(expire(server.clone())));
+    }
     Ok(Running {
         server,
         addresses,
         fingerprint,
         tasks,
     })
+}
+
+/// Retention (docs/extension.md §6): hourly, messages older than the
+/// configured days become tombstones without content.
+async fn expire(server: Arc<Server>) {
+    let days = i64::from(server.settings.config.history.retention_days);
+    let mut tick = tokio::time::interval(Duration::from_secs(3600));
+    loop {
+        tick.tick().await;
+        let now = crate::chat::now_ms();
+        server
+            .lock()
+            .history
+            .write(nuschel_ipc::server::ServerStorageRequest::HistoryExpire {
+                before_ms: now.saturating_sub(days.saturating_mul(86_400_000)),
+                deleted_ms: now,
+            });
+    }
 }
 
 /// A rate limiter for unencrypted pings: per address prefix and global, and

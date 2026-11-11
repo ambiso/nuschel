@@ -10,8 +10,9 @@ use bytes::Bytes;
 use nuschel_ipc::{
     Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
     server::{
-        ServerSnapshot, ServerStorageRequest as Request, ServerStorageResponse as Response,
-        StoredBan, StoredChannel, StoredUser, USER_PAGE,
+        HISTORY_LOAD_PAGE, MessageKind, SeqRows, ServerSnapshot, ServerStorageRequest as Request,
+        ServerStorageResponse as Response, StoredAccess, StoredBan, StoredChannel, StoredDirect,
+        StoredMessage, StoredUser, USER_PAGE,
     },
     write_frame,
 };
@@ -52,6 +53,85 @@ impl StorageHandle {
         let (reply, response) = oneshot::channel();
         self.jobs.send(Job::Read(request, reply)).ok()?;
         response.await.ok().flatten()
+    }
+
+    /// Send a request and wait for its answer (`None` if storage failed).
+    pub async fn request(&self, request: Request) -> Option<Response> {
+        self.read(request).await
+    }
+
+    /// Queue a write whose answer nobody waits for.
+    pub fn send(&self, request: Request) {
+        self.write(request);
+    }
+
+    /// Load everything that comes in pages until a short page.
+    async fn pages<T, K>(
+        &self,
+        request: impl Fn(Option<K>) -> Request,
+        unpack: impl Fn(Response) -> Option<Vec<T>>,
+        key: impl Fn(&T) -> K,
+    ) -> Option<Vec<T>> {
+        let mut out = Vec::new();
+        let mut after = None;
+        loop {
+            let page = unpack(self.read(request(after)).await?)?;
+            let full = page.len() >= HISTORY_LOAD_PAGE as usize;
+            after = page.last().map(&key);
+            out.extend(page);
+            if !full || after.is_none() {
+                return Some(out);
+            }
+        }
+    }
+
+    pub async fn history_heads(&self) -> Option<Vec<(String, u64)>> {
+        self.pages(
+            |after| Request::HistoryHeads { after },
+            |response| match response {
+                Response::Heads(page) => Some(page),
+                _ => None,
+            },
+            |(conversation, _)| conversation.clone(),
+        )
+        .await
+    }
+
+    pub async fn history_directs(&self) -> Option<Vec<StoredDirect>> {
+        self.pages(
+            |after| Request::HistoryDirects { after },
+            |response| match response {
+                Response::Directs(page) => Some(page),
+                _ => None,
+            },
+            |direct| direct.conversation.clone(),
+        )
+        .await
+    }
+
+    pub async fn history_access(&self) -> Option<Vec<StoredAccess>> {
+        self.pages(
+            |after| Request::HistoryAccess { after },
+            |response| match response {
+                Response::Access(page) => Some(page),
+                _ => None,
+            },
+            |access| {
+                (
+                    access.conversation.clone(),
+                    access.account.clone(),
+                    access.start,
+                )
+            },
+        )
+        .await
+    }
+
+    pub async fn history_read_markers(&self, account: String) -> Vec<(String, u64)> {
+        match self.read(Request::HistoryReadMarkers { account }).await {
+            Some(Response::ReadMarkers(markers)) => markers,
+            _ => Vec::new(),
+        }
     }
 
     pub fn save_channel(&self, channel: StoredChannel) {
@@ -299,6 +379,293 @@ pub struct MemoryStore {
     users: BTreeMap<u32, (StoredUser, String, String)>,
     bans: Vec<StoredBan>,
     next_user_id: u32,
+    pub history: MemoryHistory,
+}
+
+/// The history tables, in memory.
+#[derive(Default)]
+pub struct MemoryHistory {
+    pub messages: BTreeMap<(String, u64), StoredMessage>,
+    directs: BTreeMap<String, StoredDirect>,
+    access: BTreeMap<(String, String, u64), Option<u64>>,
+    /// (account, conversation) → seq.
+    markers: BTreeMap<(String, String), u64>,
+}
+
+struct MemoryRows<'a>(&'a BTreeMap<(String, u64), StoredMessage>);
+
+impl SeqRows for MemoryRows<'_> {
+    type Error = ();
+
+    async fn rows(
+        &mut self,
+        conversation: &str,
+        (lo, hi): (u64, u64),
+        descending: bool,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>, ()> {
+        let range = self
+            .0
+            .range((conversation.to_owned(), lo)..=(conversation.to_owned(), hi))
+            .map(|(_, row)| row.clone());
+        Ok(if descending {
+            range.rev().take(limit).collect()
+        } else {
+            range.take(limit).collect()
+        })
+    }
+}
+
+/// Run a future that never waits (the in-memory store) to completion.
+fn ready<T>(future: impl std::future::Future<Output = T>) -> Option<T> {
+    let mut future = std::pin::pin!(future);
+    match future
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+    {
+        std::task::Poll::Ready(value) => Some(value),
+        std::task::Poll::Pending => None,
+    }
+}
+
+impl MemoryHistory {
+    fn insert(&mut self, row: StoredMessage) {
+        self.messages
+            .insert((row.conversation.clone(), row.seq), row);
+    }
+
+    fn void(&mut self, event: &StoredMessage) {
+        self.insert(StoredMessage::void(
+            &event.conversation,
+            event.seq,
+            event.sent_ms,
+        ));
+    }
+
+    /// The author's live message `target`, if any.
+    fn live(
+        &mut self,
+        conversation: &str,
+        target: u64,
+        author: Option<&str>,
+    ) -> Option<&mut StoredMessage> {
+        self.messages
+            .get_mut(&(conversation.to_owned(), target))
+            .filter(|row| {
+                row.kind == MessageKind::Message
+                    && row.deleted_ms.is_none()
+                    && author.is_none_or(|author| row.author_account.as_deref() == Some(author))
+            })
+    }
+
+    fn tombstone(row: &mut StoredMessage, deleted_ms: i64, reason: u32) {
+        row.content.clear();
+        row.reply_to = None;
+        row.deleted_ms = Some(deleted_ms);
+        row.delete_reason = Some(reason);
+    }
+
+    fn apply(&mut self, request: Request) -> Response {
+        match request {
+            Request::HistoryAppend { message } => {
+                let earlier = self
+                    .messages
+                    .values()
+                    .find(|row| {
+                        row.conversation == message.conversation
+                            && message.idempotency_key.is_some()
+                            && message.author_account.is_some()
+                            && row.author_account == message.author_account
+                            && row.idempotency_key == message.idempotency_key
+                    })
+                    .map(|row| (row.seq, row.body_hash.clone()));
+                match earlier {
+                    Some((seq, hash)) => {
+                        self.void(&message);
+                        if hash == message.body_hash {
+                            Response::Appended {
+                                seq,
+                                duplicate: true,
+                            }
+                        } else {
+                            Response::Conflict
+                        }
+                    }
+                    None => {
+                        let seq = message.seq;
+                        self.insert(message);
+                        Response::Appended {
+                            seq,
+                            duplicate: false,
+                        }
+                    }
+                }
+            }
+            Request::HistoryEdit {
+                target,
+                author_account,
+                format,
+                content,
+                edit_limit,
+                event,
+            } => {
+                let outcome = match self.live(&event.conversation, target, Some(&author_account)) {
+                    None => Response::Missing,
+                    Some(row) if row.edits >= edit_limit => Response::LimitReached,
+                    Some(row) => {
+                        row.content = content;
+                        row.format = format;
+                        row.edited_ms = Some(event.sent_ms);
+                        row.edits += 1;
+                        Response::Done
+                    }
+                };
+                if matches!(outcome, Response::Done) {
+                    self.insert(event);
+                } else {
+                    self.void(&event);
+                }
+                outcome
+            }
+            Request::HistoryDelete {
+                target,
+                author_account,
+                reason,
+                event,
+            } => match self.live(&event.conversation, target, author_account.as_deref()) {
+                Some(row) => {
+                    Self::tombstone(row, event.sent_ms, reason);
+                    self.insert(event);
+                    Response::Done
+                }
+                None => {
+                    self.void(&event);
+                    Response::Missing
+                }
+            },
+            Request::HistoryPurge { conversation } => {
+                self.messages.retain(|(id, _), _| *id != conversation);
+                self.access.retain(|(id, _, _), _| *id != conversation);
+                self.markers.retain(|(_, id), _| *id != conversation);
+                Response::Done
+            }
+            Request::HistoryCreateDirect { direct } => {
+                self.directs
+                    .entry(direct.conversation.clone())
+                    .or_insert(direct);
+                Response::Done
+            }
+            Request::HistorySetAccess {
+                conversation,
+                account,
+                intervals,
+            } => {
+                self.access
+                    .retain(|(id, who, _), _| *id != conversation || *who != account);
+                for (start, end) in intervals {
+                    self.access
+                        .insert((conversation.clone(), account.clone(), start), end);
+                }
+                Response::Done
+            }
+            Request::HistoryForgetAccount { account } => {
+                self.access.retain(|(_, who, _), _| *who != account);
+                self.markers.retain(|(who, _), _| *who != account);
+                Response::Done
+            }
+            Request::HistorySetReadMarker {
+                account,
+                conversation,
+                seq,
+            } => {
+                let marker = self.markers.entry((account, conversation)).or_insert(0);
+                *marker = (*marker).max(seq);
+                Response::Done
+            }
+            Request::HistoryErase {
+                account,
+                deleted_ms,
+            } => {
+                let mut count = 0;
+                for row in self.messages.values_mut().filter(|row| {
+                    row.kind == MessageKind::Message
+                        && row.deleted_ms.is_none()
+                        && row.author_account.as_deref() == Some(account.as_str())
+                }) {
+                    Self::tombstone(row, deleted_ms, 3);
+                    count += 1;
+                }
+                Response::Count(count)
+            }
+            Request::HistoryExpire {
+                before_ms,
+                deleted_ms,
+            } => {
+                let mut count = 0;
+                for row in self.messages.values_mut().filter(|row| {
+                    row.kind == MessageKind::Message
+                        && row.deleted_ms.is_none()
+                        && row.sent_ms < before_ms
+                }) {
+                    Self::tombstone(row, deleted_ms, 2);
+                    count += 1;
+                }
+                Response::Count(count)
+            }
+            Request::HistoryHeads { after } => {
+                let mut heads = BTreeMap::<String, u64>::new();
+                for (conversation, seq) in self.messages.keys() {
+                    if after.as_ref().is_none_or(|after| conversation > after) {
+                        let head = heads.entry(conversation.clone()).or_insert(0);
+                        *head = (*head).max(*seq);
+                    }
+                }
+                Response::Heads(heads.into_iter().take(HISTORY_LOAD_PAGE as usize).collect())
+            }
+            Request::HistoryDirects { after } => Response::Directs(
+                self.directs
+                    .values()
+                    .filter(|direct| {
+                        after
+                            .as_ref()
+                            .is_none_or(|after| direct.conversation > *after)
+                    })
+                    .take(HISTORY_LOAD_PAGE as usize)
+                    .cloned()
+                    .collect(),
+            ),
+            Request::HistoryAccess { after } => Response::Access(
+                self.access
+                    .iter()
+                    .filter(|(key, _)| after.as_ref().is_none_or(|after| *key > after))
+                    .take(HISTORY_LOAD_PAGE as usize)
+                    .map(|((conversation, account, start), end)| StoredAccess {
+                        conversation: conversation.clone(),
+                        account: account.clone(),
+                        start: *start,
+                        end: *end,
+                    })
+                    .collect(),
+            ),
+            Request::HistoryReadMarkers { account } => Response::ReadMarkers(
+                self.markers
+                    .iter()
+                    .filter(|((who, _), _)| *who == account)
+                    .map(|((_, conversation), seq)| (conversation.clone(), *seq))
+                    .collect(),
+            ),
+            Request::HistoryPage { query } => {
+                match ready(nuschel_ipc::server::page(
+                    &mut MemoryRows(&self.messages),
+                    &query,
+                )) {
+                    Some(Ok(page)) => Response::Page(page),
+                    _ => Response::Rejected("page failed".into()),
+                }
+            }
+            _ => Response::Rejected("not a history request".into()),
+        }
+    }
 }
 
 impl MemoryStore {
@@ -387,6 +754,7 @@ impl MemoryStore {
                 self.next_user_id = self.next_user_id.max(id);
                 Response::Done
             }
+            history => self.history.apply(history),
         }
     }
 }
