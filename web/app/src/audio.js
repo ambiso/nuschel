@@ -10,8 +10,8 @@ export class BrowserAudio {
     this.workerReady=false;this.nodesReady=false;this.disposed=false;
     this.epoch="0";this.revision=0;this.job=0;this.intent=0;this.consent=null;
     this.localBlocked=false;this.localDeaf=false;this.pendingCapture=null;this.captureFailed=-1;
-    this.encodeJobs=new Map();this.decodeJobs=new Set();this.playbackJobs=new Set();
-    this.sequence=0n;this.baseSequence=0n;this.txPending=0;this.lastReady="";
+    this.encodeJobs=new Map();this.decodeJobs=new Map();this.playbackJobs=new Set();this.txJobs=new Map();
+    this.sequence=0n;this.baseSequence=0n;this.lastReady="";this.transportStalled=false;
     this.lastProgress=0;this.initializing=null;this.applied={};this.phase="idle";
   }
   status(phase,message="") {
@@ -22,7 +22,7 @@ export class BrowserAudio {
   captureEnabled() {
     return Boolean(this.voice?.joined&&!this.voice.muted&&!this.voice.deafened&&!this.localBlocked&&!this.localDeaf&&
       this.consent&&sameDestination(this.consent,this.voice)&&!this.awaitingUnmute&&
-      this.workerReady&&this.nodesReady&&this.ctx?.state==="running");
+      !this.transportStalled&&this.workerReady&&this.nodesReady&&this.ctx?.state==="running");
   }
   playbackEnabled() {
     return Boolean(this.voice?.joined&&!this.voice.deafened&&!this.localDeaf&&this.workerReady&&this.nodesReady&&this.ctx?.state==="running");
@@ -48,6 +48,7 @@ export class BrowserAudio {
       // Keep this call synchronous with the gesture for Safari/mobile autoplay.
       const resumed=this.ctx.resume();
       if(microphone&&this.voice?.joined) {
+        this.transportStalled=false;
         this.intent++;this.captureFailed=-1;this.consent=context(this.voice);
         this.awaitingUnmute=Boolean(this.localBlocked||this.voice.muted||this.voice.deafened);
         this.unmuteGeneration=this.voice.voice_generation;
@@ -96,7 +97,7 @@ export class BrowserAudio {
     const incoming=next?{...next,joined:value.joined===true,muted:value.muted!==false,
       deafened:value.deafened!==false,can_transmit:value.can_transmit===true}:null;
     if(!sameDestination(old,incoming)) {
-      this.stopCapture(true);this.localBlocked=false;this.localDeaf=false;this.sequence=0n;
+      this.stopCapture(true);this.localBlocked=false;this.localDeaf=false;this.sequence=0n;this.transportStalled=false;
     }
     if(this.awaitingUnmute&&incoming&&!incoming.muted&&!incoming.deafened&&incoming.voice_generation!==this.unmuteGeneration)this.awaitingUnmute=false;
     this.voice=incoming;
@@ -159,7 +160,7 @@ export class BrowserAudio {
   }
   resetMedia() {
     this.epoch=String(++this.revision);this.baseSequence=this.sequence;
-    this.encodeJobs.clear();this.decodeJobs.clear();this.playbackJobs.clear();
+    this.encodeJobs.clear();this.decodeJobs.clear();this.playbackJobs.clear();this.txJobs.clear();
     if(this.output)this.output.gain.setValueAtTime(0,this.ctx.currentTime);
     this.worker?.postMessage({kind:"configure",epoch:this.epoch,capture:false});
     this.captureNode?.port.postMessage({kind:"configure",epoch:this.epoch,enabled:false});
@@ -197,7 +198,7 @@ export class BrowserAudio {
   captureFrame(data) {
     if(data?.kind!=="capture"||data.epoch!==this.epoch)return;
     const credit=()=>this.captureNode?.port.postMessage({kind:"credit",epoch:data.epoch});
-    if(!this.captureRunning||!this.voice?.can_transmit||this.encodeJobs.size>=2||this.txPending>=2||
+    if(!this.captureRunning||!this.voice?.can_transmit||this.encodeJobs.size>=2||this.txJobs.size>=2||
         !(data.samples instanceof Float32Array)||data.samples.length!==FRAME||!Number.isSafeInteger(data.frame)||data.frame<0){credit();return;}
     const job=++this.job;
     this.encodeJobs.set(job,{context:{...this.voice},started:performance.now(),sequence:this.baseSequence+BigInt(data.frame)*2n});
@@ -205,7 +206,7 @@ export class BrowserAudio {
   }
   receive(packet) {
     if(!this.playbackEnabled()||!validPacket(packet,this.voice)||this.decodeJobs.size>=MAX_PENDING||this.playbackJobs.size>=MAX_PENDING)return false;
-    const job=++this.job;this.decodeJobs.add(job);
+    const job=++this.job;this.decodeJobs.set(job,{started:performance.now(),context:{...this.voice}});
     // Never transfer a buffer owned by the session/TLS worker: the SDK bridge
     // already supplies a copy, and this final slice makes ownership explicit.
     const opus=packet.opus.slice();
@@ -224,8 +225,9 @@ export class BrowserAudio {
         this.sendPacket(frame.sequence,data.opus,false);
       }
     } else if(data.kind==="decoded"||data.kind==="media-error"&&data.operation==="decode") {
-      const pending=this.decodeJobs.delete(data.job);
-      if(pending&&data.kind==="decoded"&&this.playbackEnabled()&&this.playbackJobs.size<MAX_PENDING&&
+      const pending=this.decodeJobs.get(data.job);this.decodeJobs.delete(data.job);
+      if(pending&&performance.now()-pending.started<=120&&sameContext(pending.context,this.voice)&&
+          data.kind==="decoded"&&this.playbackEnabled()&&this.playbackJobs.size<MAX_PENDING&&
           data.samples instanceof Float32Array&&data.samples.length>0&&data.samples.length<=MAX_PCM&&
           Number.isInteger(data.speaker)&&data.speaker>=0&&data.speaker<=0xffffffff&&
           Number.isFinite(data.volume)&&data.volume>=0&&data.volume<=4) {
@@ -236,11 +238,22 @@ export class BrowserAudio {
   }
   sendPacket(sequence,opus,end) {
     if(!this.voice||sequence<0n||sequence>=(1n<<64n))return;
-    this.sequence=sequence+2n;this.txPending++;
+    this.sequence=sequence+2n;
+    const job=++this.job,epoch=this.epoch;
+    const pending={epoch};this.txJobs.set(job,pending);
     const packet={server_id:this.voice.server_id,connection_generation:this.voice.connection_generation,
       voice_generation:this.voice.voice_generation,sequence:String(sequence),opus,end};
+    const timeout=setTimeout(()=>{
+      if(this.epoch!==epoch||this.txJobs.get(job)!==pending)return;
+      this.txJobs.delete(job);this.transportStalled=true;this.stopCapture(true);this.resetMedia();this.applyPolicy();
+      this.status("transport-error","The voice connection stopped accepting audio. Unmute to retry.");
+    },250);
     let result;try{result=this.onPacket(packet);}catch(error){result=Promise.reject(error);}
-    Promise.resolve(result).catch(()=>this.status("transport-error","Voice could not be sent.")).finally(()=>this.txPending--);
+    Promise.resolve(result).catch(()=>{
+      if(this.epoch===epoch)this.status("transport-error","Voice could not be sent.");
+    }).finally(()=>{
+      clearTimeout(timeout);if(this.txJobs.get(job)===pending)this.txJobs.delete(job);
+    });
   }
   sendTerminator(){this.sendPacket(this.sequence,new Uint8Array([0xf8,0xff,0xfe]),true);}
   fail(error) {

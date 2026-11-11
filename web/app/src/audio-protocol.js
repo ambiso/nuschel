@@ -5,7 +5,7 @@ export function decimal(value) {
   return typeof value==="string"&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=U64;
 }
 export function context(value) {
-  if(!value||typeof value.server_id!=="string"||value.server_id.length<1||value.server_id.length>128||
+  if(!value||typeof value.server_id!=="string"||value.server_id.length<1||value.server_id.length>1024||
       !decimal(value.connection_generation)||!decimal(value.voice_generation)||
       !Number.isInteger(value.channel_id)||value.channel_id<0||value.channel_id>0xffffffff)return null;
   return {server_id:value.server_id,connection_generation:value.connection_generation,

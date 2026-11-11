@@ -130,15 +130,25 @@ mod tests {
             energy > 0.005 && energy < 0.06,
             "unexpected decoded tone energy {energy}"
         );
-        let crossing = samples
-            .windows(2)
-            .filter(|v| v[0] <= 0. && v[1] > 0.)
-            .count();
-        let frequency = crossing as f32 * SAMPLE_RATE as f32 / samples.len() as f32;
-        assert!(
-            (frequency - 440.).abs() < 20.,
-            "tone frequency changed to {frequency}"
-        );
+        // Codec startup/quantization noise can add zero crossings. Measure the
+        // actual carrier spectrum after startup, rather than counting those.
+        let stable = &samples[FRAME_SAMPLES * 2..];
+        let amplitude = |frequency: f32| {
+            let (mut real, mut imaginary) = (0., 0.);
+            for (index, value) in stable.iter().enumerate() {
+                let phase = std::f32::consts::TAU * frequency * index as f32 / SAMPLE_RATE as f32;
+                real += value * phase.cos();
+                imaginary += value * phase.sin();
+            }
+            real * real + imaginary * imaginary
+        };
+        let carrier = amplitude(440.);
+        for other in [100., 200., 400., 480., 880., 1200.] {
+            assert!(
+                carrier > amplitude(other) * 10.,
+                "carrier was lost relative to {other} Hz"
+            );
+        }
     }
 
     #[test]
