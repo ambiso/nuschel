@@ -86,10 +86,14 @@ Later (reported):
       keepalive for codes waiting for hours, post "no longer available" when Nuschel
       quits, retry automatically when a newer code arrives, test on macOS/Windows,
       drop `--offer` if unwanted.
-- [ ] Decide whether Nuschel servers accept only Nuschel clients (legacy Mumble
-      clients cannot take part in MLS/E2EE features such as encrypted file sharing),
-      and whether servers require a current client like Signal does (a minimum
-      protocol version with a grace period), to avoid ecosystem fragmentation.
+- [x] Nuschel-only servers and a current client (user, 2026-11-11). Decided: end-to-end
+      mode, the default, turns stock clients away at the connection stage (today
+      `security = "e2ee"` refuses to start until MLS ships). Done: `minimum_client`
+      with a grace date refuses older Nuschel versions, `recommended_client` shows an
+      update notice.
+- [ ] Guests on a server with `history.guests = none` see a red "Server history: No
+      such conversation or message…" error in the conversation; show a calm "History
+      is not available to guests" notice instead (and suggest registering).
 - [x] WebP images: decoded (inline, viewer, server icons) with the `image` crate's
       pure-Rust decoder; pasted or attached WebP is sent re-encoded as JPEG/PNG.
 - [ ] AVIF images and video: their decoders are C or heavily `unsafe` and belong in
