@@ -133,6 +133,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschel-legacy-html" = rec {
+      packageId = "nuschel-legacy-html";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschel-legacy-html";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschel-media-worker" = rec {
       packageId = "nuschel-media-worker";
       build = internal.buildRustCrateWithFeatures {
@@ -19148,6 +19158,14 @@ rec {
         ];
 
       };
+      "nuschel-legacy-html" = rec {
+        crateName = "nuschel-legacy-html";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/legacy-html; };
+        libName = "nuschel_legacy_html";
+
+      };
       "nuschel-media-worker" = rec {
         crateName = "nuschel-media-worker";
         version = "0.1.0";
@@ -19316,6 +19334,10 @@ rec {
           {
             name = "nuschel-ipc";
             packageId = "nuschel-ipc";
+          }
+          {
+            name = "nuschel-legacy-html";
+            packageId = "nuschel-legacy-html";
           }
           {
             name = "nuschel-protocol";
@@ -19610,6 +19632,10 @@ rec {
             packageId = "nuschel-ipc";
           }
           {
+            name = "nuschel-legacy-html";
+            packageId = "nuschel-legacy-html";
+          }
+          {
             name = "nuschel-protocol";
             packageId = "nuschel-protocol";
           }
@@ -19682,6 +19708,10 @@ rec {
           }
         ];
         devDependencies = [
+          {
+            name = "nuschel-session";
+            packageId = "nuschel-session";
+          }
           {
             name = "tempfile";
             packageId = "tempfile";
