@@ -1126,6 +1126,8 @@ def main():
                 shot("18-image-menu")
                 # In the viewer Copy image is first (Open image is unnecessary).
                 click(width // 2 + 60, height // 2 - 20)
+                time.sleep(0.5)
+                shot("18b-image-copied")
                 def clipboard_image():
                     # Encoding and clipboard publication are asynchronous. A
                     # request issued before publication must be retried too.
