@@ -9,10 +9,13 @@ publish.workspace = true
 
 [dependencies]
 nuschel-core.workspace = true
+nuschel-protocol.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+# Tests make saved servers, which have random ids.
+nuschel-core = { workspace = true, features = ["uuid"] }
 serde_json = "1.0.154"

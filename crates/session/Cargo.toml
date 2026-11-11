@@ -8,7 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-nuschel-core.workspace = true
+nuschel-core = { workspace = true, features = ["uuid"] }
 nuschel-ipc.workspace = true
 nuschel-legacy-html.workspace = true
 nuschel-protocol.workspace = true
@@ -16,7 +16,6 @@ bytes = "1.12.1"
 prost = "0.14.4"
 thiserror = "2.0.21"
 serde_json = "1.0.154"
-sha2 = "0.11.1"
 webpki-roots = "1.0.11"
 directories = "6"
 uuid = { version = "1.29.1", features = ["v4"] }

@@ -4,9 +4,12 @@
 //! decide them. Plain data only, no runtime and no clock: it builds for
 //! `wasm32-unknown-unknown`, and platform adapters execute what it decides.
 
+pub mod conversation;
 pub mod favicon;
 mod navigation;
+pub mod server;
 pub mod timeline;
+pub mod tree;
 pub use navigation::*;
 pub use nuschel_core::model;
 

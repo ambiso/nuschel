@@ -2,6 +2,7 @@
 //! The desktop sees typed events; transport, parsing, audio and history run off its thread.
 use nuschel_client::{
     HistoryTicket,
+    server::direct_conversation_key,
     timeline::{Deletion, IncomingMessage, Page},
 };
 use nuschel_core::audio::{AudioDevice, EchoSource, Sound, TransmitMode};
@@ -30,15 +31,6 @@ use tokio::{
 pub struct CacheKey {
     pub identity: String,
     pub channel: String,
-}
-
-/// The local storage key of a direct conversation on a Nuschel server.
-pub fn direct_conversation_key(conversation: &[u8; 16]) -> String {
-    let hex: String = conversation
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    format!("conversation:{hex}")
 }
 
 /// Server history pages asked for, by request id: server, ticket, cursor,

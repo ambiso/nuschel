@@ -11,31 +11,23 @@
 //! Settings → Privacy turns sending off; others' indicators still show.
 use crate::state::{ChannelView, Desktop, ServerView};
 use gpui_kit::*;
-use nuschel_session::{
-    connection::{Command, NuschelRequest, TextTarget},
-    model::permission as perm,
-};
+use nuschel_session::connection::{Command, NuschelRequest};
 use std::time::{Duration, Instant};
 
 /// How often we say we are typing: the server's limit per conversation.
 pub const TYPING_EVERY: Duration = Duration::from_secs(3);
-/// How long an indicator stays without a new one (two missed in a row).
-pub const TYPING_SHOWN: Duration = Duration::from_secs(6);
 
 /// The line under the composer: who is typing here, or nothing.
 pub fn typing_line(
     server: &ServerView,
     channel: &ChannelView,
     settings: &nuschel_session::config::ClientSettings,
-    now: Instant,
+    now_ms: u64,
 ) -> Option<String> {
     let mut names: Vec<String> = channel
-        .typing
-        .iter()
-        .filter(|(session, at)| {
-            Some(**session) != server.own_session && now.duration_since(**at) < TYPING_SHOWN
-        })
-        .filter_map(|(session, _)| server.users.get(session))
+        .typing_now(now_ms)
+        .filter(|session| Some(*session) != server.own_session)
+        .filter_map(|session| server.users.get(&session))
         .map(|user| crate::names::display_name(user, settings).to_string())
         .collect();
     names.sort_by_key(|name| name.to_lowercase());
@@ -44,22 +36,6 @@ pub fn typing_line(
         [one] => Some(format!("{one} is typing…")),
         [one, two] => Some(format!("{one} and {two} are typing…")),
         _ => Some("Several people are typing…".into()),
-    }
-}
-
-impl ServerView {
-    /// The conversation to say we type in, if this one gets indicators.
-    pub fn typing_conversation(&self, channel: &ChannelView) -> Option<[u8; 16]> {
-        if !self.has("typing/1") || !self.archived(channel) {
-            return None;
-        }
-        // The server forwards it only from those who may write there.
-        if let TextTarget::Channel(id) = channel.target
-            && !self.may_try(id, perm::TEXT_MESSAGE)
-        {
-            return None;
-        }
-        channel.conversation
     }
 }
 
@@ -98,22 +74,6 @@ impl Desktop {
         }
     }
 
-    /// Someone types in a conversation of server `index`.
-    pub fn someone_typing(&mut self, index: usize, conversation: &[u8], session: u32) {
-        let server = &mut self.servers[index];
-        if server.own_session == Some(session) || !server.users.contains_key(&session) {
-            return;
-        }
-        if let Some(channel) = server
-            .channels
-            .iter_mut()
-            .find(|channel| channel.conversation.is_some_and(|id| id == conversation))
-            && (channel.typing.len() < 64 || channel.typing.contains_key(&session))
-        {
-            channel.typing.insert(session, Instant::now());
-        }
-    }
-
     /// Indicators fade on their own: while any is shown, look again each
     /// second and drop those that are over.
     pub fn expire_typing(&mut self, cx: &mut Context<Self>) {
@@ -136,15 +96,11 @@ impl Desktop {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let more = this.update(cx, |this, cx| {
-                    let now = Instant::now();
+                    let now = crate::state::monotonic_ms();
                     let mut changed = false;
                     for server in &mut this.servers {
                         for channel in &mut server.channels {
-                            let before = channel.typing.len();
-                            channel
-                                .typing
-                                .retain(|_, at| now.duration_since(*at) < TYPING_SHOWN);
-                            changed |= channel.typing.len() != before;
+                            changed |= channel.expire_typing(now);
                         }
                     }
                     if changed {
@@ -242,10 +198,10 @@ impl Element for LiveStatus {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::{TYPING_SHOWN, typing_line};
+    use super::typing_line;
     use crate::state::{ChannelView, ServerView};
+    use nuschel_client::conversation::TYPING_SHOWN_MS;
     use nuschel_session::{config::ClientSettings, connection::User};
-    use std::time::{Duration, Instant};
 
     #[test]
     fn the_line_names_one_or_two_people_and_counts_more() {
@@ -262,14 +218,12 @@ mod tests {
             );
         }
         let settings = ClientSettings::default();
-        let now = Instant::now();
+        let now = 100_000;
         let mut channel = ChannelView::default();
         assert_eq!(typing_line(&server, &channel, &settings, now), None);
         // Our own session never shows, and an old indicator is over.
         channel.typing.insert(1, now);
-        channel
-            .typing
-            .insert(4, now - TYPING_SHOWN - Duration::from_millis(1));
+        channel.typing.insert(4, now - TYPING_SHOWN_MS - 1);
         assert_eq!(typing_line(&server, &channel, &settings, now), None);
         channel.typing.insert(2, now);
         assert_eq!(

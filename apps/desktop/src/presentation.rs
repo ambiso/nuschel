@@ -7,7 +7,7 @@
 //! message serial, built when a conversation is shown and rebuilt when a
 //! message's revision changes (an edit, a deletion).
 use crate::document::Document;
-use nuschel_client::timeline::Message;
+use nuschel_client::{conversation::ActivityLine, timeline::Message};
 use std::{cell::Cell, collections::HashMap, rc::Rc};
 
 /// Messages taller than this are collapsed until expanded.
@@ -44,12 +44,22 @@ impl MessageUi {
     }
 }
 
+/// Heights of an activity line's row, and of the run (collapsed line or
+/// header) starting at it, when last laid out.
+#[derive(Default)]
+pub struct ActivityUi {
+    pub height: crate::scrolling::Height,
+    pub run_height: crate::scrolling::Height,
+}
+
 /// Presentations of the messages in the timelines that were shown.
 #[derive(Default)]
 pub struct Presentation {
     messages: HashMap<u64, MessageUi>,
-    /// What a message not presented yet looks like (empty).
+    activity: HashMap<u64, ActivityUi>,
+    /// What a message or line not presented yet looks like (empty).
     missing: MessageUi,
+    missing_line: ActivityUi,
     /// Size at which presentations of messages no timeline holds any more
     /// are dropped.
     prune_at: usize,
@@ -61,13 +71,25 @@ impl Presentation {
         self.messages.get(&serial).unwrap_or(&self.missing)
     }
 
+    /// The heights of activity line `serial`; empty until its timeline was shown.
+    pub fn activity(&self, serial: u64) -> &ActivityUi {
+        self.activity.get(&serial).unwrap_or(&self.missing_line)
+    }
+
     pub fn message_mut(&mut self, serial: u64) -> Option<&mut MessageUi> {
         self.messages.get_mut(&serial)
     }
 
     /// Present every message of a timeline about to be shown; a message
     /// whose content changed gets a new document (a deleted one collapses).
-    pub fn present(&mut self, messages: &[Message]) {
+    pub fn present<'a>(
+        &mut self,
+        messages: &[Message],
+        activity: impl IntoIterator<Item = &'a ActivityLine>,
+    ) {
+        for line in activity {
+            self.activity.entry(line.serial).or_default();
+        }
         for message in messages {
             let ui = self
                 .messages
@@ -85,13 +107,15 @@ impl Presentation {
 
     /// Whether presentations of gone messages should be looked for now.
     pub fn wants_pruning(&self) -> bool {
-        self.messages.len() > self.prune_at.max(4096)
+        self.messages.len() + self.activity.len() > self.prune_at.max(4096)
     }
 
-    /// Keep only the presentations of messages still in a timeline.
+    /// Keep only the presentations of messages and lines (by serial) still
+    /// in a timeline.
     pub fn prune(&mut self, live: impl IntoIterator<Item = u64>) {
         let live: std::collections::HashSet<u64> = live.into_iter().collect();
         self.messages.retain(|serial, _| live.contains(serial));
-        self.prune_at = self.messages.len() * 2;
+        self.activity.retain(|serial, _| live.contains(serial));
+        self.prune_at = (self.messages.len() + self.activity.len()) * 2;
     }
 }

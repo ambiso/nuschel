@@ -209,7 +209,7 @@ impl Desktop {
                 let servers: Vec<String> = self
                     .servers
                     .iter()
-                    .filter_map(ServerView::history_identity)
+                    .filter_map(|server| server.history_identity())
                     .collect();
                 if servers.len() > MAX_SERVERS {
                     return Err("Search covers at most 64 servers at once.");
@@ -437,7 +437,7 @@ impl Desktop {
         let Some(identity) = self.servers[index].history_identity() else {
             return;
         };
-        let server = &mut self.servers[index];
+        let server = &mut self.servers[index].state;
         let archived = server.archived(&server.channels[position]);
         let source = server.history_source;
         let channel = &mut server.channels[position];

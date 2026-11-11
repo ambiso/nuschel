@@ -21900,12 +21900,21 @@ rec {
             packageId = "nuschel-core";
           }
           {
+            name = "nuschel-protocol";
+            packageId = "nuschel-protocol";
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
           }
         ];
         devDependencies = [
+          {
+            name = "nuschel-core";
+            packageId = "nuschel-core";
+            features = [ "uuid" ];
+          }
           {
             name = "serde_json";
             packageId = "serde_json";
@@ -22016,6 +22025,16 @@ rec {
             packageId = "serde";
             features = [ "derive" ];
           }
+          {
+            name = "sha2";
+            packageId = "sha2 0.11.1";
+          }
+          {
+            name = "uuid";
+            packageId = "uuid";
+            optional = true;
+            features = [ "v4" ];
+          }
         ];
         devDependencies = [
           {
@@ -22023,7 +22042,10 @@ rec {
             packageId = "serde_json";
           }
         ];
-
+        features = {
+          "uuid" = [ "dep:uuid" ];
+        };
+        resolvedDefaultFeatures = [ "uuid" ];
       };
       "nuschel-crypto-worker" = rec {
         crateName = "nuschel-crypto-worker";
@@ -22653,6 +22675,7 @@ rec {
           {
             name = "nuschel-core";
             packageId = "nuschel-core";
+            features = [ "uuid" ];
           }
           {
             name = "nuschel-ipc";
@@ -22704,10 +22727,6 @@ rec {
           {
             name = "sha1";
             packageId = "sha1 0.11.0";
-          }
-          {
-            name = "sha2";
-            packageId = "sha2 0.11.1";
           }
           {
             name = "thiserror";

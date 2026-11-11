@@ -10,8 +10,7 @@ use gpui_kit::{
     *,
 };
 use nuschel_client::{
-    Conversation, HistorySource, Navigation, SessionSecurity,
-    timeline::{MAX_TIMELINE, Timeline},
+    Conversation, HistorySource, Navigation, SessionSecurity, timeline::MAX_TIMELINE,
 };
 use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_session::{
@@ -19,12 +18,11 @@ use nuschel_session::{
         CachedChannel, ClientSettings, Loaded, ManagedSettings, MumbleUrl, Profile, ServerBookmark,
         ShortcutAction,
     },
-    connection::{Command, NuschelEvent, ServerLimits, SessionEvent, TextTarget, User},
-    model::{Acl, Ban, ContextAction, RegisteredUser, RejectKind, UserStats},
-    udp::TransportStats,
+    connection::{Command, NuschelEvent, SessionEvent, TextTarget, User},
+    model::RejectKind,
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex, PoisonError},
 };
 
@@ -96,272 +94,45 @@ pub fn local_time(milliseconds: i64) -> String {
         format!("{} {time}", when.strftime("%Y-%m-%d"))
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TreeRow {
-    Channel(ChannelRow),
-    User {
-        session: u32,
-        depth: usize,
-    },
-    /// Someone listening to (not in) this channel, Mumble 1.4+.
-    Listener {
-        session: u32,
-        depth: usize,
-    },
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ChannelRow {
-    /// Into `ServerView::channels`.
-    pub index: usize,
-    pub depth: usize,
-    pub has_children: bool,
-    pub expanded: bool,
-    /// Users hidden inside a collapsed branch, shown as a count.
-    pub hidden_users: usize,
-    /// Someone in that collapsed branch is talking.
-    pub hidden_talking: bool,
-}
-pub struct ChannelView {
-    pub id: u32,
-    pub parent: Option<u32>,
-    pub name: String,
-    pub topic: String,
-    pub position: i32,
-    pub target: TextTarget,
-    pub direct_peer: Option<User>,
-    pub storage_key: String,
-    /// The latest page of history, older pages prepended as the reader
-    /// scrolls up, and live messages appended (see `nuschel_client::timeline`).
-    pub timeline: Timeline,
-    /// Messages that arrived while the reader was scrolled up.
-    pub new_messages: usize,
-    /// Messages that arrived out of sight, and whether one mentions you or
-    /// is a direct message (shown in the channel list and server rail).
-    pub unread: usize,
-    pub unread_mention: bool,
-    /// Joins, moves, moderation and connection gaps; in memory only.
-    pub activity: std::collections::VecDeque<ActivityLine>,
-    /// Runs of activity lines shown expanded, by their first line's time.
-    pub expanded_runs: BTreeSet<i64>,
-    pub links: BTreeSet<u32>,
-    pub temporary: bool,
-    pub max_users: u32,
-    /// Raw Mumble HTML description and its inert rendering from the content worker.
-    pub description_raw: String,
-    pub description: Option<Document>,
-    /// Its conversation on a Nuschel server, and the read marker sent last.
-    pub conversation: Option<[u8; 16]>,
-    pub read_seq: i64,
-    /// Who is typing here (Nuschel servers), by session, and when they last said so.
-    pub typing: BTreeMap<u32, std::time::Instant>,
-}
-#[derive(Clone)]
-pub struct ActivityLine {
-    /// Identifies the line to the UI while it lives.
-    pub serial: u64,
-    pub observed_at_ms: i64,
-    pub text: String,
-    pub warning: bool,
-    pub height: crate::scrolling::Height,
-    /// The height of the collapsed (or header) row of a run starting here.
-    pub run_height: crate::scrolling::Height,
-}
-pub const MAX_ACTIVITY: usize = 200;
-impl Default for ChannelView {
-    fn default() -> Self {
-        Self::root()
-    }
-}
-impl ChannelView {
-    pub fn log(&mut self, text: String, observed_at_ms: i64, warning: bool) {
-        static SERIALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        self.activity.push_back(ActivityLine {
-            serial: SERIALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            observed_at_ms,
-            text,
-            warning,
-            height: Default::default(),
-            run_height: Default::default(),
-        });
-        while self.activity.len() > MAX_ACTIVITY {
-            if let Some(gone) = self.activity.pop_front() {
-                self.expanded_runs
-                    .retain(|first| *first > gone.observed_at_ms);
-            }
-        }
-    }
-    fn root() -> Self {
-        Self {
-            id: 0,
-            parent: None,
-            name: "Root".into(),
-            topic: "Connect to load channels and users".into(),
-            position: 0,
-            target: TextTarget::Channel(0),
-            direct_peer: None,
-            storage_key: "0".into(),
-            timeline: Timeline::default(),
-            new_messages: 0,
-            unread: 0,
-            unread_mention: false,
-            activity: Default::default(),
-            expanded_runs: BTreeSet::new(),
-            links: BTreeSet::new(),
-            temporary: false,
-            max_users: 0,
-            description_raw: String::new(),
-            description: None,
-            conversation: None,
-            read_seq: 0,
-            typing: BTreeMap::new(),
-        }
-    }
-}
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    Disconnected,
-    Connecting,
-    Connected,
-}
-pub struct CertificatePrompt {
-    pub sha256: String,
-    pub changed: bool,
-    pub reason: String,
-}
-/// What the media worker reports about the active audio route.
-#[derive(Default)]
-pub struct AudioInfo {
-    pub inputs: Vec<nuschel_core::audio::AudioDevice>,
-    pub outputs: Vec<nuschel_core::audio::AudioDevice>,
-    pub input: Option<String>,
-    pub output: Option<String>,
-    pub echo: nuschel_core::audio::EchoSource,
-    /// A noise suppressor upstream of the microphone (Nuschel's own is off).
-    pub noise: Option<String>,
-    /// The output Nuschel's canceller records (`None`: its own playback only).
-    pub reference: Option<String>,
-    pub erle_db: Option<f32>,
-    pub residual_echo: Option<f32>,
-    pub health: AudioHealth,
-}
-/// The media worker's adaptive controller: what it measured and what it did
-/// with Nuschel's own playback buffer and transmit gate.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct AudioHealth {
-    pub clipping: bool,
-    pub echo_guard: bool,
-    pub double_talk: f32,
-    pub underruns: u32,
-    pub playback_ms: u32,
-}
-/// The smallest playback buffer the controller uses.
-const NORMAL_PLAYBACK_MS: u32 = 40;
-impl AudioHealth {
-    /// (short label, advice) for each condition the user may want to act on.
-    pub fn issues(&self) -> Vec<(&'static str, String)> {
-        let mut issues = Vec::new();
-        if self.clipping {
-            issues.push((
-                "Microphone is clipping",
-                "Your microphone reaches its maximum level before Nuschel receives it, which distorts \
-                 your voice. Lower the microphone's input level in the system sound settings."
-                    .to_string(),
-            ));
-        }
-        if self.echo_guard {
-            issues.push((
-                "Echo detected",
-                "Some of what you hear keeps reaching your microphone. While others talk, Nuschel now \
-                 needs clearer speech before it transmits. Headphones avoid echo entirely."
-                    .to_string(),
-            ));
-        }
-        if self.playback_ms > NORMAL_PLAYBACK_MS {
-            issues.push((
-                "Playback stuttered",
-                format!(
-                    "Audio output ran dry, so Nuschel now buffers {} ms of playback. It returns to \
-                     normal after a minute without stutters.",
-                    self.playback_ms
-                ),
-            ));
-        }
-        issues
-    }
-}
+pub use nuschel_client::{
+    conversation::{ActivityLine, ConversationState as ChannelView},
+    server::{AudioHealth, CertificatePrompt, ServerState, Status},
+    tree::{ChannelRow, TreeRow},
+};
+/// A server as the desktop shows it: the SDK's state of it, and what only
+/// drawing needs (images for the GPU, rendered descriptions and comments,
+/// which runs of activity lines are open).
 pub struct ServerView {
-    pub id: String,
-    pub name: String,
-    pub bookmark: ServerBookmark,
-    pub history_source: HistorySource,
-    pub security: SessionSecurity,
-    /// The server negotiated `mls/1` (end-to-end-encrypted direct conversations).
-    pub mls: bool,
+    /// What the client knows of the server (`nuschel_client::server`).
+    pub state: ServerState,
     /// End-to-end state of direct conversations, by the peer's registration number.
     pub e2ee: BTreeMap<u32, nuschel_ipc::crypto::ConversationView>,
-    pub channels: Vec<ChannelView>,
-    pub status: Status,
-    pub generation: u64,
-    pub peer_sha256: Option<String>,
-    pub own_session: Option<u32>,
-    pub users: BTreeMap<u32, User>,
-    pub seen_channels: BTreeSet<u32>,
-    pub muted: bool,
-    pub deafened: bool,
-    pub notice: Option<String>,
-    pub audio_status: String,
-    pub welcome: Option<String>,
-    pub certificate: Option<CertificatePrompt>,
-    /// The server answered weaker than it did before (the sticky policy).
-    pub downgrade: Option<String>,
-    /// Acknowledgements (or refusals, `None`) of our messages that arrived
-    /// before the messages themselves were shown.
-    pub acked: BTreeMap<[u8; 16], Option<u64>>,
-    /// What the Nuschel extension negotiated on this connection (empty on
-    /// stock Mumble servers) and the server's policy.
-    pub capabilities: Vec<String>,
-    pub policy: Option<nuschel_protocol::nuschel::v1::Policy>,
-    /// Our direct conversations on a Nuschel server, by id.
-    pub directs: BTreeMap<[u8; 16], nuschel_protocol::nuschel::v1::Direct>,
-    /// Edits and deletions of messages not in a timeline yet (editing.rs).
-    pub waiting_changes: nuschel_client::timeline::WaitingChanges,
-    pub talking: BTreeSet<u32>,
-    pub transport: Option<TransportStats>,
-    pub audio: AudioInfo,
-    pub permissions: BTreeMap<u32, u32>,
-    pub limits: Option<ServerLimits>,
-    pub context_actions: Vec<ContextAction>,
-    /// A server recommendation the user can act on (e.g. push-to-talk).
-    pub suggestion: Option<String>,
-    pub stats: BTreeMap<u32, UserStats>,
-    /// Users heard speaking with CELT/Speex, which Nuschel cannot play.
-    pub legacy_voice: BTreeSet<u32>,
-    pub registered_users: Option<Vec<RegisteredUser>>,
-    pub bans: Option<Vec<Ban>>,
-    pub acl: Option<Acl>,
-    pub user_names: BTreeMap<u32, String>,
-    pub reconnecting: Option<String>,
-    /// Sent and total messages of the text waiting for the server's rate limit.
-    pub outbox: Option<(usize, usize)>,
     /// Rendered user comments keyed by session, with the raw HTML they came from.
     pub comments: BTreeMap<u32, (String, Document)>,
-    /// Decoded avatars by texture hash, and hashes already requested.
+    /// Decoded avatars by texture hash.
     pub avatars: BTreeMap<String, std::sync::Arc<RenderImage>>,
     /// The server website's icon, from the bookmark.
     pub icon: Option<std::sync::Arc<RenderImage>>,
-    pub avatar_requests: BTreeSet<String>,
-    /// Active whisper/shout target label while one is selected.
-    pub whisper: Option<String>,
-    /// Channel path from a `mumble://` link, joined once the tree has loaded.
-    pub pending_channel: Vec<String>,
-    /// Branches opened or closed by hand this session, by channel id.
-    pub expansion: BTreeMap<u32, bool>,
-    /// Channel updates arrived since `channels` was last sorted.
-    unsorted: bool,
+    /// Channel descriptions as the content worker rendered them, by channel.
+    pub descriptions: BTreeMap<u32, Document>,
+    /// Runs of activity lines shown expanded, by channel and the time of
+    /// the run's first line.
+    pub expanded_runs: BTreeMap<u32, BTreeSet<i64>>,
     /// Identities and key transparency on this server.
     pub identity: crate::identity::IdentityState,
     /// The server's minimum-version policy for this client.
     pub version: crate::version_notice::VersionNotice,
+}
+impl std::ops::Deref for ServerView {
+    type Target = ServerState;
+    fn deref(&self) -> &ServerState {
+        &self.state
+    }
+}
+impl std::ops::DerefMut for ServerView {
+    fn deref_mut(&mut self) -> &mut ServerState {
+        &mut self.state
+    }
 }
 impl ServerView {
     #[cfg(test)]
@@ -373,290 +144,18 @@ impl ServerView {
             .icon
             .as_ref()
             .and_then(|icon| crate::document::render_image(icon.width, icon.height, &icon.rgba));
-        let mut channels = bookmark
-            .cached_channels
-            .iter()
-            .map(|channel| ChannelView {
-                id: channel.id,
-                parent: channel.parent,
-                name: channel.name.clone(),
-                topic: "Saved channel history".into(),
-                position: channel.position,
-                target: TextTarget::Channel(channel.id),
-                direct_peer: None,
-                storage_key: channel.id.to_string(),
-                new_messages: 0,
-                ..Default::default()
-            })
-            .collect::<Vec<_>>();
-        if !channels.iter().any(|channel| channel.id == 0) {
-            channels.insert(0, ChannelView::root());
-        }
         Self {
-            id: bookmark.id.clone(),
-            name: bookmark.name.clone(),
-            bookmark,
-            history_source: HistorySource::LocalObserved,
-            security: SessionSecurity::Unknown,
-            mls: false,
+            state: ServerState::new(bookmark),
             e2ee: BTreeMap::new(),
-            channels,
-            status: Status::Disconnected,
-            generation: 0,
-            peer_sha256: None,
-            own_session: None,
-            users: BTreeMap::new(),
-            seen_channels: BTreeSet::new(),
-            muted: true,
-            deafened: false,
-            notice: None,
-            audio_status: "Audio disconnected".into(),
-            welcome: None,
-            certificate: None,
-            downgrade: None,
-            acked: BTreeMap::new(),
-            capabilities: Vec::new(),
-            policy: None,
-            directs: BTreeMap::new(),
-            waiting_changes: Default::default(),
-            talking: BTreeSet::new(),
-            transport: None,
-            audio: AudioInfo::default(),
-            permissions: BTreeMap::new(),
-            limits: None,
-            context_actions: Vec::new(),
-            suggestion: None,
-            stats: BTreeMap::new(),
-            legacy_voice: BTreeSet::new(),
-            registered_users: None,
-            bans: None,
-            acl: None,
-            user_names: BTreeMap::new(),
-            reconnecting: None,
-            outbox: None,
             comments: BTreeMap::new(),
             avatars: BTreeMap::new(),
             icon,
-            avatar_requests: BTreeSet::new(),
-            whisper: None,
-            pending_channel: Vec::new(),
-            expansion: BTreeMap::new(),
-            unsorted: false,
+            descriptions: BTreeMap::new(),
+            expanded_runs: BTreeMap::new(),
             identity: Default::default(),
             version: Default::default(),
         }
     }
-    pub fn status_label(&self) -> String {
-        match self.status {
-            Status::Disconnected => "Disconnected".into(),
-            Status::Connecting => "Connecting…".into(),
-            Status::Connected => match &self.transport {
-                Some(stats) if stats.udp_active => {
-                    format!("Connected · UDP · {:.0} ms", stats.udp.average_ms)
-                }
-                Some(stats) if stats.tcp.packets > 0 => format!(
-                    "Connected · TCP{} · {:.0} ms",
-                    if stats.forced_tcp { " (forced)" } else { "" },
-                    stats.tcp.average_ms
-                ),
-                _ => "Connected".into(),
-            },
-        }
-    }
-    /// Effective permission bits for a channel, if the server has told us.
-    pub fn may(&self, channel: u32, bits: u32) -> bool {
-        self.permissions
-            .get(&channel)
-            .is_some_and(|permissions| permissions & bits == bits)
-    }
-    /// Like `may`, but optimistic while permissions are still unknown.
-    pub fn may_try(&self, channel: u32, bits: u32) -> bool {
-        self.permissions
-            .get(&channel)
-            .is_none_or(|permissions| permissions & bits == bits)
-    }
-    pub fn channel_view(&mut self, id: u32) -> Option<&mut ChannelView> {
-        self.channels
-            .iter_mut()
-            .find(|channel| channel.target == TextTarget::Channel(id))
-    }
-    pub fn voice_channel(&self) -> Option<u32> {
-        self.own_session
-            .and_then(|session| self.users.get(&session))
-            .map(|user| user.channel)
-    }
-    pub fn history_identity(&self) -> Option<String> {
-        self.peer_sha256
-            .as_ref()
-            .or(self.bookmark.certificate_sha256.as_ref())
-            .map(|pin| self.bookmark.history_identity(pin))
-    }
-    /// Channels in tree order, each followed by its people and listeners;
-    /// a closed branch counts the people inside it. One pass over channels
-    /// and users, so it is cheap enough to run every frame.
-    pub fn tree_rows(&self) -> Vec<TreeRow> {
-        // One entry per channel id; direct conversations are listed apart.
-        let mut index_of = HashMap::with_capacity(self.channels.len());
-        for (index, channel) in self.channels.iter().enumerate() {
-            if let TextTarget::Channel(id) = channel.target {
-                index_of.entry(id).or_insert(index);
-            }
-        }
-        // Families by parent (roots under `None`), each in display order.
-        let mut children = index_of
-            .values()
-            .map(|&index| (self.channels[index].parent, index))
-            .collect::<Vec<_>>();
-        children.sort_unstable();
-        let family = |parent| run(&children, parent, |&(parent, _)| parent);
-        let mut people = self.users.values().collect::<Vec<_>>();
-        people.sort_by_cached_key(|user| (user.channel, user.name.to_lowercase(), user.session));
-        let mut listeners = self
-            .users
-            .values()
-            .flat_map(|user| user.listening.iter().map(|&id| (id, user.session)))
-            .collect::<Vec<_>>();
-        listeners.sort_unstable();
-        // The branch holding our voice channel starts open.
-        let parent_of = |index: usize| {
-            let parent = self.channels[index].parent?;
-            index_of.get(&parent).copied()
-        };
-        let mut holds_voice = vec![false; self.channels.len()];
-        let mut voice = self
-            .voice_channel()
-            .and_then(|id| index_of.get(&id).copied());
-        while let Some(parent) = voice.and_then(parent_of)
-            && !holds_voice[parent]
-        {
-            holds_voice[parent] = true;
-            voice = Some(parent);
-        }
-
-        // Depth first through every branch, closed ones too: they count
-        // their people. A child always follows its parent. With one entry
-        // per id each channel is in one family, so a cycle is unreachable.
-        struct Node<'a> {
-            row: ChannelRow,
-            parent: Option<usize>,
-            visible: bool,
-            people: &'a [&'a User],
-        }
-        let mut nodes = Vec::<Node>::with_capacity(index_of.len());
-        let mut pending = family(None)
-            .iter()
-            .rev()
-            .map(|&(_, index)| (index, 0, None, true))
-            .collect::<Vec<_>>();
-        while let Some((index, depth, parent, visible)) = pending.pop() {
-            let channel = &self.channels[index];
-            let expanded = self
-                .expansion
-                .get(&channel.id)
-                .copied()
-                .unwrap_or(channel.parent.is_none() || holds_voice[index]);
-            let children = family(Some(channel.id));
-            let slot = nodes.len();
-            pending.extend(
-                children
-                    .iter()
-                    .rev()
-                    .map(|&(_, child)| (child, depth + 1, Some(slot), visible && expanded)),
-            );
-            nodes.push(Node {
-                row: ChannelRow {
-                    index,
-                    depth,
-                    has_children: !children.is_empty(),
-                    expanded,
-                    hidden_users: 0,
-                    hidden_talking: false,
-                },
-                parent,
-                visible,
-                people: run(&people, channel.id, |user| user.channel),
-            });
-        }
-        // Children before parents: everyone inside adds up towards the roots.
-        for slot in (0..nodes.len()).rev() {
-            let node = &nodes[slot];
-            let Some(parent) = node.parent else {
-                continue;
-            };
-            let inside = node.row.hidden_users + node.people.len();
-            let talking = node.row.hidden_talking
-                || node
-                    .people
-                    .iter()
-                    .any(|user| self.talking.contains(&user.session));
-            let parent = &mut nodes[parent].row;
-            parent.hidden_users += inside;
-            parent.hidden_talking |= talking;
-        }
-
-        let mut rows = Vec::new();
-        for Node {
-            mut row, people, ..
-        } in nodes.into_iter().filter(|node| node.visible)
-        {
-            if row.expanded {
-                (row.hidden_users, row.hidden_talking) = (0, false);
-            }
-            let id = self.channels[row.index].id;
-            let depth = row.depth + 1;
-            rows.push(TreeRow::Channel(row));
-            rows.extend(people.iter().map(|user| TreeRow::User {
-                session: user.session,
-                depth,
-            }));
-            rows.extend(
-                run(&listeners, id, |&(channel, _)| channel)
-                    .iter()
-                    .map(|&(_, session)| TreeRow::Listener { session, depth }),
-            );
-        }
-        rows
-    }
-    /// Open or close a branch by hand; the choice outlasts the defaults.
-    pub fn set_expanded(&mut self, id: u32, expanded: bool) {
-        self.expansion.insert(id, expanded);
-    }
-    /// Branches where people are open on every connect; anyone who arrives
-    /// later in a collapsed branch shows as a count on it.
-    fn expand_occupied(&mut self) {
-        let mut parents = HashMap::with_capacity(self.channels.len());
-        for channel in &self.channels {
-            if let TextTarget::Channel(id) = channel.target {
-                parents.entry(id).or_insert(channel.parent);
-            }
-        }
-        // Each channel's ancestors are walked once.
-        let mut walked = HashSet::new();
-        for user in self.users.values() {
-            let mut current = user.channel;
-            while walked.insert(current)
-                && let Some(&Some(parent)) = parents.get(&current)
-            {
-                self.expansion.insert(parent, true);
-                current = parent;
-            }
-        }
-    }
-    /// Channels in display order: by position, then name.
-    fn sort_channels(&mut self) {
-        self.channels.sort_by(|a, b| {
-            a.position
-                .cmp(&b.position)
-                .then_with(|| a.name.cmp(&b.name))
-        });
-    }
-}
-
-/// The run of `sorted` (ascending by `key`) whose key is `wanted`.
-fn run<T, K: Ord>(sorted: &[T], wanted: K, key: impl Fn(&T) -> K) -> &[T] {
-    let start = sorted.partition_point(|item| key(item) < wanted);
-    let len = sorted[start..].partition_point(|item| key(item) == wanted);
-    &sorted[start..start + len]
 }
 
 /// How long changes to the saved servers gather before they are written.
@@ -1336,17 +835,25 @@ impl Desktop {
     /// then forget the presentations of messages no timeline holds.
     pub fn present_selected(&mut self) {
         if let Some((server, channel)) = self.selected_indices() {
-            let messages = &self.servers[server].channels[channel].timeline.messages;
-            self.presentation.present(messages);
+            let view = &mut self.servers[server];
+            let channel = &view.state.channels[channel];
+            self.presentation
+                .present(&channel.timeline.messages, &channel.activity);
+            // Runs whose first line is gone are no longer open.
+            if let Some(runs) = view.expanded_runs.get_mut(&channel.id) {
+                let oldest = channel
+                    .activity
+                    .front()
+                    .map_or(i64::MAX, |line| line.observed_at_ms);
+                runs.retain(|first| *first >= oldest);
+            }
         }
         if self.presentation.wants_pruning() {
             let live = self.servers.iter().flat_map(|server| {
                 server.channels.iter().flat_map(|channel| {
-                    channel
-                        .timeline
-                        .messages
-                        .iter()
-                        .map(|message| message.serial)
+                    let messages = channel.timeline.messages.iter();
+                    let lines = channel.activity.iter().map(|line| line.serial);
+                    messages.map(|message| message.serial).chain(lines)
                 })
             });
             self.presentation.prune(live.collect::<Vec<_>>());
@@ -2603,46 +2110,8 @@ impl Desktop {
     /// The timeline of direct messages with `peer` over the stock path (a
     /// `TextMessage` to their session), created if needed; returns its id.
     pub fn stock_direct_view(&mut self, index: usize, peer: &User) -> u32 {
-        let session = peer.session;
-        let peer = peer.clone();
-        let server = &mut self.servers[index];
-        let key = peer
-            .certificate_hash
-            .as_ref()
-            .map(|hash| format!("direct:{hash}"))
-            .unwrap_or_else(|| {
-                format!(
-                    "direct:pending:{}:{session}:{}",
-                    server.generation, peer.instance
-                )
-            });
-        if let Some(channel) = server
-            .channels
-            .iter_mut()
-            .find(|channel| channel.storage_key == key)
-        {
-            channel.target = TextTarget::Direct(session);
-            channel.direct_peer = Some(peer);
-            channel.id
-        } else {
-            let mut id = u32::MAX;
-            while server.channels.iter().any(|channel| channel.id == id) {
-                id -= 1;
-            }
-            server.channels.push(ChannelView {
-                id,
-                parent: None,
-                name: format!("@ {}", crate::names::display_name(&peer, &self.settings)),
-                topic: "Private conversation".into(),
-                position: i32::MAX,
-                target: TextTarget::Direct(session),
-                direct_peer: Some(peer),
-                storage_key: key,
-                new_messages: 0,
-                ..Default::default()
-            });
-            id
-        }
+        let name = crate::names::display_name(peer, &self.settings).to_string();
+        self.servers[index].stock_direct_view(peer, &name)
     }
     pub fn load_history(&mut self, before: Option<i64>) {
         let Some((index, channel)) = self.selected_indices() else {
@@ -2651,7 +2120,7 @@ impl Desktop {
         let Some(identity) = self.servers[index].history_identity() else {
             return;
         };
-        let server = &mut self.servers[index];
+        let server = &mut self.servers[index].state;
         // Stock direct messages on a Nuschel server are local observations.
         let archive = server.archived(&server.channels[channel]);
         let cache = Some(crate::backend::CacheKey {
@@ -3031,10 +2500,11 @@ impl Desktop {
                     {
                         match key {
                             RenderKey::Description(id) => {
-                                if let Some(channel) = server.channel_view(id)
-                                    && channel.description_raw == source
+                                if server
+                                    .channel_view(id)
+                                    .is_some_and(|channel| channel.description_raw == source)
                                 {
-                                    channel.description = Some(document.into());
+                                    server.descriptions.insert(id, document.into());
                                 }
                             }
                             RenderKey::Comment(session) => {
@@ -3235,6 +2705,7 @@ impl Desktop {
                         .servers
                         .iter_mut()
                         .find(|entry| entry.id == server && entry.generation == generation)
+                        .map(|view| &mut view.state)
                     else {
                         continue;
                     };
@@ -3278,28 +2749,16 @@ impl Desktop {
                     }) {
                         index
                     } else if let TextTarget::Direct(_) = target {
-                        let mut id = u32::MAX;
-                        while server.channels.iter().any(|channel| channel.id == id) {
-                            id -= 1;
-                        }
-                        server.channels.push(ChannelView {
-                            id,
-                            parent: None,
-                            name: format!(
-                                "@ {}",
-                                peer.as_ref()
-                                    .map(|peer| crate::names::display_name(peer, &self.settings))
-                                    .unwrap_or("Direct message")
-                            ),
-                            topic: "Private conversation".into(),
-                            position: i32::MAX,
-                            target: target.clone(),
-                            direct_peer: peer.clone(),
-                            storage_key: storage_key.clone(),
-                            new_messages: 0,
-                            ..Default::default()
-                        });
-                        server.channels.len() - 1
+                        let name = peer
+                            .as_ref()
+                            .map(|peer| crate::names::display_name(peer, &self.settings))
+                            .unwrap_or("Direct message");
+                        server.received_direct(
+                            name,
+                            target.clone(),
+                            peer.clone(),
+                            storage_key.clone(),
+                        )
                     } else if let TextTarget::DirectConversation(id) = target {
                         // A durable direct conversation (directs.rs), perhaps new.
                         let name = match &peer {
@@ -3618,7 +3077,7 @@ impl Desktop {
                 }
             }
             SessionEvent::Nuschel(NuschelEvent::Typing(typing)) => {
-                self.someone_typing(index, &typing.conversation, typing.session);
+                server.someone_typing(&typing.conversation, typing.session, monotonic_ms());
             }
             SessionEvent::Nuschel(NuschelEvent::DirectList(list)) => {
                 self.directs_listed(index, list.directs);
@@ -3662,19 +3121,22 @@ impl Desktop {
                 if let nuschel_session::identity::IdentityEvent::Own(view) = &event {
                     self.own_identity.view = Some(view.clone());
                 }
-                let users = &server.users;
+                let ServerView {
+                    state, identity, ..
+                } = &mut *server;
+                let users = &state.users;
                 let name = |user_id: u32| {
                     users
                         .values()
                         .find(|user| user.user_id == Some(user_id))
                         .map(|user| user.name.clone())
                 };
-                let alarmed = server.identity.alarm.is_some();
-                if let Some(notice) = server.identity.apply_named(event, name) {
-                    server.notice = Some(notice);
+                let alarmed = identity.alarm.is_some();
+                if let Some(notice) = identity.apply_named(event, name) {
+                    state.notice = Some(notice);
                 }
                 // A new alarm interrupts: it is shown as a dialog until acknowledged.
-                if !alarmed && server.identity.alarm.is_some() && self.panel.is_none() {
+                if !alarmed && identity.alarm.is_some() && self.panel.is_none() {
                     self.panel = Some(crate::panels::Panel::IdentityAlarm { server: index });
                 }
             }
@@ -3711,6 +3173,7 @@ impl Desktop {
                 }
             }
             SessionEvent::Connected { session, .. } => {
+                let server = &mut server.state;
                 server.channels.retain(|channel| match channel.target {
                     TextTarget::Channel(id) => server.seen_channels.contains(&id),
                     TextTarget::Direct(_) | TextTarget::DirectConversation(_) => true,
@@ -3790,7 +3253,7 @@ impl Desktop {
                     channel.max_users = update.max_users;
                     if channel.description_raw != update.description {
                         channel.description_raw = update.description.clone();
-                        channel.description = None;
+                        server.descriptions.remove(&update.id);
                         if !update.description.is_empty() {
                             self.backend.render_html(
                                 server.id.clone(),
@@ -3809,21 +3272,19 @@ impl Desktop {
                             update.description.clone(),
                         );
                     }
+                    server.descriptions.remove(&update.id);
                     server.channels.push(ChannelView {
-                        id: update.id,
-                        parent: update.parent,
-                        name: update.name,
                         topic: "Channel chat · select Join voice to move here".into(),
-                        position: update.position,
-                        target: TextTarget::Channel(update.id),
-                        direct_peer: None,
-                        storage_key: update.id.to_string(),
-                        new_messages: 0,
                         links: update.links,
                         temporary: update.temporary,
                         max_users: update.max_users,
                         description_raw: update.description,
-                        ..Default::default()
+                        ..ChannelView::channel(
+                            update.id,
+                            update.parent,
+                            update.name,
+                            update.position,
+                        )
                     });
                 }
                 // Sorted once the batch of events is applied, not per channel.
@@ -3936,6 +3397,8 @@ impl Desktop {
             SessionEvent::ChannelRemoved(id) => {
                 server.expansion.remove(&id);
                 server.permissions.remove(&id);
+                server.descriptions.remove(&id);
+                server.expanded_runs.remove(&id);
                 let cached = server.bookmark.cached_channels.len();
                 server
                     .bookmark
@@ -4043,292 +3506,6 @@ fn settle_pending(server: &mut ServerView, key: [u8; 16], seq: Option<u64>) -> b
         .channels
         .iter_mut()
         .any(|channel| channel.timeline.settle(key, seq))
-}
-
-#[cfg(test)]
-mod tree_tests {
-    // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::{ChannelRow, ChannelView, ServerView, TreeRow};
-    use nuschel_session::{
-        config::ServerBookmark,
-        connection::{TextTarget, User},
-    };
-
-    fn channel(id: u32, parent: Option<u32>, name: &str, position: i32) -> ChannelView {
-        ChannelView {
-            id,
-            parent,
-            name: name.into(),
-            position,
-            target: TextTarget::Channel(id),
-            storage_key: id.to_string(),
-            ..Default::default()
-        }
-    }
-
-    fn user(session: u32, name: &str, channel: u32) -> User {
-        User {
-            session,
-            name: name.into(),
-            channel,
-            ..Default::default()
-        }
-    }
-
-    /// Root holds AFK, Lobby (Development; Gaming with Shooters and Strategy)
-    /// and Music (Listening party), which its position sorts first. We are in
-    /// Development; Margaret talks in Listening party; bob listens to
-    /// Development from AFK.
-    fn sample() -> ServerView {
-        let mut server =
-            ServerView::new(ServerBookmark::new("Test", "localhost", 64738, "andi").unwrap());
-        server.channels = vec![
-            channel(0, None, "Root", 0),
-            channel(1, Some(0), "AFK", 0),
-            channel(2, Some(0), "Lobby", 0),
-            channel(3, Some(2), "Development", 0),
-            channel(4, Some(2), "Gaming", 0),
-            channel(5, Some(4), "Shooters", 0),
-            channel(6, Some(4), "Strategy", 0),
-            channel(7, Some(0), "Music", -1),
-            channel(8, Some(7), "Listening party", 0),
-            // Its parent is unknown: never shown.
-            channel(9, Some(98), "Orphan", 0),
-        ];
-        server.sort_channels();
-        // A direct conversation shares the list but is not part of the tree.
-        server.channels.push(ChannelView {
-            id: u32::MAX,
-            name: "@ Zed".into(),
-            position: i32::MAX,
-            target: TextTarget::Direct(7),
-            ..Default::default()
-        });
-        let mut bob = user(6, "bob", 1);
-        bob.listening.insert(3);
-        for user in [
-            user(1, "andi", 3),
-            user(2, "Ada Lovelace", 3),
-            user(3, "grace", 3),
-            user(4, "Linus", 5),
-            user(5, "Margaret", 8),
-            bob,
-            user(7, "Zed", 0),
-            user(8, "Lost", 99),
-            user(9, "Orphaned", 9),
-            user(10, "ada lovelace", 3),
-        ] {
-            server.users.insert(user.session, user);
-        }
-        server.own_session = Some(1);
-        server.talking.insert(5);
-        server
-    }
-
-    /// One line per row: `v`/`>` for an open/closed branch, `@` a person,
-    /// `~` a listener, `[n]` people inside a closed branch.
-    fn describe(server: &ServerView) -> Vec<String> {
-        server
-            .tree_rows()
-            .into_iter()
-            .map(|row| match row {
-                TreeRow::Channel(ChannelRow {
-                    index,
-                    depth,
-                    has_children,
-                    expanded,
-                    hidden_users,
-                    hidden_talking,
-                }) => {
-                    let channel = &server.channels[index];
-                    let branch = match (has_children, expanded) {
-                        (false, _) => " ",
-                        (true, true) => "v",
-                        (true, false) => ">",
-                    };
-                    let hidden = match hidden_users {
-                        0 => String::new(),
-                        count if hidden_talking => format!(" [{count} talking]"),
-                        count => format!(" [{count}]"),
-                    };
-                    format!("{}{branch} {}{hidden}", "  ".repeat(depth), channel.name)
-                }
-                TreeRow::User { session, depth } => {
-                    format!("{}@{}", "  ".repeat(depth), server.users[&session].name)
-                }
-                TreeRow::Listener { session, depth } => {
-                    format!("{}~{}", "  ".repeat(depth), server.users[&session].name)
-                }
-            })
-            .collect()
-    }
-
-    #[test]
-    fn roots_and_the_voice_branch_start_open() {
-        assert_eq!(
-            describe(&sample()),
-            [
-                "v Root",
-                "  @Zed",
-                "  > Music [1 talking]",
-                "    AFK",
-                "    @bob",
-                "  v Lobby",
-                "      Development",
-                "      @Ada Lovelace",
-                "      @ada lovelace",
-                "      @andi",
-                "      @grace",
-                "      ~bob",
-                "    > Gaming [1]",
-            ]
-        );
-    }
-
-    #[test]
-    fn closed_branches_count_who_is_inside_and_keep_their_own_people() {
-        let mut server = sample();
-        server.set_expanded(4, true);
-        assert_eq!(
-            describe(&server)[12..],
-            [
-                "    v Gaming",
-                "        Shooters",
-                "        @Linus",
-                "        Strategy",
-            ]
-        );
-        server.talking.insert(4);
-        server.set_expanded(2, false);
-        assert_eq!(describe(&server)[5..], ["  > Lobby [5 talking]"]);
-        server.set_expanded(0, false);
-        assert_eq!(describe(&server), ["> Root [7 talking]", "  @Zed"]);
-    }
-
-    #[test]
-    fn the_branch_follows_our_voice_channel_unless_chosen_by_hand() {
-        let mut server = sample();
-        server.users.get_mut(&1).unwrap().channel = 6;
-        let rows = describe(&server);
-        assert!(rows.contains(&"    v Gaming".to_string()), "{rows:#?}");
-        assert!(rows.contains(&"        @andi".to_string()), "{rows:#?}");
-        server.set_expanded(2, false);
-        assert_eq!(describe(&server)[5..], ["  > Lobby [5]"]);
-        server.own_session = None;
-        server.expansion.clear();
-        assert_eq!(describe(&server)[5..], ["  > Lobby [5]"]);
-    }
-
-    #[test]
-    fn connecting_opens_every_branch_with_people() {
-        let mut server = sample();
-        server.set_expanded(2, false);
-        server.expand_occupied();
-        assert_eq!(
-            describe(&server),
-            [
-                "v Root",
-                "  @Zed",
-                "  v Music",
-                "      Listening party",
-                "      @Margaret",
-                "    AFK",
-                "    @bob",
-                "  v Lobby",
-                "      Development",
-                "      @Ada Lovelace",
-                "      @ada lovelace",
-                "      @andi",
-                "      @grace",
-                "      ~bob",
-                "    v Gaming",
-                "        Shooters",
-                "        @Linus",
-                "        Strategy",
-            ]
-        );
-    }
-
-    #[test]
-    fn a_parent_cycle_or_duplicate_never_hangs() {
-        let mut server = sample();
-        server.channels.push(channel(20, Some(21), "Ping", 0));
-        server.channels.push(channel(21, Some(20), "Pong", 0));
-        server.channels.push(channel(22, Some(22), "Self", 0));
-        server.users.insert(11, user(11, "Loop", 20));
-        server.own_session = Some(11);
-        server.expand_occupied();
-        assert_eq!(describe(&server).len(), 18);
-        // A second Lobby beneath one of Lobby's own descendants.
-        server.channels.push(channel(2, Some(5), "Lobby again", 0));
-        server.expand_occupied();
-        describe(&server);
-    }
-
-    /// 2,000 channels eight to a parent and 5,000 people:
-    /// `cargo test --release -p nuschel large_tree -- --ignored --nocapture`
-    #[test]
-    #[ignore = "timing; run in release"]
-    fn large_tree_timing() {
-        use std::{hint::black_box, time::Instant};
-        let channels = || {
-            (0..2000u32).map(|id| {
-                let name = format!("Channel {}", id * 7919 % 2000);
-                channel(
-                    id,
-                    id.checked_sub(1).map(|id| id / 8),
-                    &name,
-                    (id % 3) as i32,
-                )
-            })
-        };
-        let mut server =
-            ServerView::new(ServerBookmark::new("Test", "localhost", 64738, "andi").unwrap());
-        server.channels = channels().collect();
-        server.sort_channels();
-        for session in 0..5000u32 {
-            let name = ["ada", "Bob", "carol", "Dave"][session as usize % 4];
-            let mut user = user(session, &format!("{name} {session}"), session * 31 % 2000);
-            if session % 50 == 0 {
-                user.listening
-                    .extend([session * 7 % 2000, session * 13 % 2000]);
-            }
-            server.users.insert(session, user);
-        }
-        server.own_session = Some(4999);
-        server.talking.extend((0..5000).step_by(100));
-        let rows = |label: &str, server: &ServerView| {
-            let rounds = 20;
-            let start = Instant::now();
-            let mut rows = 0;
-            for _ in 0..rounds {
-                rows = black_box(server.tree_rows()).len();
-            }
-            println!(
-                "tree_rows, {label}: {rows} rows, {:?}",
-                start.elapsed() / rounds
-            );
-        };
-        rows("default expansion", &server);
-        let start = Instant::now();
-        server.expand_occupied();
-        println!("expand_occupied: {:?}", start.elapsed());
-        rows("occupied branches open", &server);
-
-        // Joining: every channel arrives, sorted after each or once at the end.
-        let start = Instant::now();
-        server.channels.clear();
-        for channel in channels() {
-            server.channels.push(channel);
-            server.sort_channels();
-        }
-        println!("2,000 arrivals, sorting after each: {:?}", start.elapsed());
-        let start = Instant::now();
-        server.channels.clear();
-        server.channels.extend(channels());
-        server.sort_channels();
-        println!("2,000 arrivals, sorting once: {:?}", start.elapsed());
-    }
 }
 
 #[cfg(test)]

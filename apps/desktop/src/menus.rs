@@ -998,7 +998,9 @@ impl Desktop {
                 false,
             )
         });
-        if !view.description_raw.is_empty() || view.description.is_none() {
+        if !view.description_raw.is_empty()
+            || !self.servers[server].descriptions.contains_key(&channel)
+        {
             let id = self.servers[server].id.clone();
             let _ = self.backend.command(
                 &id,

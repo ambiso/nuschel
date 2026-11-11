@@ -12,6 +12,12 @@ workspace = true
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.1"
+# Random ids for new saved servers, on platforms with a system random source.
+uuid = { version = "1.29.1", features = ["v4"], optional = true }
+
+[features]
+uuid = ["dep:uuid"]
 
 [dev-dependencies]
 serde_json = "1"

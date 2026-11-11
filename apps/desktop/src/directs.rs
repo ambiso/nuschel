@@ -11,81 +11,15 @@
 //! stock Mumble servers, unregistered people on either side, and a server
 //! that refuses to open the conversation. Those conversations show local
 //! history, and say so.
-use crate::{
-    backend::direct_conversation_key,
-    state::{ChannelView, Desktop, ServerView},
-};
+use crate::state::Desktop;
 use nuschel_protocol::nuschel::{self, v1};
-use nuschel_session::connection::{Command, NuschelRequest, TextTarget, User};
-
-impl ServerView {
-    /// Whether direct messages with `peer` go to a durable conversation.
-    pub fn durable_directs_with(&self, peer: &User) -> bool {
-        self.history_source == nuschel_client::HistorySource::ServerArchive
-            && self.has("history/1")
-            && self.own_user_id().is_some()
-            // 0 is SuperUser, and also what the server says for a deleted
-            // account: never matched to a conversation.
-            && peer.user_id.is_some_and(|id| id != 0)
-    }
-
-    /// The direct conversation with registered user `user_id`, if known.
-    fn direct_with(&self, user_id: u32) -> Option<[u8; 16]> {
-        self.directs
-            .iter()
-            .find(|(_, direct)| user_id != 0 && direct.user_id == user_id)
-            .map(|(id, _)| *id)
-    }
-
-    /// The online session of registered user `user_id`.
-    fn online(&self, user_id: u32) -> Option<&User> {
-        self.users
-            .values()
-            .find(|user| user_id != 0 && user.user_id == Some(user_id))
-    }
-
-    /// The timeline of direct conversation `id`, created if needed; returns
-    /// its index in `channels`.
-    pub fn direct_view(&mut self, id: [u8; 16], name: &str, peer: Option<User>) -> usize {
-        let key = direct_conversation_key(&id);
-        if let Some(index) = self
-            .channels
-            .iter()
-            .position(|channel| channel.conversation == Some(id) || channel.storage_key == key)
-        {
-            let channel = &mut self.channels[index];
-            channel.conversation = Some(id);
-            channel.target = TextTarget::DirectConversation(id);
-            if peer.is_some() {
-                channel.direct_peer = peer;
-            }
-            return index;
-        }
-        let mut channel_id = u32::MAX;
-        while self.channels.iter().any(|channel| channel.id == channel_id) {
-            channel_id -= 1;
-        }
-        self.channels.push(ChannelView {
-            id: channel_id,
-            parent: None,
-            name: format!("@ {name}"),
-            topic: "Private conversation".into(),
-            position: i32::MAX,
-            target: TextTarget::DirectConversation(id),
-            direct_peer: peer,
-            storage_key: key,
-            conversation: Some(id),
-            ..Default::default()
-        });
-        self.channels.len() - 1
-    }
-}
+use nuschel_session::connection::{Command, NuschelRequest, User};
 
 impl Desktop {
     /// Open the direct conversation with `session` on a Nuschel server; false
     /// if direct messages with them take the stock path.
     pub fn open_durable_direct(&mut self, index: usize, peer: &User) -> bool {
-        let server = &mut self.servers[index];
+        let server = &mut self.servers[index].state;
         let Some(user_id) = peer.user_id.filter(|_| server.durable_directs_with(peer)) else {
             return false;
         };
@@ -121,7 +55,7 @@ impl Desktop {
         let Some(id) = nuschel::id(&direct.conversation) else {
             return;
         };
-        let server = &mut self.servers[index];
+        let server = &mut self.servers[index].state;
         let peer = server.online(direct.user_id).cloned();
         let name = peer
             .as_ref()
@@ -138,7 +72,7 @@ impl Desktop {
     /// place in the list (with their count) even while the other is offline.
     pub fn directs_listed(&mut self, index: usize, directs: Vec<v1::Direct>) {
         let selected = self.navigation.selection().cloned();
-        let server = &mut self.servers[index];
+        let server = &mut self.servers[index].state;
         for direct in directs {
             let Some(id) = nuschel::id(&direct.conversation) else {
                 continue;
@@ -183,7 +117,7 @@ impl Desktop {
         else {
             return;
         };
-        let server = &mut self.servers[index];
+        let server = &mut self.servers[index].state;
         if server.id != server_id || !open {
             return;
         }

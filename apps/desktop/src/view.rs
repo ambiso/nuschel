@@ -17,12 +17,9 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_client::{HistorySource, SessionSecurity};
+use nuschel_client::{HistorySource, SessionSecurity, conversation::Entry};
 use nuschel_session::connection::{TextTarget, User};
 use std::{collections::HashMap, rc::Rc};
-
-/// Consecutive messages by one author within this window share a header.
-const GROUP_MS: i64 = 5 * 60 * 1000;
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1326,13 +1323,13 @@ fn eased(ease: &Option<crate::motion::Ease>, on: bool) -> f32 {
 impl Desktop {
     /// Expand or collapse a run of activity lines (see `activity_run`).
     fn toggle_run(&mut self, server: usize, channel: usize, key: i64) {
-        if let Some(channel) = self
-            .servers
-            .get_mut(server)
-            .and_then(|server| server.channels.get_mut(channel))
-            && !channel.expanded_runs.remove(&key)
+        if let Some(server) = self.servers.get_mut(server)
+            && let Some(id) = server.channels.get(channel).map(|channel| channel.id)
         {
-            channel.expanded_runs.insert(key);
+            let runs = server.expanded_runs.entry(id).or_default();
+            if !runs.remove(&key) {
+                runs.insert(key);
+            }
         }
     }
 
@@ -1506,54 +1503,6 @@ impl Desktop {
     }
 }
 
-/// An entry of the timeline: an activity line, or a message (which may share
-/// the previous message's header).
-enum Entry {
-    Activity(usize),
-    /// Two or more routine activity lines in a row (`first..=last`), shown
-    /// as one line; when expanded, this is the header above them.
-    Run {
-        first: usize,
-        last: usize,
-        expanded: bool,
-    },
-    Message {
-        position: usize,
-        grouped: bool,
-    },
-}
-
-/// Push activity lines `run` as entries: warnings on their own, routine lines
-/// (joins, moves, connects…) collapsed into a run when there are two or more.
-fn push_activity(entries: &mut Vec<Entry>, channel: &crate::state::ChannelView, run: &[usize]) {
-    let mut lines = run.iter().copied().peekable();
-    while let Some(first) = lines.next() {
-        if channel.activity[first].warning {
-            entries.push(Entry::Activity(first));
-            continue;
-        }
-        let mut last = first;
-        while let Some(next) = lines.next_if(|next| !channel.activity[*next].warning) {
-            last = next;
-        }
-        if last == first {
-            entries.push(Entry::Activity(first));
-            continue;
-        }
-        let expanded = channel
-            .expanded_runs
-            .contains(&channel.activity[first].observed_at_ms);
-        entries.push(Entry::Run {
-            first,
-            last,
-            expanded,
-        });
-        if expanded {
-            entries.extend((first..=last).map(Entry::Activity));
-        }
-    }
-}
-
 fn conversation(
     this: &Desktop,
     index: usize,
@@ -1572,39 +1521,22 @@ fn conversation(
     let anchor = this.anchor.frame();
     // The timeline in order: activity lines among the messages, by time.
     let messages = &channel.timeline.messages;
-    let mut entries = Vec::with_capacity(messages.len() + channel.activity.len());
-    let mut previous: Option<(&str, i64)> = None;
-    let mut activity = channel.activity.iter().enumerate().peekable();
-    let mut pending = Vec::new();
-    for (position, message) in messages.iter().enumerate() {
-        pending.clear();
-        while let Some((index, _)) =
-            activity.next_if(|(_, line)| line.observed_at_ms <= message.observed_at_ms)
-        {
-            pending.push(index);
-        }
-        if !pending.is_empty() {
-            push_activity(&mut entries, channel, &pending);
-            previous = None;
-        }
-        let grouped = previous.is_some_and(|(author, at)| {
-            author == message.author && message.observed_at_ms.saturating_sub(at) < GROUP_MS
-        });
-        // A tombstone keeps the group it is in, but never starts one: the
-        // message after it shows its author again.
-        if message.deleted.is_none() || grouped {
-            previous = Some((&message.author, message.observed_at_ms));
-        } else {
-            previous = None;
-        }
-        entries.push(Entry::Message { position, grouped });
-    }
-    let rest: Vec<usize> = activity.map(|(index, _)| index).collect();
-    push_activity(&mut entries, channel, &rest);
+    let expanded = server.expanded_runs.get(&channel.id);
+    let entries = channel.entries(|first| expanded.is_some_and(|runs| runs.contains(&first)));
     // Only what is near the viewport is laid out, the welcome first.
     let height = |entry: &Entry| match *entry {
-        Entry::Activity(index) => &channel.activity[index].height,
-        Entry::Run { first, .. } => &channel.activity[first].run_height,
+        Entry::Activity(index) => {
+            &this
+                .presentation
+                .activity(channel.activity[index].serial)
+                .height
+        }
+        Entry::Run { first, .. } => {
+            &this
+                .presentation
+                .activity(channel.activity[first].serial)
+                .run_height
+        }
         Entry::Message { position, .. } => {
             &this.presentation.message(messages[position].serial).height
         }
@@ -1684,7 +1616,8 @@ fn conversation(
                 ),
                 Some(&Entry::Activity(index)) => {
                     let line = &channel.activity[index];
-                    (activity_row(line, index), None, &line.height)
+                    let height = &this.presentation.activity(line.serial).height;
+                    (activity_row(line, index), None, height)
                 }
                 Some(&Entry::Run {
                     first,
@@ -1699,7 +1632,8 @@ fn conversation(
                         expanded,
                         cx,
                     );
-                    (row, None, &channel.activity[first].run_height)
+                    let serial = channel.activity[first].serial;
+                    (row, None, &this.presentation.activity(serial).run_height)
                 }
                 Some(&Entry::Message { position, grouped }) => {
                     let message = &messages[position];
@@ -2188,7 +2122,7 @@ fn timeline_intro(
             ),
         )
         .when_some(
-            channel.description.as_ref().filter(|_| is_channel),
+            server.descriptions.get(&channel.id).filter(|_| is_channel),
             |view, description| {
                 view.child(
                     div()
@@ -3013,7 +2947,12 @@ fn composer(
         .filter(|_| this.text.focus.is_focused(window));
     let linked = link.is_some();
     let typing = link.or_else(|| {
-        crate::typing::typing_line(server, channel, &this.settings, std::time::Instant::now())
+        crate::typing::typing_line(
+            server,
+            channel,
+            &this.settings,
+            crate::state::monotonic_ms(),
+        )
     });
     let note = this
         .attach_note
