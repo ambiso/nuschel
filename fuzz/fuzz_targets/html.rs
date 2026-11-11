@@ -8,11 +8,12 @@
 use libfuzzer_sys::fuzz_target;
 use nuschel_content::{ContentRenderer, MAX_URL_BYTES};
 use nuschel_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument};
-use std::sync::OnceLock;
 
-fn renderer() -> &'static ContentRenderer {
-    static RENDERER: OnceLock<ContentRenderer> = OnceLock::new();
-    RENDERER.get_or_init(|| ContentRenderer::new().expect("the bundled theme loads"))
+thread_local! {
+    // Loads syntect's syntaxes once, on the first code block, as one content
+    // worker does for all its requests. Not `Sync` (it loads lazily), so it
+    // is per thread; libFuzzer runs inputs on one.
+    static RENDERER: ContentRenderer = ContentRenderer::default();
 }
 
 fn check(document: &MessageDocument) {
@@ -38,7 +39,10 @@ fuzz_target!(|data: &[u8]| {
     let Ok(source) = std::str::from_utf8(data) else {
         return;
     };
-    let renderer = renderer();
+    RENDERER.with(|renderer| run(renderer, source));
+});
+
+fn run(renderer: &ContentRenderer, source: &str) {
     // Legacy HTML becomes the text history stores, which renders as a document.
     if let Ok(stored) = renderer.legacy_plain_text(source) {
         assert!(stored.len() <= MAX_CONTENT_BYTES);
@@ -50,4 +54,4 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(document) = renderer.render(source) {
         check(&document);
     }
-});
+}
