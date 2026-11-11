@@ -67,6 +67,7 @@ pub enum Negotiation {
         capabilities: Capabilities,
         /// The version the client reports (semver), if it is one.
         client: Option<version::Version>,
+        relay_only: bool,
     },
 }
 
@@ -95,9 +96,22 @@ impl Negotiation {
             *self = Self::Agreed {
                 capabilities: Capabilities(theirs.0 & server.0),
                 client: version::parse(&hello.client_version),
+                relay_only: server.has(capability::PRIVACY)
+                    && theirs.has(capability::PRIVACY)
+                    && hello.relay_only,
             };
         }
         Ok(())
+    }
+
+    pub fn relay_only(&self) -> bool {
+        matches!(
+            self,
+            Self::Agreed {
+                relay_only: true,
+                ..
+            }
+        )
     }
 
     /// At `Authenticate`: the extension's capabilities, `Ok(None)` for a stock
@@ -130,6 +144,8 @@ impl Negotiation {
 /// flight, subscriptions and the extension's own rate limits.
 pub struct Extension {
     pub capabilities: Capabilities,
+    /// Never send this user's address to another connected client.
+    pub relay_only: bool,
     /// Request ids in flight; at most [`nuschel::MAX_OUTSTANDING`].
     pub outstanding: Vec<u64>,
     pub subscriptions: BTreeSet<Id>,
@@ -153,6 +169,7 @@ impl Extension {
         let per_minute = history.pages_per_minute.max(1);
         Self {
             capabilities,
+            relay_only: false,
             outstanding: Vec::new(),
             subscriptions: BTreeSet::new(),
             pages: LeakyBucket::new(per_minute.div_ceil(60), per_minute.div_ceil(4), now),
@@ -217,6 +234,7 @@ pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>, mls: bool) -> v1
         capabilities: server_capabilities(kt_log.is_some(), mls).names(),
         kt_log: kt_log.map(<[u8]>::to_vec).unwrap_or_default(),
         client_version: String::new(),
+        relay_only: false,
         policy: Some(v1::Policy {
             mode: v1::policy::Mode::Compatible as i32,
             minimum_client: settings.minimum_client.unwrap_or(0),
@@ -258,6 +276,7 @@ mod tests {
             policy: None,
             kt_log: Vec::new(),
             client_version: client_version.into(),
+            relay_only: false,
         };
         nuschel::version_frame(&proto::Version::default(), Some(&hello)).unwrap()[HEADER_BYTES..]
             .to_vec()

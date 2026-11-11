@@ -901,6 +901,7 @@ pub fn apply(
             text
         };
         let ban = Ban {
+            private_address: false,
             address,
             mask: u8::try_from(mask).unwrap_or(128),
             name: clip(&murmur.name),

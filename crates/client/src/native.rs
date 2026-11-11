@@ -951,6 +951,7 @@ async fn connect_once(
             identity,
             password,
             force_tcp: settings.borrow().force_tcp,
+            relay_only: false,
             muted: restore.muted,
             deafened: restore.deafened,
             channel: restore.channel,

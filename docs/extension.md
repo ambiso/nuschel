@@ -118,6 +118,7 @@ Message types are reserved in ranges, one per feature:
 | 0x4E20–0x4E2C | MLS (`mls/1`) |
 | 0x4E2D–0x4E2F, 0x4E80–0x4E8F | MLS channels |
 | 0x4E30–0x4E35 | Key-transparency witnesses (`kt-witness/1`); none used yet, the witnessed data travels in fields of the `kt/1` replies |
+| 0x4E36 | Connection address privacy (`privacy/1`) |
 | 0x4E40–0x4E5F | Files (`files/1`) |
 | 0x4E60–0x4E67 | Knocking |
 | 0x4E68–0x4E7F | Spam holds and moderation queue |
@@ -590,3 +591,34 @@ How the desktop uses the extension, and the decisions taken while the user was a
   server's page around it (`around`) when it is not loaded, and newer pages
   (`after`) as the reader scrolls down; a stock message there that the server never
   stored cannot be opened.
+
+
+### Connection address privacy (`privacy/1`)
+
+The client setting `relay_only` skips peer discovery, local interface/STUN
+candidate gathering and direct connection setup. Only configured servers and
+relays may be contacted; peer-supplied endpoints cannot override this policy.
+Mumble voice already passes through the configured server. Future WebRTC/ICE
+integration must enforce the same policy before gathering or signaling candidates.
+
+The client's initial `Hello.relay_only` (field 6) asks the server to withhold its
+address from every other client, including administrative clients. This takes
+effect before authentication and public presence. `Privacy` (0x4E36, maximum
+16 bytes, boolean `relay_only` in field 1) may enable privacy during a connection;
+enabling is sticky until that connection ends, so a delayed disable cannot undo
+it. The desktop reconnects when the setting changes, applying the new policy in
+the next hello without depending on a queued update.
+
+`UserStats.address` remains available to the user themselves, but not to other
+clients while privacy is enabled. Bans created against these users retain their
+addresses for server-side enforcement, but the protocol ban list redacts both
+address and mask. The redaction flag persists across restarts; round-tripping the
+redacted list through a stock administrator retains the private address ban.
+Server operators can still manage addresses locally through `nuscheld admin`.
+The configured server necessarily sees the connection's source IP; this setting
+does not hide it from that server or erase previously disclosed information.
+
+A legacy Mumble server, or older Nuschel server without `privacy/1`, cannot promise
+server-side address privacy. Nuschel still avoids peer discovery locally and shows
+a notice explaining the missing server support. No new extension frames are sent
+to stock servers.

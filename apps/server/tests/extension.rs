@@ -157,6 +157,7 @@ fn options(address: SocketAddr, pin: &str, name: &str, identity: usize) -> Conne
         identity: session_identity(identity),
         password: None,
         force_tcp: true,
+        relay_only: false,
         muted: true,
         deafened: false,
         channel: None,
@@ -165,6 +166,144 @@ fn options(address: SocketAddr, pin: &str, name: &str, identity: usize) -> Conne
         required: Requirement::default(),
         crypto: None,
     }
+}
+
+#[tokio::test]
+async fn relay_only_hides_addresses_before_presence_and_through_ban_roundtrips() {
+    let fixture = Fixture::start("").await;
+    let pin = fixture.running.fingerprint.clone();
+    let (mut viewer, _) = Session::connect(options(fixture.address(), &pin, "Viewer", 0)).await;
+    // Seed administration permission; the actual query and ban paths below go
+    // through the real session/TLS protocol, including stock UserStats/BanList.
+    fixture
+        .running
+        .server
+        .lock()
+        .users
+        .get_mut(&viewer.session)
+        .unwrap()
+        .user_id = Some(0);
+    let mut private_options = options(fixture.address(), &pin, "Private", 1);
+    private_options.relay_only = true;
+    let (mut private, negotiated) = Session::connect(private_options).await;
+    assert!(
+        negotiated
+            .unwrap()
+            .capabilities
+            .iter()
+            .any(|cap| cap == "privacy/1")
+    );
+    assert!(fixture.running.server.lock().users[&private.session].relay_only());
+
+    viewer.command(Command::RequestStats(private.session)).await;
+    let stats = viewer
+        .wait(|event| match event {
+            SessionEvent::Stats(stats) if stats.session == private.session => Some(stats.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(
+        stats.address.is_none(),
+        "even an administrator must not receive a private address"
+    );
+    private
+        .command(Command::RequestStats(private.session))
+        .await;
+    let own_stats = private
+        .wait(|event| match event {
+            SessionEvent::Stats(stats) => Some(stats.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(
+        own_stats.address.is_some(),
+        "self-inspection stays available"
+    );
+
+    let (mut ordinary, _) = Session::connect(options(fixture.address(), &pin, "Ordinary", 2)).await;
+    viewer
+        .command(Command::RequestStats(ordinary.session))
+        .await;
+    let stats = viewer
+        .wait(|event| match event {
+            SessionEvent::Stats(stats) if stats.session == ordinary.session => Some(stats.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(
+        stats.address.is_some(),
+        "stock administration semantics remain for other clients"
+    );
+    ordinary.command(Command::RelayOnly(true)).await;
+    timeout(WAIT, async {
+        while !fixture.running.server.lock().users[&ordinary.session].relay_only() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    viewer
+        .command(Command::RequestStats(ordinary.session))
+        .await;
+    let stats = viewer
+        .wait(|event| match event {
+            SessionEvent::Stats(stats) if stats.session == ordinary.session => Some(stats.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(stats.address.is_none());
+
+    viewer
+        .command(Command::User {
+            session: private.session,
+            action: nuschel_session::model::UserAction::Ban,
+            reason: Some("privacy regression".into()),
+        })
+        .await;
+    viewer.command(Command::QueryBans).await;
+    let bans = viewer
+        .wait(|event| match event {
+            SessionEvent::Bans(bans) => Some(bans.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(bans.len(), 1);
+    assert!(
+        bans[0].address.iter().all(|byte| *byte == 0),
+        "the ban list must not bypass address privacy"
+    );
+    viewer.command(Command::UpdateBans(bans)).await;
+    viewer.command(Command::QueryBans).await;
+    let bans = viewer
+        .wait(|event| match event {
+            SessionEvent::Bans(bans) => Some(bans.clone()),
+            _ => None,
+        })
+        .await;
+    assert!(bans[0].address.iter().all(|byte| *byte == 0));
+    {
+        let state = fixture.running.server.lock();
+        assert!(state.bans[0].private_address);
+        assert!(
+            state.bans[0].address.is_some(),
+            "redacting must not disable an address ban"
+        );
+    }
+    ordinary.command(Command::RelayOnly(false)).await;
+    ordinary
+        .command(Command::RequestStats(ordinary.session))
+        .await;
+    ordinary
+        .wait(|event| matches!(event, SessionEvent::Stats(_)).then_some(()))
+        .await;
+    assert!(
+        fixture.running.server.lock().users[&ordinary.session].relay_only(),
+        "a stale disable is harmless"
+    );
+    let fixture = fixture.restart("").await;
+    assert!(fixture.running.server.lock().bans[0].private_address);
+    assert!(fixture.running.server.lock().bans[0].address.is_some());
+    fixture.running.shutdown().await;
 }
 
 impl Session {
@@ -509,6 +648,7 @@ impl Raw {
             policy: None,
             kt_log: Vec::new(),
             client_version: String::new(),
+            relay_only: false,
         });
         let frame = nuschel::version_frame(
             &proto::Version {
@@ -636,6 +776,7 @@ fn hello_version(capabilities: &[&str]) -> bytes::Bytes {
             policy: None,
             kt_log: Vec::new(),
             client_version: String::new(),
+            relay_only: false,
         }),
     )
     .unwrap()
@@ -671,7 +812,8 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
             "kt/1",
             "mls/1",
             "kt-witness/1",
-            "share/1"
+            "share/1",
+            "privacy/1"
         ]
     );
     // The key-transparency log comes with `kt/1`.

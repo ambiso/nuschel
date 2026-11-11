@@ -26,6 +26,16 @@ message Hello {
   // bytes), compared with the server's `minimum_client`. Self-reported; a
   // missing or unparsable version is below every minimum.
   string client_version = 5;
+  // Only from clients (`privacy/1`): do not disclose this connection's IP
+  // address to other clients. Applied before authentication/presence.
+  bool relay_only = 6;
+}
+
+// 0x4E36, client to server (`privacy/1`): update address privacy for this
+// connection. No peer candidates or direct discovery are permitted locally
+// while relay_only is set. Server-side address bans still apply.
+message Privacy {
+  bool relay_only = 1;
 }
 
 message Policy {

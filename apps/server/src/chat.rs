@@ -243,6 +243,10 @@ impl State {
             };
         }
         match frame.kind {
+            kind::PRIVACY => {
+                let message = decoded!(v1::Privacy);
+                self.set_address_privacy(session, message.relay_only);
+            }
             kind::CHAT_SEND => {
                 let message = decoded!(v1::ChatSend);
                 self.deferred(session, message.request_id, |state| {

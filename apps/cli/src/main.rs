@@ -43,6 +43,9 @@ struct Arguments {
     /// Keep voice in the TLS tunnel instead of encrypted UDP.
     #[arg(long)]
     force_tcp: bool,
+    /// Ask privacy/1 servers not to disclose this connection's IP to other clients.
+    #[arg(long)]
+    relay_only: bool,
     /// Access token (repeatable).
     #[arg(long = "token")]
     tokens: Vec<String>,
@@ -529,6 +532,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         identity: profile.identity()?,
         password,
         force_tcp: args.force_tcp,
+        relay_only: args.relay_only,
         muted: true,
         deafened: false,
         channel: None,

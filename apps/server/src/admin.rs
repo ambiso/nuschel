@@ -592,6 +592,7 @@ fn bans(state: &mut State, command: Bans) -> Result<()> {
                 return Err("a certificate hash is 40 hex digits (SHA-1)".into());
             }
             let ban = Ban {
+                private_address: false,
                 address: network.map(|(address, _)| address),
                 mask: network.map_or(128, |(_, mask)| mask),
                 name: arguments.name,

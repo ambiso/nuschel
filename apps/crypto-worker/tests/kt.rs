@@ -173,6 +173,7 @@ impl User {
             identity: mumble_identity(self.index),
             password: None,
             force_tcp: true,
+            relay_only: false,
             muted: true,
             deafened: false,
             channel: None,

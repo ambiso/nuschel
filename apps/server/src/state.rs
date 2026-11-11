@@ -291,6 +291,11 @@ pub struct User {
 }
 
 impl User {
+    pub fn relay_only(&self) -> bool {
+        self.extension
+            .as_ref()
+            .is_some_and(|extension| extension.relay_only)
+    }
     /// The full `UserState` another client receives (blobs by hash when long).
     pub fn state_message(&self) -> proto::UserState {
         let mut message = proto::UserState {
@@ -675,6 +680,8 @@ impl Registry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ban {
     pub address: Option<Ipv6Addr>,
+    /// Enforce the address ban, but never send the address over the protocol.
+    pub private_address: bool,
     /// Prefix length on 128 bits (IPv4 is mapped).
     pub mask: u8,
     pub name: String,
@@ -715,6 +722,7 @@ impl Ban {
     pub fn to_stored(&self) -> StoredBan {
         StoredBan {
             address: self.address.map(|address| address.to_string()),
+            private_address: self.private_address,
             mask: self.mask,
             name: self.name.clone(),
             hash: self.hash.clone(),
@@ -726,6 +734,7 @@ impl Ban {
 
     pub fn from_stored(stored: StoredBan) -> Self {
         Self {
+            private_address: stored.private_address,
             address: stored
                 .address
                 .and_then(|address| address.parse::<IpAddr>().ok())

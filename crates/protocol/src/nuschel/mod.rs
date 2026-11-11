@@ -42,7 +42,10 @@ pub mod capability {
     pub const KT_WITNESS: &str = "kt-witness/1";
     /// Share links (docs/web.md): tokens that open a channel.
     pub const SHARE: &str = "share/1";
-    pub const ALL: [&str; 7] = [HISTORY, SUBSCRIBE, TYPING, KT, MLS, KT_WITNESS, SHARE];
+    pub const PRIVACY: &str = "privacy/1";
+    pub const ALL: [&str; 8] = [
+        HISTORY, SUBSCRIBE, TYPING, KT, MLS, KT_WITNESS, SHARE, PRIVACY,
+    ];
 }
 
 /// Message types.
@@ -92,6 +95,7 @@ pub mod kind {
     pub const MLS_WELCOME_ACK: u16 = 0x4e2a;
     pub const MLS_JOIN_INFO_REQUEST: u16 = 0x4e2b;
     pub const MLS_JOIN_INFO: u16 = 0x4e2c;
+    pub const PRIVACY: u16 = 0x4e36;
     /// `share/1`, 0x4E90–0x4E97 (0x4E94–0x4E97 reserved).
     pub const SHARE_LINK_CREATE: u16 = 0x4e90;
     pub const SHARE_LINK: u16 = 0x4e91;
@@ -193,6 +197,7 @@ pub fn required_capability(kind: u16) -> Option<&'static str> {
         | MLS_WELCOME_ACK
         | MLS_JOIN_INFO_REQUEST => Some(capability::MLS),
         SHARE_LINK_CREATE | SHARE_LINK_REVOKE | SHARE_LINK_RESOLVE => Some(capability::SHARE),
+        PRIVACY => Some(capability::PRIVACY),
         _ => None,
     }
 }
@@ -204,6 +209,7 @@ pub fn required_capability(kind: u16) -> Option<&'static str> {
 pub fn client_limit(kind: u16) -> usize {
     use kind::*;
     match kind {
+        PRIVACY => 16,
         CHAT_SEND | CHAT_EDIT => MAX_CONTENT_BYTES + 256,
         SUBSCRIBE | UNSUBSCRIBE => MAX_SUBSCRIBE_PER_MESSAGE * 18 + 32,
         HISTORY_REQUEST => 128,
@@ -448,6 +454,7 @@ mod tests {
             policy: None,
             kt_log: Vec::new(),
             client_version: String::new(),
+            relay_only: false,
         }
     }
 

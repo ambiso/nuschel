@@ -201,6 +201,8 @@ pub enum SessionEvent {
     },
 }
 
+const RELAY_PRIVACY_UNAVAILABLE: &str = "Relay-only is enabled locally, but this server cannot promise to hide your IP address from other clients.";
+
 #[derive(Debug)]
 pub enum Command {
     Join(u32),
@@ -239,6 +241,9 @@ pub enum Command {
         muted: bool,
         deafened: bool,
     },
+    /// Skip peer discovery locally and ask privacy/1 servers not to disclose
+    /// our address to other clients. Configured server connections stay allowed.
+    RelayOnly(bool),
     SetComment(String),
     SetAvatar(Vec<u8>),
     /// Register our own certificate under our current name.
@@ -304,6 +309,7 @@ pub struct ConnectOptions {
     pub password: Option<String>,
     /// Never use UDP; voice stays in the TLS tunnel (Mumble's "Force TCP mode").
     pub force_tcp: bool,
+    pub relay_only: bool,
     /// Restored after a reconnect; a fresh connection starts muted.
     pub muted: bool,
     pub deafened: bool,
@@ -729,6 +735,7 @@ pub async fn run(
             policy: None,
             kt_log: Vec::new(),
             client_version: client_version().to_string(),
+            relay_only: options.relay_only,
         });
         let frame = nuschel::version_frame(&version, hello.as_ref())
             .ok_or_else(|| Error::Protocol("outgoing version too large".into()))?;
@@ -774,6 +781,9 @@ pub async fn run(
                 }
                 emit(&events, SessionEvent::Negotiated(negotiated)).await?;
             }
+        }
+        if options.relay_only && !state.privacy_supported() {
+            emit(&events, SessionEvent::Notice(RELAY_PRIVACY_UNAVAILABLE.into())).await?;
         }
         send(&mut writer, kind::AUTHENTICATE, &proto::Authenticate {
             username: Some(options.server.username.clone()),
@@ -1198,6 +1208,11 @@ impl State {
             .map(|user| user.name.clone())
             .unwrap_or_else(|| "the server".into())
     }
+    fn privacy_supported(&self) -> bool {
+        self.extension
+            .as_ref()
+            .is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::PRIVACY))
+    }
     fn channel_name(&self, channel: u32) -> String {
         self.channels
             .get(&channel)
@@ -1253,6 +1268,17 @@ impl State {
         }
         let own = self.own_session.unwrap_or_default();
         match command {
+            Command::RelayOnly(relay_only) => {
+                if self.privacy_supported() {
+                    self.queue(nuschel::kind::PRIVACY, &v1::Privacy { relay_only });
+                } else if relay_only {
+                    emit(
+                        events,
+                        SessionEvent::Notice(RELAY_PRIVACY_UNAVAILABLE.into()),
+                    )
+                    .await?;
+                }
+            }
             Command::Disconnect
             | Command::Voice { .. }
             | Command::SelectVoiceTarget(_)

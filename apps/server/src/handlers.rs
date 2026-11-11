@@ -36,6 +36,32 @@ fn decode<M: prost::Message + Default>(payload: &Bytes) -> Option<M> {
 }
 
 impl State {
+    pub(crate) fn set_address_privacy(&mut self, session: u32, relay_only: bool) {
+        let Some(user) = self.users.get_mut(&session) else {
+            return;
+        };
+        let Some(extension) = user.extension.as_mut() else {
+            return;
+        };
+        // Enabling is sticky for this connection; a delayed disable cannot
+        // undo a newer privacy choice. Reconnect to disclose addresses again.
+        if extension.relay_only {
+            return;
+        }
+        extension.relay_only = relay_only;
+        if relay_only && let Some(hash) = user.certificate_hash.as_deref() {
+            let mut changed = false;
+            for ban in &mut self.bans {
+                if ban.hash == hash && !ban.private_address {
+                    ban.private_address = true;
+                    changed = true;
+                }
+            }
+            if changed {
+                self.persist_bans();
+            }
+        }
+    }
     /// Every control message from an authenticated client passes through here:
     /// the one place that decides which types are accepted after
     /// authentication and applies the flood limit, before any handler runs.
@@ -58,7 +84,15 @@ impl State {
                 .control_bytes
                 .fetch_add(frame.payload.len() as u64 + 6, Ordering::Relaxed);
         }
-        if frame.kind != kind::UDP_TUNNEL && frame.kind != kind::PING && user.flood.limited(now) {
+        let privacy_update = frame.kind == nuschel_protocol::nuschel::kind::PRIVACY
+            && user.extension.as_ref().is_some_and(|extension| {
+                extension.has(nuschel_protocol::nuschel::capability::PRIVACY)
+            });
+        if frame.kind != kind::UDP_TUNNEL
+            && frame.kind != kind::PING
+            && !privacy_update
+            && user.flood.limited(now)
+        {
             self.counters.rate_limited.fetch_add(1, Ordering::Relaxed);
             return;
         }
@@ -925,6 +959,7 @@ impl State {
             truncate_chars(&mut reason, 1000);
             self.bans.push(Ban {
                 address: Some(mapped(destination.address.ip())),
+                private_address: destination.relay_only(),
                 mask: 128,
                 name: destination.name.clone(),
                 hash: destination.certificate_hash.clone().unwrap_or_default(),
@@ -1210,7 +1245,9 @@ impl State {
             reply.version = Some(destination.info.to_proto());
             reply.celt_versions = destination.celt_versions.clone();
             reply.opus = Some(destination.opus);
-            reply.address = Some(mapped(destination.address.ip()).octets().to_vec());
+            if source == target || !destination.relay_only() {
+                reply.address = Some(mapped(destination.address.ip()).octets().to_vec());
+            }
         }
         if local {
             let stats = |stats: nuschel_protocol::crypt::CryptStats| proto::user_stats::Stats {
@@ -1384,12 +1421,17 @@ impl State {
                 .bans
                 .iter()
                 .map(|ban| proto::ban_list::BanEntry {
-                    address: ban
-                        .address
+                    address: (!ban.private_address)
+                        .then_some(ban.address)
+                        .flatten()
                         .unwrap_or(Ipv6Addr::UNSPECIFIED)
                         .octets()
                         .to_vec(),
-                    mask: u32::from(ban.mask),
+                    mask: if ban.private_address {
+                        0
+                    } else {
+                        u32::from(ban.mask)
+                    },
                     name: Some(ban.name.clone()),
                     hash: Some(ban.hash.clone()),
                     reason: Some(ban.reason.clone()),
@@ -1423,7 +1465,8 @@ impl State {
                 truncate_bytes(&mut text, 1000);
                 text
             };
-            let ban = Ban {
+            let mut ban = Ban {
+                private_address: false,
                 address: address.filter(|address| !address.is_unspecified()),
                 mask: entry.mask.min(128) as u8,
                 name: clip(entry.name),
@@ -1436,6 +1479,18 @@ impl State {
                     .unwrap_or_else(now_unix),
                 duration: entry.duration.unwrap_or(0),
             };
+            // A stock administrator round-trips the redacted entry. Preserve
+            // enforcement without disclosing the hidden address or losing it.
+            if let Some(previous) = self.bans.iter().find(|previous| {
+                previous.private_address
+                    && previous.hash == ban.hash
+                    && previous.name == ban.name
+                    && previous.start == ban.start
+            }) {
+                ban.private_address = true;
+                ban.address = previous.address;
+                ban.mask = previous.mask;
+            }
             if ban.valid() && !bans.contains(&ban) {
                 bans.push(ban);
             }

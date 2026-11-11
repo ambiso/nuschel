@@ -739,7 +739,9 @@ pub(crate) fn new_user(
             .ok()
             .flatten()
             .map(|capabilities| {
-                Box::new(crate::extension::Extension::new(capabilities, config, now))
+                let mut extension = crate::extension::Extension::new(capabilities, config, now);
+                extension.relay_only = peer.negotiation.relay_only();
+                Box::new(extension)
             }),
         info: peer.info.clone(),
         opus: message.opus(),

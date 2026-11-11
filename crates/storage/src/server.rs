@@ -83,7 +83,7 @@ type UserRow = (
     Option<i64>,
     Option<i64>,
 );
-type BanRow = (Option<String>, i64, String, String, String, i64, i64);
+type BanRow = (Option<String>, i64, String, String, String, i64, i64, bool);
 
 impl ServerStore {
     pub async fn open(path: &Path) -> Result<Self, Error> {
@@ -164,7 +164,7 @@ impl ServerStore {
                     .fetch_all(pool)
                     .await?;
             let bans: Vec<BanRow> = sqlx::query_as(
-                "SELECT address, mask, name, hash, reason, start, duration FROM bans",
+                "SELECT address, mask, name, hash, reason, start, duration, private_address FROM bans",
             )
             .fetch_all(pool)
             .await?;
@@ -247,14 +247,17 @@ impl ServerStore {
             snapshot.bans = bans
                 .into_iter()
                 .map(
-                    |(address, mask, name, hash, reason, start, duration)| StoredBan {
-                        address,
-                        mask: u8::try_from(mask).unwrap_or(128),
-                        name,
-                        hash,
-                        reason,
-                        start,
-                        duration: id(duration),
+                    |(address, mask, name, hash, reason, start, duration, private_address)| {
+                        StoredBan {
+                            private_address,
+                            address,
+                            mask: u8::try_from(mask).unwrap_or(128),
+                            name,
+                            hash,
+                            reason,
+                            start,
+                            duration: id(duration),
+                        }
                     },
                 )
                 .collect();
@@ -497,7 +500,7 @@ impl ServerStore {
                     too_long(text, MAX_NAME)?;
                 }
                 sqlx::query(
-                    "INSERT INTO bans (address, mask, name, hash, reason, start, duration) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    "INSERT INTO bans (address, mask, name, hash, reason, start, duration, private_address) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
                 )
                 .bind(&ban.address)
                 .bind(i64::from(ban.mask))
@@ -506,6 +509,7 @@ impl ServerStore {
                 .bind(&ban.reason)
                 .bind(ban.start)
                 .bind(i64::from(ban.duration))
+                .bind(ban.private_address)
                 .execute(&mut *transaction)
                 .await?;
             }
@@ -576,6 +580,7 @@ mod tests {
             store.set_next_user_id(3).await?;
             store
                 .save_bans(&[StoredBan {
+                    private_address: true,
                     address: Some("::ffff:10.0.0.1".into()),
                     mask: 128,
                     name: "Mallory".into(),
@@ -593,6 +598,7 @@ mod tests {
         assert_eq!(snapshot.channels[2], channel(2, Some(1)));
         assert_eq!(snapshot.links, vec![(0, 2)]);
         assert_eq!(snapshot.bans.len(), 1);
+        assert!(snapshot.bans[0].private_address);
         assert_eq!(snapshot.next_user_id, 7, "the high mark never goes down");
         let users = store.load_users(None).await?;
         assert_eq!(users[0].name, "Alice");

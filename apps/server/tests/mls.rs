@@ -245,6 +245,7 @@ impl Connection {
             policy: None,
             kt_log: Vec::new(),
             client_version: String::new(),
+            relay_only: false,
         };
         let frame = nuschel::version_frame(
             &proto::Version {

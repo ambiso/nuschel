@@ -87,6 +87,8 @@ pub struct StoredBan {
     /// An IP address; IPv4 bans are stored as IPv4-mapped IPv6 with the mask
     /// counted on 128 bits, as Mumble does.
     pub address: Option<String>,
+    #[serde(default)]
+    pub private_address: bool,
     pub mask: u8,
     pub name: String,
     pub hash: String,
