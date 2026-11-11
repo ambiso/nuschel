@@ -146,6 +146,37 @@ the user's files and use the network. AppContainer or restricted-token process c
 needs unsafe Win32 calls and Windows testing. Until then, Windows offers process
 separation only.
 
+## Fuzzing
+
+The libFuzzer targets in `fuzz/` (cargo-fuzz; a workspace of its own whose committed
+lock is the main lock cut down) give hostile input to every parser that takes it:
+
+| Targets | Input |
+| --- | --- |
+| `html`, `legacy_html` | legacy HTML and plain messages into documents; text into the copy for stock clients and back |
+| `images`, `favicon` | avatars, website icons, `data:` and pasted images through the content worker's decoders; a website's page through the icon lookup |
+| `control_frames`, `server_messages`, `extension_messages`, `kt_messages` | frames and Mumble, extension and `kt/1` messages from several connections into nuscheld's state; the crypto worker's IPC |
+| `client_messages` | a hostile server's frames into the client session's state |
+| `relay`, `crypt`, `voice`, `voice_playback` | voice: the server's relay, OCB2 decryption, the client's decoding, the media worker's jitter buffer and Opus decoder |
+| `identity`, `kt` | identity and key-transparency encodings and verifiers |
+| `transfer_offer`, `mumble_url`, `policy_file` | file offers in messages, `mumble://` links and invites, `nuschel-policy.json` |
+
+`just fuzz <target> [seconds] [libFuzzer flags]` runs one in the flake's fuzz shell
+(`nix develop .#fuzz`: the newest nightly in the pinned rust-overlay, and cargo-fuzz),
+from the small committed corpus in `fuzz/seeds/<target>` into `fuzz/corpus/<target>`,
+with debug assertions (overflow checks), a 10-second limit per input and 2 GiB of
+memory; findings land in `fuzz/artifacts/<target>`. Neither directory is committed.
+Targets build without a sanitizer, which safe Rust does not need and which costs
+three quarters of the speed; `FUZZ_SANITIZER=address` checks the unsafe code in
+dependencies (html5ever, the image decoders), for example over a corpus with
+`just fuzz <target> 0 -runs=0`. To rerun a finding: `nix develop .#fuzz -c cargo fuzz
+run --fuzz-dir fuzz -s none -a <target> fuzz/artifacts/<target>/<file>` (with
+`cargo fuzz tmin` to minimise it). A finding is fixed at its root and gets a
+regression test with the minimised input next to the code. Coverage does not reveal
+super-linear time in small inputs, so the paths where it was found (link detection,
+the icon page scan, HTML nesting) have tests timing a hostile input at the largest
+size accepted.
+
 ## Release gates
 
 - Reject malformed/oversized frames before allocating the advertised body.

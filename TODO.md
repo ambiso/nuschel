@@ -391,6 +391,29 @@ ServerConfig.
       Media and storage kills are tested in the desktop. Content-worker kills and stalls
       of any worker are not tested (the content worker has a 5 s deadline in code).
 - [x] Hostile inputs for legacy HTML and fenced-code parsing (fuzzing).
+- [x] libFuzzer targets for every untrusted-input parser, run with `just fuzz <target>`
+      from the flake's nightly shell (SECURITY.md, "Fuzzing"). First campaign
+      (2026-11-11, 15–45 minutes per target, 18 targets, every corpus then replayed
+      under AddressSanitizer without findings): the fuzzer found a GIF that decoded
+      to an image without pixels; writing the targets and reviewing what they
+      cannot see (super-linear time in large inputs) found quadratic link detection
+      in the copy for stock clients (ten seconds under nuscheld's lock per 64 KiB
+      message), in bare URLs and in the website-icon page scan, unmatched end tags
+      that fooled the HTML depth limit, code blocks past the block limit, and voice
+      sequence numbers that overflowed the jitter buffer. All fixed, with regression
+      tests.
+- [ ] Fuzzing, still open: no scheduled campaigns or kept corpora (only the small
+      seed sets are committed); the server harness's frames are at most 255 bytes, so
+      large messages rely on the timing tests; direct conversations (random ids) are
+      out of the server harness's reach; no target for the update manifest's
+      signature parsing (minisign-verify), the storage worker's requests, or
+      magic-wormhole's own protocol code; the media worker's live path is covered
+      through its jitter buffer and decoder only (the mixer and devices are not);
+      the client harness goes on after a frame that would end a real session.
+      Mumble's OCB2 header keeps 24 bits of the tag, so one random datagram in 2^24
+      decrypts without the key (the crypt target finds one within a minute): the
+      protocol's, but worth weighing where a decrypting datagram rebinds a
+      session's UDP address (docs/server.md, "UDP binding").
 
 ---
 
@@ -459,9 +482,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          TLS 1.3 option; import of a Murmur database (PBKDF2/SHA-1 passwords).
    - [ ] A per-user cap on temporary channels and a global budget for shout fan-out;
          rolling statistics; clients older than 1.2.2.
-   - [ ] Chat in the stock-client VM check (needs typing into the stock window); run
-         the libFuzzer targets (cargo-fuzz + nightly not in the environment); the
-         `html` fuzz target no longer compiles (`ContentRenderer` is not `Sync`).
+   - [ ] Chat in the stock-client VM check (needs typing into the stock window).
    - [ ] Review deviations: permission checks inline per handler (one engine) rather
          than one `authorize()` module; one mutex instead of an actor.
    - [ ] TLS listener (rustls), certificate and password authentication, user
