@@ -28,9 +28,9 @@ let
     import hashlib, json, os, pathlib, re, shutil, subprocess
 
     source = pathlib.Path.cwd().resolve()
-    out = pathlib.Path('license-output/share/licenses/nuschl')
+    out = pathlib.Path(os.environ.get('LICENSE_OUT', 'license-output')) / 'share/licenses/nuschl'
     out.mkdir(parents=True)
-    metadata = json.loads(pathlib.Path('metadata.json').read_text())
+    metadata = json.loads(pathlib.Path(os.environ.get('METADATA_FILE', 'metadata.json')).read_text())
     packages = {(p['name'], p['version']): p for p in metadata['packages']}
     if len(packages) != len(metadata['packages']):
         raise SystemExit('ambiguous name/version package source; review inventory identity')
@@ -50,6 +50,7 @@ let
             command.extend(['-p', name])
         tree = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120).stdout
         for line in tree.splitlines():
+            if not line.strip(): continue
             match = re.match(r'^(\S+) v(\S+)(?:\s|$)', line)
             if not match:
                 raise SystemExit('unrecognized cargo tree record: ' + line)
