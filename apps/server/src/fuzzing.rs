@@ -39,6 +39,11 @@ impl Harness {
             Arc::new(Counters::default()),
         );
         state.initialise_root();
+        // Key transparency: requests are authorised and queued (to nowhere).
+        state.kt = Some(crate::kt::KtHandle::detached(
+            vec![0; 71],
+            nuschel_kt::LogId([7; 32]),
+        ));
         state.registry.insert(Registered {
             id: 1,
             account: [1; 16],
@@ -265,12 +270,28 @@ mod tests {
                     }
                     .encode_to_vec(),
                 ),
+                (
+                    0x18,
+                    nuschel_protocol::nuschel::v1::KtLookup {
+                        request_id: round + 3,
+                        target: Some(nuschel_protocol::nuschel::v1::kt_lookup::Target::UserId(1)),
+                    }
+                    .encode_to_vec(),
+                ),
+                (
+                    0x1a,
+                    nuschel_protocol::nuschel::v1::KtHistory {
+                        request_id: round + 4,
+                        account: vec![1; 16],
+                    }
+                    .encode_to_vec(),
+                ),
             ];
             let mut data = Vec::new();
             for _ in 0..40 {
                 let sender = next() as u8;
                 if next() % 5 == 0 {
-                    let (kind, body) = &structured[(next() % 3) as usize];
+                    let (kind, body) = &structured[(next() % 5) as usize];
                     // The harness maps type bytes from 32 on into the extension block.
                     data.extend_from_slice(&[sender, 32 + kind, body.len() as u8]);
                     data.extend_from_slice(body);

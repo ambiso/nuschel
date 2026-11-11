@@ -20,7 +20,9 @@ nuscheld = { path = "../apps/server" }
 bytes = "1.12.1"
 prost = "0.14.4"
 nuschel-identity = { path = "../crates/identity" }
+nuschel-ipc = { path = "../crates/ipc" }
 nuschel-kt = { path = "../crates/kt" }
+serde_json = "1.0.154"
 
 [[bin]]
 name = "html"
@@ -74,6 +76,13 @@ bench = false
 [[bin]]
 name = "kt"
 path = "fuzz_targets/kt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kt_messages"
+path = "fuzz_targets/kt_messages.rs"
 test = false
 doc = false
 bench = false
