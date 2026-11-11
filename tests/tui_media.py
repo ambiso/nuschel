@@ -300,7 +300,8 @@ def main():
                 return proc
             registry = start_registry(args.at_spi, env, spawn)
             pin = certificate_pin(args.binaries, "127.0.0.1", murmur.port, root / "probe")
-            peer = Client(args.binaries, "127.0.0.1", murmur.port, pin, "Media peer", root / "peer")
+            peer = Client(args.binaries, "127.0.0.1", murmur.port, pin, "Media peer", root / "peer",
+                          ["--message-limit", "1000", "--message-burst", "1000"])
             peer.send(kind="join", channel=2)
             profile = root / "tui"
             (profile / "config").mkdir(parents=True)
@@ -473,6 +474,9 @@ def main():
                 assert proof["wire_images"][0]["rgba_sha256"] != proof["wire_images"][1]["rgba_sha256"], "second paste was not fresh content"
                 shot("02c-caption-acknowledged")
             proof["graphics"] = graphics(capture)
+            for index in range(16):
+                peer.send(kind="text", channel=2, body=f"Older readable row {index:02}: before the incoming image.")
+            eventually(lambda: "Older readable row 15" in screen(capture), "older scroll fixture messages did not arrive")
             # Bring a known image in last, independently of the outgoing path.
             image = base64.b64encode(png(root / "incoming.png").read_bytes()).decode()
             peer.send(kind="html", channel=2, html=f'Received image:<img src="data:image/png;base64,{image}">')
