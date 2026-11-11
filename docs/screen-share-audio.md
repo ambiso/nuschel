@@ -225,8 +225,8 @@ Future web/mobile screen sharing needs its own exclusion and consent design.
   track; the UI must continue showing that audio is being shared. An explicit
   **mute all outgoing audio** action stops microphone, shared audio and transmitted
   TTS without changing the camera. **Stop sharing** stops the selected share's
-  video/audio, not an unrelated microphone conversation. Deafen defaults to
-  stopping outgoing audio for that destination. Moderator mute, authorization
+  video/audio, not an unrelated microphone conversation. Deafen stops all
+  outgoing audio for that destination. Moderator mute, authorization
   loss and channel changes must not be bypassed through the share track.
 - Require a fresh local choice before capture/transmit; an OS permission alone
   does not authorize a server or remote participant to start it. Show source,

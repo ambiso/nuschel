@@ -1136,6 +1136,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 - [ ] Adaptive jitter buffer / playout for WebRTC audio.
 - [ ] Real video encoder with bitrate adaptation, keyframe requests, frame dependency tracking.
 - [ ] Camera and screen capture, video rendering in GPUI, A/V sync, calling UI.
+- [ ] Optional desktop/application audio with screen sharing, excluding Nuschl's
+      voice, received shares, effects and TTS at capture time. Separate microphone
+      and system-audio tracks; verified per-stream Linux taps, Windows process-tree
+      exclusion and macOS application filters, covering playback workers. Never
+      reuse the full-device AEC reference or fall back to unfiltered capture.
+      Track negotiation, native adapters and tests remain future work; see
+      [screen-share audio design](docs/screen-share-audio.md).
 - [ ] Browser interoperability and long-call quality tests; str0m vs webrtc-rs benchmark.
 - [x] Remove AWS-LC from the native RTC dependency graph and explicitly select
       dimpl's RustCrypto DTLS provider. Vendored adapter generates P-256 certificates
