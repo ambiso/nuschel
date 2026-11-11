@@ -1611,11 +1611,9 @@ impl State {
                     TextTarget::Channel(channel) if self.history() => {
                         self.conversations.get(&channel).copied()
                     }
-                    TextTarget::DirectConversation(id)
-                        if self.history() && self.directs.contains_key(&id) =>
-                    {
-                        Some(id)
-                    }
+                    // The server decides whether it is ours (right after a
+                    // reconnect the list may not be back yet).
+                    TextTarget::DirectConversation(id) if self.history() => Some(id),
                     _ => None,
                 };
                 let chat = conversation
@@ -3663,16 +3661,10 @@ mod tests {
                 .unwrap();
         }
         while rx.try_recv().is_ok() {}
-        // Unknown until the server names it: nothing goes out.
         let send = |body: &str| Command::SendText {
             target: TextTarget::DirectConversation([5; 16]),
             body: body.into(),
             expected_peer: None,
-        };
-        state.command(send("too early"), &tx).await.unwrap();
-        assert!(state.outbound.is_empty());
-        let Ok(SessionEvent::Notice(_)) = rx.try_recv() else {
-            panic!("no notice")
         };
         let list = v1::DirectList {
             request_id: 0,

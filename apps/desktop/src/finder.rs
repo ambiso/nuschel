@@ -285,6 +285,20 @@ impl Desktop {
                     {
                         continue;
                     }
+                    // Likewise a Nuschel server's direct conversation with
+                    // someone online.
+                    TextTarget::DirectConversation(_)
+                        if connected
+                            && channel
+                                .direct_peer
+                                .as_ref()
+                                .and_then(|peer| peer.user_id)
+                                .is_some_and(|id| {
+                                    server.users.values().any(|user| user.user_id == Some(id))
+                                }) =>
+                    {
+                        continue;
+                    }
                     TextTarget::Direct(_) | TextTarget::DirectConversation(_) => {
                         let (name, alias) = match &channel.direct_peer {
                             Some(peer) => person(peer, &self.settings),
@@ -321,13 +335,18 @@ impl Desktop {
                 if Some(user.session) == server.own_session {
                     continue;
                 }
-                // Their direct conversation, if one is open.
+                // Their direct conversation, if one is open (on a Nuschel
+                // server, the account's: directs.rs).
                 let direct = server.channels.iter().find(|channel| {
                     channel.target == TextTarget::Direct(user.session)
                         && channel
                             .direct_peer
                             .as_ref()
                             .is_none_or(|peer| peer.instance == user.instance)
+                        || matches!(channel.target, TextTarget::DirectConversation(_))
+                            && user.user_id.is_some()
+                            && channel.direct_peer.as_ref().and_then(|peer| peer.user_id)
+                                == user.user_id
                 });
                 let (mut score, suggested) = rank(
                     direct.map(|channel| channel.id),
