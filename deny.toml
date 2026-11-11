@@ -94,6 +94,13 @@ deny = [
   { name = "magic-wormhole", wrappers = [
     "nuschel-transfer-worker",
   ], reason = "Peer-to-peer file transfer talks to untrusted peers from the sandboxed transfer worker" },
+  { name = "akd", wrappers = [
+    "nuschel-kt",
+  ], reason = "The key-transparency backend stays behind nuschel-kt's interface, so it can be replaced (docs/e2ee.md §5.2)" },
+  { name = "akd_core", wrappers = [
+    "akd",
+    "nuschel-kt",
+  ], reason = "akd's verifiers are used only through nuschel-kt" },
 ]
 
 [sources]

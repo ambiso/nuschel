@@ -9,6 +9,7 @@
 //! | `n` ‖ u32 label_len ‖ label_val\[32\] | a tree node with its previous state |
 //! | `v` ‖ u16 len ‖ label ‖ u64 epoch | the value of a label published at an epoch |
 //! | `h` ‖ u64 epoch | the newest signed head of an epoch (see `mod.rs`) |
+//! | `p` ‖ u64 epoch | the append-only proof from `epoch - 1` to `epoch` (see `mod.rs`) |
 //! | `m` ‖ name | metadata (the log descriptor) |
 //!
 //! The length prefix in `v` keys makes a prefix scan return exactly one label's
@@ -32,6 +33,7 @@ pub(crate) const KEY_AZKS: &[u8] = b"a";
 const PREFIX_NODE: u8 = b'n';
 const PREFIX_VALUE: u8 = b'v';
 pub(crate) const PREFIX_HEAD: u8 = b'h';
+const PREFIX_AUDIT: u8 = b'p';
 pub(crate) const KEY_DESCRIPTOR: &[u8] = b"mdescriptor";
 /// Largest stored record (a value state with the largest value and label).
 const MAX_RECORD: usize = 16 * 1024;
@@ -39,6 +41,13 @@ const MAX_AKD_LABEL: usize = crate::types::MAX_LABEL_ENCODED;
 
 pub(crate) fn head_key(epoch: u64) -> Vec<u8> {
     let mut k = vec![PREFIX_HEAD];
+    k.extend_from_slice(&epoch.to_be_bytes());
+    k
+}
+
+/// The append-only proof from `epoch - 1` to `epoch`, made when `epoch` was the latest.
+pub(crate) fn audit_key(epoch: u64) -> Vec<u8> {
+    let mut k = vec![PREFIX_AUDIT];
     k.extend_from_slice(&epoch.to_be_bytes());
     k
 }
@@ -252,10 +261,7 @@ impl<S: KtStore> KvDatabase<S> {
     }
 }
 
-fn select_state(
-    states: Vec<ValueState>,
-    flag: ValueStateRetrievalFlag,
-) -> Option<ValueState> {
+fn select_state(states: Vec<ValueState>, flag: ValueStateRetrievalFlag) -> Option<ValueState> {
     let mut it = states.into_iter();
     match flag {
         ValueStateRetrievalFlag::SpecificVersion(v) => it.find(|s| s.version == v),
@@ -288,7 +294,10 @@ impl<S: KtStore> Database for KvDatabase<S> {
         let key = key_for(St::data_type(), &St::get_full_binary_key_id(id))?;
         match self.store.get(&key).await.map_err(store_err)? {
             Some(bytes) => decode_record(St::data_type(), &bytes),
-            None => Err(StorageError::NotFound(format!("{:?} {id:?}", St::data_type()))),
+            None => Err(StorageError::NotFound(format!(
+                "{:?} {id:?}",
+                St::data_type()
+            ))),
         }
     }
 
@@ -383,8 +392,14 @@ mod tests {
         assert_eq!(pick(ValueStateRetrievalFlag::LeqEpoch(1)).await, None);
         assert_eq!(pick(ValueStateRetrievalFlag::MaxEpoch).await, Some(3));
         assert_eq!(pick(ValueStateRetrievalFlag::MinEpoch).await, Some(1));
-        assert_eq!(pick(ValueStateRetrievalFlag::SpecificEpoch(5)).await, Some(2));
-        assert_eq!(pick(ValueStateRetrievalFlag::SpecificVersion(3)).await, Some(3));
+        assert_eq!(
+            pick(ValueStateRetrievalFlag::SpecificEpoch(5)).await,
+            Some(2)
+        );
+        assert_eq!(
+            pick(ValueStateRetrievalFlag::SpecificVersion(3)).await,
+            Some(3)
+        );
         let versions = db
             .get_user_state_versions(
                 &[a.clone(), AkdLabel(b"zz".to_vec())],

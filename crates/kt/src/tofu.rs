@@ -41,7 +41,10 @@ pub struct ContactTrust {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Observation {
     /// A verified lookup of the contact's `acct:` label.
-    Lookup { root: IdentityFingerprint, version: u64 },
+    Lookup {
+        root: IdentityFingerprint,
+        version: u64,
+    },
     /// A verified history (DM and verified contacts, every connect): the current root,
     /// and the roots of all versions after `checked_version` except the current one.
     History {
@@ -276,13 +279,22 @@ mod tests {
     #[test]
     fn first_sight_pins_and_confirmations_verify_automatically() {
         let mut t = ContactTrust::default();
-        assert_eq!(t.assess(lookup(1, 1), 0), Assessment::FirstContact { root: fp(1) });
+        assert_eq!(
+            t.assess(lookup(1, 1), 0),
+            Assessment::FirstContact { root: fp(1) }
+        );
         assert_eq!(t.pinned, Some(fp(1)));
         let a = t.assess(lookup(1, 3), 0);
-        assert_eq!(a.surface(ConversationKind::Direct), Surface::VerifiedAutomatically);
+        assert_eq!(
+            a.surface(ConversationKind::Direct),
+            Surface::VerifiedAutomatically
+        );
         t.manually_verified = true;
         let a = t.assess(lookup(1, 3), 0);
-        assert_eq!(a.surface(ConversationKind::Channel), Surface::VerifiedManually);
+        assert_eq!(
+            a.surface(ConversationKind::Channel),
+            Surface::VerifiedManually
+        );
     }
 
     #[test]
@@ -316,8 +328,14 @@ mod tests {
             ..Default::default()
         };
         let a = t.assess(lookup(2, 2), 0);
-        assert_eq!(a.surface(ConversationKind::Direct), Surface::KeyChangeBlocking);
-        assert_eq!(a.surface(ConversationKind::Channel), Surface::KeyChangeAmberLock);
+        assert_eq!(
+            a.surface(ConversationKind::Direct),
+            Surface::KeyChangeBlocking
+        );
+        assert_eq!(
+            a.surface(ConversationKind::Channel),
+            Surface::KeyChangeAmberLock
+        );
         // The verified pin stays until the user decides.
         assert_eq!((t.pinned, t.pending_change), (Some(fp(1)), Some(fp(2))));
         t.accept_change();
@@ -363,7 +381,10 @@ mod tests {
             a,
             Assessment::ServerMisbehaviour(KtError::VersionRegressed { known: 4, got: 3 })
         );
-        assert_eq!(a.surface(ConversationKind::Direct), Surface::ServerMisbehaviourAlarm);
+        assert_eq!(
+            a.surface(ConversationKind::Direct),
+            Surface::ServerMisbehaviourAlarm
+        );
         let a = t.assess(
             Observation::Failed(KtError::AuditFailed {
                 from: 1,
@@ -372,7 +393,10 @@ mod tests {
             }),
             0,
         );
-        assert_eq!(a.surface(ConversationKind::Channel), Surface::ServerMisbehaviourAlarm);
+        assert_eq!(
+            a.surface(ConversationKind::Channel),
+            Surface::ServerMisbehaviourAlarm
+        );
         assert_eq!(t.failures, 0);
     }
 
@@ -392,7 +416,10 @@ mod tests {
             0,
         );
         assert_eq!(a, Assessment::TransientBinding { seen: vec![fp(9)] });
-        assert_eq!(a.surface(ConversationKind::Direct), Surface::KeyChangeNotice);
+        assert_eq!(
+            a.surface(ConversationKind::Direct),
+            Surface::KeyChangeNotice
+        );
         assert_eq!((t.pinned, t.checked_version), (Some(fp(1)), 3));
     }
 }

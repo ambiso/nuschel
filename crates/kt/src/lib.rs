@@ -47,7 +47,7 @@
 //!
 //! | Type | Message | Size |
 //! | --- | --- | --- |
-//! | 1 | [`LogDescriptor`] | 70 bytes (Ed25519, akd) |
+//! | 1 | [`LogDescriptor`] | 71 bytes (Ed25519, akd) |
 //! | 2 | [`SignedHead`] | 148 bytes |
 //! | 3 | [`LookupResponse`] | ≤ 256 KiB proof |
 //! | 4 | [`HistoryResponse`] | ≤ 8 MiB proof |

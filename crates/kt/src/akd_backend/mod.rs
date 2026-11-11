@@ -24,7 +24,7 @@ use akd::append_only_zks::AzksParallelismConfig;
 use akd::ecvrf::{VRFKeyStorage, VRFPrivateKey, VRFPublicKey, VrfError};
 use akd::errors::{AkdError, StorageError};
 use akd::storage::StorageManager;
-use akd::{AkdLabel, AkdValue, HistoryParams, HistoryVerificationParams};
+use akd::{AkdLabel, AkdValue, AppendOnlyProof, HistoryParams, HistoryVerificationParams};
 use async_trait::async_trait;
 use db::KvDatabase;
 use std::collections::HashSet;
@@ -137,13 +137,10 @@ impl<S: KtStore> AkdDirectory<S> {
             }
         }
         let manager = StorageManager::new_no_cache(KvDatabase::new(store.clone()));
-        let akd = akd::Directory::<AkdConfig, _, _>::new(
-            manager,
-            vrf,
-            AzksParallelismConfig::default(),
-        )
-        .await
-        .map_err(akd_err)?;
+        let akd =
+            akd::Directory::<AkdConfig, _, _>::new(manager, vrf, AzksParallelismConfig::default())
+                .await
+                .map_err(akd_err)?;
         let current = akd.get_epoch_hash().await.map_err(akd_err)?;
         let head = match load_head(&*store, current.epoch()).await? {
             Some(head) if head.root == current.hash() && head.log_id == log_id => head,
@@ -155,7 +152,9 @@ impl<S: KtStore> AkdDirectory<S> {
             None => {
                 // The previous head (if any) bounds the signing time from below.
                 let floor = match current.epoch().checked_sub(1) {
-                    Some(prev) => load_head(&*store, prev).await?.map_or(0, |h| h.issued_at_ms),
+                    Some(prev) => load_head(&*store, prev)
+                        .await?
+                        .map_or(0, |h| h.issued_at_ms),
                     None => 0,
                 };
                 let head = SignedHead::sign(
@@ -165,7 +164,7 @@ impl<S: KtStore> AkdDirectory<S> {
                     current.hash(),
                     now_ms.max(floor),
                 )?;
-                store_head(&*store, &head).await?;
+                store.write(epoch_records(&akd, &head).await?).await?;
                 head
             }
         };
@@ -192,13 +191,71 @@ impl<S: KtStore> AkdDirectory<S> {
     }
 }
 
-async fn load_head<S: KtStore>(store: &S, epoch: u64) -> Result<Option<SignedHead>, DirectoryError> {
+async fn load_head<S: KtStore>(
+    store: &S,
+    epoch: u64,
+) -> Result<Option<SignedHead>, DirectoryError> {
     match store.get(&db::head_key(epoch)).await? {
         Some(bytes) => SignedHead::decode(&bytes)
             .map(Some)
             .map_err(|e| DirectoryError::Corrupt(format!("stored head: {e}"))),
         None => Ok(None),
     }
+}
+
+/// The records of a newly published epoch: its head and, from epoch 1 on, the
+/// append-only proof from the previous epoch.
+///
+/// akd builds every audit proof against its *latest* tree, so a proof for an older
+/// epoch also walks every path changed since: a range audit costs the span times the
+/// later changes (238 KB for four quiet epochs at 10,000 accounts). Made while `epoch`
+/// is the latest, the proof is minimal, and it stays valid because it only connects
+/// two fixed roots. Range audits concatenate these.
+async fn epoch_records<S: KtStore>(
+    akd: &akd::Directory<AkdConfig, KvDatabase<S>, VrfSecret>,
+    head: &SignedHead,
+) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DirectoryError> {
+    let mut records = vec![(db::head_key(head.epoch), head.encode())];
+    if head.epoch > 0 {
+        let proof = akd
+            .audit(head.epoch - 1, head.epoch)
+            .await
+            .map_err(akd_err)?;
+        records.push((
+            db::audit_key(head.epoch),
+            codec::encode_append_only(&proof)?,
+        ));
+    }
+    Ok(records)
+}
+
+/// The stored single-epoch proofs for `from..to`, joined; `None` if one is missing.
+async fn stored_audit<S: KtStore>(
+    store: &S,
+    from: u64,
+    to: u64,
+) -> Result<Option<AppendOnlyProof>, DirectoryError> {
+    let keys: Vec<_> = (from + 1..=to).map(db::audit_key).collect();
+    let mut joined = AppendOnlyProof {
+        proofs: Vec::with_capacity(keys.len()),
+        epochs: Vec::with_capacity(keys.len()),
+    };
+    for (bytes, epoch) in store.get_many(&keys).await?.into_iter().zip(from..to) {
+        let Some(bytes) = bytes else {
+            return Ok(None);
+        };
+        let single = codec::decode_append_only(&bytes)
+            .map_err(|e| DirectoryError::Corrupt(format!("stored audit proof: {e}")))?;
+        if single.epochs != [epoch] {
+            return Err(DirectoryError::Corrupt(format!(
+                "the stored audit proof of epoch {} covers other epochs",
+                epoch + 1
+            )));
+        }
+        joined.proofs.extend(single.proofs);
+        joined.epochs.push(epoch);
+    }
+    Ok(Some(joined))
 }
 
 async fn store_head<S: KtStore>(store: &S, head: &SignedHead) -> Result<(), DirectoryError> {
@@ -250,9 +307,11 @@ impl<S: KtStore> Directory for AkdDirectory<S> {
             published.hash(),
             now_ms.max(latest.issued_at_ms),
         )?;
-        // If this write fails the epoch exists without a head; `open` repairs that,
-        // and until then proofs for it fail with `Corrupt`.
-        store_head(&*self.store, &head).await?;
+        // Head and audit proof are written together. If this fails, the epoch exists
+        // without them; `open` repairs that, and until then proofs fail with `Corrupt`.
+        self.store
+            .write(epoch_records(&self.akd, &head).await?)
+            .await?;
         *latest = head.clone();
         Ok(head)
     }
@@ -324,11 +383,14 @@ impl<S: KtStore> Directory for AkdDirectory<S> {
                 latest.epoch
             )));
         }
-        let proof = self
-            .akd
-            .audit(from_epoch, to_epoch)
-            .await
-            .map_err(akd_err)?;
+        let proof = match stored_audit(&*self.store, from_epoch, to_epoch).await? {
+            Some(proof) => proof,
+            None => self
+                .akd
+                .audit(from_epoch, to_epoch)
+                .await
+                .map_err(akd_err)?,
+        };
         let mut roots = Vec::with_capacity((to_epoch - from_epoch) as usize);
         for epoch in from_epoch + 1..=to_epoch {
             let head = load_head(&*self.store, epoch)

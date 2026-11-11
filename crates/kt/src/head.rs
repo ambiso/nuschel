@@ -98,9 +98,7 @@ impl SignedHead {
         }
         let root = r.array("head.root")?;
         let issued_at_ms = r.u64("head.issued_at_ms")?;
-        let signature = r
-            .bytes_u16("head.signature", MAX_SIGNATURE_BYTES)?
-            .to_vec();
+        let signature = r.bytes_u16("head.signature", MAX_SIGNATURE_BYTES)?.to_vec();
         Ok(Self {
             log_id,
             epoch,

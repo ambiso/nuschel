@@ -11,7 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-nuschel-identity = { path = "../identity" }
+nuschel-identity.workspace = true
 # The directory backend (docs/e2ee.md §5.2). Default features are off: no auditing
 # helpers (`public_auditing`), no WhatsApp configuration; the directory uses akd's
 # current configuration (`experimental`) with a Nuschel domain label.

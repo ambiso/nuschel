@@ -69,7 +69,9 @@ fuzz_target!(|data: &[u8]| {
                 assert_eq!(g.encode(), input);
                 let mut known = KnownHeads::new(&descriptor);
                 let _ = check_gossip(&descriptor, &known, &g);
-                let resigned = HeadGossip { head: resign(&g.head) };
+                let resigned = HeadGossip {
+                    head: resign(&g.head),
+                };
                 if let Ok((head, _)) = check_gossip(&descriptor, &known, &resigned) {
                     known.record(head).expect("first head");
                     let other = sign(g.head.epoch, [0xee; 32], g.head.issued_at_ms);

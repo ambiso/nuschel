@@ -39,7 +39,12 @@ async fn publish_look_up_monitor_and_audit_across_many_epochs() {
     let mut own_values = vec![];
     let mut checkpoint: Option<MonitorCheckpoint> = None;
     let mut contact = ContactTrust::default();
-    let mut heads = vec![client.accept(&dir, &dir.latest_head().await.unwrap(), T0).await.unwrap()];
+    let mut heads = vec![
+        client
+            .accept(&dir, &dir.latest_head().await.unwrap(), T0)
+            .await
+            .unwrap(),
+    ];
 
     for epoch in 1..=EPOCHS {
         let now = T0 + epoch * 10_000;
@@ -97,7 +102,8 @@ async fn publish_look_up_monitor_and_audit_across_many_epochs() {
         // Self-monitoring of account 0.
         let history = dir.history(&acct(0)).await.unwrap();
         let history = verify_history(&descriptor, &acct(0), &history).unwrap();
-        let report = monitor_own(&history, checkpoint.as_ref(), |v| own_values.contains(v)).unwrap();
+        let report =
+            monitor_own(&history, checkpoint.as_ref(), |v| own_values.contains(v)).unwrap();
         assert_eq!(report.checkpoint.version, model[&0].len() as u64);
         checkpoint = Some(report.checkpoint);
 
@@ -111,8 +117,17 @@ async fn publish_look_up_monitor_and_audit_across_many_epochs() {
         match epoch {
             1 => assert!(matches!(assessment, Assessment::FirstContact { .. })),
             20 => {
-                assert!(matches!(assessment, Assessment::KeyChanged { was_verified: false, .. }));
-                assert_eq!(assessment.surface(ConversationKind::Direct), Surface::KeyChangeNotice);
+                assert!(matches!(
+                    assessment,
+                    Assessment::KeyChanged {
+                        was_verified: false,
+                        ..
+                    }
+                ));
+                assert_eq!(
+                    assessment.surface(ConversationKind::Direct),
+                    Surface::KeyChangeNotice
+                );
             }
             _ => assert_eq!(
                 assessment.surface(ConversationKind::Direct),
@@ -125,8 +140,16 @@ async fn publish_look_up_monitor_and_audit_across_many_epochs() {
     for (&n, versions) in &model {
         let history = dir.history(&acct(n)).await.unwrap();
         let history = verify_history(&descriptor, &acct(n), &history).unwrap();
-        let got: Vec<_> = history.entries.iter().rev().map(|e| (e.value.clone(), e.epoch)).collect();
-        let want: Vec<_> = versions.iter().map(|&(r, s, e)| (binding(r, s), e)).collect();
+        let got: Vec<_> = history
+            .entries
+            .iter()
+            .rev()
+            .map(|e| (e.value.clone(), e.epoch))
+            .collect();
+        let want: Vec<_> = versions
+            .iter()
+            .map(|&(r, s, e)| (binding(r, s), e))
+            .collect();
         assert_eq!(got, want, "history of account {n}");
     }
 
@@ -136,26 +159,55 @@ async fn publish_look_up_monitor_and_audit_across_many_epochs() {
     let audit = dir.audit(first.epoch(), last.epoch()).await.unwrap();
     verify_audit(&descriptor, first, last, &audit).unwrap();
     let middle = verify_head(&descriptor, &dir.head_at(17).await.unwrap()).unwrap();
-    verify_audit(&descriptor, first, &middle, &dir.audit(1, 17).await.unwrap()).unwrap();
-    verify_audit(&descriptor, &middle, last, &dir.audit(17, EPOCHS).await.unwrap()).unwrap();
+    verify_audit(
+        &descriptor,
+        first,
+        &middle,
+        &dir.audit(1, 17).await.unwrap(),
+    )
+    .unwrap();
+    verify_audit(
+        &descriptor,
+        &middle,
+        last,
+        &dir.audit(17, EPOCHS).await.unwrap(),
+    )
+    .unwrap();
     // From the empty directory at epoch 0.
-    verify_audit(&descriptor, &heads[0], &heads[3], &dir.audit(0, 3).await.unwrap()).unwrap();
+    verify_audit(
+        &descriptor,
+        &heads[0],
+        &heads[3],
+        &dir.audit(0, 3).await.unwrap(),
+    )
+    .unwrap();
 }
 
 #[tokio::test]
 async fn refreshed_heads_keep_the_epoch_and_never_go_back_in_time() {
     let dir = open().await;
     let descriptor = dir.descriptor().clone();
-    let first = dir.publish(vec![(acct(1), binding(1, 1))], T0 + 1000).await.unwrap();
+    let first = dir
+        .publish(vec![(acct(1), binding(1, 1))], T0 + 1000)
+        .await
+        .unwrap();
     let refreshed = dir.refresh_head(T0 + 3_600_000).await.unwrap();
     assert_eq!((refreshed.epoch, refreshed.root), (first.epoch, first.root));
     assert!(refreshed.issued_at_ms > first.issued_at_ms);
     // A clock that went back neither re-signs nor moves time backwards.
     assert_eq!(dir.refresh_head(T0).await.unwrap(), refreshed);
-    let next = dir.publish(vec![(acct(2), binding(2, 1))], T0 + 5).await.unwrap();
+    let next = dir
+        .publish(vec![(acct(2), binding(2, 1))], T0 + 5)
+        .await
+        .unwrap();
     assert!(next.issued_at_ms >= refreshed.issued_at_ms);
     // Publishing an unchanged value creates no epoch.
-    assert_eq!(dir.publish(vec![(acct(2), binding(2, 1))], T0 + 9_000_000).await.unwrap(), next);
+    assert_eq!(
+        dir.publish(vec![(acct(2), binding(2, 1))], T0 + 9_000_000)
+            .await
+            .unwrap(),
+        next
+    );
 
     let a = verify_head(&descriptor, &first).unwrap();
     let b = verify_head(&descriptor, &refreshed).unwrap();
@@ -173,7 +225,10 @@ async fn refreshed_heads_keep_the_epoch_and_never_go_back_in_time() {
 async fn reopening_a_store_keeps_the_log_and_refuses_other_keys() {
     let store = Arc::new(MemoryStore::new());
     let dir = open_with(store.clone(), SIGNER_SEED, VRF_SEED).await;
-    let head = dir.publish(vec![(acct(1), binding(1, 1))], T0 + 1).await.unwrap();
+    let head = dir
+        .publish(vec![(acct(1), binding(1, 1))], T0 + 1)
+        .await
+        .unwrap();
     drop(dir);
     let dir = open_with(store.clone(), SIGNER_SEED, VRF_SEED).await;
     assert_eq!(dir.latest_head().await.unwrap(), head);
@@ -200,7 +255,10 @@ async fn gossip_between_consistent_members() {
     let mut now = T0;
     for n in 1..=3 {
         now += 10_000;
-        let head = dir.publish(vec![(acct(n), binding(n, 1))], now).await.unwrap();
+        let head = dir
+            .publish(vec![(acct(n), binding(n, 1))], now)
+            .await
+            .unwrap();
         alice.accept(&dir, &head, now).await.unwrap();
         if n == 1 {
             bob.accept(&dir, &head, now).await.unwrap();
@@ -209,20 +267,45 @@ async fn gossip_between_consistent_members() {
     let alice_latest = alice.known.latest().unwrap().clone();
     assert!(should_gossip(&alice_latest, Some(1), None, now));
     assert!(!should_gossip(&alice_latest, Some(3), None, now));
-    assert!(!should_gossip(&alice_latest, Some(1), Some(now - 1000), now));
+    assert!(!should_gossip(
+        &alice_latest,
+        Some(1),
+        Some(now - 1000),
+        now
+    ));
 
     // Bob receives a newer head and audits up to it.
-    let message = HeadGossip::decode(&HeadGossip { head: alice_latest.signed().clone() }.encode()).unwrap();
+    let message = HeadGossip::decode(
+        &HeadGossip {
+            head: alice_latest.signed().clone(),
+        }
+        .encode(),
+    )
+    .unwrap();
     let (head, outcome) = check_gossip(&descriptor, &bob.known, &message).unwrap();
     let GossipOutcome::Newer { since: Some(since) } = outcome else {
         panic!("expected a newer head, got {outcome:?}");
     };
-    verify_audit(&descriptor, &since, &head, &dir.audit(since.epoch(), head.epoch()).await.unwrap()).unwrap();
+    verify_audit(
+        &descriptor,
+        &since,
+        &head,
+        &dir.audit(since.epoch(), head.epoch()).await.unwrap(),
+    )
+    .unwrap();
     bob.known.record(head).unwrap();
     // The same head again, and an older one, are consistent.
-    assert_eq!(check_gossip(&descriptor, &bob.known, &message).unwrap().1, GossipOutcome::Known);
-    let old = HeadGossip { head: dir.head_at(2).await.unwrap() };
-    assert_eq!(check_gossip(&descriptor, &bob.known, &old).unwrap().1, GossipOutcome::Older);
+    assert_eq!(
+        check_gossip(&descriptor, &bob.known, &message).unwrap().1,
+        GossipOutcome::Known
+    );
+    let old = HeadGossip {
+        head: dir.head_at(2).await.unwrap(),
+    };
+    assert_eq!(
+        check_gossip(&descriptor, &bob.known, &old).unwrap().1,
+        GossipOutcome::Older
+    );
     // KnownHeads survives persistence.
     let saved: Vec<_> = bob.known.heads().map(|h| h.signed().clone()).collect();
     let restored = KnownHeads::restore(&descriptor, &saved).unwrap();
@@ -233,25 +316,34 @@ async fn gossip_between_consistent_members() {
 async fn a_real_identity_roster_is_checked_against_the_log() {
     let now_s = T0 / 1000;
     let validity = Validity::starting_at(now_s, 86_400 * 365).unwrap();
-    let identity = NewIdentity::create(&DisplayName::new("desktop").unwrap(), validity, now_s).unwrap();
+    let identity =
+        NewIdentity::create(&DisplayName::new("desktop").unwrap(), validity, now_s).unwrap();
     let laptop = DeviceKeys::generate().unwrap();
     let (laptop_cert, _) = identity
         .device_signing
-        .certify_device(&laptop.public_keys(), &DisplayName::new("laptop").unwrap(), validity)
+        .certify_device(
+            &laptop.public_keys(),
+            &DisplayName::new("laptop").unwrap(),
+            validity,
+        )
         .unwrap();
     let signing_cert = identity.device_signing.certificate().clone();
     let devices = vec![identity.device_certificate.clone(), laptop_cert.clone()];
     let roster = RosterCommitment::compute(&signing_cert, &devices, &[]).unwrap();
     // The commitment does not depend on the order of the certificates.
     let reversed: Vec<_> = devices.iter().rev().cloned().collect();
-    assert_eq!(RosterCommitment::compute(&signing_cert, &reversed, &[]).unwrap(), roster);
+    assert_eq!(
+        RosterCommitment::compute(&signing_cert, &reversed, &[]).unwrap(),
+        roster
+    );
     let value = AccountBinding::new(identity.root.public_key().clone(), roster).to_value();
     assert_eq!(value.data().len(), 2018);
 
     let dir = open().await;
     let descriptor = dir.descriptor().clone();
     dir.publish(vec![(acct(7), value)], T0 + 1).await.unwrap();
-    let (_, entry) = verify_lookup(&descriptor, &acct(7), &dir.lookup(&acct(7)).await.unwrap()).unwrap();
+    let (_, entry) =
+        verify_lookup(&descriptor, &acct(7), &dir.lookup(&acct(7)).await.unwrap()).unwrap();
     let binding = AccountBinding::from_value(&entry.value).unwrap();
     assert_eq!(binding.fingerprint(), identity.root.fingerprint());
 
@@ -262,13 +354,24 @@ async fn a_real_identity_roster_is_checked_against_the_log() {
         roster_for_binding(&binding, &signing_cert, &devices[..1], &[]).unwrap_err(),
         KtError::RosterMismatch
     );
-    let revocation = identity.device_signing.revoke_device(laptop.device_id(), 1, now_s).unwrap();
+    let revocation = identity
+        .device_signing
+        .revoke_device(laptop.device_id(), 1, now_s)
+        .unwrap();
     assert_eq!(
-        roster_for_binding(&binding, &signing_cert, &devices, &[revocation.clone()]).unwrap_err(),
+        roster_for_binding(
+            &binding,
+            &signing_cert,
+            &devices,
+            std::slice::from_ref(&revocation)
+        )
+        .unwrap_err(),
         KtError::RosterMismatch
     );
     // A revocation published with a new roster commitment is accepted and applied.
-    let revoked = RosterCommitment::compute(&signing_cert, &devices, &[revocation.clone()]).unwrap();
+    let revoked =
+        RosterCommitment::compute(&signing_cert, &devices, std::slice::from_ref(&revocation))
+            .unwrap();
     let binding2 = AccountBinding::new(identity.root.public_key().clone(), revoked);
     let roster = roster_for_binding(&binding2, &signing_cert, &devices, &[revocation]).unwrap();
     assert_eq!(roster.active_devices(now_s + 10).len(), 1);
@@ -294,26 +397,52 @@ async fn a_real_identity_roster_is_checked_against_the_log() {
 async fn messages_round_trip_and_have_the_documented_sizes() {
     let dir = open().await;
     let descriptor = dir.descriptor().clone();
-    dir.publish(vec![(acct(1), binding(1, 1)), (Label::name("alice").unwrap(), NameBinding(account(1)).to_value())], T0 + 1)
+    dir.publish(
+        vec![
+            (acct(1), binding(1, 1)),
+            (
+                Label::name("alice").unwrap(),
+                NameBinding(account(1)).to_value(),
+            ),
+        ],
+        T0 + 1,
+    )
+    .await
+    .unwrap();
+    dir.publish(vec![(acct(1), binding(1, 2))], T0 + 2)
         .await
         .unwrap();
-    dir.publish(vec![(acct(1), binding(1, 2))], T0 + 2).await.unwrap();
     let head = dir.latest_head().await.unwrap();
     assert_eq!(head.encode().len(), HEAD_BYTES);
     assert_eq!(HEAD_BYTES, 148);
     assert_eq!(SignedHead::decode(&head.encode()).unwrap(), head);
     assert_eq!(descriptor.encode().len(), 71);
-    assert_eq!(LogDescriptor::decode(&descriptor.encode()).unwrap(), descriptor);
+    assert_eq!(
+        LogDescriptor::decode(&descriptor.encode()).unwrap(),
+        descriptor
+    );
     let gossip = HeadGossip { head: head.clone() };
     assert_eq!(gossip.encode().len(), GOSSIP_BYTES);
     assert_eq!(GOSSIP_BYTES, 150);
 
     let lookup = dir.lookup(&Label::name("alice").unwrap()).await.unwrap();
-    assert_eq!(LookupResponse::decode(&lookup.encode().unwrap()).unwrap(), lookup);
+    assert_eq!(
+        LookupResponse::decode(&lookup.encode().unwrap()).unwrap(),
+        lookup
+    );
     let history = dir.history(&acct(1)).await.unwrap();
-    assert_eq!(HistoryResponse::decode(&history.encode().unwrap()).unwrap(), history);
+    assert_eq!(
+        HistoryResponse::decode(&history.encode().unwrap()).unwrap(),
+        history
+    );
     let audit = dir.audit(0, 2).await.unwrap();
-    assert_eq!(AuditResponse::decode(&audit.encode().unwrap()).unwrap(), audit);
+    assert_eq!(
+        AuditResponse::decode(&audit.encode().unwrap()).unwrap(),
+        audit
+    );
     let (_, entry) = verify_lookup(&descriptor, &Label::name("alice").unwrap(), &lookup).unwrap();
-    assert_eq!(NameBinding::from_value(&entry.value).unwrap(), NameBinding(account(1)));
+    assert_eq!(
+        NameBinding::from_value(&entry.value).unwrap(),
+        NameBinding(account(1))
+    );
 }

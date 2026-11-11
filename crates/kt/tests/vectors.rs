@@ -43,34 +43,71 @@ async fn generate() -> Vec<(String, String)> {
         "label.id",
         hex::encode(Label::Identity(root(1).fingerprint()).encode().unwrap()),
     );
-    put("label.alice", hex::encode(Label::name("alice").unwrap().encode().unwrap()));
+    put(
+        "label.alice",
+        hex::encode(Label::name("alice").unwrap().encode().unwrap()),
+    );
     put("value.acct1.v1", hex::encode(binding(1, 1).encode()));
     put("value.acct1.v2", hex::encode(binding(1, 2).encode()));
-    put("value.alice", hex::encode(NameBinding(account(1)).to_value().encode()));
+    put(
+        "value.alice",
+        hex::encode(NameBinding(account(1)).to_value().encode()),
+    );
 
-    put("head.0", hex::encode(dir.latest_head().await.unwrap().encode()));
+    put(
+        "head.0",
+        hex::encode(dir.latest_head().await.unwrap().encode()),
+    );
     let epoch1 = vec![
         (acct(1), binding(1, 1)),
         (acct(2), binding(2, 1)),
-        (Label::name("alice").unwrap(), NameBinding(account(1)).to_value()),
+        (
+            Label::name("alice").unwrap(),
+            NameBinding(account(1)).to_value(),
+        ),
     ];
     dir.publish(epoch1.clone(), T0 + 1000).await.unwrap();
     fork.publish(epoch1, T0 + 1000).await.unwrap();
-    dir.publish(vec![(acct(1), binding(1, 2))], T0 + 2000).await.unwrap();
-    let forked = fork.publish(vec![(acct(1), binding(666, 1))], T0 + 2000).await.unwrap();
-    dir.publish(vec![(acct(3), binding(3, 1))], T0 + 3000).await.unwrap();
+    dir.publish(vec![(acct(1), binding(1, 2))], T0 + 2000)
+        .await
+        .unwrap();
+    let forked = fork
+        .publish(vec![(acct(1), binding(666, 1))], T0 + 2000)
+        .await
+        .unwrap();
+    dir.publish(vec![(acct(3), binding(3, 1))], T0 + 3000)
+        .await
+        .unwrap();
     for epoch in 1..=3 {
-        put(&format!("head.{epoch}"), hex::encode(dir.head_at(epoch).await.unwrap().encode()));
+        put(
+            &format!("head.{epoch}"),
+            hex::encode(dir.head_at(epoch).await.unwrap().encode()),
+        );
     }
-    put("lookup.acct1", hex::encode(dir.lookup(&acct(1)).await.unwrap().encode().unwrap()));
+    put(
+        "lookup.acct1",
+        hex::encode(dir.lookup(&acct(1)).await.unwrap().encode().unwrap()),
+    );
     put("lookup.acct1.version", "2".into());
     put("lookup.acct1.epoch", "2".into());
     put(
         "lookup.alice",
-        hex::encode(dir.lookup(&Label::name("alice").unwrap()).await.unwrap().encode().unwrap()),
+        hex::encode(
+            dir.lookup(&Label::name("alice").unwrap())
+                .await
+                .unwrap()
+                .encode()
+                .unwrap(),
+        ),
     );
-    put("history.acct1", hex::encode(dir.history(&acct(1)).await.unwrap().encode().unwrap()));
-    put("audit.0.3", hex::encode(dir.audit(0, 3).await.unwrap().encode().unwrap()));
+    put(
+        "history.acct1",
+        hex::encode(dir.history(&acct(1)).await.unwrap().encode().unwrap()),
+    );
+    put(
+        "audit.0.3",
+        hex::encode(dir.audit(0, 3).await.unwrap().encode().unwrap()),
+    );
     let head3 = dir.latest_head().await.unwrap();
     put("gossip.3", hex::encode(HeadGossip { head: head3 }.encode()));
     let evidence = Evidence {
@@ -107,7 +144,10 @@ async fn vectors_are_reproducible() {
         std::fs::write(PATH, &rendered).unwrap();
     }
     let on_disk = std::fs::read_to_string(PATH).expect("vectors file");
-    assert!(on_disk == rendered, "{PATH} is out of date (see its header)");
+    assert!(
+        on_disk == rendered,
+        "{PATH} is out of date (see its header)"
+    );
 }
 
 /// The file alone, through the client API only.
@@ -120,7 +160,13 @@ fn vectors_verify_with_the_client_functions() {
     assert_eq!(descriptor.suite(), Suite::AkdBlake3Ecvrf25519V1);
 
     let heads: Vec<VerifiedHead> = (0..=3)
-        .map(|e| verify_head(&descriptor, &SignedHead::decode(&bytes(&format!("head.{e}"))).unwrap()).unwrap())
+        .map(|e| {
+            verify_head(
+                &descriptor,
+                &SignedHead::decode(&bytes(&format!("head.{e}"))).unwrap(),
+            )
+            .unwrap()
+        })
         .collect();
     let mut known = KnownHeads::new(&descriptor);
     for (e, head) in heads.iter().enumerate() {
@@ -142,25 +188,43 @@ fn vectors_verify_with_the_client_functions() {
     );
 
     let alice = Label::decode(&bytes("label.alice")).unwrap();
-    let (_, entry) = verify_lookup(&descriptor, &alice, &LookupResponse::decode(&bytes("lookup.alice")).unwrap()).unwrap();
+    let (_, entry) = verify_lookup(
+        &descriptor,
+        &alice,
+        &LookupResponse::decode(&bytes("lookup.alice")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(entry.value.encode(), bytes("value.alice"));
 
     let history = HistoryResponse::decode(&bytes("history.acct1")).unwrap();
     let history = verify_history(&descriptor, &acct1, &history).unwrap();
-    let values: Vec<_> = history.entries.iter().map(|e| (e.version, e.epoch, e.value.encode())).collect();
+    let values: Vec<_> = history
+        .entries
+        .iter()
+        .map(|e| (e.version, e.epoch, e.value.encode()))
+        .collect();
     assert_eq!(
         values,
-        vec![(2, 2, bytes("value.acct1.v2")), (1, 1, bytes("value.acct1.v1"))]
+        vec![
+            (2, 2, bytes("value.acct1.v2")),
+            (1, 1, bytes("value.acct1.v1"))
+        ]
     );
 
     let audit = AuditResponse::decode(&bytes("audit.0.3")).unwrap();
     verify_audit(&descriptor, &heads[0], &heads[3], &audit).unwrap();
 
     let gossip = HeadGossip::decode(&bytes("gossip.3")).unwrap();
-    assert_eq!(check_gossip(&descriptor, &known, &gossip).unwrap().1, GossipOutcome::Known);
+    assert_eq!(
+        check_gossip(&descriptor, &known, &gossip).unwrap().1,
+        GossipOutcome::Known
+    );
 
     let evidence = Evidence::decode(&bytes("evidence.equivocation.2")).unwrap();
     evidence.verify(&descriptor).unwrap();
     let forked = verify_head(&descriptor, &evidence.second).unwrap();
-    assert!(matches!(known.classify(&forked), Err(KtError::Equivocation(_))));
+    assert!(matches!(
+        known.classify(&forked),
+        Err(KtError::Equivocation(_))
+    ));
 }

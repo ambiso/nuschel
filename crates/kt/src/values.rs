@@ -190,8 +190,8 @@ pub fn roster_for_binding(
             "two certificates for the same device".into(),
         ));
     }
-    let identity =
-        VerifiedIdentity::verify(binding.root().clone(), device_signing.clone()).map_err(invalid)?;
+    let identity = VerifiedIdentity::verify(binding.root().clone(), device_signing.clone())
+        .map_err(invalid)?;
     let mut roster = DeviceRoster::new(identity);
     for certificate in devices {
         roster

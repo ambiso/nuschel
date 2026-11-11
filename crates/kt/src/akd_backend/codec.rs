@@ -37,7 +37,7 @@ use crate::messages::{MAX_AUDIT_SPAN, MAX_HISTORY_PROOF, MAX_LOOKUP_PROOF};
 use crate::types::MAX_VALUE_ENCODED;
 use akd_core::{
     AkdValue, AppendOnlyProof, AzksElement, AzksValue, Direction, HistoryProof, LookupProof,
-    MembershipProof, NodeLabel, NonMembershipProof, SingleAppendOnlyProof, SiblingProof,
+    MembershipProof, NodeLabel, NonMembershipProof, SiblingProof, SingleAppendOnlyProof,
     UpdateProof,
 };
 
@@ -290,7 +290,11 @@ pub(crate) fn encode_history(p: &HistoryProof) -> Result<Vec<u8>, EncodeError> {
     for m in &p.existence_of_past_marker_proofs {
         write_membership(&mut w, m)?;
     }
-    w.count_u8("future_markers", p.future_marker_vrf_proofs.len(), MAX_MARKERS)?;
+    w.count_u8(
+        "future_markers",
+        p.future_marker_vrf_proofs.len(),
+        MAX_MARKERS,
+    )?;
     for v in &p.future_marker_vrf_proofs {
         write_vrf(&mut w, v)?;
     }
