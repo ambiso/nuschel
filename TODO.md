@@ -1109,6 +1109,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       OS adapters may need the existing system-service unsafe exception; identity
       decryption stays in the crypto worker. Mobile uses native credential APIs
       where PRF is supported.
+      A passkey stored in desktop Chrome/Google Password Manager is not necessarily
+      exposed to native OS APIs; Android's Credential Manager is a different case.
+      Credential access and PRF support are separate compatibility requirements.
+      Keep browser recovery first-class; offer native or phone/hybrid recovery
+      only for tested combinations, and explain an unavailable route clearly.
       The encrypted storage API can be untrusted, but the browser recovery code
       cannot: a compromised host can serve JavaScript that captures a PRF result.
       Opening that page from the desktop and returning through localhost does not
