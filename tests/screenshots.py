@@ -177,7 +177,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; resize (not in all) measures resizing")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; resize (not in all) measures resizing")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
@@ -761,6 +761,16 @@ def main():
                 time.sleep(0.6)
                 click(228, 268)  # back to #Development, as later scenes expect
                 time.sleep(0.8)
+            if want("runs"):
+                # Routine activity in a row collapses into one line; a click expands it.
+                for channel in (1, 2, 1, 2):
+                    bots[2].send(kind="join", channel=channel)
+                    time.sleep(0.5)
+                time.sleep(1.0)
+                shot("40-activity-run")
+                click(520, 683)  # the run, the timeline's last line
+                time.sleep(0.8)
+                shot("41-activity-run-expanded")
             if want("unread"):
                 # Messages out of sight: a count on the channel; a mention turns it red
                 # and puts a red count on the server.

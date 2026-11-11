@@ -1316,6 +1316,18 @@ fn eased(ease: &Option<crate::motion::Ease>, on: bool) -> f32 {
 }
 
 impl Desktop {
+    /// Expand or collapse a run of activity lines (see `activity_run`).
+    fn toggle_run(&mut self, server: usize, channel: usize, key: i64) {
+        if let Some(channel) = self
+            .servers
+            .get_mut(server)
+            .and_then(|server| server.channels.get_mut(channel))
+            && !channel.expanded_runs.remove(&key)
+        {
+            channel.expanded_runs.insert(key);
+        }
+    }
+
     /// The conversation in sight is read: selected, the window in front and
     /// scrolled to the newest message.
     fn mark_read(&mut self) {
@@ -1378,7 +1390,48 @@ impl Desktop {
 /// the previous message's header).
 enum Entry {
     Activity(usize),
-    Message { position: usize, grouped: bool },
+    /// Two or more routine activity lines in a row (`first..=last`), shown
+    /// as one line; when expanded, this is the header above them.
+    Run {
+        first: usize,
+        last: usize,
+        expanded: bool,
+    },
+    Message {
+        position: usize,
+        grouped: bool,
+    },
+}
+
+/// Push activity lines `run` as entries: warnings on their own, routine lines
+/// (joins, moves, connects…) collapsed into a run when there are two or more.
+fn push_activity(entries: &mut Vec<Entry>, channel: &crate::state::ChannelView, run: &[usize]) {
+    let mut lines = run.iter().copied().peekable();
+    while let Some(first) = lines.next() {
+        if channel.activity[first].warning {
+            entries.push(Entry::Activity(first));
+            continue;
+        }
+        let mut last = first;
+        while let Some(next) = lines.next_if(|next| !channel.activity[*next].warning) {
+            last = next;
+        }
+        if last == first {
+            entries.push(Entry::Activity(first));
+            continue;
+        }
+        let expanded = channel
+            .expanded_runs
+            .contains(&channel.activity[first].observed_at_ms);
+        entries.push(Entry::Run {
+            first,
+            last,
+            expanded,
+        });
+        if expanded {
+            entries.extend((first..=last).map(Entry::Activity));
+        }
+    }
 }
 
 fn conversation(
@@ -1388,6 +1441,7 @@ fn conversation(
     window: &Window,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let server_index = index;
     let server = &this.servers[index];
     let channel = &server.channels[channel_index];
     let is_channel = matches!(channel.target, TextTarget::Channel(_));
@@ -1400,11 +1454,16 @@ fn conversation(
     let mut entries = Vec::with_capacity(channel.messages.len() + channel.activity.len());
     let mut previous: Option<(&str, i64)> = None;
     let mut activity = channel.activity.iter().enumerate().peekable();
+    let mut pending = Vec::new();
     for (position, message) in channel.messages.iter().enumerate() {
+        pending.clear();
         while let Some((index, _)) =
             activity.next_if(|(_, line)| line.observed_at_ms <= message.observed_at_ms)
         {
-            entries.push(Entry::Activity(index));
+            pending.push(index);
+        }
+        if !pending.is_empty() {
+            push_activity(&mut entries, channel, &pending);
             previous = None;
         }
         let grouped = previous.is_some_and(|(author, at)| {
@@ -1413,10 +1472,12 @@ fn conversation(
         previous = Some((&message.author, message.observed_at_ms));
         entries.push(Entry::Message { position, grouped });
     }
-    entries.extend(activity.map(|(index, _)| Entry::Activity(index)));
+    let rest: Vec<usize> = activity.map(|(index, _)| index).collect();
+    push_activity(&mut entries, channel, &rest);
     // Only what is near the viewport is laid out, the welcome first.
     let height = |entry: &Entry| match *entry {
         Entry::Activity(index) => &channel.activity[index].height,
+        Entry::Run { first, .. } => &channel.activity[first].run_height,
         Entry::Message { position, .. } => &channel.messages[position].height,
     };
     let heights: Vec<Pixels> = std::iter::once(this.anchor.intro())
@@ -1448,6 +1509,21 @@ fn conversation(
                 Entry::Activity(index) => {
                     let line = &channel.activity[index];
                     anchor.row(None, &line.height, activity_row(line, index))
+                }
+                Entry::Run {
+                    first,
+                    last,
+                    expanded,
+                } => {
+                    let row = activity_run(
+                        channel,
+                        (server_index, channel_index),
+                        first,
+                        last,
+                        expanded,
+                        cx,
+                    );
+                    anchor.row(None, &channel.activity[first].run_height, row)
                 }
                 Entry::Message { position, grouped } => {
                     let message = &channel.messages[position];
@@ -1982,6 +2058,97 @@ fn jump_pill(
             )
             .into_any_element(),
     )
+}
+
+/// A run of routine activity lines as one line ("Ada connected, Bob moved to
+/// Lobby and 3 more · 12:01–12:05"); a click expands it, and when expanded
+/// it is the header that collapses it again.
+fn activity_run(
+    channel: &crate::state::ChannelView,
+    (server, channel_index): (usize, usize),
+    first: usize,
+    last: usize,
+    expanded: bool,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let lines = &channel.activity;
+    let count = last - first + 1;
+    let summary = if expanded {
+        format!("{count} updates")
+    } else if count == 2 {
+        format!("{}, {}", lines[first].text, lines[last].text)
+    } else {
+        format!(
+            "{}, {} and {} more",
+            lines[first].text,
+            lines[first + 1].text,
+            count - 2
+        )
+    };
+    // "Today at 05:27", or "Today at 05:27–05:31" within one day.
+    let (start, end) = (
+        crate::state::local_time(lines[first].observed_at_ms),
+        crate::state::local_time(lines[last].observed_at_ms),
+    );
+    let times = match (start.rsplit_once(' '), end.rsplit_once(' ')) {
+        _ if start == end => start,
+        (Some((day, _)), Some((same, clock))) if day == same => format!("{start}–{clock}"),
+        _ => format!("{start} – {end}"),
+    };
+    let key = lines[first].observed_at_ms;
+    div()
+        .id(("activity-run", first))
+        .role(Role::Button)
+        .aria_label(if expanded {
+            format!("{count} updates, expanded; collapse")
+        } else {
+            format!("{summary}; show all {count}")
+        })
+        .aria_expanded(expanded)
+        .tab_index(0)
+        .cursor_pointer()
+        .px_2()
+        .py_1()
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .gap_3()
+        .text_sm()
+        .text_color(color(TEXT_FAINT))
+        .hover(|style| style.bg(color(HOVER)))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.toggle_run(server, channel_index, key);
+            cx.notify();
+        }))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+            if activation_key(event) {
+                this.toggle_run(server, channel_index, key);
+                cx.stop_propagation();
+                cx.notify();
+            }
+        }))
+        .child(div().w(px(40.)).flex().justify_center().child(icon(
+            if expanded {
+                "chevron-down"
+            } else {
+                "chevron-right"
+            },
+            14.,
+            color(TEXT_FAINT),
+        )))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(text!(summary).with_id(("activity-run-text", first))),
+        )
+        .child(
+            div()
+                .text_xs()
+                .child(text!(times).with_id(("activity-run-time", first))),
+        )
+        .into_any_element()
 }
 
 fn activity_row(line: &crate::state::ActivityLine, index: usize) -> AnyElement {

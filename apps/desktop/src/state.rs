@@ -196,6 +196,8 @@ pub struct ChannelView {
     pub unread_mention: bool,
     /// Joins, moves, moderation and connection gaps; in memory only.
     pub activity: std::collections::VecDeque<ActivityLine>,
+    /// Runs of activity lines shown expanded, by their first line's time.
+    pub expanded_runs: BTreeSet<i64>,
     pub links: BTreeSet<u32>,
     pub temporary: bool,
     pub max_users: u32,
@@ -209,6 +211,8 @@ pub struct ActivityLine {
     pub text: String,
     pub warning: bool,
     pub height: crate::scrolling::Height,
+    /// The height of the collapsed (or header) row of a run starting here.
+    pub run_height: crate::scrolling::Height,
 }
 pub const MAX_ACTIVITY: usize = 200;
 impl Default for ChannelView {
@@ -223,9 +227,13 @@ impl ChannelView {
             text,
             warning,
             height: Default::default(),
+            run_height: Default::default(),
         });
         while self.activity.len() > MAX_ACTIVITY {
-            self.activity.pop_front();
+            if let Some(gone) = self.activity.pop_front() {
+                self.expanded_runs
+                    .retain(|first| *first > gone.observed_at_ms);
+            }
         }
     }
     fn root() -> Self {
@@ -249,6 +257,7 @@ impl ChannelView {
             unread: 0,
             unread_mention: false,
             activity: Default::default(),
+            expanded_runs: BTreeSet::new(),
             links: BTreeSet::new(),
             temporary: false,
             max_users: 0,
