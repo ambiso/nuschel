@@ -212,7 +212,9 @@ plaintext legacy participants. SFrame with MLS-exported keys is the intended fut
 media encryption layer; DTLS-SRTP by itself does not provide E2EE through an SFU.
 
 Persistent chat, server message IDs, history pagination, and independent text-channel
-subscriptions require a capability-negotiated extension. Stock clients continue to
+subscriptions require a capability-negotiated extension (designed in
+`docs/extension.md`: ALPN plus a capability list in `Version`, per-conversation
+sequence numbers, idempotent sends, subscriptions, ACL-checked history pages). Stock clients continue to
 receive ordinary live TextMessage messages; stock servers provide live chat plus local
 history in Nuschel. Authentication and channel ACLs must govern history as well as live
 messages. Persistently address a conversation without relying on transient session IDs.
