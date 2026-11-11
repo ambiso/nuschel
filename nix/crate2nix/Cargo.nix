@@ -223,6 +223,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschel-sandbox-windows" = rec {
+      packageId = "nuschel-sandbox-windows";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschel-sandbox-windows";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschel-session" = rec {
       packageId = "nuschel-session";
       build = internal.buildRustCrateWithFeatures {
@@ -20456,6 +20466,11 @@ rec {
             name = "nuschel-ipc";
             packageId = "nuschel-ipc";
           }
+          {
+            name = "nuschel-sandbox-windows";
+            packageId = "nuschel-sandbox-windows";
+            target = { target, features }: (target."windows" or false);
+          }
         ];
         devDependencies = [
           {
@@ -20512,6 +20527,11 @@ rec {
           {
             name = "nuschel-kt";
             packageId = "nuschel-kt";
+          }
+          {
+            name = "nuschel-sandbox-windows";
+            packageId = "nuschel-sandbox-windows";
+            target = { target, features }: (target."windows" or false);
           }
           {
             name = "serde";
@@ -20828,6 +20848,11 @@ rec {
             name = "nuschel-math";
             packageId = "nuschel-math";
           }
+          {
+            name = "nuschel-sandbox-windows";
+            packageId = "nuschel-sandbox-windows";
+            target = { target, features }: (target."windows" or false);
+          }
         ];
         devDependencies = [
           {
@@ -20875,6 +20900,11 @@ rec {
           {
             name = "nuschel-ipc";
             packageId = "nuschel-ipc";
+          }
+          {
+            name = "nuschel-sandbox-windows";
+            packageId = "nuschel-sandbox-windows";
+            target = { target, features }: (target."windows" or false);
           }
           {
             name = "opus-pure";
@@ -20980,6 +21010,55 @@ rec {
           {
             name = "nuschel-rtc";
             packageId = "nuschel-rtc";
+          }
+        ];
+
+      };
+      "nuschel-sandbox-windows" = rec {
+        crateName = "nuschel-sandbox-windows";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/sandbox-windows; };
+        libName = "nuschel_sandbox_windows";
+        dependencies = [
+          {
+            name = "nuschel-ipc";
+            packageId = "nuschel-ipc";
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Win32_Foundation" "Win32_Security" "Win32_Security_Authorization" "Win32_Security_Isolation" "Win32_Storage_FileSystem" "Win32_System_Com" "Win32_System_JobObjects" "Win32_System_SystemServices" "Win32_System_Threading" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "base64";
+            packageId = "base64 0.22.1";
+          }
+          {
+            name = "nuschel-core";
+            packageId = "nuschel-core";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "io-util" "macros" "process" "rt" "time" ];
+          }
+          {
+            name = "windows-sys";
+            packageId = "windows-sys 0.61.2";
+            target = { target, features }: (target."windows" or false);
+            features = [ "Win32_Foundation" "Win32_Security" "Win32_System_ProcessStatus" "Win32_System_Threading" ];
           }
         ];
 
@@ -21167,6 +21246,11 @@ rec {
             packageId = "nuschel-ipc";
           }
           {
+            name = "nuschel-sandbox-windows";
+            packageId = "nuschel-sandbox-windows";
+            target = { target, features }: (target."windows" or false);
+          }
+          {
             name = "nuschel-storage";
             packageId = "nuschel-storage";
           }
@@ -21202,16 +21286,16 @@ rec {
             packageId = "async-executor";
           }
           {
-            name = "async-fs";
-            packageId = "async-fs";
-          }
-          {
             name = "async-io";
             packageId = "async-io";
           }
           {
             name = "base64";
             packageId = "base64 0.22.1";
+          }
+          {
+            name = "blocking";
+            packageId = "blocking";
           }
           {
             name = "futures";
@@ -21226,6 +21310,11 @@ rec {
           {
             name = "nuschel-ipc";
             packageId = "nuschel-ipc";
+          }
+          {
+            name = "nuschel-sandbox-windows";
+            packageId = "nuschel-sandbox-windows";
+            target = { target, features }: (target."windows" or false);
           }
         ];
 
@@ -45371,7 +45460,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_NetworkManagement_Ndis" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authorization" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_Kernel" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_Registry" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_NetworkManagement_Ndis" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authorization" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_JobObjects" "Win32_System_Kernel" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_ProcessStatus" "Win32_System_Registry" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-targets 0.48.5" = rec {
         crateName = "windows-targets";

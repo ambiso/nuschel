@@ -12,6 +12,11 @@ base64 = "0.22"
 nuschel-ipc.workspace = true
 nuschel-math.workspace = true
 
+# The launch stage: on Windows the worker starts itself again inside its
+# AppContainer (nuschel_ipc::windows_sandbox).
+[target.'cfg(windows)'.dependencies]
+nuschel-sandbox-windows.workspace = true
+
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt"] }
 

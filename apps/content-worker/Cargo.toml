@@ -16,5 +16,10 @@ nuschel-ipc.workspace = true
 [dev-dependencies]
 tokio = { version = "1.54.1", features = ["macros", "rt"] }
 
+# The launch stage: on Windows the worker starts itself again inside its
+# AppContainer (nuschel_ipc::windows_sandbox).
+[target.'cfg(windows)'.dependencies]
+nuschel-sandbox-windows.workspace = true
+
 [lints]
 workspace = true

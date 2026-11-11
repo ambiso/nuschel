@@ -14,6 +14,9 @@ use nuschel_ipc::{Envelope, MediaRequest, MediaResponse, read_frame, write_frame
 use opus_pure::{Application, MAX_PACKET_BYTES, MAX_PACKET_SAMPLES, OpusDecoder, OpusEncoder};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // On Windows, the launch stage starts this worker again in its AppContainer.
+    #[cfg(windows)]
+    nuschel_sandbox_windows::launch_if_requested();
     if std::env::args().any(|argument| argument == "--live") {
         return live::run();
     }

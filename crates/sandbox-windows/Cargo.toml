@@ -1,0 +1,65 @@
+[package]
+name = "nuschel-sandbox-windows"
+description = "Starts a Nuschel worker in an AppContainer and a job object on Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nuschel-ipc.workspace = true
+
+# The only first-party crate with unsafe code: the Win32 calls that create
+# an AppContainer process (SECURITY.md, "Explicit exceptions"). No safe,
+# maintained wrapper covers AppContainer, an explicit handle list and job
+# UI limits together; see docs/windows-sandbox.md.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Security_Isolation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_JobObjects",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+] }
+
+# Windows-only confinement check, run in the Windows VM (tests/README.md).
+# Its own binary is also the probe it starts in each worker's sandbox.
+[[test]]
+name = "confinement"
+harness = false
+
+[dev-dependencies]
+base64 = "0.22"
+nuschel-core.workspace = true
+serde = "1.0.229"
+serde_json = "1.0.154"
+tokio = { version = "1.54.1", features = [
+  "io-util",
+  "macros",
+  "process",
+  "rt",
+  "time",
+] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_ProcessStatus",
+  "Win32_System_Threading",
+] }
+
+# Not the workspace lints, whose `forbid` cannot be lifted for the one module
+# that needs unsafe code. Everything else in this crate is still denied it.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"

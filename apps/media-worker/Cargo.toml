@@ -17,6 +17,11 @@ rtrb = "0.4"
 serde_json = "1.0.154"
 sonora = { version = "0.3.0", default-features = false }
 
+# The launch stage: on Windows the worker starts itself again inside its
+# AppContainer (nuschel_ipc::windows_sandbox).
+[target.'cfg(windows)'.dependencies]
+nuschel-sandbox-windows.workspace = true
+
 [lints]
 workspace = true
 

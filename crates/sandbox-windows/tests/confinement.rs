@@ -1,0 +1,687 @@
+// SPDX-License-Identifier: EUPL-1.2
+//! Windows only: every worker's sandbox, checked from the inside.
+//!
+//! `confinement.exe [--connect HOST:PORT] [--workers DIR [--rendezvous ws://HOST:PORT/v1
+//! --relay tcp://HOST:PORT [--code-file PATH] [--receive CODE --expect TEXT]]]`
+//!
+//! This binary starts itself through `nuschel_ipc::host`'s real sandbox
+//! commands, once per worker kind, as if it were that worker. Inside, as a
+//! probe, it tries what a compromised worker would: read a file in the user's
+//! Documents, list the user's profile, write outside its directory, connect
+//! to `--connect` (default 10.0.2.100:80, the VM harness), start a process,
+//! open another process to query or end it, and commit more memory than its
+//! job allows. With `--workers`, the real workers then do their jobs in the
+//! same sandboxes: content decodes an image, storage writes and reads
+//! history, crypto creates an identity, media opens the default devices and
+//! transfer offers a file (reaching `--rendezvous` if one is given; with
+//! `--code-file` it writes the code there and waits until someone has
+//! received the file) and, with `--receive`, downloads one through the
+//! rendezvous and relay.
+//!
+//! Prints one line per check and exits non-zero if any expectation fails.
+#![allow(unsafe_code)]
+
+#[cfg(not(windows))]
+fn main() {
+    println!("the confinement check runs on Windows only (tests/README.md)");
+}
+
+#[cfg(windows)]
+fn main() {
+    nuschel_sandbox_windows::launch_if_requested();
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let probe = ["--probe", "--database", "--data", "--live", "--file-handle"];
+    if arguments
+        .first()
+        .is_some_and(|first| probe.contains(&first.as_str()))
+    {
+        windows::probe();
+        return;
+    }
+    std::process::exit(windows::drive(&arguments));
+}
+
+#[cfg(windows)]
+mod windows {
+    use std::{
+        io::{BufRead as _, Write as _},
+        path::{Path, PathBuf},
+        time::Duration,
+    };
+
+    use nuschel_ipc::{
+        ContentRequest, ContentResponse, Envelope, LiveMediaEvent, LiveMediaRequest,
+        StorageRequest, StorageResponse, TransferEvent, TransferRequest, WormholeServers,
+        crypto::{CryptoRequest, CryptoResponse, RecoveryPolicy},
+        host, write_frame,
+    };
+    use serde_json::{Value, json};
+    use tokio::{
+        io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
+        process::{Child, Command},
+        time::timeout,
+    };
+
+    /// A 4x4 red PNG.
+    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAEklEQVR4nGP4z8DwHxkzkC4AADxAH+HggXe0AAAAAElFTkSuQmCC";
+
+    // ---------------------------------------------------------------- probe
+
+    /// Inside a sandbox: one JSON request on stdin, one JSON report on stdout.
+    pub fn probe() {
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line).ok();
+        let request: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+        let text = |key: &str| request[key].as_str().unwrap_or_default().to_owned();
+        let outcome = |result: std::io::Result<()>| match result {
+            Ok(()) => "allowed".to_owned(),
+            Err(error) => format!("denied ({error})"),
+        };
+        let mut report = json!({ "app_container": is_app_container() });
+        report["read_documents"] = outcome(std::fs::read(text("secret")).map(drop)).into();
+        report["list_profile"] = outcome(std::fs::read_dir(text("profile")).map(drop)).into();
+        report["write_profile"] = outcome(std::fs::write(text("outside"), b"escape")).into();
+        report["write_public"] = outcome(std::fs::write(text("public"), b"escape")).into();
+        report["write_temp"] = outcome(std::fs::write(text("temp"), b"escape")).into();
+        if let Some(inside) = request["inside"].as_str() {
+            let file = Path::new(inside).join("probe.txt");
+            report["write_own_directory"] = outcome(std::fs::write(&file, b"ok")).into();
+        }
+        let address = text("connect");
+        let connect = address
+            .parse()
+            .map_err(std::io::Error::other)
+            .and_then(|address| {
+                std::net::TcpStream::connect_timeout(&address, Duration::from_secs(4))
+            });
+        report["connect"] = outcome(connect.map(drop)).into();
+        let spawned = std::process::Command::new(r"C:\Windows\System32\cmd.exe")
+            .args(["/c", "exit 0"])
+            .status();
+        report["start_process"] = outcome(spawned.map(drop)).into();
+        report["enumerate_processes"] = enumerate_processes().into();
+        let driver = request["driver"].as_u64().unwrap_or(0) as u32;
+        // PROCESS_QUERY_LIMITED_INFORMATION and PROCESS_TERMINATE.
+        report["query_other_process"] = outcome(open_process(driver, 0x1000)).into();
+        report["terminate_other_process"] = outcome(open_process(driver, 0x0001)).into();
+        let mut memory: Vec<u8> = Vec::new();
+        let bytes = request["allocate"].as_u64().unwrap_or(0) as usize;
+        report["commit_over_limit"] = outcome(
+            memory
+                .try_reserve_exact(bytes)
+                .map_err(std::io::Error::other),
+        )
+        .into();
+        drop(memory);
+        // The transfer probe was handed a file by handle; it must read it.
+        let arguments: Vec<String> = std::env::args().collect();
+        if let Some(position) = arguments.iter().position(|a| a == "--file-handle") {
+            let read = nuschel_sandbox_windows::inherited_file(arguments[position + 1].as_ref())
+                .and_then(|mut file| {
+                    let mut text = String::new();
+                    std::io::Read::read_to_string(&mut file, &mut text).map(|_| text)
+                });
+            report["read_offered_file"] = match read {
+                Ok(text) if text == "offered" => "allowed".into(),
+                Ok(text) => format!("wrong content {text:?}").into(),
+                Err(error) => format!("denied ({error})").into(),
+            };
+        }
+        let mut output = std::io::stdout().lock();
+        writeln!(output, "{report}").ok();
+        output.flush().ok();
+    }
+
+    fn is_app_container() -> bool {
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, HANDLE},
+            Security::{GetTokenInformation, TOKEN_QUERY, TokenIsAppContainer},
+            System::Threading::{GetCurrentProcess, OpenProcessToken},
+        };
+        let mut token: HANDLE = std::ptr::null_mut();
+        // SAFETY: no arguments; returns a pseudo handle that needs no closing.
+        let process = unsafe { GetCurrentProcess() };
+        // SAFETY: the current-process pseudo handle and an out-pointer to a local.
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+            return false;
+        }
+        let (mut value, mut length) = (0_u32, 0_u32);
+        // SAFETY: TokenIsAppContainer fills one DWORD; out-pointers to locals.
+        let queried = unsafe {
+            GetTokenInformation(
+                token,
+                TokenIsAppContainer,
+                (&raw mut value).cast(),
+                4,
+                &mut length,
+            )
+        };
+        // SAFETY: the token handle opened above, closed once.
+        unsafe { CloseHandle(token) };
+        queried != 0 && value != 0
+    }
+
+    fn enumerate_processes() -> String {
+        use windows_sys::Win32::System::ProcessStatus::K32EnumProcesses;
+        let mut ids = vec![0_u32; 4096];
+        let mut needed = 0;
+        // SAFETY: `ids` has room for the byte count passed.
+        let listed =
+            unsafe { K32EnumProcesses(ids.as_mut_ptr(), (ids.len() * 4) as u32, &mut needed) };
+        if listed == 0 {
+            format!("denied ({})", std::io::Error::last_os_error())
+        } else {
+            format!("{} process ids", needed / 4)
+        }
+    }
+
+    fn open_process(pid: u32, access: u32) -> std::io::Result<()> {
+        use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::OpenProcess};
+        // SAFETY: no pointers; a failure returns null.
+        let handle = unsafe { OpenProcess(access, 0, pid) };
+        if handle.is_null() {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: the handle just opened, closed once.
+        unsafe { CloseHandle(handle) };
+        Ok(())
+    }
+
+    // --------------------------------------------------------------- driver
+
+    struct Checks {
+        failures: u32,
+    }
+
+    impl Checks {
+        fn expect(&mut self, kind: &str, check: &str, expected: &str, actual: &str) {
+            let pass = actual.starts_with(expected);
+            if !pass {
+                self.failures += 1;
+            }
+            let mark = if pass { "ok  " } else { "FAIL" };
+            println!("{mark} {kind:<9} {check:<24} want {expected:<8} got {actual}");
+        }
+
+        fn report(&mut self, kind: &str, check: &str, result: Result<String, String>) {
+            match result {
+                Ok(detail) => println!("ok   {kind:<9} {check:<24} {detail}"),
+                Err(detail) => {
+                    self.failures += 1;
+                    println!("FAIL {kind:<9} {check:<24} {detail}");
+                }
+            }
+        }
+    }
+
+    fn option(arguments: &[String], name: &str) -> Option<String> {
+        let position = arguments.iter().position(|a| a == name)?;
+        arguments.get(position + 1).cloned()
+    }
+
+    pub fn drive(arguments: &[String]) -> i32 {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut checks = Checks { failures: 0 };
+        runtime.block_on(run(arguments, &mut checks));
+        println!("{} failed check(s)", checks.failures);
+        i32::from(checks.failures > 0)
+    }
+
+    async fn run(arguments: &[String], checks: &mut Checks) {
+        let me = std::env::current_exe().expect("own path");
+        let profile = PathBuf::from(std::env::var_os("USERPROFILE").expect("USERPROFILE"));
+        let documents = profile.join("Documents");
+        std::fs::create_dir_all(&documents).ok();
+        let secret = documents.join("nuschel-sandbox-secret.txt");
+        std::fs::write(&secret, "secret").expect("secret file");
+        let work = std::env::temp_dir().join(format!("nuschel-confinement-{}", std::process::id()));
+        let storage = work.join("history");
+        let crypto = work.join("crypto");
+        for directory in [&storage, &crypto] {
+            std::fs::create_dir_all(directory).expect("worker directory");
+        }
+        let offered = work.join("offered.txt");
+        std::fs::write(&offered, "offered").expect("offered file");
+        let connect = option(arguments, "--connect").unwrap_or_else(|| "10.0.2.100:80".into());
+        let request = |inside: Option<&Path>, allocate: u64| {
+            json!({
+                "secret": secret,
+                "profile": profile,
+                "outside": profile.join("nuschel-sandbox-escape.txt"),
+                "public": r"C:\Users\Public\nuschel-sandbox-escape.txt",
+                "temp": std::env::temp_dir().join("nuschel-sandbox-escape.txt"),
+                "inside": inside,
+                "connect": connect,
+                "driver": std::process::id(),
+                "allocate": allocate,
+            })
+        };
+        let mib = 1 << 20;
+        let probes = [
+            (
+                "content",
+                host::content_sandbox_command(&me, &["--probe".into()]),
+                request(None, 640 * mib),
+            ),
+            (
+                "storage",
+                host::storage_sandbox_command(&me, &storage),
+                request(Some(&storage), 1200 * mib),
+            ),
+            (
+                "crypto",
+                host::crypto_sandbox_command(&me, &crypto),
+                request(Some(&crypto), 1200 * mib),
+            ),
+            (
+                "media",
+                host::media_sandbox_command(&me),
+                request(None, 1200 * mib),
+            ),
+            (
+                "transfer",
+                host::transfer_sandbox_command(&me, Some(&offered)),
+                request(None, 1200 * mib),
+            ),
+        ];
+        for (kind, command, request) in probes {
+            let report = match command {
+                Ok(command) => run_probe(command, &request).await,
+                Err(error) => Err(error.to_string()),
+            };
+            let report = match report {
+                Ok(report) => report,
+                Err(error) => {
+                    checks.report(kind, "probe ran", Err(error));
+                    continue;
+                }
+            };
+            let field = |name: &str| report[name].as_str().unwrap_or("missing").to_owned();
+            let in_container = report["app_container"].as_bool() == Some(true);
+            checks.report(
+                kind,
+                "in an AppContainer",
+                if in_container {
+                    Ok("yes".into())
+                } else {
+                    Err("no".into())
+                },
+            );
+            for check in [
+                "read_documents",
+                "list_profile",
+                "write_profile",
+                "write_public",
+                "write_temp",
+                "start_process",
+                "query_other_process",
+                "terminate_other_process",
+                "commit_over_limit",
+            ] {
+                checks.expect(kind, check, "denied", &field(check));
+            }
+            let network = if kind == "transfer" {
+                "allowed"
+            } else {
+                "denied"
+            };
+            checks.expect(kind, "connect", network, &field("connect"));
+            if kind == "storage" || kind == "crypto" {
+                checks.expect(
+                    kind,
+                    "write_own_directory",
+                    "allowed",
+                    &field("write_own_directory"),
+                );
+            }
+            if kind == "transfer" {
+                checks.expect(
+                    kind,
+                    "read_offered_file",
+                    "allowed",
+                    &field("read_offered_file"),
+                );
+            }
+            println!(
+                "     {kind:<9} {:<24} {}",
+                "enumerate_processes",
+                field("enumerate_processes")
+            );
+        }
+        // A policy the launch stage cannot apply never runs the worker.
+        let refused = Command::new(&me)
+            .args([
+                "--nuschel-sandbox",
+                "--profile",
+                "not a valid name",
+                "--",
+                "--probe",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        checks.report(
+            "launcher",
+            "refuses a bad policy",
+            match refused.map(|status| status.code()) {
+                Ok(Some(nuschel_sandbox_windows::LAUNCH_FAILED)) => Ok("exit 125".into()),
+                other => Err(format!("{other:?}")),
+            },
+        );
+        if let Some(directory) = option(arguments, "--workers") {
+            workers(Path::new(&directory), &work, &offered, arguments, checks).await;
+        }
+        std::fs::remove_file(&secret).ok();
+    }
+
+    async fn run_probe(mut command: Command, request: &Value) -> Result<Value, String> {
+        let mut child = command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| format!("spawn: {error}"))?;
+        let _containment = host::contain(&child).map_err(|error| error.to_string())?;
+        let mut input = child.stdin.take().ok_or("no stdin")?;
+        input
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .map_err(|error| error.to_string())?;
+        let mut output = BufReader::new(child.stdout.take().ok_or("no stdout")?);
+        let mut line = String::new();
+        let read = timeout(Duration::from_secs(30), output.read_line(&mut line)).await;
+        let status = timeout(Duration::from_secs(5), child.wait()).await;
+        match read {
+            Ok(Ok(count)) if count > 0 => {
+                serde_json::from_str(&line).map_err(|error| format!("{error}: {line}"))
+            }
+            _ => Err(format!("no report; launch stage exited {status:?}")),
+        }
+    }
+
+    // ------------------------------------------------------ the real workers
+
+    fn spawn(mut command: Command) -> Result<(Child, host::Containment), String> {
+        let child = command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| format!("spawn: {error}"))?;
+        let containment = host::contain(&child).map_err(|error| error.to_string())?;
+        Ok((child, containment))
+    }
+
+    async fn send<T: serde::Serialize>(
+        child: &mut Child,
+        id: u64,
+        payload: T,
+    ) -> Result<(), String> {
+        let mut frame = Vec::new();
+        write_frame(&mut frame, &Envelope::new(id, payload)).map_err(|e| e.to_string())?;
+        let input = child.stdin.as_mut().ok_or("no stdin")?;
+        input.write_all(&frame).await.map_err(|e| e.to_string())
+    }
+
+    async fn receive<T: serde::de::DeserializeOwned>(child: &mut Child) -> Result<T, String> {
+        receive_within(child, 20).await
+    }
+
+    async fn receive_within<T: serde::de::DeserializeOwned>(
+        child: &mut Child,
+        seconds: u64,
+    ) -> Result<T, String> {
+        let output = child.stdout.as_mut().ok_or("no stdout")?;
+        let read = async {
+            let size = output.read_u32().await? as usize;
+            let mut bytes = vec![0; size];
+            output.read_exact(&mut bytes).await?;
+            std::io::Result::Ok(bytes)
+        };
+        let bytes = timeout(Duration::from_secs(seconds), read)
+            .await
+            .map_err(|_| format!("no answer within {seconds} s"))?
+            .map_err(|error| format!("worker closed its output: {error}"))?;
+        let envelope: Envelope<T> = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        Ok(envelope.payload)
+    }
+
+    async fn workers(
+        directory: &Path,
+        work: &Path,
+        offered: &Path,
+        arguments: &[String],
+        checks: &mut Checks,
+    ) {
+        let worker = |name: &str| directory.join(format!("nuschel-{name}-worker.exe"));
+        let rendezvous = option(arguments, "--rendezvous");
+        let servers = WormholeServers {
+            rendezvous: rendezvous
+                .clone()
+                .unwrap_or_else(|| "ws://10.0.2.100:80/v1".into()),
+            relay: option(arguments, "--relay").unwrap_or_else(|| "tcp://10.0.2.100:4001".into()),
+            direct: false,
+        };
+
+        let image = format!("data:image/png;base64,{PNG}");
+        let decoded =
+            host::exchange(&worker("content"), &[ContentRequest::View { uri: image }]).await;
+        checks.report(
+            "content",
+            "decodes an image",
+            match decoded.map(|mut results| results.pop()) {
+                Ok(Some(Ok(ContentResponse::Rendered(document)))) => {
+                    Ok(format!("{} block(s)", document.blocks.len()))
+                }
+                other => Err(format!("{other:?}")),
+            },
+        );
+
+        let history = work.join("history");
+        let stored = async {
+            let command = host::storage_sandbox_command(&worker("storage"), &history)
+                .map_err(|e| e.to_string())?;
+            let (mut child, _containment) = spawn(command)?;
+            let message = nuschel_core::ChatMessage {
+                server: "vm".into(),
+                channel: "Root".into(),
+                author: "tester".into(),
+                observed_at_ms: 1,
+                body: "kept in a sandbox".into(),
+            };
+            send(&mut child, 1, StorageRequest::Append { message }).await?;
+            let appended: StorageResponse = receive(&mut child).await?;
+            send(
+                &mut child,
+                2,
+                StorageRequest::HistoryPage {
+                    server: "vm".into(),
+                    channel: "Root".into(),
+                    before: None,
+                    limit: 10,
+                },
+            )
+            .await?;
+            let page: StorageResponse = receive(&mut child).await?;
+            match (appended, page) {
+                (StorageResponse::Appended(_), StorageResponse::HistoryPage(page))
+                    if page
+                        .messages
+                        .iter()
+                        .any(|m| m.message.body == "kept in a sandbox") =>
+                {
+                    Ok(format!(
+                        "{} message(s); database {} bytes",
+                        page.messages.len(),
+                        std::fs::metadata(history.join("history.sqlite3"))
+                            .map(|m| m.len())
+                            .unwrap_or(0)
+                    ))
+                }
+                other => Err(format!("{other:?}")),
+            }
+        };
+        checks.report("storage", "writes history", stored.await);
+
+        let keys = work.join("crypto");
+        let identity = async {
+            let command = host::crypto_sandbox_command(&worker("crypto"), &keys)
+                .map_err(|e| e.to_string())?;
+            let (mut child, _containment) = spawn(command)?;
+            send(
+                &mut child,
+                1,
+                CryptoRequest::CreateIdentity {
+                    device_name: "vm".into(),
+                    recovery: RecoveryPolicy::Never,
+                },
+            )
+            .await?;
+            match receive::<CryptoResponse>(&mut child).await? {
+                CryptoResponse::Identity(view) => Ok(format!(
+                    "{:?}; {} file(s) in its directory",
+                    view,
+                    std::fs::read_dir(&keys).map(|d| d.count()).unwrap_or(0)
+                )
+                .chars()
+                .take(160)
+                .collect()),
+                other => Err(format!("{other:?}")),
+            }
+        };
+        checks.report("crypto", "creates an identity", identity.await);
+
+        let media = async {
+            let command =
+                host::media_sandbox_command(&worker("media")).map_err(|e| e.to_string())?;
+            let (mut child, _containment) = spawn(command)?;
+            send(
+                &mut child,
+                0,
+                LiveMediaRequest::SetState {
+                    epoch: 1,
+                    muted: false,
+                    deafened: false,
+                },
+            )
+            .await?;
+            let mut devices = String::new();
+            loop {
+                match receive::<LiveMediaEvent>(&mut child).await? {
+                    LiveMediaEvent::Devices {
+                        inputs,
+                        outputs,
+                        input,
+                        output,
+                        ..
+                    } => {
+                        devices = format!(
+                            "{} input(s), {} output(s), using {input:?} / {output:?}",
+                            inputs.len(),
+                            outputs.len()
+                        )
+                    }
+                    LiveMediaEvent::Status {
+                        ready: true,
+                        message,
+                    } => {
+                        break Ok(format!("{message}; {devices}"));
+                    }
+                    LiveMediaEvent::Status {
+                        ready: false,
+                        message,
+                    } => break Err(message),
+                    _ => {}
+                }
+            }
+        };
+        checks.report("media", "opens the default devices", media.await);
+
+        let transfer = async {
+            let command = host::transfer_sandbox_command(&worker("transfer"), Some(offered))
+                .map_err(|e| e.to_string())?;
+            let (mut child, _containment) = spawn(command)?;
+            send(
+                &mut child,
+                1,
+                TransferRequest::Offer {
+                    name: "offered.txt".into(),
+                    servers: servers.clone(),
+                },
+            )
+            .await?;
+            match receive::<TransferEvent>(&mut child).await? {
+                TransferEvent::Code { code } => match option(arguments, "--code-file") {
+                    None => Ok(format!("code {code} from the rendezvous")),
+                    // Someone (the test host) picks the file up with this code.
+                    Some(path) => {
+                        std::fs::write(path, &code).map_err(|e| e.to_string())?;
+                        loop {
+                            match receive_within::<TransferEvent>(&mut child, 120).await? {
+                                TransferEvent::Done { peer } => {
+                                    break Ok(format!("code {code}; peer {peer} received it"));
+                                }
+                                TransferEvent::Failed { reason, .. } => break Err(reason),
+                                _ => {}
+                            }
+                        }
+                    }
+                },
+                TransferEvent::Failed { reason, .. } if rendezvous.is_none() => Ok(format!(
+                    "no rendezvous given; the worker reported: {reason}"
+                )),
+                other => Err(format!("{other:?}")),
+            }
+        };
+        checks.report("transfer", "offers a file", transfer.await);
+
+        let Some(code) = option(arguments, "--receive") else {
+            return;
+        };
+        let expected = option(arguments, "--expect").unwrap_or_default();
+        let download = async {
+            use base64::Engine as _;
+            let command = host::transfer_sandbox_command(&worker("transfer"), None)
+                .map_err(|e| e.to_string())?;
+            let (mut child, _containment) = spawn(command)?;
+            send(
+                &mut child,
+                1,
+                TransferRequest::Receive {
+                    code,
+                    max_size: 1 << 20,
+                    servers,
+                },
+            )
+            .await?;
+            let mut received = Vec::new();
+            loop {
+                match receive::<TransferEvent>(&mut child).await? {
+                    TransferEvent::Data { bytes } => received.extend(
+                        base64::engine::general_purpose::STANDARD
+                            .decode(bytes)
+                            .map_err(|e| e.to_string())?,
+                    ),
+                    TransferEvent::Done { .. } => break,
+                    TransferEvent::Failed { reason, .. } => return Err(reason),
+                    _ => {}
+                }
+            }
+            if received == expected.as_bytes() {
+                Ok(format!(
+                    "{} bytes through the rendezvous and relay",
+                    received.len()
+                ))
+            } else {
+                Err(format!("received {:?}", String::from_utf8_lossy(&received)))
+            }
+        };
+        checks.report("transfer", "receives a file", download.await);
+    }
+}

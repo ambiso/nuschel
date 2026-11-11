@@ -6281,6 +6281,7 @@ dependencies = [
  "nuschel-content",
  "nuschel-core",
  "nuschel-ipc",
+ "nuschel-sandbox-windows",
  "tokio",
 ]
 
@@ -6300,6 +6301,7 @@ dependencies = [
  "nuschel-ipc",
  "nuschel-kt",
  "nuschel-protocol",
+ "nuschel-sandbox-windows",
  "nuschel-session",
  "nuscheld",
  "serde",
@@ -6393,6 +6395,7 @@ dependencies = [
  "base64 0.22.1",
  "nuschel-ipc",
  "nuschel-math",
+ "nuschel-sandbox-windows",
  "tokio",
 ]
 
@@ -6405,6 +6408,7 @@ dependencies = [
  "nnnoiseless",
  "nuschel-core",
  "nuschel-ipc",
+ "nuschel-sandbox-windows",
  "opus-pure",
  "pipewire",
  "rtrb",
@@ -6437,6 +6441,19 @@ name = "nuschel-rtc-probe"
 version = "0.1.0"
 dependencies = [
  "nuschel-rtc",
+]
+
+[[package]]
+name = "nuschel-sandbox-windows"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "nuschel-core",
+ "nuschel-ipc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6486,6 +6503,7 @@ dependencies = [
  "clap",
  "landlock",
  "nuschel-ipc",
+ "nuschel-sandbox-windows",
  "nuschel-storage",
  "tempfile",
  "tokio",
@@ -6496,12 +6514,13 @@ name = "nuschel-transfer-worker"
 version = "0.1.0"
 dependencies = [
  "async-executor",
- "async-fs",
  "async-io",
  "base64 0.22.1",
+ "blocking",
  "futures",
  "magic-wormhole",
  "nuschel-ipc",
+ "nuschel-sandbox-windows",
 ]
 
 [[package]]

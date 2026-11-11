@@ -12,6 +12,9 @@ use nuschel_ipc::{
 use nuschel_math::Renderer;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // On Windows, the launch stage starts this worker again in its AppContainer.
+    #[cfg(windows)]
+    nuschel_sandbox_windows::launch_if_requested();
     let renderer = Renderer::new();
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();

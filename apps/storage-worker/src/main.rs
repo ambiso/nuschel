@@ -44,8 +44,15 @@ struct Arguments {
     operator_lock: bool,
 }
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // On Windows, the launch stage starts this worker again in its AppContainer.
+    #[cfg(windows)]
+    nuschel_sandbox_windows::launch_if_requested();
+    serve()
+}
+
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = Arguments::parse();
     if let Some(path) = &arguments.read_murmur {
         return read_murmur(path, arguments.murmur_server_id).await;

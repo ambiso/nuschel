@@ -59,10 +59,11 @@ pub fn math_sandbox_command(executable: &Path) -> Result<Command, Error> {
     sandbox_exec(seatbelt::CONTENT, executable, &[])
 }
 
-/// The math worker as the content worker runs on Windows.
+/// The math worker in an AppContainer of its own, with the content worker's
+/// memory limit and, as on Linux, 120 CPU seconds over its whole life.
 #[cfg(windows)]
 pub fn math_sandbox_command(executable: &Path) -> Result<Command, Error> {
-    Ok(windows_worker(executable))
+    Ok(windows_worker(executable, &windows_policies::math()))
 }
 
 /// Seconds of wall-clock time, and on Linux of CPU time, a request may take.
@@ -290,9 +291,10 @@ async fn read_reply(
 }
 
 /// OS containment applied to a worker after it starts, held for its lifetime.
-/// On Windows this is a job object that kills the worker when Nuschel lets go
-/// of it (including when Nuschel itself exits); elsewhere the launch command
-/// already carries the confinement.
+/// On Windows this is a job object that kills the worker's launch stage when
+/// Nuschel lets go of it (including when Nuschel itself exits); the launch
+/// stage's own job then ends the confined worker. Elsewhere the launch
+/// command already carries the confinement.
 pub struct Containment {
     #[cfg(windows)]
     _job: win32job::Job,
@@ -610,12 +612,16 @@ pub fn transfer_sandbox_command(executable: &Path, file: Option<&Path>) -> Resul
     Ok(command)
 }
 
-/// Windows: no OS sandbox yet. Workers run without the user's environment and
-/// without a console window, inside a kill-on-close job object (see
-/// [`contain`]). AppContainer or restricted-token confinement needs unsafe
-/// Win32 process creation and must be validated on Windows first.
+/// Windows: each worker runs in its own AppContainer (no capabilities unless
+/// listed: no network, no access to the user's files) inside a job object,
+/// started by its own executable's launch stage (see
+/// [`crate::windows_sandbox`] and `nuschel-sandbox-windows`). The launch
+/// stage itself runs with an empty environment apart from Windows' own
+/// directories, without a console window, inside the kill-on-close job of
+/// [`contain`]; it refuses to start a worker it cannot confine, as Linux
+/// refuses without bwrap.
 #[cfg(windows)]
-fn windows_worker(executable: &Path) -> Command {
+fn windows_worker(executable: &Path, policy: &crate::windows_sandbox::Policy) -> Command {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let mut command = Command::new(executable);
     command.env_clear();
@@ -625,20 +631,107 @@ fn windows_worker(executable: &Path) -> Command {
         }
     }
     command.creation_flags(CREATE_NO_WINDOW);
+    command.args(policy.arguments());
     command
 }
 
-/// No CPU-time limit here: the per-request deadline bounds the worker.
+/// Committed-memory limits of the Windows workers' jobs, as on Linux.
+#[cfg(any(windows, test))]
+mod windows_limits {
+    pub const CONTENT: u64 = 512 << 20;
+    pub const PERSISTENT: u64 = 1 << 30;
+}
+
+/// The AppContainer policies of the Windows workers, kept apart from process
+/// creation so that they are checked on every platform.
+#[cfg(any(windows, test))]
+mod windows_policies {
+    use super::windows_limits::{CONTENT, PERSISTENT};
+    use crate::windows_sandbox::{Policy, scoped_profile};
+    use std::path::Path;
+
+    /// No capabilities, no files: decoding happens on what arrives over stdin.
+    pub fn content(cpu_seconds: u64) -> Policy {
+        Policy {
+            profile: "nuschel.content".into(),
+            memory: CONTENT,
+            cpu_seconds: Some(cpu_seconds),
+            ..Policy::default()
+        }
+    }
+
+    /// Like content: no capabilities, no files; it parses untrusted LaTeX.
+    /// It lives long, so its CPU limit covers its whole life (it is
+    /// restarted when it runs out), as on Linux.
+    pub fn math() -> Policy {
+        Policy {
+            profile: "nuschel.math".into(),
+            memory: CONTENT,
+            cpu_seconds: Some(120),
+            ..Policy::default()
+        }
+    }
+
+    /// Only the history directory, read and write.
+    pub fn storage(directory: &Path) -> Policy {
+        Policy {
+            profile: scoped_profile("nuschel.storage", directory),
+            writable: vec![directory.to_owned()],
+            memory: PERSISTENT,
+            ..Policy::default()
+        }
+    }
+
+    /// Only the crypto directory (keystore, state, store key), read and write.
+    pub fn crypto(directory: &Path) -> Policy {
+        Policy {
+            profile: scoped_profile("nuschel.crypto", directory),
+            writable: vec![directory.to_owned()],
+            memory: PERSISTENT,
+            ..Policy::default()
+        }
+    }
+
+    /// Audio endpoints through the Windows audio service; the microphone
+    /// capability lets it capture. No network, no files.
+    pub fn media() -> Policy {
+        Policy {
+            profile: "nuschel.media".into(),
+            capabilities: vec!["microphone".into()],
+            memory: PERSISTENT,
+            ..Policy::default()
+        }
+    }
+
+    /// Outgoing connections to the Internet (rendezvous, relay, peers) and
+    /// connections to and from the local network (direct transit between
+    /// peers on one LAN), but no inbound connections from the Internet; an
+    /// offer reads its one file through a handle, never by path.
+    pub fn transfer(file: Option<&Path>) -> Policy {
+        Policy {
+            profile: "nuschel.transfer".into(),
+            capabilities: vec!["internetClient".into(), "privateNetworkClientServer".into()],
+            file: file.map(Path::to_owned),
+            memory: PERSISTENT,
+            ..Policy::default()
+        }
+    }
+}
+
 #[cfg(windows)]
-fn content_sandbox(executable: &Path, arguments: &[OsString], _: u64) -> Result<Command, Error> {
-    let mut command = windows_worker(executable);
+fn content_sandbox(
+    executable: &Path,
+    arguments: &[OsString],
+    cpu_seconds: u64,
+) -> Result<Command, Error> {
+    let mut command = windows_worker(executable, &windows_policies::content(cpu_seconds));
     command.args(arguments);
     Ok(command)
 }
 
 #[cfg(windows)]
 pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Command, Error> {
-    let mut command = windows_worker(executable);
+    let mut command = windows_worker(executable, &windows_policies::storage(directory));
     command
         .arg("--database")
         .arg(directory.join("history.sqlite3"));
@@ -647,25 +740,26 @@ pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Co
 
 #[cfg(windows)]
 pub fn crypto_sandbox_command(executable: &Path, directory: &Path) -> Result<Command, Error> {
-    let mut command = windows_worker(executable);
+    let mut command = windows_worker(executable, &windows_policies::crypto(directory));
     command.arg("--data").arg(directory);
     Ok(command)
 }
 
 #[cfg(windows)]
 pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
-    let mut command = windows_worker(executable);
+    let mut command = windows_worker(executable, &windows_policies::media());
     command.arg("--live");
     Ok(command)
 }
 
+/// An offer's file reaches the worker as an inherited read-only handle
+/// (`--file-handle N`, appended by the launch stage), never as a path.
 #[cfg(windows)]
 pub fn transfer_sandbox_command(executable: &Path, file: Option<&Path>) -> Result<Command, Error> {
-    let mut command = windows_worker(executable);
-    if let Some(file) = file {
-        command.arg("--file").arg(file);
-    }
-    Ok(command)
+    Ok(windows_worker(
+        executable,
+        &windows_policies::transfer(file),
+    ))
 }
 
 #[cfg(test)]
@@ -761,6 +855,55 @@ mod tests {
         let input = offer.iter().position(|a| a == "/input").unwrap();
         assert_eq!(offer[input - 2], "--ro-bind");
         assert!(!receive.iter().any(|a| a == "/input"));
+    }
+
+    #[test]
+    fn windows_policies_grant_only_what_each_worker_needs() {
+        use super::{windows_limits, windows_policies as policy};
+        use std::path::Path;
+        let history = Path::new(r"C:\Users\a\AppData\Roaming\nuschel\history");
+        let crypto = Path::new(r"C:\Users\a\AppData\Roaming\nuschel\crypto");
+        let offer = Path::new(r"C:\Users\a\Documents\offer.zip");
+        let content = policy::content(7);
+        assert_eq!(content.profile, "nuschel.content");
+        assert_eq!(content.cpu_seconds, Some(7));
+        assert_eq!(content.memory, windows_limits::CONTENT);
+        let math = policy::math();
+        assert_eq!(math.profile, "nuschel.math");
+        assert_eq!(math.cpu_seconds, Some(120));
+        assert_eq!(math.memory, windows_limits::CONTENT);
+        let storage = policy::storage(history);
+        assert_eq!(storage.writable, [history]);
+        assert!(storage.profile.starts_with("nuschel.storage."));
+        let keys = policy::crypto(crypto);
+        assert_eq!(keys.writable, [crypto]);
+        assert!(keys.profile.starts_with("nuschel.crypto."));
+        assert_ne!(keys.profile, policy::crypto(history).profile);
+        let media = policy::media();
+        assert_eq!(media.capabilities, ["microphone"]);
+        let send = policy::transfer(Some(offer));
+        let receive = policy::transfer(None);
+        assert_eq!(send.file.as_deref(), Some(offer));
+        assert_eq!(receive.file, None);
+        for policy in [&content, &math, &storage, &keys, &media, &send, &receive] {
+            // Only transfers reach the network; only storage and crypto get
+            // a directory; every worker has a memory limit.
+            let network = policy.capabilities.iter().any(|c| c.contains("Client"));
+            assert_eq!(network, policy.profile == "nuschel.transfer", "{policy:?}");
+            let directories = !policy.writable.is_empty();
+            assert_eq!(
+                directories,
+                std::ptr::eq(policy, &storage) || std::ptr::eq(policy, &keys)
+            );
+            assert!(policy.memory >= windows_limits::CONTENT);
+            assert!(
+                policy
+                    .capabilities
+                    .iter()
+                    .all(|c| c != "internetClientServer")
+            );
+        }
+        assert!(media.cpu_seconds.is_none() && storage.cpu_seconds.is_none());
     }
 
     /// Runs only on macOS: the profiles must actually load and confine.

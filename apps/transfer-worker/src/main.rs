@@ -2,16 +2,19 @@
 //! The network side of file transfers, over magic-wormhole. The supervisor
 //! starts one worker per offer or download in its sandbox
 //! (`nuschel_ipc::host::transfer_sandbox_command`): an offer reads only the
-//! file at `--file`, a download streams what it receives back over stdout.
-//! Neither opens any other file, and neither chooses a path.
+//! file at `--file` (on Windows, the inherited handle `--file-handle`, as the
+//! worker's AppContainer cannot open the user's files), a download streams
+//! what it receives back over stdout. Neither opens any other file, and
+//! neither chooses a path.
 
 use std::{
     borrow::Cow,
     cell::Cell,
+    fs::File,
     io,
-    path::PathBuf,
     pin::Pin,
     rc::Rc,
+    sync::Arc,
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -41,10 +44,19 @@ const CODE_WORDS: usize = 2;
 type Cancel = Shared<BoxFuture<'static, ()>>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // On Windows, the launch stage starts this worker again in its AppContainer.
+    #[cfg(windows)]
+    nuschel_sandbox_windows::launch_if_requested();
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    // Opened once; every pickup reads it at its own offset. A failure is
+    // reported with the offer, as an event the supervisor shows.
     let file = match arguments.as_slice() {
         [] => None,
-        [flag, path] if flag == "--file" => Some(PathBuf::from(path)),
+        [flag, path] if flag == "--file" => Some(File::open(path)),
+        #[cfg(windows)]
+        [flag, handle] if flag == nuschel_ipc::windows_sandbox::FILE_HANDLE_FLAG => {
+            Some(nuschel_sandbox_windows::inherited_file(handle))
+        }
         _ => return Err("usage: nuschel-transfer-worker [--file PATH]".into()),
     };
     let Some(first) = read_frame::<TransferRequest>(&mut io::stdin().lock())? else {
@@ -100,15 +112,13 @@ fn emit(event: TransferEvent) {
 /// Offer `file` until cancelled: a code, someone receives with it, a new
 /// code at once (while that pickup runs), and so on.
 async fn offer(
-    file: PathBuf,
+    file: io::Result<File>,
     name: String,
     servers: WormholeServers,
     cancel: Cancel,
 ) -> Result<(), String> {
     let relay = relay_hints(&servers)?;
-    async_fs::metadata(&file)
-        .await
-        .map_err(|error| format!("Cannot read the file: {error}"))?;
+    let file = Arc::new(file.map_err(|error| format!("Cannot read the file: {error}"))?);
     let executor = async_executor::LocalExecutor::new();
     let active = Rc::new(Cell::new(0_usize));
     let codes = async {
@@ -167,7 +177,7 @@ async fn offer(
 fn send(
     wormhole: Wormhole,
     peer: u32,
-    file: PathBuf,
+    file: Arc<File>,
     name: &str,
     servers: &WormholeServers,
     relay: &[transit::RelayHint],
@@ -175,8 +185,8 @@ fn send(
     let (name, relay, abilities) = (name.to_owned(), relay.to_vec(), abilities(servers));
     async move {
         let result = async {
-            let mut reader = async_fs::File::open(&file).await?;
-            let size = reader.metadata().await?.len();
+            let size = file.metadata()?.len();
+            let mut reader = blocking::Unblock::new(FileAt { file, offset: 0 });
             emit(TransferEvent::Started {
                 peer,
                 name: name.clone(),
@@ -202,6 +212,24 @@ fn send(
                 reason: failure(&error),
             },
         });
+    }
+}
+
+/// The offered file from `offset` on: positioned reads, so that pickups
+/// running at once never move each other's place in the file.
+struct FileAt {
+    file: Arc<File>,
+    offset: u64,
+}
+
+impl io::Read for FileAt {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        #[cfg(unix)]
+        let count = std::os::unix::fs::FileExt::read_at(&*self.file, buffer, self.offset)?;
+        #[cfg(windows)]
+        let count = std::os::windows::fs::FileExt::seek_read(&*self.file, buffer, self.offset)?;
+        self.offset += count as u64;
+        Ok(count)
     }
 }
 

@@ -33,6 +33,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() -> ExitCode {
+    // On Windows, the launch stage starts this worker again in its AppContainer.
+    #[cfg(windows)]
+    nuschel_sandbox_windows::launch_if_requested();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

@@ -132,6 +132,14 @@ deny = [
     "nuscheld",
     "nuschel-crypto-worker",
   ], reason = "Key-transparency decisions belong to the crypto worker (and the server's log); akd_core makes ed25519-dalek accept malleable signatures in any binary that links it (docs/e2ee.md §5.2)" },
+  { name = "nuschel-sandbox-windows", wrappers = [
+    "nuschel-content-worker",
+    "nuschel-crypto-worker",
+    "nuschel-math-worker",
+    "nuschel-media-worker",
+    "nuschel-storage-worker",
+    "nuschel-transfer-worker",
+  ], reason = "The one first-party crate with unsafe code (Win32 AppContainer launch) runs only as the workers' own launch stage" },
   { name = "nuschel-identity", wrappers = [
     "nuschel-kt",
     "nuscheld",
