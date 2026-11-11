@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 nuschl-client = { workspace = true, default-features = false }
+nuschl-content = { workspace = true, default-features = false }
 nuschl-core.workspace = true
 nuschl-protocol.workspace = true
 bytes = "1.12.1"

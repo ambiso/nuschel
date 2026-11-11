@@ -102,7 +102,8 @@ deny = [
   ], reason = "Untrusted grammars and message parsing belong in the content worker (and Typst's raw-text highlighting, unused, in the math worker)" },
   { name = "nuschl-content", wrappers = [
     "nuschl-content-worker",
-  ], reason = "The UI consumes typed text spans over IPC" },
+    "nuschl-client-wasm",
+  ], reason = "Native UI consumes typed spans over IPC; the browser's Web Worker uses the text-only renderer without image decoders" },
   { name = "typst", wrappers = [
     "nuschl-math",
   ], reason = "Typst (a scripting language with file, package and plugin access) runs only in the sandboxed math worker, behind its LaTeX converter" },

@@ -22754,6 +22754,11 @@ rec {
             usesDefaultFeatures = false;
           }
           {
+            name = "nuschl-content";
+            packageId = "nuschl-content";
+            usesDefaultFeatures = false;
+          }
+          {
             name = "nuschl-core";
             packageId = "nuschl-core";
           }
@@ -22874,6 +22879,7 @@ rec {
           {
             name = "image";
             packageId = "image";
+            optional = true;
             usesDefaultFeatures = false;
             features = [ "png" "jpeg" "gif" "bmp" "ico" "webp" ];
           }
@@ -22901,7 +22907,11 @@ rec {
             packageId = "thiserror 2.0.21";
           }
         ];
-
+        features = {
+          "default" = [ "images" ];
+          "images" = [ "dep:image" ];
+        };
+        resolvedDefaultFeatures = [ "default" "images" ];
       };
       "nuschl-content-worker" = rec {
         crateName = "nuschl-content-worker";

@@ -6974,6 +6974,7 @@ dependencies = [
  "futures-util",
  "js-sys",
  "nuschl-client",
+ "nuschl-content",
  "nuschl-core",
  "nuschl-protocol",
  "nuschl-web-relay",
