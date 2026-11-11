@@ -18,6 +18,7 @@
 //! Linux installations update through their package manager (e.g. Nix) and
 //! are not handled here.
 
+use cap_std::{ambient_authority, fs::Dir};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -27,6 +28,14 @@ use std::{
     path::{Component, Path, PathBuf},
     time::Duration,
 };
+
+/// A capability for the installation folder: every update file operation goes
+/// through it, so nothing outside the folder can be read, written or replaced,
+/// even through a symlink planted inside it.
+fn open_root(root: &Path) -> Result<Dir, Error> {
+    Dir::open_ambient_dir(root, ambient_authority())
+        .map_err(|error| Error::NotWritable(error.to_string()))
+}
 
 /// Where releases are published; `NUSCHEL_UPDATE_URL` overrides it (tests).
 pub const DEFAULT_URL: &str = "https://github.com/ambiso/nuschel/releases/latest/download/";
@@ -277,10 +286,8 @@ pub fn check_at(
 }
 
 /// Downloaded and verified files, ready to swap in.
-#[derive(Debug)]
 pub struct Staged {
-    root: PathBuf,
-    staging: PathBuf,
+    root: Dir,
     files: Vec<PathBuf>,
 }
 
@@ -291,18 +298,19 @@ pub fn download(
     root: &Path,
     mut progress: impl FnMut(u64, u64),
 ) -> Result<Staged, Error> {
-    let staging = root.join(STAGING);
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging).map_err(|error| Error::NotWritable(error.to_string()))?;
+    let dir = open_root(root)?;
+    let _ = dir.remove_dir_all(STAGING);
+    dir.create_dir_all(STAGING)
+        .map_err(|error| Error::NotWritable(error.to_string()))?;
     let total = update.files.iter().map(|file| file.size).sum();
     let mut done = 0;
     let agent = agent();
     let mut files = Vec::new();
     for file in &update.files {
         let relative = safe_relative(&file.path)?;
-        let target = staging.join(&relative);
+        let target = Path::new(STAGING).join(&relative);
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)?;
+            dir.create_dir_all(parent)?;
         }
         let mut response = agent
             .get(&file.url)
@@ -313,7 +321,7 @@ pub fn download(
             .with_config()
             .limit(file.size + 1)
             .reader();
-        let mut output = fs::File::create(&target)?;
+        let mut output = dir.create(&target)?;
         let mut hasher = Sha256::new();
         let mut written = 0_u64;
         let mut buffer = vec![0; 64 * 1024];
@@ -340,11 +348,7 @@ pub fn download(
         done += written;
         files.push(relative);
     }
-    Ok(Staged {
-        root: root.to_path_buf(),
-        staging,
-        files,
-    })
+    Ok(Staged { root: dir, files })
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -355,26 +359,29 @@ fn hex(bytes: &[u8]) -> String {
 /// (a running executable can be renamed but not overwritten on Windows). Any
 /// failure puts every file back.
 pub fn apply(staged: Staged) -> Result<(), Error> {
-    let retired = staged.root.join(RETIRED).join(unique());
+    let dir = &staged.root;
+    let retired = Path::new(RETIRED).join(unique());
     let mut moved: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
     let result = (|| -> Result<(), Error> {
         for relative in &staged.files {
-            let live = staged.root.join(relative);
-            let backup = if live.exists() {
+            let backup = if dir.exists(relative) {
                 let backup = retired.join(relative);
                 if let Some(parent) = backup.parent() {
-                    fs::create_dir_all(parent)?;
+                    dir.create_dir_all(parent)?;
                 }
-                fs::rename(&live, &backup)?;
+                dir.rename(relative, dir, &backup)?;
                 Some(backup)
             } else {
                 None
             };
-            moved.push((live.clone(), backup));
-            if let Some(parent) = live.parent() {
-                fs::create_dir_all(parent)?;
+            moved.push((relative.clone(), backup));
+            if let Some(parent) = relative
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                dir.create_dir_all(parent)?;
             }
-            fs::rename(staged.staging.join(relative), &live)?;
+            dir.rename(Path::new(STAGING).join(relative), dir, relative)?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -382,7 +389,10 @@ pub fn apply(staged: Staged) -> Result<(), Error> {
                     .components()
                     .any(|component| component.as_os_str() == "MacOS");
                 if executable {
-                    fs::set_permissions(&live, fs::Permissions::from_mode(0o755))?;
+                    dir.set_permissions(
+                        relative,
+                        cap_std::fs::Permissions::from_std(fs::Permissions::from_mode(0o755)),
+                    )?;
                 }
             }
         }
@@ -390,15 +400,15 @@ pub fn apply(staged: Staged) -> Result<(), Error> {
     })();
     if let Err(error) = result {
         for (live, backup) in moved.into_iter().rev() {
-            let _ = fs::remove_file(&live);
+            let _ = dir.remove_file(&live);
             if let Some(backup) = backup {
-                let _ = fs::rename(backup, &live);
+                let _ = dir.rename(backup, dir, &live);
             }
         }
-        let _ = fs::remove_dir_all(&staged.staging);
+        let _ = dir.remove_dir_all(STAGING);
         return Err(error);
     }
-    let _ = fs::remove_dir_all(&staged.staging);
+    let _ = dir.remove_dir_all(STAGING);
     Ok(())
 }
 
@@ -412,21 +422,24 @@ fn unique() -> String {
 /// Remove what earlier updates left behind; files still in use stay until
 /// the next start.
 pub fn cleanup(root: &Path) {
-    let _ = fs::remove_dir_all(root.join(STAGING));
-    if let Ok(entries) = fs::read_dir(root.join(RETIRED)) {
+    let Ok(dir) = open_root(root) else {
+        return;
+    };
+    let _ = dir.remove_dir_all(STAGING);
+    if let Ok(entries) = dir.read_dir(RETIRED) {
         for entry in entries.flatten() {
-            let _ = fs::remove_dir_all(entry.path());
+            let _ = dir.remove_dir_all(Path::new(RETIRED).join(entry.file_name()));
         }
-        let _ = fs::remove_dir(root.join(RETIRED));
+        let _ = dir.remove_dir(RETIRED);
     }
 }
 
 /// Read and verify everything without the network (used by tests and by
 /// `nuschel-cli` to vet a release before publishing).
 pub fn verify_files(root: &Path, files: &[FileEntry]) -> Result<(), Error> {
+    let dir = open_root(root)?;
     for file in files {
-        let path = root.join(safe_relative(&file.path)?);
-        let bytes = fs::read(&path)?;
+        let bytes = dir.read(safe_relative(&file.path)?)?;
         if bytes.len() as u64 != file.size || hex(&Sha256::digest(&bytes)) != file.sha256 {
             return Err(Error::Corrupt(file.path.clone()));
         }
@@ -570,10 +583,41 @@ mod tests {
             fs::write(target, body).unwrap();
         }
         Staged {
-            root: root.to_path_buf(),
-            staging,
+            root: open_root(root).unwrap(),
             files: files.iter().map(|(path, _)| PathBuf::from(path)).collect(),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_planted_in_the_installation_cannot_redirect_writes() {
+        let (root, _) = installation();
+        let outside = tempfile::tempdir().unwrap();
+        // The staging folder is a symlink to somewhere else.
+        std::os::unix::fs::symlink(outside.path(), root.path().join(STAGING)).unwrap();
+        let mut files = vec![FileEntry {
+            path: "nuschel.exe".into(),
+            url: "http://127.0.0.1:9/".into(),
+            sha256: "00".repeat(32),
+            size: 1,
+        }];
+        let update = Update {
+            version: semver::Version::new(9, 0, 0),
+            notes: None,
+            files: std::mem::take(&mut files),
+        };
+        // download() replaces the staging folder inside the root; whatever
+        // happens, nothing may appear in the directory the symlink pointed to.
+        let _ = download(&update, root.path(), |_, _| {});
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
+        // A live file that is a symlink to an outside file is moved aside, not
+        // written through.
+        let target = outside.path().join("victim");
+        fs::write(&target, b"keep").unwrap();
+        fs::remove_file(root.path().join("nuschel.exe")).unwrap();
+        std::os::unix::fs::symlink(&target, root.path().join("nuschel.exe")).unwrap();
+        apply(stage(root.path(), &[("nuschel.exe", b"new program")])).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
     }
 
     #[test]

@@ -8,6 +8,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Every file operation goes through a handle on the installation folder:
+# absolute paths, `..` and symlinks leading outside are refused.
+cap-std = "4.0.3"
 # Pure Rust, no dependencies: verifies the release manifest's signature.
 minisign-verify = "0.2"
 semver = "1.0.28"
