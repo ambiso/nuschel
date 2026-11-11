@@ -52,7 +52,7 @@ function refresh() {
     storageQueue = storageQueue.then(() => history.bookmarks(bookmarks)).catch((error) => { saved = null; fail(error); });
   }
 }
-const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "connect_with_password"]);
+const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "connect_with_password", "stop_audio", "edit_server"]);
 onmessage = async ({ data }) => {
   try {
     if (!data || typeof data !== "object") throw new Error("Invalid browser command.");
@@ -66,9 +66,9 @@ onmessage = async ({ data }) => {
       try { history = await openHistory(); client.restore_bookmarks(await history.bookmarks()); saved = client.bookmarks(); }
       catch { fail("Local history is unavailable. Messages will be shown but cannot be saved."); }
       setInterval(() => { if (client.tick(performance.now())) wake(); }, 250);
-      postMessage({ kind: "ready" });
+      postMessage({ kind: "ready", capabilities:["remove_server","dismiss_notice","connect_with_password","voice","stop_audio", "edit_server"] });
     } else {
-      if (!client || !methods.has(data.method) || !Array.isArray(data.args) || data.args.length > 5) throw new Error("Unsupported browser command.");
+      if (!client || !methods.has(data.method) || !Array.isArray(data.args) || data.args.length > 6) throw new Error("Unsupported browser command.");
       let value;
       if (data.method === "audio_ready") {
         value = client.audio_ready(JSON.stringify(data.args[0]));

@@ -6,6 +6,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 // `npm run dev` proxies /relay to a local relay (nuschl-web-relay on :8090).
 export default defineConfig({
   plugins: [svelte()],
+  worker: { format: "es" },
   build: { target: "es2022", assetsInlineLimit: 0 },
   server: {
     proxy: { "/relay": { target: "ws://127.0.0.1:8090", ws: true } },

@@ -4,21 +4,31 @@
   import { inviteFragment } from "./invite.js";
   import { channelRows, initials, avatarColor, conversationKey, filterMessages, appearance } from "./presentation.js";
   import Message from "./Message.svelte";
+  import { BrowserAudio } from "./audio.js";
   const link = inviteFragment(location.hash);
   let relay = $state(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/relay`);
-  let host = $state(link.host), port = $state(link.port), username = $state(link.username), pin = $state(link.pin), serverName = $state("");
+  let host = $state(link.host), port = $state(link.port), username = $state(link.username), pin = $state(link.pin), serverName = $state(""), password = $state("");
   let loaded = $state(false), error = $state(link.error), servers = $state([]), timeline = $state(null);
-  let showAdd = $state(false), showSettings = $state(false), drawer = $state(false), mobile = $state(false);
+  let showAdd = $state(false), editingIndex = $state(null), showSettings = $state(false), drawer = $state(false), mobile = $state(false);
   let body = $state(""), expanded = $state(new Map()), search = $state(""), showSearch = $state(false);
   let messagesElement = $state(), composerElement = $state(), navigationButton = $state(), searchElement = $state();
   let settings = $state(appearance(null)), voice = $state(null), audioState = $state(null), capabilities = $state([]);
   let serverScroll = $state(), channelScroll = $state(), serverUnread = $state({above:false,below:false}), channelUnread = $state({above:false,below:false});
   let membersOpen = $state(false);
   let lastChannelPointer = "";
-  let initialState = true, follow = true, worker, requestId = 0, activateAudio = () => {}, disposeAudio = () => {};
+  let initialState = true, follow = true, worker, audio, requestId = 0, activateAudio = () => {}, disposeAudio = () => {};
   const requests = new Map(), drafts = new Map();
   const selected = $derived(servers.find((server) => server.id === timeline?.server) || servers[0]);
   const selectedIndex = $derived(servers.findIndex((server) => server.id === selected?.id));
+  const voiceServer = $derived(servers.find(server => server.id === voice?.server_id));
+  const voiceIndex = $derived(servers.findIndex(server => server.id === voice?.server_id));
+  const voiceChannel = $derived(voiceServer?.channels.find(channel => channel.id === voice?.channel_id));
+  const microphoneMuted = $derived(voiceServer?.muted !== false || voiceServer?.deafened === true);
+  const playbackDeafened = $derived(voiceServer?.deafened !== false);
+  const voiceStatus = $derived(!voice?.joined ? "Joining…" : voice.deafened ? "Sound off"
+    : microphoneMuted ? "Microphone muted" : audioState?.phase === "permission-pending" ? "Waiting for microphone permission"
+    : audioState?.phase === "denied" ? "Microphone permission denied" : audioState?.phase === "unavailable" ? "Audio unavailable"
+    : audioState?.microphone && voice.can_transmit ? "Microphone on" : voice.muted ? "Microphone blocked" : "Microphone off");
   const rows = $derived(selected ? channelRows(selected.channels, expanded, selected.id) : []);
   const currentChannel = $derived(selected?.channels.find((channel) => channel.id === timeline?.channel));
   const ownUser = $derived(selected?.users.find((user) => user.session === selected.own_session));
@@ -41,7 +51,11 @@
   function command(method, ...args) {
     return new Promise((resolve, reject) => {
       if (!worker) { reject("The client is still starting."); return; }
-      const id = ++requestId; requests.set(id, { resolve, reject }); worker.postMessage({ id, method, args });
+      if (requests.size >= 128) { reject("The client is busy. Try again shortly."); return; }
+      const id = ++requestId;
+      const timer = setTimeout(() => { requests.delete(id); reject("The browser worker did not respond. Retry or reload to reconnect."); },15000);
+      requests.set(id, { resolve:value => {clearTimeout(timer);resolve(value);}, reject:reason => {clearTimeout(timer);reject(reason);} });
+      worker.postMessage({ id, method, args });
     });
   }
   async function act(method, ...args) { try { return await command(method, ...args); } catch (reason) { error = String(reason); } }
@@ -71,7 +85,18 @@
     const resizeViewport = () => { document.documentElement.style.setProperty("--app-height", `${viewport?.height || window.innerHeight}px`); };
     resizeViewport(); viewport?.addEventListener("resize", resizeViewport);
     worker = new Worker(new URL("./sdk.worker.js", import.meta.url), { type:"module" });
+    audio = new BrowserAudio({
+      onPacket: packet => command("voice_packet",packet),
+      onReady: ready => command("audio_ready",ready),
+      onState: state => { audioState = state; },
+    });
+    activateAudio = options => audio.activateGesture(options);
+    disposeAudio = () => audio.dispose();
     worker.onmessage = async ({ data }) => {
+      if (data.kind === "voice_packet") {
+        // Audio packets never replace reactive chat/server state.
+        audio.receive(data.packet); return;
+      }
       if (data.kind === "result") {
         const pending = requests.get(data.id); requests.delete(data.id);
         if (pending) data.error ? pending.reject(data.error) : pending.resolve(data.value);
@@ -85,7 +110,16 @@
         rememberDraft();
         servers = data.servers; timeline = data.timeline;
         voice = data.voice || null;
-        for (const update of data.updates || []) if (update.kind === "error") error = update.message;
+        audio.syncVoice(voice);
+        for (const update of data.updates || []) {
+          if (update.kind === "error") error = update.message;
+          if (update.kind === "sent") {
+            const target = servers.find(server => server.id === update.server);
+            const key = conversationKey({server:update.server,channel:update.channel},target);
+            if (drafts.get(key) === update.body) drafts.delete(key);
+            if (key === conversationKey(timeline,selected) && body === update.body) body = "";
+          }
+        }
         if (initialState) { initialState = false; if (!servers.length && !link.host) showAdd = true; }
         const changed = priorKey !== conversationKey(timeline, selected);
         if (changed) {
@@ -101,7 +135,7 @@
         updateUnread();
       }
     };
-    worker.onerror = () => { error = "The browser worker stopped. Reload to reconnect."; loaded = false; };
+    worker.onerror = () => { audio.syncVoice(null); voice = null; error = "The browser worker stopped. Reload to reconnect."; loaded = false; for (const pending of requests.values()) pending.reject(error); requests.clear(); };
     worker.postMessage({ method:"init", relay });
     return () => { media.removeEventListener("change", updateMobile); viewport?.removeEventListener("resize", resizeViewport); disposeAudio(); worker.terminate(); for (const pending of requests.values()) pending.reject("Client closed."); requests.clear(); };
   });
@@ -110,23 +144,45 @@
     if (link.error) { error = link.error; return; }
     try {
       error = "";
-      const index = await command("add_server", serverName.trim(), host.trim(), Number(port), username.trim(), pin.trim() || undefined);
-      await command("connect", index); await command("open", index, 0); showAdd = false;
+      const fields = [serverName.trim(),host.trim(),Number(port),username.trim(),pin.trim() || undefined];
+      const index = editingIndex === null ? await command("add_server",...fields) : await command("edit_server",editingIndex,...fields);
+      if (password) await command("connect_with_password",index,password); else await command("connect", index);
+      password = ""; await command("open", index, 0); showAdd = false;
     } catch (reason) { error = String(reason); }
   }
-  function addServer() { serverName = ""; host = ""; port = 64738; username = selected?.username || ""; pin = ""; showAdd = true; drawer = false; }
-  function editServer() { if (!selected) return; serverName = selected.name; host = selected.host; port = selected.port; username = selected.username; pin = selected.pin || ""; showAdd = true; drawer = false; }
+  function addServer() { editingIndex = null; password = ""; serverName = ""; host = ""; port = 64738; username = selected?.username || ""; pin = ""; showAdd = true; drawer = false; }
+  function editServer() { if (!selected) return; editingIndex = selectedIndex; password = ""; serverName = selected.name; host = selected.host; port = selected.port; username = selected.username; pin = selected.pin || ""; showAdd = true; drawer = false; }
   async function send(event) {
     event?.preventDefault();
-    const sent = body, key = conversationKey(timeline, selected);
+    const sent = body;
     if (!sent.trim() || !canSend) return;
-    try { await command("send_text", sent); if (body === sent && key === conversationKey(timeline, selected)) { body = ""; drafts.delete(key); } }
+    // Shared SDK Sent identifies both the original conversation and body.
+    // A command being queued never clears text typed during an earlier send.
+    try { await command("send_text", sent); }
     catch (reason) { error = String(reason); }
   }
   async function openChannel(id) { rememberDraft(); await act("open", selectedIndex, id); if (mobile) drawer = false; }
   function joinVoice(channel = timeline?.channel) {
     if (!selected || selected.status !== "connected" || channel == null) return;
-    activateAudio(); void act("join", selectedIndex, channel);
+    // Revoke the old destination before touching an asynchronous command.
+    audio?.syncVoice(null); voice = null;
+    void activateAudio({microphone:false}); void act("join", selectedIndex, channel);
+  }
+  function toggleMicrophone() {
+    if (voiceIndex < 0 || !voice?.joined) return;
+    if (microphoneMuted) void activateAudio({microphone:true});
+    else audio?.setLocalPolicy({muted:true});
+    void act("toggle_mute",voiceIndex);
+  }
+  function togglePlayback() {
+    if (voiceIndex < 0 || !voice?.joined) return;
+    if (playbackDeafened) void activateAudio({microphone:false});
+    else audio?.setLocalPolicy({muted:true,deafened:true});
+    void act("toggle_deaf",voiceIndex);
+  }
+  function stopAudio() {
+    audio?.setLocalPolicy({muted:true,deafened:true}); audio?.syncVoice(null);
+    voice = null; void act("stop_audio");
   }
   function toggle(row) { const next = new Map(expanded); next.set(`${selected.id}:${row.id}`, !row.open); expanded = next; }
   async function older() {
@@ -216,7 +272,18 @@
       </div>
       {#if membersOpen && timeline}<aside class="members" aria-label="Channel members"><div class="section-label"><span>IN THIS CHANNEL</span><span>{selectedUsers.length}</span></div>{#each selectedUsers as user (user.session)}<button class="member" disabled={user.session === selected.own_session} onclick={() => act("open_direct",selectedIndex,user.session)}><span class={`mini-avatar ${avatarColor(user.name)}`}>{initials(user.name)}</span><span>{user.name}{user.session === selected.own_session ? " (you)" : ""}</span></button>{/each}{#if !selectedUsers.length}<p class="muted">No one here yet.</p>{/if}</aside>{/if}
     </div>
-    {#if audioState?.error}<div class="audio-notice" role="status">{audioState.error}</div>{/if}
+    {#if voice}
+      <section class="voice-bar" aria-label="Voice controls">
+        <div class="voice-description"><strong>{voiceChannel?.name || "Voice channel"}</strong><small>{voiceServer?.name} · {voiceStatus}</small></div>
+        <div class="voice-actions">
+          <button class:pressed={microphoneMuted} class="icon-button" disabled={!voice.joined} aria-label={microphoneMuted ? "Unmute microphone" : "Mute microphone"} aria-pressed={microphoneMuted} title={microphoneMuted ? "Unmute microphone" : "Mute microphone"} onclick={toggleMicrophone}>{@render icon(microphoneMuted ? "muted" : "mic")}</button>
+          <button class:pressed={playbackDeafened} class="icon-button" disabled={!voice.joined} aria-label={playbackDeafened ? "Enable sound" : "Deafen"} aria-pressed={playbackDeafened} title={playbackDeafened ? "Enable sound" : "Deafen (also mutes microphone)"} onclick={togglePlayback}>{@render icon("headphones")}</button>
+          {#if !voice.deafened && audioState?.contextState !== "running"}<button class="text-button" onclick={() => activateAudio({microphone:false})}>Enable audio</button>{/if}
+          <button class="icon-button" aria-label="Stop audio" title="Stop audio; stay connected for chat" onclick={stopAudio}>{@render icon("leave")}</button>
+        </div>
+      </section>
+    {/if}
+    {#if audioState?.message && voice}<div class="audio-notice" role="status">{audioState.message}</div>{/if}
     <form class="composer" onsubmit={send}>
       <div class="composer-input"><label class="sr-only" for="message">Message</label><textarea id="message" bind:this={composerElement} bind:value={body} rows="2" maxlength="65536" oninput={rememberDraft} placeholder={timeline ? `Message ${timeline.name}` : "Choose a channel to start chatting"} disabled={!timeline || selected?.status !== "connected"} onkeydown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); send(); } }}></textarea><button class="send-button" type="submit" aria-label="Send" title="Send (Ctrl/⌘ Enter)" disabled={!body.trim() || !canSend}>{@render icon("send")}</button></div>
       <div class="composer-footer"><small>Enter adds a newline · Ctrl/⌘ Enter sends</small><span class="local-history">History stays in this browser</span></div>
@@ -225,5 +292,5 @@
 </main>
 
 {#if mobile && drawer}<dialog class="navigation-drawer" use:modal onclose={closeDrawer} oncancel={closeDrawer} aria-label="Server navigation" onpointerdown={(event) => { if (event.target === event.currentTarget) closeDrawer(); }}><div class="navigation">{@render navigation()}</div></dialog>{/if}
-{#if showAdd}<dialog class="modal server-modal" use:modal onclose={() => showAdd = false} oncancel={() => showAdd = false} aria-labelledby="server-form-title"><header class="modal-header"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h2 id="server-form-title">Add a server</h2></div><button class="icon-button" aria-label="Close server form" onclick={() => showAdd = false}>{@render icon("close")}</button></header><form class="connection" onsubmit={connect}><p class="muted">Connect to your Mumble server. Your bookmarks and observed chat history are saved in this browser.</p><label>Display name <input bind:value={serverName} maxlength="128" autocomplete="off" placeholder="Friday night"></label><div class="form-row"><label>Server <input bind:value={host} required autocomplete="off" placeholder="voice.example.org"></label><label class="port-field">Port <input bind:value={port} type="number" min="1" max="65535" required></label></div><label>Your name <input bind:value={username} required maxlength="128" autocomplete="nickname" placeholder="How your friends know you"></label><details><summary>Certificate and connection</summary><label>Certificate SHA-256 (optional)<input bind:value={pin} autocomplete="off" spellcheck="false" placeholder="64 hexadecimal characters"></label><small class="relay">Relay: {relay}. TLS runs in this browser.</small></details><div class="modal-actions"><button type="button" onclick={() => showAdd = false}>Cancel</button><button class="primary" type="submit" disabled={!loaded || !!link.error}>Connect</button></div></form></dialog>{/if}
-{#if showSettings}<dialog class="modal settings-modal" use:modal onclose={() => showSettings = false} oncancel={() => showSettings = false} aria-labelledby="settings-title"><header class="modal-header"><div><p class="eyebrow">MAKE IT YOURS</p><h2 id="settings-title">Settings</h2></div><button class="icon-button" aria-label="Close settings" onclick={() => showSettings = false}>{@render icon("close")}</button></header><section class="settings-section"><h3>Appearance</h3><label>Theme<select bind:value={settings.theme} onchange={persistSettings}><option value="system">Match device</option><option value="dark">Dark</option><option value="light">Light</option></select></label><label>Message spacing<select bind:value={settings.density} onchange={persistSettings}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label><label>Text size<select bind:value={settings.fontSize} onchange={persistSettings}><option value={14}>Small · 14px</option><option value={16}>Default · 16px</option><option value={18}>Large · 18px</option><option value={20}>Larger · 20px</option></select></label></section><section class="settings-section"><h3>Privacy & storage</h3><p>Bookmarks, trusted certificates and observed chat history are stored locally in this browser. Legacy servers can read chat; the relay only forwards encrypted traffic.</p><p>Links and received images never cause automatic requests to another site.</p></section>{#if selected}<section class="settings-section"><h3>{selected.name}</h3><p class="muted">{selected.host}:{selected.port} · {selected.username}</p><button onclick={() => { showSettings = false; editServer(); }}>Edit server bookmark</button>{#if capabilities.includes("remove_server")}<button class="danger" onclick={async () => { await act("remove_server",selectedIndex); showSettings = false; }}>Remove server</button>{/if}</section>{/if}<footer class="settings-footer"><span class="brand-word">nuschl<span>web</span></span><small>Built for conversations.</small></footer></dialog>{/if}
+{#if showAdd}<dialog class="modal server-modal" use:modal onclose={() => showAdd = false} oncancel={() => showAdd = false} aria-labelledby="server-form-title"><header class="modal-header"><div><p class="eyebrow">MAKE YOURSELF AT HOME</p><h2 id="server-form-title">{editingIndex === null ? "Add a server" : "Edit server"}</h2></div><button class="icon-button" aria-label="Close server form" onclick={() => showAdd = false}>{@render icon("close")}</button></header><form class="connection" onsubmit={connect}><p class="muted">Connect to your Mumble server. Your bookmarks and observed chat history are saved in this browser.</p><label>Display name <input bind:value={serverName} maxlength="128" autocomplete="off" placeholder="Friday night"></label><div class="form-row"><label>Server <input bind:value={host} required autocomplete="off" placeholder="voice.example.org"></label><label class="port-field">Port <input bind:value={port} type="number" min="1" max="65535" required></label></div><label>Your name <input bind:value={username} required maxlength="128" autocomplete="nickname" placeholder="How your friends know you"></label><label for="server-password">Server password (optional)</label><input id="server-password" type="password" bind:value={password} maxlength="1024" autocomplete="current-password"><details><summary>Certificate and connection</summary><label>Certificate SHA-256 (optional)<input bind:value={pin} autocomplete="off" spellcheck="false" placeholder="64 hexadecimal characters"></label><small class="relay">Relay: {relay}. TLS runs in this browser.</small></details><div class="modal-actions"><button type="button" onclick={() => showAdd = false}>Cancel</button><button class="primary" type="submit" disabled={!loaded || !!link.error}>Connect</button></div></form></dialog>{/if}
+{#if showSettings}<dialog class="modal settings-modal" use:modal onclose={() => showSettings = false} oncancel={() => showSettings = false} aria-labelledby="settings-title"><header class="modal-header"><div><p class="eyebrow">MAKE IT YOURS</p><h2 id="settings-title">Settings</h2></div><button class="icon-button" aria-label="Close settings" onclick={() => showSettings = false}>{@render icon("close")}</button></header><section class="settings-section"><h3>Appearance</h3><label for="theme-choice">Theme</label><select id="theme-choice" bind:value={settings.theme} onchange={persistSettings}><option value="system">Match device</option><option value="dark">Dark</option><option value="light">Light</option></select><label for="density-choice">Message spacing</label><select id="density-choice" bind:value={settings.density} onchange={persistSettings}><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select><label for="size-choice">Text size</label><select id="size-choice" bind:value={settings.fontSize} onchange={persistSettings}><option value={14}>Small · 14px</option><option value={16}>Default · 16px</option><option value={18}>Large · 18px</option><option value={20}>Larger · 20px</option></select></section><section class="settings-section"><h3>Privacy & storage</h3><p>Bookmarks, trusted certificates and observed chat history are stored locally in this browser. Legacy servers can read chat; the relay only forwards encrypted traffic.</p><p>Links and received images never cause automatic requests to another site.</p></section>{#if selected}<section class="settings-section"><h3>{selected.name}</h3><p class="muted">{selected.host}:{selected.port} · {selected.username}</p><button onclick={() => { showSettings = false; editServer(); }}>Edit server bookmark</button>{#if capabilities.includes("remove_server")}<button class="danger" onclick={async () => { await act("remove_server",selectedIndex); showSettings = false; }}>Remove server</button>{/if}</section>{/if}<footer class="settings-footer"><span class="brand-word">nuschl<span>web</span></span><small>Built for conversations.</small></footer></dialog>{/if}

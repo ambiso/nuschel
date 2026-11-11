@@ -16,9 +16,11 @@ const types = {".html":"text/html", ".js":"text/javascript", ".wasm":"applicatio
 const csp = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws://127.0.0.1:*; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 const server = createServer(async (req, res) => {
   try {
-    const path = resolve(directory, "." + decodeURIComponent(new URL(req.url, "http://127.0.0.1").pathname));
+    const pathname=decodeURIComponent(new URL(req.url,"http://127.0.0.1").pathname);
+    const mounted=pathname.startsWith("/app/") ? pathname.slice(4) : pathname;
+    const path = resolve(directory,"." + mounted);
     assert.ok(path === directory || path.startsWith(directory + sep));
-    const target = extname(path) ? path : resolve(path, "index.html");
+    const target = extname(mounted) ? path : resolve(path, "index.html");
     const bytes = await readFile(target);
     res.writeHead(200, {"Content-Type":types[extname(target)] || "application/octet-stream", "Content-Security-Policy":csp, "Referrer-Policy":"no-referrer"});
     res.end(bytes);
@@ -46,14 +48,24 @@ try {
       window.__commands=[]; window.__csp=[];
       document.addEventListener("securitypolicyviolation", (event) => window.__csp.push(event.violatedDirective + ":" + event.blockedURI));
       let state=structuredClone(initial);
+      // This matrix proves layout and commands, not actual audio. Keep all
+      // device/context creation disabled; the isolated real-audio fixture is separate.
+      window.AudioContext = undefined;
       window.Worker=class {
         postMessage(data) {
           window.__commands.push(data);
           queueMicrotask(() => {
-            if (data.method === "init") { this.onmessage?.({data:{kind:"ready",capabilities:[]}}); this.onmessage?.({data:structuredClone(state)}); return; }
+            if (data.method === "init") { this.onmessage?.({data:{kind:"ready",capabilities:["remove_server","dismiss_notice","voice","stop_audio"]}}); this.onmessage?.({data:structuredClone(state)}); return; }
             const [index,channel]=data.args || [];
             if (data.method === "open" || data.method === "browse_server") { const server=state.servers[index]; state.timeline={...state.timeline,server:server.id,channel:channel ?? 0,name:server.channels.find(x=>x.id===(channel ?? 0)).name}; }
-            if (data.method === "join") { state.servers[index].users[0].channel=channel; state.servers[index].own_channel=channel; }
+            if (data.method === "join") {
+              state.servers[index].users[0].channel=channel; state.servers[index].own_channel=channel;
+              state.servers[index].muted=true; state.servers[index].deafened=false;
+              state.voice={server_id:state.servers[index].id,connection_generation:"1",voice_generation:String(Number(state.voice?.voice_generation||0)+1),channel_id:channel,joined:true,muted:true,deafened:false,can_transmit:false};
+            }
+            if (data.method === "toggle_mute") { const s=state.servers[index];s.muted=!s.muted;s.deafened=false;state.voice={...state.voice,muted:s.muted,deafened:false,voice_generation:String(Number(state.voice.voice_generation)+1)}; }
+            if (data.method === "toggle_deaf") { const s=state.servers[index];s.deafened=!s.deafened;s.muted=true;state.voice={...state.voice,muted:true,deafened:s.deafened,voice_generation:String(Number(state.voice.voice_generation)+1)}; }
+            if (data.method === "stop_audio") state.voice=null;
             this.onmessage?.({data:{kind:"result",id:data.id}});
             this.onmessage?.({data:structuredClone(state)});
           });
@@ -61,7 +73,7 @@ try {
         terminate() {}
       };
     }, snapshot);
-    await page.goto(origin);
+    await page.goto(origin+"/app/");
     await page.getByLabel("Message",{exact:true}).waitFor();
     await page.waitForFunction(()=>document.querySelector(".chat-header h2")?.textContent==="Root");
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`${name}: page overflow`);
@@ -98,6 +110,14 @@ try {
       await page.getByRole("button",{name:"lounge",exact:true}).dblclick();
       assert.equal(await page.evaluate(()=>window.__commands.filter(x=>x.method==="join").at(-1).args[1]),1);
     }
+    await page.getByRole("region",{name:"Voice controls"}).waitFor();
+    await page.getByRole("button",{name:"Unmute microphone",exact:true}).click();
+    await page.getByRole("button",{name:"Mute microphone",exact:true}).waitFor();
+    // The deterministic SDK is unmuted, but there is no real media/device here.
+    assert.equal(await page.getByText("Microphone on",{exact:true}).count(),0);
+    await page.getByRole("button",{name:"Deafen",exact:true}).click();
+    await page.getByRole("button",{name:"Enable sound",exact:true}).click();
+    await page.getByRole("button",{name:"Unmute microphone",exact:true}).waitFor();
     // Changing conversations preserves independent drafts.
     await page.getByLabel("Message",{exact:true}).fill("A draft in lounge\nsecond line");
     const navigate=async(label)=>{if(width<=760)await page.getByRole("button",{name:"Open navigation",exact:true}).click();await page.getByRole("button",{name:label,exact:true}).click();};
@@ -122,8 +142,9 @@ try {
     await page.getByLabel("Text size",{exact:true}).selectOption("20");
     await page.keyboard.press("Escape");
     await page.setViewportSize({width,height:Math.min(height,410)});
+    await page.waitForFunction(()=>document.querySelector("main").getBoundingClientRect().height <= innerHeight + 1);
     const composer=await page.locator(".composer").boundingBox();
-    assert.ok(composer.y+composer.height<=Math.min(height,410)+1,`${name}: keyboard-height surrogate hides composer`);
+    assert.ok(composer.y+composer.height<=Math.min(height,410)+1,`${name}: keyboard-height surrogate hides composer (${JSON.stringify(composer)})`);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(await page.evaluate(()=>window.__csp),[],`${name}: CSP violations`);
     assert.deepEqual(errors,[],`${name}: browser errors`);assert.deepEqual(remote,[],`${name}: remote request`);

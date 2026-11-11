@@ -492,6 +492,32 @@ impl WebClient {
         Ok(self.client.add_server(bookmark))
     }
 
+    /// Replace one bookmark explicitly; an address change never leaves a hidden duplicate.
+    pub fn edit_server(
+        &mut self,
+        index: usize,
+        name: String,
+        host: String,
+        port: u16,
+        username: String,
+        pin: Option<String>,
+    ) -> Result<usize, String> {
+        if index >= self.client.servers.len() {
+            return Err("Unknown server.".into());
+        }
+        let bookmark = snapshot::bookmark(&name, &host, port, &username, pin)?;
+        if self
+            .client
+            .server_index(&bookmark.id)
+            .is_some_and(|other| other != index)
+        {
+            return Err("This server and username are already saved.".into());
+        }
+        self.client.replace_server(index, bookmark);
+        self.reconcile_voice();
+        Ok(index)
+    }
+
     pub fn connect(&mut self, index: usize) {
         if index < self.client.servers.len() {
             self.client.connect(index, None, true);
@@ -633,6 +659,19 @@ impl WebClient {
             .filter(|packet| view.as_ref().is_some_and(|v| v == &packet.context))
             .collect();
         serde_json::to_string(&packets).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Stop media while retaining the connection and channel presence for chat.
+    pub fn stop_audio(&mut self) {
+        if let Some(view) = self.shared.voice.borrow().view() {
+            if let Some(index) = self.client.server_index(&view.server_id) {
+                if !self.client.servers[index].deafened {
+                    self.client.set_mute(index, true);
+                }
+            }
+        }
+        self.shared.voice.borrow_mut().clear();
+        self.shared.voice_packets.borrow_mut().clear();
     }
 
     pub fn remove_server(&mut self, index: usize) {

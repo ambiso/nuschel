@@ -55,10 +55,25 @@ pub struct UserView {
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UpdateView {
-    Browse { server: String, channel: u32 },
-    LoginRefused { server: String, reason: String },
-    Negotiated { server: String },
-    Error { message: String },
+    Browse {
+        server: String,
+        channel: u32,
+    },
+    LoginRefused {
+        server: String,
+        reason: String,
+    },
+    Negotiated {
+        server: String,
+    },
+    Sent {
+        server: String,
+        channel: u32,
+        body: String,
+    },
+    Error {
+        message: String,
+    },
     Changed,
 }
 
@@ -127,6 +142,11 @@ pub fn update(update: &Update) -> Option<UpdateView> {
         },
         Update::Negotiated { server } => UpdateView::Negotiated {
             server: server.clone(),
+        },
+        Update::Sent { conversation, body } => UpdateView::Sent {
+            server: conversation.server.clone(),
+            channel: conversation.channel,
+            body: body.clone(),
         },
         Update::HistoryFailed(message) => UpdateView::Error {
             message: message.clone(),

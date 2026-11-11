@@ -67,7 +67,12 @@ try {
   assert.throws(()=>send(a,"9007199254740995"),/authorized|muted/);
   a.toggle_deaf(ai);
   for (let i=0;i<10;i++) {await new Promise(resolve=>setTimeout(resolve,20));a.poll();assert.equal(view(a).deafened,true);assert.equal(view(a).muted,true);}
+  a.stop_audio();a.poll();assert.equal(view(a),null);
+  assert.equal(JSON.parse(a.servers())[0].status,"connected");
+  a.edit_server(ai,"Renamed local bookmark",host,Number(port),"voice-wasm-renamed",own.pin);
+  assert.equal(JSON.parse(a.bookmarks()).length,1);
+  assert.equal(JSON.parse(a.bookmarks())[0].username,"voice-wasm-renamed");
   a.disconnect(ai);a.poll();assert.equal(view(a),null);
   assert.throws(()=>a.audio_ready(JSON.stringify({...stale,capture:true,playback:true})),/Stale/);
-  console.log(JSON.stringify({passed:true,transport:"TLS UDPTunnel",actual_wasm:sdk,received_packets:received.length,sequence:received[0].sequence,checks:["startup mute","join acknowledgment","readiness gate","private text browsing preserves route","stock Murmur Opus interchange","duplicate rejection","mute stale-work rejection","deaf implies mute","disconnect revocation"]}));
+  console.log(JSON.stringify({passed:true,transport:"TLS UDPTunnel",actual_wasm:sdk,received_packets:received.length,sequence:received[0].sequence,checks:["startup mute","join acknowledgment","readiness gate","private text browsing preserves route","stock Murmur Opus interchange","duplicate rejection","mute stale-work rejection","deaf implies mute","stop audio preserves chat","bookmark identity replacement","disconnect revocation"]}));
 } finally {clearInterval(timer);a.disconnect(ai);b.disconnect(bi);}
