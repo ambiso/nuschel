@@ -57,6 +57,8 @@ pub enum ContentBlock {
         /// Formatting over parts of the text, sorted by start and disjoint.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         spans: Vec<Span>,
+        #[serde(default, skip_serializing_if = "TextRole::is_paragraph")]
+        role: TextRole,
     },
     Code {
         language: Option<String>,
@@ -74,15 +76,72 @@ pub enum ContentBlock {
     },
 }
 
+impl ContentBlock {
+    /// A plain paragraph.
+    pub fn text(text: impl Into<String>) -> Self {
+        ContentBlock::Text {
+            text: text.into(),
+            spans: Vec::new(),
+            role: TextRole::Paragraph,
+        }
+    }
+}
+
+/// What a text block is.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum TextRole {
+    #[default]
+    Paragraph,
+    /// A heading of level 1 to 3.
+    Heading(u8),
+    /// A list item, nested from depth 1, with its bullet or number.
+    Item {
+        depth: u8,
+        marker: String,
+    },
+    Quote,
+    /// A horizontal rule; its text is empty.
+    Rule,
+}
+
+impl TextRole {
+    pub fn is_paragraph(&self) -> bool {
+        *self == TextRole::Paragraph
+    }
+}
+
 /// Formatting over the bytes `start..end` of a text block.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
+    #[serde(default, skip_serializing_if = "Style::is_plain")]
+    pub style: Style,
     /// The http, https or mumble URL this part links to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+}
+
+/// Inline formatting from legacy Mumble rich text.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Style {
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strike: bool,
+    /// Inline code: monospace.
+    pub code: bool,
+    /// The sender's colour; renderers adjust it to stay legible.
+    pub color: Option<[u8; 3]>,
+}
+
+impl Style {
+    pub fn is_plain(&self) -> bool {
+        *self == Style::default()
+    }
 }
 
 /// The link schemes messages may use; anything else stays plain text.

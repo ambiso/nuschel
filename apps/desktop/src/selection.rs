@@ -394,6 +394,7 @@ impl BlockText {
         id: Option<ElementId>,
         text: SharedString,
         highlights: &[(Range<usize>, HighlightStyle)],
+        monospace: &[Range<usize>],
         selected: Option<Range<usize>>,
         hovered: Option<Range<usize>>,
         links: Option<Links>,
@@ -411,6 +412,16 @@ impl BlockText {
             Some(styles) => styled.with_highlights(styles),
             None if highlights.is_empty() => styled,
             None => styled.with_highlights(highlights.iter().cloned()),
+        };
+        let styled = if monospace.is_empty() {
+            styled
+        } else {
+            let family = SharedString::new_static("monospace");
+            styled.with_font_family_overrides(
+                monospace
+                    .iter()
+                    .map(|range| (range.clone(), family.clone())),
+            )
         };
         Self {
             id,
@@ -839,7 +850,7 @@ mod tests {
     use super::{
         Caret, TextSelection, line_at, names_target, overlay, select, selected_text, word_at,
     };
-    use crate::document::{Block, Document};
+    use crate::document::{Block, Document, Kind};
     use gpui_kit::{HighlightStyle, rgb};
 
     #[test]
@@ -883,6 +894,8 @@ mod tests {
                     text: "Hello there".into(),
                     highlights: Vec::new().into(),
                     links: Vec::new().into(),
+                    code: Vec::new().into(),
+                    kind: Kind::Paragraph,
                 },
                 image,
                 Block::Code {
@@ -894,6 +907,8 @@ mod tests {
                     text: "Bye".into(),
                     highlights: Vec::new().into(),
                     links: Vec::new().into(),
+                    code: Vec::new().into(),
+                    kind: Kind::Paragraph,
                 },
             ],
         };

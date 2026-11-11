@@ -5,7 +5,7 @@ use std::cell::OnceCell;
 
 use base64::Engine as _;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder as _, ImageFormat, ImageReader, Limits};
-use nuschel_core::{CodeRun, ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument, Span};
+use nuschel_core::{CodeRun, ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use syntect::{
     easy::HighlightLines,
@@ -14,6 +14,9 @@ use syntect::{
     util::LinesWithEndings,
 };
 use thiserror::Error;
+
+mod markup;
+pub use markup::{MAX_LINKS, MAX_URL_BYTES};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -37,9 +40,6 @@ pub const MAX_IMAGE_HEIGHT: u32 = 270;
 pub const VIEW_WIDTH: u32 = 1600;
 pub const VIEW_HEIGHT: u32 = 1000;
 const MAX_IMAGES: usize = 8;
-/// Links per message, and the longest link target kept.
-pub const MAX_LINKS: usize = 128;
-pub const MAX_URL_BYTES: usize = 2048;
 const MAX_DOCUMENT_PIXELS_BYTES: usize = 640 * 1024;
 const MAX_SOURCE_DIMENSION: u32 = 4096;
 
@@ -343,13 +343,10 @@ impl ContentRenderer {
                 Event::End(TagEnd::CodeBlock) => {
                     if let Some((start, language, body)) = code.take() {
                         if start > consumed {
-                            blocks.push(ContentBlock::Text {
-                                text: source[consumed..start].to_owned(),
-                                spans: Vec::new(),
-                            });
+                            blocks.push(ContentBlock::text(&source[consumed..start]));
                         }
                         // Mumble links URLs even inside a fence: code shows text only.
-                        let body = without_markers(&body);
+                        let body = markup::without_markers(&body);
                         let runs = self.highlight(&body, language.as_deref())?;
                         blocks.push(ContentBlock::Code { language, runs });
                         consumed = range.end;
@@ -359,104 +356,18 @@ impl ContentRenderer {
             }
         }
         if consumed < source.len() || blocks.is_empty() {
-            blocks.push(ContentBlock::Text {
-                text: source[consumed..].to_owned(),
-                spans: Vec::new(),
-            });
+            blocks.push(ContentBlock::text(&source[consumed..]));
         }
         Ok(MessageDocument {
-            blocks: expand_markers(blocks),
+            blocks: markup::expand(blocks),
         })
     }
 
-    /// Legacy Mumble rich text becomes inert text before it crosses back into
-    /// the UI. No image, URL, style, script, font or other resource is loaded.
-    /// Inline `data:` images and http, https and mumble links are kept as
-    /// markers (`EMBED` directive `EMBED`) that [`Self::render`] expands, so
-    /// stored history keeps them and its visible text stays searchable.
+    /// Legacy Mumble rich text becomes inert, marked-up text before it crosses
+    /// back into the UI; no image, URL, style, script, font or other resource
+    /// is loaded. See [`markup`] for what is kept and how.
     pub fn legacy_plain_text(&self, source: &str) -> Result<String, Error> {
-        use html5ever::tendril::TendrilSink;
-        use markup5ever_rcdom::{NodeData, RcDom};
-        if source.len() > MAX_CONTENT_BYTES {
-            return Err(Error::TooLarge);
-        }
-        let dom = html5ever::parse_document(RcDom::default(), Default::default()).one(source);
-        let mut pending = vec![(dom.document.clone(), false)];
-        let mut text = String::new();
-        let mut links = 0;
-        while let Some((node, closing)) = pending.pop() {
-            match &node.data {
-                NodeData::Text { contents } if !closing => {
-                    text.extend(contents.borrow().chars().filter(|c| *c != EMBED));
-                }
-                NodeData::Element { name, attrs, .. } => {
-                    let tag = name.local.as_ref();
-                    if tag == "img" && !closing {
-                        // Only inline data: images are kept; remote URLs are never fetched.
-                        let source = attrs
-                            .borrow()
-                            .iter()
-                            .find(|attribute| &*attribute.name.local == "src")
-                            .map(|attribute| attribute.value.to_string());
-                        match source.filter(|source| data_uri(source).is_some()) {
-                            Some(source) => {
-                                text.push(EMBED);
-                                text.extend(source.chars().filter(|c| !c.is_whitespace()));
-                                text.push(EMBED);
-                            }
-                            None => text.push_str("[image]"),
-                        }
-                    }
-                    if matches!(tag, "script" | "style" | "head" | "iframe" | "object") {
-                        continue;
-                    }
-                    if tag == "a" {
-                        if closing {
-                            marker(&mut text, "/link");
-                        } else if links < MAX_LINKS
-                            && let Some(url) = attrs
-                                .borrow()
-                                .iter()
-                                .find(|attribute| &*attribute.name.local == "href")
-                                .and_then(|attribute| link_target(&attribute.value))
-                        {
-                            links += 1;
-                            marker(&mut text, &format!("link:{url}"));
-                            pending.push((node.clone(), true));
-                        }
-                    }
-                    if tag == "br" && !closing {
-                        text.push('\n');
-                    }
-                    if matches!(
-                        tag,
-                        "p" | "div" | "li" | "pre" | "blockquote" | "tr" | "h1" | "h2" | "h3"
-                    ) {
-                        if !text.is_empty() && !text.ends_with('\n') {
-                            text.push('\n');
-                        }
-                        if !closing {
-                            pending.push((node.clone(), true));
-                        }
-                    }
-                }
-                _ => {}
-            }
-            if text.len() > MAX_CONTENT_BYTES {
-                return Err(Error::TooLarge);
-            }
-            if !closing {
-                pending.extend(
-                    node.children
-                        .borrow()
-                        .iter()
-                        .rev()
-                        .cloned()
-                        .map(|child| (child, false)),
-                );
-            }
-        }
-        Ok(text)
+        markup::legacy_text(source)
     }
 
     fn highlight(&self, source: &str, language: Option<&str>) -> Result<Vec<CodeRun>, Error> {
@@ -485,213 +396,10 @@ impl ContentRenderer {
     }
 }
 
-fn marker(text: &mut String, directive: &str) {
-    text.push(EMBED);
-    text.push_str(directive);
-    text.push(EMBED);
-}
-
-/// Text with every `EMBED … EMBED` marker removed.
-fn without_markers(text: &str) -> std::borrow::Cow<'_, str> {
-    if text.contains(EMBED) {
-        text.split(EMBED).step_by(2).collect::<String>().into()
-    } else {
-        text.into()
-    }
-}
-
-/// A link target if it may be one: http, https or mumble, without control,
-/// invisible or whitespace characters, and not too long.
-fn link_target(raw: &str) -> Option<String> {
-    if raw.len() > 4 * MAX_URL_BYTES {
-        return None;
-    }
-    let invisible = |c: char| {
-        c.is_control()
-            || c == EMBED
-            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
-    };
-    let url: String = raw.chars().filter(|&c| !invisible(c)).collect();
-    let url = url.trim();
-    (url.len() <= MAX_URL_BYTES
-        && !url.contains(char::is_whitespace)
-        && nuschel_core::allowed_link(url))
-    .then(|| url.to_owned())
-}
-
-/// Bare http, https and mumble URLs in `text` outside the existing spans
-/// become links; `spans` stays sorted.
-fn bare_links(text: &str, spans: &mut Vec<Span>, count: &mut usize) {
-    let bytes = text.as_bytes();
-    let mut found = Vec::new();
-    let mut from = 0;
-    for (colon, _) in text.match_indices("://") {
-        if *count >= MAX_LINKS {
-            break;
-        }
-        if colon < from {
-            continue;
-        }
-        let Some(start) = ["https", "http", "mumble"].iter().find_map(|scheme| {
-            let start = colon.checked_sub(scheme.len())?;
-            bytes[start..colon]
-                .eq_ignore_ascii_case(scheme.as_bytes())
-                .then_some(start)
-        }) else {
-            continue;
-        };
-        // The scheme starts a word: "xhttp://" is no link.
-        if text[..start]
-            .chars()
-            .next_back()
-            .is_some_and(char::is_alphanumeric)
-        {
-            continue;
-        }
-        let mut end = text[colon..]
-            .find(|c: char| {
-                c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | '"' | '`')
-            })
-            .map_or(text.len(), |length| colon + length);
-        from = end;
-        // Sentence punctuation after a URL is not part of it, nor is a closing
-        // bracket that has no opening one inside it.
-        while let Some(last) = text[start..end].chars().next_back() {
-            let url = &text[start..end];
-            let unbalanced = |open, close| {
-                last == close && url.matches(open).count() < url.matches(close).count()
-            };
-            if matches!(last, '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"')
-                || unbalanced('(', ')')
-                || unbalanced('[', ']')
-            {
-                end -= last.len_utf8();
-            } else {
-                break;
-            }
-        }
-        if spans
-            .iter()
-            .any(|span| span.start < end && start < span.end)
-        {
-            continue;
-        }
-        if let Some(url) = link_target(&text[start..end]) {
-            *count += 1;
-            found.push(Span {
-                start,
-                end,
-                link: Some(url),
-            });
-        }
-    }
-    if !found.is_empty() {
-        spans.extend(found);
-        spans.sort_by_key(|span| span.start);
-    }
-}
-
-/// A text block being assembled from marked-up text.
-#[derive(Default)]
-struct Pending {
-    text: String,
-    spans: Vec<Span>,
-    link: Option<(usize, String)>,
-}
-
-impl Pending {
-    fn close_link(&mut self) {
-        if let Some((start, url)) = self.link.take()
-            && start < self.text.len()
-        {
-            self.spans.push(Span {
-                start,
-                end: self.text.len(),
-                link: Some(url),
-            });
-        }
-    }
-
-    fn flush(&mut self, out: &mut Vec<ContentBlock>, links: &mut usize) {
-        self.close_link();
-        let text = std::mem::take(&mut self.text);
-        let mut spans = std::mem::take(&mut self.spans);
-        bare_links(&text, &mut spans, links);
-        out.push(ContentBlock::Text { text, spans });
-    }
-}
-
-/// Expand the markers in text blocks: decoded images become blocks of their
-/// own and links become spans, as do bare URLs. Unknown markers are dropped.
-fn expand_markers(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
-    let mut out = Vec::with_capacity(blocks.len());
-    let mut images = 0;
-    let mut links = 0;
-    let mut budget = MAX_DOCUMENT_PIXELS_BYTES;
-    for block in blocks {
-        let ContentBlock::Text { text, .. } = block else {
-            out.push(block);
-            continue;
-        };
-        let mut pending = Pending::default();
-        let mut pushed = false;
-        for (index, part) in text.split(EMBED).enumerate() {
-            if index % 2 == 0 {
-                pending.text.push_str(part);
-            } else if let Some(url) = part.strip_prefix("link:") {
-                pending.close_link();
-                if links < MAX_LINKS
-                    && let Some(url) = link_target(url)
-                {
-                    links += 1;
-                    pending.link = Some((pending.text.len(), url));
-                }
-            } else if part == "/link" {
-                pending.close_link();
-            } else if part.starts_with("data:") {
-                let decoded = (images < MAX_IMAGES)
-                    .then(|| data_uri(part))
-                    .flatten()
-                    .and_then(|bytes| decode_image(&bytes, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT))
-                    .filter(|image| match image {
-                        ContentBlock::Image { width, height, .. } => {
-                            (*width * *height * 4) as usize <= budget
-                        }
-                        _ => false,
-                    });
-                match decoded {
-                    Some(mut image) => {
-                        if let ContentBlock::Image {
-                            width,
-                            height,
-                            source,
-                            ..
-                        } = &mut image
-                        {
-                            budget -= (*width * *height * 4) as usize;
-                            *source = Some(part.chars().filter(|c| !c.is_whitespace()).collect());
-                        }
-                        images += 1;
-                        if !pending.text.is_empty() {
-                            pending.flush(&mut out, &mut links);
-                        }
-                        out.push(image);
-                        pushed = true;
-                    }
-                    None => pending.text.push_str("[image]"),
-                }
-            }
-        }
-        if !pending.text.is_empty() || !pushed {
-            pending.flush(&mut out, &mut links);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nuschel_core::EMBED;
 
     #[test]
     fn favicons_decode_from_ico() {
@@ -960,13 +668,7 @@ mod tests {
     fn literal_messages_keep_blank_lines_and_html_inert() -> Result<(), Error> {
         let source = "first\n\nsecond\n<script>never execute</script>";
         let result = ContentRenderer::new()?.render(source)?;
-        assert_eq!(
-            result.blocks,
-            vec![ContentBlock::Text {
-                text: source.to_owned(),
-                spans: Vec::new(),
-            }]
-        );
+        assert_eq!(result.blocks, vec![ContentBlock::text(source)]);
         Ok(())
     }
 
@@ -996,145 +698,6 @@ mod tests {
         assert!(
             runs.windows(2)
                 .any(|pair| pair[0].foreground != pair[1].foreground)
-        );
-        Ok(())
-    }
-
-    /// (visible text, [(linked text, url)]) of each text block.
-    fn links(document: &MessageDocument) -> Vec<(String, Vec<(String, String)>)> {
-        document
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text, spans } => Some((
-                    text.clone(),
-                    spans
-                        .iter()
-                        .filter_map(|span| {
-                            Some((text[span.start..span.end].to_owned(), span.link.clone()?))
-                        })
-                        .collect(),
-                )),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn html(renderer: &ContentRenderer, source: &str) -> Result<MessageDocument, Error> {
-        renderer.render(&renderer.legacy_plain_text(source)?)
-    }
-
-    #[test]
-    fn anchors_and_bare_urls_become_links_with_allowed_schemes_only() -> Result<(), Error> {
-        let renderer = ContentRenderer::new()?;
-        let document = html(
-            &renderer,
-            "see <a href=\"https://example.com/a?b=1&amp;c\">the <b>docs</b></a>, \
-             <a href='javascript:alert(1)'>js</a> <a href='file:///etc/passwd'>file</a> \
-             <a href='data:text/html,x'>data</a> <a href=' MUMBLE://host/ch '>join</a>",
-        )?;
-        assert_eq!(
-            links(&document),
-            [(
-                "see the docs, js file data join".to_owned(),
-                vec![
-                    (
-                        "the docs".to_owned(),
-                        "https://example.com/a?b=1&c".to_owned()
-                    ),
-                    ("join".to_owned(), "MUMBLE://host/ch".to_owned()),
-                ]
-            )]
-        );
-        // Bare URLs in plain messages (and in old history) too, without
-        // trailing punctuation or an unmatched closing bracket.
-        let document = renderer.render(
-            "Read https://en.wikipedia.org/wiki/Rust_(language). (or http://a.example/x) \
-             xhttp://no.example ftp://no.example mumble://ok.example:64738/",
-        )?;
-        let urls: Vec<String> = links(&document)[0]
-            .1
-            .iter()
-            .map(|(_, url)| url.clone())
-            .collect();
-        assert_eq!(
-            urls,
-            [
-                "https://en.wikipedia.org/wiki/Rust_(language)",
-                "http://a.example/x",
-                "mumble://ok.example:64738/"
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn hostile_links_are_capped_and_cleaned() -> Result<(), Error> {
-        let renderer = ContentRenderer::new()?;
-        // Control and bidi characters are removed from targets; whitespace
-        // inside one, or a target past the length cap, makes no link.
-        let huge = format!("https://example.com/{}", "a".repeat(MAX_URL_BYTES));
-        let document = html(
-            &renderer,
-            &format!(
-                "<a href=\"https://exa\u{7}mple.com/\u{202E}x\">one</a> \
-                 <a href=\"https://a b.example\">two</a> <a href=\"{huge}\">three</a>"
-            ),
-        )?;
-        assert_eq!(
-            links(&document)[0].1,
-            [("one".to_owned(), "https://example.com/x".to_owned())]
-        );
-        // Many links: only the first MAX_LINKS are links, all text is kept.
-        let many: String = (0..MAX_LINKS + 50)
-            .map(|n| format!("<a href=\"https://e.example/{n}\">{n}</a> "))
-            .collect();
-        let document = html(&renderer, &many)?;
-        let (text, found) = &links(&document)[0];
-        assert_eq!(found.len(), MAX_LINKS);
-        assert!(text.contains(&format!("{}", MAX_LINKS + 49)));
-        // Nested and unclosed anchors and markers never yield overlapping or
-        // out-of-range spans.
-        for source in [
-            "<a href='https://a.example'>a<a href='https://b.example'>b</a>c",
-            "<a href='https://a.example'><p>para<a href='https://b.example'>x",
-            "<b><a href='https://a.example'>unclosed",
-            "text\u{FFFC}link:https://a.example\u{FFFC}more\u{FFFC}/link\u{FFFC}\u{FFFC}/link\u{FFFC}",
-            "\u{FFFC}link:https://a.example\u{FFFC}",
-        ] {
-            for document in [html(&renderer, source)?, renderer.render(source)?] {
-                for block in &document.blocks {
-                    if let ContentBlock::Text { text, spans } = block {
-                        let mut end = 0;
-                        for span in spans {
-                            assert!(end <= span.start && span.start < span.end, "{source}");
-                            assert!(
-                                text.is_char_boundary(span.start)
-                                    && text.is_char_boundary(span.end)
-                            );
-                            end = span.end;
-                        }
-                        assert!(end <= text.len() && !text.contains(EMBED), "{source}");
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn linked_urls_inside_a_fence_stay_plain_code() -> Result<(), Error> {
-        let renderer = ContentRenderer::new()?;
-        let document = html(
-            &renderer,
-            "```<br/>curl <a href=\"https://x.example/\">https://x.example/</a><br/>```",
-        )?;
-        let Some(ContentBlock::Code { runs, .. }) = document.blocks.first() else {
-            panic!("{document:?}");
-        };
-        assert_eq!(
-            runs.iter().map(|run| run.text.as_str()).collect::<String>(),
-            "curl https://x.example/\n"
         );
         Ok(())
     }
@@ -1183,6 +746,20 @@ mod tests {
             ").",
             "\u{FFFC}link:https://y.example\u{FFFC}",
             "\u{FFFC}/link\u{FFFC}",
+            "<ul><li>",
+            "</li>",
+            "<ol start='9'>",
+            "<blockquote>",
+            "<pre>",
+            "</pre>",
+            "<h1>",
+            "<hr>",
+            "<th>",
+            "<font color='#abc'>",
+            "<span style='color:rgb(1,2,3);font-weight:700;text-decoration:underline line-through'>",
+            "\u{FFFC}item:9:\u{FFFC}",
+            "\u{FFFC}quote\u{FFFC}",
+            "\u{FFFC}h2\u{FFFC}",
         ];
         let mut state = 99_u64;
         for _ in 0..3_000 {
@@ -1196,7 +773,7 @@ mod tests {
             let plain = renderer.legacy_plain_text(&text)?;
             for document in [renderer.render(&plain)?, renderer.render(&text)?] {
                 for block in document.blocks {
-                    if let ContentBlock::Text { text, spans } = block {
+                    if let ContentBlock::Text { text, spans, .. } = block {
                         let mut end = 0;
                         for span in spans {
                             assert!(end <= span.start && span.start < span.end);

@@ -140,7 +140,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,links,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,links,rich,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -328,6 +328,22 @@ def main():
                 shot("34-mumble-link")
                 click(228, 299, count=2)  # back into Development, as the other scenes expect
                 time.sleep(1.5)
+            if want("rich"):
+                # Formatting as stock Mumble's rich text editor and markdown send it.
+                bots[1].send(kind="html", channel=2, html=(
+                    "<h2>Release notes</h2><p><b>Bold</b>, <i>italic</i>, <u>underlined</u>, <s>struck</s>, "
+                    "<code>inline code</code>, <span style=\" color:#000080;\">navy</span> and "
+                    "<font color=\"#ff8800\">orange</font>.</p><ul><li>First</li><li>Second<ul><li>Nested</li>"
+                    "</ul></li></ul><ol><li>One</li><li>Two</li></ol><blockquote>A quote<br/>on two lines</blockquote>"
+                    "<hr/><pre>fn main() {\n    println!(\"hi\");\n}</pre>"
+                    "<table><tr><th>Key</th><th>Value</th></tr><tr><td>a</td><td>1</td></tr></table>"))
+                time.sleep(1.5)
+                shot("35-rich-text")
+                click(461, 685)  # Show more
+                time.sleep(1.0)
+                shot("36-rich-text-expanded")
+                click(461, 685)  # Show less, so the timeline is as later scenes expect
+                time.sleep(0.6)
 
             if want("dialog"):
                 click(59, 227)

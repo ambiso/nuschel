@@ -955,10 +955,7 @@ pub fn content_worker() -> Option<&'static std::path::Path> {
 /// What is shown when the content worker cannot render a message.
 fn plain(source: &str) -> MessageDocument {
     MessageDocument {
-        blocks: vec![ContentBlock::Text {
-            text: source.into(),
-            spans: Vec::new(),
-        }],
+        blocks: vec![ContentBlock::text(source)],
     }
 }
 

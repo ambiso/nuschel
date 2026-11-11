@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-use crate::document::{Block, Document};
+use crate::document::{Block, Document, Kind};
 use crate::{
     assets::icon,
     chrome,
@@ -2417,9 +2417,18 @@ fn blocks(
         .enumerate()
         .map(|(index, block)| match block {
             Block::Text {
+                kind: Kind::Rule, ..
+            } => div()
+                .my_1()
+                .h(px(1.))
+                .bg(color(BORDER_STRONG))
+                .into_any_element(),
+            Block::Text {
                 text,
                 highlights,
                 links,
+                code,
+                kind,
             } => {
                 let selected =
                     selection.and_then(|selection| selection.block_range(index, text.len()));
@@ -2432,6 +2441,7 @@ fn blocks(
                     id,
                     text.clone(),
                     highlights,
+                    code,
                     selected,
                     underlined,
                     links.clone(),
@@ -2442,7 +2452,49 @@ fn blocks(
                     layout: content.layout(),
                     links,
                 });
-                div().id(("text", index)).child(content).into_any_element()
+                let block = div().id(("text", index));
+                match kind {
+                    Kind::Heading(level) => block
+                        .font_weight(FontWeight::BOLD)
+                        .text_size(px(match level {
+                            1 => 22.,
+                            2 => 19.,
+                            _ => 17.,
+                        }))
+                        .child(content),
+                    Kind::Quote => block
+                        .pl_3()
+                        .border_l_2()
+                        .border_color(color(BORDER_STRONG))
+                        .text_color(color(TEXT_MUTED))
+                        .child(content),
+                    Kind::Item { depth, marker } => {
+                        // Items of one list sit closer than other blocks.
+                        let follows = index > 0
+                            && matches!(
+                                document.blocks[index - 1],
+                                Block::Text {
+                                    kind: Kind::Item { .. },
+                                    ..
+                                }
+                            );
+                        block
+                            .flex()
+                            .pl(px(f32::from(depth - 1) * 18.))
+                            .when(follows, |item| item.mt(px(-4.)))
+                            .child(
+                                div()
+                                    .min_w(px(18.))
+                                    .pr_1()
+                                    .flex_shrink_0()
+                                    .text_color(color(TEXT_MUTED))
+                                    .child(marker.clone()),
+                            )
+                            .child(div().flex_1().min_w_0().child(content))
+                    }
+                    Kind::Paragraph | Kind::Rule => block.child(content),
+                }
+                .into_any_element()
             }
             Block::Image {
                 image,
@@ -2493,7 +2545,8 @@ fn blocks(
                 let selected =
                     selection.and_then(|selection| selection.block_range(index, text.len()));
                 let id = Some(("code-text", index).into());
-                let content = BlockText::new(id, text.clone(), highlights, selected, None, None);
+                let content =
+                    BlockText::new(id, text.clone(), highlights, &[], selected, None, None);
                 texts.push(TextBox {
                     block: index,
                     text: text.clone(),
