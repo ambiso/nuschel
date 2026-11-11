@@ -89,6 +89,8 @@
             || lib.hasSuffix ".vp8" path
             || lib.hasSuffix ".svg" path
             || lib.hasSuffix ".ico" path
+            # The math worker's bundled font (crates/math/fonts).
+            || lib.hasSuffix ".otf" path
             # The emoji picker's table.
             || lib.hasSuffix "emoji.txt" path
             # The release signing key the updater trusts.
