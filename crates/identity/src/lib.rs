@@ -21,7 +21,8 @@
 //!
 //! Every format is a fixed-layout, versioned binary encoding (see [`codec`]'s rules and
 //! each module's layout); decoders reject unknown versions, truncation and trailing
-//! bytes, and every signature has its own context string.
+//! bytes, and every signature has its own context string. The test vectors in
+//! `test-vectors/identity-v1.txt` pin the encodings.
 //!
 //! Nothing here does I/O or reads the clock: callers pass `now` (Unix seconds) and move
 //! the bytes.
@@ -41,6 +42,9 @@ pub mod safety;
 
 #[cfg(test)]
 mod tests;
+
+#[doc(hidden)]
+pub mod fuzzing;
 
 pub use certificate::{
     DeviceCertificate, DeviceCredential, DeviceRevocation, DeviceSigningAuthority,

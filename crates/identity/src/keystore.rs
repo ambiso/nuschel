@@ -296,6 +296,11 @@ impl RecoveryKey {
         Ok(Self(Secret32::random()?))
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_bytes(bytes: &[u8; 32]) -> Self {
+        Self(Secret32::from_slice(bytes).expect("32 bytes"))
+    }
+
     fn checksum(key: &[u8; 32]) -> [u8; 3] {
         let digest = crypto::sha256(&[&label(RECOVERY_CHECKSUM_LABEL), key]);
         [digest[0], digest[1], digest[2]]
@@ -592,6 +597,17 @@ impl DeviceKeystore {
     /// Encrypts the keystore under `key`.
     pub fn seal(&self, key: &StoreKey) -> Result<Vec<u8>, Error> {
         Ok(Sealed::seal(key.0.expose(), Purpose::DeviceKeystore, &self.plaintext())?.encode())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn seal_with_salt(&self, key: &StoreKey, salt: [u8; 32]) -> Result<Vec<u8>, Error> {
+        Ok(Sealed::seal_with_salt(
+            key.0.expose(),
+            Purpose::DeviceKeystore,
+            &self.plaintext(),
+            salt,
+        )?
+        .encode())
     }
 
     /// Decrypts and checks a keystore: authenticity, then every key against its

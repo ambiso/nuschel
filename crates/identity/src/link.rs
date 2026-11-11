@@ -348,6 +348,25 @@ impl SessionKeys {
     }
 }
 
+/// The key schedule for the test vectors: (transcript, confirmation, psk).
+#[cfg(test)]
+pub(crate) fn key_schedule(
+    spake_key: &[u8; 32],
+    pake_existing: &[u8; PAKE_LEN],
+    pake_new: &[u8; PAKE_LEN],
+    keys: &DevicePublicKeys,
+    display_name: &DisplayName,
+) -> ([u8; 32], [u8; 32], [u8; 32]) {
+    let body = LinkDeviceKeys::body(keys, display_name);
+    let session = SessionKeys::derive(
+        spake_key,
+        &LinkPake(*pake_existing),
+        &LinkPake(*pake_new),
+        &body,
+    );
+    (session.transcript, session.confirmation(), *session.psk)
+}
+
 // ---------------------------------------------------------------------------------
 // Existing device
 

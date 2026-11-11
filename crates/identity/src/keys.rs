@@ -333,6 +333,10 @@ impl HybridSecret {
         })
     }
 
+    pub fn from_seeds(mldsa65: Secret32, ed25519: Secret32) -> Self {
+        Self { mldsa65, ed25519 }
+    }
+
     pub fn public(&self) -> HybridPublicKey {
         HybridPublicKey {
             mldsa65: mldsa65::public_from_seed(self.mldsa65.expose()),

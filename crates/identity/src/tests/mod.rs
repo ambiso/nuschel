@@ -5,6 +5,8 @@ mod formats;
 mod keystore;
 mod linking;
 mod policy;
+mod random_input;
+mod vectors;
 
 use crate::{
     DeviceId, DeviceRevocation, DisplayName, NewIdentity, Validity, VerifiedIdentity, WHOLE_DEVICE,
