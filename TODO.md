@@ -113,8 +113,8 @@ Later (reported):
       merging people across servers) and Ctrl+F / Ctrl+Shift+F full-text search with
       "exact phrases", `from:`, paging and jumping to a result (SQLite FTS5,
       PostgreSQL tsvector; older history indexed in the background).
-- [ ] Wire Ctrl+K and Ctrl+F (`Desktop::open_finder`, `open_search`) into the
-      configurable shortcuts.
+- [x] Ctrl+K, Ctrl+F and Ctrl+Shift+F are configurable in Settings → Shortcuts as
+      in-app actions (defaults, rebind, clear; never registered system-wide).
 - [ ] Finder/search follow-ups: direct conversations from earlier sessions are not in
       the finder; a result in a DM opens only if that person is online; diacritics are
       significant (PostgreSQL would need `unaccent`); CJK text matches only by prefix.

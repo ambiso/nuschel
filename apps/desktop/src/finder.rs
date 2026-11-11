@@ -81,40 +81,36 @@ impl Finder {
 }
 
 /// Whether a keystroke is the primary modifier (Ctrl, Cmd on macOS) plus `key`.
-fn chord(keystroke: &Keystroke, key: &str, shift: bool, cx: &App) -> bool {
-    let modifiers = &keystroke.modifiers;
-    keystroke.key == key
-        && modifiers.secondary(cx)
-        && modifiers.shift == shift
-        && !modifiers.alt
-        && !(modifiers.control && modifiers.platform)
-}
-
 impl Desktop {
-    /// The switcher's and search's shortcuts: Ctrl+K, Ctrl+F (this
-    /// conversation) and Ctrl+Shift+F (all servers); Cmd on macOS. Returns
-    /// whether the keystroke was one.
+    /// The switcher's and search's shortcuts (configurable in Settings →
+    /// Shortcuts; by default Ctrl+K, Ctrl+F for this conversation and
+    /// Ctrl+Shift+F for all servers, Cmd on macOS). Returns whether the
+    /// keystroke was one.
     pub fn find_shortcut(
         &mut self,
         keystroke: &Keystroke,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if chord(keystroke, "k", false, cx) {
-            if self.finder.is_open() {
-                self.close_finder();
-            } else {
-                self.open_finder(window, cx);
+        use nuschel_session::config::ShortcutAction;
+        match crate::shortcuts::app_action(&self.settings, keystroke) {
+            Some(ShortcutAction::Find) => {
+                if self.finder.is_open() {
+                    self.close_finder();
+                } else {
+                    self.open_finder(window, cx);
+                }
+                true
             }
-            true
-        } else if chord(keystroke, "f", false, cx) {
-            self.open_search(false, window, cx);
-            true
-        } else if chord(keystroke, "f", true, cx) {
-            self.open_search(true, window, cx);
-            true
-        } else {
-            false
+            Some(ShortcutAction::Search) => {
+                self.open_search(false, window, cx);
+                true
+            }
+            Some(ShortcutAction::SearchAll) => {
+                self.open_search(true, window, cx);
+                true
+            }
+            _ => false,
         }
     }
 

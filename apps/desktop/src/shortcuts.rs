@@ -19,6 +19,34 @@ pub fn label(action: ShortcutAction) -> &'static str {
         ShortcutAction::ToggleMute => "Toggle mute",
         ShortcutAction::ToggleDeafen => "Toggle deafen",
         ShortcutAction::PushToMute => "Push to mute",
+        ShortcutAction::Find => "Find a channel or person",
+        ShortcutAction::Search => "Search this conversation",
+        ShortcutAction::SearchAll => "Search all servers",
+    }
+}
+
+/// Written in the settings for an action deliberately left without a key
+/// (in-app actions have defaults, so a missing entry means the default).
+pub const UNSET: &str = "none";
+
+/// An in-app action's key when the settings name none: Ctrl+K, Ctrl+F and
+/// Ctrl+Shift+F (Cmd on macOS). Voice actions have no default.
+fn default_binding(action: ShortcutAction) -> Option<&'static str> {
+    let mac = cfg!(target_os = "macos");
+    match action {
+        ShortcutAction::Find => Some(if mac { "super-k" } else { "ctrl-k" }),
+        ShortcutAction::Search => Some(if mac { "super-f" } else { "ctrl-f" }),
+        ShortcutAction::SearchAll => Some(if mac { "super-shift-f" } else { "ctrl-shift-f" }),
+        _ => None,
+    }
+}
+
+/// The key bound to an action: the settings', else its default.
+pub fn binding(settings: &ClientSettings, action: ShortcutAction) -> Option<&str> {
+    match settings.shortcuts.get(&action).map(String::as_str) {
+        Some(UNSET) => None,
+        Some(key) => Some(key),
+        None => default_binding(action),
     }
 }
 
@@ -29,18 +57,31 @@ pub fn applies(action: ShortcutAction, transmit: TransmitMode) -> bool {
     match action {
         ShortcutAction::PushToTalk => transmit == TransmitMode::PushToTalk,
         ShortcutAction::PushToMute => transmit != TransmitMode::PushToTalk,
-        ShortcutAction::ToggleMute | ShortcutAction::ToggleDeafen => true,
+        _ => true,
     }
 }
 
-/// The bindings in effect for the current transmission mode.
+/// The voice bindings in effect for the current transmission mode (the ones
+/// held and registered system-wide; in-app actions go through
+/// [`app_action`]).
 pub fn active(settings: &ClientSettings) -> Bindings {
-    settings
-        .shortcuts
-        .iter()
-        .filter(|(action, _)| applies(**action, settings.audio.transmit))
-        .map(|(action, binding)| (*action, binding.clone()))
+    ShortcutAction::ALL
+        .into_iter()
+        .filter(|action| action.system_wide() && applies(*action, settings.audio.transmit))
+        .filter_map(|action| Some((action, binding(settings, action)?.to_string())))
         .collect()
+}
+
+/// The in-app action a key press in the window triggers, if any.
+pub fn app_action(settings: &ClientSettings, keystroke: &Keystroke) -> Option<ShortcutAction> {
+    ShortcutAction::ALL
+        .into_iter()
+        .filter(|action| !action.system_wide())
+        .find(|action| {
+            binding(settings, *action)
+                .and_then(parse)
+                .is_some_and(|bound| matches(&bound, keystroke))
+        })
 }
 
 pub fn parse(binding: &str) -> Option<Keystroke> {
@@ -158,6 +199,8 @@ impl Held {
             ShortcutAction::PushToMute => Some(Effect::PushToMute(down)),
             ShortcutAction::ToggleMute => down.then_some(Effect::ToggleMute),
             ShortcutAction::ToggleDeafen => down.then_some(Effect::ToggleDeafen),
+            // In-app actions are not held (see `app_action`).
+            ShortcutAction::Find | ShortcutAction::Search | ShortcutAction::SearchAll => None,
         }
     }
     /// Everything one source held is released (focus lost, backend gone).
@@ -311,6 +354,51 @@ mod tests {
 
     fn key(text: &str) -> Keystroke {
         parse(text).unwrap()
+    }
+
+    #[test]
+    fn in_app_actions_have_defaults_and_stay_out_of_the_desktop() {
+        let mut settings = ClientSettings::default();
+        let find = if cfg!(target_os = "macos") {
+            "super-k"
+        } else {
+            "ctrl-k"
+        };
+        assert_eq!(binding(&settings, ShortcutAction::Find), Some(find));
+        assert_eq!(
+            app_action(&settings, &key(find)),
+            Some(ShortcutAction::Find)
+        );
+        assert_eq!(binding(&settings, ShortcutAction::ToggleMute), None);
+        // Rebound, and cleared on purpose (not back to the default).
+        settings
+            .shortcuts
+            .insert(ShortcutAction::Find, "ctrl-p".into());
+        assert_eq!(
+            app_action(&settings, &key("ctrl-p")),
+            Some(ShortcutAction::Find)
+        );
+        assert_eq!(app_action(&settings, &key(find)), None);
+        settings
+            .shortcuts
+            .insert(ShortcutAction::Find, UNSET.into());
+        assert_eq!(binding(&settings, ShortcutAction::Find), None);
+        // Only voice actions are held and registered system-wide.
+        settings
+            .shortcuts
+            .insert(ShortcutAction::ToggleMute, "ctrl-m".into());
+        let registered = active(&settings);
+        assert!(registered.iter().all(|(action, _)| action.system_wide()));
+        assert!(
+            registered
+                .iter()
+                .any(|(action, _)| *action == ShortcutAction::ToggleMute)
+        );
+        assert!(
+            !registered
+                .iter()
+                .any(|(action, _)| *action == ShortcutAction::Search)
+        );
     }
 
     #[test]

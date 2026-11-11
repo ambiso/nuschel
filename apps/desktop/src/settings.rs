@@ -1098,6 +1098,9 @@ fn shortcut_description(action: ShortcutAction) -> &'static str {
         ShortcutAction::ToggleMute => "Same as the microphone button.",
         ShortcutAction::ToggleDeafen => "Same as the headphones button.",
         ShortcutAction::PushToMute => "Hold to silence yourself while transmitting.",
+        ShortcutAction::Find => "Jump to any channel, person or conversation. Only in Nuschel.",
+        ShortcutAction::Search => "Search the open conversation's messages. Only in Nuschel.",
+        ShortcutAction::SearchAll => "Search messages on every server. Only in Nuschel.",
     }
 }
 
@@ -1110,9 +1113,11 @@ fn shortcut_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
         .enumerate()
         .map(|(index, action)| {
             let name = label(action);
-            let binding = this.settings.shortcuts.get(&action);
+            let binding = crate::shortcuts::binding(&this.settings, action);
             let recording = shortcuts.recording == Some(action);
-            let system = binding.and(shortcuts.system.as_ref());
+            let system = binding
+                .filter(|_| action.system_wide())
+                .and(shortcuts.system.as_ref());
             let detail = if recording {
                 "Press the key, with any modifiers. Esc cancels.".to_string()
             } else if binding.is_some() && !applies(action, transmit) {
@@ -1132,7 +1137,7 @@ fn shortcut_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
             let key = if recording {
                 "…".to_string()
             } else {
-                binding.map_or_else(|| "Not set".into(), |binding| display(binding))
+                binding.map_or_else(|| "Not set".into(), display)
             };
             div()
                 .id(("shortcut", index))
@@ -1206,7 +1211,15 @@ fn shortcut_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
                                 Tone::Ghost,
                                 move |this, _, cx| {
                                     this.update_settings(|settings| {
-                                        settings.shortcuts.remove(&action);
+                                        // Voice actions have no default; in-app ones
+                                        // would fall back to theirs without the marker.
+                                        if action.system_wide() {
+                                            settings.shortcuts.remove(&action);
+                                        } else {
+                                            settings
+                                                .shortcuts
+                                                .insert(action, crate::shortcuts::UNSET.into());
+                                        }
                                     });
                                     cx.notify();
                                 },

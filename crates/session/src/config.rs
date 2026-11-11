@@ -225,14 +225,32 @@ pub enum ShortcutAction {
     ToggleMute,
     ToggleDeafen,
     PushToMute,
+    /// Ctrl+K: the switcher (in Nuschel only).
+    Find,
+    /// Ctrl+F: search this conversation (in Nuschel only).
+    Search,
+    /// Ctrl+Shift+F: search every server (in Nuschel only).
+    SearchAll,
 }
 impl ShortcutAction {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 7] = [
         Self::PushToTalk,
         Self::ToggleMute,
         Self::ToggleDeafen,
         Self::PushToMute,
+        Self::Find,
+        Self::Search,
+        Self::SearchAll,
     ];
+    /// Voice actions work system-wide; the others only while Nuschel is in
+    /// front, and are never registered with the desktop (they would take the
+    /// key from every other application).
+    pub fn system_wide(self) -> bool {
+        matches!(
+            self,
+            Self::PushToTalk | Self::ToggleMute | Self::ToggleDeafen | Self::PushToMute
+        )
+    }
     /// The stable name, as in the settings file and system shortcut registrations.
     pub fn id(self) -> &'static str {
         match self {
@@ -240,6 +258,9 @@ impl ShortcutAction {
             Self::ToggleMute => "toggle-mute",
             Self::ToggleDeafen => "toggle-deafen",
             Self::PushToMute => "push-to-mute",
+            Self::Find => "find",
+            Self::Search => "search",
+            Self::SearchAll => "search-all",
         }
     }
     pub fn from_id(id: &str) -> Option<Self> {

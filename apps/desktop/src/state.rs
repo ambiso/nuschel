@@ -1808,6 +1808,16 @@ impl Desktop {
     pub fn bind_shortcut(&mut self, action: ShortcutAction, key: String) {
         self.update_settings(|settings| {
             settings.shortcuts.retain(|_, bound| *bound != key);
+            // An in-app action whose default is this key loses it too.
+            for other in ShortcutAction::ALL {
+                if other != action
+                    && crate::shortcuts::binding(settings, other) == Some(key.as_str())
+                {
+                    settings
+                        .shortcuts
+                        .insert(other, crate::shortcuts::UNSET.into());
+                }
+            }
             settings.shortcuts.insert(action, key);
         });
     }
