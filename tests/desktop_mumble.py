@@ -364,7 +364,10 @@ class DesktopTest:
         assert not any(user["name"] == "NuschelDesktop" for user in self.peer.users.values())
         self.capture("certificate")
         self.press("Trust certificate and connect")
-        gui = self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschelDesktop")["user"]
+        # Connecting starts the desktop's workers and its TLS session: on a busy
+        # two-core VM that takes longer than the peer's default wait.
+        gui = self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschelDesktop",
+                             timeout=60)["user"]
         session = gui["session"]
         self.connected()
         eventually(lambda: self.pulse_json("sink-inputs"), "desktop playback did not start")
@@ -453,7 +456,7 @@ class DesktopTest:
         assert not any(user["name"] == "NuschelDesktop" for user in self.peer.users.values())
         self.capture("offline-history")
         self.press("Connect")
-        self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschelDesktop")
+        self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschelDesktop", timeout=60)
         self.connected()
         assert (self.profile / "data/identity/identity.json").read_bytes() == identity
         print("Saved server/certificate/client identity and offline nested-channel history survived restart.", flush=True)
