@@ -30,6 +30,96 @@ desktop (GPUI) exists; the terminal, Android, iOS and web clients are queued.
   join in the browser. The project domain is optional; a server or operator can host
   the same page.
 
+## The SDK (`crates/client`)
+
+The SDK is `nuschel-client`. It owns every decision that is not drawing; each client
+(GPUI desktop, ratatui, Compose, SwiftUI, Svelte) is a view over it. Decided while
+extracting it (2026-11-11); "Status" below says what has moved so far.
+
+### Layers
+
+| Layer | Where | Builds for | Holds |
+|---|---|---|---|
+| Session values | `nuschel-core::model` | everything, `wasm32-unknown-unknown` | channels, users, text targets, activity lines, ACLs, bans, limits: plain data the session reports |
+| SDK core | `nuschel-client` (no features) | everything, `wasm32-unknown-unknown` | timelines, conversations, servers, the channel tree, unread counts, typing, direct conversations, the rules for editing and deleting; the inputs it takes and the updates it reports |
+| Native platform | `nuschel-client`, feature `native` (default) | Linux, Windows, macOS; later Android, iOS | the driver on tokio: connection supervision and reconnects (over `nuschel-session`), the content and storage workers, the media worker per connection, history paging and the local cache |
+| Platform services the app provides | the app | per platform | notifications, update checks, the audio check in Settings, website icons, image decoding for a viewer, files the user picks |
+
+`just wasm` checks that the core builds for `wasm32-unknown-unknown` (it is part of
+`just check`). The core depends only on `nuschel-core`, `nuschel-protocol` and serde.
+
+### Modules
+
+- `model` — the session values (re-exported from `nuschel-core::model`).
+- `timeline` — one conversation's messages: `Timeline`, `Message`, `MessageStatus`,
+  `IncomingMessage`, `Change`, `Deletion`, `Page`. Merging the local cache and server
+  pages by id (seq on Nuschel servers) and observation time; the latest page starting
+  over while keeping what arrived since; older pages only if they continue the
+  timeline; windows around a search result; trimming the oldest; our pending sends
+  until the server acknowledges their idempotency key; edits and deletions that wait
+  for their message and never overtake it, undo a deletion or a newer edit.
+- `conversation` — a channel or direct conversation: names, target, timeline, unread
+  count and mention, the read marker, who is typing, activity lines, the collapsed runs
+  of activity as data.
+- `server` — one server's state: connection status, users, permissions, capabilities
+  and policy, direct conversations, limits, the channel tree (`tree_rows`), and the
+  rules (`may_edit`, `may_delete`, `typing_conversation`, `durable_directs_with`, …).
+- `navigation` — which conversation is browsed and the tickets that drop late pages.
+- `client` — the `Client` (below).
+- `native` (feature) — `Driver`, today's backend: connections, workers, storage.
+
+### API
+
+```text
+Client                      commands in             events in (from the driver)
+  ├─ servers() / server(id) / conversation(ref)     read access, cheap, no copies
+  ├─ connect, disconnect, open, load_older, jump_to, send, edit, delete,
+  │  mark_read, typing, open_direct, search, set_focus     commands
+  ├─ handle(Input)                                   driver events
+  └─ take_updates() -> Vec<Update>                   what changed, per entity
+```
+
+- **Commands in**: methods on `Client`. None blocks: anything slow is a request to the
+  driver, whose answer comes back as an `Input`. Failures a caller must show at once
+  (not connected, too long) are returned as `Result<_, String>`.
+- **Events out**: `Update` names what changed: a server, a conversation's timeline,
+  unread counts, typing, a notice, an alert (sound, notification) for the platform to
+  play or show, a send acknowledged. A UI marks itself dirty on updates and reads state
+  through the getters (GPUI: `cx.notify()`; ratatui: redraw; UniFFI: a callback that
+  Kotlin and Swift turn into flows; WASM: `postMessage` of the update and a snapshot).
+- **Plain data only** in the public surface: owned strings, enums with data, no
+  generics or lifetimes, no GPUI types, ids as values (`server: String`, channel ids,
+  16-byte conversation ids, message serials). Rendered content is
+  `nuschel_core::MessageDocument`; each UI converts it to its own representation and
+  caches that by message serial (the desktop: GPU images and laid-out text).
+- **Time is passed in**: the core never reads a clock (`std::time::Instant` panics on
+  `wasm32-unknown-unknown`). Inputs carry wall-clock milliseconds; expiring typing
+  indicators and waiting edits take the platform's monotonic milliseconds.
+- **No runtime in the core**: it is a state machine. The native driver runs on tokio,
+  as `nuschel-session` does; a browser driver will run on `wasm-bindgen-futures` and
+  talk to the same core.
+
+### What stays in each UI
+
+Views, input states, focus, scrolling and virtualisation, animations, images in the
+GPU atlas, menus, dialogs, theme; per-message presentation (laid-out document, height,
+"Show more"), the expansion of collapsed activity runs, drafts and attachments being
+composed, "new messages" below the fold.
+
+### Status
+
+1. Session values moved to `nuschel-core::model` (re-exported by `nuschel-session`).
+2. Timelines.
+3. Conversations, servers and the channel tree.
+4. The native driver.
+5. `Client` applies driver events and takes the commands.
+6. A headless client (`crates/client/examples/headless.rs`) proves the API.
+
+Remaining after these: identity, key transparency and trust state (`identity.rs`) and
+the version notice still live in the desktop; settings and bookmarks stay in
+`nuschel-session::config` until the core needs them on the web; search requests and
+transfer offers are issued by the desktop.
+
 ## Reuse by layer
 
 | Layer | Crates | Desktop | TUI | Android | iOS | Web |
