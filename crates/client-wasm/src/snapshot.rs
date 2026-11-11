@@ -23,6 +23,7 @@ pub struct ServerView {
     /// The certificate waiting for the user's decision.
     pub certificate: Option<String>,
     pub own_session: Option<u32>,
+    pub pin: Option<String>,
     pub channels: Vec<ChannelView>,
     pub users: Vec<UserView>,
 }
@@ -47,6 +48,7 @@ pub enum UpdateView {
     Browse { server: String, channel: u32 },
     LoginRefused { server: String, reason: String },
     Negotiated { server: String },
+    Error { message: String },
     Changed,
 }
 
@@ -70,6 +72,7 @@ pub fn servers(servers: &[ServerState]) -> Vec<ServerView> {
                 .as_ref()
                 .map(|prompt| prompt.sha256.clone()),
             own_session: server.own_session,
+            pin: server.bookmark.certificate_sha256.clone(),
             channels: server
                 .channels
                 .iter()
@@ -105,6 +108,9 @@ pub fn update(update: &Update) -> Option<UpdateView> {
         },
         Update::Negotiated { server } => UpdateView::Negotiated {
             server: server.clone(),
+        },
+        Update::HistoryFailed(message) => UpdateView::Error {
+            message: message.clone(),
         },
         _ => UpdateView::Changed,
     })
@@ -172,4 +178,50 @@ mod tests {
         assert!(bookmark("", "a.b", 1, "ada", Some("12".into())).is_err());
         assert!(bookmark("", "a.b", 1, "ada", Some("AB".repeat(32))).is_ok());
     }
+}
+
+#[derive(Serialize)]
+pub struct TimelineView {
+    pub server: String,
+    pub channel: u32,
+    pub name: String,
+    pub loading: bool,
+    pub has_older: bool,
+    pub sending: bool,
+    pub messages: Vec<MessageView>,
+}
+#[derive(Serialize)]
+pub struct MessageView {
+    pub serial: String,
+    pub author: String,
+    pub at_ms: i64,
+    pub outgoing: bool,
+    pub status: Option<&'static str>,
+    pub document: nuschl_core::MessageDocument,
+}
+pub fn timeline(client: &nuschl_client::Client) -> Option<TimelineView> {
+    let (server, channel) = client.selected_indices()?;
+    let server = &client.servers[server];
+    let channel = &server.channels[channel];
+    Some(TimelineView {
+        server: server.id.clone(),
+        channel: channel.id,
+        name: channel.name.clone(),
+        loading: channel.timeline.loading,
+        has_older: channel.timeline.next_before.is_some(),
+        sending: client.sending(),
+        messages: channel
+            .timeline
+            .messages
+            .iter()
+            .map(|message| MessageView {
+                serial: message.serial.to_string(),
+                author: message.author.clone(),
+                at_ms: message.observed_at_ms,
+                outgoing: message.outgoing,
+                status: message.status.label(),
+                document: message.document.clone(),
+            })
+            .collect(),
+    })
 }

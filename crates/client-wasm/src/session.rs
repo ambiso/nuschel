@@ -6,12 +6,15 @@
 //! the saved pin, or the web's certificate authorities, as the apps do.
 //!
 //! The browser glue (`browser.rs`) moves bytes; tests drive this directly.
-//! For now it logs in and keeps the channel tree and the users; text, voice
-//! and the Nuschl extension come with the web client.
+//! Legacy text and presence are supported. Voice, modern server archives and
+//! MLS are deliberately not negotiated by this adapter.
 
 use bytes::BytesMut;
 use nuschl_client::input::ServerEvent;
-use nuschl_core::model::{Channel, User};
+use nuschl_core::{
+    MAX_CONTENT_BYTES,
+    model::{Channel, TextTarget, User},
+};
 use nuschl_protocol::{
     control as proto, decode_control, encode_control, kind,
     tunnel::{self, CloseReason, Frame},
@@ -53,13 +56,34 @@ pub struct Login {
 #[derive(Clone, Debug)]
 pub enum Event {
     /// The relay reached the server (`udp`: datagrams can go over UDP).
-    Opened { udp: bool },
+    Opened {
+        udp: bool,
+    },
     /// What the SDK models.
     Server(ServerEvent),
     /// The certificate is neither pinned nor vouched for: the user decides.
-    Certificate { sha256: String, changed: bool },
+    Certificate {
+        sha256: String,
+        changed: bool,
+    },
+    /// Bounded legacy text. The platform renders and persists it before
+    /// reporting a Message to the shared SDK; the relay never sees plaintext.
+    Text {
+        target: TextTarget,
+        peer: Option<User>,
+        author: String,
+        body: String,
+        html: bool,
+        outgoing: bool,
+    },
+    Sent {
+        target: TextTarget,
+        body: String,
+    },
     /// The connection is over.
-    Closed { reason: String },
+    Closed {
+        reason: String,
+    },
 }
 
 /// Mumble's server drops a client that is silent for 30 seconds.
@@ -162,6 +186,7 @@ pub struct Session {
     own: Option<u32>,
     last_ping: f64,
     certificate_reported: bool,
+    allow_html: bool,
 }
 
 impl Session {
@@ -209,6 +234,7 @@ impl Session {
             own: None,
             last_ping: 0.0,
             certificate_reported: false,
+            allow_html: true,
         })
     }
 
@@ -274,6 +300,94 @@ impl Session {
                 ..Default::default()
             },
         );
+    }
+
+    /// Legacy text only. Modern/encrypted sends have no fallback here.
+    pub fn send_text(
+        &mut self,
+        target: TextTarget,
+        body: String,
+        expected_peer: Option<u64>,
+    ) -> Result<(), String> {
+        if self.phase != Phase::LoggedIn || body.trim().is_empty() || body.len() > MAX_CONTENT_BYTES
+        {
+            return Err("Connect and enter a message of at most 256 KiB.".into());
+        }
+        let mut wire = proto::TextMessage::default();
+        match &target {
+            TextTarget::Channel(id) if self.channels.contains_key(id) => wire.channel_id.push(*id),
+            TextTarget::Direct(id)
+                if self
+                    .users
+                    .get(id)
+                    .is_some_and(|user| expected_peer == Some(user.instance)) =>
+            {
+                wire.session.push(*id)
+            }
+            _ => {
+                return Err(
+                    "This recipient is unavailable or requires an unsupported protocol.".into(),
+                );
+            }
+        }
+        // Escape text for legacy HTML-capable peers, preserving every newline.
+        wire.message = if self.allow_html {
+            body.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('\n', "<br>")
+        } else {
+            body.clone()
+        };
+        self.send(kind::TEXT_MESSAGE, &wire);
+        if self.is_closed() {
+            return Err("TLS failed while sending.".into());
+        }
+        let peer = match target {
+            TextTarget::Direct(id) => self.users.get(&id).cloned(),
+            _ => None,
+        };
+        self.events.push_back(Event::Text {
+            target: target.clone(),
+            peer,
+            author: self.login.username.clone(),
+            body: body.clone(),
+            html: false,
+            outgoing: true,
+        });
+        self.events.push_back(Event::Sent { target, body });
+        Ok(())
+    }
+
+    pub fn request_permissions(&mut self, channel: u32) {
+        if self.phase == Phase::LoggedIn {
+            self.send(
+                kind::PERMISSION_QUERY,
+                &proto::PermissionQuery {
+                    channel_id: Some(channel),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    /// Available only after successful TLS verification, including CA-backed
+    /// connections without a preconfigured pin. Matches ServerBookmark scoping.
+    pub fn history_identity(&self) -> Option<String> {
+        if self.tls.is_handshaking() {
+            return None;
+        }
+        self.verifier
+            .seen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .filter(|(_, rejected)| !rejected)
+            .map(|(pin, _)| {
+                nuschl_core::bookmark::fingerprint(
+                    format!("{}:{}:{pin}", self.login.host, self.login.port).as_bytes(),
+                )
+            })
     }
 
     /// Our session number once logged in.
@@ -470,6 +584,87 @@ impl Session {
                         )));
                 }
             }
+            kind::SERVER_CONFIG => {
+                if let Ok(config) = proto::ServerConfig::decode(payload) {
+                    if let Some(html) = config.allow_html {
+                        self.allow_html = html;
+                    }
+                }
+            }
+            kind::PERMISSION_QUERY => {
+                if let Ok(query) = proto::PermissionQuery::decode(payload) {
+                    if let (Some(channel), Some(permissions)) =
+                        (query.channel_id, query.permissions)
+                    {
+                        self.events
+                            .push_back(Event::Server(ServerEvent::Permissions {
+                                channel,
+                                permissions: permissions as u32,
+                                flush: query.flush.unwrap_or(false),
+                            }));
+                    }
+                }
+            }
+            kind::PERMISSION_DENIED => {
+                self.events
+                    .push_back(Event::Server(ServerEvent::PermissionDenied(
+                        "The server refused this action.".into(),
+                    )));
+            }
+            kind::TEXT_MESSAGE => {
+                let Ok(message) = proto::TextMessage::decode(payload) else {
+                    return;
+                };
+                if self.phase != Phase::LoggedIn || message.message.len() > MAX_CONTENT_BYTES {
+                    return;
+                }
+                let peer = message.actor.and_then(|id| self.users.get(&id)).cloned();
+                let author = peer
+                    .as_ref()
+                    .map(|user| user.name.clone())
+                    .unwrap_or_else(|| "Server".into());
+                let mut targets = message
+                    .channel_id
+                    .iter()
+                    .filter(|id| self.channels.contains_key(id))
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>();
+                if let Some(own) = self.own.and_then(|id| self.users.get(&id)) {
+                    for root in message.tree_id {
+                        let mut current = Some(own.channel);
+                        let mut seen = std::collections::BTreeSet::new();
+                        while let Some(id) = current {
+                            if !seen.insert(id) {
+                                break;
+                            }
+                            if id == root {
+                                targets.insert(own.channel);
+                                break;
+                            }
+                            current = self.channels.get(&id).and_then(|channel| channel.parent);
+                        }
+                    }
+                }
+                let targets = if targets.is_empty() {
+                    vec![
+                        peer.as_ref()
+                            .map(|peer| TextTarget::Direct(peer.session))
+                            .unwrap_or(TextTarget::Channel(0)),
+                    ]
+                } else {
+                    targets.into_iter().map(TextTarget::Channel).collect()
+                };
+                for target in targets {
+                    self.events.push_back(Event::Text {
+                        target,
+                        peer: peer.clone(),
+                        author: author.clone(),
+                        body: message.message.clone(),
+                        html: self.allow_html,
+                        outgoing: false,
+                    });
+                }
+            }
             kind::USER_STATE => {
                 let Ok(state) = proto::UserState::decode(payload) else {
                     return;
@@ -552,6 +747,131 @@ mod tests {
             pin: None,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn legacy_text_routes_known_channels_and_tree_targets_without_cycles() {
+        let mut session = session();
+        session.phase = Phase::LoggedIn;
+        session.own = Some(1);
+        session.channels.insert(
+            0,
+            Channel {
+                id: 0,
+                ..Default::default()
+            },
+        );
+        session.channels.insert(
+            2,
+            Channel {
+                id: 2,
+                parent: Some(0),
+                ..Default::default()
+            },
+        );
+        session.users.insert(
+            1,
+            User {
+                session: 1,
+                channel: 2,
+                ..Default::default()
+            },
+        );
+        session.users.insert(
+            3,
+            User {
+                session: 3,
+                name: "Ada".into(),
+                instance: 4,
+                ..Default::default()
+            },
+        );
+        let text = proto::TextMessage {
+            actor: Some(3),
+            channel_id: vec![0, 0, 999],
+            tree_id: vec![0],
+            message: "one<br><br>two".into(),
+            ..Default::default()
+        };
+        session.control(kind::TEXT_MESSAGE, text.encode_to_vec().into());
+        let events = session.take_events();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| matches!(event, Event::Text { author, html: true, outgoing: false, body, .. } if author == "Ada" && body == "one<br><br>two")));
+        let unknown = proto::TextMessage {
+            actor: Some(3),
+            message: "private".into(),
+            ..Default::default()
+        };
+        session.control(kind::TEXT_MESSAGE, unknown.encode_to_vec().into());
+        assert!(matches!(
+            session.take_events().first(),
+            Some(Event::Text {
+                target: TextTarget::Direct(3),
+                ..
+            })
+        ));
+        session.channels.get_mut(&2).unwrap().parent = Some(2);
+        let cycle = proto::TextMessage {
+            actor: Some(3),
+            tree_id: vec![0],
+            message: "bounded".into(),
+            ..Default::default()
+        };
+        session.control(kind::TEXT_MESSAGE, cycle.encode_to_vec().into());
+        assert_eq!(session.take_events().len(), 1);
+    }
+    #[test]
+    fn text_sends_refuse_unconnected_unknown_durable_and_reused_recipients() {
+        let mut session = session();
+        assert!(
+            session
+                .send_text(TextTarget::Channel(0), "hi".into(), None)
+                .is_err()
+        );
+        session.phase = Phase::LoggedIn;
+        session.users.insert(
+            3,
+            User {
+                session: 3,
+                instance: 8,
+                ..Default::default()
+            },
+        );
+        assert!(
+            session
+                .send_text(TextTarget::Channel(999), "hi".into(), None)
+                .is_err()
+        );
+        assert!(
+            session
+                .send_text(TextTarget::Direct(3), "hi".into(), Some(7))
+                .is_err()
+        );
+        assert!(
+            session
+                .send_text(TextTarget::Direct(3), "hi".into(), None)
+                .is_err()
+        );
+        assert!(
+            session
+                .send_text(TextTarget::DirectConversation([0; 16]), "hi".into(), None)
+                .is_err()
+        );
+        assert!(
+            session
+                .send_text(TextTarget::Direct(3), " ".into(), Some(8))
+                .is_err()
+        );
+        assert!(
+            session
+                .send_text(
+                    TextTarget::Direct(3),
+                    "x".repeat(MAX_CONTENT_BYTES + 1),
+                    Some(8)
+                )
+                .is_err()
+        );
+        assert!(session.take_events().is_empty());
     }
 
     #[test]

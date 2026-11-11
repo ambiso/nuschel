@@ -8,6 +8,7 @@
 use crate::{
     session::{Event, Login, Session},
     snapshot,
+    storage::Storage,
 };
 use nuschl_client::{
     Client, HistoryTicket, Update,
@@ -16,7 +17,12 @@ use nuschl_client::{
     platform::{CacheKey, ChangeRequest, Platform, RenderKey, Request},
     timeline::Page,
 };
-use nuschl_core::{SearchCursor, audio::Sound, bookmark::ServerBookmark};
+use nuschl_client::{model::TextTarget, timeline::IncomingMessage};
+use nuschl_content::ContentRenderer;
+use nuschl_core::{
+    ChatMessage, ContentBlock, MessageDocument, SearchCursor, audio::Sound,
+    bookmark::ServerBookmark,
+};
 use nuschl_protocol::tunnel;
 use std::{
     cell::{Cell, RefCell},
@@ -45,6 +51,8 @@ struct Shared {
     connections: RefCell<HashMap<String, Connection>>,
     generation: Cell<u64>,
     wake: RefCell<Option<js_sys::Function>>,
+    storage: RefCell<Storage>,
+    renderer: ContentRenderer,
 }
 
 impl Shared {
@@ -92,6 +100,82 @@ impl Shared {
                     sha256,
                     changed,
                     reason: "No certificate authority vouches for this server.".into(),
+                },
+                Event::Text {
+                    target,
+                    peer,
+                    author,
+                    body,
+                    html,
+                    outgoing,
+                } => {
+                    let Some(identity) = session.borrow().history_identity() else {
+                        continue;
+                    };
+                    let source = if html {
+                        self.renderer
+                            .legacy_plain_text(&body)
+                            .unwrap_or_else(|_| "[Message could not be rendered]".into())
+                    } else {
+                        body
+                    };
+                    let document =
+                        self.renderer
+                            .render(&source)
+                            .unwrap_or_else(|_| MessageDocument {
+                                blocks: vec![ContentBlock::text("[Message could not be rendered]")],
+                            });
+                    let storage_key = match &target {
+                        TextTarget::Channel(id) => id.to_string(),
+                        TextTarget::Direct(id) => peer
+                            .as_ref()
+                            .and_then(|peer| peer.certificate_hash.as_ref())
+                            .filter(|hash| !hash.is_empty())
+                            .map(|hash| format!("direct:{}", hash.to_ascii_lowercase()))
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "direct:{generation}:{id}:{}",
+                                    peer.as_ref().map(|peer| peer.instance).unwrap_or(0)
+                                )
+                            }),
+                        TextTarget::DirectConversation(_) => continue,
+                    };
+                    let message = IncomingMessage::plain(
+                        None,
+                        ChatMessage {
+                            server: identity,
+                            channel: storage_key.clone(),
+                            author,
+                            observed_at_ms: js_sys::Date::now() as i64,
+                            body: source,
+                        },
+                        document,
+                        outgoing,
+                    );
+                    if let Err(reason) = self.storage.borrow_mut().append(
+                        server.clone(),
+                        generation,
+                        target.clone(),
+                        peer.clone(),
+                        message.clone(),
+                    ) {
+                        inputs.push_back(Input::HistoryError(reason));
+                        inputs.push_back(Input::Message {
+                            server,
+                            generation,
+                            target,
+                            storage_key,
+                            peer,
+                            message,
+                        });
+                    }
+                    continue;
+                }
+                Event::Sent { target, body } => Input::Sent {
+                    server,
+                    generation,
+                    target,
+                    body,
                 },
                 Event::Closed { reason } => {
                     let _ = socket.close();
@@ -210,6 +294,17 @@ impl Platform for BrowserPlatform {
         let connection = connections.get(server).ok_or("Not connected.")?;
         match request {
             Request::Join(channel) => connection.session.borrow_mut().join(channel),
+            Request::SendText {
+                target,
+                body,
+                expected_peer,
+            } => connection
+                .session
+                .borrow_mut()
+                .send_text(target, body, expected_peer)?,
+            Request::RequestPermissions(channel) => {
+                connection.session.borrow_mut().request_permissions(channel)
+            }
             _ => return Err(NOT_YET.into()),
         }
         let (shared, generation) = (self.0.clone(), connection.generation);
@@ -221,13 +316,23 @@ impl Platform for BrowserPlatform {
 
     fn local_history(
         &self,
-        _: String,
-        _: String,
-        _: String,
-        _: HistoryTicket,
-        _: Page,
+        server: String,
+        identity: String,
+        channel: String,
+        ticket: HistoryTicket,
+        page: Page,
     ) -> Result<(), String> {
-        Err(NOT_YET.into())
+        let generation = self
+            .0
+            .connections
+            .borrow()
+            .get(&server)
+            .map(|connection| connection.generation)
+            .unwrap_or(0);
+        self.0
+            .storage
+            .borrow_mut()
+            .page(server, generation, identity, channel, ticket, page)
     }
 
     fn server_history(
@@ -283,6 +388,8 @@ impl WebClient {
             connections: RefCell::new(HashMap::new()),
             generation: Cell::new(0),
             wake: RefCell::new(None),
+            storage: RefCell::new(Storage::default()),
+            renderer: ContentRenderer::default(),
         });
         let client = Client::new(
             Box::new(BrowserPlatform(shared.clone())),
@@ -316,7 +423,7 @@ impl WebClient {
 
     pub fn connect(&mut self, index: usize) {
         if index < self.client.servers.len() {
-            self.client.connect(index, None, false);
+            self.client.connect(index, None, true);
         }
     }
 
@@ -328,18 +435,130 @@ impl WebClient {
 
     /// Trust the certificate the user saw (its SHA-256) and connect again.
     pub fn accept_certificate(&mut self, index: usize, sha256: String) {
-        let Some(server) = self.client.servers.get_mut(index) else {
-            return;
-        };
-        server.bookmark.certificate_sha256 = Some(sha256.to_ascii_lowercase());
-        server.certificate = None;
-        self.client.connect(index, None, false);
+        if self
+            .client
+            .servers
+            .get(index)
+            .and_then(|server| server.certificate.as_ref())
+            .is_some_and(|prompt| prompt.sha256.eq_ignore_ascii_case(&sha256))
+        {
+            self.client.trust_certificate(index, true);
+        }
     }
 
     pub fn join(&mut self, index: usize, channel: u32) {
         if index < self.client.servers.len() {
             self.client.join(index, channel);
         }
+    }
+
+    /// Single-click navigation uses the shared SDK's selected timeline.
+    pub fn open(&mut self, index: usize, channel: u32) -> Result<bool, String> {
+        self.client.open(index, channel)
+    }
+
+    pub fn browse_server(&mut self, index: usize) -> Result<bool, String> {
+        let Some(server) = self.client.servers.get(index) else {
+            return Ok(false);
+        };
+        let channel = self
+            .client
+            .navigation
+            .remembered_channel(&server.id)
+            .unwrap_or(0);
+        self.client.open(index, channel)
+    }
+
+    pub fn send_text(&mut self, body: String) -> Result<(), String> {
+        self.client
+            .send_text(body)
+            .map_err(|_| "Message was not sent; check the server status and recipient.".into())
+    }
+
+    pub fn older(&mut self) -> Result<(), String> {
+        let before = self
+            .client
+            .selected_indices()
+            .and_then(|(server, channel)| {
+                self.client.servers[server].channels[channel]
+                    .timeline
+                    .next_before
+            });
+        if let Some(before) = before {
+            self.client.load_history(Some(before))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Storage requests contain opaque ticket IDs, never forgeable HistoryTickets.
+    pub fn storage_requests(&mut self) -> String {
+        serde_json::to_string(&self.shared.storage.borrow_mut().take())
+            .unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn storage_complete(&mut self, ticket: String, response: String) {
+        let inputs = self.shared.storage.borrow_mut().complete(
+            &ticket,
+            &response,
+            |id, generation, identity| {
+                self.client.servers.iter().any(|server| {
+                    server.id == id
+                        && (generation == 0 || server.generation == generation)
+                        && server.history_identity().as_deref() == Some(identity)
+                })
+            },
+            |source| {
+                self.shared
+                    .renderer
+                    .render(source)
+                    .unwrap_or_else(|_| MessageDocument {
+                        blocks: vec![ContentBlock::text("[Message could not be rendered]")],
+                    })
+            },
+        );
+        self.shared.inputs.borrow_mut().extend(inputs);
+    }
+
+    pub fn timeline(&self) -> String {
+        serde_json::to_string(&snapshot::timeline(&self.client)).unwrap_or_else(|_| "null".into())
+    }
+
+    pub fn bookmarks(&self) -> String {
+        serde_json::to_string(
+            &self
+                .client
+                .servers
+                .iter()
+                .map(|server| &server.bookmark)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn restore_bookmarks(&mut self, raw: String) -> Result<(), String> {
+        if raw.len() > 1024 * 1024 {
+            return Err("Saved servers exceed the browser limit.".into());
+        }
+        let saved: Vec<ServerBookmark> =
+            serde_json::from_str(&raw).map_err(|_| "Saved servers could not be read.")?;
+        if saved.len() > 128 {
+            return Err("Too many saved servers.".into());
+        }
+        for old in saved {
+            let mut bookmark = snapshot::bookmark(
+                &old.name,
+                &old.host,
+                old.port,
+                &old.username,
+                old.certificate_sha256,
+            )?;
+            bookmark.cached_channels = old.cached_channels.into_iter().take(10_000).collect();
+            if self.client.server_index(&bookmark.id).is_none() {
+                self.client.add_server(bookmark);
+            }
+        }
+        Ok(())
     }
 
     /// Keep connections alive; call every few seconds with a monotonic clock.
@@ -373,6 +592,16 @@ impl WebClient {
             self.client.handle(input);
         }
         self.client.settle();
+        if self.client.navigation.selection().is_none() {
+            if let Some(index) = self
+                .client
+                .servers
+                .iter()
+                .position(|server| server.status == nuschl_client::server::Status::Connected)
+            {
+                let _ = self.client.open(index, 0);
+            }
+        }
         let updates: Vec<snapshot::UpdateView> = self
             .client
             .take_updates()
