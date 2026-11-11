@@ -50,7 +50,7 @@ pub fn to_typst(tex: &str) -> Result<String, Error> {
         Ended::Eof => {}
         _ => return error("unexpected end"),
     }
-    let out = parser.out.trim_end().to_owned();
+    let out = trimmed(&parser.out).to_owned();
     check(&out)?;
     Ok(out)
 }
@@ -179,7 +179,7 @@ impl<'a> Parser<'a> {
     }
 
     fn trim(&mut self) {
-        let length = self.out.trim_end().len();
+        let length = trimmed(&self.out).len();
         self.out.truncate(length);
     }
 
@@ -201,7 +201,7 @@ impl<'a> Parser<'a> {
         let result = f(self);
         let inner = std::mem::replace(&mut self.out, outer);
         result?;
-        Ok(inner.trim_end().to_owned())
+        Ok(trimmed(&inner).to_owned())
     }
 
     /// Atoms with their attachments until `stop`.
@@ -751,7 +751,7 @@ impl<'a> Parser<'a> {
         if call.len() == 3 {
             return self.emit("\"\"");
         }
-        call.truncate(call.trim_end().len());
+        call.truncate(trimmed(&call).len());
         call.push(')');
         self.emit(&call)
     }
@@ -845,10 +845,23 @@ impl<'a> Parser<'a> {
         }
         self.atom()?;
         self.trim();
-        if self.out.len() > start {
-            // U+0338 COMBINING LONG SOLIDUS OVERLAY on what was just written.
-            self.out.push_str("\u{338} ");
+        // U+0338 COMBINING LONG SOLIDUS OVERLAY on what was just written:
+        // after a symbol or an escaped character. After a letter it would
+        // join it into an identifier, so a negated letter is text; anything
+        // else (a name like `space`, a call) stays as it is.
+        let atom = &self.out[start..];
+        let mut chars = atom.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) if c.is_alphanumeric() => {
+                let negated = string_literal(&format!("{c}\u{338}"));
+                self.out.truncate(start);
+                self.out.push_str(&negated);
+            }
+            _ if atom.ends_with(|c: char| c.is_alphanumeric() || c == ')') => {}
+            _ if !atom.is_empty() => self.out.push('\u{338}'),
+            _ => {}
         }
+        self.out.push(' ');
         Ok(())
     }
 
@@ -923,11 +936,17 @@ impl<'a> Parser<'a> {
             match ended {
                 Ended::Cell => {
                     self.trim();
-                    self.out.push_str(match kind {
+                    let separator = match kind {
                         Kind::Matrix(_) => ", ",
                         Kind::Cases => " && quad ",
                         Kind::Lines => " & ",
-                    });
+                    };
+                    // After a line break's space, no second one.
+                    if self.out.ends_with(' ') {
+                        self.out.push_str(separator.trim_start());
+                    } else {
+                        self.out.push_str(separator);
+                    }
                 }
                 Ended::Row => {
                     self.trim();
@@ -999,7 +1018,20 @@ impl<'a> Parser<'a> {
         if !text.is_empty() || out.is_empty() {
             out.push_str(&string_literal(&plain_text(&text)));
         }
-        Ok(out.trim_end().to_owned())
+        Ok(trimmed(&out).to_owned())
+    }
+}
+
+/// `text` without trailing spaces, except the one after a line break: a
+/// `\` (an odd one, not half of an escaped backslash) before anything but
+/// a space escapes it.
+fn trimmed(text: &str) -> &str {
+    let trimmed = text.trim_end();
+    let backslashes = trimmed.len() - trimmed.trim_end_matches('\\').len();
+    if backslashes % 2 == 1 && trimmed.len() < text.len() {
+        &text[..trimmed.len() + 1]
+    } else {
+        trimmed
     }
 }
 
@@ -1765,6 +1797,17 @@ mod tests {
             "a & = b \\ & = c"
         );
         assert_eq!(ok("\\not\\in \\not\\prec"), "∉ ⊀");
+        assert_eq!(
+            ok("\\not\\star \\not a \\not 1"),
+            "⋆\u{338} \"a\u{338}\" \"1\u{338}\""
+        );
+        // Found by fuzzing: a line break at the end of a group escaped the
+        // parenthesis closing it.
+        assert_eq!(ok("{a \\\\}"), "class(\"normal\", a \\ )");
+        super::check(&ok("\\frac{a \\\\}{b} \\sqrt{x \\\\}")).unwrap();
+        // Found by fuzzing: a negated space was an identifier `space̸`.
+        assert_eq!(ok("\\not\\ "), "space");
+        assert_eq!(ok("\\not\\frac12 \\not("), "frac(1, 2) \\(\u{338}");
         assert_eq!(ok("\\sum\\limits_0"), "limits(∑)_(0)");
         assert_eq!(ok("{}^{14}C"), "\"\"^(14) C");
         assert_eq!(ok("{a+b}^2"), "class(\"normal\", a + b)^(2)");
