@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The image viewer: a click on an inline image shows it large over a
 //! gradient backdrop (decoded again, larger, by the sandboxed content worker),
-//! and a right click or the viewer's button saves the original file.
+//! and a right click offers copying the displayed image or saving the original file.
 use crate::{state::Desktop, theme::*};
 use gpui_kit::{prelude::*, *};
 use std::sync::Arc;
@@ -23,6 +23,27 @@ pub struct Viewer {
 }
 
 impl Desktop {
+    /// Copy only pixels already decoded and validated by the content worker.
+    /// PNG encoding runs off the UI thread; the platform clipboard never receives
+    /// the message's original, untrusted encoded image or data URI.
+    pub fn copy_image(&mut self, image: Arc<RenderImage>, cx: &mut Context<Self>) {
+        self.menu = None;
+        let encoded = cx
+            .background_executor()
+            .spawn(async move { clipboard_image(&image) });
+        cx.spawn(async move |this, cx| {
+            let result = encoded.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(image) => cx.write_to_clipboard(ClipboardItem::new_image(&image)),
+                    Err(error) => this.error = Some(format!("Could not copy image: {error}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub fn open_viewer(&mut self, image: ViewerImage) {
         self.menu = None;
         self.viewer_requests += 1;
@@ -107,7 +128,7 @@ impl Desktop {
 
 /// The open viewer, over everything else: the image on a dark glow. A click
 /// anywhere but the image closes it (nothing behind receives it); a right
-/// click on the image offers Save image as.
+/// click on the image offers Copy image and Save image as.
 pub fn overlay(this: &Desktop, window: &Window, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     let viewer = this.viewer.as_ref()?;
     let shown = viewer.shown.clone();
@@ -166,4 +187,56 @@ pub fn overlay(this: &Desktop, window: &Window, cx: &mut Context<Desktop>) -> Op
             )
             .into_any_element(),
     )
+}
+
+/// GPUI stores BGRA; PNG and the native clipboard exchange straight RGBA.
+/// Take dimensions from the validated frame, not its message's metadata.
+fn clipboard_image(image: &RenderImage) -> Result<Image, String> {
+    use image::ImageEncoder as _;
+
+    let size = image.size(0);
+    let width = u32::try_from(size.width.0).map_err(|_| "invalid image width")?;
+    let height = u32::try_from(size.height.0).map_err(|_| "invalid image height")?;
+    if width == 0 || height == 0 || width > 4096 || height > 4096 {
+        return Err("the displayed image has invalid dimensions".into());
+    }
+    let mut pixels = image
+        .as_bytes(0)
+        .ok_or("the displayed image has no pixels")?
+        .to_vec();
+    if pixels.len() != width as usize * height as usize * 4 {
+        return Err("the displayed image has incomplete pixels".into());
+    }
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new_with_quality(
+        &mut png,
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::Adaptive,
+    )
+    .write_image(&pixels, width, height, image::ExtendedColorType::Rgba8)
+    .map_err(|error| error.to_string())?;
+    Ok(Image::from_bytes(ImageFormat::Png, png))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copied_image_preserves_displayed_colours_and_transparency_without_a_source() {
+        // The displayed BGRA pixels can come from a message without a data URI.
+        let pixels = vec![3, 2, 1, 64, 90, 80, 70, 255];
+        let frame = image::RgbaImage::from_raw(2, 1, pixels).unwrap();
+        let displayed = RenderImage::new(vec![image::Frame::new(frame)]);
+        let copied = clipboard_image(&displayed).unwrap();
+        assert_eq!(copied.format, ImageFormat::Png);
+        let decoded = image::load_from_memory_with_format(&copied.bytes, image::ImageFormat::Png)
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(decoded.dimensions(), (2, 1));
+        assert_eq!(decoded.into_raw(), [1, 2, 3, 64, 70, 80, 90, 255]);
+    }
 }

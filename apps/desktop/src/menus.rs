@@ -427,6 +427,10 @@ impl Desktop {
                             this.open_viewer(viewed.clone())
                         }));
                     }
+                    let copied = image.clone();
+                    entries.push(item("Copy image", "copy", move |this, _, cx| {
+                        this.copy_image(copied.image.clone(), cx)
+                    }));
                     if image.source.is_some() {
                         entries.push(item("Save image as…", "record", move |this, _, cx| {
                             this.save_image(&image, cx)

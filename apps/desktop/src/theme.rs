@@ -68,7 +68,8 @@ pub const TEXT: Token = Token::new(0xe8ebf2, 0x1b2130);
 /// Message bodies, a little quieter than names and headings.
 pub const BODY: Token = Token::new(0xdbdfe8, 0x2a3142);
 pub const TEXT_MUTED: Token = Token::new(0x9aa4b7, 0x475066);
-pub const TEXT_FAINT: Token = Token::new(0x6c778c, 0x5d6678);
+/// Timestamps and hints remain AA-readable even on selected/elevated surfaces.
+pub const TEXT_FAINT: Token = Token::new(0x949fb2, 0x5d6678);
 
 pub const ACCENT: Token = Token::new(0x5b7cfa, 0x3b5bdb);
 pub const ACCENT_HOVER: Token = Token::new(0x6f8cff, 0x2f4bc2);
@@ -252,6 +253,30 @@ mod tests {
         assert!(is_light());
         set_light(false);
         assert_eq!(color(WHITE), rgba(0xffff_ffff));
+    }
+
+    #[test]
+    fn the_dark_palette_keeps_secondary_text_readable() {
+        for surface in [
+            APP,
+            RAIL,
+            SIDEBAR,
+            SIDEBAR_FOOTER,
+            MAIN,
+            MAIN_HOVERED,
+            ELEVATED,
+            INPUT,
+            HOVER,
+            SELECTED,
+        ] {
+            let ratio = contrast(hsla(TEXT_FAINT, false), hsla(surface, false));
+            assert!(ratio >= 4.5, "faint text on {surface:?}: {ratio}");
+        }
+        // Secondary labels stay quieter than regular text rather than becoming
+        // another bright foreground, and the light palette is independent.
+        for pair in [TEXT_FAINT, TEXT_MUTED, BODY, TEXT].windows(2) {
+            assert!(luminance(hsla(pair[0], false)) < luminance(hsla(pair[1], false)));
+        }
     }
 
     #[test]
