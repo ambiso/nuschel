@@ -22,8 +22,9 @@
 //! - **Who may ask** (decided in authz.rs, `Action::Kt*`). Lookups: any
 //!   connection, for any registered account of this server. Histories: the
 //!   account's owner and its contacts (a direct conversation, or the same
-//!   channel now), or everyone with `history = "members"`. Audits and heads:
-//!   anyone. Each kind has its own rate limit.
+//!   channel now), or everyone with `history = "members"`; checked again when
+//!   the answer is sent, as history pages are. Audits and heads: anyone. Each
+//!   kind has its own rate limit.
 use crate::{
     authz::Action,
     config::{Kt as KtConfig, KtHistoryAccess},
@@ -786,8 +787,19 @@ impl State {
         })
     }
 
-    /// The key-transparency task's answer.
+    /// The key-transparency task's answer. A binding history is authorised
+    /// again now, as history pages are: whoever stopped being a contact while
+    /// it was read does not get it.
     pub fn kt_answer(&mut self, session: u32, request_id: u64, reply: Result<Reply, Code>) {
+        if let Ok(Reply::History(history)) = &reply {
+            let allowed = nuschel::id(&history.account).is_some_and(|account| {
+                self.allowed(session, Action::KtHistory { account: &account })
+            });
+            if !allowed {
+                self.failed(session, request_id, (Code::NotFound, 0));
+                return;
+            }
+        }
         match reply {
             Ok(reply) => {
                 match reply {

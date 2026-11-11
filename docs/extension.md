@@ -333,7 +333,10 @@ in a channel and who listens. On a server in compatible mode:
   (another number of days, or not archived at all) says so, and so does a change of
   the channel's retention to stock users in it.
 - Direct messages from stock senders are not archived by default
-  (`history.archive_stock_direct_messages` stores those between two accounts).
+  (`history.archive_stock_direct_messages` stores those between two accounts, when
+  the sender may write to that direct conversation as a Nuschel client would:
+  TextMessage in the channel of every connection of the other account, not only
+  the one the stock client named; otherwise that connection gets it live only).
 - Operators get tools to erase a user's messages (and must, for GDPR requests):
   `nuscheld admin history erase-user NAME --yes` (or the older `nuscheld
   --erase-user NAME`) turns them into tombstones. Copies already on clients

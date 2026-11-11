@@ -517,8 +517,14 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          packets from the stock client: 0" at load ~47 on 24 cores): it waits at most
          40 s for the stock GUI to open its microphone; wait for the first voice
          packet instead of a fixed deadline.
-   - [ ] Review deviations: permission checks inline per handler (one engine) rather
-         than one `authorize()` module; one mutex instead of an actor.
+   - [x] Review deviations (2026-11-11): every permission decision goes through one
+         `State::authorize(actor, action)` (authz.rs) over the ACL engine, which only
+         that module can evaluate (a test guards the rest of the server); three
+         decisions made two ways now agree (temporary tokens, stock direct messages
+         to the archive, key-transparency histories re-checked when answered). The
+         mutex stays as the single owner of authorisation state: no check-to-effect
+         gap that an actor would close (docs/server.md, "Design"). Left: the UDP path
+         takes the lock per packet (an immutable routing snapshot would avoid it).
    - [ ] TLS listener (rustls), certificate and password authentication, user
          registration, server and channel passwords, ban list.
    - [ ] Channels (create, move, links, temporary channels), user state, ACLs and

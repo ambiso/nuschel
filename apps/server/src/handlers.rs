@@ -356,7 +356,9 @@ impl State {
             return;
         }
         // Temporary access tokens count for this message only (Murmur's
-        // `TemporaryAccessTokenHelper`).
+        // `TemporaryAccessTokenHelper`): permissions are re-evaluated when they
+        // are added and again when they are gone, so suppression and the
+        // client's permission cache never keep what only a token granted.
         let temporary: Vec<[u8; 32]> = match self.users.get(&source) {
             Some(user) => bounded_tokens(&message.temporary_access_tokens)
                 .into_iter()
@@ -368,14 +370,14 @@ impl State {
             if let Some(user) = self.users.get_mut(&source) {
                 user.tokens.extend(temporary.iter().cloned());
             }
-            self.invalidate();
+            self.permissions_changed(Some(source));
         }
         self.user_state_inner(source, target, message);
         if !temporary.is_empty() && self.users.contains_key(&source) {
             if let Some(user) = self.users.get_mut(&source) {
                 user.tokens.retain(|token| !temporary.contains(token));
             }
-            self.invalidate();
+            self.permissions_changed(Some(source));
         }
     }
 
@@ -1532,7 +1534,10 @@ impl State {
             }
         }
         // Direct messages from stock senders are kept only if the operator
-        // chose to (docs/extension.md §9), between two accounts.
+        // chose to (docs/extension.md §9), between two accounts, and only when
+        // the sender may write to that direct conversation as a Nuschel client
+        // would (to every connection of the account, not only the one listed);
+        // otherwise the listed connection gets it live, as from Murmur.
         let mut directs = BTreeSet::new();
         if self.settings.config.history.archive_stock_direct_messages
             && let Some(sender) = self.users.get(&source).and_then(|user| user.account)
@@ -1540,6 +1545,7 @@ impl State {
             for session in &message.session {
                 if let Some(peer) = self.users.get(session).and_then(|user| user.account)
                     && peer != sender
+                    && self.allowed(source, Action::SendDirect { peer: &peer })
                 {
                     directs.insert(peer);
                 }

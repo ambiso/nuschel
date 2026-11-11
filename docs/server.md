@@ -253,7 +253,26 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
   permission tests appear anywhere else. The same module reports permissions
   to clients (`PermissionQuery`, `ServerSync`), keeps `suppress` in step with
   Speak after every change, and says what part of a `since_access`
-  conversation a reader sees.
+  conversation a reader sees. Moving the checks there turned up three places
+  where one decision was made two ways; they now agree:
+  - Temporary access tokens (`UserState.temporary_access_tokens`) were removed
+    after their message without the re-evaluation every other credential
+    change gets, so a token that granted Speak left the user unsuppressed for
+    good and the client's permission cache kept the token's grants. Now they
+    are re-evaluated when the tokens are added and when they are gone, as
+    Murmur's `TemporaryAccessTokenHelper` does, and the tokens apply only after
+    the SuperUser, name and rate checks, in Murmur's order.
+  - A stock client's direct message was archived in the accounts' direct
+    conversation (with `archive_stock_direct_messages`) after checking only the
+    connection it named, and then delivered to all of the account's
+    connections; a Nuschel client's send to the same conversation needs
+    TextMessage in the channel of each of them. The stock path now archives
+    only when the Nuschel send would be allowed (`Action::SendDirect`);
+    otherwise the named connection gets the message live, as from Murmur.
+  - Key-transparency histories were authorised once, when requested, while
+    history pages are checked again when they are sent. A binding history is
+    now authorised again when the key-transparency task answers, so someone
+    who stopped being a contact in between gets `not_found`.
 - **One state, one lock.** Channels, users, registrations, bans and permission
   caches live in `State` behind a mutex. Handlers run synchronously under it and
   never across an `.await`; Murmur serialises the same way (its main thread plus
@@ -268,12 +287,13 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
   messages runs under the lock against the readers of that moment; and each
   step that leaves the lock is checked again when its result comes back:
   history pages (the epoch moved: `can_read` and the visible ranges again),
+  key-transparency histories (authorised again, the gap found above),
   logins (the account and its password hash re-read before the session
   exists) and voice target caches (keyed by the routing generation). An actor
   would serialise the same commands in the same order with a message hop
   more, and would not close any of these windows by itself; the audit found
-  no other check whose effect lands after another lock holder could have
-  changed the answer. What remains open is throughput:
+  no check whose effect lands after another lock holder could have changed
+  the answer, other than the one fixed. What remains open is throughput:
   the UDP path takes the lock per packet, which an immutable routing snapshot
   (review §3 item 2) would avoid; that is a performance question, not a
   correctness one.

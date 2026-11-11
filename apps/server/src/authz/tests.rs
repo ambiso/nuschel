@@ -2,8 +2,8 @@
 //! `State::authorize` as a table: every action against each kind of actor
 //! (SuperUser, an administrator, a channel's owner, a registered user an ACL
 //! names, a registered user without one, a guest with a certificate, a guest
-//! without), on Murmur's default root ACLs; and a guard that keeps the checks
-//! in authz.rs.
+//! without), on Murmur's default root ACLs; then the inconsistencies fixed
+//! when the checks moved into authz.rs, and a guard that keeps them there.
 use super::{Action, Denial, SUPERUSER};
 use crate::{
     acl::{AclEntry, Group, perm},
@@ -11,14 +11,22 @@ use crate::{
     config::Config,
     conversations::Id,
     extension::{Extension, server_capabilities},
-    kt::KtHandle,
+    kt::{KtHandle, Reply},
+    routing::Datagrams,
     state::{Channel, ClientInfo, Counters, Link, Peer, Registered, State},
     storage::StorageHandle,
 };
+use bytes::Bytes;
 use nuschel_ipc::server::HistoryVisibility;
-use nuschel_protocol::{control as proto, crypt::CryptState};
+use nuschel_protocol::{
+    ControlFrame, control as proto,
+    crypt::CryptState,
+    kind,
+    nuschel::{self, v1},
+};
 use proto::permission_denied::DenyType;
-use std::{net::SocketAddr, path::Path, sync::Arc, time::Instant};
+use std::{collections::HashMap, net::SocketAddr, path::Path, sync::Arc, time::Instant};
+use tokio::sync::mpsc;
 
 const LOBBY: u32 = 1;
 /// Created by the owner; denies the administrator Write (a creator locking
@@ -58,6 +66,7 @@ struct Fixture {
     state: State,
     /// In the order of [`KINDS`].
     actors: [u32; 7],
+    frames: HashMap<u32, mpsc::UnboundedReceiver<Bytes>>,
 }
 
 /// The actor kinds, in table order.
@@ -146,6 +155,7 @@ impl Fixture {
         let mut fixture = Self {
             state,
             actors: [0; 7],
+            frames: HashMap::new(),
         };
         let people = [
             (Some(SUPERUSER), 0),
@@ -177,7 +187,8 @@ impl Fixture {
         channel: u32,
     ) -> u32 {
         let session = self.state.allocate_session().expect("a session");
-        let (link, _, _) = Link::new(1 << 20);
+        let (link, frames, _) = Link::new(1 << 20);
+        self.frames.insert(session, frames);
         let peer = Peer {
             address: SocketAddr::from(([10, 0, 0, session as u8], 50_000)),
             certificates: Vec::new(),
@@ -232,6 +243,26 @@ impl Fixture {
             .get(channel)
             .expect("a channel")
             .conversation_id
+    }
+
+    /// Frames sent to `session` since last asked: (type, payload).
+    fn received(&mut self, session: u32) -> Vec<(u16, Bytes)> {
+        let mut out = Vec::new();
+        if let Some(frames) = self.frames.get_mut(&session) {
+            while let Ok(frame) = frames.try_recv() {
+                let kind = u16::from_be_bytes([frame[0], frame[1]]);
+                out.push((kind, frame.slice(6..)));
+            }
+        }
+        out
+    }
+
+    fn handle(&mut self, session: u32, kind: u16, message: &impl prost::Message) {
+        let frame = ControlFrame {
+            kind,
+            payload: Bytes::from(message.encode_to_vec()),
+        };
+        self.state.handle(session, frame, &mut Datagrams::default());
     }
 }
 
@@ -1126,6 +1157,158 @@ fn reported_permissions_and_groups() {
     assert!(!f.state.in_group(registered, OWNED, "admin"));
     assert!(f.state.in_group(registered, LOBBY, "auth"));
     assert!(!f.state.in_group(f.actor("guest"), LOBBY, "auth"));
+}
+
+// ---- inconsistencies fixed when the checks moved here ----
+
+/// A temporary access token counts for one `UserState` only. Before, the
+/// token's grants were dropped from the cache when the message was done, but
+/// suppression (and the client's permission cache) were not re-evaluated as
+/// after every other credential change: a token that granted Speak left the
+/// user unsuppressed. Murmur's `TemporaryAccessTokenHelper` clears the ACL
+/// cache with its suppression update on both ends.
+#[test]
+fn temporary_tokens_do_not_outlive_their_message() {
+    let mut f = Fixture::new(Config::default());
+    let registered = f.actor("registered");
+    f.received(registered);
+    f.handle(
+        registered,
+        kind::USER_STATE,
+        &proto::UserState {
+            channel_id: Some(PRIVATE),
+            temporary_access_tokens: vec!["secret".into()],
+            ..Default::default()
+        },
+    );
+    let user = &f.state.users[&registered];
+    assert_eq!(user.channel, PRIVATE, "the token let them in");
+    assert!(user.tokens.is_empty(), "the token is gone");
+    assert!(
+        user.suppress,
+        "Speak came only from the token, so the user is suppressed again"
+    );
+    assert!(
+        !f.state
+            .allowed(registered, Action::Speak { channel: PRIVATE })
+    );
+    // The client's permission cache was flushed with the token-free value.
+    let flushed = f
+        .received(registered)
+        .into_iter()
+        .filter(|(kind, _)| *kind == kind::PERMISSION_QUERY)
+        .filter_map(|(_, payload)| <proto::PermissionQuery as prost::Message>::decode(payload).ok())
+        .filter(|query| query.flush() && query.channel_id == Some(PRIVATE))
+        .last()
+        .expect("a flushed PermissionQuery");
+    assert_eq!(flushed.permissions() & perm::SPEAK, 0);
+}
+
+/// A stock client's direct message is archived in the accounts' direct
+/// conversation only if the sender may write to it as a Nuschel client would:
+/// TextMessage in the channel of each of the peer's connections. Before, the
+/// stock path checked only the connection it named and then delivered the
+/// stored message to all of the account's connections.
+#[test]
+fn stock_direct_messages_are_archived_only_where_a_nuschel_send_would_be() {
+    let mut config = Config::default();
+    config.history.archive_stock_direct_messages = true;
+    let mut f = Fixture::new(config);
+    let registered = f.actor("registered");
+    // The member is online twice: in the lobby and in the restricted channel.
+    let lobby_member = f.connect("member", Some(MEMBER), None, LOBBY);
+    f.state.conversations = Default::default();
+    for channel in f.state.channels.0.values() {
+        f.state
+            .conversations
+            .add_channel(channel.conversation_id, channel.id);
+    }
+    let text = proto::TextMessage {
+        session: vec![lobby_member],
+        message: "hello".into(),
+        ..Default::default()
+    };
+    f.received(lobby_member);
+    f.handle(registered, kind::TEXT_MESSAGE, &text);
+    assert!(
+        f.state
+            .conversations
+            .direct(account(REGISTERED), account(MEMBER))
+            .is_none(),
+        "not archived: the sender may not text the member's other connection"
+    );
+    assert!(
+        f.received(lobby_member)
+            .iter()
+            .any(|(kind, _)| *kind == kind::TEXT_MESSAGE),
+        "the named connection still gets it live, as from Murmur"
+    );
+    // Once the member's other connection is somewhere the sender may text,
+    // the same message is archived.
+    let member = f.actor("member");
+    let mut moved = proto::UserState {
+        session: Some(member),
+        channel_id: Some(LOBBY),
+        ..Default::default()
+    };
+    f.state.enter_channel(member, LOBBY, &mut moved);
+    f.handle(registered, kind::TEXT_MESSAGE, &text);
+    assert!(
+        f.state
+            .conversations
+            .direct(account(REGISTERED), account(MEMBER))
+            .is_some()
+    );
+}
+
+/// A binding history is authorised again when its answer comes back from the
+/// key-transparency task, as history pages are re-checked: someone who stopped
+/// being a contact in between gets `not_found`.
+#[test]
+fn key_transparency_histories_are_checked_again_when_answered() {
+    let mut f = Fixture::new(Config::default());
+    let (owner, registered) = (f.actor("owner"), f.actor("registered"));
+    let owner_account = account(OWNER);
+    let history = Action::KtHistory {
+        account: &owner_account,
+    };
+    let answer = |request_id| {
+        Ok(Reply::History(v1::KtHistoryReply {
+            request_id,
+            account: owner_account.to_vec(),
+            response: vec![1, 2, 3],
+        }))
+    };
+    let mut moved = proto::UserState::default();
+    f.state.enter_channel(owner, LOBBY, &mut moved);
+    assert!(
+        f.state.allowed(registered, history),
+        "same channel: a contact"
+    );
+    f.received(registered);
+    f.state.kt_answer(registered, 7, answer(7));
+    assert!(
+        f.received(registered)
+            .iter()
+            .any(|(kind, _)| *kind == nuschel::kind::KT_HISTORY_REPLY)
+    );
+    // Authorised, then the owner leaves before the answer arrives.
+    f.state.enter_channel(owner, OWNED, &mut moved);
+    assert!(!f.state.allowed(registered, history));
+    f.state.kt_answer(registered, 8, answer(8));
+    let frames = f.received(registered);
+    assert!(
+        !frames
+            .iter()
+            .any(|(kind, _)| *kind == nuschel::kind::KT_HISTORY_REPLY)
+    );
+    let error = frames
+        .iter()
+        .find(|(kind, _)| *kind == nuschel::kind::ERROR)
+        .and_then(|(_, payload)| <v1::Error as prost::Message>::decode(payload.clone()).ok())
+        .expect("an error");
+    assert_eq!(error.request_id, 8);
+    assert_eq!(error.code(), v1::error::Code::NotFound);
 }
 
 // ---- nothing else decides ----

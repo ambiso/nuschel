@@ -1214,6 +1214,9 @@ settled, beyond the refinements marked "as implemented" above:
   only for the owner and contacts, which the server knows as direct-conversation
   partners and users in the same channel right now (`[kt] history = "members"` opens
   them to everyone); audits and heads for anyone; each with a per-minute rate limit.
+  A history is authorised when it is asked for and again when the answer is sent
+  (as history pages are), so someone who stopped being a contact meanwhile gets
+  `not_found`.
   A verified contact without a direct conversation is checked by lookup only, with
   the version check of `ContactTrust` (a transient binding between two lookups is not
   seen then).
