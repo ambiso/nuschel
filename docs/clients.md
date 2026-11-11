@@ -207,9 +207,10 @@ Left, in the order they should move:
 ## The terminal client (`apps/tui`)
 
 `nuschl-tui` (ratatui on crossterm) is the SDK's second view, built on 2026-11-11 to
-prove the SDK is UI-independent: everything in it that is not drawing or keys is a
-call into `nuschl-client`, and what the desktop had kept to itself moved into the SDK
-first (Status, step 7). Decisions:
+prove the SDK is UI-independent: connection and conversation decisions live in
+`nuschl-client`; terminal input, drawing, clipboard access and bitmap caching adapt
+the existing services and workers. Shared behavior moved into the SDK first
+(Status, step 7). Decisions:
 
 - **Same profile and workers.** `Profile` (or `--profile-dir`), the saved servers,
   local history, identity and the sandboxed workers beside the executable, through the
@@ -227,11 +228,66 @@ first (Status, step 7). Decisions:
   Plain lines suit readers that read new output (Speakup, Orca or NVDA in a terminal).
 - **Untrusted text.** Every string from a server goes through one cleaning step:
   control characters (escape sequences) and bidirectional overrides never reach the
-  terminal. Images show as `[image, W×H]` (the content worker keeps no alternative
-  text), display formulas as `[formula]` with their source; links are numbered under
+  terminal. Image dimensions (the content worker keeps no alternative text) and
+  formula source remain available even when pictures render. Links are numbered under
   the message and open only on request (`o`, `/open N`), web links with the system's
   opener (`--opener`; none over SSH, where they are shown), `mumble://` links in the
   client itself.
+- **Images and formulas.** The content worker decodes received images and prepares
+  clipboard attachments; the existing sandboxed math worker renders LaTeX, including
+  inline formulas. The full screen shows their validated raw pixels after the message
+  text. It queries terminal capabilities before reading keys. Kitty, Sixel and iTerm2
+  protocols can provide higher resolution; KGX/VTE without those protocols uses
+  colored half-block raster rows. This fallback is coarse, with a maximum of sixteen
+  terminal rows per picture, rather than a promise of desktop-quality typography.
+  Formula source always stays visible. `--plain` prints source and image dimensions
+  without querying graphics capabilities or emitting pictures.
+- **Local Linux image paste.** In the composer, Ctrl+V or `/paste-image` attaches the
+  clipboard's actual `image/png` data. Native Wayland reads require an advertised
+  `ext_data_control_manager_v1` or `zwlr_data_control_manager_v1` and the reviewed,
+  pinned Rust `wl-clipboard-rs` helper. Otherwise a local X11 connection, including
+  GNOME's XWayland clipboard bridge, can supply the PNG. The attachment notice names
+  its provider. Clipboard helpers never open a visible window or steal focus: the C
+  `wl-clipboard` popup fallback is not used. The Nix package supplies the helpers and
+  the windowless registry probe; other launches need them in `PATH`.
+  Reads have an 8 MiB limit, three-second data-read deadline and eight-second overall
+  deadline; helper processes have memory/CPU limits. An X11 MIME query initializes a
+  lazy bridge, with one bounded retry, before any image data is read. No compositor
+  settings or broad remote-desktop permissions are changed. The sandboxed content worker
+  re-encodes the image for the server's limit; no image-format decoder runs in the
+  TUI. Enter sends the image with the caption, or `/send-image` sends it explicitly.
+  One image can be attached at a time; `/discard-image` removes it and cancels an
+  unfinished clipboard read. The terminal's usual bracketed paste carries text;
+  pasted file paths are not treated as clipboard images.
+- **Pure Wayland limits.** GNOME/Mutter without XWayland does not expose either
+  data-control protocol in the tested configuration. KGX/VTE also supplies no
+  image-MIME terminal protocol, so that combination reports image paste unavailable
+  immediately instead of waiting for Alt+Tab. The standard terminal's text paste
+  continues to work. A Rust client cannot replace a missing compositor capability;
+  `org.gnome.Mutter.ServiceChannel` is not a generic clipboard permission API, and
+  the RemoteDesktop clipboard service is outside this feature's permission scope.
+  See the [reviewed data-control helper](https://github.com/YaLTeR/wl-clipboard-rs/tree/v0.9.5)
+  and [Mutter's ServiceChannel API](https://github.com/GNOME/mutter/blob/50.5/data/dbus-interfaces/org.gnome.Mutter.ServiceChannel.xml).
+- **Retained image drafts.** An image stays bound to its original conversation and
+  server identity. A private recipient with the same certificate can reconnect;
+  anonymous recipients require the same connection and presence. Permissions,
+  encryption state, size limits and current recipient are checked again before send.
+  The image and caption remain until the connection acknowledges sending the exact
+  HTML message. An interrupted or unacknowledged send retains them for explicit retry,
+  with a warning that retrying an uncertain send can duplicate it. Stock Mumble has
+  no recipient delivery acknowledgment. Encrypted servers currently refuse image
+  attachments. Local clipboard image reads on Windows/macOS and terminal-mediated
+  image MIME over SSH are not implemented; SSH never reads the remote host's OS
+  clipboard.
+- **Color with a text fallback.** Server/channel/status accents and code-run syntax
+  colors make the full screen easier to scan; states still have words and markers.
+  Math masks and transparent image pixels are composited against the queried terminal
+  background, with a dark fallback. Output comes from bounded pixel/encoded caches
+  and worker queues; resizing and scrolling use clipped image rows. The reviewed
+  terminal renderer uses safe Rust palette quantization and standard base64 rather
+  than the upstream unsafe SIMD encoders; OS terminal bindings and the existing
+  validated-pixel PNG/zlib output remain reviewed exceptions, not a claim of zero
+  transitive unsafe code.
 - **Voice over SSH.** Over SSH (or with `--no-audio`) every connection stays muted
   and deafened, so no media worker opens audio devices on the remote machine; voice
   elsewhere goes through the same media worker as the desktop (`--audio` over SSH).
@@ -247,7 +303,21 @@ Not yet in the terminal client: identity and key transparency beyond a new
 identity's recovery key and the worker's failures, which show as warnings (the
 driver's other `Native` events are dropped), end-to-end direct conversations, file
 transfers (an offer shows as text), administration, whisper, and settings beyond the
-command line.
+command line. Image alt text remains missing from the content worker.
+
+Validation (2026-11-11): the focused TUI build and 27 tests pass. The private-GNOME
+integration test (`tests/tui_media.py`) ran actual KGX 50.0/VTE 0.84.1 with Mutter's
+strict focus policy. Ordinary Ctrl+V over an owned, initially cold XWayland bridge
+sent two different Wayland-owned PNGs with exact decoded pixels and the caption;
+actual send acknowledgment cleared the attachment/draft. No helper opened a visible
+window or changed focus. The pure Wayland variant with no data-control or X11 display
+refused clipboard images clearly. Both variants rendered formulas and received
+images, preserved syntax colors, clipped images inside the timeline while resizing,
+removed scrolled-out pictures, and retained the plain-text fallback.
+Replacing the private clipboard with text refused image paste and did not resend an
+earlier image. An injected OSC 52 sequence remained inert in the terminal stream and
+did not change the private clipboard. Tests used owned compositors, XWayland displays,
+profiles and a loopback Murmur server; no host clipboard, microphone or public server.
 
 ## Voice on several servers
 

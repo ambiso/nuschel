@@ -1190,11 +1190,28 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         direct conversations, Ctrl+K and Ctrl+F, plain-line mode, no audio over SSH
         (docs/clients.md, "The terminal client"). The switcher, search, typing line
         and `mumble://` links moved into the SDK for it.
+  - [x] TUI media and color implementation (2026-11-11): local Linux PNG clipboard
+        paste through the existing content worker (`Ctrl+V`, `/paste-image`),
+        certificate-bound image drafts retained until send acknowledgment, and
+        sandboxed formula rendering with clipped terminal pictures or a readable
+        half-block raster fallback for KGX; source/dimensions remain in `--plain`.
+        Server/channel/status accents and worker code-run syntax colors are kept.
+        Clipboard providers require focus-free native data-control or a local
+        X11/XWayland bridge; no popup-focus fallback is used. Focused TUI build and
+        27 tests pass. Actual KGX under private GNOME's strict focus policy passed
+        two distinct PNG pastes over an owned, initially cold XWayland bridge,
+        exact decoded pixels/caption and send-ack draft clearing, no helper focus
+        or visible windows, formula/image rendering, clipping/resize/scroll and
+        plain fallback. Text-only clipboard rejected stale image reuse; OSC 52
+        injection left the private clipboard unchanged. Pure Wayland without the
+        required providers refuses paste.
   - [ ] TUI, left: identity and key transparency (warnings, verification),
         end-to-end direct conversations, file transfers (offers show as text),
         administration (ACLs, bans, moving people), whisper and push-to-talk (a
         terminal has no key-up), Settings beyond the command line, image alt text
-        (the content worker keeps none).
+        (the content worker keeps none), local clipboard image adapters for
+        Windows/macOS and terminal-mediated image MIME over SSH. Pure Wayland KGX
+        without data-control or XWayland currently refuses image paste explicitly.
   - [ ] **iOS — cancelled/deferred by the user:** Swift + SwiftUI over UniFFI; staged
         milestones are retained in "Deferred iOS plan" above. Review mobile processing and
         codec boundaries; CallKit, background audio, push extension.
