@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: EUPL-1.2
 # libFuzzer targets; needs nightly and cargo-fuzz, so it is its own workspace,
-# outside the default build: `cargo +nightly fuzz run html` from this directory.
+# outside the default build: `cargo +nightly fuzz run html` (or `identity`) from this directory.
 [package]
 name = "nuschel-fuzz"
 version = "0.0.0"
@@ -19,6 +19,7 @@ nuschel-protocol = { path = "../crates/protocol" }
 nuscheld = { path = "../apps/server" }
 bytes = "1.12.1"
 prost = "0.14.4"
+nuschel-identity = { path = "../crates/identity" }
 
 [[bin]]
 name = "html"
@@ -51,6 +52,13 @@ bench = false
 [[bin]]
 name = "crypt"
 path = "fuzz_targets/crypt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "identity"
+path = "fuzz_targets/identity.rs"
 test = false
 doc = false
 bench = false
