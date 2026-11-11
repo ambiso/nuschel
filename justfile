@@ -39,6 +39,24 @@ licenses:
 audit:
     cargo deny check advisories
 
+# Run a libFuzzer target (`fuzz/fuzz_targets/<target>.rs`) for `seconds`, from
+# fuzz/seeds/<target>; new inputs go to fuzz/corpus/<target>, crashes to
+# fuzz/artifacts/<target> (neither is committed). Extra arguments go to libFuzzer,
+# e.g. `just fuzz html 600 -fork=4`. Nightly and cargo-fuzz come from the
+# flake's fuzz shell. Targets: `just fuzz-list`. See SECURITY.md, "Fuzzing".
+fuzz target seconds="600" *libfuzzer:
+    mkdir -p fuzz/corpus/{{target}} fuzz/seeds/{{target}}
+    nix develop .#fuzz --command cargo fuzz run --fuzz-dir fuzz --debug-assertions {{target}} \
+        fuzz/corpus/{{target}} fuzz/seeds/{{target}} -- \
+        -max_total_time={{seconds}} -timeout=10 -rss_limit_mb=2048 {{libfuzzer}}
+
+fuzz-list:
+    nix develop .#fuzz --command cargo fuzz list --fuzz-dir fuzz
+
+# Build every fuzz target (as `just fuzz` does), without running one.
+fuzz-build:
+    nix develop .#fuzz --command cargo fuzz build --fuzz-dir fuzz --debug-assertions
+
 # Regenerate the per-crate Nix build after changing dependencies (Cargo.lock).
 crate2nix:
     nix run --inputs-from . nixpkgs#crate2nix -- generate -f Cargo.toml -o nix/crate2nix/Cargo.nix -h nix/crate2nix/crate-hashes.json

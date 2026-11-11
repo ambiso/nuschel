@@ -9,7 +9,8 @@ use nuschel_protocol::crypt::CryptState;
 
 fuzz_target!(|data: &[u8]| {
     let (mut server, parts) = CryptState::generate_server([9; 48]);
-    let mut client = CryptState::client(&parts.key, &parts.client_nonce, &parts.server_nonce).expect("16-byte parts");
+    let mut client = CryptState::client(&parts.key, &parts.client_nonce, &parts.server_nonce)
+        .expect("16-byte parts");
     let mut out = [0_u8; 4096];
     if data.len() <= out.len() {
         assert!(server.decrypt_into(data, &mut out).is_none());

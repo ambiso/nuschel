@@ -56,6 +56,18 @@
           targets = [ "wasm32-unknown-unknown" ];
         };
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
+        # Only for the libFuzzer targets in fuzz/ (`nix develop .#fuzz`, `just fuzz`):
+        # the newest nightly in the pinned rust-overlay that has these components.
+        # llvm-tools are for `cargo fuzz coverage`. Builds and checks stay on stable.
+        fuzzToolchain = pkgs.rust-bin.selectLatestNightlyWith (
+          toolchain:
+          toolchain.minimal.override {
+            extensions = [
+              "rust-src"
+              "llvm-tools-preview"
+            ];
+          }
+        );
         src = lib.cleanSourceWith {
           src = ./.;
           filter =
@@ -503,6 +515,17 @@
           LD_LIBRARY_PATH = lib.optionalString pkgs.stdenv.hostPlatform.isLinux (
             lib.makeLibraryPath buildInputs
           );
+        };
+        # cargo-fuzz with nightly; libfuzzer-sys compiles libFuzzer with the
+        # shell's C++ compiler. See SECURITY.md, "Fuzzing".
+        devShells.fuzz = pkgs.mkShell {
+          packages = [
+            fuzzToolchain
+            pkgs.cargo-fuzz
+            pkgs.just
+            pkgs.protobuf
+            pkgs.pkg-config
+          ];
         };
         formatter = pkgs.nixfmt;
       }
