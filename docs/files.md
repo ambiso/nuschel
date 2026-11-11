@@ -1020,7 +1020,40 @@ delivered and simply counted.
   certificates), which reads offered files and writes downloads only to the path the
   user chose; no new worker and no new crypto dependency.
 
-## 11. Open questions for the user
+## 11. Decisions by the user (2026-11-11)
+
+The user answered the questions this section asked:
+
+1. **Default boundary:** accepted as proposed: files up to 100 MiB are kept on the
+   server, with a 10 GiB quota per account (operator settings; above them files go
+   live and never fail), and the sender can switch any attachment either way.
+2. **Live shares' lifetime:** forever, until the sender stops sharing, deletes the
+   message or changes or removes the file. The user added: "we should be careful that
+   this doesn't become a performance issue both in network traffic and startup time
+   when you have a lot of files you're sharing." So shares must cost nothing at
+   startup and nothing on the network while nobody asks for them: no re-announcing
+   every share after a restart, a lazily loaded share index, and work only when a
+   recipient requests pieces.
+3. **Direct connections:** direct first everywhere by default (channels too), with the
+   per-user "relay only" setting.
+4. **Stock users in compatible mode:** yes, offer live files to them automatically
+   through magic-wormhole codes, which go through magic-wormhole's public servers
+   unless Settings name others. But a restart must not spam the channel with every
+   file still on offer (the same concern as 2): codes are re-offered only when someone
+   could use them, not all at once on startup.
+5. **Recipients as sources:** yes, this would be nice. The user suggested embedding
+   rqbit (a Rust BitTorrent library) and encrypting the file before it is
+   transmitted: a private swarm of the people who may read the message, over the
+   encrypted object. The original sender keeps authority over deleting the message
+   and the file (message deletion exists since 2026-11-11). To work out: a private
+   swarm only (no DHT, no public trackers, the Nuschel server as tracker and relay,
+   peers limited to those with `can_read`), whether the object format can match
+   BitTorrent v2's SHA-256 Merkle tree over 16 KiB blocks so that rqbit verifies the
+   same root, and how a deletion makes peers stop seeding.
+
+The original questions follow for reference.
+
+### The questions as asked
 
 1. **Default boundary:** keep files up to 100 MiB on the server by default, with a 10 GiB
    quota per account (both operator settings; above them files go live, never fail), and

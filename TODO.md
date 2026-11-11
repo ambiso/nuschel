@@ -77,10 +77,13 @@ Later (reported):
 - [ ] Files on Nuschel servers: designed in docs/files.md (2026-11-11): *kept* files
       on the server, *live* files sent from the sender's device magic-wormhole style
       (direct first, the server as relay with a piece cache), one encrypted format
-      with per-chunk Merkle proofs (prototyped in `crates/files`). Decisions
-      needed from the user: docs/files.md §11 (default size boundary and quota, live
-      share lifetime, direct connections, wormhole codes for stock users, recipients
-      as sources).
+      with per-chunk Merkle proofs (prototyped in `crates/files`). The user decided
+      all five questions (docs/files.md §11): 100 MiB / 10 GiB defaults; live shares
+      last forever but must cost nothing at startup or on the network while idle;
+      direct first everywhere; wormhole codes for stock users offered automatically
+      without re-posting everything after a restart; recipients as sources wanted
+      (evaluate rqbit with a private swarm over the encrypted object; the sender keeps
+      authority over deletion).
 - [ ] File transfer follow-ups: Settings controls for the rendezvous/relay servers,
       `wss://` rendezvous (the crate's TLS option pulls an old rustls), a rendezvous
       keepalive for codes waiting for hours, post "no longer available" when Nuschel
@@ -741,6 +744,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 
 ### WebRTC and video (follow-ups to the str0m trial)
 
+- [ ] High-quality video without transcoding (user, 2026-11-11), docs/clients.md
+      "Video": the sender encodes once with scalable layers (AV1/VP9 SVC, e.g. L3T3;
+      simulcast as fallback); the SFU forwards per receiver only the layers its
+      bandwidth allows, from the RTP dependency descriptor, never decoding; direct
+      two-person calls over plain WebRTC; SFrame with MLS keys keeps layer selection
+      possible; codecs in sandboxed workers, hardware codecs where available.
+
 - [ ] Authenticated signaling over the Nuschel session; server capability negotiation.
 - [ ] SFU forwarding in the server; Mumble ↔ WebRTC Opus bridge without re-encoding.
 - [ ] TURN client, ICE restart, renegotiation, multiple tracks per kind.
@@ -760,25 +770,26 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 - [ ] macOS Developer ID signing and notarisation with `rcodesign` (needs an Apple
       Developer account); until then first start needs "Open Anyway".
 - [ ] Third-party notices and attribution; walk through the release gates in `SECURITY.md`.
-- [ ] Mobile, web and terminal clients (user, 2026-11-11), queued; architecture under
-      discussion with the user. Proposal: first a headless client SDK, the desktop's
-      UI-independent state (`apps/desktop/src/state.rs`/`backend.rs`: unread, edit
-      ordering, history merge, typing, trust, reconnects) moved into `crates/client`
-      with commands in and events out, so every client shares it and the GPUI desktop
-      becomes one view over it. Then:
+- [ ] Mobile, web and terminal clients (user, 2026-11-11): decided, see
+      docs/clients.md. First a headless client SDK in `crates/client` (commands in,
+      events out) with the GPUI desktop moved onto it. Then:
   - [ ] **TUI** (ratatui), the SDK's second consumer; full protocol and voice.
   - [ ] **Android**: Kotlin + Compose over UniFFI; full protocol natively; workers as
         `isolatedProcess` services; platform echo cancellation; foreground service.
   - [ ] **iOS**: Swift + SwiftUI over UniFFI; workers in-process behind the same
         boundary (no subprocesses on iOS); CallKit, background audio, push extension.
-  - [ ] **Web**: SDK in WASM in a Web Worker, DOM UI; needs a gateway in nuscheld
-        (WebSocket control with the same framing, WebRTC voice via str0m without
-        re-encoding); content in a sandboxed iframe on its own origin; trust model for
-        E2EE in a served web app to decide.
+  - [ ] **Web** (Svelte, SDK in WASM in a Web Worker), served from one project-run
+        domain (others may host it), so one cross-server identity lives in the
+        browser; Signal-like version requirements apply. Reaches Mumble and Nuschel
+        servers through an untrusted WebSocket/WebTransport tunnel with TLS inside the
+        browser, so legacy Mumble servers work too; the relay is no open proxy.
+  - [ ] NixOS module for the web host, share links and tunnel relay
+        (`services.nginx.virtualHosts` with `enableACME = true`, optionally a
+        subdomain).
   - [ ] Push for mobile: content-free pushes (Signal-style), UnifiedPush on Android.
-  Start each sub-agent once the SDK and the protocol interfaces are semi-stable.
 - [ ] Channel share links (user, 2026-11-11): a link you send to someone that opens
-      Nuschel if installed, else joins in the browser. Proposal:
+      Nuschel if installed, else joins in the browser; on the optional project
+      domain or any web host (docs/clients.md). Proposal:
       `https://<server>/join/<opaque token>#<client-only data>` served by nuscheld (token
       revocable, expiring, optionally an access token; the fragment carries the
       certificate pin and later an E2EE invite secret, never logged), App Links and
