@@ -1218,6 +1218,53 @@ rec {
         ];
 
       };
+      "argon2" = rec {
+        crateName = "argon2";
+        version = "0.5.3";
+        edition = "2021";
+        sha256 = "0wn0kk97k49wxidfigmz1pdqmygqzi4h6w72ib7cpq765s4i0diw";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "base64ct";
+            packageId = "base64ct";
+          }
+          {
+            name = "blake2";
+            packageId = "blake2";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "cpufeatures";
+            packageId = "cpufeatures 0.2.17";
+            target = { target, features }: (("x86" == target."arch" or null) || ("x86_64" == target."arch" or null));
+          }
+          {
+            name = "password-hash";
+            packageId = "password-hash";
+            optional = true;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "password-hash";
+            packageId = "password-hash";
+            features = [ "rand_core" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "password-hash/alloc" ];
+          "default" = [ "alloc" "password-hash" "rand" ];
+          "password-hash" = [ "dep:password-hash" ];
+          "rand" = [ "password-hash/rand_core" ];
+          "simple" = [ "password-hash" ];
+          "std" = [ "alloc" "password-hash/std" ];
+          "zeroize" = [ "dep:zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "password-hash" "std" ];
+      };
       "array-init" = rec {
         crateName = "array-init";
         version = "2.1.0";
@@ -2673,7 +2720,7 @@ rec {
         features = {
           "std" = [ "alloc" ];
         };
-        resolvedDefaultFeatures = [ "alloc" ];
+        resolvedDefaultFeatures = [ "alloc" "std" ];
       };
       "bincode" = rec {
         crateName = "bincode";
@@ -17489,6 +17536,10 @@ rec {
             packageId = "nuschel-core";
           }
           {
+            name = "nuschel-ipc";
+            packageId = "nuschel-ipc";
+          }
+          {
             name = "sqlx";
             packageId = "sqlx";
             usesDefaultFeatures = false;
@@ -17662,13 +17713,23 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/server; };
         dependencies = [
           {
+            name = "argon2";
+            packageId = "argon2";
+            usesDefaultFeatures = false;
+            features = [ "alloc" "password-hash" "std" ];
+          }
+          {
+            name = "base64";
+            packageId = "base64 0.22.1";
+          }
+          {
+            name = "bytes";
+            packageId = "bytes";
+          }
+          {
             name = "clap";
             packageId = "clap";
             features = [ "derive" ];
-          }
-          {
-            name = "nuschel-core";
-            packageId = "nuschel-core";
           }
           {
             name = "nuschel-ipc";
@@ -17679,21 +17740,62 @@ rec {
             packageId = "nuschel-protocol";
           }
           {
+            name = "prost";
+            packageId = "prost";
+          }
+          {
+            name = "rcgen";
+            packageId = "rcgen";
+            usesDefaultFeatures = false;
+            features = [ "ring" "pem" ];
+          }
+          {
+            name = "regex";
+            packageId = "regex";
+          }
+          {
+            name = "ring";
+            packageId = "ring";
+          }
+          {
             name = "rustls";
             packageId = "rustls";
             usesDefaultFeatures = false;
             features = [ "ring" "std" "tls12" ];
           }
           {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "socket2";
+            packageId = "socket2";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
             name = "tokio";
             packageId = "tokio";
-            features = [ "macros" "rt-multi-thread" "net" "io-util" "signal" "time" ];
+            features = [ "macros" "rt-multi-thread" "net" "io-util" "process" "signal" "sync" "time" ];
           }
           {
             name = "tokio-rustls";
             packageId = "tokio-rustls";
             usesDefaultFeatures = false;
             features = [ "ring" "tls12" ];
+          }
+          {
+            name = "toml";
+            packageId = "toml 1.2.1+spec-1.1.0";
+            usesDefaultFeatures = false;
+            features = [ "std" "parse" "serde" ];
           }
           {
             name = "tracing";
@@ -17703,6 +17805,12 @@ rec {
             name = "tracing-subscriber";
             packageId = "tracing-subscriber";
             features = [ "env-filter" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "tempfile";
+            packageId = "tempfile";
           }
         ];
 
@@ -21468,6 +21576,41 @@ rec {
           "petgraph" = [ "dep:petgraph" ];
         };
         resolvedDefaultFeatures = [ "nightly" ];
+      };
+      "password-hash" = rec {
+        crateName = "password-hash";
+        version = "0.5.0";
+        edition = "2021";
+        sha256 = "0ri1mim11zk0a9s40zdi288dfqvmdiryc7lw8vl46b59ifa08vrl";
+        libName = "password_hash";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "base64ct";
+            packageId = "base64ct";
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "alloc" = [ "base64ct/alloc" ];
+          "default" = [ "rand_core" ];
+          "getrandom" = [ "rand_core/getrandom" ];
+          "rand_core" = [ "dep:rand_core" ];
+          "std" = [ "alloc" "base64ct/std" "rand_core/std" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" "rand_core" "std" ];
       };
       "paste" = rec {
         crateName = "paste";
