@@ -312,6 +312,7 @@ assert lib.assertMsg (accepts {
       unit = "app-org.nuschel.Nuschel@autostart.service"
       entry = "/home/alice/.config/autostart/org.nuschel.Nuschel.desktop"
       config = "/home/alice/.config/nuschel"
+      data = "/home/alice/.local/share/nuschel"
 
       machine.wait_for_unit("home-manager-alice.service")
       machine.wait_for_unit("murmur.service")
@@ -343,6 +344,12 @@ assert lib.assertMsg (accepts {
           machine.wait_until_succeeds("journalctl -u murmur.service --grep 'New connection'")
           machine.succeed(f"systemctl {user} is-active {unit}")
           machine.succeed(f"systemctl {user} stop {unit}")
+
+      with subtest("the identity and history are in the data folder, not with the dotfiles"):
+          machine.succeed(f"test \"$(ls {config})\" = \"$(printf 'managed.json\\nservers.json\\nsettings.json')\"")
+          machine.succeed(f"test -s {data}/identity/identity.json")
+          machine.succeed(f"test \"$(stat -c '%a %U' {data} {data}/identity {data}/history)\" = \"$(printf '700 alice\\n700 alice\\n700 alice')\"")
+          machine.succeed(f"test \"$(stat -c %a {data}/identity/identity.json)\" = 600")
 
       with subtest("managed settings and bookmarks show as set by the system and stay so"):
           machine.succeed(f"test -L {config}/managed.json")

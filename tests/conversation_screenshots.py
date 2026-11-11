@@ -149,7 +149,7 @@ def main():
             ada.tell(direct, "I left the notes for the release in #Development.")
 
             bookmark = {"id": str(uuid.uuid4()), "name": "Nuschel test server", "host": "127.0.0.1",
-                        "port": port, "username": "Andi", "certificate_sha256": pin, "cached_channels": []}
+                        "port": port, "username": "Andi", "certificate_sha256": pin}
             (profile / "config/servers.json").write_text(json.dumps([bookmark]))
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme}}))
             log = (args.output / "desktop.log").open("w")

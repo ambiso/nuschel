@@ -269,9 +269,9 @@ def main():
             profile = root / "profile"
             (profile / "config").mkdir(parents=True)
             bookmark = {"id": str(uuid.uuid4()), "name": "Screenshot server", "host": "127.0.0.1",
-                        "port": port, "username": "Andi", "certificate_sha256": pin, "cached_channels": []}
+                        "port": port, "username": "Andi", "certificate_sha256": pin}
             second = {"id": str(uuid.uuid4()), "name": "Friends", "host": "127.0.0.1",
-                      "port": 1, "username": "Andi", "certificate_sha256": None, "cached_channels": []}
+                      "port": 1, "username": "Andi", "certificate_sha256": None}
             (profile / "config/servers.json").write_text(json.dumps([bookmark, second]))
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme, "zoom": args.zoom}}))
             if "managed" in args.scenes.split(","):
@@ -1291,6 +1291,12 @@ def main():
                     app.wait(timeout=8)
                 except subprocess.TimeoutExpired:
                     os.killpg(app.pid, signal.SIGKILL)
+            profile = root / "profile"
+            if profile.exists():
+                # What the profile holds where (crates/session/src/layout.rs), for review.
+                (args.output / "profile-files.txt").write_text("".join(
+                    f"{oct(path.stat().st_mode & 0o777)} {path.relative_to(profile)}\n"
+                    for path in sorted(profile.rglob("*"))))
             for bot in bots:
                 try:
                     bot.close()

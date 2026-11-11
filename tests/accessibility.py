@@ -188,7 +188,7 @@ class AccessibilityTest:
             (profile / "config").mkdir(parents=True)
             (profile / "config/servers.json").write_text(json.dumps([dict(
                 id=str(uuid.uuid4()), name="Accessible server", host="127.0.0.1", port=port, username="Andi",
-                certificate_sha256=pin, cached_channels=[])]))
+                certificate_sha256=pin)]))
             app = self.spawn([str(self.args.binaries / "nuschel"), "--profile-dir", str(profile),
                               f"mumble://Andi@127.0.0.1:{port}/Lobby/Development"],
                              env, "desktop.log")

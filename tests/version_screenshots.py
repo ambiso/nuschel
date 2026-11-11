@@ -88,8 +88,7 @@ def main():
                     pin = certificate_pin(args.binaries, "127.0.0.1", port, root / "probe")
                     register(args.binaries, port, pin, "Andi", profile)
                     bookmark = {"id": str(uuid.uuid4()), "name": "Nuschel test server", "host": "127.0.0.1",
-                                "port": port, "username": "Andi", "certificate_sha256": pin,
-                                "cached_channels": []}
+                                "port": port, "username": "Andi", "certificate_sha256": pin}
                     (profile / "config/servers.json").write_text(json.dumps([bookmark]))
                 log = (args.output / f"{name}.log").open("w")
                 app = subprocess.Popen([str(args.binaries / "nuschel"), "--profile-dir", str(profile),

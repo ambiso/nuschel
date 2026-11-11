@@ -76,7 +76,7 @@ def main():
             register(args.binaries, port, pin, "Ada", root / "ada")
             bots.append(ada(args.binaries, port, pin, root, root / "ada-identity"))
             bookmark = {"id": str(uuid.uuid4()), "name": "Nuschel test server", "host": "127.0.0.1",
-                        "port": port, "username": "Andi", "certificate_sha256": pin, "cached_channels": []}
+                        "port": port, "username": "Andi", "certificate_sha256": pin}
             (profile / "config/servers.json").write_text(json.dumps([bookmark]))
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme}}))
             log = (args.output / "desktop.log").open("w")

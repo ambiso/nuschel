@@ -200,7 +200,7 @@ class DesktopTest:
         return eventually(lambda: value.casefold() in self.text().casefold(), f"UI did not show {value!r}")
 
     def rows(self):
-        with sqlite3.connect(self.profile / "data/history.sqlite3") as database:
+        with sqlite3.connect(self.profile / "data/history/history.sqlite3") as database:
             return database.execute("SELECT channel, author, body FROM messages ORDER BY id").fetchall()
 
     def has_message(self, body):
@@ -258,12 +258,15 @@ class DesktopTest:
             dict(id=3, parent=2, name="Third depth", position=0),
             dict(id=4, parent=0, name=long_name, position=1),
         ] + [dict(id=index, parent=0, name=f"Scroll row {index:02}", position=index) for index in range(5, 60)]
+        # An earlier version's servers.json, with the tree inside: it moves to the cache.
         (self.profile / "config/servers.json").write_text(json.dumps([
             dict(id=str(uuid.uuid4()), name="Offline channel browser", host="127.0.0.1", port=64738,
                  username="Preview", cached_channels=channels)
         ]))
         self.start_app()
         self.wait_text("Group branch")
+        assert "cached_channels" not in (self.profile / "config/servers.json").read_text()
+        assert len(next(iter(json.loads((self.profile / "cache/channels.json").read_text()).values()))) == 60
         initial = self.text()
         assert "Second depth" not in initial and "Third depth" not in initial
         self.capture("channel-browser-default")
@@ -395,7 +398,7 @@ class DesktopTest:
         eventually(lambda: self.pulse_json("source-outputs"), "capture did not recover")
         self.captured_audio(session)
         print("PulseAudio restart recovered capture without reconnecting the Mumble session; chat stayed live.", flush=True)
-        identity = (self.profile / "config/identity.json").read_bytes()
+        identity = (self.profile / "data/identity/identity.json").read_bytes()
         terminate(self.app)
         self.app = None
         self.peer.wait(lambda event: event["kind"] == "user_removed" and event["session"] == session)
@@ -412,7 +415,7 @@ class DesktopTest:
         self.click_text("Save and connect")
         self.peer.wait(lambda event: event["kind"] == "user" and event["user"]["name"] == "NuschelDesktop")
         self.wait_text("Connected")
-        assert (self.profile / "config/identity.json").read_bytes() == identity
+        assert (self.profile / "data/identity/identity.json").read_bytes() == identity
         print("Saved server/certificate/client identity and offline nested-channel history survived restart.", flush=True)
 
     def close(self):
