@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Bounded asynchronous adapters for persistent worker processes.
 use crate::Error;
-use nuschel_core::{ChatMessage, HistoryPage};
+use nuschel_core::{ChatMessage, HistoryPage, SearchCursor, SearchPage};
 use nuschel_ipc::{
     Envelope, LiveMediaEvent, LiveMediaRequest, MAX_FRAME_BYTES, PROTOCOL_VERSION, StorageRequest,
     StorageResponse, TransferEvent, TransferRequest, write_frame,
@@ -99,33 +99,69 @@ impl Storage {
         channel: String,
         before: Option<i64>,
     ) -> Result<HistoryPage, Error> {
-        match self
-            .request(StorageRequest::HistoryPage {
-                server,
-                channel,
-                before,
-                limit: 40,
-            })
-            .await?
-        {
+        self.history(StorageRequest::HistoryPage {
+            server,
+            channel,
+            before,
+            limit: 40,
+        })
+        .await
+    }
+    /// A page around message `id`, to show it in its conversation.
+    pub async fn page_around(
+        &mut self,
+        server: String,
+        channel: String,
+        id: i64,
+    ) -> Result<HistoryPage, Error> {
+        self.history(StorageRequest::HistoryAround {
+            server,
+            channel,
+            id,
+            limit: 40,
+        })
+        .await
+    }
+    pub async fn page_after(
+        &mut self,
+        server: String,
+        channel: String,
+        after: i64,
+    ) -> Result<HistoryPage, Error> {
+        self.history(StorageRequest::HistoryAfter {
+            server,
+            channel,
+            after,
+            limit: 40,
+        })
+        .await
+    }
+    async fn history(&mut self, request: StorageRequest) -> Result<HistoryPage, Error> {
+        match self.request(request).await? {
             StorageResponse::HistoryPage(page) => Ok(page),
             _ => Err(Error::Worker("unexpected storage response".into())),
         }
     }
+    /// Full-text search of these servers' history, or of one conversation
+    /// of a single server.
     pub async fn search(
         &mut self,
-        server: String,
+        servers: Vec<String>,
+        channel: Option<String>,
         query: String,
-    ) -> Result<Vec<nuschel_core::HistoryEntry>, Error> {
+        after: Option<SearchCursor>,
+    ) -> Result<SearchPage, Error> {
         match self
             .request(StorageRequest::Search {
-                server,
+                servers,
+                channel,
                 query,
+                after,
                 limit: 50,
             })
             .await?
         {
-            StorageResponse::SearchResults(entries) => Ok(entries),
+            StorageResponse::SearchResults(page) => Ok(page),
             _ => Err(Error::Worker("unexpected storage response".into())),
         }
     }

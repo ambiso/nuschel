@@ -4,7 +4,10 @@
 use serde::{Deserialize, Serialize};
 
 pub mod audio;
+pub mod search;
 pub mod transfer;
+
+pub use search::{SearchCursor, SearchPage};
 
 /// Parsing limits are separate from UI collapsing. Storage retains the original body.
 /// 256 KiB covers Mumble's default 128 KiB image messages with room for markup.
@@ -39,8 +42,14 @@ pub struct HistoryEntry {
 pub struct HistoryPage {
     /// Chronological display order, including repeated messages with identical timestamps.
     pub messages: Vec<HistoryEntry>,
-    /// Exclusive cursor for the next older page; None means the beginning was reached.
+    /// Exclusive cursor for the next older page; None means the beginning was
+    /// reached (a page read forwards, after a message, leaves it None).
     pub next_before: Option<i64>,
+    /// Exclusive cursor for the next newer page of a page read around or after
+    /// a message; None means the newest stored message is included (a page
+    /// read backwards leaves it None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_after: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

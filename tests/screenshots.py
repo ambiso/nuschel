@@ -33,6 +33,19 @@ def SEARCH_BUTTON(width):
     return (width - 77, 86)
 
 
+# The first result in the search panel.
+SEARCH_RESULT = (600, 300)
+# Ctrl+Shift plus a key on the virtual keyboard.
+CONTROL_SHIFT = """
+const k = global._nuschelKeyboard, C = imports.gi.Clutter, t = imports.gi.GLib.get_monotonic_time();
+k.notify_keyval(t, C.KEY_Control_L, C.KeyState.PRESSED);
+k.notify_keyval(t + 5000, C.KEY_Shift_L, C.KeyState.PRESSED);
+k.notify_keyval(t + 10000, C.KEY_%s, C.KeyState.PRESSED);
+k.notify_keyval(t + 20000, C.KEY_%s, C.KeyState.RELEASED);
+k.notify_keyval(t + 25000, C.KEY_Shift_L, C.KeyState.RELEASED);
+k.notify_keyval(t + 30000, C.KEY_Control_L, C.KeyState.RELEASED); 'ok'
+"""
+
 # The voice card's warning line, in window screenshot pixels.
 CLIPPING_WARNING = (205, 728)
 # Settings: "Test echo" before the microphone test has started, and each
@@ -162,7 +175,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,shortcuts,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
@@ -183,7 +196,7 @@ def main():
         port = free_port()
         murmur = Murmur(args.murmur, root, port)
         bot_options = []
-        if {"all", "scroll"} & set(args.scenes.split(",")):
+        if {"all", "scroll", "search"} & set(args.scenes.split(",")):
             # The scroll scene fills several pages of history quickly; the
             # stock server otherwise drops text beyond one message a second.
             # The bots need not wait for it either (Nuschel itself still does).
@@ -645,12 +658,90 @@ def main():
             if want("search"):
                 click(*SEARCH_BUTTON(width))
                 time.sleep(0.8)
-                shell.type("patch")
+                shell.type("patc")  # the last word matches as a prefix while typed
                 time.sleep(1.5)
                 shot("12-search")
                 shell.key("Escape")
                 time.sleep(0.6)
                 shot("13-search-closed")
+                # Older history: reopened, the conversation holds only its latest page.
+                click(228, 268)  # #Development
+                time.sleep(0.6)
+                for n in range(1, 121):
+                    bots[(n // 3) % 2].send(kind="text", channel=2, body=f"History message {n}")
+                    time.sleep(0.05)
+                time.sleep(2.0)
+                click(*LOBBY_ROW)
+                time.sleep(0.8)
+                click(228, 268)
+                time.sleep(2.0)
+                # Ctrl+F searches this conversation; quotes match a phrase exactly.
+                shell.chord("Control_L", "f")
+                time.sleep(0.8)
+                shell.type('"history message 7" ')
+                time.sleep(1.5)
+                shot("12a-search-phrase")
+                # A result opens its message among the history around it, highlighted.
+                click(*SEARCH_RESULT)
+                time.sleep(1.5)
+                shot("12b-search-jumped")
+                # A live message waits for the newer history, which loads below
+                # as the reader scrolls down; "Jump to latest" returns to the end.
+                bots[0].send(kind="text", channel=2, body="A live message while you read older ones")
+                time.sleep(1.2)
+                timeline = (width // 2 + 160, height // 2)
+                for _ in range(3):
+                    wheel(*timeline, 2 * SCROLL_CLICKS)
+                    time.sleep(1.0)
+                shot("12c-search-newer")
+                click(*JUMP_TO_LATEST(width, height))
+                time.sleep(2.0)
+                shot("12d-search-latest")
+                # Ctrl+Shift+F searches every server, with the same words.
+                shell.eval(CONTROL_SHIFT % ("F", "F"))
+                time.sleep(1.5)
+                shot("12e-search-all-servers")
+                shell.key("Escape")
+                time.sleep(0.6)
+            if want("finder"):
+                click(228, 268)  # #Development
+                time.sleep(0.6)
+                # Ctrl+K: recent conversations first; typing finds channels and people.
+                shell.chord("Control_L", "k")
+                time.sleep(0.8)
+                shot("40-finder")
+                shell.type("dev")
+                time.sleep(0.8)
+                shot("41-finder-channel")
+                shell.key("BackSpace")
+                shell.key("BackSpace")
+                shell.key("BackSpace")
+                shell.type("ada")
+                time.sleep(0.8)
+                shot("42-finder-person")
+                shell.key("Return")  # a direct conversation with Ada
+                time.sleep(1.0)
+                shot("43-finder-direct")
+                shell.chord("Control_L", "k")
+                time.sleep(0.6)
+                shell.type("lby")  # letters in order
+                time.sleep(0.6)
+                shell.key("Down")
+                shell.key("Up")
+                shot("44-finder-fuzzy")
+                shell.key("Return")
+                time.sleep(1.0)
+                shot("45-finder-lobby")
+                # Not behind a dialog: Settings keeps the keys.
+                click(239, 773)
+                time.sleep(0.8)
+                shell.chord("Control_L", "k")
+                time.sleep(0.8)
+                shot("46-finder-not-behind-settings")
+                shell.key("Escape")
+                time.sleep(0.6)
+                click(228, 268)  # back to #Development, as later scenes expect
+                time.sleep(0.8)
             if want("unread"):
                 # Messages out of sight: a count on the channel; a mention turns it red
                 # and puts a red count on the server.

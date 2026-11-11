@@ -172,6 +172,12 @@ pub struct ChannelView {
     pub messages: Vec<MessageView>,
     /// Cursor for the next older page, if local history has more.
     pub next_before: Option<i64>,
+    /// Set while the timeline shows older history apart from the newest
+    /// (after a search result opened a message): the next newer page.
+    pub next_after: Option<i64>,
+    /// A live message was left out of such a timeline since the newer page
+    /// was asked for.
+    pub missed_live: bool,
     /// The oldest stored message is loaded: there is nothing further up.
     pub beginning: bool,
     /// The latest page is in memory; live messages keep it current, so
@@ -228,6 +234,8 @@ impl ChannelView {
             storage_key: "0".into(),
             messages: Vec::new(),
             next_before: None,
+            next_after: None,
+            missed_live: false,
             beginning: false,
             loaded: false,
             loading: false,
@@ -678,22 +686,6 @@ impl ServerWrites {
     }
 }
 
-pub struct SearchView {
-    pub server: String,
-    pub input: Entity<InputState>,
-    pub query: String,
-    pub results: Vec<SearchHit>,
-    pub loading: bool,
-    _changes: Subscription,
-}
-pub struct SearchHit {
-    pub channel: u32,
-    pub place: String,
-    pub author: String,
-    pub time: String,
-    pub snippet: String,
-}
-
 pub struct ServerForm {
     pub editing: Option<String>,
     pub name: Entity<InputState>,
@@ -795,7 +787,10 @@ pub struct Desktop {
     /// (and Escape) only through a focused element.
     pub window_focus: FocusHandle,
     pub identity_status: Option<String>,
-    pub search: Option<SearchView>,
+    pub search: Option<crate::search::SearchView>,
+    /// The message a search result opened, highlighted for a moment.
+    pub jumped: Option<crate::search::Jumped>,
+    pub finder: crate::finder::Finder,
     pending_browse: Option<(String, u32)>,
     /// A rejected login waiting to reopen the server form for a retry.
     pending_retry: Option<(usize, RejectKind, String)>,
@@ -991,6 +986,8 @@ impl Desktop {
             window_focus,
             identity_status: None,
             search: None,
+            jumped: None,
+            finder: Default::default(),
             pending_browse: None,
             pending_retry: None,
             cache_dirty: false,
@@ -1162,13 +1159,13 @@ impl Desktop {
             .unwrap_or_default();
         self.composer
             .update(cx, |input, cx| input.set_value(draft, window, cx));
-        self.navigation.browse(
-            Conversation {
-                server: server.id.clone(),
-                channel: id,
-            },
-            HistorySource::LocalObserved,
-        );
+        let conversation = Conversation {
+            server: server.id.clone(),
+            channel: id,
+        };
+        self.browsed(&conversation);
+        self.navigation
+            .browse(conversation, HistorySource::LocalObserved);
         self.chat_motion.cancel();
         self.anchor.reset();
         self.following = true;
@@ -1843,65 +1840,6 @@ impl Desktop {
             Effect::ToggleMute | Effect::ToggleDeafen => {}
         }
     }
-    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((index, _)) = self.selected_indices() else {
-            return;
-        };
-        let input = cx.new(|cx| {
-            accessible(
-                InputState::new(window, cx).placeholder("Search local history"),
-                "Search local history",
-                false,
-                false,
-            )
-        });
-        input.update(cx, |input, cx| input.focus(window, cx));
-        // Search as you type; replies for older queries are dropped on arrival.
-        let changes = cx.subscribe(&input, |this, _, event, cx| {
-            if matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
-                this.run_search(cx);
-                cx.notify();
-            }
-        });
-        self.search = Some(SearchView {
-            server: self.servers[index].id.clone(),
-            input,
-            query: String::new(),
-            results: Vec::new(),
-            loading: false,
-            _changes: changes,
-        });
-    }
-    pub fn run_search(&mut self, cx: &mut Context<Self>) {
-        let Some(search) = self.search.as_mut() else {
-            return;
-        };
-        let query = search.input.read(cx).value().trim().to_string();
-        let Some(server) = self
-            .servers
-            .iter()
-            .find(|server| server.id == search.server)
-        else {
-            return;
-        };
-        let Some(identity) = server.history_identity() else {
-            return;
-        };
-        if query == search.query {
-            return;
-        }
-        if query.is_empty() {
-            search.query.clear();
-            search.results.clear();
-            search.loading = false;
-            return;
-        }
-        search.query = query.clone();
-        search.loading = true;
-        if let Err(error) = self.backend.search(server.id.clone(), identity, query) {
-            self.error = Some(error);
-        }
-    }
     pub fn set_mute(&mut self, deafen: bool) {
         let Some((index, _)) = self.selected_indices() else {
             return;
@@ -2506,6 +2444,9 @@ impl Desktop {
     /// Before each frame: follow the newest message, or hold still where the
     /// reader scrolled to, judged by how the offset moved since the last frame.
     pub fn settle_timeline(&mut self) {
+        if self.settle_detached() {
+            return;
+        }
         let Some((server, channel)) = self.selected_indices() else {
             return;
         };
@@ -2566,54 +2507,22 @@ impl Desktop {
                         self.acknowledged.push((pending.conversation, pending.body));
                     }
                 }
-                Event::SearchResults {
-                    server,
-                    query,
-                    results,
-                } => {
-                    let Some(search) = self
-                        .search
-                        .as_mut()
-                        .filter(|search| search.server == server && search.query == query)
-                    else {
-                        continue;
-                    };
-                    let Some(view) = self.servers.iter().find(|entry| entry.id == server) else {
-                        continue;
-                    };
-                    search.loading = false;
-                    search.results = results
-                        .into_iter()
-                        .map(|entry| {
-                            let channel = view
-                                .channels
-                                .iter()
-                                .find(|channel| channel.storage_key == entry.message.channel);
-                            let visible: String = entry
-                                .message
-                                .body
-                                .split(nuschel_core::EMBED)
-                                .step_by(2)
-                                .collect::<String>()
-                                .split_whitespace()
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            let mut snippet: String = visible.chars().take(240).collect();
-                            if visible.chars().count() > 240 {
-                                snippet.push('…');
-                            }
-                            SearchHit {
-                                channel: channel.map(|channel| channel.id).unwrap_or(u32::MAX),
-                                place: channel
-                                    .map(|channel| channel.name.clone())
-                                    .unwrap_or_else(|| "Earlier conversation".into()),
-                                author: entry.message.author,
-                                time: local_time(entry.message.observed_at_ms),
-                                snippet,
-                            }
-                        })
-                        .collect();
+                Event::SearchResults { request, result } => {
+                    self.apply_search_results(request, result, cx);
                 }
+                Event::HistoryWindow {
+                    server,
+                    ticket,
+                    page,
+                    messages,
+                    next_before,
+                    next_after,
+                } => self.apply_history_window(
+                    (server, ticket, page),
+                    messages,
+                    (next_before, next_after),
+                    cx,
+                ),
                 Event::HistoryRecovered => {
                     self.older_paused = false;
                     if self
@@ -3117,7 +3026,14 @@ impl Desktop {
                                 matches!(block, nuschel_core::ContentBlock::Text { text, .. }
                                     if crate::notify::mentions(text, &server.bookmark.username))
                             }));
-                    let added = merge_message(channel, message);
+                    // Older history is shown apart from the newest: the
+                    // message arrives with the newer pages.
+                    let added = if channel.next_after.is_some() && message.id.is_some() {
+                        channel.missed_live = true;
+                        true
+                    } else {
+                        merge_message(channel, message)
+                    };
                     let in_sight = self.window_active
                         && self.following
                         && self.navigation.selection().is_some_and(|selected| {
@@ -3601,7 +3517,7 @@ fn lost_messages(server: &mut ServerView) -> Option<String> {
     })
 }
 /// Returns whether the message is new to this timeline.
-fn merge_message(channel: &mut ChannelView, message: RenderedMessage) -> bool {
+pub(crate) fn merge_message(channel: &mut ChannelView, message: RenderedMessage) -> bool {
     if message
         .id
         .is_some_and(|id| channel.messages.iter().any(|entry| entry.id == Some(id)))
@@ -3629,6 +3545,8 @@ impl ChannelView {
         match before {
             None => {
                 self.loaded = true;
+                self.next_after = None;
+                self.missed_live = false;
                 let newest = messages
                     .iter()
                     .filter_map(|message| message.id)

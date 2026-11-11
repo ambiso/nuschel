@@ -99,9 +99,27 @@ pub enum StorageRequest {
         before: Option<i64>,
         limit: u16,
     },
-    Search {
+    /// A page of messages around `id` (see `History::page_around`).
+    HistoryAround {
         server: String,
+        channel: String,
+        id: i64,
+        limit: u16,
+    },
+    /// The page of messages newer than `after`.
+    HistoryAfter {
+        server: String,
+        channel: String,
+        after: i64,
+        limit: u16,
+    },
+    /// Full-text search of these servers' history, or of one conversation
+    /// (`channel`) when a single server is given.
+    Search {
+        servers: Vec<String>,
+        channel: Option<String>,
         query: String,
+        after: Option<nuschel_core::SearchCursor>,
         limit: u16,
     },
 }
@@ -117,7 +135,7 @@ pub enum StorageResponse {
     Appended(i64),
     Messages(Vec<ChatMessage>),
     HistoryPage(HistoryPage),
-    SearchResults(Vec<nuschel_core::HistoryEntry>),
+    SearchResults(nuschel_core::SearchPage),
     Rejected(String),
 }
 

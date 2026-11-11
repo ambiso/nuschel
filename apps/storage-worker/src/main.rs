@@ -2,7 +2,11 @@
 use clap::{ArgGroup, Parser};
 use nuschel_ipc::{Envelope, StorageRequest, StorageResponse, read_frame, write_frame};
 use nuschel_storage::History;
-use std::{io, path::PathBuf};
+use std::{
+    io,
+    path::PathBuf,
+    sync::mpsc::{self, TryRecvError},
+};
 
 #[derive(Parser)]
 #[command(about = "Nuschel SQLx storage worker; receives requests on inherited stdin/stdout")]
@@ -30,9 +34,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if arguments.check_database {
         return Ok(());
     }
-    let mut input = io::stdin().lock();
+    // Requests are read on their own thread, so that older messages can be
+    // made searchable whenever none is waiting.
+    let (frames, requests) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut input = io::stdin().lock();
+        loop {
+            let frame = read_frame::<StorageRequest>(&mut input);
+            let last = !matches!(frame, Ok(Some(_)));
+            if frames.send(frame).is_err() || last {
+                break;
+            }
+        }
+    });
     let mut output = io::stdout().lock();
-    while let Some(request) = read_frame::<StorageRequest>(&mut input)? {
+    let mut backfill = true;
+    loop {
+        let frame = if backfill {
+            match requests.try_recv() {
+                Ok(frame) => frame,
+                Err(TryRecvError::Empty) => {
+                    // A database that cannot be filled is still served.
+                    backfill = history.backfill().await.unwrap_or(false);
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => break,
+            }
+        } else {
+            match requests.recv() {
+                Ok(frame) => frame,
+                Err(_) => break,
+            }
+        };
+        let Some(request) = frame? else {
+            break;
+        };
         let payload = match request.payload {
             StorageRequest::Append { message } => history
                 .append(&message)
@@ -55,12 +91,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .page(&server, &channel, before, usize::from(limit))
                 .await
                 .map(StorageResponse::HistoryPage),
-            StorageRequest::Search {
+            StorageRequest::HistoryAround {
                 server,
-                query,
+                channel,
+                id,
                 limit,
             } => history
-                .search(&server, &query, usize::from(limit))
+                .page_around(&server, &channel, id, usize::from(limit))
+                .await
+                .map(StorageResponse::HistoryPage),
+            StorageRequest::HistoryAfter {
+                server,
+                channel,
+                after,
+                limit,
+            } => history
+                .page_after(&server, &channel, after, usize::from(limit))
+                .await
+                .map(StorageResponse::HistoryPage),
+            StorageRequest::Search {
+                servers,
+                channel,
+                query,
+                after,
+                limit,
+            } => history
+                .search(
+                    &servers,
+                    channel.as_deref(),
+                    &query,
+                    after,
+                    usize::from(limit),
+                )
                 .await
                 .map(StorageResponse::SearchResults),
         }

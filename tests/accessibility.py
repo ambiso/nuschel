@@ -41,7 +41,7 @@ from mumble_client import Client, certificate_pin  # noqa: E402
 ROLES = {23: "frame", 29: "label", 43: "push button", 54: "status bar", 61: "text", 62: "toggle button",
          65: "tree", 69: "window", 75: "application", 79: "entry", 91: "tree item", 27: "image",
          40: "password text", 16: "dialog", 33: "menu", 35: "menu item", 85: "section", 99: "grouping",
-         31: "list", 32: "list item", 39: "panel"}
+         31: "list", 32: "list item", 39: "panel", 98: "list box", 105: "page tab list", 37: "page tab"}
 INTERACTIVE = {"push button", "toggle button", "text", "entry", "password text", "tree item", "menu item"}
 # A 2×2 RGB PNG.
 PNG = (b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x02\x08\x02\0\0\0\xfd\xd4\x9as\0\0\0\x12IDATx"
@@ -212,6 +212,26 @@ class AccessibilityTest:
             self.check_shortcuts(nuschel)
             if self.shell:
                 self.check_attachments(nuschel)
+                # Ctrl+K: the switcher's field names the result count and the
+                # highlighted result; the results are options of a list box.
+                self.shell.chord("Control_L", "k")
+                time.sleep(0.5)
+                self.shell.type("dev")
+
+                def switcher():
+                    nodes = snapshot(nuschel)
+                    fields = [name for _, _, role, name in nodes
+                              if role in ("text", "entry") and name.startswith("Find a channel or person: ")]
+                    return (nodes, fields[0]) if fields and "1 result" in fields[0] else None
+                nodes, field = eventually(switcher, "the switcher did not announce its results", timeout=10)
+                self.write_tree(nodes, "switcher-tree.txt")
+                assert "Development (channel) highlighted" in field, field
+                options = [name for _, _, role, name in nodes if role == "list item"]
+                assert options == ["Development, channel in Lobby, Accessible server"], options
+                self.find(nodes, "list box", "1 result")
+                self.find(nodes, "dialog", "Quick switcher")
+                self.shell.key("Escape")
+                print(f"Switcher announced through its field: {field!r}; options: {options}.", flush=True)
         finally:
             if peer:
                 peer.close()
@@ -306,7 +326,7 @@ class AccessibilityTest:
                 self.find(nodes, "push button", button)
             assert any(role == "push button" and name in ("Maximize", "Restore") for _, _, role, name in nodes)
         for button in ("Add a server", "Disconnect", "Settings", "Unmute", "Deafen",
-                       "Search local history", "Send"):
+                       "Search messages", "Send"):
             self.find(nodes, "push button", button)
         self.find(nodes, "tree", "Channels")
         for item in ("Lobby", "Development"):

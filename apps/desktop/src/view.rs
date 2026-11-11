@@ -39,6 +39,7 @@ impl Render for Desktop {
                 format!("{} — {}", server.name, server.channels[channel].name)
             })
             .unwrap_or_default();
+        let finder = crate::finder::overlay(self, window, cx);
         let body = div()
             .flex_1()
             .min_h_0()
@@ -69,6 +70,11 @@ impl Render for Desktop {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.find_shortcut(&event.keystroke, window, cx) {
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
                 if crate::emoji::shortcut(&event.keystroke)
                     && this.selected_indices().is_some()
                     && !this.dialog_open()
@@ -137,6 +143,7 @@ impl Render for Desktop {
             .when_some(crate::viewer::overlay(self, window, cx), |view, viewer| {
                 view.child(viewer)
             })
+            .when_some(finder, |view, finder| view.child(finder))
             .when_some(crate::menus::menu(self, cx), |view, menu| view.child(menu))
             .when_some(crate::appearance::badge(self), |view, badge| {
                 view.child(badge)
@@ -980,13 +987,16 @@ fn user_row(
 }
 
 /// The decoded avatar for a user's texture hash, if we have one.
-fn avatar_image(server: &ServerView, user: Option<&User>) -> Option<std::sync::Arc<RenderImage>> {
+pub fn avatar_image(
+    server: &ServerView,
+    user: Option<&User>,
+) -> Option<std::sync::Arc<RenderImage>> {
     user.and_then(|user| user.texture_hash.as_ref())
         .and_then(|hash| server.avatars.get(hash))
         .cloned()
 }
 
-fn avatar(
+pub fn avatar(
     name: &str,
     size: f32,
     talking: bool,
@@ -1314,7 +1324,11 @@ impl Desktop {
     }
 
     pub fn dialog_open(&self) -> bool {
-        self.form.is_some() || self.settings_open || self.panel.is_some() || self.prompt.is_some()
+        self.form.is_some()
+            || self.settings_open
+            || self.panel.is_some()
+            || self.prompt.is_some()
+            || self.finder.is_open()
     }
 
     /// While a dialog is open, keyboard focus stays inside it, so nothing
@@ -1388,6 +1402,7 @@ fn conversation(
             channel.direct_peer.as_ref(),
         );
         let row = message_row(this, server, channel, position, author, grouped, cx);
+        let row = crate::search::mark_jumped(this, message.id, row);
         messages.push(match message.id {
             Some(id) => anchor.row(id, row),
             None => row,
@@ -1507,13 +1522,11 @@ fn conversation(
                 .child(icon_button(
                     "open-search",
                     "search",
-                    "Search local history",
+                    "Search messages",
                     TEXT_MUTED,
-                    this.search.is_some().then_some(ACCENT),
+                    crate::search::panel_open(this).then_some(ACCENT),
                     |this, window, cx| {
-                        if this.search.take().is_none() {
-                            this.open_search(window, cx);
-                        }
+                        this.toggle_search(window, cx);
                         cx.notify();
                     },
                     cx,
@@ -1630,7 +1643,7 @@ fn conversation(
         .when_some(server.certificate.as_ref(), |view, certificate| {
             view.child(certificate_card(certificate, index, cx))
         })
-        .map(|view| match search_panel(this, index, cx) {
+        .map(|view| match crate::search::panel(this, cx) {
             Some(panel) => view.child(panel),
             None => view.child(
                 div()
@@ -1910,139 +1923,6 @@ fn jump_pill(
                     }))
                     .child(icon("chevron-down", 16., color(WHITE)))
                     .child(text!(label).with_id("jump-to-latest-label")),
-            )
-            .into_any_element(),
-    )
-}
-
-fn search_panel(
-    this: &Desktop,
-    server_index: usize,
-    cx: &mut Context<Desktop>,
-) -> Option<AnyElement> {
-    let search = this
-        .search
-        .as_ref()
-        .filter(|search| search.server == this.servers[server_index].id)?;
-    let status = if search.loading {
-        "Searching…".to_string()
-    } else if search.query.is_empty() {
-        "Searches messages saved on this device.".to_string()
-    } else if search.results.is_empty() {
-        format!("No messages contain “{}”.", search.query)
-    } else {
-        format!(
-            "{} recent {} for “{}”",
-            search.results.len(),
-            if search.results.len() == 1 {
-                "match"
-            } else {
-                "matches"
-            },
-            search.query
-        )
-    };
-    let server = &this.servers[server_index];
-    let results = search.results.iter().enumerate().map(|(index, hit)| {
-        let channel = hit.channel;
-        let author = names::author(&hit.author, server.users.values(), None);
-        let author = names::author_name(&hit.author, author, &this.settings).to_string();
-        div()
-            .id(("search-hit", index))
-            .role(Role::ListItem)
-            .tab_index(0)
-            .p_3()
-            .rounded(px(8.))
-            .cursor_pointer()
-            .hover(|style| style.bg(color(HOVER)))
-            .flex()
-            .flex_col()
-            .gap_1()
-            .on_click(cx.listener(move |this, _, window, cx| {
-                if channel != u32::MAX {
-                    this.search = None;
-                    this.browse_channel(server_index, channel, window, cx);
-                    cx.notify();
-                }
-            }))
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(color(TEXT_FAINT))
-                    .child(text!(format!("#{}", hit.place)).with_id(("hit-place", index)))
-                    .child(text!(hit.time.clone()).with_id(("hit-time", index))),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::name_color(&author))
-                            .child(text!(author).with_id(("hit-author", index))),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(text!(hit.snippet.clone()).with_id(("hit-snippet", index))),
-                    ),
-            )
-    });
-    Some(
-        div()
-            .id("search-panel")
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .px_4()
-            .py_3()
-            .gap_3()
-            .child(
-                div()
-                    .px_3()
-                    .py(px(9.))
-                    .rounded(px(8.))
-                    .bg(color(INPUT))
-                    .border_1()
-                    .border_color(color(BORDER_STRONG))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if event.keystroke.key == "escape" {
-                            this.search = None;
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                    }))
-                    .child(icon("search", 16., color(TEXT_FAINT)))
-                    .child(
-                        div()
-                            .flex_1()
-                            .child(gpui_kit::base::input::Input::new(&search.input)),
-                    ),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(color(TEXT_MUTED))
-                    .child(text!(status).with_id("search-status")),
-            )
-            .child(
-                div()
-                    .id("search-results")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .children(results),
             )
             .into_any_element(),
     )

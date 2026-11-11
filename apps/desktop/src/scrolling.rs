@@ -144,6 +144,10 @@ struct AnchorState {
     painted: Cell<Option<(Pixels, Pixels)>>,
     /// Corrections made since the smooth scroller last looked.
     shifted: Cell<Pixels>,
+    /// A message to bring into view, until a frame shows it there, and the
+    /// offset this frame set for it.
+    reveal: Cell<Option<i64>>,
+    revealed: Cell<Option<Pixels>>,
 }
 
 impl Anchor {
@@ -152,6 +156,13 @@ impl Anchor {
         self.0.message.set(None);
         self.0.painted.set(None);
         self.0.shifted.set(px(0.));
+        self.0.reveal.set(None);
+    }
+
+    /// Scroll message `id` a third of the way down the viewport once it is
+    /// laid out (a search result opening it).
+    pub fn reveal(&self, id: i64) {
+        self.0.reveal.set(Some(id));
     }
 
     pub fn painted(&self) -> Option<(Pixels, Pixels)> {
@@ -217,6 +228,13 @@ impl AnchorFrame {
                         state.shifted.set(state.shifted.get() - moved);
                     }
                 }
+                if let Some(id) = state.reveal.get()
+                    && let Some(&(_, layout)) = rows.iter().find(|(row, _)| *row == id)
+                {
+                    offset.y = (handle.bounds().size.height / 3. - top(window, layout)).min(px(0.));
+                    handle.set_offset(offset);
+                    state.revealed.set(Some(offset.y));
+                }
                 let first = rows.partition_point(|&(_, layout)| {
                     window.layout_bounds(layout).bottom() - bounds.top() + offset.y <= px(0.)
                 });
@@ -229,6 +247,15 @@ impl AnchorFrame {
                 let (state, handle) = painted;
                 let offset = handle.offset().y;
                 state.painted.set(Some((offset, handle.max_offset().y)));
+                // Done once the timeline scrolled there (as far as it can):
+                // a pending scroll to the bottom may have won this frame.
+                if let Some(wanted) = state.revealed.take() {
+                    if offset == wanted.max(-handle.max_offset().y) {
+                        state.reveal.set(None);
+                    } else {
+                        window.request_animation_frame();
+                    }
+                }
                 if let Some(older) = older
                     && near_top(offset, handle.bounds().size.height)
                 {

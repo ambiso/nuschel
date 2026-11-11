@@ -85,11 +85,20 @@ pub enum Event {
         target: TextTarget,
         body: String,
     },
-    HistoryError(String),
-    SearchResults {
+    /// A page read around or after a message (`Page::Around`, `Page::After`).
+    HistoryWindow {
         server: String,
-        query: String,
-        results: Vec<nuschel_core::HistoryEntry>,
+        ticket: HistoryTicket,
+        page: Page,
+        messages: Vec<RenderedMessage>,
+        next_before: Option<i64>,
+        next_after: Option<i64>,
+    },
+    HistoryError(String),
+    /// Results for search `request` (see `Backend::search`).
+    SearchResults {
+        request: u64,
+        result: Result<nuschel_core::SearchPage, String>,
     },
     /// History writes work again after an earlier failure.
     HistoryRecovered,
@@ -157,6 +166,16 @@ pub enum Event {
         talking: bool,
     },
 }
+/// Which page of a conversation's local history to load.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Page {
+    /// Older than this message; None is the latest page.
+    Before(Option<i64>),
+    /// Newer than this message.
+    After(i64),
+    /// Around this message, which a search result jumps to.
+    Around(i64),
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderKey {
     Description(u32),
@@ -204,12 +223,13 @@ enum StorageCommand {
         identity: String,
         channel: String,
         ticket: HistoryTicket,
-        before: Option<i64>,
+        page: Page,
     },
     Search {
-        server: String,
-        identity: String,
+        request: u64,
+        scope: (Vec<String>, Option<String>),
         query: String,
+        after: Option<nuschel_core::SearchCursor>,
     },
 }
 impl Backend {
@@ -456,12 +476,22 @@ impl Backend {
             let _ = events.send(Event::Prepared { id, result }).await;
         });
     }
-    pub fn search(&self, server: String, identity: String, query: String) -> Result<(), String> {
+    /// Search the history of these server identities, or of one
+    /// conversation (its storage key) of a single one; results come back
+    /// as `Event::SearchResults` for `request`.
+    pub fn search(
+        &self,
+        request: u64,
+        scope: (Vec<String>, Option<String>),
+        query: String,
+        after: Option<nuschel_core::SearchCursor>,
+    ) -> Result<(), String> {
         self.storage
             .try_send(StorageCommand::Search {
-                server,
-                identity,
+                request,
+                scope,
                 query,
+                after,
             })
             .map_err(|_| "History is busy; try again shortly.".into())
     }
@@ -531,13 +561,23 @@ impl Backend {
         ticket: HistoryTicket,
         before: Option<i64>,
     ) -> Result<(), String> {
+        self.history_page(server, identity, channel, ticket, Page::Before(before))
+    }
+    pub fn history_page(
+        &self,
+        server: String,
+        identity: String,
+        channel: String,
+        ticket: HistoryTicket,
+        page: Page,
+    ) -> Result<(), String> {
         self.storage
             .try_send(StorageCommand::Load {
                 server,
                 identity,
                 channel,
                 ticket,
-                before,
+                page,
             })
             .map_err(|_| "History is busy; try again shortly.".into())
     }
@@ -1155,45 +1195,40 @@ async fn storage_loop(
                     .await;
             }
             StorageCommand::Search {
-                server,
-                identity,
+                request,
+                scope: (servers, channel),
                 query,
+                after,
             } => {
                 let result = match &mut storage {
-                    Some(worker) => worker.search(identity, query.clone()).await,
+                    Some(worker) => worker.search(servers, channel, query, after).await,
                     None => Err(Error::Worker("Local history is unavailable.".into())),
                 };
-                match result {
-                    Ok(results) => {
-                        let _ = events
-                            .send(Event::SearchResults {
-                                server,
-                                query,
-                                results,
-                            })
-                            .await;
-                    }
-                    Err(error) => {
-                        storage.take();
-                        let _ = events.send(Event::HistoryError(error.to_string())).await;
-                    }
+                if result.is_err() {
+                    storage.take();
                 }
+                let result = result.map_err(|error| error.to_string());
+                let _ = events.send(Event::SearchResults { request, result }).await;
             }
             StorageCommand::Load {
                 server,
                 identity,
                 channel,
                 ticket,
-                before,
+                page,
             } => {
                 let result = if let Some(worker) = &mut storage {
-                    worker.page(identity, channel, before).await
+                    match page {
+                        Page::Before(before) => worker.page(identity, channel, before).await,
+                        Page::After(after) => worker.page_after(identity, channel, after).await,
+                        Page::Around(id) => worker.page_around(identity, channel, id).await,
+                    }
                 } else {
                     Err(Error::Worker("Local history is unavailable.".into()))
                 };
                 match result {
-                    Ok(page) => {
-                        let _ = pages.send((server, ticket, before, page)).await;
+                    Ok(history) => {
+                        let _ = pages.send((server, ticket, page, history)).await;
                     }
                     Err(error) => {
                         storage.take();
@@ -1210,10 +1245,10 @@ async fn storage_loop(
 
 /// Render loaded history pages, each in one content worker.
 async fn history_loop(
-    mut pages: mpsc::Receiver<(String, HistoryTicket, Option<i64>, HistoryPage)>,
+    mut pages: mpsc::Receiver<(String, HistoryTicket, Page, HistoryPage)>,
     events: mpsc::Sender<Event>,
 ) {
-    while let Some((server, ticket, before, page)) = pages.recv().await {
+    while let Some((server, ticket, kind, page)) = pages.recv().await {
         let sources: Vec<String> = page
             .messages
             .iter()
@@ -1234,12 +1269,22 @@ async fn history_loop(
                 outgoing: false,
             })
             .collect();
-        let history = Event::History {
-            server,
-            ticket,
-            before,
-            messages,
-            next_before: page.next_before,
+        let history = match kind {
+            Page::Before(before) => Event::History {
+                server,
+                ticket,
+                before,
+                messages,
+                next_before: page.next_before,
+            },
+            page_kind => Event::HistoryWindow {
+                server,
+                ticket,
+                page: page_kind,
+                messages,
+                next_before: page.next_before,
+                next_after: page.next_after,
+            },
         };
         if events.send(history).await.is_err() {
             break;
