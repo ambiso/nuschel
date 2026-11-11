@@ -144,6 +144,8 @@ pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<A
             .left(px(-4.))
             .bottom(px(-4.))
             .size(px(20.))
+            .aspect_square()
+            .flex_shrink_0()
             .rounded_full()
             .bg(color(RAIL))
             .flex()
@@ -152,12 +154,14 @@ pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<A
             .child(
                 div()
                     .size(px(16.))
+                    .aspect_square()
+                    .flex_shrink_0()
                     .rounded_full()
                     .bg(background)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icon(name, 10., foreground)),
+                    .child(icon(name, 12., foreground)),
             )
             .into_any_element(),
     )

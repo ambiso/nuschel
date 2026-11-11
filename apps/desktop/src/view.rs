@@ -249,6 +249,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         .aria_selected(active)
                         .relative()
                         .size(px(48.))
+                        .flex_shrink_0()
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1893,6 +1894,9 @@ fn conversation(
                 let from_server = server.notice.is_some();
                 view.child(
                     div()
+                        .id("connection-notice-banner")
+                        .role(Role::Status)
+                        .aria_label("Connection notice")
                         .mx_4()
                         .mt_3()
                         .px_3()
@@ -1902,6 +1906,7 @@ fn conversation(
                         .border_1()
                         .border_color(tint(DANGER, 0x60))
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .gap_2()
                         .text_sm()
@@ -1910,6 +1915,8 @@ fn conversation(
                         .child(
                             div()
                                 .flex_1()
+                                .flex_basis(px(240.))
+                                .min_w_0()
                                 .child(text!(notice).with_id("connection-notice")),
                         )
                         .child(styled_button(
