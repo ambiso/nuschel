@@ -830,7 +830,17 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          an HPKE (X-Wing) report key pair per epoch from it; the server publishes the
          public key signed by a moderator; reporters encrypt each report to it
          without joining anything; a moderator losing Kick/Ban is removed and the key
-         rotates. On compatible servers a report references the stored message.
+         rotates. **The removal race** (a report encrypted to the old key while a
+         moderator loses Kick/Ban): the server delivers reports only to devices with
+         current Kick/Ban (checked at delivery and again after the lock); from the
+         moment the permission changes it refuses reports to the superseded key
+         (`stale_epoch`), and reporters queue them until a moderator's client commits
+         the removal and publishes the new key. Against a malicious server: the report
+         key carries the group epoch and a moderator-signed timestamp with a
+         freshness bound (24 h; later the KT log), and moderators flag a report
+         encrypted to an epoch older than a removal they know of. Residual risk: a
+         malicious server colluding with a removed moderator, for at most the bound.
+         On compatible servers a report references the stored message.
    - [ ] **Spam holds and a moderation queue** (user, 2026-11-11): against scam bots
          that join and post in every channel. Light, configurable server-side
          signals that work without content on end-to-end servers: a new account
