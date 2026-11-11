@@ -22,7 +22,7 @@ export class PcmMixer {
     let state = this.speakers.get(speaker);
     if (!state) {
       if (this.speakers.size >= MAX_SPEAKERS) return false;
-      state = {data:new Float32Array(MAX_QUEUED_SAMPLES), read:0, size:0, idle:0};
+      state = {data:new Float32Array(MAX_QUEUED_SAMPLES), read:0, size:0, idle:0, hold:AUDIO_FRAME};
       this.speakers.set(speaker,state);
     }
     const overflow = Math.max(0,state.size + samples.length - MAX_QUEUED_SAMPLES);
@@ -39,8 +39,10 @@ export class PcmMixer {
     output.fill(0);
     if (!this.enabled) return;
     for (const [speaker,state] of this.speakers) {
-      const length = Math.min(output.length,state.size);
-      for(let i=0;i<length;i++) output[i] += state.data[(state.read+i)%MAX_QUEUED_SAMPLES];
+      // One 20 ms prebuffer per talker absorbs ordinary transport/worker jitter.
+      const offset=Math.min(output.length,state.hold);state.hold-=offset;
+      const length = Math.min(output.length-offset,state.size);
+      for(let i=0;i<length;i++) output[offset+i] += state.data[(state.read+i)%MAX_QUEUED_SAMPLES];
       state.read=(state.read+length)%MAX_QUEUED_SAMPLES;state.size-=length;
       state.idle=state.size===0?state.idle+output.length:0;
       if(state.idle>AUDIO_RATE) this.speakers.delete(speaker);
@@ -97,7 +99,12 @@ if(typeof registerProcessor==="function") {
       super();this.mixer=new PcmMixer();
       this.port.onmessage=({data})=>{
         if(data?.kind==="configure")this.mixer.configure(data.epoch,data.enabled);
-        else if(data?.kind==="playback")this.mixer.enqueue(data);
+        else if(data?.kind==="playback") {
+          this.mixer.enqueue(data);
+          // The controller permits only a fixed number of unacknowledged
+          // transfers, bounding this MessagePort even if processing suspends.
+          this.port.postMessage({kind:"queued",epoch:data.epoch,job:data.job});
+        }
         else if(data?.kind==="remove")this.mixer.remove(data.speaker);
       };
     }

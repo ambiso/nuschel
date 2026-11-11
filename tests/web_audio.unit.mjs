@@ -28,6 +28,7 @@ test("mixer preserves separate speaker PCM, clips finite output and has finite l
   mixer.enqueue({epoch:"current",speaker:1,samples:new Float32Array(MAX_QUEUED_SAMPLES).fill(0.25)});
   mixer.enqueue({epoch:"current",speaker:1,samples:new Float32Array(MAX_QUEUED_SAMPLES).fill(0.5)});
   mixer.enqueue({epoch:"current",speaker:2,samples:new Float32Array(128).fill(0.75)});
+  const prebuffer=new Float32Array(AUDIO_FRAME);mixer.render(prebuffer);assert.ok(prebuffer.every(v=>v===0));
   const out=new Float32Array(128);mixer.render(out);assert.ok(out.every(v=>v===1));
   mixer.render(out);assert.ok(out.every(v=>v===0.5));
   for(let i=0;i<MAX_QUEUED_SAMPLES/128+1;i++)mixer.render(out);
