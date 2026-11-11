@@ -484,7 +484,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          settings to `murmur-import.toml`; `services.nuschel.importMurmur`. Left
          out: Murmur on MySQL/PostgreSQL (export to SQLite), murmur.ini, e-mail
          addresses, disabled listeners, the log table.
-   - [ ] Persist channel listeners for registered users.
+   - [x] Persist channel listeners for registered users (2026-11-11): stored with
+         their volume, restored after `ServerSync` with Listen and the limits checked
+         again (Murmur does not check), removed with the user or channel.
    - [ ] TLS reload on SIGHUP; a minimum TLS 1.3 option.
    - [ ] IP obfuscation in logs.
    - [ ] CA-verified ("strong") certificates.

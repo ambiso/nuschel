@@ -231,11 +231,19 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
   `nuschel-storage-worker --server` and writes every change through an ordered
   queue (`crates/ipc/src/server.rs` defines the messages); the worker owns the
   database and its credential. Startup loads channels, ACLs, links, bans and
-  registered users (in pages); comments and avatars are loaded when a registered
-  user connects. Graceful shutdown (SIGTERM) disconnects everyone and flushes the
+  registered users (in pages); comments, avatars and channel listeners are loaded
+  when a registered user connects. Graceful shutdown (SIGTERM) disconnects everyone and flushes the
   queue. The schema (`crates/storage/server-migrations`) works on SQLite and
   PostgreSQL and is tracked in its own migrations table, so it can share a
   database with the history schema.
+- **Channel listeners** of registered users are kept, as in Murmur: adding one,
+  changing its volume and removing it are stored (`channel_listeners`, removed with
+  the user or the channel), and after `ServerSync` on the next login they are added
+  again; everyone learns the channels, only the user the volumes (unless
+  `broadcast_listener_volume_adjustments`). Unlike Murmur, Listen and the listener
+  limits are checked again then; a listener that fails stays stored for when it is
+  allowed. Listeners in temporary channels and those of unregistered users end with
+  the connection; a user who registers keeps the current ones.
 
 ## Compatibility with Murmur
 
@@ -276,8 +284,7 @@ Deliberate differences:
   per-address and pending-connection caps, and a bounded argon2id queue (a busy
   server answers `AuthenticatorFail`, "try again later").
 - Not implemented: Ice/gRPC, external authenticators, `strong` certificates (no
-  CA store; the group never matches), email login, persisted channel listeners,
-  rolling statistics, behaviour specific to clients older than 1.2.2, recording
+  CA store; the group never matches), email login, rolling statistics, behaviour specific to clients older than 1.2.2, recording
   notices for clients older than 1.2.3, the pre-1.4 Opus/CELT codec switching.
 
 ## Security measures

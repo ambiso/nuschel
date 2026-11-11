@@ -1447,3 +1447,137 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
     // The upgraded hash verifies (this login replaces alice's first session).
     login("alice", "hunter2", leak(identity())).await.unwrap();
 }
+
+/// Murmur keeps registered users' listeners (`channel_listeners`): they come
+/// back on reconnect and after a restart, with their volume; removing one
+/// forgets it; an unregistered user's listeners end with the connection.
+#[tokio::test]
+async fn registered_users_keep_their_listeners() {
+    let fixture = Fixture::start("").await;
+    let (admin_id, alice_id, guest_id) = (identity(), identity(), identity());
+    let mut admin = superuser(fixture.address(), &admin_id).await;
+    admin
+        .send(
+            kind::CHANNEL_STATE,
+            &proto::ChannelState {
+                parent: Some(0),
+                name: Some("Radio".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+    let radio = admin
+        .expect::<proto::ChannelState>(kind::CHANNEL_STATE, |c| c.name.as_deref() == Some("Radio"))
+        .await
+        .channel_id
+        .unwrap();
+    let listen =
+        |session: u32, add: Vec<u32>, remove: Vec<u32>, volume: Option<f32>| proto::UserState {
+            session: Some(session),
+            listening_channel_add: add,
+            listening_channel_remove: remove,
+            listening_volume_adjustment: volume
+                .map(|volume| proto::user_state::VolumeAdjustment {
+                    listening_channel: Some(radio),
+                    volume_adjustment: Some(volume),
+                })
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+    let mut alice = Client::connect(fixture.address(), Options::new("Alice", &alice_id))
+        .await
+        .unwrap();
+    alice
+        .send(
+            kind::USER_STATE,
+            &proto::UserState {
+                session: Some(alice.session),
+                user_id: Some(0),
+                ..Default::default()
+            },
+        )
+        .await;
+    alice
+        .expect::<proto::UserState>(kind::USER_STATE, |s| s.user_id.is_some())
+        .await;
+    alice
+        .send(
+            kind::USER_STATE,
+            &listen(alice.session, vec![radio], vec![], None),
+        )
+        .await;
+    alice
+        .send(
+            kind::USER_STATE,
+            &listen(alice.session, vec![], vec![], Some(0.5)),
+        )
+        .await;
+    alice.sync().await;
+    // An unregistered user's listener is not kept.
+    let mut guest = Client::connect(fixture.address(), Options::new("Guest", &guest_id))
+        .await
+        .unwrap();
+    guest
+        .send(
+            kind::USER_STATE,
+            &listen(guest.session, vec![radio], vec![], None),
+        )
+        .await;
+    guest.sync().await;
+    drop(guest);
+    drop(alice);
+    admin.sync().await;
+
+    let restored = |client: &Client| {
+        client
+            .seen
+            .iter()
+            .filter(|frame| frame.kind == kind::USER_STATE)
+            .filter_map(|frame| proto::UserState::decode(frame.payload.clone()).ok())
+            .find(|state| {
+                state.session == Some(client.session) && !state.listening_channel_add.is_empty()
+            })
+    };
+    let fixture = fixture.restart("").await;
+    let mut admin = superuser(fixture.address(), &admin_id).await;
+    let mut alice = Client::connect(fixture.address(), Options::new("Alice", &alice_id))
+        .await
+        .unwrap();
+    alice.sync().await;
+    let state = restored(&alice).expect("alice's listener comes back");
+    assert_eq!(state.listening_channel_add, [radio]);
+    assert_eq!(state.listening_volume_adjustment.len(), 1);
+    assert_eq!(
+        state.listening_volume_adjustment[0].volume_adjustment,
+        Some(0.5)
+    );
+    // Others learn the channel, not the volume.
+    let seen = admin
+        .expect::<proto::UserState>(kind::USER_STATE, |s| {
+            s.session == Some(alice.session) && !s.listening_channel_add.is_empty()
+        })
+        .await;
+    assert!(seen.listening_volume_adjustment.is_empty());
+    {
+        let server = fixture.running.server.lock();
+        let channel = server.channels.get(radio).unwrap();
+        assert!(channel.listeners.contains(&alice.session));
+        assert_eq!(channel.listeners.len(), 1, "the guest's listener is gone");
+    }
+    // Removing it forgets it.
+    alice
+        .send(
+            kind::USER_STATE,
+            &listen(alice.session, vec![], vec![radio], None),
+        )
+        .await;
+    alice.sync().await;
+    drop(alice);
+    admin.sync().await;
+    let mut alice = Client::connect(fixture.address(), Options::new("Alice", &alice_id))
+        .await
+        .unwrap();
+    alice.sync().await;
+    assert!(restored(&alice).is_none());
+}

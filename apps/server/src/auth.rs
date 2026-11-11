@@ -130,6 +130,11 @@ pub async fn authenticate(
         Identity::Registered(id) if id > 0 => Some(server.storage.user_blobs(id).await),
         _ => None,
     };
+    // Remembered channel listeners (Murmur's `loadChannelListenersOf`).
+    let listeners = match identity {
+        Identity::Registered(id) => server.storage.user_listeners(id).await,
+        _ => Vec::new(),
+    };
     // The account's read markers, unless another of its connections already
     // loaded them (docs/extension.md §7).
     let account = match identity {
@@ -167,7 +172,9 @@ pub async fn authenticate(
                     .collect()
             });
     }
-    complete(&mut state, peer, message, name, password, identity, blobs)
+    complete(
+        &mut state, peer, message, name, password, identity, blobs, listeners,
+    )
 }
 
 /// Murmur's `Server::authenticate` for the built-in user database.
@@ -232,6 +239,7 @@ fn complete(
     password: String,
     mut identity: Identity,
     blobs: Option<(String, Bytes)>,
+    listeners: Vec<(u32, f32)>,
 ) -> Result<u32, Rejection> {
     if let Identity::Registered(id) = identity {
         match state.registry.users.get(&id) {
@@ -400,7 +408,7 @@ fn complete(
         registered.certificate_hash = Some(hash.clone());
         state.persist_registration(id);
     }
-    send_initial_state(state, session, channel, crypt_setup);
+    send_initial_state(state, session, channel, crypt_setup, listeners);
     tracing::info!(
         user = %state.log_name(session),
         address = %peer.address,
@@ -410,8 +418,72 @@ fn complete(
     Ok(session)
 }
 
+/// Re-add a registered user's remembered listeners after `ServerSync`, as
+/// Murmur does: everyone learns the channels, only the user the volumes
+/// (unless `broadcast_listener_volume_adjustments`). Unlike Murmur, Listen is
+/// checked again, and the listener limits apply; a listener that fails stays
+/// remembered for when it is allowed again.
+fn restore_listeners(state: &mut State, session: u32, listeners: Vec<(u32, f32)>) {
+    let config = &state.settings.config;
+    let (per_channel, per_user, broadcast_volumes) = (
+        config.listeners_per_channel,
+        config.listeners_per_user,
+        config.broadcast_listener_volume_adjustments,
+    );
+    let mut added = Vec::new();
+    let mut volumes = Vec::new();
+    for (channel, volume) in listeners {
+        let Some(target) = state.channels.get(channel) else {
+            continue;
+        };
+        if target.temporary
+            || !state.has(session, channel, perm::LISTEN)
+            || per_channel.is_some_and(|limit| target.listeners.len() >= limit as usize)
+            || per_user.is_some_and(|limit| added.len() >= limit as usize)
+        {
+            continue;
+        }
+        state.add_listener(session, channel);
+        if let Some(user) = state.users.get_mut(&session)
+            && let Some(entry) = user.listening.get_mut(&channel)
+        {
+            *entry = volume.clamp(0., 64.);
+        }
+        added.push(channel);
+        if volume != 1. {
+            volumes.push(proto::user_state::VolumeAdjustment {
+                listening_channel: Some(channel),
+                volume_adjustment: Some(volume),
+            });
+        }
+    }
+    if added.is_empty() {
+        return;
+    }
+    state.generation += 1;
+    let mut message = proto::UserState {
+        session: Some(session),
+        listening_channel_add: added,
+        ..Default::default()
+    };
+    if broadcast_volumes {
+        message.listening_volume_adjustment = volumes;
+        state.broadcast(kind::USER_STATE, &message, None);
+    } else {
+        state.broadcast(kind::USER_STATE, &message, Some(session));
+        message.listening_volume_adjustment = volumes;
+        state.send(session, kind::USER_STATE, &message);
+    }
+}
+
 /// What a new client receives, in Murmur's order.
-fn send_initial_state(state: &mut State, session: u32, channel: u32, crypt: CryptSetupParts) {
+fn send_initial_state(
+    state: &mut State,
+    session: u32,
+    channel: u32,
+    crypt: CryptSetupParts,
+    listeners: Vec<(u32, f32)>,
+) {
     state.send(
         session,
         kind::CRYPT_SETUP,
@@ -519,7 +591,8 @@ fn send_initial_state(state: &mut State, session: u32, channel: u32, crypt: Cryp
     } else {
         state.permissions(session, 0)
     };
-    let config = &state.settings.config;
+    let settings = state.settings.clone();
+    let config = &settings.config;
     // Stock clients are told that text is kept (docs/extension.md §9).
     let mut welcome = state.settings.welcome_text.clone();
     if !nuschel && config.history.notify_stock_clients {
@@ -544,6 +617,7 @@ fn send_initial_state(state: &mut State, session: u32, channel: u32, crypt: Cryp
             permissions: Some(u64::from(permissions)),
         },
     );
+    restore_listeners(state, session, listeners);
     state.send(
         session,
         kind::SERVER_CONFIG,

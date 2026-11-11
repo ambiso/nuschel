@@ -656,6 +656,7 @@ impl State {
         let mut routing_changed = false;
         for &channel in &listen_add {
             self.add_listener(target, channel);
+            self.persist_listener(target, channel);
             routing_changed = true;
         }
         message.listening_channel_add = listen_add;
@@ -675,6 +676,7 @@ impl State {
             {
                 *entry = volume.clamp(0., 64.);
                 volume_changed = true;
+                self.persist_listener(target, channel);
             }
         }
         let removals: Vec<u32> = message
@@ -689,6 +691,9 @@ impl State {
             .collect();
         for &channel in &removals {
             self.remove_listener(target, channel);
+            if let Some(id) = self.users.get(&target).and_then(|user| user.user_id) {
+                self.storage.remove_listener(id, channel);
+            }
             routing_changed = true;
         }
         message.listening_channel_remove = removals;
@@ -804,7 +809,23 @@ impl State {
         self.text_to(session, &text);
     }
 
-    fn add_listener(&mut self, session: u32, channel: u32) {
+    /// Registered users' listeners outlive the connection (Murmur's
+    /// `channel_listeners`), except in temporary channels.
+    pub(crate) fn persist_listener(&self, session: u32, channel: u32) {
+        let Some(user) = self.users.get(&session) else {
+            return;
+        };
+        if let (Some(id), Some(volume)) = (user.user_id, user.listening.get(&channel))
+            && self
+                .channels
+                .get(channel)
+                .is_some_and(|channel| !channel.temporary)
+        {
+            self.storage.set_listener(id, channel, *volume);
+        }
+    }
+
+    pub(crate) fn add_listener(&mut self, session: u32, channel: u32) {
         if let Some(user) = self.users.get_mut(&session) {
             user.listening.entry(channel).or_insert(1.);
         }
@@ -861,6 +882,14 @@ impl State {
                 id,
                 base64::engine::general_purpose::STANDARD.encode(&texture),
             );
+        }
+        let listening: Vec<u32> = self
+            .users
+            .get(&session)
+            .map(|user| user.listening.keys().copied().collect())
+            .unwrap_or_default();
+        for channel in listening {
+            self.persist_listener(session, channel);
         }
         self.remember_channel(session);
         tracing::info!(user = %self.log_name(session), "registered");
