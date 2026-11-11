@@ -13,6 +13,85 @@ Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 
 ---
 
+## Now: open reports and review findings
+
+Reported while testing (2026-11-10/11):
+
+- [ ] Code blocks: a copy-to-clipboard button.
+- [ ] Message text is selectable; right-click a message for Copy message (and Copy
+      image / Save image as for images).
+- [ ] Paste images into the composer: decode and re-encode in the content worker to
+      fit the server's image limit, send as a Mumble image message.
+- [ ] Echo reference: Nuschel's canceller records one output device, everything it
+      plays (all applications; more than two channels fold into left/right and AEC3
+      switches between mono and stereo by itself). Sound on another output device
+      (HDMI speakers while Nuschel plays to a headset) is not cancelled. Settings
+      now names the recorded output, to check the "wrong output" report; record
+      several outputs if that turns out to matter.
+- [x] Opening a channel shifted the layout for a frame: it reloaded the latest page
+      every time, and the first load flashed the welcome and "Loading local history".
+- [x] Settings said "Looking for audio devices…" / "The audio worker stopped" in a
+      container whose sound sockets were deleted: the media sandbox now skips them,
+      and binds PulseAudio's directory so its restarts show up inside.
+- [ ] The PipeWire/PulseAudio restart test drives the worker without its sandbox;
+      run it through the real sandbox command (PipeWire restarts rely on the worker
+      being replaced, about 2 s).
+
+Security review (2026-11-11):
+
+- [ ] M1 macOS: the storage worker's data folder is the whole config folder; give it
+      a history subfolder.
+- [ ] M2 The media worker gets the PulseAudio socket on PipeWire hosts too.
+- [ ] M3 The macOS media Seatbelt profile allows by default (deny list).
+- [ ] L1 The notification thumbnail size check can overflow in u32 (`state.rs`).
+- [ ] L2 Voice end packets bypass mute (`backend.rs`, `connection.rs`).
+- [ ] L3 No total budgets against a malicious server (channels, users, blobs).
+- [ ] L4 Control characters in channel names block saving the bookmarks.
+- [ ] L5 History search has no byte budget.
+- [ ] L6 The updater has no freshness check (a replayed old manifest is accepted
+      until something newer is seen).
+- [ ] L7 Exported certificates' file permissions.
+- [ ] L8 The Windows VM harness's HTTP control has no authentication (test-only).
+
+Code quality and performance review (2026-11-11):
+
+- [ ] Content worker per message: load syntax highlighting lazily, and render a
+      history page in one worker exchange (a page costs about 1 s in debug builds and
+      blocks incoming messages behind it).
+- [ ] Settings changes and loss estimates rebuild the whole capture chain (the echo
+      canceller relearns): send Configure only when audio settings change, apply
+      bitrate/loss to the encoder only.
+- [ ] Undisplayed level events redraw the window 10 times a second while unmuted.
+- [ ] Channel tree rows are rebuilt in O(C²) with allocations every frame.
+- [ ] Message text and code highlights are copied every frame; avatar lookup per
+      message scans all users.
+- [ ] Image decoding and bookmark saving (with fsync) run on the UI thread.
+- [ ] `img(Arc<RenderImage>)` sprites are never dropped from the GPU atlas
+      (`Window::drop_image`); confirm with the viewer and fix.
+- [ ] `server, generation` repeated in ~17 event types; `connect_once` and
+      `drain_events` are too large.
+- [ ] The desktop polls events every 20 ms instead of awaiting them.
+- [ ] Media worker: idle 4 ms wakeups without devices, per-packet allocations, sample
+      format dispatch written three times, unused `JitterStats`.
+- [ ] Storage: `(?3 IS NULL OR id < ?3)` may defeat the index; search filters image
+      matches after `LIMIT` (FTS5 over visible text).
+- [ ] Smaller: `persistent_sandbox` picks the content sandbox's arguments apart by
+      position; `ContentRequest` flags as an enum; duplicated activate-key checks and
+      `data:` URI parsing; test-only worker modes in release binaries.
+
+From the timeline and icon work:
+
+- [ ] Memory while scrolled far up is unbounded and every loaded message renders each
+      frame: a virtualised list, or paging towards newer messages.
+- [ ] A keyboard and screen-reader way to load older history; keyboard scrolling of
+      the timeline.
+- [ ] The channel description shows only at the beginning of local history.
+- [ ] A screenshot scene for the 1000-message limit.
+- [ ] Installs without Nix get no desktop entry (no icon on Wayland); no icon for MSVC
+      builds; no AppStream metainfo.
+
+---
+
 ## Now: client compatibility with stock Mumble servers
 
 ### 1. UDP voice transport
