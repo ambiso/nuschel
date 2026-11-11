@@ -937,6 +937,33 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       (and so a complete fallback echo reference). Rail: green microphone ring on the talk server,
       a headphone badge on listening servers, pulsing while someone talks; the footer
       says "Talking on X · listening to Y, Z". Awaiting the user's go.
+- [ ] **Rename Nuschel → nuschl** (user, 2026-11-11; "nuschl is mumbled nuschel"),
+      queued as a sync point: start no new agents, merge the running ones, rename on
+      a quiet tree, verify, push, then start the next wave. Checklist:
+      - text: `nuschel`, `Nuschel`, `NUSCHEL` (env vars) in text files only (no PNGs,
+        fonts or other binaries; never inside `vendor/`); German prose about
+        *nuscheln* stays;
+      - paths: `fd nuschel` renames (crates/apps dirs, desktop file, icons, nix files,
+        `nuschel-policy.json`, …);
+      - regenerate, never edit: `Cargo.lock`, `fuzz/Cargo.lock`, crate2nix output;
+      - re-record frozen test vectors deliberately (identity fingerprint context,
+        KT labels, MLS binding context, backup and file key derivation strings),
+        noting the change in each crate's docs;
+      - user data: migrate `$XDG_*/nuschel` (and the macOS/Windows folders) to
+        `nuschl` on first start, extending the XDG move; Windows AppContainer
+        profiles get new names (remove the old ones);
+      - Nix: `services.nuschel` / `programs.nuschel` keep working through
+        `mkRenamedOptionModule` aliases with a warning;
+      - wire: ALPN `nuschel/1` → `nuschl/1`, `nuschel.v1` → `nuschl.v1` (old and new
+        builds stop interoperating; acceptable in early development);
+      - repository: the user renames `ambiso/nuschel` on GitHub (redirects), then the
+        jj remote is updated; README, docs and the screenshot regenerate;
+      - domain: nuschl.eu proposed as the project domain (passkey relying party, app
+        links, share links, web client origin; changing it later breaks passkeys and
+        browser identities), awaiting the user;
+      - verify: workspace build, clippy, tests, fmt, deny, crate2nix check, every VM
+        check, screenshots, the accessibility test, and a migration test from an
+        existing nuschel profile.
 - [ ] **Passkey-backed identity backup** (user, 2026-11-11): skip writing down a
       recovery key by tying the identity to a passkey. WebAuthn's PRF extension
       (CTAP2 `hmac-secret`) yields a stable secret per passkey and salt; encrypt the
