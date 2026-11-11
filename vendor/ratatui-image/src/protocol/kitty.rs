@@ -70,6 +70,20 @@ impl Kitty {
         Ok(Self { proto_state, size })
     }
 
+    /// The image ID owned by this protocol. Callers may release this image on
+    /// cache eviction/shutdown without deleting other terminal applications' images.
+    pub fn image_id(&self) -> u32 {
+        self.proto_state.id.0
+    }
+
+    /// Bytes retained for transmission, for callers' bounded render caches.
+    pub fn encoded_len(&self) -> usize {
+        self.proto_state
+            .transmit_str
+            .as_ref()
+            .map_or(0, String::len)
+    }
+
     /// Only for SlicedImage
     pub(crate) fn render_with_skip(&self, area: Rect, buf: &mut Buffer, skip_line_count: usize) {
         // Transmit only once. This is why self is mut.
@@ -591,6 +605,24 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::{Rect, Size};
     use ratatui::style::Color;
+
+    #[test]
+    fn vendor_safety_owned_id_is_preserved_for_cleanup() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::new(1, 1));
+        let protocol = super::Kitty::new(image, Size::new(1, 1), 0xaabbccdd, false, false).unwrap();
+        assert_eq!(protocol.image_id(), 0xaabbccdd);
+        assert_eq!(protocol.clone().image_id(), 0xaabbccdd);
+        assert!(protocol.encoded_len() > 4);
+        let wire = protocol.proto_state.make_transmit().unwrap();
+        assert!(wire.contains(&format!("i={},", protocol.image_id())));
+        assert_eq!(protocol.encoded_len(), wire.len());
+        assert!(protocol.proto_state.make_transmit().is_none());
+        assert_eq!(
+            protocol.encoded_len(),
+            wire.len(),
+            "transmitted storage remains retained until eviction"
+        );
+    }
 
     /// The id state tuple as the protocol builds it: full id, low three bytes
     /// as the foreground colour, high byte as the third diacritic.

@@ -277,3 +277,194 @@ fn encode_indexed_to_sixel(
 fn write_number(out: &mut String, n: usize) {
     write!(out, "{n}").expect("formatting into a String cannot fail");
 }
+
+#[cfg(test)]
+mod vendor_safety {
+    use super::*;
+
+    // Independent test-only interpreter for generated SIXEL. It checks the wire
+    // grammar/pixel result instead of reproducing encoder palette/band logic.
+    fn decode(sequence: &str) -> (usize, usize, Vec<Option<[u8; 3]>>) {
+        assert!(sequence.starts_with("\x1bP9;1;0q\"1;1;"));
+        assert!(sequence.ends_with("\x1b\\"));
+        let bytes = sequence.as_bytes();
+        let mut cursor = sequence.find('"').unwrap() + 1;
+        fn number(bytes: &[u8], cursor: &mut usize) -> usize {
+            let mut value = 0usize;
+            let start = *cursor;
+            while let Some(digit @ b'0'..=b'9') = bytes.get(*cursor) {
+                value = value * 10 + usize::from(digit - b'0');
+                *cursor += 1;
+            }
+            assert!(*cursor > start);
+            value
+        }
+        fn separator(bytes: &[u8], cursor: &mut usize) {
+            assert_eq!(bytes[*cursor], b';');
+            *cursor += 1;
+        }
+        assert_eq!(number(bytes, &mut cursor), 1);
+        separator(bytes, &mut cursor);
+        assert_eq!(number(bytes, &mut cursor), 1);
+        separator(bytes, &mut cursor);
+        let width = number(bytes, &mut cursor);
+        separator(bytes, &mut cursor);
+        let height = number(bytes, &mut cursor);
+        let mut palette = vec![[0; 3]; 256];
+        let mut pixels = vec![None; width * height];
+        let (mut x, mut y, mut selected) = (0, 0, 0);
+        while cursor < bytes.len() - 2 {
+            let command = bytes[cursor];
+            cursor += 1;
+            match command {
+                b'#' => {
+                    selected = number(bytes, &mut cursor);
+                    assert!(selected < palette.len());
+                    if bytes.get(cursor) == Some(&b';') {
+                        separator(bytes, &mut cursor);
+                        assert_eq!(number(bytes, &mut cursor), 2);
+                        for component in &mut palette[selected] {
+                            separator(bytes, &mut cursor);
+                            let percent = number(bytes, &mut cursor);
+                            assert!(percent <= 100);
+                            *component = ((percent * 255 + 50) / 100) as u8;
+                        }
+                    }
+                }
+                b'$' => x = 0,
+                b'-' => {
+                    x = 0;
+                    y += 6;
+                }
+                b'!' | b'?'..=b'~' => {
+                    let (repeat, sixel) = if command == b'!' {
+                        let repeat = number(bytes, &mut cursor);
+                        let sixel = bytes[cursor];
+                        cursor += 1;
+                        (repeat, sixel)
+                    } else {
+                        (1, command)
+                    };
+                    assert!((b'?'..=b'~').contains(&sixel));
+                    assert!(x + repeat <= width);
+                    for column in x..x + repeat {
+                        for bit in 0..6 {
+                            if y + bit < height && (sixel - b'?') & (1 << bit) != 0 {
+                                pixels[(y + bit) * width + column] = Some(palette[selected]);
+                            }
+                        }
+                    }
+                    x += repeat;
+                }
+                _ => panic!("unexpected SIXEL opcode {command}"),
+            }
+        }
+        (width, height, pixels)
+    }
+
+    #[test]
+    fn rejects_invalid_sizes_and_rgba_before_processing() {
+        for (width, height) in [(0, 1), (1, 0), (usize::MAX, 2), (4097, 1), (4096, 4096)] {
+            assert!(encode(&[], width, height).is_err());
+        }
+        for raw in [&[][..], &[255, 0, 0][..], &[255; 8][..]] {
+            assert!(encode(raw, 1, 1).is_err());
+        }
+        assert_eq!(dimensions(1600, 1000), Ok(6_400_000));
+    }
+
+    #[test]
+    fn primary_colors_transparency_run_lengths_and_partial_bands_roundtrip() {
+        let (width, height) = (37, 13);
+        let mut raw = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = match (y / 3, x / 8) {
+                    (0, _) => [255, 0, 0, 255],
+                    (1, _) => [0, 255, 0, 255],
+                    (2, _) => [0, 0, 255, 255],
+                    (_, 0) => [13, 90, 200, 0],
+                    (_, 1) => [255, 255, 255, 127],
+                    _ => [0, 0, 0, 128],
+                };
+                raw.extend_from_slice(&pixel);
+            }
+        }
+        let wire = encode(&raw, width, height).unwrap();
+        assert!(wire.contains('!'), "fixture must exercise run lengths");
+        let (decoded_width, decoded_height, pixels) = decode(&wire);
+        assert_eq!((decoded_width, decoded_height), (width, height));
+        for (source, target) in raw.chunks_exact(4).zip(pixels) {
+            if source[3] < 128 {
+                assert_eq!(target, None);
+            } else {
+                assert_eq!(target, Some([source[0], source[1], source[2]]));
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_palette_preserves_many_antialias_gray_levels() {
+        let (width, height) = (32, 9);
+        let mut raw = Vec::new();
+        for _ in 0..height {
+            for x in 0..width {
+                let gray = (x * 255 / (width - 1)) as u8;
+                raw.extend_from_slice(&[gray, gray, gray, 255]);
+            }
+        }
+        let (_, _, pixels) = decode(&encode(&raw, width, height).unwrap());
+        let unique = pixels
+            .iter()
+            .map(|pixel| pixel.unwrap()[0])
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(unique.len(), 32, "not a fixed low-bit RGB cube");
+        for (source, target) in raw.chunks_exact(4).zip(pixels) {
+            let target = target.unwrap();
+            assert_eq!(target[0], target[1]);
+            assert_eq!(target[1], target[2]);
+            assert!(source[0].abs_diff(target[0]) <= 3);
+        }
+    }
+
+    #[test]
+    fn neuquant_branch_has_bounded_error_for_more_than_256_colors() {
+        let (width, height) = (64, 16);
+        let mut raw = Vec::new();
+        for y in 0..height {
+            for x in 0..width {
+                raw.extend_from_slice(&[(x * 4) as u8, (y * 16) as u8, ((x + y) * 3) as u8, 255]);
+            }
+        }
+        let unique = raw
+            .chunks_exact(4)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(unique.len() > 256);
+        let (_, _, pixels) = decode(&encode(&raw, width, height).unwrap());
+        let mut error = 0usize;
+        for (source, target) in raw.chunks_exact(4).zip(pixels) {
+            let target = target.expect("opaque pixels stay opaque");
+            error += source[..3]
+                .iter()
+                .zip(target)
+                .map(|(a, b)| usize::from(a.abs_diff(b)))
+                .sum::<usize>();
+        }
+        let average = error as f64 / (width * height * 3) as f64;
+        assert!(average < 28., "mean absolute channel error {average}");
+    }
+
+    #[test]
+    fn transparent_rgb_does_not_distort_the_visible_palette() {
+        let mut raw = Vec::new();
+        for index in 0..1024 {
+            raw.extend_from_slice(&[(index % 256) as u8, (index / 256) as u8, 200, 0]);
+        }
+        raw.extend_from_slice(&[255, 255, 255, 255]);
+        let (_, _, pixels) = decode(&encode(&raw, 1025, 1).unwrap());
+        assert!(pixels[..1024].iter().all(Option::is_none));
+        assert_eq!(pixels[1024], Some([255; 3]));
+        let (_, _, transparent) = decode(&encode(&[80, 20, 30, 0], 1, 1).unwrap());
+        assert_eq!(transparent, [None]);
+    }
+}

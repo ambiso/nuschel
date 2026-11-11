@@ -40,5 +40,7 @@ chafa-dyn/chafa-static and image-defaults disabled for Nuschl.
 Vendoring omits upstream Cargo.lock, registry bookkeeping and showcase.gif. The
 library source, public API, examples, benchmark, build script and original
 manifest are otherwise retained; Cargo.toml and Cargo.toml.orig reflect this
-small dependency substitution. Tests use generated fixtures; upstream tests
+small dependency substitution. Additive Kitty image_id/encoded_len accessors
+permit bounded caller caches to account for retained terminal payloads and
+delete only their owned image IDs on eviction. Tests use generated fixtures; upstream tests
 expecting unpublished assets are outside the focused vendor-safety filter.
