@@ -5,6 +5,10 @@ not a new platform test result. The hybrid updater is being implemented in a
 separate change; the baseline still uses minisign. Recheck the final integrated
 commit and record the actual CI run before publishing.
 
+The chosen first release is the normal `0.1.0` release, described as an early
+preview. It is not a separate prerelease update channel. No tag, release or CI
+dispatch was created by this audit.
+
 ## Smallest coherent scope
 
 An explicitly experimental desktop alpha can contain the Windows x86_64 portable
@@ -34,9 +38,9 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   material or secret availability was verified by this audit. The implementation
   owner will specify the final key format and secret name; `UPDATE_SIGNING_KEY`
   and `update-key.pub` describe the baseline, not the pending hybrid contract.
-- [ ] Choose the alpha version and make the tag match the workspace version
-  exactly. At baseline only `v0.1.0` matches. `v0.1.0-alpha.1` needs a version change
-  first; inspect hard-coded Nix package/app versions as well as Cargo/lockfiles.
+- [x] Choose `0.1.0` as the normal early-preview version. The eventual tag must be
+  `v0.1.0`, matching the workspace and package versions; this decision has not
+  created that tag.
 - [ ] Run the reusable build workflow at the intended commit and retain all three
   independent platform artifacts and logs. No successful GitHub build is claimed
   by this source review. A failed cross job must not hide another platform's
@@ -57,11 +61,48 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   early-development status; compatible TLS/Mumble voice; MLS experiments and
   historical-key limits; no completed RTC video/screen-sharing claim; Linux via
   Nix; Windows VM-only and Mac untested status; no OS code-signing claim.
-- [ ] Decide how alpha clients find subsequent prereleases. The baseline default
+- Deferred for a future prerelease channel: decide how alpha clients find subsequent
+  prereleases. The baseline default
   URL uses GitHub's `releases/latest/download`, whereas the release workflow marks
   versions containing `-` as prereleases. A first prerelease is not a stable
   latest release. Do not promise automatic alpha-to-alpha updates without a
   deliberate authenticated channel/discovery policy.
+
+## Implemented build separation
+
+`.github/workflows/build.yml` is build-only, manually dispatchable and reusable
+from the release workflow. Three independent Ubuntu jobs build Linux native
+packages/web assets, Windows x86_64 and macOS universal. They need no signing
+secret and only have read permission to repository contents. The Linux job also
+runs formatting, dependency/advisory and generated-graph checks. Native desktop,
+audio and sandbox runtime tests are not implied by these package jobs.
+
+The reusable outputs are `linux-artifact`, `windows-artifact`, and
+`macos-artifact`, with artifact names containing the exact source commit. Windows
+and Mac artifacts contain `install.tar` rooted at `windows/` and `Nuschl.app/`,
+respectively, plus `build-info.json` and `SHA256SUMS`. Tar retains executable modes
+and complete app signatures through Actions artifact storage. Linux's artifact
+contains Nix installation references/build evidence and a static web archive;
+its native program files are not advertised as portable.
+
+Repeated uploads use `overwrite: true`. Publication must verify repository,
+commit, run ID, expected platform and hashes, and reject future attempts. It may
+reuse a successful earlier attempt from the same run/commit when only failed
+jobs are rerun. Build workflow success and immutable same-run artifact identity
+remain required; an unrelated run's artifact is not a substitute.
+
+Each job uses two Nix cores/two jobs, an explicit disk build directory, bounded
+timeout/retention, and separate Nix cache keys. The 3 GiB cache GC setting is best
+effort; it is not a hard disk-size guarantee. Source syntax was checked with
+actionlint; first-run cache effectiveness, disk use, elapsed time and actual
+platform build success remain unproven until an authenticated GitHub dispatch.
+
+Downloadable CI snapshots also distribute their contents: the shared notice
+bundle/check must gate those artifacts as well as public release assets. The
+source inventory in `nix/release-licenses.nix` is inspectable when incomplete;
+its `check`/`bundle` fail on unresolved source notices or required external
+runtime/embedded-asset records. Generic SPDX text is not silently substituted for
+missing upstream attribution.
 
 ## Baseline workflow findings
 
