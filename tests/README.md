@@ -17,6 +17,13 @@ expansion defaults, full-name tooltips, wheel scrolling and a draggable scrollba
 It then drives the real Add Server dialog, certificate confirmation,
 independent history browsing/double-click voice joining, chat, playback/capture, mute privacy,
 audio service socket replacement, offline history and reconnect persistence.
+The desktop suites (`desktop_mumble.py`, `desktop_recovery.py`) find controls as a
+screen reader does: they start a private session bus with an accessibility bus and
+registry (`accessibility.py`'s `start_registry`), look controls up by role and accessible name,
+activate them through the Action interface or point at the position the tree
+gives (double-clicks, hovers, the scrollbar, fields to type into). This works in
+either theme and font. OCR reads only rendered text with no accessible counterpart:
+the long channel name's tooltip, from a crop of the screenshot.
 The fixture seeds channels in a stopped stock server database; the real server handles
 all protocol traffic.
 
