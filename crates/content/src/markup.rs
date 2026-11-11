@@ -35,7 +35,7 @@ pub const MAX_URL_BYTES: usize = 2048;
 /// Styled parts and blocks per message; past them text stays plain and in
 /// the block it is in.
 const MAX_SPANS: usize = 2048;
-const MAX_BLOCKS: usize = 512;
+pub(crate) const MAX_BLOCKS: usize = 512;
 /// Styles open at once, list nesting shown, and the longest style attribute read.
 const MAX_OPEN: usize = 16;
 const MAX_LIST_DEPTH: usize = 4;

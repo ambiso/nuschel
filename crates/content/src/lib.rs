@@ -370,7 +370,10 @@ impl ContentRenderer {
                     }
                 }
                 Event::End(TagEnd::CodeBlock) => {
-                    if let Some((start, language, body)) = code.take() {
+                    // Past the block limit, a fence stays in the text around it.
+                    if let Some((start, language, body)) = code.take()
+                        && blocks.len() < markup::MAX_BLOCKS
+                    {
                         if start > consumed {
                             blocks.push(ContentBlock::text(&source[consumed..start]));
                         }
@@ -780,6 +783,18 @@ mod tests {
             runs.windows(2)
                 .any(|pair| pair[0].foreground != pair[1].foreground)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn code_blocks_count_towards_the_block_limit() -> Result<(), Error> {
+        // 256 KiB of fences were 32,766 code blocks, each laid out by the
+        // desktop; blocks are capped at 512 per message.
+        let source = "```\n".repeat(MAX_CONTENT_BYTES / 4);
+        let document = ContentRenderer::new()?.render(&source)?;
+        let code = |block: &&ContentBlock| matches!(block, ContentBlock::Code { .. });
+        assert!(document.blocks.iter().filter(code).count() > 200);
+        assert!(document.blocks.len() <= 513, "{}", document.blocks.len());
         Ok(())
     }
 
