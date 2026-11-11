@@ -26,6 +26,11 @@ appeared. Checks:
    the microphone at -37 dB): it records what the speakers play, so both its
    own playback and another application's sound are removed from the
    microphone, every run.
+7. The restarts of 2 and 3 with every worker in the sandbox a call gives it
+   (`nuschel media-sandbox`, the desktop's own bwrap command), replaced as
+   the desktop replaces it. PipeWire's socket is bound as a file, so after a
+   restart only a replacement worker reaches the new one; PulseAudio's
+   directory is bound, so a pipewire-pulse restart shows up in place.
 """
 import argparse
 import json
@@ -217,12 +222,14 @@ class Worker:
     logs = Path(tempfile.gettempdir())
 
     def __init__(self, binary, pipewire, host=None, backend=None, muted=True, settings=None, preview=False):
+        """`binary`: the media worker, or a whole command that runs it (the sandbox)."""
         env = dict(pipewire.env) | {"PULSE_SERVER": f"unix:{pipewire.runtime}/pulse/native", "PIPEWIRE_DEBUG": "2"}
         if backend:
             env["NUSCHEL_AUDIO_BACKEND"] = backend
         Worker.count += 1
         self.log = Worker.logs / f"worker-{Worker.count}.log"
-        self.process = subprocess.Popen([str(binary), "--live"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        command = binary if isinstance(binary, list) else [str(binary), "--live"]
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=self.log.open("w"), env=env)
         self.events = []
         threading.Thread(target=self._read, daemon=True).start()
@@ -339,6 +346,72 @@ def check_restarts(binary, pipewire, packets, output):
     assert level > 0.02, f"playback through pipewire-pulse did not resume (RMS {level:.4f})"
     worker.stop()
     print("pipewire-pulse restart: native worker undisturbed; PulseAudio-API worker recovered.", flush=True)
+
+
+def check_sandboxed_restarts(sandboxed, pipewire, packets, output):
+    """check_restarts through the real sandbox, supervised as the desktop does:
+    a worker reporting Status{ready: false} is stopped and, after 2 s, replaced
+    by a fresh sandbox pinned to the audio server that last worked."""
+    worker = Worker(sandboxed, pipewire)
+    worker.ready()
+    devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
+    assert devices["output"].startswith("pipewire:"), \
+        f"native PipeWire was not used: {devices}\nworker log:\n{worker.log.read_text()[-3000:]}"
+    level = play_and_measure(worker, pipewire, packets, output / "sandbox-before.wav")
+    assert level > 0.02, f"sandboxed playback did not reach the speakers (RMS {level:.4f})"
+
+    mark = len(worker.events)
+    pipewire.down()
+    worker.wait(lambda e: e["kind"] == "status" and not e["ready"], "the PipeWire failure was not reported",
+                since=mark)
+    worker.stop()
+    failures = []
+
+    def replacement():
+        worker = Worker(sandboxed, pipewire, host="pipewire")
+        status = worker.wait(lambda e: e["kind"] == "status", "the replacement reported nothing")
+        if not status["ready"]:
+            failures.append(status["message"])
+            worker.stop()
+            time.sleep(2)
+        return worker if status["ready"] else None
+    for _ in range(2):
+        assert replacement() is None, "a replacement found audio while PipeWire was down"
+    pipewire.up()
+    deadline = time.monotonic() + 30
+    while (worker := replacement()) is None:
+        assert time.monotonic() < deadline, f"no sandboxed replacement reached the new PipeWire: {failures[-3:]}"
+    assert not any("Alsa" in m or "PulseAudio" in m for m in failures), \
+        f"a pinned worker tried another audio server while PipeWire was down: {failures}"
+    level = play_and_measure(worker, pipewire, packets, output / "sandbox-after.wav")
+    assert level > 0.02, f"sandboxed playback did not resume after the PipeWire restart (RMS {level:.4f})"
+    print(f"Sandbox, PipeWire restart: {len(failures)} replacements waited for PipeWire only, then a fresh "
+          f"sandbox played again (RMS {level:.3f}).", flush=True)
+
+    mark = len(worker.events)
+    pipewire.stop("pipewire-pulse")
+    time.sleep(1)
+    pipewire.start("pipewire-pulse")
+    time.sleep(2)
+    disturbed = [e for e in worker.events[mark:] if e["kind"] == "status" and not e["ready"]]
+    assert not disturbed, f"a pipewire-pulse restart disturbed the sandboxed PipeWire worker: {disturbed}"
+    worker.stop()
+
+    worker = Worker(sandboxed, pipewire, backend="pulse")
+    worker.ready()
+    mark = len(worker.events)
+    pipewire.stop("pipewire-pulse")
+    worker.wait(lambda e: e["kind"] == "status" and not e["ready"], "the pipewire-pulse failure was not reported",
+                since=mark)
+    # Not replaced: the bound directory shows the restarted server's socket.
+    mark = len(worker.events)
+    pipewire.start("pipewire-pulse")
+    worker.ready(since=mark, timeout=30)
+    level = play_and_measure(worker, pipewire, packets, output / "sandbox-pulse-after.wav")
+    assert level > 0.02, f"sandboxed playback through pipewire-pulse did not resume (RMS {level:.4f})"
+    worker.stop()
+    print("Sandbox, pipewire-pulse restart: the native worker was undisturbed; a PulseAudio-API worker "
+          f"reconnected in place (RMS {level:.3f}).", flush=True)
 
 
 def defaults(pipewire):
@@ -489,6 +562,7 @@ def main():
     Worker.logs = args.output
     packets = ReferenceOpus(args.opus_library).encode_tone(100)
     binary = args.binaries / "nuschel-media-worker"
+    sandboxed = [str(args.binaries / "nuschel"), "media-sandbox"]
     with tempfile.TemporaryDirectory(prefix="nuschel-pw-", dir=os.environ.get("NUSCHEL_SHORT_TMP")) as temporary:
         only = os.environ.get("NUSCHEL_PIPEWIRE_ONLY")
         if only in (None, "restarts"):
@@ -496,6 +570,13 @@ def main():
             try:
                 pipewire.up()
                 check_restarts(binary, pipewire, packets, args.output)
+            finally:
+                pipewire.close()
+        if only in (None, "sandbox"):
+            pipewire = PipeWire(args.pipewire, args.wireplumber, args.dbus_daemon, Path(temporary) / "sandbox")
+            try:
+                pipewire.up()
+                check_sandboxed_restarts(sandboxed, pipewire, packets, args.output)
             finally:
                 pipewire.close()
         if only in (None, "echo"):

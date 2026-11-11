@@ -60,6 +60,11 @@ enum Action {
         #[arg(trailing_var_arg = true)]
         arguments: Vec<std::ffi::OsString>,
     },
+    /// Run the media worker in the sandbox a call gives it, speaking its
+    /// protocol on this process's standard input and output (audio tests).
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    MediaSandbox,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -88,6 +93,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             Err("sandbox probe failed".into())
         };
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(Action::MediaSandbox) = arguments.command {
+        let worker = nuschel_session::workers::sibling("nuschel-media-worker")?;
+        let mut command = nuschel_ipc::host::media_sandbox_command(&worker)?;
+        let status = runtime.block_on(async { command.status().await })?;
+        std::process::exit(status.code().unwrap_or(1));
     }
 
     if let Some(Action::Render { text }) = arguments.command {
