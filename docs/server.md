@@ -134,7 +134,9 @@ Deliberate differences:
 
 Passwords are argon2id (19 MiB, two passes by default) on the blocking pool behind
 a semaphore of two with at most 32 queued; the server password and tokens are
-compared as digests in constant time. The TLS verifier accepts any client
+compared as digests in constant time. Password guesses are limited per account:
+after ten failures (one more allowed per second) logins to that account are
+answered with `AuthenticatorFail` ("try again later"). The TLS verifier accepts any client
 certificate but rustls still checks the handshake signature, so presenting
 someone else's certificate fails (tested). TLS session resumption is off. Debug
 output of protocol messages redacts passwords, tokens, keys, comments and

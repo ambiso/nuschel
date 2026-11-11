@@ -479,6 +479,34 @@ async fn rejections_use_murmurs_reasons() {
         ),
         RejectType::UsernameInUse
     );
+
+    // Password guesses against an account are limited: after ten failures even
+    // the right password is answered with "try again later" for a while (the
+    // SuperUser attempt with the server password above was the first).
+    for _ in 0..9 {
+        let mut guess = Options::new("SuperUser", &alice);
+        guess.password = Some("wrong");
+        assert_eq!(
+            reject_type(
+                &Client::connect(fixture.address(), guess)
+                    .await
+                    .err()
+                    .unwrap()
+            ),
+            RejectType::WrongUserPw
+        );
+    }
+    let mut right = Options::new("SuperUser", &alice);
+    right.password = Some(SUPERUSER_PASSWORD);
+    assert_eq!(
+        reject_type(
+            &Client::connect(fixture.address(), right)
+                .await
+                .err()
+                .unwrap()
+        ),
+        RejectType::AuthenticatorFail
+    );
     fixture.running.shutdown().await;
 
     let fixture = Fixture::start("certificate_required = true\n").await;

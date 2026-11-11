@@ -24,8 +24,23 @@ impl LeakyBucket {
         }
     }
 
+    /// Whether the bucket is full right now, without adding to it.
+    pub fn exhausted(&mut self, now: Instant) -> bool {
+        self.drain(now);
+        self.tokens >= u64::from(self.burst)
+    }
+
     /// Whether a message arriving `now` must be dropped.
     pub fn limited(&mut self, now: Instant) -> bool {
+        self.drain(now);
+        let limited = self.tokens + 1 > u64::from(self.burst);
+        if !limited {
+            self.tokens += 1;
+        }
+        limited
+    }
+
+    fn drain(&mut self, now: Instant) {
         let elapsed = now.saturating_duration_since(self.since).as_millis();
         let drained = elapsed.saturating_mul(u128::from(self.per_second)) / 1000;
         // Restart the clock only once a whole token has drained, or frequent
@@ -36,11 +51,6 @@ impl LeakyBucket {
         self.tokens = self
             .tokens
             .saturating_sub(u64::try_from(drained).unwrap_or(u64::MAX));
-        let limited = self.tokens + 1 > u64::from(self.burst);
-        if !limited {
-            self.tokens += 1;
-        }
-        limited
     }
 }
 

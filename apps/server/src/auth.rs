@@ -62,16 +62,26 @@ pub async fn authenticate(
         .registry
         .by_name(&name)
         .map(|user| (user.id, user.password_hash.clone()));
+    let busy = || {
+        reject(
+            RejectType::AuthenticatorFail,
+            "Your account information can not be verified currently. Please try again later",
+        )
+    };
     let password_ok = match &by_name {
-        Some((_, Some(hash))) => match password::verify(password.clone(), hash.clone()).await {
-            Some(ok) => Some(ok),
-            None => {
-                return Err(reject(
-                    RejectType::AuthenticatorFail,
-                    "Your account information can not be verified currently. Please try again later",
-                ));
+        Some((id, Some(hash))) => {
+            // Guessing a registered user's password is limited per account.
+            if server.login_paused(*id, false) {
+                return Err(busy());
             }
-        },
+            let ok = password::verify(password.clone(), hash.clone())
+                .await
+                .ok_or_else(busy)?;
+            if !ok {
+                server.login_paused(*id, true);
+            }
+            Some(ok)
+        }
         _ => None,
     };
     let identity = {

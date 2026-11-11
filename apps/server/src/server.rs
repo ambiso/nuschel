@@ -76,6 +76,8 @@ pub struct Server {
     /// The server's `Version` message, sent first on every connection.
     pub version_frame: Bytes,
     pub shutdown: Notify,
+    /// Failed password logins per registered account (ten, then one a second).
+    pub login_failures: Mutex<HashMap<u32, LeakyBucket>>,
 }
 
 impl Server {
@@ -178,6 +180,26 @@ impl Server {
                 attempts.pop_back();
             }
         }
+    }
+
+    /// Whether password guesses against `account` are paused; `failed` records
+    /// one more failure.
+    pub fn login_paused(&self, account: u32, failed: bool) -> bool {
+        let now = Instant::now();
+        let mut failures = self
+            .login_failures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if failures.len() > 100_000 {
+            failures.retain(|_, bucket| bucket.exhausted(now));
+        }
+        let bucket = failures
+            .entry(account)
+            .or_insert_with(|| LeakyBucket::new(1, 10, now));
+        if failed {
+            bucket.limited(now);
+        }
+        bucket.exhausted(now)
     }
 
     pub fn banned_certificate(&self, hash: &str) -> bool {
@@ -512,6 +534,7 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         pending: Arc::new(Semaphore::new(config.max_pending_connections as usize)),
         version_frame: server_version(&settings),
         shutdown: Notify::new(),
+        login_failures: Mutex::new(HashMap::new()),
     });
     let mut tasks = Vec::new();
     let mut addresses = Vec::new();
