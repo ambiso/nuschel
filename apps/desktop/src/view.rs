@@ -27,6 +27,7 @@ impl Render for Desktop {
         let started = std::time::Instant::now();
         crate::images::collect(window);
         self.ease_voice_toggles(window, cx);
+        self.animate_voice(window, cx);
         // Which dialog the last frame showed (see dialogs::modal).
         self.modal_seen.set(self.modal_shown.take());
         self.keep_dialog_focus(window, cx);
@@ -142,6 +143,10 @@ impl Render for Desktop {
             .when_some(crate::menus::prompt(self, cx), |view, prompt| {
                 view.child(prompt)
             })
+            .when_some(
+                crate::voice::second_server_dialog(self, cx),
+                |view, dialog| view.child(dialog),
+            )
             .when_some(crate::emoji::overlay(self, cx), |view, picker| {
                 view.child(picker)
             })
@@ -201,12 +206,21 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         .id(("server", index))
                         .role(Role::Button)
                         .tab_index(0)
-                        .aria_label(format!(
-                            "{}; {}; {}",
-                            server.name,
-                            server.status_label(),
-                            security_label(server.security)
-                        ))
+                        .aria_label({
+                            let role = this.client.voice_role(index);
+                            let voice =
+                                crate::voice::rail_label(role, crate::voice::someone_talks(server));
+                            let mut label = format!(
+                                "{}; {}; {}",
+                                server.name,
+                                server.status_label(),
+                                security_label(server.security)
+                            );
+                            if !voice.is_empty() {
+                                label = format!("{label}; {voice}");
+                            }
+                            label
+                        })
                         .aria_selected(active)
                         .relative()
                         .size(px(48.))
@@ -270,6 +284,14 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 .items_center()
                                 .justify_center()
                                 .child(security_icon(server.security, index, 12.)),
+                        )
+                        .when_some(
+                            crate::voice::rail_ring(this, server, if active { 16. } else { 24. }),
+                            |tile, ring| tile.child(ring),
+                        )
+                        .when_some(
+                            crate::voice::rail_badge(this, index, server),
+                            |tile, badge| tile.child(badge),
                         )
                         .when(mentions > 0, |tile| {
                             tile.child(
@@ -630,9 +652,10 @@ fn sidebar(
                     ),
                 ),
         )
-        .when_some(voice_card(server, server_index, cx), |sidebar, card| {
-            sidebar.child(card)
-        })
+        .when_some(
+            crate::voice::card(this, server_index, cx),
+            |sidebar, card| sidebar.child(card),
+        )
         .child(user_panel(this, server, cx))
         .into_any_element()
 }
@@ -1061,102 +1084,6 @@ pub fn avatar(
         .into_any_element()
 }
 
-fn voice_card(
-    server: &ServerView,
-    server_index: usize,
-    cx: &mut Context<Desktop>,
-) -> Option<AnyElement> {
-    let id = server
-        .voice_channel()
-        .filter(|_| server.status == Status::Connected)?;
-    let name = server
-        .channels
-        .iter()
-        .find(|channel| channel.target == TextTarget::Channel(id))
-        .map(|channel| channel.name.clone())
-        .unwrap_or_else(|| "Unknown channel".into());
-    Some(
-        div()
-            .px_3()
-            .py_2()
-            .border_t_1()
-            .border_color(color(BORDER))
-            .bg(color(SIDEBAR_FOOTER))
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_color(color(SUCCESS))
-                    .child(icon("signal", 18., color(SUCCESS))),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(color(SUCCESS))
-                            .child(text!("Voice connected").with_id("voice-heading")),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .truncate()
-                            .text_color(color(TEXT_MUTED))
-                            .child(
-                                text!(format!("{name} / {}", server.name)).with_id("voice-channel"),
-                            ),
-                    )
-                    .when_some(
-                        server.audio.health.issues().first().map(|issue| issue.0),
-                        |column, issue| {
-                            // Details and advice are in Settings.
-                            column.child(
-                                div()
-                                    .id("audio-issue")
-                                    .role(Role::Status)
-                                    .cursor_pointer()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .text_xs()
-                                    .text_color(color(WARNING))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.open_settings();
-                                        cx.notify();
-                                    }))
-                                    .child(icon("alert", 12., color(WARNING)))
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .truncate()
-                                            .child(text!(issue).with_id("audio-issue-label")),
-                                    ),
-                            )
-                        },
-                    ),
-            )
-            .child(icon_button(
-                "disconnect",
-                "hang-up",
-                "Disconnect",
-                TEXT_MUTED,
-                None,
-                move |this, _, cx| {
-                    this.disconnect(server_index);
-                    cx.notify();
-                },
-                cx,
-            ))
-            .into_any_element(),
-    )
-}
-
 fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) -> AnyElement {
     let transmit = this.settings.audio.transmit;
     let own = server
@@ -1171,10 +1098,16 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
     let connected = server.status == Status::Connected;
     // A short state fits beside the controls; the full audio message is the tooltip.
     let detail = server.audio_status.clone();
+    let listening = this.client.server_index(&server.id).is_some_and(|index| {
+        this.client.voice_role(index) == nuschel_client::voice::Role::Listening
+    });
     let status = if !connected {
         server.status_label().to_string()
     } else if server.deafened {
         "Deafened".into()
+    } else if listening {
+        // Your voice goes to another server; this one only plays.
+        "Listening".into()
     } else if server.muted {
         "Muted".into()
     } else if this.push_muted {
@@ -1418,6 +1351,7 @@ impl Desktop {
             | u8::from(self.panel.is_some()) << 2
             | u8::from(self.prompt.is_some()) << 3
             | u8::from(self.finder.is_open()) << 4
+            | u8::from(self.second_server.is_some()) << 5
     }
 
     pub fn dialog_open(&self) -> bool {
@@ -1426,6 +1360,7 @@ impl Desktop {
             || self.panel.is_some()
             || self.prompt.is_some()
             || self.finder.is_open()
+            || self.second_server.is_some()
     }
 
     /// While a dialog is open, keyboard focus stays inside it, so nothing

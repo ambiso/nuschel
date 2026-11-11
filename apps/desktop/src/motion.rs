@@ -11,17 +11,30 @@ pub struct Ease {
     to: f32,
     started: Instant,
     duration: Duration,
+    /// How long all the way takes.
+    full: Duration,
 }
 
 impl Ease {
     pub fn new(on: bool) -> Self {
+        Self::taking(on, FULL)
+    }
+
+    /// One that takes `full` all the way (a slow pulse).
+    pub fn taking(on: bool, full: Duration) -> Self {
         let value = f32::from(u8::from(on));
         Self {
             from: value,
             to: value,
             started: Instant::now(),
             duration: Duration::ZERO,
+            full,
         }
+    }
+
+    /// Where it is heading.
+    pub fn target(&self) -> bool {
+        self.to > 0.5
     }
 
     fn progress(&self) -> f32 {
@@ -50,8 +63,9 @@ impl Ease {
             duration: if reduce_motion {
                 Duration::ZERO
             } else {
-                FULL.mul_f32((to - from).abs())
+                self.full.mul_f32((to - from).abs())
             },
+            full: self.full,
         };
     }
 
@@ -77,6 +91,16 @@ mod tests {
         // The way back takes only as long as the distance covered.
         assert!(ease.duration < super::FULL);
         assert!(ease.moving());
+    }
+
+    #[test]
+    fn a_slow_ease_takes_its_own_time() {
+        let mut ease = Ease::taking(false, std::time::Duration::from_secs(10));
+        ease.set(true, false);
+        assert!(ease.target());
+        assert_eq!(ease.duration, std::time::Duration::from_secs(10));
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        assert!(ease.moving() && ease.value() < 0.01);
     }
 
     #[test]

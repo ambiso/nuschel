@@ -263,6 +263,10 @@ pub struct Desktop {
     /// Focus stays inside an open dialog (see `keep_dialog_focus`).
     pub modal_focus: FocusHandle,
     pub deafen_ease: Option<crate::motion::Ease>,
+    /// The rail's talk rings and listening badges (voice.rs).
+    pub voice_motion: crate::voice::Motion,
+    /// "Speak on two servers?" is being asked.
+    pub second_server: Option<nuschel_client::SecondServer>,
     pub menu: Option<crate::menus::Menu>,
     /// Message text: its selection, the message a menu is for, copy feedback.
     pub text: crate::selection::TextState,
@@ -529,6 +533,8 @@ impl Desktop {
             mute_ease: None,
             modal_focus: cx.focus_handle(),
             deafen_ease: None,
+            voice_motion: Default::default(),
+            second_server: None,
             menu: None,
             text: crate::selection::TextState::new(cx),
             prompt: None,
@@ -1444,10 +1450,12 @@ impl Desktop {
                 || self.settings_open
                 || self.menu.is_some()
                 || self.prompt.is_some()
+                || self.second_server.is_some()
                 || self.panel.is_some())
         {
             if self.menu.take().is_none()
                 && self.prompt.take().is_none()
+                && self.second_server.take().is_none()
                 && self.panel.take().is_none()
             {
                 self.form = None;
@@ -1516,26 +1524,18 @@ impl Desktop {
         }
         !actions.is_empty()
     }
-    /// What a shortcut does matches the footer's buttons and push to talk.
+    /// What a shortcut does matches the footer's buttons and push to talk,
+    /// on the talk servers (voice.rs).
     fn apply_shortcut(&mut self, effect: crate::shortcuts::Effect) {
         use crate::shortcuts::Effect;
-        let connected = self
-            .selected_indices()
-            .is_some_and(|(server, _)| self.client.servers[server].status == Status::Connected);
         match effect {
             Effect::PushToTalk(active) => self.set_push_to_talk(active),
             Effect::PushToMute(active) => {
                 self.push_muted = active;
                 self.driver.set_push_to_mute(active);
             }
-            Effect::ToggleMute if connected => self.set_mute(false),
-            Effect::ToggleDeafen if connected => self.set_mute(true),
-            Effect::ToggleMute | Effect::ToggleDeafen => {}
-        }
-    }
-    pub fn set_mute(&mut self, deafen: bool) {
-        if let Some((index, _)) = self.selected_indices() {
-            self.client.set_mute(index, deafen);
+            Effect::ToggleMute => self.toggle_voice(false),
+            Effect::ToggleDeafen => self.toggle_voice(true),
         }
     }
     pub fn sending(&self) -> bool {

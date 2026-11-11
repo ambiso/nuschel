@@ -201,7 +201,7 @@ pub fn toggle_button(
 }
 
 /// The colour `t` of the way from `a` to `b`.
-fn mix(a: Token, b: Token, t: f32) -> Rgba {
+pub fn mix(a: Token, b: Token, t: f32) -> Rgba {
     let (a, b) = (color(a), color(b));
     let t = t.clamp(0., 1.);
     Rgba {

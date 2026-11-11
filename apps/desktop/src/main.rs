@@ -42,6 +42,7 @@ mod update;
 mod version_notice;
 mod view;
 mod viewer;
+mod voice;
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 

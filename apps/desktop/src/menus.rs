@@ -3,7 +3,7 @@
 //! Entries the server would refuse are hidden using its reported permissions.
 use crate::{
     assets::icon,
-    dialogs::{Tone, modal, styled_button},
+    dialogs::{Tone, modal, named_button, styled_button},
     names::display_name,
     state::{Desktop, Panel, Status},
     theme::*,
@@ -85,12 +85,38 @@ enum Entry {
         action: Action,
     },
     Volume {
-        hash: String,
+        of: Volume,
         volume: f32,
     },
     /// An explanation in place of entries that do not apply.
     Note(&'static str),
     Separator,
+}
+
+/// Whose volume a menu sets: a person's (by certificate hash) or a
+/// server's playback (by id).
+#[derive(Clone)]
+enum Volume {
+    User(String),
+    Server(String),
+}
+
+impl Volume {
+    fn get(&self, settings: &nuschel_session::config::ClientSettings) -> f32 {
+        match self {
+            Volume::User(hash) => settings.volume_for(Some(hash)),
+            Volume::Server(id) => settings.server_volume(id),
+        }
+    }
+
+    /// Change it by `step`, within 0 to 4.
+    fn step(&self, settings: &mut nuschel_session::config::ClientSettings, step: f32) {
+        let value = (self.get(settings) + step).clamp(0., 4.);
+        match self {
+            Volume::User(hash) => settings.user_volumes.insert(hash.clone(), value),
+            Volume::Server(id) => settings.server_volumes.insert(id.clone(), value),
+        };
+    }
 }
 
 fn item(
@@ -500,7 +526,7 @@ impl Desktop {
                     ));
                     if let Some(hash) = user.certificate_hash.clone() {
                         entries.push(Entry::Volume {
-                            hash: hash.clone(),
+                            of: Volume::User(hash.clone()),
                             volume: self.settings.volume_for(Some(&hash)),
                         });
                         let muted = self.settings.locally_muted(Some(&hash));
@@ -873,6 +899,24 @@ impl Desktop {
                 );
             }
             MenuTarget::Server => {
+                if connected {
+                    // Your voice: talk here, and how loud this server plays.
+                    let role = self.client.voice_role(index);
+                    if matches!(
+                        role,
+                        nuschel_client::voice::Role::Listening
+                            | nuschel_client::voice::Role::Deafened
+                    ) {
+                        entries.push(item("Use voice here", "mic", move |this, _, _| {
+                            this.use_voice_here(index)
+                        }));
+                    }
+                    entries.push(Entry::Volume {
+                        of: Volume::Server(server.id.clone()),
+                        volume: self.settings.server_volume(&server.id),
+                    });
+                    entries.push(Entry::Separator);
+                }
                 entries.push(item("Connection info", "signal", move |this, _, _| {
                     this.panel = Some(Panel::Connection { server: index })
                 }));
@@ -1307,12 +1351,16 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     )
                     .into_any_element()
             }
-            Entry::Volume { hash, volume } => {
-                let (down, up) = (hash.clone(), hash);
+            Entry::Volume { of, volume } => {
+                let what = match &of {
+                    Volume::User(_) => "Volume",
+                    Volume::Server(_) => "Server volume",
+                };
+                let (down, up) = (of.clone(), of);
                 div()
                     .id(("menu-volume", index))
                     .role(Role::Slider)
-                    .aria_label(format!("Volume {:.0}%", volume * 100.))
+                    .aria_label(format!("{what} {:.0}%", volume * 100.))
                     .px_2()
                     .py_1()
                     .flex()
@@ -1323,34 +1371,28 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     .child(icon("volume", 15., color(TEXT_MUTED)))
                     .child(
                         div().flex_1().child(
-                            text!(format!("Volume {:.0}%", volume * 100.))
+                            text!(format!("{what} {:.0}%", volume * 100.))
                                 .with_id(("volume-label", index)),
                         ),
                     )
-                    .child(styled_button(
+                    .child(named_button(
                         ("volume-down", index),
                         "−",
+                        format!("{what} quieter"),
                         Tone::Secondary,
                         move |this, _, cx| {
-                            let hash = down.clone();
-                            this.update_settings(|settings| {
-                                let value = settings.volume_for(Some(&hash)) - 0.1;
-                                settings.user_volumes.insert(hash, value.max(0.));
-                            });
+                            this.update_settings(|settings| down.step(settings, -0.1));
                             cx.notify();
                         },
                         cx,
                     ))
-                    .child(styled_button(
+                    .child(named_button(
                         ("volume-up", index),
                         "+",
+                        format!("{what} louder"),
                         Tone::Secondary,
                         move |this, _, cx| {
-                            let hash = up.clone();
-                            this.update_settings(|settings| {
-                                let value = settings.volume_for(Some(&hash)) + 0.1;
-                                settings.user_volumes.insert(hash, value.min(4.));
-                            });
+                            this.update_settings(|settings| up.step(settings, 0.1));
                             cx.notify();
                         },
                         cx,
