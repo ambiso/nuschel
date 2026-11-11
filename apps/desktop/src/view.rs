@@ -1875,6 +1875,10 @@ fn conversation(
         .when_some(crate::panels::reconnect_banner(server), |view, text| {
             view.child(banner("reconnect-banner", WARNING, "signal", text, None))
         })
+        .when_some(
+            crate::version_notice::banner(this, index, cx),
+            |view, banner| view.child(banner),
+        )
         .when_some(server.whisper.clone(), |view, text| {
             view.child(banner(
                 "whisper-banner",
@@ -2622,7 +2626,7 @@ fn update_bar(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     )
 }
 
-fn banner(
+pub(crate) fn banner(
     id: &'static str,
     tone: Token,
     icon_name: &'static str,

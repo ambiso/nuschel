@@ -449,6 +449,8 @@ pub struct ServerView {
     unsorted: bool,
     /// Identities and key transparency on this server.
     pub identity: crate::identity::IdentityState,
+    /// The server's minimum-version policy for this client.
+    pub version: crate::version_notice::VersionNotice,
 }
 impl ServerView {
     #[cfg(test)]
@@ -531,6 +533,7 @@ impl ServerView {
             expansion: BTreeMap::new(),
             unsorted: false,
             identity: Default::default(),
+            version: Default::default(),
         }
     }
     pub fn status_label(&self) -> String {
@@ -3577,6 +3580,7 @@ impl Desktop {
             // The backend keeps the sticky record. With history, the timeline
             // pages from the server (seqs), not from local observations.
             SessionEvent::Negotiated(negotiated) => {
+                server.version.negotiated(&negotiated);
                 let history = negotiated
                     .capabilities
                     .iter()
