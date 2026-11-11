@@ -89,13 +89,15 @@ Later (reported):
       reversing smoothly under rapid clicks.
 - [x] Home Manager module (`homeModules.default`): install, autostart, seed-once
       initial settings and servers; checked by evaluation and a NixOS VM test.
-- [ ] Declarative settings for Home Manager: a read-only `managed.json` merged at
-      start (managed keys win and show as "set by your system configuration";
-      managed bookmarks keep runtime state such as certificate pins), then
-      `programs.nuschel.settings` / `servers` options.
-- [ ] An invalid `servers.json` stops the app from starting and an invalid
-      `settings.json` is silently replaced by defaults: show an error, keep the
-      file as `*.invalid`, continue.
+- [x] Declarative settings: a read-only `managed.json` (user and `$XDG_CONFIG_DIRS`)
+      merged at start; managed controls show "Set by your system configuration";
+      managed bookmarks keep runtime state. Home Manager `programs.nuschel.settings`
+      and `servers` write it.
+- [x] Broken `settings.json` / `servers.json` are set aside as `*.invalid` with an
+      error notice instead of stopping the app or being overwritten.
+- [ ] Managed config follow-ups: a NixOS option for `/etc/xdg/nuschel/managed.json`;
+      system-wide managed config on Windows/macOS; evaluation-time checks for nested
+      settings; a way to dismiss the startup error notice.
 - [x] Unread indicators (channel and DM counts, red for mentions; a pill and a red
       count on the server rail). Remember the last channel and rejoin it on start.
 - [x] Runs of routine activity lines (joins, moves, connects, disconnects) collapse into
