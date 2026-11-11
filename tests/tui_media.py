@@ -210,11 +210,12 @@ def colored_bounds(path):
     background = Counter(tuple(data[i:i+3]) for i in range(0, len(data)-2, 27)).most_common(1)[0][0]
     rules = []
     for y in range(60, height - 25):
-        samples = Counter(tuple(data[(y*width+x)*3:(y*width+x)*3+3]) for x in range(width//2, width-20))
+        start = width * 4 // 5
+        samples = Counter(tuple(data[(y*width+x)*3:(y*width+x)*3+3]) for x in range(start, width-20))
         for color, count in samples.most_common():
             if color == background or color in COLORS:
                 continue
-            if count > (width//2-20) * 0.7:
+            if count > (width-start-20) * 0.7:
                 if not rules or y > rules[-1][-1]+2:
                     rules.append([y])
                 else:
@@ -350,6 +351,7 @@ def main():
 
             proof = {"terminal": args.kind, "capabilities": json.loads((capture / "capabilities.json").read_text()), "wire_images": [], "screens": []}
             proof["second_paste"] = args.second_paste
+            proof["acceptance"] = args.second_paste == "control-v"
 
             def acknowledged(caption=None):
                 eventually(lambda: "Image sent to the server." in screen(capture), "send acknowledgment did not clear the attachment")
@@ -422,8 +424,8 @@ def main():
                 proof["screens"].append(colors)
             # User text is not a terminal control channel, even in a graphics terminal.
             marker = base64.b64encode(b"not-the-private-clipboard").decode()
-            peer.send(kind="text", channel=2, body=f"inert control: \x1b]52;c;{marker}\x07")
-            time.sleep(1)
+            peer.send(kind="html", channel=2, html=f"inert control: \x1b]52;c;{marker}\x07")
+            eventually(lambda: "inert control:" in screen(capture), "control canary did not reach the native TUI")
             assert f"\x1b]52;c;{marker}".encode() not in (capture / "output.bin").read_bytes(), "message executed OSC52"
             for _ in range(4):
                 shell.key("Page_Up")
@@ -454,7 +456,8 @@ def main():
             (args.output / "plain.txt").write_text(plain.output)
             proof["plain_fallback"] = True
             (args.output / "proof.json").write_text(json.dumps(proof, indent=2))
-            print(f"Native {args.kind}: two pixel-exact pasted images, formula graphics, resize, inert controls and plain fallback passed.", flush=True)
+            print(f"Native {args.kind}: two pixel-exact pasted images, formula graphics, resize, inert controls and plain fallback passed."
+                  + (f" DIAGNOSTIC {args.second_paste}: ordinary Ctrl+V acceptance NOT proved." if not proof["acceptance"] else ""), flush=True)
         finally:
             if plain:
                 plain.close("/quit\r")
