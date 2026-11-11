@@ -281,23 +281,34 @@ impl ClientSettings {
 #[derive(Clone)]
 pub struct Profile {
     pub config_dir: PathBuf,
+    /// The local history folder, the storage worker's only writable directory.
+    /// It never holds configuration, the identity or other credentials.
     pub data_dir: PathBuf,
 }
 
+const HISTORY_FILE: &str = "history.sqlite3";
+
 impl Profile {
     pub fn open(override_dir: Option<PathBuf>) -> io::Result<Self> {
-        let profile = if let Some(root) = override_dir {
-            Self {
-                config_dir: root.join("config"),
-                data_dir: root.join("data"),
-            }
-        } else {
-            let paths = directories::ProjectDirs::from("org", "Nuschel", "Nuschel")
-                .ok_or_else(|| io::Error::other("could not find the application data directory"))?;
-            Self {
-                config_dir: paths.config_dir().to_owned(),
-                data_dir: paths.data_local_dir().to_owned(),
-            }
+        if let Some(root) = override_dir {
+            return Self::at(root.join("config"), root.join("data"));
+        }
+        let paths = directories::ProjectDirs::from("org", "Nuschel", "Nuschel")
+            .ok_or_else(|| io::Error::other("could not find the application data directory"))?;
+        Self::at(paths.config_dir().into(), paths.data_local_dir().into())
+    }
+
+    /// macOS keeps configuration and data in one folder (Application Support),
+    /// and XDG variables can nest them elsewhere. The storage worker may write
+    /// anywhere in its directory, so history then gets a subfolder of its own.
+    fn at(config_dir: PathBuf, data_dir: PathBuf) -> io::Result<Self> {
+        let profile = Self {
+            data_dir: if config_dir.starts_with(&data_dir) {
+                data_dir.join("history")
+            } else {
+                data_dir.clone()
+            },
+            config_dir,
         };
         for directory in [&profile.config_dir, &profile.data_dir] {
             fs::create_dir_all(directory)?;
@@ -307,6 +318,7 @@ impl Profile {
                 fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
             }
         }
+        migrate_history(&data_dir, &profile.data_dir)?;
         Ok(profile)
     }
 
@@ -377,7 +389,7 @@ impl Profile {
     }
 
     pub fn history_path(&self) -> PathBuf {
-        self.data_dir.join("history.sqlite3")
+        self.data_dir.join(HISTORY_FILE)
     }
 
     pub fn identity(&self) -> Result<ClientIdentity, Box<dyn std::error::Error + Send + Sync>> {
@@ -568,6 +580,24 @@ pub fn fingerprint(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Move a database that earlier versions kept beside the configuration (macOS)
+/// into the history folder. Sidecars move first and the database last, so an
+/// interrupted move resumes on the next start. A failure is an error: the
+/// worker would otherwise start an empty database and strand the old one.
+fn migrate_history(old: &Path, new: &Path) -> io::Result<()> {
+    if old == new || new.join(HISTORY_FILE).exists() || !old.join(HISTORY_FILE).exists() {
+        return Ok(());
+    }
+    for suffix in ["-wal", "-shm", ""] {
+        let name = format!("{HISTORY_FILE}{suffix}");
+        match fs::rename(old.join(&name), new.join(&name)) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            result => result?,
+        }
+    }
+    Ok(())
+}
+
 fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     use std::io::Read;
     let file = fs::File::open(path)?;
@@ -643,6 +673,31 @@ mod tests {
             original.mumble_hash()
         );
         assert!(ClientIdentity::from_pkcs12(b"not a pkcs12 file", "").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn history_never_shares_the_configuration_folder() {
+        let root = std::env::temp_dir().join(format!("nuschel-layout-{}", Uuid::new_v4()));
+        // Linux and Windows: separate folders stay as they are.
+        let separate = Profile::at(root.join("config"), root.join("data")).unwrap();
+        assert_eq!(separate.data_dir, root.join("data"));
+        // macOS: one folder for both. A database (and its WAL) that an earlier
+        // version kept beside the configuration moves into the history folder.
+        let shared = root.join("Application Support");
+        fs::create_dir_all(&shared).unwrap();
+        fs::write(shared.join(HISTORY_FILE), b"database").unwrap();
+        fs::write(shared.join(format!("{HISTORY_FILE}-wal")), b"log").unwrap();
+        let profile = Profile::at(shared.clone(), shared.clone()).unwrap();
+        assert_eq!(profile.data_dir, shared.join("history"));
+        assert_eq!(fs::read(profile.history_path()).unwrap(), b"database");
+        assert_eq!(
+            fs::read(profile.data_dir.join(format!("{HISTORY_FILE}-wal"))).unwrap(),
+            b"log"
+        );
+        assert!(!shared.join(HISTORY_FILE).exists());
+        // Configuration nested inside the data folder gets the same treatment.
+        let nested = Profile::at(root.join("data/config"), root.join("data")).unwrap();
+        assert_eq!(nested.data_dir, root.join("data/history"));
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
