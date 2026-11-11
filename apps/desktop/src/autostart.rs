@@ -16,23 +16,42 @@ fn home() -> Result<std::path::PathBuf, String> {
 /// The program to start: a launcher on `PATH` survives updates (on Nix the
 /// store path of the running binary changes with every update).
 #[cfg(target_os = "linux")]
-fn program() -> String {
+fn program() -> Result<String, String> {
     let on_path = std::env::var_os("PATH").is_some_and(|path| {
         std::env::split_paths(&path).any(|directory| directory.join("nuschel").is_file())
     });
     if on_path {
-        "nuschel".into()
-    } else {
-        let exe = std::env::current_exe().unwrap_or_else(|_| "nuschel".into());
-        // Quote for the desktop entry Exec key.
-        let escaped = exe
-            .to_string_lossy()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace('`', "\\`")
-            .replace('$', "\\$");
-        format!("\"{escaped}\"")
+        return Ok("nuschel".into());
     }
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let path = exe.to_str().ok_or("the program path is not valid UTF-8")?;
+    exec_quote(path)
+        .ok_or_else(|| "the program path cannot be written to an autostart entry".into())
+}
+
+/// Quote a path for a desktop entry's Exec key. String-level escaping applies
+/// before the Exec quoting rules, so inside the quotes a backslash becomes four
+/// and `"`, `` ` `` and `$` get two; `%` would start a field code and is
+/// doubled. Control characters (a line break would end the key) are refused.
+#[cfg(any(target_os = "linux", test))]
+fn exec_quote(path: &str) -> Option<String> {
+    if path.chars().any(char::is_control) {
+        return None;
+    }
+    let mut out = String::from("\"");
+    for c in path.chars() {
+        match c {
+            '\\' => out.push_str("\\\\\\\\"),
+            '"' | '`' | '$' => {
+                out.push_str("\\\\");
+                out.push(c);
+            }
+            '%' => out.push_str("%%"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    Some(out)
 }
 
 #[cfg(target_os = "linux")]
@@ -51,7 +70,8 @@ pub fn enabled() -> bool {
 
 #[cfg(target_os = "linux")]
 pub fn set(enable: bool) -> Result<(), String> {
-    set_at(&entry()?, enable, &program())
+    let program = if enable { program()? } else { String::new() };
+    set_at(&entry()?, enable, &program)
 }
 
 #[cfg(target_os = "linux")]
@@ -184,6 +204,21 @@ pub fn set(_: bool) -> Result<(), String> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exec_paths_are_quoted_by_the_desktop_entry_rules() {
+        assert_eq!(
+            exec_quote("/opt/nuschel/nuschel").unwrap(),
+            "\"/opt/nuschel/nuschel\""
+        );
+        assert_eq!(
+            exec_quote("/a b/$x`y\"z").unwrap(),
+            r#""/a b/\\$x\\`y\\"z""#
+        );
+        assert_eq!(exec_quote(r"/a\b").unwrap(), r#""/a\\\\b""#);
+        assert_eq!(exec_quote("/100%/n").unwrap(), "\"/100%%/n\"");
+        assert!(exec_quote("/a\nExec=evil").is_none());
+    }
 
     #[test]
     fn the_autostart_entry_round_trips() {

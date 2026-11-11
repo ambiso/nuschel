@@ -526,9 +526,17 @@ impl State {
                 if self.channels.contains_key(&channel)
                     && edit.name.as_deref().is_none_or(valid_name)
                 {
-                    let description = edit
-                        .description
-                        .map(|text| bounded(text, MAX_CONTENT_BYTES));
+                    // Stock Mumble renders descriptions as HTML; the editor is plain
+                    // text, so what was typed is what others see (as with chat).
+                    // Kick and ban reasons stay plain: Mumble escapes those itself.
+                    let description = edit.description.map(|text| {
+                        let text = if self.allow_html {
+                            escape_html(&text)
+                        } else {
+                            text
+                        };
+                        bounded(text, MAX_CONTENT_BYTES)
+                    });
                     self.queue(
                         kind::CHANNEL_STATE,
                         &proto::ChannelState {

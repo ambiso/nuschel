@@ -217,6 +217,8 @@ pub struct ClientSettings {
     pub sidebar_width: f32,
     /// Look for signed updates (Windows and macOS builds).
     pub check_updates: bool,
+    /// Desktop notifications for direct messages, your voice channel and mentions.
+    pub notifications: bool,
 }
 
 pub const SIDEBAR_WIDTH: std::ops::RangeInclusive<f32> = 200.0..=560.0;
@@ -232,6 +234,7 @@ impl Default for ClientSettings {
             enter_sends: true,
             sidebar_width: 248.,
             check_updates: true,
+            notifications: true,
         }
     }
 }
