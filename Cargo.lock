@@ -7244,12 +7244,16 @@ dependencies = [
 name = "nuschl-tui"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "clap",
+ "image",
  "jiff",
  "nuschl-client",
  "nuschl-core",
+ "nuschl-ipc",
  "nuschl-session",
  "ratatui",
+ "ratatui-image",
  "tokio",
  "unicode-width",
 ]
@@ -9311,6 +9315,22 @@ dependencies = [
  "crossterm",
  "instability",
  "ratatui-core",
+]
+
+[[package]]
+name = "ratatui-image"
+version = "11.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "color_quant",
+ "flate2",
+ "image",
+ "rand 0.8.8",
+ "ratatui",
+ "rustix 0.38.44",
+ "self_cell",
+ "thiserror 1.0.69",
+ "windows 0.58.0",
 ]
 
 [[package]]

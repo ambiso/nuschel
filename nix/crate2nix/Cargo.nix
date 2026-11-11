@@ -23765,9 +23765,18 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/tui; };
         dependencies = [
           {
+            name = "base64";
+            packageId = "base64 0.22.1";
+          }
+          {
             name = "clap";
             packageId = "clap";
             features = [ "derive" ];
+          }
+          {
+            name = "image";
+            packageId = "image";
+            usesDefaultFeatures = false;
           }
           {
             name = "jiff";
@@ -23784,6 +23793,10 @@ rec {
             packageId = "nuschl-core";
           }
           {
+            name = "nuschl-ipc";
+            packageId = "nuschl-ipc";
+          }
+          {
             name = "nuschl-session";
             packageId = "nuschl-session";
           }
@@ -23792,6 +23805,12 @@ rec {
             packageId = "ratatui";
             usesDefaultFeatures = false;
             features = [ "crossterm" "underline-color" ];
+          }
+          {
+            name = "ratatui-image";
+            packageId = "ratatui-image";
+            usesDefaultFeatures = false;
+            features = [ "crossterm" ];
           }
           {
             name = "tokio";
@@ -32214,6 +32233,79 @@ rec {
         };
         resolvedDefaultFeatures = [ "crossterm_0_29" "default" "underline-color" ];
       };
+      "ratatui-image" = rec {
+        crateName = "ratatui-image";
+        version = "11.1.0";
+        edition = "2024";
+        crateBin = [];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/ratatui-image; };
+        libName = "ratatui_image";
+        authors = [
+          "Benjamin Große <ste3ls@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "base64";
+            packageId = "base64 0.22.1";
+          }
+          {
+            name = "color_quant";
+            packageId = "color_quant";
+          }
+          {
+            name = "flate2";
+            packageId = "flate2";
+          }
+          {
+            name = "image";
+            packageId = "image";
+            usesDefaultFeatures = false;
+            features = [ "png" ];
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.8.8";
+          }
+          {
+            name = "ratatui";
+            packageId = "ratatui";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "rustix";
+            packageId = "rustix 0.38.44";
+            target = { target, features }: (!(target."windows" or false));
+            features = [ "stdio" "termios" "fs" ];
+          }
+          {
+            name = "self_cell";
+            packageId = "self_cell";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 1.0.69";
+          }
+          {
+            name = "windows";
+            packageId = "windows 0.58.0";
+            usesDefaultFeatures = false;
+            target = { target, features }: (target."windows" or false);
+            features = [ "std" "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_Security" ];
+          }
+        ];
+        features = {
+          "chafa-dyn" = [ "dep:pkg-config" ];
+          "chafa-static" = [ "dep:pkg-config" ];
+          "crossterm" = [ "ratatui/crossterm" ];
+          "default" = [ "image-defaults" "crossterm" "chafa-dyn" ];
+          "image-defaults" = [ "image/default" ];
+          "serde" = [ "dep:serde" ];
+          "termion" = [ "ratatui/termion" ];
+          "termwiz" = [ "ratatui/termwiz" ];
+          "tokio" = [ "dep:tokio" ];
+        };
+        resolvedDefaultFeatures = [ "crossterm" ];
+      };
       "ratatui-termina" = rec {
         crateName = "ratatui-termina";
         version = "0.1.0";
@@ -34259,7 +34351,7 @@ rec {
           "thread" = [ "linux-raw-sys/prctl" ];
           "use-libc" = [ "libc_errno" "libc" "libc-extra-traits" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "fs" "libc-extra-traits" "std" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "fs" "libc-extra-traits" "std" "stdio" "termios" "use-libc-auxv" ];
       };
       "rustix 1.1.6" = rec {
         crateName = "rustix";
@@ -47405,7 +47497,7 @@ rec {
           "default" = [ "std" ];
           "std" = [ "windows-core/std" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_System" "Wdk_System_SystemServices" "Win32" "Win32_Foundation" "Win32_UI" "Win32_UI_WindowsAndMessaging" "default" "std" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_System" "Wdk_System_SystemServices" "Win32" "Win32_Foundation" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_UI" "Win32_UI_WindowsAndMessaging" "default" "std" ];
       };
       "windows 0.61.3" = rec {
         crateName = "windows";

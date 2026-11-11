@@ -156,7 +156,7 @@
             cp -R ${pulseSource} "$out/vendor/pulseaudio"
             chmod -R u+w "$out/vendor/pulseaudio"
             # GPUI compiles against these patched crates during the dependency pass.
-            for crate in gpui-pre gpui-pre-windows gpui-pre-apple gpui-pre-wgpu gpui-pre-linux str0m-rust-crypto; do
+            for crate in gpui-pre gpui-pre-windows gpui-pre-apple gpui-pre-wgpu gpui-pre-linux str0m-rust-crypto ratatui-image; do
               rm -rf "$out/vendor/$crate"
               cp -R ${./vendor}/$crate "$out/vendor/$crate"
               chmod -R u+w "$out/vendor/$crate"
@@ -207,6 +207,9 @@
           install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschl/Mumble-BSD"
           install -Dm644 ${./vendor/pulseaudio/LICENSE.md} "$out/share/licenses/nuschl/pulseaudio-MIT"
           install -Dm644 ${./vendor/cpal/LICENSE} "$out/share/licenses/nuschl/cpal-Apache-2.0"
+          install -Dm644 ${./vendor/ratatui-image/LICENSE} "$out/share/licenses/nuschl/ratatui-image-MIT"
+          install -Dm644 ${./vendor/ratatui-image/LICENSE-icy_sixel-MIT} "$out/share/licenses/nuschl/sixel-encoder-MIT"
+          install -Dm644 ${./vendor/ratatui-image/NOTICE} "$out/share/licenses/nuschl/ratatui-image-NOTICE"
           install -Dm644 ${./crates/math/fonts/GUST-FONT-LICENSE.txt} "$out/share/licenses/nuschl/NewCMMath-GUST-Font-License"
         ''
         + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
@@ -227,7 +230,12 @@
           # The terminal client finds the workers beside it in bin; the
           # wrapper gives their sandbox bubblewrap and the media worker its
           # audio libraries.
-          wrapProgram "$out/bin/nuschl-tui" "''${runtimeFlags[@]}"
+          wrapProgram "$out/bin/nuschl-tui" "''${runtimeFlags[@]}" --prefix PATH : "${
+            lib.makeBinPath [
+              pkgs.wl-clipboard
+              pkgs.xclip
+            ]
+          }"
           # Desktop entry and hicolor icons; shells match the window by its app id.
           cp -R --no-preserve=mode ${
             (import ./nix/desktop-files.nix { inherit pkgs; }).linux

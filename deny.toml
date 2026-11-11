@@ -73,9 +73,14 @@ deny = [
   ], reason = "GPUI is an explicit desktop rendering exception" },
   { name = "ratatui", wrappers = [
     "nuschl-tui",
+    "ratatui-image",
   ], reason = "Terminal drawing belongs to the terminal client; the SDK stays UI-independent" },
+  { name = "ratatui-image", wrappers = [
+    "nuschl-tui",
+  ], reason = "Only the terminal renderer consumes validated worker bitmaps; no source image decoding in the UI" },
   { name = "crossterm", wrappers = [
     "ratatui-crossterm",
+    "ratatui-image",
   ], reason = "The terminal client reaches the terminal only through ratatui" },
   { name = "cpal", wrappers = [
     "nuschl-media-worker",

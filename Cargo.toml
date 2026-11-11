@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*"]
-exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-linux", "vendor/str0m-rust-crypto", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu", "vendor/gpui-pre", "vendor/hpke-rs-libcrux", "vendor/openmls_libcrux_crypto", "vendor/magic-wormhole"]
+exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-linux", "vendor/str0m-rust-crypto", "vendor/ratatui-image", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu", "vendor/gpui-pre", "vendor/hpke-rs-libcrux", "vendor/openmls_libcrux_crypto", "vendor/magic-wormhole"]
 default-members = ["apps/desktop", "apps/server"]
 
 [workspace.metadata.crane]
@@ -63,6 +63,8 @@ codegen-units = 1
 strip = "debuginfo"
 
 [patch.crates-io]
+# Safe Rust terminal graphics encoding; source formats stay in workers.
+ratatui-image = { path = "vendor/ratatui-image" }
 # Explicit RustCrypto DTLS provider and memory-safe certificate generation.
 str0m-rust-crypto = { path = "vendor/str0m-rust-crypto" }
 # Relay-only connections must not dial a peer's purported relay address.
