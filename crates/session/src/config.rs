@@ -287,6 +287,10 @@ pub struct Profile {
 }
 
 const HISTORY_FILE: &str = "history.sqlite3";
+const MAX_SERVERS: usize = 100;
+const MAX_SERVERS_FILE: usize = 8 * 1024 * 1024;
+const MAX_CACHED_CHANNELS: usize = 4096;
+const MAX_CHANNEL_NAME: usize = 512;
 
 impl Profile {
     pub fn open(override_dir: Option<PathBuf>) -> io::Result<Self> {
@@ -327,25 +331,27 @@ impl Profile {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        let servers: Vec<ServerBookmark> =
-            serde_json::from_slice(&read_bounded(&path, 8 * 1024 * 1024)?)?;
-        if servers.len() > 100 {
+        let mut servers: Vec<ServerBookmark> =
+            serde_json::from_slice(&read_bounded(&path, MAX_SERVERS_FILE as u64)?)?;
+        if servers.len() > MAX_SERVERS {
             return Err(io::Error::other("too many saved servers"));
         }
         let mut ids = std::collections::BTreeSet::new();
-        for server in &servers {
+        for server in &mut servers {
             ServerBookmark::new(&server.name, &server.host, server.port, &server.username)
                 .map_err(io::Error::other)?;
             if server.tokens.len() > 64 || server.tokens.iter().any(|token| token.len() > 256) {
                 return Err(io::Error::other("too many or oversized access tokens"));
             }
-            if server.cached_channels.len() > 4096
+            // Only a cache, written by earlier versions without limits: drop it
+            // rather than refuse every bookmark.
+            if server.cached_channels.len() > MAX_CACHED_CHANNELS
                 || server
                     .cached_channels
                     .iter()
-                    .any(|channel| channel.name.len() > 512)
+                    .any(|channel| channel.name.len() > MAX_CHANNEL_NAME)
             {
-                return Err(io::Error::other("saved channel cache exceeds its limit"));
+                server.cached_channels.clear();
             }
             if Uuid::parse_str(&server.id).is_err()
                 || !ids.insert(&server.id)
@@ -361,15 +367,37 @@ impl Profile {
         Ok(servers)
     }
 
+    /// The cached channel trees are the only part a server controls, and JSON
+    /// escapes a control character to six bytes, so 4,096 such names overflow
+    /// the file. The caches are only an offline convenience: they are trimmed
+    /// to what loading accepts, and the largest are dropped until the file
+    /// fits, so a server can never stop bookmarks or certificate pins from
+    /// being saved.
     pub fn save_servers(&self, servers: &[ServerBookmark]) -> io::Result<()> {
-        if servers.len() > 100 {
+        if servers.len() > MAX_SERVERS {
             return Err(io::Error::other("at most 100 servers may be saved"));
         }
-        let bytes = serde_json::to_vec_pretty(servers)?;
-        if bytes.len() > 8 * 1024 * 1024 {
-            return Err(io::Error::other("server metadata exceeds 8 MiB"));
+        let mut servers = servers.to_vec();
+        for server in &mut servers {
+            let cache = &mut server.cached_channels;
+            cache.retain(|channel| channel.name.len() <= MAX_CHANNEL_NAME);
+            cache.truncate(MAX_CACHED_CHANNELS);
         }
-        atomic_private_write(&self.config_dir.join("servers.json"), &bytes)
+        loop {
+            let bytes = serde_json::to_vec_pretty(&servers)?;
+            if bytes.len() <= MAX_SERVERS_FILE {
+                return atomic_private_write(&self.config_dir.join("servers.json"), &bytes);
+            }
+            let size =
+                |cache: &Vec<CachedChannel>| serde_json::to_vec(cache).map_or(0, |b| b.len());
+            let largest = servers
+                .iter_mut()
+                .map(|server| &mut server.cached_channels)
+                .filter(|cache| !cache.is_empty())
+                .max_by_key(|cache| size(cache))
+                .ok_or_else(|| io::Error::other("server metadata exceeds 8 MiB"))?;
+            largest.clear();
+        }
     }
 
     pub fn load_settings(&self) -> io::Result<ClientSettings> {
@@ -698,6 +726,51 @@ mod tests {
         // Configuration nested inside the data folder gets the same treatment.
         let nested = Profile::at(root.join("data/config"), root.join("data")).unwrap();
         assert_eq!(nested.data_dir, root.join("data/history"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_hostile_channel_cache_cannot_block_saving_bookmarks() {
+        let root = std::env::temp_dir().join(format!("nuschel-servers-{}", Uuid::new_v4()));
+        let profile = Profile::open(Some(root.clone())).unwrap();
+        let mut hostile = ServerBookmark::new("", "hostile.invalid", 64738, "me").unwrap();
+        // Each control character is escaped to six bytes ("\u0001") in JSON.
+        hostile.cached_channels = (0..4096)
+            .map(|id| CachedChannel {
+                id,
+                parent: Some(0),
+                name: "\u{1}".repeat(512),
+                position: 0,
+            })
+            .collect();
+        let mut friendly = ServerBookmark::new("", "friendly.invalid", 64738, "me").unwrap();
+        friendly.cached_channels = vec![CachedChannel {
+            id: 0,
+            parent: None,
+            name: "Root\u{7}".into(),
+            position: 0,
+        }];
+        friendly.certificate_sha256 = Some("ab".repeat(32));
+        profile.save_servers(&[hostile, friendly]).unwrap();
+        let loaded = profile.load_servers().unwrap();
+        assert_eq!(loaded.len(), 2);
+        // Only the hostile cache was dropped; the other bookmark and its pin survive.
+        assert!(loaded[0].cached_channels.is_empty());
+        assert_eq!(loaded[1].cached_channels[0].name, "Root\u{7}");
+        assert_eq!(loaded[1].certificate_sha256, Some("ab".repeat(32)));
+        // A cache beyond the limits from an earlier version no longer refuses
+        // every bookmark.
+        let mut old = loaded;
+        old[1].cached_channels = vec![old[1].cached_channels[0].clone(); 5000];
+        atomic_private_write(
+            &profile.config_dir.join("servers.json"),
+            &serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            profile.load_servers().unwrap()[1]
+                .cached_channels
+                .is_empty()
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
