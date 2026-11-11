@@ -45,7 +45,9 @@ pub struct SignedHead {
 }
 
 impl SignedHead {
-    pub(crate) fn sign(
+    /// Signs a head. The directory does this; it is public for servers with their own
+    /// signing flow and for tests that play a malicious operator.
+    pub fn sign(
         signer: &dyn HeadSigner,
         log_id: LogId,
         epoch: u64,

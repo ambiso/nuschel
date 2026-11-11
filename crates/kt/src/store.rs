@@ -50,6 +50,25 @@ pub trait KtStore: Send + Sync + 'static {
     async fn write(&self, records: Vec<(Vec<u8>, Vec<u8>)>) -> Result<(), StoreError>;
 }
 
+#[async_trait]
+impl<S: KtStore> KtStore for std::sync::Arc<S> {
+    async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StoreError> {
+        (**self).get(key).await
+    }
+
+    async fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
+        (**self).get_many(keys).await
+    }
+
+    async fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
+        (**self).scan_prefix(prefix).await
+    }
+
+    async fn write(&self, records: Vec<(Vec<u8>, Vec<u8>)>) -> Result<(), StoreError> {
+        (**self).write(records).await
+    }
+}
+
 /// An in-memory [`KtStore`] for tests and benchmarks.
 #[derive(Default)]
 pub struct MemoryStore {

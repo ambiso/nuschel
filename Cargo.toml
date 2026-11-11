@@ -36,6 +36,17 @@ undocumented_unsafe_blocks = "deny"
 opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
+# Key transparency (nuschel-kt): the VRF and tree hashing are ~100x slower unoptimised.
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
+[profile.dev.package.akd]
+opt-level = 3
+[profile.dev.package.akd_core]
+opt-level = 3
+[profile.dev.package.blake3]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
 
 [profile.release]
 lto = "thin"
