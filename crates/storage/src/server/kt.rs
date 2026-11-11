@@ -4,6 +4,7 @@
 //! behind each binding. Keys and values are opaque bytes (base64 on the IPC);
 //! the worker bounds their sizes and counts but never interprets them.
 use super::ServerStore;
+use crate::BeginWrite as _;
 use crate::{Error, Pool};
 use base64::Engine as _;
 use nuschel_ipc::server::{MAX_KT_KEY_BYTES, MAX_KT_RECORDS, MAX_KT_VALUE_BYTES};
@@ -112,7 +113,7 @@ impl ServerStore {
             })
             .collect::<Result<Vec<_>, Error>>()?;
         with_pool!(&self.pool, |pool| {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = pool.begin_write().await?;
             for (key, value) in &records {
                 // An empty value deletes the key (nuschel-kt never writes one).
                 if value.is_empty() {

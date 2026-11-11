@@ -3,6 +3,7 @@
 //! users (with comments and avatars) and bans. Only the storage worker links
 //! this; the server sends typed requests and never SQL. Statements bind every
 //! value and work on both SQLite and PostgreSQL.
+use crate::BeginWrite as _;
 use crate::{Error, Pool};
 use nuschel_ipc::server::{
     HistoryVisibility, ServerSnapshot, StoredAcl, StoredBan, StoredChannel, StoredGroup,
@@ -304,7 +305,7 @@ impl ServerStore {
         too_long(&channel.description, MAX_TEXT)?;
         too_long(&channel.conversation_id, 64)?;
         with_pool!(&self.pool, |pool| {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = pool.begin_write().await?;
             sqlx::query(
                 "INSERT INTO channels (id, parent, name, description, position, max_users, inherit_acl, conversation_id, history_visibility) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
                  ON CONFLICT (id) DO UPDATE SET parent = excluded.parent, name = excluded.name, description = excluded.description, position = excluded.position, max_users = excluded.max_users, inherit_acl = excluded.inherit_acl, conversation_id = excluded.conversation_id, history_visibility = excluded.history_visibility",
@@ -487,7 +488,7 @@ impl ServerStore {
 
     pub async fn save_bans(&self, bans: &[StoredBan]) -> Result<(), Error> {
         with_pool!(&self.pool, |pool| {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = pool.begin_write().await?;
             sqlx::query("DELETE FROM bans")
                 .execute(&mut *transaction)
                 .await?;

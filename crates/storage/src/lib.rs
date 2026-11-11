@@ -253,6 +253,30 @@ macro_rules! remove {
 pub mod murmur;
 pub mod server;
 
+/// A write transaction that takes the write lock when it begins. The server runs
+/// several storage workers (state, history, key transparency, MLS) on one SQLite file;
+/// a deferred transaction that reads before it writes then fails with `SQLITE_BUSY`
+/// at once, without waiting for the busy timeout, whenever another worker committed
+/// in between. `BEGIN IMMEDIATE` waits for the lock instead. PostgreSQL keeps `BEGIN`.
+pub(crate) trait BeginWrite {
+    type Database: sqlx::Database;
+    async fn begin_write(&self) -> Result<sqlx::Transaction<'static, Self::Database>, sqlx::Error>;
+}
+
+impl BeginWrite for sqlx::SqlitePool {
+    type Database = sqlx::Sqlite;
+    async fn begin_write(&self) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, sqlx::Error> {
+        self.begin_with("BEGIN IMMEDIATE").await
+    }
+}
+
+impl BeginWrite for sqlx::PgPool {
+    type Database = sqlx::Postgres;
+    async fn begin_write(&self) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, sqlx::Error> {
+        self.begin().await
+    }
+}
+
 /// What search matches and returns: the text without inline image data.
 fn visible(body: &str) -> String {
     body.split(nuschel_core::EMBED)

@@ -6,6 +6,7 @@
 //! authorisation; this stores, and checks what only the rows can tell
 //! (authorship, edit counts, earlier use of an idempotency key).
 use super::{MAX_NAME, ServerStore, too_long};
+use crate::BeginWrite as _;
 use crate::{Error, Pool};
 use nuschel_ipc::server::{
     HISTORY_LOAD_PAGE, MAX_RETENTION_DAYS, MessageKind, PageQuery, Retention, SeqRows,
@@ -201,7 +202,7 @@ impl ServerStore {
     /// (another one); the seq the server assigned then becomes a void.
     pub async fn history_append(&self, message: &StoredMessage) -> Result<Response, Error> {
         with_pool!(&self.pool, |pool| {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = pool.begin_write().await?;
             if let (Some(account), Some(key)) = (&message.author_account, &message.idempotency_key)
             {
                 let earlier: Option<(i64, Option<String>)> = sqlx::query_as(
@@ -250,7 +251,7 @@ impl ServerStore {
     ) -> Result<Response, Error> {
         too_long(content, MAX_CONTENT)?;
         with_pool!(&self.pool, |pool| {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = pool.begin_write().await?;
             let edits: Option<i64> = sqlx::query_scalar(
                 "SELECT edits FROM history_messages WHERE conversation = $1 AND seq = $2 AND kind = 0 AND deleted_ms IS NULL AND author_account = $3",
             )
@@ -298,7 +299,7 @@ impl ServerStore {
         event: &StoredMessage,
     ) -> Result<Response, Error> {
         with_pool!(&self.pool, |pool| {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = pool.begin_write().await?;
             let found: Option<i64> = match author_account {
                 Some(account) => sqlx::query_scalar(
                     "SELECT seq FROM history_messages WHERE conversation = $1 AND seq = $2 AND kind = 0 AND deleted_ms IS NULL AND author_account = $3",
@@ -342,7 +343,7 @@ impl ServerStore {
     pub async fn history_purge(&self, conversation: &str) -> Result<(), Error> {
         too_long(conversation, MAX_ID)?;
         with_pool!(&self.pool, |pool| {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = pool.begin_write().await?;
             for statement in [
                 "DELETE FROM history_messages WHERE conversation = $1",
                 "DELETE FROM history_access WHERE conversation = $1",
@@ -389,7 +390,7 @@ impl ServerStore {
             return Err(Error::InvalidMessage);
         }
         with_pool!(&self.pool, |pool| {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = pool.begin_write().await?;
             sqlx::query("DELETE FROM history_access WHERE conversation = $1 AND account = $2")
                 .bind(conversation)
                 .bind(account)
@@ -414,7 +415,7 @@ impl ServerStore {
     pub async fn history_forget_account(&self, account: &str) -> Result<(), Error> {
         too_long(account, MAX_ID)?;
         with_pool!(&self.pool, |pool| {
-            let mut transaction = pool.begin().await?;
+            let mut transaction = pool.begin_write().await?;
             for statement in [
                 "DELETE FROM history_access WHERE account = $1",
                 "DELETE FROM history_read_markers WHERE account = $1",
