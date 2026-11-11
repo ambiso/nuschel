@@ -530,19 +530,33 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          mutex stays as the single owner of authorisation state: no check-to-effect
          gap that an actor would close (docs/server.md, "Design"). Left: the UDP path
          takes the lock per packet (an immutable routing snapshot would avoid it).
-   - [ ] TLS listener (rustls), certificate and password authentication, user
-         registration, server and channel passwords, ban list.
-   - [ ] Channels (create, move, links, temporary channels), user state, ACLs and
-         groups with Mumble's permission model (PermissionQuery, PermissionDenied).
-   - [ ] Text messages to channels, trees and users; blobs (comments, descriptions,
-         avatars) with size limits.
-   - [ ] Voice routing without decoding: UDP with OCB2-AES128 (shared with the
-         client's implementation), the TCP tunnel, whisper/shout targets, codec
-         negotiation (Opus only).
-   - [ ] Persistent state in SQLite/PostgreSQL (crates/storage); config file; the
-         NixOS module made deployable (today config-only in the VM).
-   - [ ] Rate limits as configurable and visible as Murmur's; the VM matrix rows:
-         stock client → Nuschel server, Nuschel → Nuschel, Nuschel → stock server.
+   - [x] TLS listener (rustls), certificate and password authentication, user
+         registration, server and channel passwords, ban list: tls.rs (the R1
+         verifier), auth.rs, handlers.rs (`register`, `UserList`, `BanList`),
+         access tokens as `#token` groups kept as digests; tests/protocol.rs (login,
+         every reject reason, a certificate without its key, registration, kick),
+         protocol_features.py (the ban list).
+   - [x] Channels (create, move, links, temporary channels), user state, ACLs and
+         groups with Mumble's permission model (PermissionQuery, PermissionDenied):
+         handlers.rs over authz.rs and its engine (Murmur's `ACL.cpp`/`Group.cpp`);
+         tests/protocol.rs, the authz tables, protocol_features.py in vm-server.
+   - [x] Text messages to channels, trees and users; blobs (comments, descriptions,
+         avatars) with size limits: `text_message`, `RequestBlob`, text.rs
+         (Murmur's UTF-16 lengths and `<img>` rule), blobs by hash from 128 bytes.
+   - [x] Voice routing without decoding: UDP with OCB2-AES128 (crates/protocol
+         `crypt.rs`, shared with the client), the TCP tunnel, whisper/shout targets,
+         Opus only: routing.rs, udp.rs; tests/protocol.rs (tunnel, UDP, legacy
+         clients, whisper isolation), udp_voice.py with loss and blocked UDP.
+   - [x] Persistent state in SQLite/PostgreSQL (the storage worker over
+         crates/storage), the TOML config (murmur.ini's names), and the NixOS module
+         deployable (`services.nuschel`: hardened unit, credentials, local
+         PostgreSQL): vm-server runs it on both databases across restarts.
+   - [x] Rate limits configurable as Murmur's (`message_limit`/`message_burst`,
+         `plugin_message_limit`/`plugin_message_burst`; also flood, query and
+         extension buckets) and counted in the `statistics` line; the VM matrix:
+         stock client → nuscheld (vm-server: the stock GUI and the client suites),
+         Nuschel → nuscheld (vm-server: history, key transparency), Nuschel → stock
+         Murmur (vm-smoke).
 2. **Nuschel extension** (negotiated; stock clients keep working) — done
    (2026-11-11), see docs/extension.md "Implementation notes": ALPN + hello with a
    sticky, fail-closed client policy (and a reset), `nuschel.v1` messages, account
@@ -567,13 +581,23 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          storage worker on a throwaway PostgreSQL from nixpkgs).
    - [ ] Session and desktop: honour `retry_after_ms` on `rate_limited` and `busy`
          (history pages today fail without a retry).
-   - [ ] Capability negotiation in the Mumble handshake (extension message range or
-         `Version` fields) and a protocol version with a minimum-version policy.
-   - [ ] Persistent history: server message ids, network pagination with ACL checks
-         on every page, idempotency keys, edits and deletions as tombstones,
-         independent text-channel subscriptions, retention.
-   - [ ] Client side: server history replaces local-only history for such servers;
-         the history source label already exists (`HistorySource::ServerArchive`).
+   - [x] Capability negotiation in the Mumble handshake: ALPN `nuschel/1` plus the
+         hello in `Version` (field 7200), frozen at `Authenticate`, fail-closed
+         (extension.rs, the session's sticky policy), with the protocol version in
+         the hello.
+   - [ ] Minimum-version policy: the hello announces `minimum_client` and
+         `recommended_client` (docs/extension.md §1), but the client shows no update
+         notice below `recommended`, and the server never refuses below `minimum`
+         after an announced grace date (nor may it for stock clients in compatible
+         mode).
+   - [x] Persistent history: per-conversation seq, pages checked with `can_read` and
+         again when sent, idempotency keys on the message row, edits and deletions
+         as tombstones, subscriptions, per-channel retention (docs/extension.md
+         "Implementation notes").
+   - [x] Client side: with `history/1` the desktop's timeline pages from the server
+         (`HistorySource::ServerArchive`) and goes back to local observations when
+         offline; keeping fetched pages in the local cache is the desktop item
+         above.
 3. **Identity and key transparency** (persistent, cross-server and multi-device;
    user, 2026-11-11) — done without MLS (2026-11-11), see docs/e2ee.md "Phase 3 as
    implemented": identities are created, published to each server's log, looked up,
