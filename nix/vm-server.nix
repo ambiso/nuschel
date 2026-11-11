@@ -143,6 +143,14 @@ pkgs.testers.runNixOSTest {
     as_tester(f"python3 {tests}/key_transparency.py {bins} --host server")
     server.succeed("test ! -e /var/lib/private/nuschel/kt-vrf.key")
 
+    # End-to-end-encrypted direct conversations (mls/1, docs/e2ee.md "Phase 4
+    # prototype"): group creation, messages both ways, offline delivery, and the
+    # group and stream surviving a restart.
+    as_tester(f"python3 {tests}/e2ee_direct.py {bins} --host server --state /tmp/nuschel-e2ee")
+    server.succeed("systemctl restart nuschel.service")
+    server.wait_for_open_port(64738)
+    as_tester(f"python3 {tests}/e2ee_direct.py {bins} --host server --state /tmp/nuschel-e2ee --phase second")
+
     # The real stock Mumble GUI against nuscheld: login with a certificate
     # exported by Nuschel, then voice and chat in both directions.
     as_tester(f"xvfb-run -a -s \"-screen 0 1280x800x24\" python3 {tests}/stock_client.py {bins} --mumble ${pkgs.mumble}/bin/mumble --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${opus} --output /tmp/nuschel-stock-artifacts")
@@ -160,6 +168,8 @@ pkgs.testers.runNixOSTest {
     as_tester(f"python3 {tests}/nuschel_history.py {bins} --host postgres")
     # Key transparency on PostgreSQL, with keys the server generated (0600).
     as_tester(f"python3 {tests}/key_transparency.py {bins} --host postgres")
+    # End-to-end direct conversations on PostgreSQL.
+    as_tester(f"python3 {tests}/e2ee_direct.py {bins} --host postgres")
     postgres.succeed("test \"$(stat -c %a /var/lib/private/nuschel/kt-vrf.key)\" = 600")
     # The periodic statistics line.
     server.wait_until_succeeds("journalctl -u nuschel.service --no-pager | grep -q 'statistics'", timeout=30)

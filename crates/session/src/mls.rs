@@ -670,7 +670,10 @@ impl Context {
             return Ok(());
         }
         let seq = message.seq;
-        match self
+        // The worker answers every message it could not use with `Undecryptable`
+        // (an explicit gap); an error here means the worker itself failed, so the
+        // row stays unprocessed and the next catch-up hands it over again.
+        let received = match self
             .mls_worker(CryptoRequest::MlsReceive {
                 server: self.server.key.clone(),
                 conversation: conversation.to_vec(),
@@ -679,25 +682,18 @@ impl Context {
             })
             .await
         {
-            Ok(CryptoResponse::MlsReceived(received)) => {
-                self.mls_emit(MlsEvent::Received {
-                    conversation,
-                    received,
-                })
-                .await;
-            }
-            Ok(_) => {}
+            Ok(CryptoResponse::MlsReceived(received)) => received,
+            Ok(_) => return Err(crate::Error::Worker("unexpected worker answer".into())),
             Err(error) => {
-                self.mls_emit(MlsEvent::Received {
-                    conversation,
-                    received: Received::Undecryptable {
-                        seq,
-                        reason: error.to_string(),
-                    },
-                })
-                .await
+                self.mls().cursors.insert(conversation, seq - 1);
+                return Err(error);
             }
-        }
+        };
+        self.mls_emit(MlsEvent::Received {
+            conversation,
+            received,
+        })
+        .await;
         Ok(())
     }
 

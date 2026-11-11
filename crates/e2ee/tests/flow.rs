@@ -265,18 +265,25 @@ fn a_short_xwing_key_in_a_key_package_is_refused_before_libcrux() {
             .expect("OpenMLS 0.9.2 accepts a short X-Wing init key");
         let init = package.hpke_init_key().as_slice().len();
         assert_eq!(init, 32);
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let crypto = openmls_traits::OpenMlsProvider::crypto(&provider);
-            let _ = openmls_traits::crypto::OpenMlsCrypto::hpke_seal(
+            openmls_traits::crypto::OpenMlsCrypto::hpke_seal(
                 crypto,
                 nuschel_e2ee::SUITE.hpke_config(),
                 package.hpke_init_key().as_slice(),
                 b"info",
                 b"aad",
                 b"secret",
-            );
+            )
+            .is_ok()
         }));
-        assert!(panicked.is_err(), "libcrux-kem 0.0.9 panics on a short key");
+        // OpenMLS 0.9.2 (libcrux-kem 0.0.9, RUSTSEC-2026-0330) panics here; the
+        // release with fixed libcrux crates must refuse the key instead. Either
+        // way, sealing to it never succeeds.
+        assert!(
+            !matches!(outcome, Ok(true)),
+            "a 32-byte X-Wing key must never be usable"
+        );
     }
     // The real flow never gets there: a group with Alice still works.
     let _ = alice.key_package();
