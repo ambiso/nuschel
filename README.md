@@ -46,7 +46,7 @@ channel with mute state intact, and mark the gap in the timeline. Enter sends an
 Shift+Enter starts a new line (switchable in Settings). Drag the channel list's edge
 to fit long names; collapsed branches show how many people are inside, and branches
 with people open on connect. Messages keep blank lines, highlight fenced
-code, show inline images (decoded in a sandboxed worker), and collapse by measured
+code, show inline images (decoded in a sandboxed worker), typeset LaTeX between `$…$` and `$$…$$` (docs/math.md), and collapse by measured
 height behind **Show more**. Ctrl+V pastes an image (re-encoded in the sandboxed
 worker to fit the server's limit and sent the way stock Mumble sends it), and Ctrl+.
 or Ctrl+; opens an emoji picker. Volume mixers name each stream (microphone, voice

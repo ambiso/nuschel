@@ -26,6 +26,8 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | `image` decoders (PNG, JPEG, GIF) | Inline images and avatars from untrusted peers | Content worker only, with dimension and allocation limits; the UI receives raw RGBA |
 | `akd` (key transparency) | Auditable key directory; no memory-safe alternative with VRF and audit proofs | Through `nuschel-kt` only, in the crypto worker and `nuscheld`; akd_core turns on ed25519-dalek's `legacy_compatibility` for the whole binary, so `nuschel-kt` checks `s < ℓ` itself and `nuschel-identity` uses libcrux, not ed25519-dalek; akd's verifiers run under `catch_unwind` behind a strict decoder (docs/e2ee.md §5.2) |
 | Global shortcuts (`ashpd` portal; `global-hotkey` on Windows/macOS) | System-wide push-to-talk | Desktop shell; press/release of one bound key only |
+| Typst (`typst`, `typst-render`) | Typesetting LaTeX formulas; Typst is a scripting language with file, package, plugin and data access | Math worker only; formulas reach it as math markup from Nuschel's own converter, checked to contain no code; a world with one file and no packages, clock or system fonts; a library without `read`, `plugin`, `image`, the data loaders, `eval` and `std`; limits and a deadline per formula (docs/math.md) |
+| `psm` (assembly, through `stacker`) | Typst's evaluator grows its stack on deep recursion | Only through `stacker` and `typst-eval`, in the math worker |
 
 The `cargo-deny` wrapper rules enforce ownership for the named top-level dependencies.
 They do not automatically audit every transitive crate, dynamic system library, or new
@@ -43,6 +45,13 @@ The Linux content supervisor uses bubblewrap namespaces, read-only runtime libra
 an empty environment, private temporary storage, a 512 MiB address-space limit, a
 five-second CPU limit, and a five-second wall deadline. It kills and reaps failed
 one-shot helpers. It does not expose the user's home, audio devices, or network.
+
+The math worker (docs/math.md) runs in the content worker's sandbox, but stays up
+between formulas: it starts on the first formula and stops after a minute without
+one. Each formula has a three-second deadline, after which the worker is killed and
+the next formula starts a fresh one; its CPU limit (120 s) covers its life, its
+address space is limited like the content worker's, and it answers with coverage
+masks the desktop checks against their size and the limits before drawing them.
 
 Desktop confinement must restrict filesystem/network access, inherited environment and
 handles, process creation, memory, CPU, and wall time. Content processing needs no
@@ -130,7 +139,7 @@ The NixOS server's storage preflight inherits its hardened systemd unit.
 ### macOS and Windows (implemented, not yet validated on those systems)
 
 macOS workers start under `sandbox-exec` with Seatbelt profiles (`crates/ipc/src/host.rs`).
-Content and storage workers are deny-by-default on top of Apple's `system.sb`. Storage
+Content, math and storage workers are deny-by-default on top of Apple's `system.sb`. Storage
 may read and write only its history directory, and neither gets any network rule. The
 media worker needs CoreAudio's undocumented Mach services, so for now it is confined by
 a deny list: no network, no process execution, no writes outside temporary
@@ -160,6 +169,7 @@ lock is the main lock cut down) give hostile input to every parser that takes it
 | `relay`, `crypt`, `voice`, `voice_playback` | voice: the server's relay, OCB2 decryption, the client's decoding, the media worker's jitter buffer and Opus decoder |
 | `identity`, `kt` | identity and key-transparency encodings and verifiers |
 | `transfer_offer`, `mumble_url`, `policy_file` | file offers in messages, `mumble://` links and invites, `nuschel-policy.json` |
+| `math`, `math_tokens` | LaTeX through the converter, its check, Typst and the rasteriser; message text through the formula grammar (tokens are the bytes typed, never from code, the text unchanged) |
 
 `just fuzz <target> [seconds] [libFuzzer flags]` runs one in the flake's fuzz shell
 (`nix develop .#fuzz`: the newest nightly in the pinned rust-overlay, and cargo-fuzz),

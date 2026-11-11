@@ -65,8 +65,10 @@ Later (reported):
       in the composer's footer line (no layout shift), a polite live region; Settings →
       Privacy turns sending off. Stock Mumble servers: none (`PluginDataTransmission`
       is forwarded without channel authorisation, docs/extension.md §7).
-- [ ] LaTeX/math in messages: e.g. a Typst compiler in its own sandboxed worker
-      rendering to an image, with resource limits.
+- [x] LaTeX/math in messages: `$…$`, `$$…$$` and ```` ```math ```` as tokens of the
+      Markdown grammar, rendered by Typst in the sandboxed math worker (docs/math.md).
+      Remaining: the worker on Windows has only process separation; `\text` in
+      other scripts than Latin lacks glyphs (one font); math in links' URLs.
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
       relays (perhaps a small chunk cache, content-defined chunking); resumable
       across restarts and lost connections; clearly shown while still uploading.
