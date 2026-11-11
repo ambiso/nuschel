@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod audio;
+pub mod transfer;
 
 /// Parsing limits are separate from UI collapsing. Storage retains the original body.
 /// 256 KiB covers Mumble's default 128 KiB image messages with room for markup.
