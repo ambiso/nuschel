@@ -1,0 +1,264 @@
+# Home Manager module for the Nuschel desktop client. It does not depend on
+# this flake's nixpkgs: only the package comes from the flake, chosen for the
+# consumer's platform and replaceable through `programs.nuschel.package`.
+{ self }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+let
+  inherit (lib) mkOption types;
+  cfg = config.programs.nuschel;
+  json = pkgs.formats.json { };
+  inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin system;
+
+  # Nuschel's configuration folder: ProjectDirs::from("org", "Nuschel",
+  # "Nuschel") in crates/session/src/config.rs.
+  configDir =
+    if isDarwin then
+      "${config.home.homeDirectory}/Library/Application Support/org.Nuschel.Nuschel"
+    else
+      "${config.xdg.configHome}/nuschel";
+
+  # The entry the in-app switch writes (apps/desktop/src/autostart.rs), under
+  # the same file name, so the app shows the switch as on and never adds a
+  # second one. Exec names this generation's binary: Home Manager rewrites the
+  # entry on every switch, and the session's PATH may not include the profile.
+  autostartEntry = pkgs.writeTextDir "org.nuschel.Nuschel.desktop" ''
+    [Desktop Entry]
+    Type=Application
+    Name=Nuschel
+    Comment=Voice and text chat
+    Exec=${lib.getExe cfg.package} --autostart
+    Icon=org.nuschel.Nuschel
+    Terminal=false
+    X-GNOME-Autostart-enabled=true
+  '';
+  autostartReadOnly =
+    (config.xdg.autostart.enable or false) && (config.xdg.autostart.readOnly or false);
+
+  # What crates/session/src/config.rs accepts when loading servers.json. A
+  # bookmark it rejects stops Nuschel from starting, so these are checked here.
+  host = types.strMatching "[^][[:space:][:cntrl:]/@\\]{1,253}" // {
+    description = "hostname or IP address (IPv6 without brackets), at most 253 bytes";
+  };
+  username =
+    types.addCheck (types.strMatching "[^[:cntrl:]]{1,128}") (
+      name: builtins.match "[[:space:]]*" name == null
+    )
+    // {
+      description = "user name of at most 128 bytes without control characters";
+    };
+  server =
+    { config, ... }:
+    {
+      options = {
+        name = mkOption {
+          type = types.strMatching "[^[:cntrl:]]{1,128}";
+          default = config.host;
+          defaultText = lib.literalExpression "host";
+          description = "Name shown in the server list.";
+        };
+        host = mkOption {
+          type = host;
+          example = "voice.example.org";
+          description = "Hostname or IP address of the Mumble server.";
+        };
+        port = mkOption {
+          type = types.ints.between 1 65535;
+          default = 64738;
+          description = "Port of the Mumble server.";
+        };
+        username = mkOption {
+          type = username;
+          example = "alice";
+          description = "User name to log in with.";
+        };
+        autoConnect = mkOption {
+          type = types.bool;
+          default = true;
+          description = "Connect when Nuschel starts, self-muted and deafened.";
+        };
+        tokens = mkOption {
+          type = types.listOf (types.addCheck types.str (token: lib.stringLength token <= 256));
+          default = [ ];
+          description = ''
+            Access tokens (ACL group passwords), sent with every login.
+            They are stored in the world-readable Nix store.
+          '';
+        };
+        certificateSha256 = mkOption {
+          type = types.nullOr (types.strMatching "[0-9a-fA-F]{64}");
+          default = null;
+          description = ''
+            SHA-256 fingerprint (hexadecimal) of the server's certificate. When set,
+            Nuschel accepts exactly this certificate without asking, and no other,
+            including CA-signed ones. Use it for a self-signed certificate you
+            verified independently. Without it, Nuschel asks on first connect.
+          '';
+        };
+      };
+    };
+  # A stable UUID per endpoint and user, so a bookmark keeps its identity
+  # however the list is ordered.
+  bookmarkId =
+    server:
+    let
+      h = builtins.hashString "sha256" "nuschel-home-manager:${lib.toLower server.host}:${toString server.port}:${server.username}";
+      part = start: length: builtins.substring start length h;
+    in
+    "${part 0 8}-${part 8 4}-8${part 13 3}-a${part 17 3}-${part 20 12}";
+  bookmark = server: {
+    id = bookmarkId server;
+    inherit (server)
+      name
+      port
+      username
+      tokens
+      ;
+    host = lib.toLower server.host;
+    certificate_sha256 = lib.mapNullable lib.toLower server.certificateSha256;
+    auto_connect = server.autoConnect;
+  };
+
+  initialFiles =
+    lib.optionalAttrs (cfg.initialSettings != { }) {
+      "settings.json" = json.generate "nuschel-settings.json" cfg.initialSettings;
+    }
+    // lib.optionalAttrs (cfg.initialServers != [ ]) {
+      "servers.json" = json.generate "nuschel-servers.json" (map bookmark cfg.initialServers);
+    };
+  # Writes each file only where Nuschel has none. Nuschel creates the folder
+  # owner-only and its files 0600; this does the same.
+  writeInitialFiles = pkgs.writeShellScript "nuschel-initial-files" ''
+    set -eu
+    PATH=${lib.makeBinPath [ pkgs.coreutils ]}
+    directory=$1
+    install -d -m 0700 -- "$directory"
+    ${lib.concatStrings (
+      lib.mapAttrsToList (name: file: ''
+        if [ ! -e "$directory/${name}" ] && [ ! -L "$directory/${name}" ]; then
+          install -m 0600 -- ${file} "$directory/.${name}.home-manager"
+          mv -f -- "$directory/.${name}.home-manager" "$directory/${name}"
+          echo "Nuschel: wrote $directory/${name}"
+        fi
+      '') initialFiles
+    )}
+  '';
+in
+{
+  options.programs.nuschel = {
+    enable = lib.mkEnableOption "Nuschel, a Mumble-compatible voice and text chat client";
+
+    package = mkOption {
+      type = types.package;
+      default = self.packages.${system}.default;
+      defaultText = lib.literalExpression "inputs.nuschel.packages.\${pkgs.stdenv.hostPlatform.system}.default";
+      description = "The Nuschel package. Its desktop entry and icons are installed with it.";
+    };
+
+    autostart = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Start Nuschel minimised when you log in (Linux), through the XDG
+        autostart entry that **Settings → General** would write. The entry
+        replaces one the app wrote earlier. Turning the switch off in the app
+        removes it until the next `home-manager switch`. When this is
+        `false`, the module leaves the entry and the in-app switch alone.
+      '';
+    };
+
+    initialSettings = mkOption {
+      type = types.attrsOf json.type;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          enter_sends = false;
+          push_to_talk_key = "f13";
+          audio = {
+            transmit = "push_to_talk";
+            echo_cancellation = "auto";
+          };
+        }
+      '';
+      description = ''
+        Settings written to Nuschel's `settings.json`, in its own format
+        (`ClientSettings` in crates/session/src/config.rs; keys you leave out
+        keep their defaults).
+
+        The file is written only if it does not exist yet, typically before
+        Nuschel's first start. Nuschel owns it after that: changes here no
+        longer apply, and Nuschel overwrites it when you change a setting.
+        A key Nuschel does not know makes it ignore the whole file.
+      '';
+    };
+
+    initialServers = mkOption {
+      type = types.listOf (types.submodule server);
+      default = [ ];
+      example = lib.literalExpression ''
+        [
+          {
+            name = "Team";
+            host = "voice.example.org";
+            username = "alice";
+          }
+        ]
+      '';
+      description = ''
+        Server bookmarks written to Nuschel's `servers.json`, only if the file
+        does not exist yet. Like {option}`programs.nuschel.initialSettings`,
+        they seed a new profile: Nuschel owns the file after that.
+      '';
+    };
+  };
+
+  config = lib.mkIf cfg.enable (
+    lib.mkMerge [
+      {
+        assertions = [
+          {
+            assertion = !cfg.autostart || isLinux;
+            message = "programs.nuschel.autostart is supported on Linux only; on macOS use Nuschel's Settings → General.";
+          }
+          {
+            assertion = lib.length cfg.initialServers <= 100;
+            message = "programs.nuschel.initialServers: Nuschel saves at most 100 servers.";
+          }
+          {
+            assertion = lib.all (server: lib.length server.tokens <= 64) cfg.initialServers;
+            message = "programs.nuschel.initialServers: at most 64 access tokens per server.";
+          }
+          {
+            assertion =
+              let
+                ids = map bookmarkId cfg.initialServers;
+              in
+              lib.length ids == lib.length (lib.unique ids);
+            message = "programs.nuschel.initialServers: each host, port and user name may appear only once.";
+          }
+        ];
+        home.packages = [ cfg.package ];
+      }
+      (lib.mkIf (cfg.autostart && isLinux && !autostartReadOnly) {
+        xdg.configFile."autostart/org.nuschel.Nuschel.desktop" = {
+          source = "${autostartEntry}/org.nuschel.Nuschel.desktop";
+          # The app writes an equivalent file here; replace it.
+          force = true;
+        };
+      })
+      # A read-only autostart folder takes its entries from this list.
+      (lib.mkIf (cfg.autostart && isLinux && autostartReadOnly) {
+        xdg.autostart.entries = [ "${autostartEntry}/org.nuschel.Nuschel.desktop" ];
+      })
+      (lib.mkIf (initialFiles != { }) {
+        home.activation.nuschelInitialFiles = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+          run ${writeInitialFiles} ${lib.escapeShellArg configDir}
+        '';
+      })
+    ]
+  );
+}

@@ -13,6 +13,12 @@
       url = "github:rustsec/advisory-db";
       flake = false;
     };
+    # Only for checking the Home Manager module; it does not use this input,
+    # so consumers bring their own Home Manager.
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     # Older stock servers for interoperability tests only (legacy UDP format).
     nixpkgs-mumble14.url = "github:NixOS/nixpkgs/nixos-22.11";
     nixpkgs-mumble13.url = "github:NixOS/nixpkgs/nixos-21.05";
@@ -26,12 +32,15 @@
       flake-utils,
       rust-overlay,
       advisory-db,
+      home-manager,
       nixpkgs-mumble14,
       nixpkgs-mumble13,
       ...
     }:
     {
       nixosModules.default = import ./nix/module.nix { inherit self; };
+      homeModules.default = import ./nix/home-manager.nix { inherit self; };
+      homeManagerModules.default = self.homeModules.default;
     }
     // flake-utils.lib.eachDefaultSystem (
       system:
@@ -445,17 +454,28 @@
             '';
           };
         }
-        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          vm-smoke = import ./nix/vm-smoke.nix {
-            inherit pkgs;
-            nuschel = package;
-            module = self.nixosModules.default;
-            legacyServers = {
-              "1.4" = "${nixpkgs-mumble14.legacyPackages.${system}.murmur}/bin/mumble-server";
-              "1.3" = "${nixpkgs-mumble13.legacyPackages.${system}.murmur}/bin/murmurd";
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+          let
+            homeManagerChecks = import ./nix/home-manager-test.nix {
+              inherit pkgs home-manager;
+              module = self.homeModules.default;
+              nuschel = package;
             };
-          };
-        };
+          in
+          {
+            home-manager = homeManagerChecks.files;
+            vm-home-manager = homeManagerChecks.vm;
+            vm-smoke = import ./nix/vm-smoke.nix {
+              inherit pkgs;
+              nuschel = package;
+              module = self.nixosModules.default;
+              legacyServers = {
+                "1.4" = "${nixpkgs-mumble14.legacyPackages.${system}.murmur}/bin/mumble-server";
+                "1.3" = "${nixpkgs-mumble13.legacyPackages.${system}.murmur}/bin/murmurd";
+              };
+            };
+          }
+        );
         devShells.default = craneLib.devShell {
           inherit buildInputs;
           LIBCLANG_PATH = common.LIBCLANG_PATH;

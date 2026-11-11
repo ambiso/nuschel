@@ -138,6 +138,39 @@ If the log reports a missing `GLIBC_*` version, update the pin with
 `nix flake update nixpkgs` and rebuild. Adding driver search paths cannot fix that
 ABI mismatch.
 
+## Home Manager
+
+The flake exports a Home Manager module, `homeModules.default` (also
+`homeManagerModules.default`). It installs the package with its desktop entry and
+icons and works with your own nixpkgs: only the package comes from this flake, and
+`programs.nuschel.package` replaces it.
+
+```nix
+# Flake input: nuschel.url = "github:ambiso/nuschel";
+imports = [ inputs.nuschel.homeModules.default ];
+programs.nuschel = {
+  enable = true;
+  # Start minimised at login (Linux), with the entry Settings → General writes.
+  autostart = true;
+  # Written only where Nuschel has no settings.json or servers.json yet.
+  initialServers = [
+    { name = "Team"; host = "voice.example.org"; username = "alice"; }
+  ];
+  initialSettings = {
+    enter_sends = false;
+    push_to_talk_key = "f13";
+    audio.transmit = "push_to_talk";
+  };
+};
+```
+
+Nuschel saves `settings.json` and `servers.json` itself (in `~/.config/nuschel`),
+so the module never replaces them with read-only links. `initialSettings` and
+`initialServers` only seed a new profile: once the files exist, Nuschel owns them
+and later changes to these options do not apply. With `autostart`, turning the
+switch off in the app lasts until the next `home-manager switch`. The check
+`.#checks.x86_64-linux.vm-home-manager` boots a VM in which logging in starts Nuschel.
+
 ## Server module and databases
 
 The flake exports `nixosModules.default` and a headless `packages.<system>.server`

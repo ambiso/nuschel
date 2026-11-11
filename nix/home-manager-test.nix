@@ -1,0 +1,283 @@
+# Checks for the Home Manager module (nix/home-manager.nix).
+#   files: evaluates Home Manager configurations and inspects what they generate.
+#   vm:    a NixOS machine with Home Manager, where logging in autostarts Nuschel.
+{
+  pkgs,
+  home-manager,
+  module,
+  nuschel,
+}:
+let
+  inherit (pkgs) lib;
+  homeWith =
+    extra:
+    home-manager.lib.homeManagerConfiguration {
+      inherit pkgs;
+      modules = [
+        module
+        {
+          home = {
+            username = "alice";
+            homeDirectory = "/home/alice";
+            stateVersion = "26.05";
+          };
+          programs.nuschel.enable = true;
+        }
+        extra
+      ];
+    };
+  pin = builtins.hashString "sha256" "fixture certificate";
+  full = homeWith {
+    programs.nuschel = {
+      autostart = true;
+      initialSettings = {
+        enter_sends = false;
+        push_to_talk_key = "f13";
+        audio.transmit = "push_to_talk";
+      };
+      initialServers = [
+        {
+          name = "Team";
+          host = "Voice.Example.org";
+          username = "alice";
+          tokens = [ "blue" ];
+        }
+        {
+          host = "::1";
+          port = 64739;
+          username = "alice";
+          autoConnect = false;
+          certificateSha256 = lib.toUpper pin;
+        }
+      ];
+    };
+  };
+  readOnly = homeWith {
+    xdg.autostart = {
+      enable = true;
+      readOnly = true;
+    };
+    programs.nuschel.autostart = true;
+  };
+  plain = homeWith { };
+
+  # Bookmarks crates/session/src/config.rs would refuse (Nuschel would not
+  # start) fail evaluation instead.
+  server = attrs: {
+    programs.nuschel.initialServers = [
+      (
+        {
+          host = "voice.example.org";
+          username = "alice";
+        }
+        // attrs
+      )
+    ];
+  };
+  refused = {
+    host-with-space = server { host = "voice example.org"; };
+    host-with-slash = server { host = "voice.example.org/x"; };
+    bracketed-ipv6 = server { host = "[::1]"; };
+    port-zero = server { port = 0; };
+    blank-username = server { username = "  "; };
+    long-username = server { username = lib.concatStrings (lib.genList (_: "a") 129); };
+    short-pin = server { certificateSha256 = "abcd"; };
+    long-token = server { tokens = [ (lib.concatStrings (lib.genList (_: "a") 257)) ]; };
+    duplicate.programs.nuschel.initialServers = [
+      {
+        host = "voice.example.org";
+        username = "alice";
+      }
+      {
+        name = "Again";
+        host = "VOICE.example.org";
+        username = "alice";
+      }
+    ];
+  };
+  # A type error throws; a failed assertion is false. Forcing only these two
+  # is much cheaper than evaluating the whole activation package.
+  accepts =
+    extra:
+    let
+      inherit (homeWith extra) config;
+      result = builtins.tryEval (
+        builtins.deepSeq config.programs.nuschel.initialServers (lib.all (a: a.assertion) config.assertions)
+      );
+    in
+    result.success && result.value;
+  accepted = lib.attrNames (lib.filterAttrs (_: accepts) refused);
+
+  autostartSource = ../apps/desktop/src/autostart.rs;
+in
+assert lib.assertMsg (
+  full.config.programs.nuschel.package.outPath == nuschel.outPath
+) "programs.nuschel.package does not default to this flake's package";
+assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toString accepted}";
+{
+  files =
+    pkgs.runCommand "nuschel-home-manager-files"
+      {
+        nativeBuildInputs = [
+          pkgs.desktop-file-utils
+          pkgs.jq
+        ];
+      }
+      ''
+        home=${full.activationPackage}
+
+        # The autostart entry is the one the in-app switch writes, with this
+        # package's binary in place of the program the app finds.
+        entry=$home/home-files/.config/autostart/org.nuschel.Nuschel.desktop
+        desktop-file-validate "$entry"
+        template=$(grep -o '"\[Desktop Entry\]\\n[^"]*"' ${autostartSource}) || {
+          echo "apps/desktop/src/autostart.rs no longer has the entry's format string" >&2
+          exit 1
+        }
+        flag=$(sed -n 's/^pub const FLAG: &str = "\(.*\)";$/\1/p' ${autostartSource})
+        test "$flag" = --autostart
+        template=''${template:1:-1}
+        template=''${template//\{program\}/${lib.getExe nuschel}}
+        template=''${template//\{FLAG\}/$flag}
+        printf '%b' "$template" > expected.desktop
+        if ! cmp expected.desktop "$entry"; then
+          diff -u expected.desktop "$entry" >&2 || true
+          echo "Update the autostart entry in nix/home-manager.nix to match the app's" >&2
+          exit 1
+        fi
+
+        # The package, its desktop entry and icons.
+        test "$(readlink -f "$home/home-path/bin/nuschel")" = "$(readlink -f ${nuschel}/bin/nuschel)"
+        test -e "$home/home-path/share/applications/org.nuschel.Nuschel.desktop"
+        test -e "$home/home-path/share/icons/hicolor/scalable/apps/org.nuschel.Nuschel.svg"
+
+        # A read-only autostart folder lists the same entry.
+        test -L ${readOnly.activationPackage}/home-files/.config/autostart
+        cmp "$entry" ${readOnly.activationPackage}/home-files/.config/autostart/org.nuschel.Nuschel.desktop
+
+        # Without autostart or initial files the module installs the package only.
+        test ! -e ${plain.activationPackage}/home-files/.config/autostart
+        if grep -q nuschel-initial-files ${plain.activationPackage}/activate; then
+          echo "initial files are written although none are set" >&2
+          exit 1
+        fi
+        test -e ${plain.activationPackage}/home-path/bin/nuschel
+
+        # The activation step and what it writes.
+        seed=$(grep -o '/nix/store/[a-z0-9]*-nuschel-initial-files' "$home/activate" | head -n 1)
+        grep -qF "run $seed /home/alice/.config/nuschel" "$home/activate"
+        dir=$PWD/home/alice/.config/nuschel
+        "$seed" "$dir" > first.log
+        grep -qFx "Nuschel: wrote $dir/settings.json" first.log
+        grep -qFx "Nuschel: wrote $dir/servers.json" first.log
+        test "$(stat -c %a "$dir")" = 700
+        test "$(stat -c %a "$dir/settings.json")" = 600
+        test "$(stat -c %a "$dir/servers.json")" = 600
+        jq -e '. == {enter_sends: false, push_to_talk_key: "f13", audio: {transmit: "push_to_talk"}}' "$dir/settings.json"
+        uuid='^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-a[0-9a-f]{3}-[0-9a-f]{12}$'
+        jq -e --arg uuid "$uuid" 'length == 2 and all(.[]; .id | test($uuid)) and .[0].id != .[1].id' "$dir/servers.json"
+        jq -e '.[0] == {id: .[0].id, name: "Team", host: "voice.example.org", port: 64738, username: "alice",
+          tokens: ["blue"], certificate_sha256: null, auto_connect: true}' "$dir/servers.json"
+        jq -e '.[1] == {id: .[1].id, name: "::1", host: "::1", port: 64739, username: "alice",
+          tokens: [], certificate_sha256: "${pin}", auto_connect: false}' "$dir/servers.json"
+
+        # Once a file exists Nuschel owns it; a deleted one is written again.
+        echo '[]' > "$dir/servers.json"
+        rm "$dir/settings.json"
+        "$seed" "$dir" > second.log
+        test "$(cat "$dir/servers.json")" = "[]"
+        test "$(cat second.log)" = "Nuschel: wrote $dir/settings.json"
+        test -z "$(find "$dir" -name '.*.home-manager')"
+        touch "$out"
+      '';
+
+  vm = pkgs.testers.runNixOSTest {
+    name = "nuschel-home-manager";
+    nodes.machine = {
+      imports = [ home-manager.nixosModules.home-manager ];
+      users.users.alice = {
+        isNormalUser = true;
+        uid = 1000;
+      };
+      home-manager = {
+        useGlobalPkgs = true;
+        useUserPackages = true;
+        users.alice = {
+          imports = [ module ];
+          home.stateVersion = "26.05";
+          programs.nuschel = {
+            enable = true;
+            autostart = true;
+            initialSettings.enter_sends = false;
+            initialServers = [
+              {
+                name = "Local";
+                host = "127.0.0.1";
+                username = "alice";
+              }
+            ];
+          };
+        };
+      };
+      # The bookmark's server: its log shows when the autostarted app connects.
+      services.murmur.enable = true;
+      # What a desktop session provides: a display, and a target that starts
+      # the units systemd generates from XDG autostart entries.
+      systemd.user.services.xvfb.serviceConfig.ExecStart =
+        "${pkgs.xvfb}/bin/Xvfb :99 -screen 0 1280x800x24";
+      systemd.user.targets.test-session.wants = [ "xdg-desktop-autostart.target" ];
+      hardware.graphics.enable = true;
+      fonts.packages = [ pkgs.dejavu_fonts ];
+      environment.systemPackages = [ pkgs.xdotool ];
+      virtualisation.memorySize = 2048;
+      virtualisation.cores = 2;
+    };
+    testScript = ''
+      user = "--user -M alice@"
+      unit = "app-org.nuschel.Nuschel@autostart.service"
+      entry = "/home/alice/.config/autostart/org.nuschel.Nuschel.desktop"
+      config = "/home/alice/.config/nuschel"
+
+      machine.wait_for_unit("home-manager-alice.service")
+      machine.wait_for_unit("murmur.service")
+
+      with subtest("the package is on the user's PATH with its desktop entry and icons"):
+          machine.succeed("su - alice -c 'nuschel --version' | grep -Fx 'nuschel 0.1.0'")
+          machine.succeed("test \"$(su - alice -c 'readlink -f \"$(command -v nuschel)\"')\" = ${nuschel}/bin/nuschel")
+          machine.succeed("test -e /etc/profiles/per-user/alice/share/applications/org.nuschel.Nuschel.desktop")
+          machine.succeed("test -e /etc/profiles/per-user/alice/share/icons/hicolor/scalable/apps/org.nuschel.Nuschel.svg")
+
+      with subtest("the initial files are private to alice"):
+          machine.succeed(f"test \"$(stat -c '%a %U' {config})\" = '700 alice'")
+          machine.succeed(f"test \"$(stat -c '%a %U' {config}/servers.json {config}/settings.json)\" = \"$(printf '600 alice\\n600 alice')\"")
+          machine.succeed(f"grep -F '\"host\": \"127.0.0.1\"' {config}/servers.json")
+
+      with subtest("logging in starts Nuschel minimised from the autostart entry"):
+          machine.succeed("loginctl enable-linger alice")
+          machine.wait_for_unit("user@1000.service")
+          machine.wait_for_unit("default.target", "alice")
+          # systemd's XDG autostart generator turned the entry into a unit.
+          machine.succeed(f"systemctl {user} show -p ExecStart {unit} | grep -F 'argv[]=${nuschel}/bin/nuschel --autostart ;'")
+          machine.succeed(f"systemctl {user} start xvfb.service")
+          machine.wait_until_succeeds("test -S /tmp/.X11-unix/X99")
+          machine.succeed(f"systemctl {user} set-environment DISPLAY=:99 LIBGL_ALWAYS_SOFTWARE=1 LP_NUM_THREADS=2")
+          machine.succeed(f"systemctl {user} start test-session.target")
+          machine.wait_until_succeeds(f"systemctl {user} is-active {unit}")
+          machine.wait_until_succeeds("su - alice -c 'DISPLAY=:99 xdotool search --name ^Nuschel$'")
+          # It read the seeded bookmark and connected on start.
+          machine.wait_until_succeeds("journalctl -u murmur.service --grep 'New connection'")
+          machine.succeed(f"systemctl {user} is-active {unit}")
+          machine.succeed(f"systemctl {user} stop {unit}")
+
+      with subtest("switching again keeps Nuschel's files and replaces an entry the app wrote"):
+          # The in-app switch turned off and on again: the app's own file in
+          # place of the link (it names the program on PATH).
+          machine.succeed(f"su - alice -c 'sed \"s|^Exec=.*|Exec=nuschel --autostart|\" {entry} > {entry}.new && mv {entry}.new {entry}'")
+          machine.succeed(f"test ! -L {entry}")
+          machine.succeed(f"su - alice -c 'echo [] > {config}/servers.json'")
+          machine.succeed("systemctl restart home-manager-alice.service")
+          machine.succeed(f"test -L {entry}")
+          machine.succeed(f"test \"$(cat {config}/servers.json)\" = '[]'")
+    '';
+  };
+}
