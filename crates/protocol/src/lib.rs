@@ -5,6 +5,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use thiserror::Error;
 
 pub mod crypt;
+pub mod relay;
 pub mod voice;
 
 pub mod control {
@@ -17,6 +18,60 @@ pub mod udp {
 
 pub const HEADER_BYTES: usize = 6;
 pub const MAX_CONTROL_BYTES: usize = 8 * 1024 * 1024;
+
+/// Control message types: the first two bytes of a frame header.
+pub mod kind {
+    pub const VERSION: u16 = 0;
+    pub const UDP_TUNNEL: u16 = 1;
+    pub const AUTHENTICATE: u16 = 2;
+    pub const PING: u16 = 3;
+    pub const REJECT: u16 = 4;
+    pub const SERVER_SYNC: u16 = 5;
+    pub const CHANNEL_REMOVE: u16 = 6;
+    pub const CHANNEL_STATE: u16 = 7;
+    pub const USER_REMOVE: u16 = 8;
+    pub const USER_STATE: u16 = 9;
+    pub const BAN_LIST: u16 = 10;
+    pub const TEXT_MESSAGE: u16 = 11;
+    pub const PERMISSION_DENIED: u16 = 12;
+    pub const ACL: u16 = 13;
+    pub const QUERY_USERS: u16 = 14;
+    pub const CRYPT_SETUP: u16 = 15;
+    pub const CONTEXT_ACTION_MODIFY: u16 = 16;
+    pub const CONTEXT_ACTION: u16 = 17;
+    pub const USER_LIST: u16 = 18;
+    pub const VOICE_TARGET: u16 = 19;
+    pub const PERMISSION_QUERY: u16 = 20;
+    pub const CODEC_VERSION: u16 = 21;
+    pub const USER_STATS: u16 = 22;
+    pub const REQUEST_BLOB: u16 = 23;
+    pub const SERVER_CONFIG: u16 = 24;
+    pub const SUGGEST_CONFIG: u16 = 25;
+    pub const PLUGIN_DATA_TRANSMISSION: u16 = 26;
+    /// Reserved for the Nuschel extension (`docs/extension.md`): 0x4E00–0x4EFF.
+    pub const NUSCHEL_EXTENSION: std::ops::RangeInclusive<u16> = 0x4e00..=0x4eff;
+}
+
+/// A complete control frame (header and protobuf body) in one buffer, so a
+/// broadcast encodes once and shares the bytes.
+pub fn encode_control(kind: u16, message: &impl prost::Message) -> Bytes {
+    let length = message.encoded_len();
+    let mut buffer = BytesMut::with_capacity(HEADER_BYTES + length);
+    buffer.extend_from_slice(&kind.to_be_bytes());
+    buffer.extend_from_slice(&(length as u32).to_be_bytes());
+    // Encoding into a buffer with enough capacity cannot fail.
+    let _ = message.encode(&mut buffer);
+    buffer.freeze()
+}
+
+/// A tunneled voice datagram as a `UDPTunnel` frame (raw bytes, not protobuf).
+pub fn encode_tunnel(payload: &[u8]) -> Bytes {
+    let mut buffer = BytesMut::with_capacity(HEADER_BYTES + payload.len());
+    buffer.extend_from_slice(&kind::UDP_TUNNEL.to_be_bytes());
+    buffer.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    buffer.extend_from_slice(payload);
+    buffer.freeze()
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ControlFrame {

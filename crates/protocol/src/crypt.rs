@@ -66,6 +66,8 @@ fn times3(block: &Block) -> Block {
 }
 
 impl CryptState {
+    /// Named from the client's side: the client encrypts with `client_nonce` and
+    /// decrypts with `server_nonce`. A server passes them the other way round.
     pub fn new(key: &[u8], client_nonce: &[u8], server_nonce: &[u8]) -> Result<Self, CryptError> {
         let key: &Block = key.try_into().map_err(|_| CryptError::InvalidLength)?;
         Ok(Self {
@@ -106,21 +108,38 @@ impl CryptState {
     }
 
     pub fn encrypt(&mut self, plain: &[u8]) -> Vec<u8> {
+        let mut out = vec![0; plain.len() + HEADER];
+        self.encrypt_into(plain, &mut out);
+        out
+    }
+
+    /// Encrypt into `out` without allocating; returns the packet length
+    /// (`plain.len() + HEADER`), or `None` if `out` is too small.
+    pub fn encrypt_into(&mut self, plain: &[u8], out: &mut [u8]) -> Option<usize> {
+        let length = plain.len() + HEADER;
+        let out = out.get_mut(..length)?;
         for byte in self.encrypt_iv.iter_mut() {
             *byte = byte.wrapping_add(1);
             if *byte != 0 {
                 break;
             }
         }
-        let mut out = vec![0; plain.len() + HEADER];
         let tag = self.ocb_encrypt(plain, &mut out[HEADER..], &self.encrypt_iv.clone());
         out[0] = self.encrypt_iv[0];
         out[1..HEADER].copy_from_slice(&tag[..3]);
-        out
+        Some(length)
     }
 
     pub fn decrypt(&mut self, packet: &[u8]) -> Option<Vec<u8>> {
-        if packet.len() < HEADER {
+        let mut plain = vec![0; packet.len().checked_sub(HEADER)?];
+        self.decrypt_into(packet, &mut plain)?;
+        Some(plain)
+    }
+
+    /// Decrypt into `out` without allocating; returns the plaintext length.
+    /// A failed packet leaves the nonce state as it was (`out` may hold garbage).
+    pub fn decrypt_into(&mut self, packet: &[u8], out: &mut [u8]) -> Option<usize> {
+        if packet.len() < HEADER || out.len() < packet.len() - HEADER {
             return None;
         }
         let saved = self.decrypt_iv;
@@ -176,9 +195,9 @@ impl CryptState {
                 return None;
             }
         }
-        let mut plain = vec![0; packet.len() - HEADER];
+        let plain = &mut out[..packet.len() - HEADER];
         let iv = self.decrypt_iv;
-        let tag = self.ocb_decrypt(&packet[HEADER..], &mut plain, &iv);
+        let tag = self.ocb_decrypt(&packet[HEADER..], plain, &iv);
         if tag.is_none_or(|tag| tag[..3] != packet[1..HEADER]) {
             self.decrypt_iv = saved;
             return None;
@@ -194,7 +213,7 @@ impl CryptState {
         } else {
             self.stats.lost.saturating_sub(lost.unsigned_abs())
         };
-        Some(plain)
+        Some(packet.len() - HEADER)
     }
 
     fn ocb_encrypt(&self, mut plain: &[u8], mut out: &mut [u8], nonce: &Block) -> Block {
