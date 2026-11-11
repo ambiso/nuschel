@@ -41,6 +41,9 @@ pub struct ServerBookmark {
     /// When the icon was last looked for (milliseconds since the epoch).
     #[serde(default)]
     pub icon_checked_ms: i64,
+    /// The channel you were last in; rejoined when Nuschel connects again.
+    #[serde(default)]
+    pub last_channel: Option<u32>,
 }
 
 /// A small RGBA image (base64), as decoded by the sandboxed content worker.
@@ -94,6 +97,7 @@ impl ServerBookmark {
             auto_connect: true,
             icon: None,
             icon_checked_ms: 0,
+            last_channel: None,
         })
     }
 

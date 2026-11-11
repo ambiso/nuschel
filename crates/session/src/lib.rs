@@ -59,7 +59,26 @@ impl Error {
     pub fn transient(&self) -> bool {
         matches!(
             self,
-            Self::Io(_) | Self::Timeout(_) | Self::Protocol(_) | Self::Tls(_)
+            Self::Io(_)
+                | Self::Refused { .. }
+                | Self::Timeout(_)
+                | Self::Protocol(_)
+                | Self::Tls(_)
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn refused_connections_are_retried() {
+        // A restarting server refuses connections for a moment.
+        let refused = Error::Refused {
+            host: "voice.example.org".into(),
+            port: 64738,
+        };
+        assert!(refused.transient());
     }
 }

@@ -77,6 +77,15 @@ class RecoveryTest(DesktopTest):
             self.wait_text("Disconnected from")
             self.capture("reconnected")
             print("Server restart: reconnected, rejoined Lobby muted and marked the history gap.", flush=True)
+
+            # Starting Nuschel again (no link) connects and rejoins the channel it was last in.
+            terminate(self.app)
+            self.args.url = None
+            self.start_app()
+            again = self.peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "RecoveryDesktop"
+                                   and e["user"]["channel"] == 1, timeout=60)["user"]
+            assert again["self_muted"] and again["self_deafened"], "a fresh start must join muted and deafened"
+            print("Restart: Nuschel rejoined Lobby, its last channel.", flush=True)
         finally:
             if self.peer:
                 self.peer.close()
@@ -85,7 +94,8 @@ class RecoveryTest(DesktopTest):
 
     def start_app(self):
         url = getattr(self.args, "url", None)
-        self.app = subprocess.Popen([str(self.args.binaries / "nuschel"), "--profile-dir", str(self.profile), url],
+        self.app = subprocess.Popen([str(self.args.binaries / "nuschel"), "--profile-dir", str(self.profile),
+                                     *([url] if url else [])],
                                     env=self.env, stdout=(self.output / "desktop.log").open("a"),
                                     stderr=subprocess.STDOUT, start_new_session=True)
 

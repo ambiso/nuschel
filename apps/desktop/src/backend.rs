@@ -571,7 +571,9 @@ async fn connection_loop(
     (mut settings, mut push_to_talk): (watch::Receiver<ClientSettings>, watch::Receiver<bool>),
 ) {
     let id = server.id.clone();
+    // A fresh connection rejoins the channel you were last in, like a reconnect.
     let mut restore = Restore {
+        channel: server.last_channel,
         muted: true,
         deafened,
         ..Restore::default()

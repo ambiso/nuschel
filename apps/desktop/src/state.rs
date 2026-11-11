@@ -1385,6 +1385,7 @@ impl Desktop {
                 bookmark.certificate_sha256 = previous.bookmark.certificate_sha256.clone();
                 bookmark.icon = previous.bookmark.icon.clone();
                 bookmark.icon_checked_ms = previous.bookmark.icon_checked_ms;
+                bookmark.last_channel = previous.bookmark.last_channel;
                 bookmark.cached_channels = previous.bookmark.cached_channels.clone();
             }
             let online = previous.status != Status::Disconnected;
@@ -3022,6 +3023,13 @@ impl Desktop {
                 if Some(user.session) == server.own_session {
                     server.muted = user.self_muted;
                     server.deafened = user.self_deafened;
+                    // Remembered for the next start (the root channel is where
+                    // a server puts you anyway).
+                    let last = (user.channel != 0).then_some(user.channel);
+                    if server.bookmark.last_channel != last {
+                        server.bookmark.last_channel = last;
+                        self.cache_dirty = true;
+                    }
                     self.navigation.set_voice(Some(Conversation {
                         server: server.id.clone(),
                         channel: user.channel,
