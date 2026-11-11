@@ -1274,6 +1274,11 @@ impl State {
             )
             .await;
         }
+        if self.encrypted_server()
+            && matches!(command, Command::SendText { .. } | Command::SendHtml { .. })
+        {
+            return emit(events, SessionEvent::Notice("Plaintext chat and attachments are disabled on an encrypted server; send text through MLS.".into())).await;
+        }
         let own = self.own_session.unwrap_or_default();
         match command {
             Command::RelayOnly(relay_only) => {
@@ -1748,10 +1753,18 @@ impl State {
                 },
             ),
             Command::Nuschel(request) => {
-                let negotiated = self.extension.as_ref().is_some_and(|capabilities| {
-                    nuschel::required_capability(request.frame().0)
-                        .is_some_and(|needed| capabilities.iter().any(|have| have == needed))
-                });
+                let protected = matches!(
+                    request,
+                    NuschelRequest::Send(_)
+                        | NuschelRequest::Edit(_)
+                        | NuschelRequest::Delete(_)
+                        | NuschelRequest::Typing(_)
+                );
+                let negotiated = !(self.encrypted_server() && protected)
+                    && self.extension.as_ref().is_some_and(|capabilities| {
+                        nuschel::required_capability(request.frame().0)
+                            .is_some_and(|needed| capabilities.iter().any(|have| have == needed))
+                    });
                 if !negotiated {
                     return emit(
                         events,
@@ -1869,6 +1882,16 @@ impl State {
         (pending, shown): (PendingChat, bool),
         events: &mpsc::Sender<SessionEvent>,
     ) -> Result<(), Error> {
+        if self.encrypted_server() {
+            return emit(
+                events,
+                SessionEvent::ChatFailed {
+                    key: pending.key,
+                    reason: "A queued plaintext message was refused on an encrypted server.".into(),
+                },
+            )
+            .await;
+        }
         self.next_request += 1;
         let request_id = INTERNAL | self.next_request;
         self.queue(
@@ -2201,6 +2224,15 @@ impl State {
         }: Outgoing,
         events: &mpsc::Sender<SessionEvent>,
     ) -> Result<(), Error> {
+        if self.encrypted_server() {
+            return emit(
+                events,
+                SessionEvent::Notice(
+                    "A queued plaintext message was refused on an encrypted server.".into(),
+                ),
+            )
+            .await;
+        }
         let own = self.own_session.unwrap_or_default();
         let mut message = proto::TextMessage {
             message: wire,
@@ -3473,6 +3505,75 @@ pub mod fuzzing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn encrypted_session_emits_no_plaintext_chat_frames_from_raw_or_restored_commands() {
+        let mut state = State {
+            own_session: Some(7),
+            extension: Some(nuschel::capability::ALL.map(str::to_owned).to_vec()),
+            ..State::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        for command in [
+            Command::SendText {
+                target: TextTarget::Channel(0),
+                body: "private caption".into(),
+                expected_peer: None,
+            },
+            Command::SendHtml {
+                target: TextTarget::Channel(0),
+                html: vec!["secret inline image".into()],
+                expected_peer: None,
+            },
+            Command::Nuschel(NuschelRequest::Send(v1::ChatSend {
+                request_id: 1,
+                content: "plaintext send".into(),
+                ..Default::default()
+            })),
+            Command::Nuschel(NuschelRequest::Edit(v1::ChatEdit {
+                request_id: 2,
+                content: "plaintext edit".into(),
+                ..Default::default()
+            })),
+            Command::Nuschel(NuschelRequest::Delete(v1::ChatDelete {
+                request_id: 3,
+                ..Default::default()
+            })),
+        ] {
+            state.command(command, &tx).await.unwrap();
+        }
+        let pending = PendingChat {
+            key: [1; 16],
+            conversation: [2; 16],
+            target: TextTarget::Channel(0),
+            content: "restored secret".into(),
+        };
+        state.outbox.push(Outgoing {
+            target: TextTarget::Channel(0),
+            expected_peer: None,
+            wire: "restored secret".into(),
+            body: "restored secret".into(),
+            html: false,
+            chat: Some((pending, true)),
+        });
+        state.flush_outbox(&tx).await.unwrap();
+        assert!(
+            state.outbox.waiting.is_empty(),
+            "restored plaintext was drained as refused"
+        );
+        assert!(state.outbound.iter().all(|(kind, _)| !matches!(
+            *kind,
+            kind::TEXT_MESSAGE
+                | nuschel::kind::CHAT_SEND
+                | nuschel::kind::CHAT_EDIT
+                | nuschel::kind::CHAT_DELETE
+        )));
+        assert!(
+            rx.try_recv().is_ok(),
+            "the caller receives an explicit local refusal"
+        );
+    }
+
     use nuschel_protocol::nuschel::version;
 
     fn frame<M: Message>(kind: u16, message: M) -> ControlFrame {

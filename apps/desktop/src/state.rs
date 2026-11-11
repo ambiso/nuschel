@@ -1929,6 +1929,14 @@ impl Desktop {
         };
         let text = self.composer.read(cx).value().to_string();
         let server = &mut self.client.servers[server];
+        if server.mls {
+            self.attach_note = Some((
+                key,
+                "Attachments and file offers are not supported on encrypted servers yet.".into(),
+            ));
+            cx.notify();
+            return;
+        }
         let limits = server
             .limits
             .as_ref()
@@ -2001,6 +2009,19 @@ impl Desktop {
             let Some(batch) = self.outgoing.pop_front() else {
                 break;
             };
+            if self
+                .client
+                .servers
+                .iter()
+                .any(|server| server.id == batch.key.0 && server.mls)
+            {
+                self.attach_note = Some((
+                    batch.key.clone(),
+                    "Queued attachments cannot be sent to an encrypted server.".into(),
+                ));
+                self.outgoing.push_back(batch);
+                continue;
+            }
             let resolved = self
                 .client
                 .servers

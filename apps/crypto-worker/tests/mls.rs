@@ -31,6 +31,13 @@ fn archives() -> &'static std::sync::Mutex<std::collections::BTreeMap<Vec<u8>, V
     ARCHIVES.get_or_init(Default::default)
 }
 
+fn authors() -> &'static std::sync::Mutex<std::collections::BTreeMap<Vec<u8>, Vec<u8>>> {
+    static AUTHORS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<Vec<u8>, Vec<u8>>>,
+    > = std::sync::OnceLock::new();
+    AUTHORS.get_or_init(Default::default)
+}
+
 const CONVERSATION: [u8; 16] = [0xc0; 16];
 
 fn conversation() -> Vec<u8> {
@@ -189,6 +196,12 @@ impl Client {
                 server: SERVER.into(),
                 conversation: conversation(),
                 seq,
+                author: authors()
+                    .lock()
+                    .unwrap()
+                    .get(&ds.at(seq))
+                    .cloned()
+                    .unwrap_or_default(),
                 archive: archives()
                     .lock()
                     .unwrap()
@@ -206,6 +219,12 @@ impl Client {
                 server: SERVER.into(),
                 conversation: conversation(),
                 seq,
+                author: authors()
+                    .lock()
+                    .unwrap()
+                    .get(&message)
+                    .cloned()
+                    .unwrap_or_default(),
                 archive: archives()
                     .lock()
                     .unwrap()
@@ -227,6 +246,10 @@ impl Client {
             CryptoResponse::MlsCiphertext {
                 message, archive, ..
             } => {
+                authors()
+                    .lock()
+                    .unwrap()
+                    .insert(message.clone(), self.account.to_vec());
                 archives().lock().unwrap().insert(message.clone(), archive);
                 Ok(message)
             }
@@ -506,20 +529,8 @@ async fn a_stale_epoch_resend_reuses_the_envelope() {
     // A fork: Bob shows the same counter with two different texts.
     let first = bob.envelope(1, [0; 32], "original", [7; 16]);
     let forked = bob.envelope(1, [0; 32], "forged", [8; 16]);
-    let a = ds
-        .send(
-            &bob.client
-                .encrypt(bob.device(), &group, &first.encode())
-                .unwrap(),
-        )
-        .unwrap();
-    let b = ds
-        .send(
-            &bob.client
-                .encrypt(bob.device(), &group, &forked.encode())
-                .unwrap(),
-        )
-        .unwrap();
+    let a = ds.send(&bob.encrypt(&group, &first.encode())).unwrap();
+    let b = ds.send(&bob.encrypt(&group, &forked.encode())).unwrap();
     assert_eq!(text_of(&alice.receive(&ds, a)).1, Order::InOrder);
     assert_eq!(text_of(&alice.receive(&ds, b)).1, Order::Fork);
     assert!(matches!(alice.status().lock, Lock::Attention { .. }));
@@ -864,6 +875,7 @@ fn person_for(
 
 /// A device driven with nuschel-e2ee directly.
 struct RawDevice {
+    account: std::cell::Cell<Option<[u8; 16]>>,
     /// A first device holds its identity (and the device-signing key).
     identity: Option<NewIdentity>,
     /// A second device: its own keys and credential.
@@ -876,6 +888,7 @@ impl RawDevice {
     fn new(name: &str) -> Self {
         let identity = new_identity(name);
         Self {
+            account: std::cell::Cell::new(None),
             certificate: identity.device_certificate.clone(),
             identity: Some(identity),
             extra: None,
@@ -901,6 +914,7 @@ impl RawDevice {
             )
             .unwrap();
         RawDevice {
+            account: std::cell::Cell::new(self.account.get()),
             identity: None,
             extra: Some((keys, credential)),
             certificate,
@@ -930,6 +944,7 @@ impl RawDevice {
 
     /// This identity bound to `account`, with the first device and `more`.
     fn person(&self, dir: &Dir, account: u8, more: &[DeviceCertificate]) -> Person {
+        self.account.set(Some([account; 16]));
         let mut devices = vec![self.certificate.clone()];
         devices.extend_from_slice(more);
         person_for(dir, self.identity(), [account; 16], &devices)
@@ -938,6 +953,18 @@ impl RawDevice {
     fn join(&self, welcome: &[u8], tree: &[u8]) -> Vec<u8> {
         let pending = self.client.stage_welcome(welcome, tree).unwrap();
         self.client.join(pending).unwrap()
+    }
+
+    fn encrypt(&self, group: &[u8], data: &[u8]) -> Vec<u8> {
+        let message = self.client.encrypt(self.device(), group, data).unwrap();
+        authors().lock().unwrap().insert(
+            message.clone(),
+            self.account
+                .get()
+                .expect("fixture actor registered")
+                .to_vec(),
+        );
+        message
     }
 
     fn open(&self, group: &[u8], message: &[u8]) -> Envelope {
@@ -1011,10 +1038,7 @@ async fn a_grant_must_match_the_independently_derived_current_key() {
     let mut envelope = bob.envelope(1, [0; 32], "", [1; 16]);
     envelope.kind = Kind::HistoryGrant;
     envelope.body = encode_grant_page(&[fake_old, wrong], current.index, false).unwrap();
-    let message = bob
-        .client
-        .encrypt(bob.device(), &group, &envelope.encode())
-        .unwrap();
+    let message = bob.encrypt(&group, &envelope.encode());
     let seq = ds.send(&message).unwrap();
     assert!(
         matches!(alice.receive(&ds, seq), Received::Undecryptable { reason, .. } if reason.contains("exporter"))
@@ -1024,15 +1048,53 @@ async fn a_grant_must_match_the_independently_derived_current_key() {
         1,
         "invalid grants change no retained keys"
     );
-    envelope.body =
-        encode_grant_page(std::slice::from_ref(&current), current.index, false).unwrap();
-    let message = bob
-        .client
-        .encrypt(bob.device(), &group, &envelope.encode())
-        .unwrap();
+    envelope.body = encode_grant_page(std::slice::from_ref(&current), current.index, true).unwrap();
+    let first_page = envelope.clone();
+    let message = bob.encrypt(&group, &envelope.encode());
     let seq = ds.send(&message).unwrap();
     assert!(matches!(alice.receive(&ds, seq), Received::Nothing { .. }));
     assert_eq!(alice.status().history_keys, 1);
+    envelope.counter = 2;
+    envelope.prev = first_page.hash();
+    envelope.body =
+        encode_grant_page(std::slice::from_ref(&current), current.index, false).unwrap();
+    let message = bob.encrypt(&group, &envelope.encode());
+    let seq = ds.send(&message).unwrap();
+    assert!(matches!(alice.receive(&ds, seq), Received::Nothing { .. }));
+    let duplicate = bob.encrypt(&group, &envelope.encode());
+    let seq = ds.send(&duplicate).unwrap();
+    assert!(matches!(
+        alice.receive(&ds, seq),
+        Received::Duplicate { .. }
+    ));
+    let replay = bob.encrypt(&group, &first_page.encode());
+    let seq = ds.send(&replay).unwrap();
+    assert!(matches!(alice.receive(&ds, seq), Received::Nothing { .. }));
+    assert!(
+        !alice.status().history_pending,
+        "a replayed early page cannot revert completion"
+    );
+    // A fork cannot insert a previously unknown historical key either.
+    envelope.body = encode_grant_page(
+        &[
+            HistoryKey {
+                index: 0,
+                key: [99; 32],
+            },
+            current.clone(),
+        ],
+        current.index,
+        true,
+    )
+    .unwrap();
+    let fork = bob.encrypt(&group, &envelope.encode());
+    let seq = ds.send(&fork).unwrap();
+    assert!(matches!(alice.receive(&ds, seq), Received::Nothing { .. }));
+    assert_eq!(
+        alice.status().history_keys,
+        1,
+        "forks cannot mutate history grants"
+    );
 
     // An archive holder cannot substitute an unlisted device credential or
     // attribute a genuine signer to somebody else's account.
@@ -1114,5 +1176,90 @@ async fn a_grant_must_match_the_independently_derived_current_key() {
     alice.contact(&dir, &revoked).await;
     assert!(
         matches!(read(&mut alice, record, revoked.account.to_vec()), CryptoResponse::Rejected(reason) if reason.contains("pinned roster"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn own_ciphertext_and_archives_keep_their_first_sequence_before_and_after_ack_restart() {
+    let (dir, mut alice, person, mut bob, _) = pair().await;
+    let mut ds = Ds::new(&dir);
+    establish(&mut ds, &mut alice, person.account, &mut bob);
+    let ciphertext = alice.encrypt([5; 16], "before ack").unwrap();
+    let seq = ds.send(&ciphertext).unwrap();
+    assert!(matches!(alice.receive(&ds, seq), Received::Own { .. }));
+    assert!(matches!(
+        alice.receive_bytes(seq + 10, ciphertext.clone()),
+        Received::Duplicate { .. }
+    ));
+    alice.sent([5; 16], seq);
+    alice.restart();
+    assert!(matches!(
+        alice.receive_bytes(seq + 10, ciphertext),
+        Received::Duplicate { .. }
+    ));
+    let ciphertext = alice.encrypt([6; 16], "after ack").unwrap();
+    let seq = ds.send(&ciphertext).unwrap();
+    alice.sent([6; 16], seq);
+    assert!(matches!(
+        alice.receive_bytes(seq + 10, ciphertext.clone()),
+        Received::Duplicate { .. }
+    ));
+    alice.restart();
+    assert!(matches!(
+        alice.receive_bytes(seq + 10, ciphertext),
+        Received::Duplicate { .. }
+    ));
+    assert!(matches!(alice.receive(&ds, seq), Received::Own { .. }));
+    let CryptoResponse::MlsCiphertext { message, .. } = alice.ask(CryptoRequest::MlsGrant {
+        server: SERVER.into(),
+        conversation: conversation(),
+        idempotency_key: vec![9; 16],
+        rotate: false,
+        after: None,
+    }) else {
+        panic!("expected control grant")
+    };
+    authors()
+        .lock()
+        .unwrap()
+        .insert(message.clone(), alice.account.to_vec());
+    let seq = ds.send(&message).unwrap();
+    alice.sent([9; 16], seq);
+    assert!(matches!(alice.receive(&ds, seq), Received::Nothing { .. }));
+    alice.restart();
+    assert!(matches!(
+        alice.receive_bytes(seq + 10, message),
+        Received::Duplicate { .. }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_ciphertext_cannot_be_attributed_to_another_authenticated_account() {
+    let (dir, mut alice, alice_person, mut bob, bob_person) = pair().await;
+    let mut ds = Ds::new(&dir);
+    establish(&mut ds, &mut alice, alice_person.account, &mut bob);
+    let message = alice.encrypt([7; 16], "Alice's signed text").unwrap();
+    let seq = ds.send(&message).unwrap();
+    let archive = archives().lock().unwrap().get(&message).cloned().unwrap();
+    let claim = |client: &mut Client| {
+        client.ask(CryptoRequest::MlsReceive {
+            server: SERVER.into(),
+            conversation: conversation(),
+            seq,
+            message: message.clone(),
+            archive: archive.clone(),
+            author: bob_person.account.to_vec(),
+        })
+    };
+    assert!(
+        matches!(claim(&mut bob), CryptoResponse::MlsReceived(Received::Undecryptable { reason, .. }) if reason.contains("attributed account"))
+    );
+    assert!(
+        matches!(claim(&mut alice), CryptoResponse::MlsReceived(Received::Undecryptable { reason, .. }) if reason.contains("another account"))
+    );
+    assert!(matches!(alice.receive(&ds, seq), Received::Own { .. }));
+    let seq = alice.say(&mut ds, 8, "Alice correctly attributed");
+    assert!(
+        matches!(bob.receive(&ds, seq), Received::Message { text, .. } if text == "Alice correctly attributed")
     );
 }

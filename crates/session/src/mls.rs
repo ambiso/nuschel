@@ -70,6 +70,30 @@ fn busy_delay(reply: &Reply) -> Option<Duration> {
     }
 }
 
+/// Reconstruct a chat row solely from authenticated archive output. Mutation and
+/// reply metadata are not implemented inside encrypted envelopes yet; none of
+/// the server's unsigned edit/delete fields may change text or local history.
+/// The display label comes from a verified device certificate, with a stable
+/// identity discriminator. Server nickname metadata is not an authenticated name.
+pub fn authenticated_sender_label(sender: &nuschel_ipc::crypto::MemberView) -> String {
+    format!(
+        "{} · {}",
+        sender.device_name,
+        sender.identity.get(..16).unwrap_or(&sender.identity)
+    )
+}
+
+pub fn reconstructed_archive_chat(row: v1::Message, text: String, sent_at: u64) -> v1::Message {
+    v1::Message {
+        seq: row.seq,
+        author: row.author,
+        content: text,
+        sent_ms: sent_at.min(i64::MAX as u64) as i64,
+        format: v1::Format::Text as i32,
+        ..Default::default()
+    }
+}
+
 /// What the frontend asks for in end-to-end conversations.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MlsCommand {
@@ -864,6 +888,11 @@ impl Context {
                 server: self.server.key.clone(),
                 conversation: conversation.to_vec(),
                 seq,
+                author: message
+                    .author
+                    .as_ref()
+                    .map(|author| author.account.clone())
+                    .unwrap_or_default(),
                 message: message.mls,
                 archive: message.archive,
             })
@@ -1396,10 +1425,14 @@ impl Context {
                         Ok(CryptoResponse::MlsReceived(Received::Message {
                             text,
                             sent_at,
+                            sender,
                             ..
                         })) => {
-                            message.content = text;
-                            message.sent_ms = sent_at.min(i64::MAX as u64) as i64;
+                            if let Some(author) = message.author.as_mut() {
+                                author.name = authenticated_sender_label(&sender);
+                            }
+                            *message =
+                                reconstructed_archive_chat(std::mem::take(message), text, sent_at);
                         }
                         Ok(CryptoResponse::MlsReceived(Received::Duplicate { .. })) => {
                             message.kind = v1::message::Kind::Void as i32;

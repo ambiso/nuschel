@@ -909,6 +909,13 @@ impl Client {
     /// Edit or delete a message on a Nuschel server; the answer comes back
     /// as an edit or deletion, or [`Input::ChangeFailed`].
     pub fn change_message(&self, change: ChangeRequest) -> Result<(), String> {
+        if self
+            .servers
+            .iter()
+            .any(|server| server.id == change.server && server.mls)
+        {
+            return Err("Encrypted edits and deletions are not implemented yet.".into());
+        }
         self.platform.change_message(change)
     }
 

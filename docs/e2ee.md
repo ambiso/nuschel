@@ -1852,3 +1852,20 @@ authenticated historical roster/membership evidence is remaining 4d work; the cu
 archive implementation is not complete production E2EE history. Sender/server
 timestamps cannot replace that evidence. Verified local plaintext already retained
 by a device is kept when a remote archive cannot authenticate.
+
+The 4c security review also closes four protocol-boundary issues: authenticated Chat
+archives reconstruct rows without unsigned edit/delete/reply metadata; history grants
+apply only after sender-chain acceptance and carry total-key coverage so a missing
+page cannot masquerade as a complete archive; own ciphertext/archives retain their
+first sequence across acknowledgements and restarts; and the session refuses all raw
+plaintext chat/image/edit/delete/typing paths, including restored outboxes, on
+`e2ee/1`. The desktop refuses attachments/file offers and the SDK refuses edits/deletes
+until those encrypted envelope types are implemented.
+
+Live MLS messages and own-message acknowledgements/echoes bind the claimed author
+account to the authenticated sender too. Encrypted sender labels come from signed
+device credentials with an identity fingerprint; untrusted server nickname labels
+are not used as authenticated chat authors. Carrying authenticated nickname labels
+through the SDK remains presentation work. Grant format v3 declares the total key
+count; per-sender/epoch coverage records prevent lost, replayed or reordered pages
+from falsely completing or reopening a history grant.

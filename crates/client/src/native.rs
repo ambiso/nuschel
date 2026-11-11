@@ -1278,7 +1278,7 @@ async fn connect_once(
                         MlsEvent::NotSent { reason, .. } | MlsEvent::Failed(reason) => {
                             let _ = events.send(Event::Input(Input::SendFailed { server: id.clone(), generation, reason: reason.clone() })).await;
                         }
-                        MlsEvent::Received { conversation, received, author } => {
+                        MlsEvent::Received { conversation, received, author: _ } => {
                             let visible = match received {
                                 Received::Message { seq, text, sent_at, .. } => Some((*seq, text.clone(), (*sent_at).min(i64::MAX as u64) as i64, false)),
                                 Received::Own { seq, text, .. } => Some((*seq, text.clone(), connection::now_ms(), true)),
@@ -1290,7 +1290,7 @@ async fn connect_once(
                             };
                             if let (Some((seq, body, observed_at_ms, outgoing)), Some(peer)) = (visible, peer.as_ref()) {
                                 let target = conversation_keys.get(conversation).and_then(|key| key.parse().ok()).map(TextTarget::Channel).unwrap_or(TextTarget::DirectConversation(*conversation));
-                                let author = if outgoing { server.username.clone() } else { author.as_ref().map(author_name).unwrap_or_else(|| "Encrypted member".into()) };
+                                let author = if outgoing { server.username.clone() } else if let Received::Message { sender, .. } = received { nuschel_session::mls::authenticated_sender_label(sender) } else { "Encrypted member".into() };
                                 let text = IncomingText { target, author, peer: None, body, html: false, outgoing, observed_at_ms, seq: Some(seq), pending: None };
                                 let job = ContentJob { server: id.clone(), generation, identity: server.history_identity(peer), nonce: nonce.clone(), text, archived: true };
                                 if content.send(ContentWork::Text(Box::new(job))).await.is_err() { break; }
@@ -2650,6 +2650,47 @@ mod tests {
 #[cfg(test)]
 mod encrypted_history_tests {
     use super::*;
+    #[tokio::test]
+    async fn authenticated_archive_text_cannot_be_erased_by_unsigned_mutation_metadata() {
+        let forged = v1::Message {
+            seq: 7,
+            kind: v1::message::Kind::Delete as i32,
+            target: 99,
+            deleted_ms: 1,
+            edited_ms: 2,
+            edits: 3,
+            delete_reason: 1,
+            reply_to: 99,
+            ..Default::default()
+        };
+        let authenticated = nuschel_session::mls::reconstructed_archive_chat(
+            forged,
+            "Authenticated original text".into(),
+            123,
+        );
+        assert_eq!(
+            (
+                authenticated.kind,
+                authenticated.target,
+                authenticated.reply_to
+            ),
+            (0, 0, 0)
+        );
+        let page = v1::HistoryPage {
+            messages: vec![authenticated],
+            ..Default::default()
+        };
+        let cache = CacheKey {
+            identity: "server".into(),
+            channel: "channel".into(),
+        };
+        let (messages, _, records) = render_server_page(page, Some(&cache), &[]).await;
+        assert_eq!(messages[0].message.body, "Authenticated original text");
+        assert!(messages[0].deleted.is_none() && messages[0].edited_ms.is_none());
+        assert_eq!(records[0].message.body, "Authenticated original text");
+        assert!(records[0].deleted_ms.is_none() && records[0].edited_ms.is_none());
+    }
+
     #[tokio::test]
     async fn unauthenticated_remote_gaps_never_replace_stored_plaintext() {
         let page = v1::HistoryPage {

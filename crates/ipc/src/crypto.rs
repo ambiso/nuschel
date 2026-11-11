@@ -482,6 +482,8 @@ pub enum CryptoRequest {
         conversation: Vec<u8>,
         seq: u64,
         #[serde(with = "base64_bytes")]
+        author: Vec<u8>,
+        #[serde(with = "base64_bytes")]
         message: Vec<u8>,
         #[serde(default, with = "base64_bytes")]
         archive: Vec<u8>,
@@ -861,10 +863,14 @@ impl CryptoRequest {
                 conversation: c,
                 message,
                 archive,
+                author,
                 ..
             } => {
                 server(s)?;
                 conversation(c)?;
+                if !author.is_empty() {
+                    account(author)?;
+                }
                 at_most(message.len(), MAX_MLS_BYTES, "message")?;
                 at_most(archive.len(), MAX_MLS_BYTES, "archive")
             }

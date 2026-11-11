@@ -30,10 +30,11 @@
 //!
 //! ```text
 //! struct {
-//!   uint8  version = 2;
-//!   uint8  more;                 // more bounded grant pages follow
+//!   uint8  version = 3;
 //!   uint32 current;              // the key to seal with from now on
 //!   uint16 count;                // at most MAX_KEYS
+//!   uint8  more;                 // more bounded grant pages follow
+//!   uint64 total;                // keys across all pages, including current
 //!   struct { uint32 index; opaque key[32]; } keys[count];
 //! } HistoryGrant;
 //! ```
@@ -52,7 +53,7 @@ const CREDENTIAL: usize = 172;
 const SIGNATURE: usize = 64;
 /// An envelope with a 64 KiB body and its framing, sealed.
 pub const MAX_CIPHERTEXT: usize = 128 * 1024;
-/// History keys one conversation keeps and one grant carries.
+/// History keys one grant carries; the retained conversation total is uncapped.
 pub const MAX_KEYS: usize = 256;
 
 /// Hash binding the separately signed archive record to its live MLS envelope.
@@ -274,14 +275,27 @@ pub fn encode_grant(keys: &[HistoryKey], current: u32) -> Result<Vec<u8>, Error>
 
 /// One bounded page; `more` keeps a new member waiting for subsequent pages.
 pub fn encode_grant_page(keys: &[HistoryKey], current: u32, more: bool) -> Result<Vec<u8>, Error> {
+    encode_grant_page_with_total(keys, current, more, keys.len() as u64)
+}
+
+pub fn encode_grant_page_with_total(
+    keys: &[HistoryKey],
+    current: u32,
+    more: bool,
+    total: u64,
+) -> Result<Vec<u8>, Error> {
+    if total < keys.len() as u64 || total > u64::from(current) + 1 {
+        return Err(Error::Invalid("invalid history grant coverage"));
+    }
     if keys.len() > MAX_KEYS {
         return Err(Error::Invalid("too many keys in one history grant"));
     }
-    let mut out = Vec::with_capacity(8 + keys.len() * 36);
-    out.push(2);
+    let mut out = Vec::with_capacity(16 + keys.len() * 36);
+    out.push(3);
     out.extend_from_slice(&current.to_be_bytes());
     out.extend_from_slice(&(keys.len() as u16).to_be_bytes());
     out.push(u8::from(more));
+    out.extend_from_slice(&total.to_be_bytes());
     for key in keys {
         out.extend_from_slice(&key.index.to_be_bytes());
         out.extend_from_slice(&key.key);
@@ -290,9 +304,9 @@ pub fn encode_grant_page(keys: &[HistoryKey], current: u32, more: bool) -> Resul
 }
 
 /// The keys and the current index of a grant.
-pub fn decode_grant(bytes: &[u8]) -> Result<(Vec<HistoryKey>, u32, bool), Error> {
+pub fn decode_grant(bytes: &[u8]) -> Result<(Vec<HistoryKey>, u32, bool, u64), Error> {
     let malformed = Error::Invalid("malformed history grant");
-    if bytes.len() < 8 || bytes[0] != 2 || bytes[7] > 1 {
+    if bytes.len() < 16 || bytes[0] != 3 || bytes[7] > 1 {
         return Err(malformed);
     }
     let current = u32::from_be_bytes(
@@ -305,10 +319,18 @@ pub fn decode_grant(bytes: &[u8]) -> Result<(Vec<HistoryKey>, u32, bool), Error>
             .try_into()
             .map_err(|_| Error::Invalid("grant"))?,
     ));
-    if count > MAX_KEYS || bytes.len() != 8 + count * 36 {
+    let total = u64::from_be_bytes(
+        bytes[8..16]
+            .try_into()
+            .map_err(|_| Error::Invalid("grant coverage"))?,
+    );
+    if total < count as u64 || total > u64::from(current) + 1 {
         return Err(malformed);
     }
-    let keys = bytes[8..]
+    if count > MAX_KEYS || bytes.len() != 16 + count * 36 {
+        return Err(malformed);
+    }
+    let keys = bytes[16..]
         .chunks(36)
         .map(|entry| {
             Ok(HistoryKey {
@@ -325,7 +347,7 @@ pub fn decode_grant(bytes: &[u8]) -> Result<(Vec<HistoryKey>, u32, bool), Error>
     if !keys.iter().any(|key| key.index == current) {
         return Err(Error::Invalid("the grant's current key is not in it"));
     }
-    Ok((keys, current, bytes[7] == 1))
+    Ok((keys, current, bytes[7] == 1, total))
 }
 
 #[cfg(test)]
@@ -347,8 +369,9 @@ mod tests {
         loop {
             let (page, next) = grant_page(keys.iter().cloned(), keys[699].clone(), after);
             assert!(page.len() <= MAX_KEYS);
-            let encoded = encode_grant_page(&page, 699, next.is_some()).unwrap();
-            let (decoded, current, more) = decode_grant(&encoded).unwrap();
+            let encoded = encode_grant_page_with_total(&page, 699, next.is_some(), 700).unwrap();
+            let (decoded, current, more, total) = decode_grant(&encoded).unwrap();
+            assert_eq!(total, 700);
             assert_eq!(current, 699);
             assert_eq!(more, next.is_some());
             for key in decoded {
@@ -415,7 +438,10 @@ mod tests {
         // Grants round-trip and must name a key they carry.
         let keys = vec![HistoryKey::generate(0).unwrap(), key.clone()];
         let grant = encode_grant(&keys, 3).unwrap();
-        assert_eq!(decode_grant(&grant).unwrap(), (keys.clone(), 3, false));
+        assert_eq!(
+            decode_grant(&grant).unwrap(),
+            (keys.clone(), 3, false, keys.len() as u64)
+        );
         assert!(decode_grant(&encode_grant(&keys, 9).unwrap()).is_err());
         assert!(decode_grant(&grant[..grant.len() - 1]).is_err());
     }

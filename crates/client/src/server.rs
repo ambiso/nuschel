@@ -355,9 +355,12 @@ impl ServerState {
 
     /// The conversation, if its messages can be changed now.
     pub fn changeable(&self, channel: &ConversationState) -> Option<[u8; 16]> {
-        (self.status == Status::Connected && self.archived(channel) && self.has("history/1"))
-            .then_some(channel.conversation)
-            .flatten()
+        (!self.mls
+            && self.status == Status::Connected
+            && self.archived(channel)
+            && self.has("history/1"))
+        .then_some(channel.conversation)
+        .flatten()
     }
 
     /// Whether we may edit this message: ours, stored, and we are registered.

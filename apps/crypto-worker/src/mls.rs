@@ -131,6 +131,31 @@ pub struct SentText {
     pub control: bool,
     #[serde(default, with = "base64_bytes")]
     pub archive_hash: Vec<u8>,
+    #[serde(default)]
+    pub seq: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantCoverage {
+    epoch: u32,
+    total: u64,
+    seen: BTreeSet<u32>,
+    final_seen: bool,
+}
+impl GrantCoverage {
+    fn add(&mut self, epoch: u32, total: u64, more: bool, keys: &[HistoryKey]) -> bool {
+        if self.epoch != epoch || self.total != total {
+            *self = Self {
+                epoch,
+                total,
+                ..Self::default()
+            };
+        }
+        self.seen.extend(keys.iter().map(|key| key.index));
+        self.final_seen |= !more;
+        self.final_seen && self.seen.len() as u64 == total
+    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -138,6 +163,8 @@ pub struct SentText {
 pub struct HistoryState {
     pub keys: BTreeMap<u32, Vec<u8>>,
     pub archived: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub grants: BTreeMap<String, GrantCoverage>,
 }
 
 impl std::fmt::Debug for HistoryState {
@@ -577,9 +604,11 @@ impl Worker {
                 seq,
                 message,
                 archive,
+                author,
             } => {
                 let conversation = array16(&conversation, "a conversation id")?;
-                let received = self.receive(&server, &conversation, seq, &message, &archive)?;
+                let received =
+                    self.receive(&server, &conversation, seq, &message, &archive, &author)?;
                 CryptoResponse::MlsReceived(received)
             }
             CryptoRequest::MlsEncrypt {
@@ -607,8 +636,39 @@ impl Worker {
                 let conversation = array16(&conversation, "a conversation id")?;
                 let key = key_of(&idempotency_key)?;
                 let entry = self.conversation_mut(&server, &conversation)?;
+                if entry
+                    .sent
+                    .iter()
+                    .filter(|sent| sent.idempotency_key == idempotency_key)
+                    .any(|sent| {
+                        sent.seq.is_some_and(|previous| previous != seq)
+                            || (!sent.archive_hash.is_empty()
+                                && entry
+                                    .history
+                                    .archived
+                                    .get(&hex(&sent.archive_hash))
+                                    .is_some_and(|previous| *previous != seq))
+                    })
+                {
+                    return Err(
+                        "the server reassigned a sent message/archive to another sequence".into(),
+                    );
+                }
                 entry.outgoing.remove(&key);
-                let _ = seq;
+                for sent in entry
+                    .sent
+                    .iter_mut()
+                    .filter(|sent| sent.idempotency_key == idempotency_key)
+                {
+                    sent.seq = Some(seq);
+                    if !sent.archive_hash.is_empty() {
+                        entry
+                            .history
+                            .archived
+                            .entry(hex(&sent.archive_hash))
+                            .or_insert(seq);
+                    }
+                }
                 self.mls.save(&self.store)?;
                 CryptoResponse::Done
             }
@@ -1543,6 +1603,7 @@ impl Worker {
         seq: u64,
         message: &[u8],
         archive: &[u8],
+        author: &[u8],
     ) -> Result<Received, String> {
         let Some(entry) = self.conversation(server, conversation).cloned() else {
             return Ok(Received::Undecryptable {
@@ -1586,6 +1647,12 @@ impl Worker {
             .find(|sent| sent.ciphertext_hash == hash)
             .cloned()
         {
+            if self.server(server)?.account != author {
+                return Ok(Received::Undecryptable {
+                    seq,
+                    reason: "the server attributed an own message to another account".into(),
+                });
+            }
             if !sent.archive_hash.is_empty() && sent.archive_hash != history::archive_hash(archive)
             {
                 return Ok(Received::Undecryptable {
@@ -1593,8 +1660,25 @@ impl Worker {
                     reason: "the server changed or withheld the archive record".into(),
                 });
             }
+            if sent.seq.is_some_and(|previous| previous != seq)
+                || (!sent.archive_hash.is_empty()
+                    && entry
+                        .history
+                        .archived
+                        .get(&hex(&sent.archive_hash))
+                        .is_some_and(|previous| *previous != seq))
+            {
+                return Ok(Received::Duplicate { seq });
+            }
             let stored = self.conversation_mut(server, conversation)?;
             stored.cursor = seq;
+            for own in stored
+                .sent
+                .iter_mut()
+                .filter(|own| own.idempotency_key == sent.idempotency_key)
+            {
+                own.seq = Some(seq);
+            }
             stored.outgoing.remove(&hex(&sent.idempotency_key));
             if !sent.archive_hash.is_empty() {
                 stored.history.archived.insert(hex(&sent.archive_hash), seq);
@@ -1700,7 +1784,7 @@ impl Worker {
                 return Ok(Received::Commit { seq, view });
             }
             Ok(Incoming::Application { sender, data }) => {
-                self.application(server, conversation, seq, &sender, &data, archive)?
+                self.application(server, conversation, seq, &sender, &data, (archive, author))?
             }
         };
         self.mls.save(&self.store)?;
@@ -1714,7 +1798,7 @@ impl Worker {
         seq: u64,
         sender: &MemberInfo,
         data: &[u8],
-        archive: &[u8],
+        (archive, author): (&[u8], &[u8]),
     ) -> Result<Received, String> {
         let undecryptable = |reason: &str| Received::Undecryptable {
             seq,
@@ -1732,9 +1816,24 @@ impl Worker {
         let Ok(credential) = DeviceCredential::decode(&sender.credential) else {
             return Ok(undecryptable("the sender has no Nuschel credential"));
         };
-        let Some(view) = view else {
+        let Some(view) = view.filter(|view| view.verified) else {
             return Ok(undecryptable("the sender's credential does not verify"));
         };
+        let expected = if self.server(server)?.account == author {
+            self.keystore
+                .as_ref()
+                .map(|keys| keys.identity().fingerprint().to_hex())
+        } else {
+            array16(author, "an author account")
+                .ok()
+                .and_then(|account| self.peer_contact(server, &account))
+                .and_then(|contact| contact.pinned.clone())
+        };
+        if expected.as_deref() != Some(view.identity.as_str()) {
+            return Ok(undecryptable(
+                "the live sender differs from its attributed account",
+            ));
+        }
         let envelope = match Envelope::decode(data) {
             Ok(envelope) => envelope,
             Err(error) => return Ok(undecryptable(&format!("malformed envelope: {error}"))),
@@ -1772,8 +1871,9 @@ impl Worker {
                 }
             }
         }
+        let mut grant = None;
         if envelope.kind == Kind::HistoryGrant {
-            let (keys, current, more) =
+            let (keys, current, more, total) =
                 history::decode_grant(&envelope.body).map_err(|e| e.to_string())?;
             let group_id = entry.group_id.clone();
             let epoch = self
@@ -1812,10 +1912,7 @@ impl Worker {
                     "a history key conflicts with an earlier grant",
                 ));
             }
-            stored.history_pending = more;
-            for key in keys {
-                stored.history.keys.insert(key.index, key.key.to_vec());
-            }
+            grant = Some((keys, current, more, total));
         }
         if !envelope.kind.durable() {
             return Ok(Received::Nothing { seq });
@@ -1871,6 +1968,26 @@ impl Worker {
                 Order::Fork
             }
         };
+        if let Some((keys, current, more, total)) = grant
+            && !matches!(order, Order::Fork)
+        {
+            stored
+                .history
+                .grants
+                .retain(|_, coverage| coverage.epoch == current);
+            let complete = stored
+                .history
+                .grants
+                .entry(device.clone())
+                .or_default()
+                .add(current, total, more, &keys);
+            if complete {
+                stored.history_pending = false;
+            }
+            for key in keys {
+                stored.history.keys.insert(key.index, key.key.to_vec());
+            }
+        }
         stored.chains.insert(
             device,
             ChainState {
@@ -1987,8 +2104,14 @@ impl Worker {
             current.clone(),
             after,
         );
-        let body = history::encode_grant_page(&keys, current.index, next_key.is_some())
-            .map_err(|e| e.to_string())?;
+        let total = if binding.history == nuschel_e2ee::HistoryPolicy::Members {
+            entry.history.keys.len() as u64
+        } else {
+            1
+        };
+        let body =
+            history::encode_grant_page_with_total(&keys, current.index, next_key.is_some(), total)
+                .map_err(|e| e.to_string())?;
         let (message, epoch, archive) = self.encrypt_body(
             server,
             conversation,
@@ -2196,6 +2319,7 @@ impl Worker {
                 String::new()
             },
             control: kind != Kind::Chat,
+            seq: None,
             archive_hash: if archive.is_empty() {
                 Vec::new()
             } else {
@@ -2207,5 +2331,41 @@ impl Worker {
         }
         self.mls.save(&self.store)?;
         Ok((message, epoch, archive))
+    }
+}
+
+#[cfg(test)]
+mod history_coverage_tests {
+    use super::*;
+    #[test]
+    fn missing_middle_pages_do_not_complete_and_late_pages_never_revert_completion() {
+        let keys = |from, to| {
+            (from..to)
+                .chain([699])
+                .map(|index| HistoryKey {
+                    index,
+                    key: [1; 32],
+                })
+                .collect::<Vec<_>>()
+        };
+        let first = keys(0, 255);
+        let middle = keys(255, 510);
+        let last = keys(510, 699);
+        let mut coverage = GrantCoverage::default();
+        assert!(!coverage.add(699, 700, false, &last));
+        assert!(!coverage.add(699, 700, true, &first));
+        assert!(coverage.add(699, 700, true, &middle));
+        assert!(coverage.add(699, 700, true, &first));
+        assert_eq!(coverage.seen.len(), 700);
+        // A new epoch needs its own complete coverage.
+        assert!(!coverage.add(
+            700,
+            701,
+            false,
+            &[HistoryKey {
+                index: 700,
+                key: [2; 32]
+            }]
+        ));
     }
 }
