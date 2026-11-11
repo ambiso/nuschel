@@ -21,8 +21,10 @@ platforms. First-party source forbids unsafe code; dependencies require separate
 | Windows worker sandbox | Own adapter `nuschel-sandbox-windows` over `windows-sys` | The one first-party crate with unsafe code; crates that wrap AppContainers were reviewed and rejected in docs/windows-sandbox.md |
 
 The live media worker owns CPAL streams, per-speaker Opus decoders, mixing, resampling,
-and optional RNNoise. AEC route detection and automatic DSP selection remain subsequent
-work; unknown upstream effects must not be treated as absent. Sonora is not active yet.
+RNNoise and Sonora echo cancellation. It detects upstream effects, selects its own
+processing and monitors the result; unknown upstream effects are not treated as
+absent. Native Windows/macOS effect detection and validation on real hardware remain
+open, with per-device overrides available.
 
 str0m is confined to `nuschel-rtc`, with examples and native WebRTC bindings disabled.
 Its `rust-crypto` feature selects the RustCrypto SRTP/hash provider, but its dimpl 0.9

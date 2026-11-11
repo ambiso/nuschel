@@ -1,8 +1,10 @@
 # Nuschel TODO
 
-Current focus: **the Nuschel desktop client against stock Mumble servers.**
-The Nuschel server, WebRTC/video and MLS are deferred until the client is a
-credible everyday Mumble replacement. They are listed under [Later](#later).
+Current focus: **integrate and verify the resumed work before the nuschl rename.**
+The desktop and server support stock Mumble interoperability; shared multi-server
+audio, key-transparency witnesses, the browser foundation and experimental MLS
+text/history are implemented. Live WebRTC/video, SFrame and the remaining encrypted
+history proofs are later work. The rename waits for a quiet, verified tree.
 
 Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 
@@ -553,7 +555,8 @@ ServerConfig.
 
 ### Nuschel server (`nuscheld`) — queued (2026-11-11), in dependency order
 
-`apps/server/src/main.rs` refuses to start a listener. Decisions so far (user):
+`nuscheld` implements the listener, compatibility mode and experimental encrypted
+text mode. Decisions so far (user):
 end-to-end mode is the default for new Nuschel servers and turns stock clients
 away at the connection stage ("compatible" mode admits them, without E2EE); new
 members see earlier history by default (per-channel setting); read markers sync

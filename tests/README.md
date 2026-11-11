@@ -115,7 +115,9 @@ on host loopback, rendered an image message, stored history and captured from th
 microphone with its workers in AppContainers.
 
 The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
-module's hardened database preflight. Nuschel server protocol tests remain deferred.
+module's hardened database preflight. `vm-server` runs the protocol suites against
+Nuscheld, including stock-client interoperability, persistent history, witnesses
+and encrypted text/history on dedicated SQLite and PostgreSQL nodes.
 Both databases reopen the worker between pages and retain duplicate messages correctly.
 
 ## Client and server matrix
