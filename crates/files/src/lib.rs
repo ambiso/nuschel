@@ -119,7 +119,7 @@
 //! their parent, so they could pass only where the parent stands, a level above the
 //! leaves: that takes a proof one hash shorter, which is rejected. The zero leaves are
 //! no hash of anything; a block that hashed to zero would be a SHA-256 preimage. The root
-//! and the commitment keep their prefixes and labels, and with inputs of 92 and 50
+//! and the commitment keep their prefixes and labels, and with inputs of 93 and 51
 //! bytes neither is an inner node of 64.
 //!
 //! # BitTorrent v2

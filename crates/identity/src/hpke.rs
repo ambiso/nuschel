@@ -13,7 +13,7 @@
 //!   opaque ciphertext<16..2^24-1>;          // AEAD output with tag
 //! } SealedToDevice;
 //!
-//! info = uint8(27) || "nuschl/sealed-to-device/v1" || recipient_device
+//! info = uint8(26) || "nuschl/sealed-to-device/v1" || recipient_device
 //!        || recipient_key_epoch || caller_info
 //! ```
 

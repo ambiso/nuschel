@@ -29,7 +29,17 @@ class Client:
         ], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
-        self.session = self.wait(lambda event: event["kind"] == "connected")["session"]
+        try:
+            # A fresh debug profile generates an RSA identity before emitting
+            # events; prime search can exceed 15 s under concurrent builds.
+            self.session = self.wait(lambda event: event["kind"] == "connected", timeout=60)["session"]
+        except BaseException as error:
+            self.process.kill()
+            self.process.wait(timeout=5)
+            detail = self.process.stderr.read()[-2000:]
+            if isinstance(error, AssertionError):
+                raise AssertionError(f"{error}\nClient stderr: {detail}") from error
+            raise
 
     def _read(self):
         try:

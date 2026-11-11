@@ -36,13 +36,25 @@ pub(crate) fn migrate(old: Option<&Layout>, new: &Layout) -> io::Result<Migratio
             &mut report,
         )?;
         // macOS has a shared config/data root. A second traversal is harmless.
+        // XDG roots can also nest. Each root moves through its own mapping;
+        // never traverse another root or copy a destination back into itself.
+        let roots = [
+            old.config.clone(),
+            old.data.clone(),
+            old.state.clone(),
+            old.cache.clone(),
+            new.config.clone(),
+            new.data.clone(),
+            new.state.clone(),
+            new.cache.clone(),
+        ];
         for (from, to) in [
             (&old.config, &new.config),
             (&old.data, &new.data),
             (&old.state, &new.state),
             (&old.cache, &new.cache),
         ] {
-            merge(from, to, &mut report)?;
+            merge(from, to, &roots, &mut report)?;
         }
     }
     // Explicit --profile-dir profiles retain their root across the rename.
@@ -92,7 +104,12 @@ fn archive(from: &Path, to: &Path, report: &mut Migration) -> io::Result<()> {
 
 /// Merge disjoint roots without overwriting anything, including interrupted
 /// earlier moves. A conflict stops startup before a fresh identity can be made.
-fn merge(from: &Path, to: &Path, report: &mut Migration) -> io::Result<()> {
+fn merge(
+    from: &Path,
+    to: &Path,
+    roots: &[std::path::PathBuf],
+    report: &mut Migration,
+) -> io::Result<()> {
     if !from.try_exists()? || from == to {
         return Ok(());
     }
@@ -101,6 +118,9 @@ fn merge(from: &Path, to: &Path, report: &mut Migration) -> io::Result<()> {
     // SQLite's sidecars must reach the destination before the main database.
     entries.sort_by_key(|entry| (entry.file_name() == layout::HISTORY_FILE, entry.file_name()));
     for entry in entries {
+        if roots.contains(&entry.path()) {
+            continue;
+        }
         let name = entry.file_name();
         if name == layout::IDENTITY_LOCK {
             continue;
@@ -112,7 +132,7 @@ fn merge(from: &Path, to: &Path, report: &mut Migration) -> io::Result<()> {
         });
         let kind = entry.file_type()?;
         if kind.is_dir() {
-            merge(&entry.path(), &destination, report)?;
+            merge(&entry.path(), &destination, roots, report)?;
             // A lock or a file retained after a failed move can keep it nonempty.
             let _ = fs::remove_dir(entry.path());
         } else {
@@ -217,6 +237,37 @@ mod tests {
             fs::read(new.keys().join("keystore")).unwrap(),
             b"new namespace store"
         );
+    }
+
+    #[test]
+    fn nested_xdg_roots_do_not_copy_another_root_or_the_destination_into_itself() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = Layout {
+            data: temp.path().join("nuschel"),
+            config: temp.path().join("nuschel/nuschel"),
+            state: temp.path().join("state/nuschel"),
+            cache: temp.path().join("cache/nuschel"),
+        };
+        let new = Layout {
+            data: temp.path().join("nuschl"),
+            config: temp.path().join("nuschel/nuschl"),
+            state: temp.path().join("state/nuschl"),
+            cache: temp.path().join("cache/nuschl"),
+        };
+        write(&old.config.join("settings.json"), b"settings");
+        write(&old.history().join(layout::HISTORY_FILE), b"history");
+        migrate(Some(&old), &new).unwrap();
+        assert_eq!(
+            fs::read(new.config.join("settings.json")).unwrap(),
+            b"settings"
+        );
+        assert_eq!(
+            fs::read(new.history().join(layout::HISTORY_FILE)).unwrap(),
+            b"history"
+        );
+        assert!(!new.data.join("nuschel").exists());
+        assert!(!new.data.join("nuschl").exists());
+        assert!(migrate(Some(&old), &new).unwrap().moved.is_empty());
     }
 
     #[test]

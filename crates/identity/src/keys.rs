@@ -102,7 +102,7 @@ fn hex(bytes: &[u8]) -> String {
 /// encoding. Pins, safety numbers, credentials and key transparency name it.
 ///
 /// ```text
-/// identity = SHA-256(uint8(31) || "nuschl/identity-fingerprint/v1" || HybridPublicKey)
+/// identity = SHA-256(uint8(30) || "nuschl/identity-fingerprint/v1" || HybridPublicKey)
 /// ```
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct IdentityFingerprint([u8; 32]);

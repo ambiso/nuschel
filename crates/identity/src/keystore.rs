@@ -70,7 +70,7 @@
 //!
 //! The recovery key is 256 random bits, shown as 56 Crockford base32 characters in 14
 //! groups of 4: the key and a 24-bit checksum
-//! (`SHA-256(uint8(23) || "nuschl/recovery-key/v1" || key)[0..3]`). Whether a recovery
+//! (`SHA-256(uint8(22) || "nuschl/recovery-key/v1" || key)[0..3]`). Whether a recovery
 //! key is required is a policy for the caller (docs/e2ee.md §10, question 1).
 
 use std::fmt;
