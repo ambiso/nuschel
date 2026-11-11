@@ -1322,7 +1322,7 @@ impl Desktop {
                     "End-to-end encryption is being set up".into(),
                 ),
             },
-            None if peer.is_some() && server.mls => (
+            None if peer.is_some() && server.mls && self.settings.e2ee_direct_messages => (
                 SessionSecurity::Unknown,
                 "End-to-end encryption is being set up".into(),
             ),
@@ -2654,7 +2654,9 @@ impl Desktop {
         };
         // A direct conversation checks the peer's identity (and its history), and on
         // a `mls/1` server opens its end-to-end group (creating it on first use).
-        let mls = server.mls;
+        // End-to-end direct messages are experimental and opt-in until the client
+        // sends and shows them (Settings: `e2ee_direct_messages`).
+        let mls = server.mls && self.settings.e2ee_direct_messages;
         if let Some(user_id) = peer.user_id {
             crate::identity::check(self, index, user_id, true);
             if mls {

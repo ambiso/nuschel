@@ -67,6 +67,17 @@ struct Cli {
 
 impl Cli {
     async fn spawn(server: &Running, name: &str, profile: &Path, identity: Option<&Path>) -> Self {
+        Self::spawn_with(server, name, profile, identity, true).await
+    }
+
+    /// `e2ee`: opt in to end-to-end direct messages (`--e2ee`).
+    async fn spawn_with(
+        server: &Running,
+        name: &str,
+        profile: &Path,
+        identity: Option<&Path>,
+        e2ee: bool,
+    ) -> Self {
         let address = server.addresses[0];
         let mut command = Command::new(cli());
         command
@@ -87,6 +98,9 @@ impl Cli {
             .kill_on_drop(true);
         if let Some(identity) = identity {
             command.arg("--identity-dir").arg(identity);
+            if e2ee {
+                command.arg("--e2ee");
+            }
         }
         let mut child = command.spawn().expect("nuschel-cli starts");
         let input = child.stdin.take().unwrap();
@@ -286,6 +300,84 @@ async fn two_devices_exchange_direct_messages_through_nuscheld() {
         })
         .await;
 
+    bob.quit().await;
+    alice.quit().await;
+}
+
+/// End-to-end direct messages are opt-in (experimental): a device without the
+/// opt-in uploads no key packages and creates no groups, so nobody can turn its
+/// plaintext direct conversations into ones the server refuses plaintext for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn without_the_opt_in_direct_messages_stay_plaintext() {
+    if !worker_present() {
+        panic!("build nuschel-crypto-worker first: cargo build -p nuschel-crypto-worker");
+    }
+    let state = tempfile::tempdir().unwrap();
+    let running = server(state.path()).await;
+    let directories: Vec<tempfile::TempDir> =
+        (0..4).map(|_| tempfile::tempdir().unwrap()).collect();
+    let (alice_profile, alice_identity) = (directories[0].path(), directories[1].path());
+    let (bob_profile, bob_identity) = (directories[2].path(), directories[3].path());
+    let alice_id = Cli::register(&running, "alice", alice_profile).await;
+    let bob_id = Cli::register(&running, "bob", bob_profile).await;
+
+    let mut bob = Cli::spawn_with(&running, "bob", bob_profile, Some(bob_identity), false).await;
+    let mut alice = Cli::spawn(&running, "alice", alice_profile, Some(alice_identity)).await;
+    alice.key_packages_uploaded().await;
+
+    // Bob has not opted in: he creates no group...
+    bob.send(json!({"kind":"e2ee_open", "user_id":alice_id}))
+        .await;
+    let refused = bob
+        .wait("the opt-in refusal", |event| {
+            (event["kind"] == "e2ee_failed").then(|| event["reason"].clone())
+        })
+        .await;
+    assert!(
+        refused.as_str().unwrap().contains("turned off"),
+        "{refused}"
+    );
+    // ...and has no key packages, so Alice cannot put him into one.
+    alice
+        .send(json!({"kind":"e2ee_open", "user_id":bob_id}))
+        .await;
+    alice
+        .wait("the failed creation", |event| {
+            (event["kind"] == "e2ee_failed").then_some(())
+        })
+        .await;
+    assert!(
+        !bob.backlog
+            .iter()
+            .any(|event| event["kind"] == "e2ee_key_packages"),
+        "no key packages without the opt-in"
+    );
+
+    // The direct conversation stays plaintext and keeps working.
+    alice
+        .send(json!({"kind":"open_direct", "request_id":11, "user_id":bob_id}))
+        .await;
+    let conversation = alice
+        .wait("the direct conversation", |event| {
+            (event["kind"] == "direct_opened" && event["request_id"] == 11)
+                .then(|| event["direct"]["conversation"].as_str().map(str::to_owned))
+                .flatten()
+        })
+        .await;
+    alice
+        .send(
+            json!({"kind":"chat_send", "request_id":12, "conversation":conversation,
+            "content":"still in the clear"}),
+        )
+        .await;
+    alice
+        .wait("the plaintext acknowledgement", |event| {
+            if event["kind"] == "nuschel_error" && event["request_id"] == 12 {
+                panic!("plaintext refused: {event}");
+            }
+            (event["kind"] == "chat_ack" && event["request_id"] == 12).then_some(())
+        })
+        .await;
     bob.quit().await;
     alice.quit().await;
 }

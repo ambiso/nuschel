@@ -960,6 +960,7 @@ impl KtLink {
                 Some(crate::identity::MlsLink {
                     commands: commands_rx,
                     pushes: pushes_rx,
+                    enabled: self.setup.e2ee_direct,
                 }),
             )
         } else {

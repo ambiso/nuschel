@@ -120,7 +120,7 @@ impl Cli {
     ) -> Self {
         let mut command = Self::command(server, name, profile);
         if let Some(identity) = identity {
-            command.arg("--identity-dir").arg(identity);
+            command.arg("--identity-dir").arg(identity).arg("--e2ee");
         }
         command.args(extra);
         let mut cli = Self::start(name, command);

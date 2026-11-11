@@ -146,6 +146,7 @@ impl User {
                 crypto: self.crypto.clone(),
                 device_name: format!("{}'s laptop", self.name),
                 recovery: RecoveryPolicy::Offer,
+                e2ee_direct: false,
             }),
         }
     }

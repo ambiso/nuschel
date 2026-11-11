@@ -69,6 +69,10 @@ struct Arguments {
     /// key transparency (`kt/1`). The worker runs in its sandbox, beside this binary.
     #[arg(long)]
     identity_dir: Option<PathBuf>,
+    /// End-to-end encrypted direct messages (experimental, with --identity-dir on
+    /// `mls/1` servers): upload key packages and let `e2ee_open` create groups.
+    #[arg(long)]
+    e2ee: bool,
     /// Do not connect: serve device-linking commands (`link_offer`, `link_join`,
     /// `link_approve`, `link_complete`) with the crypto worker of `--identity-dir`
     /// only. `--host` and `--username` are not used.
@@ -535,6 +539,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ),
             device_name: format!("{} (nuschel-cli)", args.username),
             recovery: nuschel_ipc::crypto::RecoveryPolicy::Never,
+            e2ee_direct: args.e2ee,
         }),
     };
     let (tx, rx) = mpsc::channel(32);

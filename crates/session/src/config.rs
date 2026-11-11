@@ -354,6 +354,11 @@ pub struct ClientSettings {
     /// Whether a recovery key is offered when the Nuschel identity is created
     /// (docs/e2ee.md §10, question 1: offered and skippable by default).
     pub recovery_key: nuschel_ipc::crypto::RecoveryPolicy,
+    /// End-to-end encrypted direct messages (experimental): upload key packages
+    /// and create end-to-end groups for direct conversations on `mls/1` servers.
+    /// Off until the client sends and shows them; once a conversation has a group
+    /// the server takes no plaintext there.
+    pub e2ee_direct_messages: bool,
 }
 
 /// Light or dark, or as the desktop prefers.
@@ -442,6 +447,7 @@ impl Default for ClientSettings {
             wormhole_relay: nuschel_core::transfer::PUBLIC_RELAY.into(),
             appearance: AppearanceSettings::default(),
             recovery_key: Default::default(),
+            e2ee_direct_messages: false,
         }
     }
 }

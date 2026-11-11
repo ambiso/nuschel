@@ -123,8 +123,8 @@ impl MlsState {
     }
 
     /// The hourly round: key packages again (the server reports how many are left).
-    pub(crate) fn hourly(&mut self) {
-        if self.device.len() == 16 {
+    pub(crate) fn hourly(&mut self, enabled: bool) {
+        if enabled && self.device.len() == 16 {
             self.upload_at.get_or_insert_with(Instant::now);
         }
     }
@@ -176,8 +176,23 @@ impl Context {
             self.mls();
             return Ok(());
         }
-        self.mls().upload_at = Some(Instant::now());
-        self.mls_upload().await?;
+        if self.mls_enabled {
+            self.mls().upload_at = Some(Instant::now());
+            self.mls_upload().await?;
+        } else {
+            // Opted out: no key packages, so nobody can add this device to a new
+            // group; only our device id, for Welcomes from an earlier opt-in.
+            if let Ok(CryptoResponse::MlsKeyPackages(batch)) = self
+                .mls_worker(CryptoRequest::MlsKeyPackages {
+                    server: self.server.key.clone(),
+                    one_time: 0,
+                    last_resort: false,
+                })
+                .await
+            {
+                self.mls().device = batch.device;
+            }
+        }
         self.mls_directs().await?;
         self.mls_fetch_welcomes().await?;
         let conversations: Vec<[u8; 16]> = self.mls().directs.keys().copied().collect();
@@ -199,7 +214,7 @@ impl Context {
             .as_ref()
             .and_then(|state| state.upload_at)
             .is_some_and(|at| at <= Instant::now());
-        if !due {
+        if !due || !self.mls_enabled {
             return Ok(());
         }
         let mut one_time = BATCH;
@@ -590,6 +605,13 @@ impl Context {
             self.mls_fetch_welcomes().await?;
             let view = self.mls_status(conversation).await?;
             self.mls_view(view).await;
+            return Ok(());
+        }
+        if !self.mls_enabled {
+            self.mls_emit(MlsEvent::Failed(
+                "End-to-end encrypted direct messages are experimental and turned off.".into(),
+            ))
+            .await;
             return Ok(());
         }
         let mut key_packages = self.mls_claim(peer).await?;

@@ -21,7 +21,7 @@ from mumble_client import Client, certificate_pin
 
 
 def connect(args, pin, name, profile, identity=None):
-    extra = ["--identity-dir", str(identity)] if identity else []
+    extra = ["--identity-dir", str(identity), "--e2ee"] if identity else []
     return Client(args.binaries, args.host, args.port, pin, name, profile, extra)
 
 
