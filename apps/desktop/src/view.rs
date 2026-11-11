@@ -2927,14 +2927,8 @@ fn composer(
         .link_status()
         .filter(|_| this.text.focus.is_focused(window));
     let linked = link.is_some();
-    let typing = link.or_else(|| {
-        crate::typing::typing_line(
-            server,
-            channel,
-            &this.settings,
-            crate::state::monotonic_ms(),
-        )
-    });
+    let typing =
+        link.or_else(|| server.typing_line(channel, &this.settings, crate::state::monotonic_ms()));
     let note = this
         .attach_note
         .as_ref()

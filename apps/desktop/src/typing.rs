@@ -9,31 +9,9 @@
 //! after the last one. Only conversations the server named and we may write
 //! in get one; the server forwards it only to those who may read there.
 //! Settings → Privacy turns sending off; others' indicators still show.
-use crate::state::{ChannelView, Desktop, ServerView};
+use crate::state::Desktop;
 use gpui_kit::*;
 use std::time::Duration;
-
-/// The line under the composer: who is typing here, or nothing.
-pub fn typing_line(
-    server: &ServerView,
-    channel: &ChannelView,
-    settings: &nuschel_session::config::ClientSettings,
-    now_ms: u64,
-) -> Option<String> {
-    let mut names: Vec<String> = channel
-        .typing_now(now_ms)
-        .filter(|session| Some(*session) != server.own_session)
-        .filter_map(|session| server.users.get(&session))
-        .map(|user| crate::names::display_name(user, settings).to_string())
-        .collect();
-    names.sort_by_key(|name| name.to_lowercase());
-    match names.as_slice() {
-        [] => None,
-        [one] => Some(format!("{one} is typing…")),
-        [one, two] => Some(format!("{one} and {two} are typing…")),
-        _ => Some("Several people are typing…".into()),
-    }
-}
 
 impl Desktop {
     /// The composer changed: say we are typing, now and then (the client
@@ -156,56 +134,5 @@ impl Element for LiveStatus {
         cx: &mut App,
     ) {
         self.child.paint(window, cx);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::typing_line;
-    use crate::state::{ChannelView, ServerView};
-    use nuschel_client::conversation::TYPING_SHOWN_MS;
-    use nuschel_session::{config::ClientSettings, connection::User};
-
-    #[test]
-    fn the_line_names_one_or_two_people_and_counts_more() {
-        let mut server = ServerView::new(
-            nuschel_session::config::ServerBookmark::new("Test", "localhost", 64738, "andi")
-                .unwrap(),
-        );
-        server.own_session = Some(1);
-        for (session, name) in [(1, "Me"), (2, "Bob"), (3, "ada"), (4, "Cy")] {
-            server.users.insert(
-                session,
-                User {
-                    session,
-                    name: name.into(),
-                    ..Default::default()
-                },
-            );
-        }
-        let settings = ClientSettings::default();
-        let now = 100_000;
-        let mut channel = ChannelView::default();
-        assert_eq!(typing_line(&server, &channel, &settings, now), None);
-        // Our own session never shows, and an old indicator is over.
-        channel.typing.insert(1, now);
-        channel.typing.insert(4, now - TYPING_SHOWN_MS - 1);
-        assert_eq!(typing_line(&server, &channel, &settings, now), None);
-        channel.typing.insert(2, now);
-        assert_eq!(
-            typing_line(&server, &channel, &settings, now).as_deref(),
-            Some("Bob is typing…")
-        );
-        channel.typing.insert(3, now);
-        assert_eq!(
-            typing_line(&server, &channel, &settings, now).as_deref(),
-            Some("ada and Bob are typing…")
-        );
-        channel.typing.insert(4, now);
-        assert_eq!(
-            typing_line(&server, &channel, &settings, now).as_deref(),
-            Some("Several people are typing…")
-        );
     }
 }

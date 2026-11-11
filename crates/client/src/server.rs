@@ -421,6 +421,28 @@ impl ServerState {
         }
     }
 
+    /// The line under a composer: who is typing in `channel` now, or nothing.
+    pub fn typing_line(
+        &self,
+        channel: &ConversationState,
+        names: &(impl crate::names::Names + ?Sized),
+        now_ms: u64,
+    ) -> Option<String> {
+        let mut shown: Vec<String> = channel
+            .typing_now(now_ms)
+            .filter(|session| Some(*session) != self.own_session)
+            .filter_map(|session| self.users.get(&session))
+            .map(|user| crate::names::display_name(user, names).to_string())
+            .collect();
+        shown.sort_by_key(|name| name.to_lowercase());
+        match shown.as_slice() {
+            [] => None,
+            [one] => Some(format!("{one} is typing…")),
+            [one, two] => Some(format!("{one} and {two} are typing…")),
+            _ => Some("Several people are typing…".into()),
+        }
+    }
+
     /// Whether direct messages with `peer` go to a durable conversation:
     /// between two registered accounts on a Nuschel server with history.
     pub fn durable_directs_with(&self, peer: &User) -> bool {
@@ -713,6 +735,46 @@ mod tests {
         server.someone_typing(&[1; 16], 9, 100);
         let typing = &server.channels.last().unwrap().typing;
         assert_eq!(typing.keys().copied().collect::<Vec<_>>(), [2]);
+    }
+
+    #[test]
+    fn the_typing_line_names_one_or_two_people_and_counts_more() {
+        use crate::{conversation::TYPING_SHOWN_MS, names::Preferences};
+        let mut server = test_server();
+        server.own_session = Some(1);
+        for (session, name) in [(1, "Me"), (2, "Bob"), (3, "ada"), (4, "Cy")] {
+            server.users.insert(
+                session,
+                User {
+                    session,
+                    name: name.into(),
+                    ..Default::default()
+                },
+            );
+        }
+        let names = Preferences::default();
+        let now = 100_000;
+        let mut channel = ConversationState::default();
+        assert_eq!(server.typing_line(&channel, &names, now), None);
+        // Our own session never shows, and an old indicator is over.
+        channel.typing.insert(1, now);
+        channel.typing.insert(4, now - TYPING_SHOWN_MS - 1);
+        assert_eq!(server.typing_line(&channel, &names, now), None);
+        channel.typing.insert(2, now);
+        assert_eq!(
+            server.typing_line(&channel, &names, now).as_deref(),
+            Some("Bob is typing…")
+        );
+        channel.typing.insert(3, now);
+        assert_eq!(
+            server.typing_line(&channel, &names, now).as_deref(),
+            Some("ada and Bob are typing…")
+        );
+        channel.typing.insert(4, now);
+        assert_eq!(
+            server.typing_line(&channel, &names, now).as_deref(),
+            Some("Several people are typing…")
+        );
     }
 
     #[test]
