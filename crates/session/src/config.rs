@@ -87,7 +87,10 @@ impl MumbleUrl {
                     certificate_sha256 = Some(hex.to_ascii_lowercase());
                 }
                 "policy" => {
-                    require_nuschl = value.split('+').any(|part| part == "nuschl");
+                    // Old Mumble invites must retain their no-downgrade flag.
+                    require_nuschl |= value
+                        .split('+')
+                        .any(|part| matches!(part, "nuschl" | "nuschel"));
                 }
                 _ => {}
             }
@@ -2851,6 +2854,21 @@ mod tests {
         }
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn pre_rename_mumble_invites_keep_their_protocol_requirement() {
+        for query in [
+            "policy=nuschel",
+            "policy=nuschel&policy=",
+            "policy=nuschel+nuschl",
+        ] {
+            assert!(
+                MumbleUrl::parse(&format!("mumble://127.0.0.1/?{query}"))
+                    .unwrap()
+                    .require_nuschl
+            );
+        }
+    }
+
     #[test]
     fn parses_mumble_urls_like_stock_clients() {
         let url = MumbleUrl::parse(

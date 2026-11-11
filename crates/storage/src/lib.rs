@@ -1146,6 +1146,50 @@ impl History {
 
 #[cfg(test)]
 mod tests {
+
+    /// SQLx includes comments in its SHA-384 migration checksums. This digest
+    /// is from Nuschel's pre-rename 0004 migration, before the
+    /// branding change; preserve its original text, including the old name.
+    #[tokio::test]
+    async fn legacy_history_opens_with_its_original_migration_checksum() -> Result<(), Error> {
+        const CHECKSUM: [u8; 48] = [
+            100, 182, 96, 254, 82, 30, 193, 4, 99, 214, 34, 87, 211, 213, 113, 42, 250, 159, 145,
+            176, 170, 113, 200, 161, 57, 117, 8, 135, 74, 103, 164, 225, 208, 95, 107, 158, 240,
+            46, 179, 211, 250, 111, 65, 220, 199, 115, 47, 237,
+        ];
+        for migrator in [
+            sqlx::migrate!("./migrations/sqlite"),
+            sqlx::migrate!("./migrations/postgres"),
+        ] {
+            let fourth = migrator
+                .iter()
+                .find(|migration| migration.version == 4)
+                .unwrap();
+            assert_eq!(fourth.checksum.as_ref(), CHECKSUM);
+        }
+        let root = tempfile::tempdir().map_err(sqlx::Error::Io)?;
+        let old = root.path().join("nuschel.sqlite3");
+        let new = root.path().join("nuschl.sqlite3");
+        let history = History::open(&old).await?;
+        history
+            .append(&message("saved", "ada", "before\nrename"))
+            .await?;
+        let Pool::Sqlite(pool) = &history.pool else {
+            unreachable!()
+        };
+        // A database produced by the old implementation records this digest.
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = 4")
+            .bind(CHECKSUM.as_slice())
+            .execute(pool)
+            .await?;
+        pool.close().await;
+        drop(history);
+        std::fs::rename(&old, &new).map_err(sqlx::Error::Io)?;
+        let migrated = History::open(&new).await?;
+        let page = migrated.page("saved", "general", None, 100).await?;
+        assert_eq!(page.messages[0].message.body, "before\nrename");
+        Ok(())
+    }
     use super::*;
 
     fn message(server: &str, author: &str, body: &str) -> ChatMessage {

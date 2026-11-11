@@ -240,6 +240,17 @@ mod tests {
     }
 
     #[test]
+    fn retired_worker_names_use_the_same_canonical_paths_as_the_launcher() {
+        let temp = tempfile::tempdir().unwrap();
+        let existing = temp.path().canonicalize().unwrap();
+        assert_eq!(canonical_worker_path(temp.path()).unwrap(), existing);
+        assert_eq!(
+            canonical_worker_path(&temp.path().join("missing/keys")).unwrap(),
+            existing.join("missing/keys")
+        );
+    }
+
+    #[test]
     fn nested_xdg_roots_do_not_copy_another_root_or_the_destination_into_itself() {
         let temp = tempfile::tempdir().unwrap();
         let old = Layout {
@@ -366,6 +377,28 @@ mod tests {
     }
 }
 
+/// The launcher hashes canonical paths (including Windows' verbatim prefix).
+/// Reconstruct a now-missing tail too, for retries after an interrupted move.
+#[cfg(any(windows, test))]
+fn canonical_worker_path(path: &Path) -> io::Result<std::path::PathBuf> {
+    let mut parent = std::path::absolute(path)?;
+    let mut missing = Vec::new();
+    loop {
+        match parent.canonicalize() {
+            Ok(mut canonical) => {
+                canonical.extend(missing.into_iter().rev());
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let name = parent.file_name().ok_or(error)?.to_owned();
+                missing.push(name);
+                parent.pop();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 #[cfg(all(windows, not(test)))]
 fn retire_windows(old: Option<&Layout>, new: &Layout) -> io::Result<()> {
     use nuschl_ipc::windows_sandbox::scoped_profile;
@@ -417,6 +450,7 @@ fn retire_windows(old: Option<&Layout>, new: &Layout) -> io::Result<()> {
             ("crypto", layout.keys()),
             ("crypto", layout.config.join("nuschel-identity")),
         ] {
+            let directory = canonical_worker_path(&directory)?;
             let name = scoped_profile(&format!("nuschel.{kind}"), &directory);
             // Include the destination on a retry after an interrupted move.
             let paths = [

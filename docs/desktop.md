@@ -198,7 +198,8 @@ The first start after the Nuschel → Nuschl rename moves the old `nuschel`
 folders to `nuschl` (including the corresponding macOS and Windows folders).
 Quit older clients first. Mumble certificates and private keys, accepted server
 certificates, bookmarks, settings, history and saved security requirements are
-preserved. Different files at both destinations stop startup with both copies
+preserved. Published client SQL migration files retain their original bytes
+(including old-name comments), because SQLx verifies their checksums. Different files at both destinations stop startup with both copies
 retained; resolve the conflict before retrying. Old managed configuration under
 `nuschel/managed.json` remains readable, with the new name taking precedence.
 
