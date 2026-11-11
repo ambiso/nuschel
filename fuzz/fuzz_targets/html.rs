@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Hostile legacy HTML and plain text through the content worker's conversion
 //! into a document, as messages, comments and channel descriptions take it:
-//! nothing may panic, and every span must lie inside its text, in order, with
-//! an allowed link target.
+//! nothing may panic, every span must lie inside its text, in order, with an
+//! allowed link target, and blocks and spans stay within the worker's limits.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -17,6 +17,25 @@ thread_local! {
 }
 
 fn check(document: &MessageDocument) {
+    // The worker's limits: 512 blocks, with room for the eight images and
+    // the text around them, and 2,048 styled spans, which links may split.
+    assert!(
+        document.blocks.len() <= 600,
+        "{} blocks",
+        document.blocks.len()
+    );
+    let spans: usize = document
+        .blocks
+        .iter()
+        .map(|block| match block {
+            ContentBlock::Text { spans, .. } => spans.len(),
+            _ => 0,
+        })
+        .sum();
+    assert!(
+        spans <= 2048 + 3 * nuschel_content::MAX_LINKS,
+        "{spans} spans"
+    );
     for block in &document.blocks {
         let ContentBlock::Text { text, spans, .. } = block else {
             continue;
