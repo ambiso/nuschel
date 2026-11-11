@@ -12,6 +12,7 @@ import zlib
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -80,8 +81,10 @@ imports.gi.Gio.bus_own_name_on_connection(imports.gi.Gio.DBus.session,
 """
 
 
-# The message box, and a clipboard holding a file's PNG (as screenshot tools leave it).
+# The message box, its attach button, and a clipboard holding a file's PNG
+# (as screenshot tools leave it).
 COMPOSER = (700, 735)
+ATTACH_BUTTON = (386, 735)
 SET_CLIPBOARD = """
 const [, data] = imports.gi.GLib.file_get_contents(%s);
 imports.gi.St.Clipboard.get_default().set_content(imports.gi.St.ClipboardType.CLIPBOARD,
@@ -140,7 +143,8 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,links,rich,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,links,rich,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,maximize")
+    parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -149,10 +153,13 @@ def main():
         root = Path(temporary)
         port = free_port()
         murmur = Murmur(args.murmur, root, port)
+        bot_options = []
         if {"all", "scroll"} & set(args.scenes.split(",")):
             # The scroll scene fills several pages of history quickly; the
             # stock server otherwise drops text beyond one message a second.
+            # The bots need not wait for it either (Nuschel itself still does).
             murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
+            bot_options = ["--message-limit", "1000", "--message-burst", "1000"]
         murmur.seed()
         murmur.start()
         bots = []
@@ -183,7 +190,7 @@ def main():
                 eventually(lambda: (socket_dir / "native").exists(), "private PulseAudio did not start")
             pin = certificate_pin(args.binaries, "127.0.0.1", port, root / "probe")
             for index, (name, channel) in enumerate([("Ada Lovelace", 2), ("Grace", 2), ("Linus", 5), ("Margaret", 7)]):
-                bot = Client(args.binaries, "127.0.0.1", port, pin, name, root / f"bot{index}")
+                bot = Client(args.binaries, "127.0.0.1", port, pin, name, root / f"bot{index}", bot_options)
                 bot.send(kind="join", channel=channel)
                 bots.append(bot)
             time.sleep(1.2)
@@ -599,6 +606,10 @@ def main():
                 time.sleep(0.4)
                 started = time.monotonic()
                 shell.eval(PASTE)
+                # Pasting attaches the image; Enter sends it.
+                time.sleep(4.0)
+                shot("27a-pasted-attached")
+                shell.key("Return")
                 sent = bots[0].wait(lambda e: e["kind"] == "text" and e["author"] == "Andi", timeout=60)
                 print(f"pasted image sent after {time.monotonic() - started:.1f} s: "
                       f"{len(sent['body'])} bytes, {sent['body'][:40]}", flush=True)
@@ -607,6 +618,74 @@ def main():
                 assert len(sent["body"]) <= 131072 and ("%2B" in sent["body"] or "%2F" in sent["body"])
                 time.sleep(2.0)
                 shot("27-pasted-image")
+            if want("attach"):
+                click(228, 268)  # #Development
+                time.sleep(0.6)
+                # Without a file chooser portal in this session, the attach
+                # button says so (Escape closes a chooser that did open).
+                click(*ATTACH_BUTTON)
+                time.sleep(1.5)
+                shot("28-attach-chooser")
+                shell.key("Escape")
+                time.sleep(0.4)
+                # Five pasted pictures…
+                click(*COMPOSER)
+                time.sleep(0.4)
+                for n in range(5):
+                    shell.eval(SET_CLIPBOARD % json.dumps(str(make_png(root / f"attach{n}.png", 320, 20 + n, height=200))))
+                    time.sleep(0.3)
+                    shell.eval(PASTE)
+                    time.sleep(0.6)
+                # …and a drawing and the notes, dropped together on the conversation.
+                images = 5
+                drawing = make_png(root / "drawing.png", 400, 31, height=300)
+                notes = root / "notes.pdf"
+                notes.write_bytes(b"%PDF-1.4\n" + b"%" * 12_300)
+                dragon = args.dragon_drop or shutil.which("dragon-drop")
+                if dragon:
+                    source = subprocess.Popen([str(dragon), "--all-compact", "--and-exit", str(drawing), str(notes)],
+                                              env=shell.app_environment(), stdout=subprocess.DEVNULL,
+                                              stderr=subprocess.DEVNULL, start_new_session=True)
+                    eventually(lambda: any(not (w["title"] or "").startswith("Nuschel") for w in shell.windows()),
+                               "dragon-drop did not appear")
+                    title = next(w["title"] for w in shell.windows() if not (w["title"] or "").startswith("Nuschel"))
+                    time.sleep(1.0)
+                    # Its one button ("2 files") fills the bottom of its small window.
+                    box = shell.window(title)
+                    nuschel = shell.window("Nuschel")
+                    shell.drag((box["x"] + box["width"] // 2, box["y"] + box["height"] - 15),
+                               (nuschel["x"] + 900, nuschel["y"] + 250), steps=30, hold=1.0)
+                    time.sleep(1.0)
+                    source.wait(timeout=10)
+                    images += 1
+                else:
+                    print("no dragon-drop: dropping files is not covered", flush=True)
+                click(*COMPOSER)
+                shell.type("Five pictures, a drawing & the notes")
+                time.sleep(4.0)
+                shot("29-attach-tray")
+                started = time.monotonic()
+                shell.key("Return")
+                time.sleep(0.4)
+                shot("30-attach-sending")
+                # One image per message, the text with the first: none lost to
+                # the stock server's rate limit (a burst of five, then one a second).
+                received = []
+                for _ in range(images):
+                    received.append(bots[0].wait(lambda e: e["kind"] == "text" and e["author"] == "Andi", timeout=60))
+                    received[-1]["after"] = time.monotonic() - started
+                print("attached images arrived after", ", ".join(f"{m['after']:.1f} s" for m in received), flush=True)
+                assert received[0]["body"].startswith("Five pictures, a drawing &amp; the notes<br/><img src=\"data:image/"), \
+                    received[0]["body"][:80]
+                assert all(m["html"] and m["body"].count("<img ") == 1 and len(m["body"]) <= 131072 for m in received)
+                assert all(m["body"].startswith("<img src=\"data:image/png;base64,") for m in received[1:])
+                # Four at once, then one every 1.25 s.
+                assert received[-1]["after"] > 1.25 * (images - 4) - 0.3, "faster than the rate limit allows"
+                time.sleep(2.0)
+                shot("31-attach-sent")
+                wheel(800, 400, -2 * SCROLL_CLICKS)  # up to the text that went with the first picture
+                time.sleep(1.0)
+                shot("32-attach-caption")
             if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)

@@ -11,7 +11,10 @@ Orca would and checks that:
 - every interactive control has a name (no unlabeled buttons or fields);
 - a control can be operated through AT-SPI alone: "Unmute" is invoked via the
   Action interface, the server sees the user unmuted, and the button becomes
-  "Mute".
+  "Mute";
+- with --gnome-shell (which has a clipboard): a pasted image shows in the
+  composer's tray as a named list item, and its "Remove" button works through
+  the Action interface.
 
 Uses busctl for D-Bus calls, so no Python bindings are needed.
 """
@@ -34,8 +37,12 @@ from mumble_client import Client, certificate_pin  # noqa: E402
 # AT-SPI role numbers (atspi-constants.h).
 ROLES = {23: "frame", 29: "label", 43: "push button", 54: "status bar", 61: "text", 62: "toggle button",
          65: "tree", 69: "window", 75: "application", 79: "entry", 91: "tree item", 27: "image",
-         40: "password text", 16: "dialog", 33: "menu", 35: "menu item", 85: "section", 99: "grouping"}
+         40: "password text", 16: "dialog", 33: "menu", 35: "menu item", 85: "section", 99: "grouping",
+         31: "list", 32: "list item"}
 INTERACTIVE = {"push button", "toggle button", "text", "entry", "password text", "tree item", "menu item"}
+# A 2×2 RGB PNG.
+PNG = (b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x02\x08\x02\0\0\0\xfd\xd4\x9as\0\0\0\x12IDATx"
+       b"\x9cc\xf8\xcf\xc0\xc0\0\xc2\x0c\xff\x81\0\0\x1f\xee\x05\xfb\x0b\xd9h\x8b\0\0\0\0IEND\xaeB`\x82")
 
 
 class Bus:
@@ -199,10 +206,40 @@ class AccessibilityTest:
                        "the button did not change to Mute", timeout=10)
             print("Unmuted through the AT-SPI Action interface; the server saw it and the button became Mute.",
                   flush=True)
+            if self.shell:
+                self.check_attachments(nuschel)
         finally:
             if peer:
                 peer.close()
             murmur.stop()
+
+    def check_attachments(self, nuschel):
+        """Paste an image into the composer; remove it again through AT-SPI."""
+        image = self.root / "pasted.png"
+        image.write_bytes(PNG)
+        self.shell.eval("const [, data] = imports.gi.GLib.file_get_contents(%s);"
+                        " imports.gi.St.Clipboard.get_default().set_content(imports.gi.St.ClipboardType.CLIPBOARD,"
+                        " 'image/png', new imports.gi.GLib.Bytes(data)); 'ok'" % json.dumps(str(image)))
+        nodes = snapshot(nuschel)
+        composer = next(node for _, node, role, name in nodes if role in ("text", "entry") and name == "Message")
+        composer.call("Component", "GrabFocus")
+        time.sleep(0.5)
+        self.shell.chord("Control_L", "v")
+
+        def attached():
+            nodes = snapshot(nuschel)
+            return nodes if any(role == "list item" and name == "Image Pasted image 1"
+                                for _, _, role, name in nodes) else None
+        nodes = eventually(attached, "the pasted image is not in the composer's tray", timeout=30)
+        self.write_tree(nodes, "tree-attached.txt")
+        self.find(nodes, "list", "1 attachment")
+        unnamed = [role for _, _, role, name in nodes if role in INTERACTIVE and not name.strip()]
+        assert not unnamed, f"interactive elements without a name: {unnamed}"
+        remove = self.find(nodes, "push button", "Remove Pasted image 1")
+        assert remove.call("Action", "DoAction", "i", "0")[0] is not False
+        eventually(lambda: not any(name == "Remove Pasted image 1" for _, _, _, name in snapshot(nuschel)),
+                   "the image stayed after Remove", timeout=10)
+        print("A pasted image showed in the tray as a named item and was removed through AT-SPI.", flush=True)
 
     @staticmethod
     def try_call(function, *arguments):

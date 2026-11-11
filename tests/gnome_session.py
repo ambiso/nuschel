@@ -161,7 +161,9 @@ class GnomeSession:
                   f" for (let i = 0; i < {abs(clicks)}; i++) p.notify_discrete_scroll(t + i * 8000,"
                   f" imports.gi.Clutter.ScrollDirection.{direction}, imports.gi.Clutter.ScrollSource.WHEEL); 'ok'")
 
-    def drag(self, start, end, steps=12):
+    def drag(self, start, end, steps=12, hold=0.0):
+        """Drag with the left button; `hold` waits at the end before the release
+        (a file drop needs a moment for the target to read what is offered)."""
         self.move(*start)
         self.eval("global._nuschelPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, imports.gi.Clutter.ButtonState.PRESSED); 'ok'")
         for step in range(1, steps + 1):
@@ -169,6 +171,7 @@ class GnomeSession:
             y = start[1] + (end[1] - start[1]) * step / steps
             self.move(x, y)
             time.sleep(0.02)
+        time.sleep(hold)
         self.eval("global._nuschelPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, imports.gi.Clutter.ButtonState.RELEASED); 'ok'")
 
     def key(self, keysym_name):
