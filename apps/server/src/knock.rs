@@ -268,6 +268,8 @@ impl State {
             moderator: actor,
             first_seq,
         };
+        // Resolve the previous channel's label before replacing its grant.
+        self.knock_left(p.session, Some(p.channel));
         self.knocks.grants.insert(p.session, grant.clone());
         let mut message = control::UserState {
             session: Some(p.session),
@@ -409,6 +411,56 @@ mod tests {
         acl::{AclEntry, perm},
         state::Channel,
     };
+
+    #[test]
+    fn moving_between_admissions_closes_the_previous_grant_before_the_new_one() {
+        let mut h = crate::fuzzing::Harness::new();
+        let requester = h
+            .state
+            .users
+            .values()
+            .find(|u| u.name == "Anonymous")
+            .unwrap()
+            .session;
+        let moderator = h
+            .state
+            .users
+            .values()
+            .find(|u| u.name == "SuperUser")
+            .unwrap()
+            .session;
+        let (link, mut frames, _) = crate::state::Link::new(1 << 20);
+        h.state.users.get_mut(&requester).unwrap().link = link;
+        for id in 100..102 {
+            let mut c = Channel::new(id, Some(0), format!("Private{id}"));
+            c.node.acls.push(AclEntry {
+                apply_here: true,
+                apply_subs: true,
+                user_id: None,
+                group: "all".into(),
+                grant: 0,
+                deny: perm::ENTER,
+            });
+            h.state.conversations.add_channel(c.conversation_id, id);
+            h.state.channels.0.insert(id, c);
+            h.state
+                .knocks
+                .last
+                .insert(requester, Instant::now() - COOLDOWN);
+            let pending = h.state.knock_request(requester, id).unwrap();
+            h.state.knock_decide(moderator, pending, true).unwrap();
+        }
+        let mut events = Vec::new();
+        while let Ok(frame) = frames.try_recv() {
+            if u16::from_be_bytes([frame[0], frame[1]]) == kind::KNOCK_ADMISSION {
+                let message = v1::KnockAdmission::decode(frame.slice(6..)).unwrap();
+                events.push((message.channel, message.active));
+            }
+        }
+        assert_eq!(events, [(100, true), (100, false), (101, true)]);
+        assert_eq!(h.state.admission_floor(requester, 100), None);
+        assert!(h.state.admission_floor(requester, 101).is_some());
+    }
 
     #[test]
     fn requests_coalesce_expire_and_bound_per_session_fanout() {
