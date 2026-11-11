@@ -44,11 +44,24 @@ in
 pkgs.testers.runNixOSTest {
   name = "nuschel-server";
   nodes = {
-    server = serverNode {
-      # Key-transparency keys as credentials (written by the test, never in the store).
-      kt.signingKeyFile = "/run/keys/nuschel-kt-signing";
-      kt.vrfSecretFile = "/run/keys/nuschel-kt-vrf";
-    };
+    server =
+      { pkgs, ... }:
+      {
+        imports = [
+          (serverNode {
+            # Key-transparency keys as credentials (written by the test, never in the store).
+            kt.signingKeyFile = "/run/keys/nuschel-kt-signing";
+            kt.vrfSecretFile = "/run/keys/nuschel-kt-vrf";
+          })
+        ];
+        # Builds the Murmur fixture database (tests/fixtures/murmur-1.5.sql).
+        environment.systemPackages = [ pkgs.sqlite ];
+        # The import into a fresh database, switched to at the end of the test.
+        specialisation.murmur.configuration.services.nuschel = {
+          importMurmur.databaseFile = "/tmp/murmur.sqlite";
+          database.sqlitePath = "/var/lib/nuschel/imported.sqlite3";
+        };
+      };
     postgres = serverNode {
       database.type = "postgresql";
       database.createLocally = true;
@@ -142,6 +155,17 @@ pkgs.testers.runNixOSTest {
     # Key transparency on PostgreSQL, with keys the server generated (0600).
     as_tester(f"python3 {tests}/key_transparency.py {bins} --host postgres")
     postgres.succeed("test \"$(stat -c %a /var/lib/private/nuschel/kt-vrf.key)\" = 600")
+    # A Murmur database (Murmur's own schema, tests/fixtures/murmur-1.5.sql)
+    # imported by the module into a fresh SQLite database, then logged in to.
+    server.succeed(f"sqlite3 /tmp/murmur.sqlite < {tests}/fixtures/murmur-1.5.sql && chmod 0600 /tmp/murmur.sqlite")
+    server.succeed("/run/current-system/specialisation/murmur/bin/switch-to-configuration test")
+    server.wait_until_succeeds("test -e /var/lib/nuschel/murmur-imported", timeout=120)
+    server.wait_for_unit("nuschel.service")
+    server.wait_for_open_port(64738)
+    server.succeed("test ! -e /var/lib/nuschel/murmur-import.sqlite")
+    server.succeed("test \"$(stat -c %a /var/lib/nuschel/murmur-server-password)\" = 600")
+    print(server.succeed("journalctl -u nuschel.service --no-pager | grep -A40 'imported from Murmur'"))
+    as_tester(f"python3 {tests}/murmur_import.py {bins} --host server")
     print(server.succeed("journalctl -u nuschel.service --no-pager | tail -n 40"))
   '';
 }

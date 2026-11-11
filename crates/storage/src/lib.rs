@@ -101,6 +101,7 @@ macro_rules! with_pool {
     };
 }
 
+pub mod murmur;
 pub mod server;
 
 /// What search matches and returns: the text without inline image data.

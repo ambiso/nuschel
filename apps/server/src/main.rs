@@ -54,6 +54,18 @@ struct Arguments {
     /// and exit: they become tombstones without content (GDPR requests).
     #[arg(long, value_name = "USER")]
     erase_user: Option<String>,
+    /// Import a Murmur (mumble-server) SQLite database, opened read-only:
+    /// registered users with their passwords, channels, ACLs, groups, links,
+    /// listeners and bans (docs/server.md). Refuses a server that already has
+    /// channels, users or bans unless --replace-existing is given.
+    #[arg(long, value_name = "PATH")]
+    import_murmur: Option<PathBuf>,
+    /// The Murmur virtual server to import.
+    #[arg(long, default_value_t = 1, requires = "import_murmur")]
+    murmur_server_id: i64,
+    /// Delete this server's channels, registered users and bans before the import.
+    #[arg(long, requires = "import_murmur")]
+    replace_existing: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -135,6 +147,19 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         server::set_superuser_password(&mut state, password, &settings).await?;
         storage.flush().await;
         println!("SuperUser password set");
+        return Ok(());
+    }
+    if let Some(path) = &arguments.import_murmur {
+        if arguments.ephemeral {
+            return Err("--import-murmur needs persistent state, not --ephemeral".into());
+        }
+        let options = nuscheld::murmur::Options {
+            path: path.clone(),
+            server_id: arguments.murmur_server_id,
+            replace_existing: arguments.replace_existing,
+        };
+        let report = nuscheld::murmur::import(&settings, backend, &options).await?;
+        print!("{}", report.render());
         return Ok(());
     }
     if let Some(user) = &arguments.erase_user {

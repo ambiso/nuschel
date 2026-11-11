@@ -17,7 +17,7 @@ use std::{
 
 #[derive(Parser)]
 #[command(about = "Nuschel SQLx storage worker; receives requests on inherited stdin/stdout")]
-#[command(group(ArgGroup::new("database-config").required(true).args(["database", "database_url_file"])))]
+#[command(group(ArgGroup::new("database-config").required(true).args(["database", "database_url_file", "read_murmur"])))]
 struct Arguments {
     /// A local SQLite path selected by the trusted supervisor.
     #[arg(long)]
@@ -31,6 +31,13 @@ struct Arguments {
     /// Serve `nuscheld`'s server state (channels, ACLs, users, bans) instead of history.
     #[arg(long)]
     server: bool,
+    /// Read this Murmur database (read-only, untrusted) for `nuscheld
+    /// --import-murmur`, write it to stdout as frames and exit.
+    #[arg(long, conflicts_with_all = ["database", "database_url_file", "server", "check_database"])]
+    read_murmur: Option<PathBuf>,
+    /// The Murmur virtual server to read.
+    #[arg(long, default_value_t = 1, requires = "read_murmur")]
+    murmur_server_id: i64,
     /// With `--server`: take the operator lock before opening the database; if
     /// another process holds it, answer every request with `Held` instead.
     #[arg(long, requires = "server")]
@@ -40,6 +47,9 @@ struct Arguments {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = Arguments::parse();
+    if let Some(path) = &arguments.read_murmur {
+        return read_murmur(path, arguments.murmur_server_id).await;
+    }
     if arguments.server {
         return serve_server_state(arguments).await;
     }
@@ -149,6 +159,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Stream a Murmur database as frames; a failure is reported as a
+/// `Failed` frame and the exit status.
+async fn read_murmur(
+    path: &std::path::Path,
+    server: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use nuschel_ipc::murmur::MurmurFrame;
+    let mut output = io::stdout().lock();
+    let mut sequence = 0_u64;
+    let mut emit = |frame: MurmurFrame| {
+        sequence += 1;
+        write_frame(&mut output, &Envelope::new(sequence, frame)).map_err(|error| error.to_string())
+    };
+    if let Err(error) = nuschel_storage::murmur::read(path, server, &mut emit).await {
+        let _ = emit(MurmurFrame::Failed(error.clone()));
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 /// Another process holds the operator lock: the database stays closed.
 fn serve_held() -> Result<(), Box<dyn std::error::Error>> {
     let mut input = io::stdin().lock();
@@ -213,6 +243,17 @@ async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::err
                 .map(|(comment, texture)| Response::Blobs { comment, texture }),
             Request::SaveBans { bans } => done(store.save_bans(&bans).await),
             Request::SetNextUserId { id } => done(store.set_next_user_id(id).await),
+            Request::SetListener {
+                user_id,
+                channel,
+                volume,
+            } => done(store.set_listener(user_id, channel, volume).await),
+            Request::RemoveListener { user_id, channel } => {
+                done(store.remove_listener(user_id, channel).await)
+            }
+            Request::UserListeners { id } => {
+                store.user_listeners(id).await.map(Response::Listeners)
+            }
             Request::HistoryAppend { message } => store.history_append(&message).await,
             Request::HistoryEdit {
                 target,

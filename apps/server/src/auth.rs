@@ -84,15 +84,47 @@ pub async fn authenticate(
         }
         _ => None,
     };
+    // A hash imported from Murmur becomes argon2id after a successful login
+    // (crate::password). A busy hasher leaves it for the next login.
+    let upgrade = match (&by_name, password_ok) {
+        (Some((_, Some(hash))), Some(true)) if password::is_imported(hash) => {
+            let cost = password::Cost {
+                memory_kib: server.settings.config.password_hashing.memory_kib,
+                passes: server.settings.config.password_hashing.passes,
+            };
+            password::hash(password.clone(), cost).await
+        }
+        _ => None,
+    };
     let identity = {
-        let state = server.lock();
-        resolve(
+        let mut state = server.lock();
+        let identity = resolve(
             &state,
             &by_name,
             password_ok,
             &password,
             peer.certificate_hash.as_deref(),
-        )
+        );
+        if let (Identity::Registered(id), Some(upgraded), Some((expected, old))) =
+            (identity, upgrade, &by_name)
+            && id == *expected
+        {
+            let replaced = match state.registry.users.get_mut(&id) {
+                Some(user) if user.password_hash == *old => {
+                    user.password_hash = Some(upgraded);
+                    true
+                }
+                _ => false,
+            };
+            if replaced {
+                state.persist_registration(id);
+                tracing::info!(
+                    user = id,
+                    "replaced an imported Murmur password hash with argon2id"
+                );
+            }
+        }
+        identity
     };
     let blobs = match identity {
         Identity::Registered(id) if id > 0 => Some(server.storage.user_blobs(id).await),

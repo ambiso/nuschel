@@ -3,6 +3,12 @@
 //! expensive (19 MiB, two passes, OWASP's minimum), so it runs on the blocking
 //! pool behind a small semaphore: a flood of logins can neither stall the
 //! control path nor allocate unbounded memory. Passwords are never logged.
+//!
+//! Accounts imported from Murmur keep Murmur's hash until their next
+//! successful login, which replaces it with argon2id ([`is_imported`]):
+//! PBKDF2-HMAC-SHA384 with a hex salt and 48-byte output (`PBKDF2.cpp`), or the
+//! legacy unsalted SHA-1 of the UTF-8 password (`ServerDB::getLegacySHA1Hash`).
+//! Both are compared in constant time.
 use argon2::{
     Algorithm, Argon2, Params, Version,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
@@ -86,14 +92,96 @@ pub fn hash_now(password: &str, cost: Cost) -> Option<String> {
         .map(|hash| hash.to_string())
 }
 
+/// Murmur's PBKDF2 hashes: `$murmur-pbkdf2-sha384$i=<iterations>$<salt hex>$<hash hex>`.
+pub const MURMUR_PBKDF2: &str = "$murmur-pbkdf2-sha384$";
+/// Murmur's legacy hashes: `$murmur-sha1$<hash hex>`.
+pub const MURMUR_SHA1: &str = "$murmur-sha1$";
+/// Iterations accepted from Murmur (its benchmark aims at 10 ms, at least
+/// 1000); more would let one stored row cost seconds per login attempt.
+pub const MAX_MURMUR_ITERATIONS: u32 = 2_000_000;
+const MURMUR_SALT_BYTES: usize = 64;
+
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    if !text.len().is_multiple_of(2) || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(text.get(at..at + 2)?, 16).ok())
+        .collect()
+}
+
+/// A stored hash for Murmur's PBKDF2 columns (`pw`, `salt`, `kdfiterations`),
+/// or `None` if they are malformed or too expensive.
+pub fn murmur_pbkdf2(iterations: i64, salt: &str, hash: &str) -> Option<String> {
+    let iterations = u32::try_from(iterations).ok()?;
+    let salt_bytes = unhex(salt.trim())?;
+    let hash_bytes = unhex(hash.trim())?;
+    if !(1..=MAX_MURMUR_ITERATIONS).contains(&iterations)
+        || salt_bytes.is_empty()
+        || salt_bytes.len() > MURMUR_SALT_BYTES
+        || hash_bytes.len() != 48
+    {
+        return None;
+    }
+    Some(format!(
+        "{MURMUR_PBKDF2}i={iterations}${}${}",
+        crate::tls::hex(&salt_bytes),
+        crate::tls::hex(&hash_bytes)
+    ))
+}
+
+/// A stored hash for Murmur's legacy SHA-1 `pw` column.
+pub fn murmur_sha1(hash: &str) -> Option<String> {
+    let bytes = unhex(hash.trim())?;
+    (bytes.len() == 20).then(|| format!("{MURMUR_SHA1}{}", crate::tls::hex(&bytes)))
+}
+
+/// A hash imported from Murmur, replaced with argon2id after the next login.
+pub fn is_imported(stored: &str) -> bool {
+    stored.starts_with(MURMUR_PBKDF2) || stored.starts_with(MURMUR_SHA1)
+}
+
+fn verify_murmur(password: &str, stored: &str) -> Option<bool> {
+    if let Some(rest) = stored.strip_prefix(MURMUR_PBKDF2) {
+        let mut parts = rest.split('$');
+        let iterations = parts.next()?.strip_prefix("i=")?.parse::<u32>().ok()?;
+        let (salt, hash) = (unhex(parts.next()?)?, unhex(parts.next()?)?);
+        if parts.next().is_some() || iterations > MAX_MURMUR_ITERATIONS {
+            return Some(false);
+        }
+        let iterations = std::num::NonZeroU32::new(iterations)?;
+        // `verify` compares in constant time.
+        return Some(
+            ring::pbkdf2::verify(
+                ring::pbkdf2::PBKDF2_HMAC_SHA384,
+                iterations,
+                &salt,
+                password.as_bytes(),
+                &hash,
+            )
+            .is_ok(),
+        );
+    }
+    let expected = unhex(stored.strip_prefix(MURMUR_SHA1)?)?;
+    let digest = ring::digest::digest(&ring::digest::SHA1_FOR_LEGACY_USE_ONLY, password.as_bytes());
+    Some(equal_constant_time(digest.as_ref(), &expected))
+}
+
 fn verify_now(password: &str, stored: &str) -> bool {
     if password.len() > MAX_PASSWORD_BYTES {
         return false;
     }
+    // Imported Murmur hashes are accepted until the first login replaces them.
+    // A database writer could select such a scheme, but could as well store an
+    // argon2id hash of a password of their choice.
+    if is_imported(stored) {
+        return verify_murmur(password, stored).unwrap_or(false);
+    }
     let Ok(parsed) = PasswordHash::new(stored) else {
         return false;
     };
-    // Refuse anything but argon2id so a tampered database cannot select a weak scheme.
+    // Refuse anything but argon2id (and the imported formats above).
     if parsed.algorithm != argon2::ARGON2ID_IDENT {
         return false;
     }
@@ -141,6 +229,40 @@ mod tests {
         assert!(!verify_now("correct horse", "not a hash"));
         assert!(!verify_now(&"x".repeat(MAX_PASSWORD_BYTES + 1), &first));
         assert!(hash_now(&"x".repeat(MAX_PASSWORD_BYTES + 1), CHEAP).is_none());
+    }
+
+    #[test]
+    fn murmur_hashes_verify() {
+        // PBKDF2-HMAC-SHA384 as Murmur's `PBKDF2::getHash` computes it (8-byte
+        // hex salt, 48-byte hex output). The vector is from Python's
+        // hashlib.pbkdf2_hmac("sha384", b"hunter2", bytes.fromhex("0011223344556677"), 1000).
+        let stored = murmur_pbkdf2(
+            1000,
+            "0011223344556677",
+            "c2fa5023e808bd1adafccf5f995d5147a0d17e0113e9bda3fa8380faa58088467346ba1eb6bbf7e6374da78caa9b784c",
+        )
+        .unwrap();
+        assert!(is_imported(&stored));
+        assert!(verify_now("hunter2", &stored));
+        assert!(!verify_now("hunter3", &stored));
+        let derived = [7_u8; 48];
+        // SHA-1 of "password", as `getLegacySHA1Hash` stores it.
+        let legacy = murmur_sha1("5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8").unwrap();
+        assert!(verify_now("password", &legacy));
+        assert!(!verify_now("Password", &legacy));
+        // Malformed or too expensive rows are refused at import.
+        assert!(murmur_sha1("5baa61e4").is_none());
+        assert!(murmur_pbkdf2(0, "00", &crate::tls::hex(&derived)).is_none());
+        assert!(
+            murmur_pbkdf2(
+                i64::from(MAX_MURMUR_ITERATIONS) + 1,
+                "00",
+                &crate::tls::hex(&derived)
+            )
+            .is_none()
+        );
+        assert!(murmur_pbkdf2(1000, "zz", &crate::tls::hex(&derived)).is_none());
+        assert!(!verify_now("x", "$murmur-pbkdf2-sha384$i=1$00"));
     }
 
     #[test]

@@ -11,6 +11,7 @@ use rustls::{
     crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature},
     pki_types::{CertificateDer, PrivateKeyDer, UnixTime, pem::PemObject},
     server::danger::{ClientCertVerified, ClientCertVerifier},
+    sign::CertifiedKey,
 };
 use std::{
     io::Write,
@@ -62,6 +63,37 @@ pub struct Identity {
 }
 
 impl Identity {
+    /// A PEM certificate chain and private key held in memory.
+    pub fn from_pem(certificate: &[u8], key: &[u8]) -> Result<Self, TlsError> {
+        let read_error = |what: &str| {
+            let what = PathBuf::from(what);
+            move |error: rustls::pki_types::pem::Error| TlsError::Read {
+                path: what.clone(),
+                message: error.to_string(),
+            }
+        };
+        let chain = CertificateDer::pem_slice_iter(certificate)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(read_error("certificate"))?;
+        if chain.is_empty() {
+            return Err(TlsError::Read {
+                path: PathBuf::from("certificate"),
+                message: "no certificate found".into(),
+            });
+        }
+        let key = PrivateKeyDer::from_pem_slice(key).map_err(read_error("private key"))?;
+        Ok(Self { chain, key })
+    }
+
+    /// The chain with its signing key; fails if the key does not belong to
+    /// the leaf certificate or cannot sign.
+    pub fn certified(self) -> Result<Arc<CertifiedKey>, TlsError> {
+        let provider = rustls::crypto::ring::default_provider();
+        Ok(Arc::new(CertifiedKey::from_der(
+            self.chain, self.key, &provider,
+        )?))
+    }
+
     pub fn load(certificate: &Path, key: &Path) -> Result<Self, TlsError> {
         let read_error = |path: &Path| {
             let path = path.to_owned();
@@ -113,6 +145,11 @@ impl Identity {
     pub fn fingerprint(&self) -> String {
         sha256_hex(self.chain[0].as_ref())
     }
+}
+
+/// Whether a certificate and key can serve TLS.
+pub fn check_identity(identity: Identity) -> Result<(), TlsError> {
+    identity.certified().map(|_| ())
 }
 
 fn write_atomically(path: &Path, contents: &[u8], mode: u32) -> Result<(), TlsError> {

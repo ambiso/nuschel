@@ -470,6 +470,20 @@ pub enum ServerStorageRequest {
     SetNextUserId {
         id: u32,
     },
+    /// Add or update a registered user's channel listener (volume factor).
+    SetListener {
+        user_id: u32,
+        channel: u32,
+        volume: f32,
+    },
+    RemoveListener {
+        user_id: u32,
+        channel: u32,
+    },
+    /// A registered user's listeners: `Listeners`.
+    UserListeners {
+        id: u32,
+    },
     /// Store a message (or a `Void` for its seq when the key was used before):
     /// `Appended` or `Conflict`.
     HistoryAppend {
@@ -624,6 +638,8 @@ pub enum ServerStorageResponse {
     Missing,
     LimitReached,
     Count(u64),
+    /// Channel and volume factor.
+    Listeners(Vec<(u32, f32)>),
     Heads(Vec<(String, u64)>),
     Directs(Vec<StoredDirect>),
     Access(Vec<StoredAccess>),

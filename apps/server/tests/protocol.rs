@@ -1218,3 +1218,232 @@ async fn hostile_frames_leave_the_server_running() {
     assert!(late.session > 0);
     fixture.running.shutdown().await;
 }
+
+fn fixture_text(name: &str) -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(name),
+    )
+    .unwrap()
+}
+
+fn plain_settings(directory: &std::path::Path, extra: &str) -> nuscheld::config::Settings {
+    Config::from_toml(&format!(
+        "bind = [\"127.0.0.1\"]\nport = 0\nstate_directory = {directory:?}\n\
+         message_limit = 1000\nmessage_burst = 1000\n{extra}\n\
+         [autoban]\nattempts = 0\n[password_hashing]\nmemory_kib = 64\npasses = 1\n"
+    ))
+    .unwrap()
+    .settings()
+    .unwrap()
+}
+
+/// A server without the SuperUser password file (the imported one counts).
+async fn start_plain(
+    directory: tempfile::TempDir,
+    store: Arc<Mutex<MemoryStore>>,
+    extra: &str,
+) -> Fixture {
+    let running = start(
+        plain_settings(directory.path(), extra),
+        Backend::Memory(store.clone()),
+    )
+    .await
+    .unwrap();
+    Fixture {
+        running,
+        store,
+        directory,
+    }
+}
+
+/// Import Murmur's rows (as `nuschel-storage-worker --read-murmur` reads
+/// tests/fixtures/murmur-1.5.sql) into `store`.
+async fn import_murmur(
+    directory: &std::path::Path,
+    store: &Arc<Mutex<MemoryStore>>,
+    dump: nuschel_ipc::murmur::MurmurDump,
+    replace: bool,
+) -> Result<nuscheld::murmur::Report, nuscheld::murmur::ImportError> {
+    let settings = plain_settings(directory, "");
+    let storage = nuscheld::storage::start(Backend::Memory(store.clone()));
+    let counters = Default::default();
+    let mut state = nuscheld::server::load_state_for_admin(&settings, &storage, &counters)
+        .await
+        .unwrap();
+    let report = nuscheld::murmur::apply(&mut state, dump, replace);
+    storage.flush().await;
+    report
+}
+
+#[tokio::test]
+async fn a_murmur_database_imports_with_its_passwords_and_acls() {
+    let carol = identity();
+    let mut dump =
+        nuschel_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
+    for user in &mut dump.users {
+        if user.name == "carol" {
+            // Murmur's hashes are lowercase; an uppercase one is normalised.
+            user.certificate_hash =
+                Some(nuscheld::tls::sha1_hex(carol.certificate.as_ref()).to_uppercase());
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let store = MemoryStore::shared();
+    let report = import_murmur(directory.path(), &store, dump.clone(), false)
+        .await
+        .unwrap();
+    let rendered = report.render();
+    for (what, count) in [
+        ("registered users", 5),
+        ("channels", 3),
+        ("ACL entries", 6),
+        ("groups", 2),
+        ("links", 1),
+        ("channel listeners", 1),
+        ("bans", 1),
+        ("expired bans (not imported)", 1),
+        ("comments", 1),
+        ("avatars", 1),
+    ] {
+        assert_eq!(
+            report.imported.get(what),
+            Some(&count),
+            "{what}: {rendered}"
+        );
+    }
+    assert_eq!((report.pbkdf2_passwords, report.sha1_passwords), (3, 1));
+    for expected in [
+        "user 4: the name does not match",
+        "user 5: another account has the same name",
+        "user 6: malformed PBKDF2 password",
+        "user 6: malformed certificate hash",
+        "channel 4 and its subchannels",
+        "channel 5: its parent 99",
+        "ACL 2 of channel 1: user 999 was not imported",
+        "member 999 was not imported",
+        "link 1–99",
+        "ban 3: no valid address",
+        "ban 4: no valid address",
+        "listener of user 1 in channel 99",
+    ] {
+        assert!(rendered.contains(expected), "{expected} in {rendered}");
+    }
+    assert!(
+        rendered.contains("channels: channel_id: malformed"),
+        "{rendered}"
+    );
+    // Nothing secret in the report.
+    assert!(!rendered.contains("serverpw") && !rendered.contains("c2fa5023"));
+
+    // A second import refuses to touch a server that has state, and says so.
+    let error = import_murmur(directory.path(), &store, dump.clone(), false)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("--replace-existing"), "{error}");
+    let report = import_murmur(directory.path(), &store, dump, true)
+        .await
+        .unwrap();
+    assert_eq!(report.imported.get("registered users"), Some(&5));
+    assert!(
+        report
+            .advice
+            .iter()
+            .any(|line| line.contains("replaced 3 channels, 5 registered users"))
+    );
+
+    let fixture = start_plain(directory, store, "").await;
+    let address = fixture.address();
+    let login = |name: &'static str, password: &'static str, identity: &'static Identity| {
+        Client::connect(
+            address,
+            Options {
+                password: Some(password),
+                ..Options::new(name, identity)
+            },
+        )
+    };
+    let leak = |identity: Identity| -> &'static Identity { Box::leak(Box::new(identity)) };
+    // Murmur's SuperUser password (this server had none), PBKDF2, the legacy
+    // SHA-1, and PBKDF2 of a non-ASCII password.
+    login("SuperUser", "superpw", leak(identity()))
+        .await
+        .unwrap();
+    let mut alice = login("alice", "hunter2", leak(identity())).await.unwrap();
+    let mut bob = login("bob", "password", leak(identity())).await.unwrap();
+    login("eve", "pässwörd", leak(identity())).await.unwrap();
+    let wrong = login("bob", "Password", leak(identity()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(reject_type(&wrong), proto::reject::RejectType::WrongUserPw);
+    let wrong = login("alice", "hunter3", leak(identity()))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(reject_type(&wrong), proto::reject::RejectType::WrongUserPw);
+    // Certificate login from the imported hash.
+    let mut carol = Client::connect(address, Options::new("carol", &carol))
+        .await
+        .unwrap();
+    // Successful logins replaced Murmur's hashes with argon2id.
+    {
+        let state = fixture.running.server.lock();
+        for id in [0, 1, 2, 7] {
+            let hash = state.registry.users[&id].password_hash.clone().unwrap();
+            assert!(hash.starts_with("$argon2id$"), "user {id}: {hash}");
+        }
+        let alice = &state.registry.users[&1];
+        assert_eq!(alice.last_channel, Some(1));
+        let lobby = state.channels.get(1).unwrap();
+        assert_eq!((lobby.position, lobby.max_users), (5, 10));
+        assert!(lobby.links.contains(&3));
+        assert_eq!(state.bans.len(), 1);
+    }
+
+    // The ACLs: only "insiders" (bob) enter Secret; bob starts there (his
+    // last channel), alice in Lobby.
+    let own_channel = |client: &Client| {
+        client
+            .seen
+            .iter()
+            .filter(|frame| frame.kind == kind::USER_STATE)
+            .filter_map(|frame| proto::UserState::decode(frame.payload.clone()).ok())
+            .find(|state| state.session == Some(client.session))
+            .and_then(|state| state.channel_id)
+    };
+    assert_eq!(own_channel(&bob), Some(2));
+    assert_eq!(own_channel(&alice), Some(1));
+    carol
+        .send(
+            kind::USER_STATE,
+            &proto::UserState {
+                session: Some(carol.session),
+                channel_id: Some(2),
+                ..Default::default()
+            },
+        )
+        .await;
+    let denied = carol
+        .expect::<proto::PermissionDenied>(kind::PERMISSION_DENIED, |_| true)
+        .await;
+    assert_eq!(denied.permission, Some(0x4));
+    // Bob's user ACL in Lobby grants MakeChannel there.
+    bob.send(
+        kind::CHANNEL_STATE,
+        &proto::ChannelState {
+            parent: Some(1),
+            name: Some("Bob's".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+    alice
+        .expect::<proto::ChannelState>(kind::CHANNEL_STATE, |state| {
+            state.name.as_deref() == Some("Bob's")
+        })
+        .await;
+    // The upgraded hash verifies (this login replaces alice's first session).
+    login("alice", "hunter2", leak(identity())).await.unwrap();
+}

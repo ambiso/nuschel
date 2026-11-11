@@ -477,9 +477,17 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 1. **Server for stock Mumble clients** (the base everything else extends) — done
    (2026-11-11): see docs/server.md; the `vm-server` check runs the protocol suites
    and the stock GUI against it. Open phase-1 items:
-   - [ ] Persist channel listeners for registered users; CA-verified ("strong")
-         certificates; IP obfuscation in logs; TLS reload on SIGHUP; a minimum
-         TLS 1.3 option; import of a Murmur database (PBKDF2/SHA-1 passwords).
+   - [x] Import of a Murmur database (2026-11-11): `nuscheld --import-murmur`
+         (docs/server.md), both layouts (`ServerDB.cpp` of 1.2.4–1.5 and 1.6's),
+         read-only by the storage worker and validated by the server's rules;
+         PBKDF2-SHA384 and SHA-1 passwords become argon2id at the next login;
+         settings to `murmur-import.toml`; `services.nuschel.importMurmur`. Left
+         out: Murmur on MySQL/PostgreSQL (export to SQLite), murmur.ini, e-mail
+         addresses, disabled listeners, the log table.
+   - [ ] Persist channel listeners for registered users.
+   - [ ] TLS reload on SIGHUP; a minimum TLS 1.3 option.
+   - [ ] IP obfuscation in logs.
+   - [ ] CA-verified ("strong") certificates.
    - [ ] A per-user cap on temporary channels and a global budget for shout fan-out;
          rolling statistics; clients older than 1.2.2.
    - [ ] Chat in the stock-client VM check (needs typing into the stock window).

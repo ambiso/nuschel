@@ -70,6 +70,27 @@ let
       "%d/kt-vrf-secret"
     ];
   notInStore = path: path == null || !(lib.hasPrefix builtins.storeDir (toString path));
+  # A Murmur database imported once before the first start (docs/server.md):
+  # root copies it in for the dynamic user, the service imports it; the
+  # marker keeps later starts from trying again.
+  murmurCopy = "${stateDirectory}/murmur-import.sqlite";
+  murmurMarker = "${stateDirectory}/murmur-imported";
+  copyMurmur = pkgs.writeShellScript "nuschel-copy-murmur" ''
+    set -eu
+    if [ ! -e ${murmurMarker} ] && [ ! -e ${murmurCopy} ]; then
+      ${pkgs.coreutils}/bin/install -m 0600 -o nuschel -g nuschel \
+        ${lib.escapeShellArg (toString cfg.importMurmur.databaseFile)} ${murmurCopy}
+    fi
+  '';
+  importMurmur = pkgs.writeShellScript "nuschel-import-murmur" ''
+    set -eu
+    if [ -e ${murmurCopy} ] && [ ! -e ${murmurMarker} ]; then
+      ${cfg.package}/bin/nuscheld --config ${configFile} --state-directory ${stateDirectory} "$@" \
+        --import-murmur ${murmurCopy} --murmur-server-id ${toString cfg.importMurmur.serverId}
+      ${pkgs.coreutils}/bin/touch ${murmurMarker}
+      ${pkgs.coreutils}/bin/rm -f ${murmurCopy}
+    fi
+  '';
 in
 {
   options.services.nuschel = {
@@ -178,6 +199,27 @@ in
         '';
       };
     };
+    importMurmur = {
+      databaseFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/var/lib/murmur/murmur.sqlite";
+        description = ''
+          A Murmur (mumble-server) SQLite database to import once, before the first
+          start (`nuscheld --import-murmur`, docs/server.md): users with their
+          passwords, channels, ACLs, groups, links, listeners and bans. Stop Murmur
+          first. The import refuses a database that already has channels, users or
+          bans; then the service does not start and the journal says why.
+          Settings found in it are written to murmur-import.toml in the state
+          directory, for `settings`.
+        '';
+      };
+      serverId = lib.mkOption {
+        type = lib.types.int;
+        default = 1;
+        description = "The Murmur virtual server to import.";
+      };
+    };
     tls = {
       certificateFile = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -273,14 +315,20 @@ in
           ++ lib.optional (cfg.kt.signingKeyFile != null) "kt-signing-key:${cfg.kt.signingKeyFile}"
           ++ lib.optional (cfg.kt.vrfSecretFile != null) "kt-vrf-secret:${cfg.kt.vrfSecretFile}";
         # Migrations and a connection check before the server takes traffic.
-        ExecStartPre = lib.escapeShellArgs (
-          [
-            "${cfg.package}/bin/nuschel-storage-worker"
-            "--server"
-            "--check-database"
-          ]
-          ++ databaseArguments
-        );
+        ExecStartPre = [
+          (lib.escapeShellArgs (
+            [
+              "${cfg.package}/bin/nuschel-storage-worker"
+              "--server"
+              "--check-database"
+            ]
+            ++ databaseArguments
+          ))
+        ]
+        ++ lib.optionals (cfg.importMurmur.databaseFile != null) [
+          "+${copyMurmur}"
+          (lib.escapeShellArgs ([ "${importMurmur}" ] ++ serverDatabaseArguments ++ tlsArguments))
+        ];
         ExecStart = lib.escapeShellArgs (
           [
             "${cfg.package}/bin/nuscheld"

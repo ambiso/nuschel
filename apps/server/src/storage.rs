@@ -188,6 +188,29 @@ impl StorageHandle {
         self.write(Request::SetNextUserId { id });
     }
 
+    /// Remember a registered user's listener (volume must be finite).
+    pub fn set_listener(&self, user_id: u32, channel: u32, volume: f32) {
+        if volume.is_finite() {
+            self.write(Request::SetListener {
+                user_id,
+                channel,
+                volume,
+            });
+        }
+    }
+
+    pub fn remove_listener(&self, user_id: u32, channel: u32) {
+        self.write(Request::RemoveListener { user_id, channel });
+    }
+
+    /// A registered user's remembered listeners: channel and volume.
+    pub async fn user_listeners(&self, id: u32) -> Vec<(u32, f32)> {
+        match self.read(Request::UserListeners { id }).await {
+            Some(Response::Listeners(listeners)) => listeners,
+            _ => Vec::new(),
+        }
+    }
+
     /// A handle whose writes go nowhere (fuzzing and unit tests of the state).
     pub fn detached() -> Self {
         let (jobs, _) = mpsc::unbounded_channel();
@@ -416,6 +439,8 @@ pub struct MemoryStore {
     channels: BTreeMap<u32, StoredChannel>,
     links: BTreeSet<(u32, u32)>,
     users: BTreeMap<u32, (StoredUser, String, String)>,
+    /// (user, channel) → volume.
+    listeners: BTreeMap<(u32, u32), f32>,
     bans: Vec<StoredBan>,
     next_user_id: u32,
     pub history: MemoryHistory,
@@ -797,6 +822,7 @@ impl MemoryStore {
                 let mut doomed = vec![id];
                 while let Some(current) = doomed.pop() {
                     self.channels.remove(&current);
+                    self.listeners.retain(|(_, channel), _| *channel != current);
                     self.links.retain(|(a, b)| *a != current && *b != current);
                     doomed.extend(
                         self.channels
@@ -825,8 +851,32 @@ impl MemoryStore {
             }
             Request::DeleteUser { id } => {
                 self.users.remove(&id);
+                self.listeners.retain(|(user, _), _| *user != id);
                 Response::Done
             }
+            // The database's foreign keys: both must exist.
+            Request::SetListener {
+                user_id,
+                channel,
+                volume,
+            } => {
+                if self.users.contains_key(&user_id) && self.channels.contains_key(&channel) {
+                    self.listeners.insert((user_id, channel), volume);
+                    Response::Done
+                } else {
+                    Response::Rejected("no such user or channel".into())
+                }
+            }
+            Request::RemoveListener { user_id, channel } => {
+                self.listeners.remove(&(user_id, channel));
+                Response::Done
+            }
+            Request::UserListeners { id } => Response::Listeners(
+                self.listeners
+                    .range((id, 0)..=(id, u32::MAX))
+                    .map(|(&(_, channel), &volume)| (channel, volume))
+                    .collect(),
+            ),
             Request::SetComment { id, comment } => {
                 if let Some(entry) = self.users.get_mut(&id) {
                     entry.1 = comment;

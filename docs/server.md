@@ -12,6 +12,7 @@ history, edits and deletions, subscriptions, read markers and direct conversatio
 nuscheld --config nuscheld.toml          # see apps/server/nuscheld.example.toml
 nuscheld --config nuscheld.toml --check-config
 nuscheld --config nuscheld.toml admin users list     # operator commands, see Administration
+nuscheld --config nuscheld.toml --import-murmur /var/lib/mumble-server/mumble-server.sqlite
 ```
 
 Every configuration key is optional; names and defaults follow murmur.ini
@@ -59,6 +60,71 @@ The NixOS module (`services.nuschel`, nix/module.nix) generates the TOML file
 from `settings` (never secrets), runs a database preflight, and hardens the unit
 (DynamicUser, a private state directory, no capabilities, system call filter,
 `SocketBindAllow` for the server port only).
+
+## Importing a Murmur server
+
+`nuscheld --import-murmur PATH` moves a Murmur (mumble-server) server into this
+one: registered users with their passwords, certificate hashes, last channels,
+comments and avatars; the channel tree with descriptions, positions, user limits and
+ACL inheritance; ACL entries, groups and members (inherit and inheritable flags);
+links; channel listeners; and bans. Stop Murmur first (the file is read as it is on
+disk) and run the import with the configuration the server will use, as the user it
+runs as. It prints a report and exits.
+
+- **Which Murmur.** Both database layouts: `ServerDB.cpp` (Murmur 1.2.4 to 1.5,
+  schema versions 6 to 9, `murmur.sqlite`/`mumble-server.sqlite`) and Murmur 1.6's
+  (schema 10 and later, where ACLs refer to groups by id). Older files: start them
+  once with Murmur 1.5 to upgrade. SQLite only; for a Murmur on MySQL or PostgreSQL,
+  export to SQLite first. A database holding several virtual servers is imported one
+  at a time: `--murmur-server-id N` (default 1).
+- **Into what.** The import writes through the storage worker like the running
+  server, so the target may be SQLite or PostgreSQL. It refuses a server that already
+  has channels, registered users or bans (besides the root channel and SuperUser)
+  and changes nothing. `--replace-existing` deletes those first: deleted channels'
+  history becomes an archive only SuperUser reads, deleted accounts' messages show as
+  a deleted user's, as when they are removed by hand. Ids are kept (ACLs, groups and
+  `default_channel` refer to them); registration ids continue above the highest
+  imported one.
+- **Untrusted input.** The storage worker opens the file read-only
+  (`--read-murmur`: `query_only`, `trusted_schema = OFF`, cell size checks, a heap
+  limit, `quick_check` first), reads fixed statements page by page and decodes every
+  value by its actual type, so a malformed row is reported, not fatal; values over
+  1.5 MiB, and blobs beyond 256 MiB in total, are dropped. `nuscheld` then applies its
+  own rules: `username_pattern` and `channel_name_pattern`, unique names (users
+  regardless of case, siblings exactly), the text limits for comments and
+  descriptions, `image_message_length` for avatars (Mumble's pre-1.2.3 raw avatars are
+  dropped), at most 512 ACL entries and groups per channel and 8192 members per group,
+  one root and no cycles (a channel that fails takes its subchannels with it),
+  references only to imported users and channels. The report names what was skipped
+  by id, never by content.
+- **Passwords** keep Murmur's hash until the user's next login, which replaces it
+  with argon2id: PBKDF2-HMAC-SHA384 with Murmur's hex salt and 48-byte output
+  (`kdfiterations` up to 2,000,000; more would make one row cost seconds per login
+  attempt, and such an account is imported without a password), or the legacy
+  unsalted SHA-1 that Murmur keeps for accounts whose `kdfiterations` is not set.
+  Both are compared in constant time. The report counts the SHA-1 accounts; until
+  their users log in, the database holds their unsalted hashes. SuperUser keeps this
+  server's password if it has one; `superuser_password_file` replaces it at every
+  start anyway.
+- **Settings.** Murmur keeps per-server settings in its `config` table (set through
+  Ice or written by Murmur itself). Those with an equivalent are written to
+  `murmur-import.toml` in `state_directory` for you to merge (`welcometext`,
+  `users`, `bandwidth`, `textmessagelength`, the patterns, the limits, …); the server
+  password goes to `murmur-server-password` (0600) for `password_file`. Murmur's
+  certificate and key in the database (Murmur stores the self-signed one it
+  generated) become this server's generated certificate if there is none yet, so
+  clients that pinned Murmur's keep trusting the server; otherwise they are written
+  next to it for `certificate`/`private_key`. murmur.ini is not read: its values
+  carry over by hand, under the same names in snake_case.
+- **Not imported:** e-mail addresses (no e-mail login here), disabled listeners
+  (Murmur keeps their volume), Murmur's log table, and settings without an
+  equivalent (listed in the report).
+
+On NixOS, `services.nuschel.importMurmur.databaseFile` runs the import once, before
+the first start: the file is copied into the state directory for the service's
+dynamic user, imported, and removed; `murmur-imported` in the state directory
+records that it ran. If the import refuses (the database already has state), the
+service does not start and the journal says why.
 
 ## Administration
 
