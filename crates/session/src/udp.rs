@@ -10,7 +10,6 @@ use nuschel_protocol::{
     crypt::{CryptState, CryptStats},
     voice::{self, UdpMessage},
 };
-use serde::Serialize;
 use std::net::SocketAddr;
 use tokio::{
     net::UdpSocket,
@@ -27,44 +26,9 @@ const GIVE_UP_AFTER: Duration = Duration::from_secs(15);
 const BACKOFF_PING: Duration = Duration::from_secs(10);
 /// Stock clients request a resync after five seconds without a good packet.
 const RESYNC_AFTER: Duration = Duration::from_secs(5);
+pub use nuschel_core::model::{PingStats, TransportStats};
+
 pub const MAX_DATAGRAM: usize = 1024 + nuschel_protocol::crypt::HEADER;
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
-pub struct PingStats {
-    pub packets: u32,
-    pub average_ms: f32,
-    pub variance_ms: f32,
-}
-impl PingStats {
-    pub fn record(&mut self, rtt_ms: f32) {
-        if !rtt_ms.is_finite() || rtt_ms < 0. {
-            return;
-        }
-        self.packets = self.packets.saturating_add(1);
-        let n = self.packets as f32;
-        let delta = rtt_ms - self.average_ms;
-        self.average_ms += delta / n;
-        // Exponentially weighted variance keeps the value responsive on long calls.
-        self.variance_ms = if self.packets == 1 {
-            0.
-        } else {
-            0.9 * self.variance_ms + 0.1 * delta * delta
-        };
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
-pub struct TransportStats {
-    pub udp_active: bool,
-    pub forced_tcp: bool,
-    pub udp: PingStats,
-    pub tcp: PingStats,
-    /// Server-to-client UDP crypt statistics.
-    pub good: u32,
-    pub late: u32,
-    pub lost: u32,
-    pub resync: u32,
-}
 
 pub enum Received {
     Message(UdpMessage),

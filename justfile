@@ -4,8 +4,14 @@ default:
 check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
+    just wasm
     cargo test --workspace
     cargo deny check
+
+# The SDK's core builds for browsers (docs/clients.md, "The SDK"): no native
+# session, runtime or clock in it.
+wasm:
+    cargo clippy -p nuschel-core -p nuschel-client --target wasm32-unknown-unknown --no-default-features -- -D warnings
 
 workers:
     cargo build --workspace

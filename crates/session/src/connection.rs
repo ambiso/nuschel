@@ -20,7 +20,6 @@ use nuschel_protocol::{
     voice::{self, UdpMessage, VoicePacket},
 };
 use prost::Message;
-use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::{SystemTime, UNIX_EPOCH},
@@ -31,7 +30,7 @@ use tokio::{
     time::{self, Duration, Instant, timeout},
 };
 
-pub use crate::model::{Channel, User};
+pub use crate::model::{Channel, ServerLimits, TextTarget, User};
 pub use nuschel_legacy_html::{escape_html, legacy_body, text_html};
 
 /// Wire message types (Mumble's TCP control protocol).
@@ -80,16 +79,6 @@ const USERS_NOTICE: &str = "This server has more than 16,384 users; the rest are
 const BLOBS_NOTICE: &str = "This server sent more than 64 MiB of comments, descriptions and \
     avatars; further ones are not shown.";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
-pub enum TextTarget {
-    Channel(u32),
-    Direct(u32),
-    /// A direct conversation on a Nuschel server (`OpenDirect`), by its id:
-    /// stored, and reachable while the other account is offline.
-    DirectConversation([u8; 16]),
-}
-
 #[derive(Clone, Debug)]
 pub struct IncomingText {
     pub target: TextTarget,
@@ -121,16 +110,6 @@ pub struct PendingChat {
 const INTERNAL: u64 = 1 << 63;
 /// Busy or rate-limited sends are retried this often before they fail.
 const MAX_SEND_ATTEMPTS: u32 = 5;
-
-#[derive(Clone, Debug, Serialize)]
-pub struct ServerLimits {
-    pub allow_html: bool,
-    pub message_length: usize,
-    pub image_message_length: usize,
-    pub max_users: Option<u32>,
-    pub recording_allowed: bool,
-    pub max_bandwidth: Option<u32>,
-}
 
 #[derive(Clone, Debug)]
 pub enum SessionEvent {

@@ -22651,10 +22651,6 @@ rec {
             packageId = "directories";
           }
           {
-            name = "nuschel-client";
-            packageId = "nuschel-client";
-          }
-          {
             name = "nuschel-core";
             packageId = "nuschel-core";
           }

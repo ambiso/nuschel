@@ -9,7 +9,6 @@ publish.workspace = true
 
 [dependencies]
 nuschel-core.workspace = true
-nuschel-client.workspace = true
 nuschel-ipc.workspace = true
 nuschel-legacy-html.workspace = true
 nuschel-protocol.workspace = true

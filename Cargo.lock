@@ -6929,7 +6929,6 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "directories",
- "nuschel-client",
  "nuschel-core",
  "nuschel-ipc",
  "nuschel-legacy-html",
