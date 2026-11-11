@@ -845,6 +845,9 @@ impl<'a> Parser<'a> {
         }
         self.atom()?;
         self.trim();
+        // The atom may have written nothing (a control character), and the
+        // trim taken the space before it.
+        let start = start.min(self.out.len());
         // U+0338 COMBINING LONG SOLIDUS OVERLAY on what was just written:
         // after a symbol or an escaped character. After a letter it would
         // join it into an identifier, so a negated letter is text; anything
@@ -1805,6 +1808,8 @@ mod tests {
         // parenthesis closing it.
         assert_eq!(ok("{a \\\\}"), "class(\"normal\", a \\ )");
         super::check(&ok("\\frac{a \\\\}{b} \\sqrt{x \\\\}")).unwrap();
+        // Found by fuzzing: \not before a control character panicked.
+        assert_eq!(ok("x \\not\u{1}"), "x");
         // Found by fuzzing: a negated space was an identifier `space̸`.
         assert_eq!(ok("\\not\\ "), "space");
         assert_eq!(ok("\\not\\frac12 \\not("), "frac(1, 2) \\(\u{338}");
