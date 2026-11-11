@@ -41,6 +41,19 @@ const ECHO_DELAY_HINT_MS: i32 = 30;
 const MAX_SPEAKERS: usize = 64;
 const LEVEL_EVERY: u32 = 10;
 
+/// Call a stream builder with the sample type of `format`.
+macro_rules! by_format {
+    ($format:expr, $build:ident($($argument:expr),* $(,)?)) => {
+        match $format {
+            SampleFormat::F32 => $build::<f32>($($argument),*),
+            SampleFormat::I16 => $build::<i16>($($argument),*),
+            SampleFormat::U16 => $build::<u16>($($argument),*),
+            SampleFormat::I32 => $build::<i32>($($argument),*),
+            format => Err(format!("unsupported sample format {format}")),
+        }
+    };
+}
+
 enum Event {
     Request(LiveMediaRequest),
     DeviceError(String),
@@ -129,19 +142,25 @@ impl Speaker {
 struct Transmit {
     encoder: OpusEncoder,
     pending: Vec<f32>,
+    packet: [u8; MAX_PACKET_BYTES],
     sequence: u64,
     active: bool,
 }
 
 impl Transmit {
-    fn encode(&mut self, samples: &[f32]) -> Option<Vec<u8>> {
-        let mut packet = vec![0; MAX_PACKET_BYTES];
+    /// Encode the first 20 ms of pending audio, padded with silence. The
+    /// returned copy is the packet's IPC payload.
+    fn encode(&mut self) -> Option<Vec<u8>> {
+        const SAMPLES: usize = 2 * FRAME;
+        if self.pending.len() < SAMPLES {
+            self.pending.resize(SAMPLES, 0.);
+        }
         let count = self
             .encoder
-            .encode(samples, samples.len(), &mut packet)
-            .ok()?;
-        packet.truncate(count);
-        Some(packet)
+            .encode(&self.pending[..SAMPLES], SAMPLES, &mut self.packet)
+            .ok();
+        self.pending.drain(..SAMPLES);
+        Some(self.packet[..count?].to_vec())
     }
 }
 
@@ -186,6 +205,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut transmit = Transmit {
         encoder,
         pending: Vec::with_capacity(2 * FRAME),
+        packet: [0; MAX_PACKET_BYTES],
         sequence: 0,
         active: false,
     };
@@ -295,7 +315,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        let event = match rx.recv_timeout(Duration::from_millis(4)) {
+        // Open devices are serviced every few milliseconds; without them the
+        // worker waits for the supervisor or its next attempt to open them.
+        let timeout = if devices.is_some() {
+            Duration::from_millis(4)
+        } else if state_known && !deafened {
+            retry_at.saturating_duration_since(Instant::now())
+        } else {
+            Duration::MAX
+        };
+        let event = match rx.recv_timeout(timeout) {
             Ok(event) => Some(event),
             Err(mpsc::RecvTimeoutError::Timeout) => None,
             Err(_) => break,
@@ -353,12 +382,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 transmit.encoder.bitrate_bps = bitrate.clamp(6000, 64_000) as i32;
                 transmit.encoder.packet_loss_perc = i32::from(packet_loss_percent.clamp(1, 30));
                 let requested = requested.sanitized();
-                let route_changed = requested.input_device != settings.input_device
-                    || requested.output_device != settings.output_device
-                    || requested.echo_cancellation != settings.echo_cancellation
-                    || requested.device_overrides != settings.device_overrides;
-                settings = requested;
-                if route_changed && devices.is_some() {
+                if !requested.same_route(&settings) && devices.is_some() {
                     // A new route needs new streams; the supervisor restarts this process.
                     emit(
                         &mut output,
@@ -368,16 +392,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         },
                     )?;
                     std::process::exit(0);
-                } else if let Some(chain) = pipeline.as_mut() {
-                    // Rebuild the chain with the new processing choices on the same route.
-                    let mut rebuilt = CapturePipeline::with_reference(
-                        &chain_settings(&settings, upstream_noise),
-                        chain.echo_cancellation(),
-                        chain.reference_channels(),
-                    );
-                    rebuilt.set_delay_hint(ECHO_DELAY_HINT_MS);
-                    *chain = rebuilt;
                 }
+                if requested != settings
+                    && let Some(chain) = pipeline.as_mut()
+                {
+                    // The canceller and filters keep what they learned.
+                    chain.configure(&chain_settings(&requested, upstream_noise));
+                }
+                settings = requested;
             }
             Some(Event::Request(LiveMediaRequest::Preview {
                 capture,
@@ -568,14 +590,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             let result = chain.process(&mut capture_frame, push_to_talk, controller.guard_gate());
             controller.observe_capture(&raw, result.voice);
             frames_seen = frames_seen.wrapping_add(1);
-            if frames_seen.is_multiple_of(LEVEL_EVERY) {
+            // Only Settings shows a meter.
+            if preview && frames_seen.is_multiple_of(LEVEL_EVERY) {
                 emit(
                     &mut output,
                     LiveMediaEvent::Level {
                         level_db: result.level_db,
                         voice: result.voice,
-                        // In a preview: whether the gate would transmit.
-                        transmitting: result.transmit && (preview || !muted),
+                        transmitting: result.transmit,
                     },
                 )?;
             }
@@ -617,8 +639,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 transmit.active = true;
                 transmit.pending.extend_from_slice(&capture_frame);
                 if transmit.pending.len() >= 2 * FRAME {
-                    let samples: Vec<f32> = transmit.pending.drain(..2 * FRAME).collect();
-                    if let Some(opus) = transmit.encode(&samples) {
+                    if let Some(opus) = transmit.encode() {
                         emit(
                             &mut output,
                             LiveMediaEvent::Packet {
@@ -657,9 +678,7 @@ fn finish(
     transmit: &mut Transmit,
     epoch: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut samples = std::mem::take(&mut transmit.pending);
-    samples.resize(2 * FRAME, 0.);
-    if let Some(opus) = transmit.encode(&samples) {
+    if let Some(opus) = transmit.encode() {
         emit(
             output,
             LiveMediaEvent::Packet {
@@ -886,37 +905,16 @@ fn open_host(
             let config = input.default_input_config().ok()?;
             let (producer, consumer) = RingBuffer::<f32>::new(RING);
             let stamp = (capture_stamper, clock);
-            let stream = match config.sample_format() {
-                SampleFormat::F32 => input_stream::<f32>(
+            let stream = by_format!(
+                config.sample_format(),
+                input_stream(
                     &input,
                     stream_config(host, config),
                     tx.clone(),
                     producer,
-                    stamp,
-                ),
-                SampleFormat::I16 => input_stream::<i16>(
-                    &input,
-                    stream_config(host, config),
-                    tx.clone(),
-                    producer,
-                    stamp,
-                ),
-                SampleFormat::U16 => input_stream::<u16>(
-                    &input,
-                    stream_config(host, config),
-                    tx.clone(),
-                    producer,
-                    stamp,
-                ),
-                SampleFormat::I32 => input_stream::<i32>(
-                    &input,
-                    stream_config(host, config),
-                    tx.clone(),
-                    producer,
-                    stamp,
-                ),
-                _ => return None,
-            }
+                    stamp
+                )
+            )
             .ok()?;
             stream.play().ok()?;
             capture_consumer = Some(consumer);
@@ -990,37 +988,16 @@ fn open_host(
         },
         clock,
     );
-    let stream = match config.sample_format() {
-        SampleFormat::F32 => output_stream::<f32>(
+    let stream = by_format!(
+        config.sample_format(),
+        output_stream(
             &output_device,
             stream_config(host, config),
             tx.clone(),
             (playback_consumer, underruns.clone()),
-            played,
-        ),
-        SampleFormat::I16 => output_stream::<i16>(
-            &output_device,
-            stream_config(host, config),
-            tx.clone(),
-            (playback_consumer, underruns.clone()),
-            played,
-        ),
-        SampleFormat::U16 => output_stream::<u16>(
-            &output_device,
-            stream_config(host, config),
-            tx.clone(),
-            (playback_consumer, underruns.clone()),
-            played,
-        ),
-        SampleFormat::I32 => output_stream::<i32>(
-            &output_device,
-            stream_config(host, config),
-            tx.clone(),
-            (playback_consumer, underruns.clone()),
-            played,
-        ),
-        _ => return Err("unsupported output sample format".into()),
-    }?;
+            played
+        )
+    )?;
     stream.play().map_err(|error| error.to_string())?;
     // Nuschel's canceller needs to know everything the speakers play: record
     // the output device (all applications) where the system allows it, and
@@ -1098,14 +1075,20 @@ fn upstream_processing(source: &str, capturing: bool) -> crate::graph::Upstream 
     found
 }
 
+/// Whether a PulseAudio server (native or pipewire-pulse) may be listening,
+/// checked before cpal waits for a connection.
+#[cfg(target_os = "linux")]
+fn pulse_running() -> bool {
+    std::env::var_os("PULSE_SERVER").is_some_and(|server| !server.is_empty())
+        || std::env::var_os("XDG_RUNTIME_DIR")
+            .is_some_and(|runtime| std::path::Path::new(&runtime).join("pulse/native").exists())
+}
+
 /// Real sources (without monitors) and sinks by node name, from the PulseAudio
 /// API (pipewire-pulse) when it is running.
 #[cfg(target_os = "linux")]
 fn pulse_device_names() -> Option<(Vec<String>, Vec<String>)> {
-    if !std::env::var_os("PULSE_SERVER").is_some_and(|server| !server.is_empty())
-        && !std::env::var_os("XDG_RUNTIME_DIR")
-            .is_some_and(|runtime| std::path::Path::new(&runtime).join("pulse/native").exists())
-    {
+    if !pulse_running() {
         return None;
     }
     let host = cpal::host_from_id(cpal::HostId::PulseAudio).ok()?;
@@ -1128,10 +1111,7 @@ fn pulse_device_names() -> Option<(Vec<String>, Vec<String>)> {
 /// Ask the PulseAudio API (native or pipewire-pulse) for the default node.
 #[cfg(target_os = "linux")]
 fn resolve_pulse_default(input: bool) -> Option<(String, String)> {
-    if !std::env::var_os("PULSE_SERVER").is_some_and(|server| !server.is_empty())
-        && !std::env::var_os("XDG_RUNTIME_DIR")
-            .is_some_and(|runtime| std::path::Path::new(&runtime).join("pulse/native").exists())
-    {
+    if !pulse_running() {
         return None;
     }
     let host = cpal::host_from_id(cpal::HostId::PulseAudio).ok()?;
@@ -1141,6 +1121,18 @@ fn resolve_pulse_default(input: bool) -> Option<(String, String)> {
         host.default_output_device()
     }?;
     Some((device_id(&device)?, device_name(&device)))
+}
+
+/// The channel count and rate of a device format the converters handle.
+fn convertible(config: &cpal::StreamConfig) -> Result<(usize, u32), String> {
+    let channels = usize::from(config.channels);
+    let rate = config.sample_rate;
+    if channels == 0 || channels > 32 || !(8000..=384_000).contains(&rate) {
+        return Err(format!(
+            "unsupported device format: {channels} channels at {rate} Hz"
+        ));
+    }
+    Ok((channels, rate))
 }
 
 fn error_callback(tx: SyncSender<Event>) -> impl FnMut(cpal::Error) + Send + 'static {
@@ -1167,11 +1159,7 @@ where
     T: SizedSample,
     f32: FromSample<T>,
 {
-    let channels = config.channels as usize;
-    let rate = config.sample_rate;
-    if channels == 0 || channels > 32 || !(8000..=384_000).contains(&rate) {
-        return Err("unsupported input configuration".into());
-    }
+    let (channels, rate) = convertible(&config)?;
     let mut converter = CaptureConverter::new(channels, rate);
     device
         .build_input_stream(
@@ -1267,17 +1255,13 @@ fn record_output(
         .default_input_config()
         .or_else(|_| output.default_output_config())
         .map_err(|error| error.to_string())?;
-    let channels = usize::from(config.channels());
-    let rate = config.sample_rate();
-    if channels == 0 || channels > 32 || !(8000..=384_000).contains(&rate) {
-        return Err("unsupported output recording format".into());
-    }
+    let format = config.sample_format();
+    let stream_config = stream_config(host, config);
+    let (channels, rate) = convertible(&stream_config)?;
     let mut converter = ReferenceConverter::new(channels, rate);
     let outputs = converter.outputs();
     let (mut ring, samples) = RingBuffer::<f32>::new(reference::RING_FRAMES * outputs);
     let (mut stamper, timeline) = reference::stamped();
-    let format = config.sample_format();
-    let stream_config = stream_config(host, config);
     let callback = move |values: &mut dyn Iterator<Item = f32>, info: &cpal::InputCallbackInfo| {
         let timestamp = info.timestamp();
         let latency = timestamp
@@ -1286,13 +1270,10 @@ fn record_output(
         stamper.anchor(clock.now_shifted(latency, Duration::ZERO));
         stamper.advance(converter.push(values, &mut ring));
     };
-    let stream = match format {
-        SampleFormat::F32 => build_recording::<f32>(&device, stream_config, tx, callback),
-        SampleFormat::I16 => build_recording::<i16>(&device, stream_config, tx, callback),
-        SampleFormat::U16 => build_recording::<u16>(&device, stream_config, tx, callback),
-        SampleFormat::I32 => build_recording::<i32>(&device, stream_config, tx, callback),
-        _ => Err("unsupported output recording sample format".into()),
-    }?;
+    let stream = by_format!(
+        format,
+        build_recording(&device, stream_config, tx, callback)
+    )?;
     stream.play().map_err(|error| error.to_string())?;
     // A readable name for what is recorded; the default sink's own name where
     // cpal only offers a virtual "default" entry.
@@ -1405,11 +1386,7 @@ fn output_stream<T>(
 where
     T: SizedSample + FromSample<f32>,
 {
-    let channels = config.channels as usize;
-    let rate = config.sample_rate;
-    if channels == 0 || channels > 32 || !(8000..=384_000).contains(&rate) {
-        return Err("unsupported output configuration".into());
-    }
+    let (channels, rate) = convertible(&config)?;
     let mut converter = PlaybackConverter::new(channels, rate);
     device
         .build_output_stream(

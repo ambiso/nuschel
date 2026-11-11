@@ -93,14 +93,6 @@ pub enum Event {
     },
     /// History writes work again after an earlier failure.
     HistoryRecovered,
-    /// Microphone level for the settings meter, about ten times per second.
-    AudioLevel {
-        server: String,
-        generation: u64,
-        level_db: f32,
-        voice: f32,
-        transmitting: bool,
-    },
     AudioDevices {
         server: String,
         generation: u64,
@@ -736,17 +728,16 @@ async fn connect_once(
         tokio::select! {
             changed = settings.changed() => {
                 if changed.is_err() { break; }
-                let current = settings.borrow_and_update().clone();
-                let route = |audio: &nuschel_core::audio::AudioSettings| (audio.input_device.clone(), audio.output_device.clone(), audio.echo_cancellation, audio.device_overrides.clone());
-                if route(&current.audio) != route(&applied_audio) {
+                let audio = settings.borrow_and_update().audio.clone();
+                if !audio.same_route(&applied_audio) {
                     // New devices need new native streams: replace the worker, as for mute.
                     media.take();
                     capture_epoch += 1;
                     retry_audio = tokio::time::Instant::now();
-                } else if let Some(media) = &media {
-                    let _ = media.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio.clone(), host: pinned_host(&audio_host) });
+                } else if audio != applied_audio && let Some(media) = &media {
+                    configure(media, &audio, (bitrate, loss_percent), pinned_host(&audio_host));
                 }
-                applied_audio = current.audio;
+                applied_audio = audio;
             },
             changed = push_to_talk.changed() => {
                 if changed.is_err() { break; }
@@ -822,8 +813,7 @@ async fn connect_once(
                     if measured.abs_diff(loss_percent) >= 3 {
                         loss_percent = measured;
                         if let Some(media) = &media {
-                            let current = settings.borrow().clone();
-                            let _ = media.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio, host: pinned_host(&audio_host) });
+                            configure(media, &applied_audio, (bitrate, loss_percent), pinned_host(&audio_host));
                         }
                     }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Transport(stats) }).await;
@@ -842,8 +832,7 @@ async fn connect_once(
                 capture_epoch += 1;
                 match Media::start() {
                     Ok(worker) => {
-                        let current = settings.borrow().clone();
-                        let _ = worker.commands.try_send(LiveMediaRequest::Configure { bitrate, packet_loss_percent: loss_percent, settings: current.audio, host: pinned_host(&audio_host) });
+                        configure(&worker, &applied_audio, (bitrate, loss_percent), pinned_host(&audio_host));
                         let _ = worker.commands.try_send(LiveMediaRequest::SetState { epoch: capture_epoch, muted, deafened });
                         let _ = worker.commands.try_send(LiveMediaRequest::PushToTalk { active: *push_to_talk.borrow() });
                         media = Some(worker);
@@ -858,9 +847,6 @@ async fn connect_once(
                     sequence += 2;
                     if !muted || end { let _ = session_commands.try_send(Command::Voice { target: 0, packet }); }
                     if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, !end && !muted).await; }
-                },
-                Some(LiveMediaEvent::Level { level_db, voice, transmitting }) => {
-                    let _ = events.try_send(Event::AudioLevel { server: id.clone(), generation, level_db, voice, transmitting });
                 },
                 Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise, reference }) => {
                     if let Some((host, _)) = output.as_deref().and_then(|id| id.split_once(':')) {
@@ -879,8 +865,8 @@ async fn connect_once(
                     if !ready { audio_host.1 = tokio::time::Instant::now() + HOST_PIN; media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 }); }
                     let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message }).await;
                 },
-                // Echo tests run only in the Settings check.
-                Some(LiveMediaEvent::EchoTest { .. }) => {},
+                // The meter and the echo test are the Settings check's (preview.rs).
+                Some(LiveMediaEvent::Level { .. } | LiveMediaEvent::EchoTest { .. }) => {},
                 None => { media.take(); retry_audio = tokio::time::Instant::now() + std::time::Duration::from_secs(2); let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message: "Audio worker restarting…".into() }).await; },
             },
         }
@@ -1165,6 +1151,21 @@ async fn history_loop(
 /// worked before, for this long. A restarting PipeWire or PulseAudio must not
 /// lose its hardware device to a fallback that opens ALSA directly.
 const HOST_PIN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The audio settings, and the bitrate and packet loss the encoder plans for.
+fn configure(
+    media: &Media,
+    audio: &nuschel_core::audio::AudioSettings,
+    (bitrate, packet_loss_percent): (u32, u8),
+    host: Option<String>,
+) {
+    let _ = media.commands.try_send(LiveMediaRequest::Configure {
+        bitrate,
+        packet_loss_percent,
+        settings: audio.clone(),
+        host,
+    });
+}
 
 fn pinned_host(audio_host: &(Option<String>, tokio::time::Instant)) -> Option<String> {
     audio_host

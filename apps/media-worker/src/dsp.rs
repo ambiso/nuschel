@@ -84,27 +84,10 @@ impl CapturePipeline {
             .render_config(StreamConfig::new(RATE, reference_channels as u16))
             .echo_detector(echo_cancellation)
             .build();
-        let gain = settings.automatic_gain.then(|| {
-            AudioProcessing::builder()
-                .config(Config {
-                    gain_controller2: Some(GainController2 {
-                        adaptive_digital: Some(AdaptiveDigital {
-                            // Voice chat favours steady loudness over a large boost of a
-                            // quiet or distant microphone.
-                            max_gain_db: 30.,
-                            ..Default::default()
-                        }),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                })
-                .capture_config(stream())
-                .build()
-        });
         Self {
             front,
             echo_cancellation,
-            gain,
+            gain: settings.automatic_gain.then(gain_stage),
             denoise: DenoiseState::new(),
             noise_suppression: settings.noise_suppression,
             gate: Gate::new(settings),
@@ -118,8 +101,17 @@ impl CapturePipeline {
         }
     }
 
-    pub fn reference_channels(&self) -> usize {
-        self.reference_channels
+    /// Apply new processing choices on the same route. The high-pass filter
+    /// and the echo canceller keep what they learned, the gate stays open
+    /// mid-sentence, and a running gain stage keeps its level.
+    pub fn configure(&mut self, settings: &AudioSettings) {
+        self.noise_suppression = settings.noise_suppression;
+        self.gate.configure(settings);
+        if settings.automatic_gain != self.gain.is_some() {
+            self.gain = settings.automatic_gain.then(gain_stage);
+            self.near_gain = 1.;
+            self.gain_ceiling = None;
+        }
     }
 
     /// Tell the chain whether the far end is audible. While echo dominates a
@@ -260,6 +252,25 @@ impl CapturePipeline {
     }
 }
 
+/// AGC2 with its limiter.
+fn gain_stage() -> AudioProcessing {
+    AudioProcessing::builder()
+        .config(Config {
+            gain_controller2: Some(GainController2 {
+                adaptive_digital: Some(AdaptiveDigital {
+                    // Voice chat favours steady loudness over a large boost of a
+                    // quiet or distant microphone.
+                    max_gain_db: 30.,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .capture_config(stream())
+        .build()
+}
+
 fn rms(frame: &[f32]) -> f32 {
     (frame.iter().map(|sample| sample * sample).sum::<f32>() / frame.len().max(1) as f32).sqrt()
 }
@@ -294,17 +305,26 @@ struct Gate {
 
 impl Gate {
     fn new(settings: &AudioSettings) -> Self {
-        let sensitivity = settings.vad_sensitivity.clamp(0., 1.);
-        let open_threshold = 0.9 - 0.6 * sensitivity;
-        Self {
+        let mut gate = Self {
             mode: settings.transmit,
-            open_threshold,
-            close_threshold: (open_threshold - 0.3).max(0.05),
+            open_threshold: 0.,
+            close_threshold: 0.,
             hangover: 0,
-            release_frames: settings.ptt_release_ms / 10,
+            release_frames: 0,
             release: 0,
             open: false,
-        }
+        };
+        gate.configure(settings);
+        gate
+    }
+
+    /// New thresholds and mode; an open gate and its hangover carry over.
+    fn configure(&mut self, settings: &AudioSettings) {
+        let sensitivity = settings.vad_sensitivity.clamp(0., 1.);
+        self.mode = settings.transmit;
+        self.open_threshold = 0.9 - 0.6 * sensitivity;
+        self.close_threshold = (self.open_threshold - 0.3).max(0.05);
+        self.release_frames = settings.ptt_release_ms / 10;
     }
 
     fn update(&mut self, voice: f32, level_db: f32, push_to_talk: bool, echo_guard: bool) -> bool {
@@ -522,6 +542,52 @@ mod tests {
         assert!(
             attenuation > 15.,
             "AEC3 attenuated echo by only {attenuation:.1} dB"
+        );
+    }
+
+    #[test]
+    fn new_processing_choices_keep_the_canceller_and_an_open_gate() {
+        let settings = AudioSettings {
+            noise_suppression: false,
+            automatic_gain: false,
+            ..Default::default()
+        };
+        let mut chain = CapturePipeline::new(&settings, true);
+        let mut without = CapturePipeline::new(&settings, false);
+        let far = |index: usize| speech_like(index).map(|s| s * 2.);
+        let echo = |index: usize| far(index - 4).map(|s| s * 0.5);
+        let mut measure = |chain: &mut CapturePipeline, frames: std::ops::Range<usize>| {
+            let (mut cancelled, mut raw) = (0., 0.);
+            for index in frames.clone() {
+                chain.render(&far(index));
+                let (mut a, mut b) = (echo(index), echo(index));
+                cancelled += chain.process(&mut a, false, false).level_db;
+                raw += without.process(&mut b, false, false).level_db;
+            }
+            (raw - cancelled) / frames.len() as f32
+        };
+        measure(&mut chain, 4..400);
+        chain.configure(&AudioSettings {
+            vad_sensitivity: 0.9,
+            noise_suppression: true,
+            automatic_gain: true,
+            ..settings.clone()
+        });
+        let attenuation = measure(&mut chain, 400..450);
+        assert!(
+            attenuation > 15.,
+            "the canceller relearned: only {attenuation:.1} dB in the first half second"
+        );
+
+        let mut gate = Gate::new(&settings);
+        assert!(gate.update(0.95, -20., false, false));
+        gate.configure(&AudioSettings {
+            vad_sensitivity: 0.,
+            ..settings
+        });
+        assert!(
+            gate.update(0., -80., false, false),
+            "the gate closed mid-sentence"
         );
     }
 }

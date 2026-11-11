@@ -43,16 +43,6 @@ pub struct JitterBuffer {
     frames_per_packet: u64,
     jitter_ms: f32,
     last_arrival: Option<(Instant, u64)>,
-    pub stats: JitterStats,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct JitterStats {
-    pub received: u32,
-    pub late: u32,
-    pub concealed: u32,
-    pub recovered_fec: u32,
-    pub dropped_to_catch_up: u32,
 }
 
 impl Default for JitterBuffer {
@@ -65,7 +55,6 @@ impl Default for JitterBuffer {
             frames_per_packet: 2,
             jitter_ms: 0.,
             last_arrival: None,
-            stats: JitterStats::default(),
         }
     }
 }
@@ -78,18 +67,13 @@ impl JitterBuffer {
 
     /// Audio buffered ahead of the playout position, in milliseconds.
     pub fn buffered_ms(&self) -> f32 {
-        let Some((first, _)) = self.packets.first_key_value() else {
+        let (Some(&first), Some(&last)) =
+            (self.packets.keys().next(), self.packets.keys().next_back())
+        else {
             return 0.;
         };
-        let start = self.next.unwrap_or(*first).min(*first);
-        let (last, _) = self.packets.last_key_value().unwrap_or((
-            first,
-            &Packet {
-                opus: Vec::new(),
-                end: false,
-            },
-        ));
-        ((last + self.frames_per_packet).saturating_sub(start)) as f32 * FRAME_MS
+        let start = self.next.map_or(first, |next| next.min(first));
+        (last + self.frames_per_packet).saturating_sub(start) as f32 * FRAME_MS
     }
 
     /// The decoder reports how many 10 ms frames a packet really carried.
@@ -104,9 +88,7 @@ impl JitterBuffer {
     }
 
     pub fn push(&mut self, sequence: u64, opus: Vec<u8>, end: bool, now: Instant) {
-        self.stats.received = self.stats.received.saturating_add(1);
         if self.next.is_some_and(|next| sequence < next) || self.packets.contains_key(&sequence) {
-            self.stats.late = self.stats.late.saturating_add(1);
             return;
         }
         // Packet spacing is the smallest gap to a neighbour; the decoder
@@ -167,7 +149,6 @@ impl JitterBuffer {
         while self.buffered_ms() > self.target_ms() + CATCH_UP_MS && self.packets.len() > 1 {
             if let Some((sequence, _)) = self.packets.pop_first() {
                 self.next = Some(sequence + self.frames_per_packet);
-                self.stats.dropped_to_catch_up = self.stats.dropped_to_catch_up.saturating_add(1);
             }
         }
         let Some(next) = self.next else {
@@ -194,16 +175,12 @@ impl JitterBuffer {
             self.next = None;
             return Pull::Idle;
         }
-        self.stats.concealed = self.stats.concealed.saturating_add(1);
         let frames = self.frames_per_packet;
         self.next = Some(next + frames);
         let fec = self
             .packets
             .get(&(next + frames))
             .map(|packet| packet.opus.clone());
-        if fec.is_some() {
-            self.stats.recovered_fec = self.stats.recovered_fec.saturating_add(1);
-        }
         Pull::Lost { fec, frames }
     }
 }
@@ -287,7 +264,6 @@ mod tests {
                 end: false
             }
         );
-        assert_eq!(buffer.stats.recovered_fec, 1);
     }
 
     #[test]
@@ -297,11 +273,18 @@ mod tests {
         feed(&mut buffer, start, &[(0, 0), (2, 20), (4, 40)]);
         buffer.push(6, vec![6], true, start + Duration::from_millis(60));
         assert!(matches!(buffer.pull(), Pull::Packet { .. }));
+        // A late packet and a duplicate (with different contents) are ignored.
         buffer.push(0, vec![0], false, start + Duration::from_millis(70));
-        buffer.push(4, vec![4], false, start + Duration::from_millis(70));
-        assert_eq!(buffer.stats.late, 2);
-        assert!(matches!(buffer.pull(), Pull::Packet { .. }));
-        assert!(matches!(buffer.pull(), Pull::Packet { .. }));
+        buffer.push(4, vec![44], false, start + Duration::from_millis(70));
+        for expected in [2, 4] {
+            assert_eq!(
+                buffer.pull(),
+                Pull::Packet {
+                    opus: vec![expected],
+                    end: false
+                }
+            );
+        }
         assert_eq!(
             buffer.pull(),
             Pull::Packet {
@@ -356,6 +339,5 @@ mod tests {
         }
         assert!(matches!(burst.pull(), Pull::Packet { .. }));
         assert!(burst.buffered_ms() <= burst.target_ms() + CATCH_UP_MS + 20.);
-        assert!(burst.stats.dropped_to_catch_up > 0);
     }
 }

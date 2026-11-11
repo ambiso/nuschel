@@ -216,7 +216,7 @@ class Worker:
     count = 0
     logs = Path(tempfile.gettempdir())
 
-    def __init__(self, binary, pipewire, host=None, backend=None, muted=True, settings=None):
+    def __init__(self, binary, pipewire, host=None, backend=None, muted=True, settings=None, preview=False):
         env = dict(pipewire.env) | {"PULSE_SERVER": f"unix:{pipewire.runtime}/pulse/native", "PIPEWIRE_DEBUG": "2"}
         if backend:
             env["NUSCHEL_AUDIO_BACKEND"] = backend
@@ -228,7 +228,11 @@ class Worker:
         threading.Thread(target=self._read, daemon=True).start()
         self.send({"kind": "configure", "bitrate": 40000, "packet_loss_percent": 5, "settings": settings or {},
                    "host": host})
-        self.send({"kind": "set_state", "epoch": 1, "muted": muted, "deafened": False})
+        if preview:
+            # The Settings check: the microphone open, nothing encoded, a level meter.
+            self.send({"kind": "preview", "capture": True, "loopback": False})
+        else:
+            self.send({"kind": "set_state", "epoch": 1, "muted": muted, "deafened": False})
 
     def _read(self):
         while True:
@@ -454,7 +458,7 @@ def check_room_echo(binary, pipewire, output):
         player = subprocess.Popen([str(pipewire.pipewire / "bin/pw-play"), "--target", "speakers", str(music)],
                                   env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                   start_new_session=True)
-        worker = Worker(binary, pipewire, muted=False, settings={"echo_cancellation": mode})
+        worker = Worker(binary, pipewire, preview=True, settings={"echo_cancellation": mode})
         worker.ready()
         time.sleep(6)
         mark = len(worker.events)

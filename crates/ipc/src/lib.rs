@@ -318,12 +318,14 @@ pub enum LiveMediaEvent {
         opus: Vec<u8>,
         end: bool,
     },
-    /// Roughly ten times per second while the microphone is open.
+    /// Roughly ten times per second while a preview has the microphone open
+    /// (the Settings meter); a call has no use for it.
     Level {
         /// Processed input level in dBFS.
         level_db: f32,
         /// Speech probability for the latest frame.
         voice: f32,
+        /// Whether the gate would transmit (a preview never sends).
         transmitting: bool,
     },
     /// Device inventory and the active route, sent whenever devices are opened.

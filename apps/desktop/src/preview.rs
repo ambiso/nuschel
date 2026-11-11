@@ -3,7 +3,7 @@
 //! own lists devices, meters the microphone, plays the processed voice back and
 //! runs the echo test. It never encodes or sends anything, so testing needs
 //! neither a connection nor unmuting.
-use nuschel_core::audio::{AudioDevice, EchoSource};
+use nuschel_core::audio::{AudioDevice, AudioSettings, EchoSource};
 use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
 use nuschel_session::{config::ClientSettings, workers::Media};
 use std::time::Duration;
@@ -162,28 +162,11 @@ impl PreviewView {
     }
 }
 
-type Route = (
-    Option<String>,
-    Option<String>,
-    nuschel_core::audio::EchoMode,
-    std::collections::BTreeMap<String, nuschel_core::audio::EchoMode>,
-);
-
-fn route(settings: &ClientSettings) -> Route {
-    let audio = &settings.audio;
-    (
-        audio.input_device.clone(),
-        audio.output_device.clone(),
-        audio.echo_cancellation,
-        audio.device_overrides.clone(),
-    )
-}
-
-fn configure(media: &Media, settings: &ClientSettings) {
+fn configure(media: &Media, audio: &AudioSettings) {
     let _ = media.commands.try_send(LiveMediaRequest::Configure {
         bitrate: 48_000,
         packet_loss_percent: 5,
-        settings: settings.audio.clone(),
+        settings: audio.clone(),
         host: None,
     });
 }
@@ -200,7 +183,7 @@ pub async fn run(
     let (mut capture, mut loopback) = (false, false);
     let mut media: Option<Media> = None;
     let mut retry = Instant::now();
-    let mut applied = route(&settings.borrow());
+    let mut applied = settings.borrow().audio.clone();
     // An echo test waiting for the microphone to open, and its deadline.
     let mut test_pending = false;
     let mut test_deadline: Option<Instant> = None;
@@ -253,19 +236,19 @@ pub async fn run(
             },
             changed = settings.changed() => {
                 if changed.is_err() { break; }
-                let current = settings.borrow_and_update().clone();
-                if route(&current) != applied {
-                    applied = route(&current);
+                let audio = settings.borrow_and_update().audio.clone();
+                if !audio.same_route(&applied) {
                     media.take();
                     retry = Instant::now();
-                } else if let Some(media) = &media {
-                    configure(media, &current);
+                } else if audio != applied && let Some(media) = &media {
+                    configure(media, &audio);
                 }
+                applied = audio;
             },
             _ = tokio::time::sleep_until(retry), if media.is_none() => {
                 match Media::start() {
                     Ok(worker) => {
-                        configure(&worker, &settings.borrow());
+                        configure(&worker, &applied);
                         let _ = worker.commands.try_send(LiveMediaRequest::Preview { capture, loopback });
                         media = Some(worker);
                     }

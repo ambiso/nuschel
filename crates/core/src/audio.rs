@@ -102,6 +102,16 @@ impl AudioSettings {
             .copied()
             .unwrap_or(self.echo_cancellation)
     }
+
+    /// Whether both open the same devices with the same echo decisions. A
+    /// different route needs new native streams (a new media worker); anything
+    /// else applies to the running capture chain.
+    pub fn same_route(&self, other: &Self) -> bool {
+        self.input_device == other.input_device
+            && self.output_device == other.output_device
+            && self.echo_cancellation == other.echo_cancellation
+            && self.device_overrides == other.device_overrides
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,5 +152,38 @@ mod tests {
             serde_json::from_str("{\"transmit\":\"push_to_talk\"}").unwrap();
         assert_eq!(parsed.transmit, TransmitMode::PushToTalk);
         assert!(parsed.noise_suppression);
+    }
+    #[test]
+    fn only_devices_and_echo_decisions_change_the_route() {
+        let settings = AudioSettings::default();
+        let processing = AudioSettings {
+            transmit: TransmitMode::PushToTalk,
+            vad_sensitivity: 0.9,
+            noise_suppression: false,
+            automatic_gain: false,
+            ptt_release_ms: 500,
+            ..AudioSettings::default()
+        };
+        assert!(settings.same_route(&processing));
+        for route in [
+            AudioSettings {
+                input_device: Some("mic".into()),
+                ..AudioSettings::default()
+            },
+            AudioSettings {
+                output_device: Some("speakers".into()),
+                ..AudioSettings::default()
+            },
+            AudioSettings {
+                echo_cancellation: EchoMode::Off,
+                ..AudioSettings::default()
+            },
+            AudioSettings {
+                device_overrides: [("mic".into(), EchoMode::On)].into(),
+                ..AudioSettings::default()
+            },
+        ] {
+            assert!(!settings.same_route(&route), "{route:?}");
+        }
     }
 }

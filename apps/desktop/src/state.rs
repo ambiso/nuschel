@@ -242,9 +242,6 @@ pub struct CertificatePrompt {
 /// What the media worker reports about the active audio route.
 #[derive(Default)]
 pub struct AudioInfo {
-    pub level_db: f32,
-    pub voice: f32,
-    pub transmitting: bool,
     pub inputs: Vec<nuschel_core::audio::AudioDevice>,
     pub outputs: Vec<nuschel_core::audio::AudioDevice>,
     pub input: Option<String>,
@@ -2324,23 +2321,6 @@ impl Desktop {
                         && let Some(image) = Document::from(document).first_image()
                     {
                         server.avatars.insert(hash, image);
-                    }
-                }
-                Event::AudioLevel {
-                    server,
-                    generation,
-                    level_db,
-                    voice,
-                    transmitting,
-                } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        server.audio.level_db = level_db;
-                        server.audio.voice = voice;
-                        server.audio.transmitting = transmitting;
                     }
                 }
                 Event::AudioDevices {

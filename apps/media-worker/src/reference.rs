@@ -21,9 +21,10 @@ use std::time::{Duration, Instant};
 const ANCHORS: usize = 256;
 /// The reference may run this far behind before the microphone stops waiting.
 pub const MAX_HOLD_FRAMES: usize = 4;
-/// A reference frame is fed if it starts before the microphone frame ends: the
-/// echo of any sample in the reference can then never reach the canceller
-/// before the sample itself (one frame, 10 ms).
+/// A reference frame is fed if it starts less than this after the microphone
+/// frame: everything that sounded before the microphone frame ended (one
+/// frame, 10 ms) has then reached the canceller ahead of its echo, with 15 ms
+/// to spare for the devices' approximate latency reports.
 pub const LEAD: Duration = Duration::from_millis(25);
 /// Reference audio older than this is no use to the canceller (a stalled
 /// stream resuming); it is dropped rather than fed in a burst.
@@ -42,8 +43,8 @@ impl Clock {
         }
     }
 
-    /// Now, moved by `offset` (earlier for capture latency, later for
-    /// playback latency). Callable from device callbacks: no allocation.
+    /// Now, moved `earlier` (by capture latency) or `later` (by playback
+    /// latency). Callable from device callbacks: no allocation.
     pub fn now_shifted(&self, earlier: Duration, later: Duration) -> u64 {
         let elapsed = self.epoch.elapsed() + later;
         elapsed.saturating_sub(earlier).as_nanos() as u64
