@@ -198,10 +198,13 @@ impl Extension {
 /// What this server offers: everything, and `kt/1` only with a key-transparency
 /// log.
 pub fn server_capabilities(kt: bool) -> Capabilities {
+    // `mls/1` needs `kt/1` (credentials are checked against key transparency); it
+    // is offered once the delivery service exists (crate::mls).
     Capabilities::from_names(
         capability::ALL
             .into_iter()
-            .filter(|name| kt || *name != capability::KT),
+            .filter(|name| kt || *name != capability::KT)
+            .filter(|name| *name != capability::MLS || (kt && crate::mls::OFFERED)),
     )
 }
 

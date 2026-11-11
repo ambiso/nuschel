@@ -316,6 +316,7 @@ impl Worker {
                 self.save()?;
                 CryptoResponse::Done
             }
+            _ => return Err("MLS is not implemented yet".into()),
         })
     }
 

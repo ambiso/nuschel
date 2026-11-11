@@ -33,7 +33,10 @@ pub mod capability {
     /// Key transparency (docs/e2ee.md §5): the log descriptor in the hello,
     /// binding publication, lookups, histories, audits and heads.
     pub const KT: &str = "kt/1";
-    pub const ALL: [&str; 4] = [HISTORY, SUBSCRIBE, TYPING, KT];
+    /// MLS (docs/e2ee.md §6): the delivery service, key packages, Welcome
+    /// mailboxes. Needs `kt/1`; sticky like every capability.
+    pub const MLS: &str = "mls/1";
+    pub const ALL: [&str; 5] = [HISTORY, SUBSCRIBE, TYPING, KT, MLS];
 }
 
 /// Message types.
@@ -70,6 +73,19 @@ pub mod kind {
     pub const KT_AUDIT_REPLY: u16 = 0x4e1d;
     pub const KT_HEAD: u16 = 0x4e1e;
     pub const KT_HEAD_REPLY: u16 = 0x4e1f;
+    pub const MLS_KEY_PACKAGE_UPLOAD: u16 = 0x4e20;
+    pub const MLS_KEY_PACKAGE_STATUS: u16 = 0x4e21;
+    pub const MLS_KEY_PACKAGE_CLAIM: u16 = 0x4e22;
+    pub const MLS_KEY_PACKAGES: u16 = 0x4e23;
+    pub const MLS_COMMIT: u16 = 0x4e24;
+    pub const MLS_ACK: u16 = 0x4e25;
+    pub const MLS_SEND: u16 = 0x4e26;
+    pub const MLS_WELCOME_PUSH: u16 = 0x4e27;
+    pub const MLS_WELCOME_FETCH: u16 = 0x4e28;
+    pub const MLS_WELCOMES: u16 = 0x4e29;
+    pub const MLS_WELCOME_ACK: u16 = 0x4e2a;
+    pub const MLS_JOIN_INFO_REQUEST: u16 = 0x4e2b;
+    pub const MLS_JOIN_INFO: u16 = 0x4e2c;
 }
 
 /// Requests in flight per connection.
@@ -103,6 +119,34 @@ pub const MAX_KT_LOOKUP_REPLY_BYTES: usize = 512 * 1024;
 /// History and audit replies; a server answers `TOO_LARGE` beyond this, and
 /// clients audit shorter spans.
 pub const MAX_KT_REPLY_BYTES: usize = 6 * 1024 * 1024;
+/// `mls/1` (docs/e2ee.md §6.3). One key package (an X-Wing one is about 2.8 KB).
+pub const MAX_MLS_KEY_PACKAGE_BYTES: usize = 4096;
+/// One-time key packages per upload, and kept per device.
+pub const MAX_MLS_UPLOAD_PACKAGES: usize = 16;
+pub const MAX_MLS_DEVICE_PACKAGES: usize = 50;
+/// Devices per account in one claim (the key-transparency roster's limit).
+pub const MAX_MLS_CLAIM_PACKAGES: usize = MAX_KT_DEVICES;
+/// A commit or proposal in the stream (a 1000-member X-Wing add is 2.8 MB: larger
+/// groups than direct conversations need more, with channels).
+pub const MAX_MLS_HANDSHAKE_BYTES: usize = 2 * 1024 * 1024;
+/// An application message: the 64 KiB text, the envelope and MLS framing.
+pub const MAX_MLS_APPLICATION_BYTES: usize = MAX_CONTENT_BYTES + 16 * 1024;
+pub const MAX_MLS_WELCOME_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_MLS_GROUP_INFO_BYTES: usize = 256 * 1024;
+/// A ratchet tree (1.5 MB at 1000 X-Wing members).
+pub const MAX_MLS_TREE_BYTES: usize = 2 * 1024 * 1024;
+/// Welcomes in one `MlsWelcomes` and ids in one `MlsWelcomeAck`.
+pub const MAX_MLS_WELCOMES: usize = 32;
+/// `MlsCommit` from a client: commit, GroupInfo, Welcome and a new group's
+/// GroupInfo and tree.
+pub const MAX_MLS_COMMIT_FRAME: usize = MAX_MLS_HANDSHAKE_BYTES
+    + 2 * MAX_MLS_GROUP_INFO_BYTES
+    + MAX_MLS_WELCOME_BYTES
+    + MAX_MLS_TREE_BYTES
+    + 1024;
+/// The largest stored row of any format, as it travels (a page or event with it
+/// comes alone if it exceeds the page's byte cap).
+pub const MAX_ROW_BYTES: usize = MAX_MLS_HANDSHAKE_BYTES;
 
 /// 16 bytes: conversation ids, account ids and idempotency keys.
 pub type Id = [u8; 16];
@@ -123,6 +167,13 @@ pub fn required_capability(kind: u16) -> Option<&'static str> {
         KT_STATUS | KT_PUBLISH | KT_LOOKUP | KT_HISTORY | KT_AUDIT | KT_HEAD => {
             Some(capability::KT)
         }
+        MLS_KEY_PACKAGE_UPLOAD
+        | MLS_KEY_PACKAGE_CLAIM
+        | MLS_COMMIT
+        | MLS_SEND
+        | MLS_WELCOME_FETCH
+        | MLS_WELCOME_ACK
+        | MLS_JOIN_INFO_REQUEST => Some(capability::MLS),
         _ => None,
     }
 }
@@ -138,6 +189,12 @@ pub fn client_limit(kind: u16) -> usize {
         SUBSCRIBE | UNSUBSCRIBE => MAX_SUBSCRIBE_PER_MESSAGE * 18 + 32,
         HISTORY_REQUEST => 128,
         KT_PUBLISH => MAX_KT_PUBLISH_BYTES,
+        MLS_KEY_PACKAGE_UPLOAD => {
+            (MAX_MLS_UPLOAD_PACKAGES + 1) * (MAX_MLS_KEY_PACKAGE_BYTES + 8) + 64
+        }
+        MLS_COMMIT => MAX_MLS_COMMIT_FRAME,
+        MLS_SEND => MAX_MLS_APPLICATION_BYTES + 256,
+        MLS_WELCOME_ACK => MAX_MLS_WELCOMES * 20 + 64,
         _ => 64,
     }
 }
@@ -147,8 +204,12 @@ pub fn server_limit(kind: u16) -> usize {
     use kind::*;
     match kind {
         // A message larger than the byte cap comes alone.
-        HISTORY_PAGE => MAX_PAGE_BYTES + MAX_LEGACY_CONTENT_BYTES + MAX_PAGE_MESSAGES * 1024,
-        CHAT_EVENT => MAX_LEGACY_CONTENT_BYTES + 2048,
+        HISTORY_PAGE => MAX_PAGE_BYTES + MAX_ROW_BYTES + MAX_PAGE_MESSAGES * 1024,
+        CHAT_EVENT => MAX_ROW_BYTES + 2048,
+        MLS_KEY_PACKAGES => MAX_MLS_CLAIM_PACKAGES * (MAX_MLS_KEY_PACKAGE_BYTES + 8) + 64,
+        MLS_WELCOME_PUSH => MAX_MLS_WELCOME_BYTES + 256,
+        MLS_WELCOMES => 4 * MAX_MLS_WELCOME_BYTES,
+        MLS_JOIN_INFO => MAX_MLS_GROUP_INFO_BYTES + MAX_MLS_TREE_BYTES + 256,
         SUBSCRIBED => MAX_SUBSCRIBE_PER_MESSAGE * 64 + 32,
         DIRECT_LIST => MAX_DIRECTS * (MAX_NAME_BYTES + 96) + 32,
         DIRECT_OPENED => MAX_NAME_BYTES + 128,
@@ -174,6 +235,7 @@ pub fn detail(code: Code) -> &'static str {
         Code::DuplicateRequest => "This request is already in progress.",
         Code::TooManyRequests => "Too many requests are in progress.",
         Code::LimitReached => "This message cannot be edited any more.",
+        Code::StaleEpoch => "The conversation moved on; catch up and try again.",
         Code::ConfirmationRequired => {
             "This change removes stored messages; confirm it to go ahead."
         }
@@ -186,7 +248,23 @@ pub fn error(request_id: u64, code: Code, retry_after_ms: u64) -> v1::Error {
         code: code as i32,
         detail: detail(code).into(),
         retry_after_ms,
+        epoch: 0,
+        head: 0,
     }
+}
+
+/// `STALE_EPOCH` with the group's epoch and the conversation's head.
+pub fn stale_epoch(request_id: u64, epoch: u64, head: u64) -> v1::Error {
+    v1::Error {
+        epoch,
+        head,
+        ..error(request_id, Code::StaleEpoch, 0)
+    }
+}
+
+/// Whether a row's format carries an MLS message.
+pub fn is_mls_format(format: i32) -> bool {
+    format == v1::Format::MlsApplication as i32 || format == v1::Format::MlsHandshake as i32
 }
 
 /// Why a hello is refused. Any refusal fails the connection closed.
@@ -310,7 +388,12 @@ pub fn valid_message(message: &v1::Message) -> bool {
     } else {
         MAX_CONTENT_BYTES
     };
-    message.content.len() <= limit
+    let mls = if is_mls_format(message.format) {
+        message.content.is_empty() && message.mls.len() <= MAX_MLS_HANDSHAKE_BYTES
+    } else {
+        message.mls.is_empty()
+    };
+    mls && message.content.len() <= limit
         && message.author.as_ref().is_none_or(|author| {
             author.name.len() <= MAX_NAME_BYTES
                 && (author.account.is_empty() || author.account.len() == 16)

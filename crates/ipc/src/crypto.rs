@@ -65,6 +65,14 @@ pub const MAX_REASON: usize = 512;
 pub const MAX_KT_BYTES: usize = 6 * 1024 * 1024;
 pub const MAX_CERTIFICATE: usize = 8 * 1024;
 pub const MAX_RECORD_ENTRIES: usize = 32;
+/// MLS (docs/e2ee.md §6): any one MLS message, Welcome, GroupInfo or tree.
+pub const MAX_MLS_BYTES: usize = 2 * 1024 * 1024;
+/// Key packages in one request (claims for two accounts of 16 devices each).
+pub const MAX_MLS_PACKAGES: usize = 32;
+/// A key package.
+pub const MAX_MLS_KEY_PACKAGE: usize = 4096;
+/// Chat text, in bytes of UTF-8.
+pub const MAX_MLS_TEXT: usize = 64 * 1024;
 
 /// The server a request is about: its sticky key (`host:port`, as the session's
 /// sticky record names it) and how the user knows it, for "verified (same
@@ -236,6 +244,106 @@ pub enum CryptoRequest {
     AcknowledgeAlarm { server: String },
     /// The user reset this server's key-transparency pin (after a log change).
     ForgetServer { server: String },
+
+    // ---- MLS (`mls/1`, docs/e2ee.md §6, §7) ----
+    // Conversations are named by the server's sticky key and the 16-byte
+    // conversation id. The worker keeps each conversation's group, pin (§7.2),
+    // cursor (the last processed seq) and per-sender chains (§6.4).
+    /// Key packages for this device to upload to a `mls/1` server: `one_time`
+    /// fresh ones (at most 16) and, with `last_resort`, a last-resort one
+    /// (`MlsKeyPackages`).
+    MlsKeyPackages {
+        server: String,
+        one_time: u32,
+        last_resort: bool,
+    },
+    /// What the worker knows about a conversation: `MlsConversation`.
+    MlsStatus {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+    },
+    /// Create a direct conversation's group with the account `peer`.
+    /// `key_packages` were claimed from the server for the peer's account and for
+    /// our own (our other devices; this device's own are skipped). Every
+    /// credential must verify against the key-transparency roster the worker
+    /// keeps for the peer and for us (look them up first: `Contact`). The commit
+    /// is pending until `MlsCommitDone` (`MlsOutgoing`).
+    MlsCreateDirect {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        peer: Vec<u8>,
+        #[serde(with = "base64_list")]
+        key_packages: Vec<Vec<u8>>,
+    },
+    /// Add devices (a contact's new device, or our own) to the conversation's
+    /// group, with key packages claimed for them (`MlsOutgoing`).
+    MlsAddDevices {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        #[serde(with = "base64_list")]
+        key_packages: Vec<Vec<u8>>,
+    },
+    /// The server's answer to our pending commit: accepted as `seq`, or refused
+    /// (stale epoch or invalid); a refused creation forgets the group
+    /// (`MlsConversation`).
+    MlsCommitDone {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        accepted: bool,
+        seq: u64,
+    },
+    /// A Welcome from our mailbox, with the server's ratchet tree for it and the
+    /// seq of the commit that added us. `peer` is the other account of the direct
+    /// conversation. Joined after the binding, the pin and every member's
+    /// credential check out (`MlsConversation`), else `Rejected`.
+    MlsWelcome {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        peer: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        welcome: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        tree: Vec<u8>,
+        seq: u64,
+    },
+    /// One message of the conversation's stream (`ChatEvent`, `HistoryPage`), in
+    /// seq order (`MlsReceived`).
+    MlsReceive {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        seq: u64,
+        #[serde(with = "base64_bytes")]
+        message: Vec<u8>,
+    },
+    /// Encrypt chat text for the conversation's current epoch
+    /// (`MlsCiphertext`). The same idempotency key again (after `STALE_EPOCH`)
+    /// encrypts the same envelope (counter, chain) for the new epoch. Refused
+    /// while sending is blocked (§7.4).
+    MlsEncrypt {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        idempotency_key: Vec<u8>,
+        text: String,
+    },
+    /// The server stored our application message as `seq` (`Done`).
+    MlsSent {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        idempotency_key: Vec<u8>,
+        seq: u64,
+    },
 }
 
 impl CryptoRequest {
@@ -251,6 +359,25 @@ impl CryptoRequest {
             } else {
                 Err("account id")
             }
+        };
+        let conversation = |bytes: &[u8]| {
+            if bytes.len() == 16 {
+                Ok(())
+            } else {
+                Err("conversation id")
+            }
+        };
+        let key = |bytes: &[u8]| {
+            if bytes.len() == 16 {
+                Ok(())
+            } else {
+                Err("idempotency key")
+            }
+        };
+        let packages = |list: &[Vec<u8>]| {
+            at_most(list.len(), MAX_MLS_PACKAGES, "key packages")?;
+            list.iter()
+                .try_for_each(|bytes| at_most(bytes.len(), MAX_MLS_KEY_PACKAGE, "key package"))
         };
         match self {
             Self::Identity
@@ -373,6 +500,94 @@ impl CryptoRequest {
             Self::CheckGossip { server: s, gossip } => {
                 server(s)?;
                 at_most(gossip.len(), 1024, "gossip")
+            }
+            Self::MlsKeyPackages {
+                server: s,
+                one_time,
+                ..
+            } => {
+                server(s)?;
+                at_most(*one_time as usize, 16, "key packages")
+            }
+            Self::MlsStatus {
+                server: s,
+                conversation: c,
+            } => {
+                server(s)?;
+                conversation(c)
+            }
+            Self::MlsCreateDirect {
+                server: s,
+                conversation: c,
+                peer,
+                key_packages,
+            } => {
+                server(s)?;
+                conversation(c)?;
+                account(peer)?;
+                packages(key_packages)
+            }
+            Self::MlsAddDevices {
+                server: s,
+                conversation: c,
+                key_packages,
+            } => {
+                server(s)?;
+                conversation(c)?;
+                packages(key_packages)
+            }
+            Self::MlsCommitDone {
+                server: s,
+                conversation: c,
+                ..
+            } => {
+                server(s)?;
+                conversation(c)
+            }
+            Self::MlsWelcome {
+                server: s,
+                conversation: c,
+                peer,
+                welcome,
+                tree,
+                ..
+            } => {
+                server(s)?;
+                conversation(c)?;
+                account(peer)?;
+                at_most(welcome.len(), MAX_MLS_BYTES, "welcome")?;
+                at_most(tree.len(), MAX_MLS_BYTES, "tree")
+            }
+            Self::MlsReceive {
+                server: s,
+                conversation: c,
+                message,
+                ..
+            } => {
+                server(s)?;
+                conversation(c)?;
+                at_most(message.len(), MAX_MLS_BYTES, "message")
+            }
+            Self::MlsEncrypt {
+                server: s,
+                conversation: c,
+                idempotency_key,
+                text,
+            } => {
+                server(s)?;
+                conversation(c)?;
+                key(idempotency_key)?;
+                at_most(text.len(), MAX_MLS_TEXT, "text")
+            }
+            Self::MlsSent {
+                server: s,
+                conversation: c,
+                idempotency_key,
+                ..
+            } => {
+                server(s)?;
+                conversation(c)?;
+                key(idempotency_key)
             }
         }
     }
@@ -542,6 +757,170 @@ pub enum CryptoResponse {
     GossipChecked(String),
     Done,
     Rejected(String),
+    MlsKeyPackages(KeyPackageBatch),
+    MlsConversation(ConversationView),
+    MlsOutgoing(MlsOutgoing),
+    MlsReceived(Received),
+    MlsCiphertext {
+        #[serde(with = "base64_bytes")]
+        message: Vec<u8>,
+        epoch: u64,
+    },
+}
+
+// ---- MLS views (docs/e2ee.md §6, §7.4) ----
+
+/// Key packages to upload (`MlsKeyPackageUpload`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyPackageBatch {
+    #[serde(with = "base64_list")]
+    pub one_time: Vec<Vec<u8>>,
+    /// Empty when none was asked for.
+    #[serde(with = "base64_bytes")]
+    pub last_resort: Vec<u8>,
+}
+
+/// The lock in the conversation header (docs/e2ee.md §7.4).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Lock {
+    /// Grey: no group yet, negotiating, or key transparency pending for a new
+    /// device.
+    Pending { reason: String },
+    /// Red: no end-to-end encryption (no `mls/1`, or a conversation that never
+    /// had a group).
+    Open,
+    /// Green: the group is established, every member's credential verified
+    /// against key transparency.
+    Encrypted,
+    /// Green with a check mark: the same, and the contact verified out of band.
+    Verified,
+    /// Amber: encrypted, but something needs attention (an unverified device, a
+    /// key change, a gap or fork, a refused commit).
+    Attention { reason: String },
+}
+
+/// A member device, as the conversation shows it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberView {
+    /// The identity fingerprint (64 hex digits).
+    pub identity: String,
+    /// The device id (32 hex digits).
+    pub device: String,
+    pub device_name: String,
+    /// One of our own devices (this one included).
+    pub own: bool,
+    /// Its credential verified against the identity's key-transparency roster.
+    pub verified: bool,
+}
+
+/// A conversation's end-to-end state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationView {
+    pub server: String,
+    #[serde(with = "base64_bytes")]
+    pub conversation: Vec<u8>,
+    /// The conversation is pinned to an MLS group (§7.2): plaintext for it is
+    /// refused from now on.
+    pub pinned: bool,
+    /// We are a member (not removed).
+    pub active: bool,
+    pub epoch: u64,
+    /// The last processed seq.
+    pub cursor: u64,
+    pub lock: Lock,
+    pub members: Vec<MemberView>,
+    /// Why sending is blocked, if it is.
+    pub blocked: Option<String>,
+    /// Things to show once in the conversation (a device added, a gap, a fork).
+    pub notices: Vec<String>,
+    /// A commit of ours waits for the server's answer.
+    pub pending_commit: bool,
+}
+
+/// A commit to send as `MlsCommit`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MlsOutgoing {
+    #[serde(with = "base64_bytes")]
+    pub conversation: Vec<u8>,
+    #[serde(with = "base64_bytes")]
+    pub idempotency_key: Vec<u8>,
+    #[serde(with = "base64_bytes")]
+    pub commit: Vec<u8>,
+    #[serde(with = "base64_bytes")]
+    pub group_info: Vec<u8>,
+    /// Empty when the commit adds nobody.
+    #[serde(with = "base64_bytes")]
+    pub welcome: Vec<u8>,
+    /// A new group's epoch-0 GroupInfo and tree (`MlsGroupInit`).
+    pub create: Option<GroupInit>,
+    pub epoch: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupInit {
+    #[serde(with = "base64_bytes")]
+    pub group_info: Vec<u8>,
+    #[serde(with = "base64_bytes")]
+    pub tree: Vec<u8>,
+}
+
+/// Where a message stands in its sender's chain (docs/e2ee.md §6.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "order", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Order {
+    InOrder,
+    /// Messages from that device are missing.
+    Gap {
+        missing: u64,
+    },
+    /// The server showed different histories: an alarm, both versions kept.
+    Fork,
+}
+
+/// What one stream message was.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Received {
+    /// A chat message from another device.
+    Message {
+        seq: u64,
+        sender: MemberView,
+        text: String,
+        /// The sender's clock, Unix milliseconds.
+        sent_at: u64,
+        #[serde(with = "base64_bytes")]
+        idempotency_key: Vec<u8>,
+        order: Order,
+    },
+    /// Our own message (sent by this device) coming back.
+    Own {
+        seq: u64,
+        text: String,
+        #[serde(with = "base64_bytes")]
+        idempotency_key: Vec<u8>,
+    },
+    /// A commit was applied; the view shows the group now.
+    Commit { seq: u64, view: ConversationView },
+    /// Nothing to show (a typing indicator, a proposal, an envelope kind this
+    /// version does not show).
+    Nothing { seq: u64 },
+    /// Already processed (at or before the cursor).
+    Duplicate { seq: u64 },
+    /// Could not be decrypted: shown as an explicit gap, never silently.
+    Undecryptable { seq: u64, reason: String },
+    /// A commit the worker refused (a stranger, a credential that does not
+    /// verify, a changed binding): the conversation is blocked.
+    Refused {
+        seq: u64,
+        reason: String,
+        view: ConversationView,
+    },
 }
 
 #[cfg(test)]

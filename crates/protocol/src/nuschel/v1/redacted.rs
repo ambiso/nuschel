@@ -52,6 +52,7 @@ impl fmt::Debug for Message {
             .field("deleted_ms", &self.deleted_ms)
             .field("delete_reason", &self.delete_reason)
             .field("edits", &self.edits)
+            .field("mls", &Length(self.mls.len()))
             .finish()
     }
 }

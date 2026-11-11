@@ -112,6 +112,12 @@ enum Format {
   TEXT = 1;
   // Mumble HTML from a stock client, as received; render as inert text.
   LEGACY_HTML = 2;
+  // `mls/1`: an MLS application message (PrivateMessage) in `Message.mls`;
+  // never shown as text and never copied to stock clients.
+  MLS_APPLICATION = 3;
+  // `mls/1`: an MLS commit or proposal (PublicMessage) in `Message.mls`.
+  // Clients must process every one, in order.
+  MLS_HANDSHAKE = 4;
 }
 
 // 0x4E00. Errors have stable codes and fixed details.
@@ -136,9 +142,13 @@ message Error {
     TOO_MANY_REQUESTS = 9;
     // The edit limit was reached.
     LIMIT_REACHED = 10;
-    // (11 is reserved for `mls/1`.) The change removes stored messages (a
-    // shorter retention): the client must show that and resend it with
-    // `confirm_expiry`.
+    // `mls/1`: the message is for another epoch than the group's current one
+    // (`epoch`); fetch the stream after your last seq (up to `head`), process
+    // it and retry with the same idempotency key. Also: the conversation
+    // already has a group.
+    STALE_EPOCH = 11;
+    // The change removes stored messages (a shorter retention): the client
+    // must show that and resend it with `confirm_expiry`.
     CONFIRMATION_REQUIRED = 12;
   }
   uint64 request_id = 1;
@@ -146,6 +156,9 @@ message Error {
   // Fixed text for the code; never SQL, paths or user text.
   string detail = 3;
   uint64 retry_after_ms = 4;
+  // With STALE_EPOCH: the group's current epoch and the conversation's head.
+  uint64 epoch = 5;
+  uint64 head = 6;
 }
 
 message Author {
@@ -182,6 +195,9 @@ message Message {
   // 0 by the author, 1 by a moderator.
   uint32 delete_reason = 11;
   uint32 edits = 12;
+  // With format MLS_APPLICATION or MLS_HANDSHAKE: the MLS message (RFC 9420
+  // `MLSMessage`); `content` is empty.
+  bytes mls = 13;
 }
 
 // 0x4E01 -> ChatAck or Error.
@@ -458,4 +474,151 @@ message KtHead {
 message KtHeadReply {
   uint64 request_id = 1;
   bytes head = 2;
+}
+
+// ---- MLS (`mls/1`, docs/e2ee.md §6.3) ----
+// Key packages, MLS messages, GroupInfo, Welcomes and ratchet trees travel in
+// their RFC 9420 TLS encodings as opaque bytes. Commits, proposals and
+// application messages share the conversation's `seq` stream: they come back
+// in `ChatEvent` and `HistoryPage` as messages with format MLS_HANDSHAKE or
+// MLS_APPLICATION. Welcomes are not in the stream; they wait in a mailbox per
+// device. `mls/1` needs `kt/1`: credentials are checked against key
+// transparency.
+
+// 0x4E20 -> MlsKeyPackageStatus or Error. For the uploader's own devices
+// (each credential's identity must be the one the account's key-transparency
+// record binds, and the device in its roster); registered users only.
+message MlsKeyPackageUpload {
+  uint64 request_id = 1;
+  // One-time key packages, at most 16 per upload; the server keeps at most 50
+  // per device (the oldest go first).
+  repeated bytes key_packages = 2;
+  // Replaces the device's last-resort key package, if set.
+  bytes last_resort = 3;
+}
+
+// 0x4E21
+message MlsKeyPackageStatus {
+  uint64 request_id = 1;
+  // The uploading device's one-time key packages left, and whether it has a
+  // last-resort one.
+  uint32 one_time = 2;
+  bool last_resort = 3;
+}
+
+// 0x4E22 -> MlsKeyPackages or Error. One key package per device of `account`
+// (one-time ones are consumed; a device without one gives its last-resort
+// package). Only for one's own account and direct-conversation partners;
+// rate-limited per account.
+message MlsKeyPackageClaim {
+  uint64 request_id = 1;
+  bytes account = 2;
+}
+
+// 0x4E23
+message MlsKeyPackages {
+  uint64 request_id = 1;
+  bytes account = 2;
+  // At most 16 (the key-transparency roster's device limit).
+  repeated bytes key_packages = 3;
+}
+
+// A new conversation group: its epoch-0 GroupInfo and ratchet tree.
+message MlsGroupInit {
+  bytes group_info = 1;
+  bytes tree = 2;
+}
+
+// 0x4E24 -> MlsAck or Error. A commit for the group's current epoch, with
+// the committer's GroupInfo for the new epoch and, when it adds devices, the
+// Welcome for them (without a ratchet tree: joiners fetch the server's).
+message MlsCommit {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  // 16 random bytes; a retry with the same key and commit returns the
+  // original acknowledgement.
+  bytes idempotency_key = 3;
+  bytes commit = 4;
+  bytes group_info = 5;
+  bytes welcome = 6;
+  // Registers the conversation's group (generation 0) first; refused with
+  // STALE_EPOCH when it already has one.
+  MlsGroupInit create = 7;
+}
+
+// 0x4E25, once the message is durably stored.
+message MlsAck {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  uint64 seq = 3;
+  // The group's epoch after the message.
+  uint64 epoch = 4;
+}
+
+// 0x4E26 -> MlsAck or Error. An application message (PrivateMessage) for the
+// group's current epoch.
+message MlsSend {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  bytes idempotency_key = 3;
+  bytes message = 4;
+}
+
+// A Welcome waiting for a device.
+message MlsWelcome {
+  // The mailbox entry, for MlsWelcomeAck.
+  bytes id = 1;
+  bytes conversation = 2;
+  // The commit that added the device, and the epoch it led to.
+  uint64 seq = 3;
+  uint64 epoch = 4;
+  bytes welcome = 5;
+}
+
+// 0x4E27, pushed to the device's connection when a commit adds it.
+message MlsWelcomePush {
+  MlsWelcome welcome = 1;
+}
+
+// 0x4E28 -> MlsWelcomes. The mailbox of one of the requester's devices (the
+// device id from its credential, 16 bytes); also subscribes the connection to
+// pushes for it.
+message MlsWelcomeFetch {
+  uint64 request_id = 1;
+  bytes device = 2;
+}
+
+// 0x4E29
+message MlsWelcomes {
+  uint64 request_id = 1;
+  // At most 32; fetch again after acknowledging them.
+  repeated MlsWelcome welcomes = 2;
+}
+
+// 0x4E2A -> Done. Deletes processed Welcomes from the device's mailbox.
+message MlsWelcomeAck {
+  uint64 request_id = 1;
+  bytes device = 2;
+  // At most 32.
+  repeated bytes ids = 3;
+}
+
+// 0x4E2B -> MlsJoinInfo or Error (NOT_FOUND: no group, or not allowed).
+message MlsJoinInfoRequest {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  // Include the ratchet tree (Welcome recipients need it).
+  bool tree = 3;
+}
+
+// 0x4E2C
+message MlsJoinInfo {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  uint64 epoch = 3;
+  // The newest GroupInfo (member-signed) and the server's ratchet tree.
+  bytes group_info = 4;
+  bytes tree = 5;
+  // The seq of the newest commit.
+  uint64 commit_seq = 6;
 }
