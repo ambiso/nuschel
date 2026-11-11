@@ -22,7 +22,7 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | SQLx PostgreSQL backend | Server persistence on a managed database | Storage worker; database credentials and a scoped database connection |
 | TLS crypto provider | Cryptographic implementation and CPU-specific acceleration | Session/server authority; bounded protocol framing and reviewed provider |
 | OS sandbox/process APIs | Establish restricted worker execution | Small supervisor adapter; prefer safe Rust wrappers (`win32job` for Windows job objects) |
-| `nuschel-sandbox-windows` (Win32 calls via `windows-sys`) | No maintained safe wrapper creates AppContainer processes with an explicit handle list and job limits (docs/windows-sandbox.md) | The workers' own launch stage only, before any input is read (`cargo-deny` allows only the five workers to depend on it); `unsafe` only in its `win32` module, one operation per block, each with a `SAFETY:` comment; `unsafe_op_in_unsafe_fn` denied |
+| `nuschel-sandbox-windows` (Win32 calls via `windows-sys`) | No maintained safe wrapper creates AppContainer processes with an explicit handle list and job limits (docs/windows-sandbox.md) | The workers' own launch stage only, before any input is read (`cargo-deny` allows only the five workers to depend on it). Each Win32 function is one trait method whose `# Safety` is Microsoft's documented contract (cross-checked with ReactOS); unsafe calls only in `os.rs`, one per block with a `SAFETY:` argument, behind guards that release what Windows allocates exactly once; pure logic in unsafe-free modules; no `as` casts. The launch steps run under Miri (Linux and Windows targets) against a mock of Win32 that fails every call in turn; an independent review found and fixed the issues listed in docs/windows-sandbox.md |
 | `aes` (OCB2 voice crypto) | Mumble's UDP voice encryption; AES-NI intrinsics | Session authority; fixed-size blocks, keys from the TLS control channel |
 | `rsa` (identity generation only) | Stock Mumble imports only RSA client certificates | Generates the local Mumble client key only; TLS signing uses ring, so the Marvin timing issue (RUSTSEC-2023-0071) in private-key operations never runs on untrusted input; `cargo-deny` confines the crate to `nuschel-session` |
 | `image` decoders (PNG, JPEG, GIF) | Inline images and avatars from untrusted peers | Content worker only, with dimension and allocation limits; the UI receives raw RGBA |
@@ -167,12 +167,14 @@ every AppContainer, such as the user's environment variables in the registry. Me
 (outgoing connections, and the LAN both ways for direct transit; nothing inbound from
 the Internet, and no AppContainer reaches loopback). Beyond the container's own
 folder and what every AppContainer may read (the Windows directory, Program Files),
-storage may modify only its history directory and crypto only its own directory, each
-in a container of its own per directory; an offer's file reaches the transfer worker
-as an inherited read-only handle, its permissions unchanged. Only the standard handles
+storage may modify only what is in its history directory and crypto only what is in
+its own directory (each directory itself only listed and added to; a junction there
+is refused, not followed), each in a container of its own per directory; an offer's
+file reaches the transfer worker as an inherited read-only handle, its permissions
+unchanged. Only the standard handles
 (and that file) are inherited, through an explicit handle list; there is no console.
-The job kills the worker when the launch stage exits or is killed (the supervisor's
-kill-on-close job holds the launch stage), admits one process (the child-process
+The worker is created inside its job, which kills it when the launch stage exits or
+is killed (the supervisor's kill-on-close job holds the launch stage), admits one process (the child-process
 policy refuses process creation too), limits committed memory (512 MiB content, 1 GiB
 the others) and content's CPU time as on Linux, and blocks the clipboard, global atoms,
 other processes' USER handles, desktop switching and system settings. Extension-point
