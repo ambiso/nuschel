@@ -80,7 +80,28 @@ async fn mumble_server() -> (u16, String) {
                 for frame in frames {
                     let _ = tls.write_all(&frame.expect("frame")).await;
                 }
-                while tls.read_buf(&mut buffer).await.unwrap_or(0) > 0 {}
+                loop {
+                    while let Ok(Some(frame)) = decode_control(&mut buffer) {
+                        if frame.kind == kind::TEXT_MESSAGE {
+                            let text = proto::TextMessage::decode(frame.payload).expect("text");
+                            let reply = proto::TextMessage {
+                                actor: Some(3),
+                                channel_id: text.channel_id,
+                                message: format!("fixture received: {}", text.message),
+                                ..Default::default()
+                            };
+                            let _ = tls
+                                .write_all(
+                                    &encode_control(kind::TEXT_MESSAGE, &reply)
+                                        .expect("text frame"),
+                                )
+                                .await;
+                        }
+                    }
+                    if tls.read_buf(&mut buffer).await.unwrap_or(0) == 0 {
+                        break;
+                    }
+                }
             });
         }
     });
@@ -177,6 +198,74 @@ async fn logs_in_through_the_relay_with_tls_in_the_client() {
         events.last(),
         Some(Event::Server(ServerEvent::Connected { session: 3 }))
     ));
+}
+
+#[tokio::test]
+async fn legacy_text_preserves_newlines_and_escapes_html_across_tls_relay() {
+    let (port, fingerprint) = mumble_server().await;
+    let relay = relay().await;
+    let mut request = relay.into_client_request().expect("request");
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        HeaderValue::from_static(tunnel::SUBPROTOCOL),
+    );
+    let (mut ws, _) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("relay");
+    let mut session = Session::new(Login {
+        host: "127.0.0.1".into(),
+        port,
+        username: "web".into(),
+        password: None,
+        tokens: Vec::new(),
+        pin: Some(fingerprint),
+    })
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let body = "literal <script>\n\n```rust\nfn main() {}\n```";
+    let mut sent = false;
+    loop {
+        for message in session.take_outgoing() {
+            ws.send(Message::binary(message)).await.expect("send");
+        }
+        for event in session.take_events() {
+            match event {
+                Event::Server(ServerEvent::Connected { .. }) => {
+                    session
+                        .send_text(
+                            nuschl_client::model::TextTarget::Channel(0),
+                            body.into(),
+                            None,
+                        )
+                        .unwrap();
+                    sent = true;
+                }
+                Event::Text {
+                    body,
+                    outgoing: false,
+                    ..
+                } => {
+                    assert!(sent);
+                    assert_eq!(
+                        body,
+                        "fixture received: literal &lt;script&gt;<br><br>```rust<br>fn main() {}<br>```"
+                    );
+                    return;
+                }
+                Event::Closed { reason } => panic!("closed: {reason}"),
+                _ => {}
+            }
+        }
+        // Sending from the event handler queues another tunnel record.
+        for message in session.take_outgoing() {
+            ws.send(Message::binary(message)).await.expect("send text");
+        }
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Binary(bytes)))) => session.receive(&bytes),
+            Ok(Some(Ok(_))) => {}
+            other => panic!("text relay ended: {other:?}"),
+        }
+    }
 }
 
 #[tokio::test]
