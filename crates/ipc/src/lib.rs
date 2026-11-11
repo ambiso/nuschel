@@ -3,6 +3,7 @@
 
 #[cfg(not(target_family = "wasm"))]
 pub mod host;
+pub mod server;
 
 use std::io::{self, Read, Write};
 

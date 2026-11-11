@@ -99,6 +99,8 @@ macro_rules! with_pool {
     };
 }
 
+pub mod server;
+
 /// What search matches and returns: the text without inline image data.
 fn visible(body: &str) -> String {
     body.split(nuschel_core::EMBED)
