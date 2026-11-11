@@ -9,6 +9,7 @@ mod backend;
 mod chrome;
 mod dialogs;
 mod document;
+mod emoji;
 mod global_ptt;
 mod images;
 mod menus;

@@ -58,6 +58,8 @@
             || lib.hasSuffix ".vp8" path
             || lib.hasSuffix ".svg" path
             || lib.hasSuffix ".ico" path
+            # The emoji picker's table.
+            || lib.hasSuffix "emoji.txt" path
             # The release signing key the updater trusts.
             || lib.hasSuffix "update-key.pub" path
             # Vendored GPUI platform crates keep their shaders and headers.

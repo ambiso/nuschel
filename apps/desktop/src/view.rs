@@ -55,7 +55,13 @@ impl Render for Desktop {
             .text_color(color(TEXT))
             .font_family("sans-serif")
             .text_size(px(15.))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if crate::emoji::shortcut(&event.keystroke) && this.selected_indices().is_some() {
+                    this.open_emoji(window, cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
                 if !event.is_held && this.key_down(&event.keystroke) {
                     cx.stop_propagation();
                     cx.notify();
@@ -108,6 +114,9 @@ impl Render for Desktop {
             })
             .when_some(crate::menus::prompt(self, cx), |view, prompt| {
                 view.child(prompt)
+            })
+            .when_some(crate::emoji::overlay(self, cx), |view, picker| {
+                view.child(picker)
             })
             .when_some(crate::viewer::overlay(self, window, cx), |view, viewer| {
                 view.child(viewer)

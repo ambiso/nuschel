@@ -178,6 +178,14 @@ class GnomeSession:
                   " k.notify_keyval(t, v, imports.gi.Clutter.KeyState.PRESSED);"
                   " k.notify_keyval(t + 20000, v, imports.gi.Clutter.KeyState.RELEASED); 'ok'")
 
+    def chord(self, modifier, keysym_name):
+        """Press a key while holding a modifier, e.g. chord("Control_L", "period")."""
+        self._pointer()
+        self.eval("const k = global._nuschelKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
+                  " const C = imports.gi.Clutter, P = C.KeyState.PRESSED, R = C.KeyState.RELEASED;"
+                  f" k.notify_keyval(t, C.KEY_{modifier}, P); k.notify_keyval(t + 10000, C.KEY_{keysym_name}, P);"
+                  f" k.notify_keyval(t + 20000, C.KEY_{keysym_name}, R); k.notify_keyval(t + 30000, C.KEY_{modifier}, R); 'ok'")
+
     def type(self, text):
         self._pointer()
         for character in text:

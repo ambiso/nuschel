@@ -88,7 +88,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,clipping,viewer,notify,scroll,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,emoji,clipping,viewer,notify,scroll,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -276,6 +276,19 @@ def main():
                 shell.key("Escape")
                 time.sleep(0.6)
                 shot("13-search-closed")
+            if want("emoji"):
+                # Ctrl+. opens the picker; typing searches; Enter inserts the first match.
+                click(800, 738)  # the composer
+                time.sleep(0.4)
+                shell.chord("Control_L", "period")
+                time.sleep(1.0)
+                shot("27-emoji")
+                shell.type("thumbs")
+                time.sleep(0.8)
+                shot("28-emoji-search")
+                shell.key("Return")
+                time.sleep(0.8)
+                shot("29-emoji-inserted")
             if want("clipping") and args.pulse_bin:
                 # A second microphone driven to full scale: the adaptive controller warns.
                 server = f"--server=unix:{shell.runtime / 'pulse' / 'native'}"
