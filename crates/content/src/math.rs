@@ -59,6 +59,63 @@ impl Token {
     }
 }
 
+/// The formula tokens of a text, in order, before the limit on their number.
+///
+/// CommonMark ranks code spans, autolinks and raw HTML above every other
+/// inline construct, but pulldown-cmark 0.13 lets a `$` before a code span
+/// pair with a `$` inside it (`$a `$x$` b`). So the text is parsed in that
+/// order: first without math, and what is code (spans and blocks), an
+/// autolink or HTML there has its content masked, byte for byte, keeping
+/// line breaks; then the masked text is parsed with math. No `$` inside those
+/// is seen by the second parse, and a token that would take in masked bytes
+/// differs from the text and is refused (`Token::new`).
+pub fn tokens(source: &str) -> Vec<Token> {
+    use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
+    let mut masked = source.as_bytes().to_vec();
+    let mut mask = |range: std::ops::Range<usize>| {
+        for byte in &mut masked[range] {
+            if !matches!(*byte, b'\n' | b'\r') {
+                *byte = b'x';
+            }
+        }
+    };
+    let mut code_block = false;
+    for (event, range) in Parser::new(source).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => code_block = true,
+            Event::End(TagEnd::CodeBlock) => code_block = false,
+            Event::Text(_) if code_block => mask(range),
+            // Inside the delimiters: backticks and angle brackets stay.
+            Event::Code(_) => {
+                let text = &source[range.clone()];
+                let ticks = text.len() - text.trim_start_matches('`').len();
+                if text.len() >= 2 * ticks {
+                    mask(range.start + ticks..range.end - ticks);
+                }
+            }
+            Event::InlineHtml(_) | Event::Html(_) if range.len() >= 2 => {
+                mask(range.start + 1..range.end - 1)
+            }
+            Event::Start(Tag::Link {
+                link_type: LinkType::Autolink | LinkType::Email,
+                ..
+            }) if range.len() >= 2 => mask(range.start + 1..range.end - 1),
+            _ => {}
+        }
+    }
+    let Ok(masked) = String::from_utf8(masked) else {
+        return Vec::new();
+    };
+    Parser::new_ext(&masked, Options::ENABLE_MATH)
+        .into_offset_iter()
+        .filter_map(|(event, range)| match event {
+            Event::InlineMath(tex) => Token::new(source, range, &tex, false),
+            Event::DisplayMath(tex) => Token::new(source, range, &tex, true),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The grammar as a table: input → the formulas found in it, as written
 /// (delimiters included), with their LaTeX, inline (`i`) or display (`d`).
 #[cfg(test)]
@@ -171,6 +228,11 @@ mod spec {
                 ("~~~\n$$x$$\n~~~", &[]),
                 ("    $x$", &[]),
                 ("$`x`$", &[]),
+                ("$a `$x$` b", &[]),
+                ("$$y `$x$` b", &[]),
+                ("$a `$x$` b $c$", &[("$c$", "c", 'i')]),
+                ("$a <span title=\"$\">x</span> $b$", &[("$b$", "b", 'i')]),
+                ("$a <https://x.example/$> b$", &[]),
                 // Braces: a $ inside a group belongs to the formula.
                 ("${a}$", &[("${a}$", "{a}", 'i')]),
                 (

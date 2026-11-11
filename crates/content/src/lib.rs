@@ -6,7 +6,7 @@ use std::cell::OnceCell;
 use base64::Engine as _;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder as _, ImageFormat, ImageReader, Limits};
 use nuschel_core::{CodeRun, ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use syntect::{
     easy::HighlightLines,
     highlighting::{FontStyle, Theme, ThemeSet},
@@ -359,19 +359,18 @@ impl ContentRenderer {
         let mut pieces = Vec::new();
         let mut consumed = 0;
         let mut code: Option<(usize, Option<String>, String)> = None;
-        let mut tokens: Vec<math::Token> = Vec::new();
+        let tokens = math::tokens(source);
         let mut fences = 0;
-        // Formulas of the text not yet cut into a piece.
-        let text = |start: usize, end: usize, tokens: &mut Vec<math::Token>| {
+        // A piece of the text, with the formulas in it.
+        let text = |start: usize, end: usize| {
             let inside = tokens
                 .iter()
                 .filter(|token| token.range.start >= start && token.range.end <= end)
                 .map(|token| token.shifted(start))
                 .collect();
-            tokens.clear();
             markup::Piece::Text(source[start..end].to_owned(), inside)
         };
-        for (event, range) in Parser::new_ext(source, Options::ENABLE_MATH).into_offset_iter() {
+        for (event, range) in Parser::new(source).into_offset_iter() {
             match event {
                 Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
                     let language = info
@@ -385,19 +384,13 @@ impl ContentRenderer {
                         body.push_str(&text);
                     }
                 }
-                Event::InlineMath(tex) if code.is_none() => {
-                    tokens.extend(math::Token::new(source, range, &tex, false));
-                }
-                Event::DisplayMath(tex) if code.is_none() => {
-                    tokens.extend(math::Token::new(source, range, &tex, true));
-                }
                 Event::End(TagEnd::CodeBlock) => {
                     // Past the block limit, a fence stays in the text around it.
                     if let Some((start, language, body)) = code.take()
                         && pieces.len() < markup::MAX_BLOCKS
                     {
                         if start > consumed {
-                            pieces.push(text(consumed, start, &mut tokens));
+                            pieces.push(text(consumed, start));
                         }
                         let written = source[start..range.end].trim_end_matches(['\n', '\r']);
                         // A math fence is a display formula, as on GitHub.
@@ -426,7 +419,7 @@ impl ContentRenderer {
             }
         }
         if consumed < source.len() || pieces.is_empty() {
-            pieces.push(text(consumed, source.len(), &mut tokens));
+            pieces.push(text(consumed, source.len()));
         }
         Ok(MessageDocument {
             blocks: markup::expand(pieces, math::MAX_FORMULAS - fences),
