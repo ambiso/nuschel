@@ -7,7 +7,7 @@
 # themselves (crates/update).
 #
 # Needs the repository secret UPDATE_SIGNING_KEY: the unencrypted minisign
-# secret key whose public half is release/update-key.pub.
+# secret key whose public half is crates/update/update-key.pub.
 name: Release
 
 on:
@@ -73,7 +73,7 @@ jobs:
             --platform windows-x86_64=install/windows \
             --platform macos-universal=install/Nuschel.app \
             --output dist --sign-key "$key"
-          nix shell nixpkgs#rsign2 -c rsign verify -p release/update-key.pub -x dist/update.json.minisig dist/update.json
+          nix shell nixpkgs#rsign2 -c rsign verify -p crates/update/update-key.pub -x dist/update.json.minisig dist/update.json
 
       - name: Publish
         env:

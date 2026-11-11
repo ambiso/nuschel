@@ -41,7 +41,7 @@ fn open_root(root: &Path) -> Result<Dir, Error> {
 pub const DEFAULT_URL: &str = "https://github.com/ambiso/nuschel/releases/latest/download/";
 pub const MANIFEST: &str = "update.json";
 /// The release signing key (minisign public key file).
-pub const RELEASE_KEY: &str = include_str!("../../../release/update-key.pub");
+pub const RELEASE_KEY: &str = include_str!("../update-key.pub");
 /// An additional trusted key beside the executable (test installations).
 pub const LOCAL_KEY: &str = "update-key.pub";
 

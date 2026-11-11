@@ -62,7 +62,7 @@ Windows build and a universal, ad-hoc signed `Nuschel.app` are cross-compiled by
 the flake (no macOS runner), zipped, and published with `update.json`, which lists
 every file with its size and SHA-256 and is signed with minisign. The workflow needs
 the repository secret `UPDATE_SIGNING_KEY`; its public half is
-`release/update-key.pub` and is built into the client.
+`crates/update/update-key.pub` and is built into the client.
 
 Windows and macOS copies check for a newer release 20 seconds after start and every
 six hours (**Settings → General → Check for updates**). They verify the signature,

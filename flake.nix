@@ -58,7 +58,7 @@
             || lib.hasSuffix ".vp8" path
             || lib.hasSuffix ".svg" path
             # The release signing key the updater trusts.
-            || lib.hasSuffix "release/update-key.pub" path
+            || lib.hasSuffix "update-key.pub" path
             # Vendored GPUI platform crates keep their shaders and headers.
             || lib.hasInfix "/vendor/gpui-pre-" path
             || lib.hasPrefix "LICENSE" (builtins.baseNameOf path);
@@ -150,36 +150,56 @@
             '';
           }
         );
-        package = craneLib.buildPackage (
+        # Licences, and on Linux the desktop binary under libexec (screen readers
+        # announce the executable's name, not ".nuschel-wrapped") with wrappers.
+        packageLayout = ''
+          install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
+          install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
+          install -Dm644 ${./vendor/pulseaudio/LICENSE.md} "$out/share/licenses/nuschel/pulseaudio-MIT"
+        ''
+        + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+          runtimeFlags=(--prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}"
+            --prefix PATH : "${
+              lib.makeBinPath [
+                pkgs.bubblewrap
+                pkgs.util-linux
+              ]
+            }")
+          mkdir -p "$out/libexec/nuschel"
+          mv "$out/bin/nuschel" "$out/libexec/nuschel/nuschel"
+          for worker in nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
+            ln -s "../../bin/$worker" "$out/libexec/nuschel/$worker"
+          done
+          makeWrapper "$out/libexec/nuschel/nuschel" "$out/bin/nuschel" "''${runtimeFlags[@]}"
+          wrapProgram "$out/bin/nuschel-cli" "''${runtimeFlags[@]}"
+        '';
+        # Whole-workspace build (crane): kept for comparison and as a fallback.
+        cranePackage = craneLib.buildPackage (
           common
           // {
             inherit cargoArtifacts;
-            postInstall = ''
-              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
-              install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschel/Mumble-BSD"
-              install -Dm644 ${./vendor/pulseaudio/LICENSE.md} "$out/share/licenses/nuschel/pulseaudio-MIT"
-            ''
-            + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
-              runtimeFlags=(--prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}"
-                --prefix PATH : "${
-                  lib.makeBinPath [
-                    pkgs.bubblewrap
-                    pkgs.util-linux
-                  ]
-                }")
-              # The desktop binary keeps its own name (screen readers announce the
-              # executable's name, not ".nuschel-wrapped"); it finds its workers
-              # beside it.
-              mkdir -p "$out/libexec/nuschel"
-              mv "$out/bin/nuschel" "$out/libexec/nuschel/nuschel"
-              for worker in nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
-                ln -s "../../bin/$worker" "$out/libexec/nuschel/$worker"
-              done
-              makeWrapper "$out/libexec/nuschel/nuschel" "$out/bin/nuschel" "''${runtimeFlags[@]}"
-              wrapProgram "$out/bin/nuschel-cli" "''${runtimeFlags[@]}"
-            '';
+            postInstall = packageLayout;
           }
         );
+        # The desktop package from per-crate derivations (crate2nix): a change
+        # rebuilds only the crates that depend on it.
+        crates = import ./nix/crate2nix.nix { inherit pkgs toolchain; };
+        package =
+          pkgs.runCommand "nuschel-0.1.0"
+            {
+              nativeBuildInputs = [ pkgs.makeWrapper ];
+              meta.mainProgram = "nuschel";
+            }
+            ''
+              mkdir -p "$out/bin"
+              for crate in ${lib.concatStringsSep " " crates.binaries}; do
+                for program in "$crate"/bin/*; do
+                  cp "$program" "$out/bin/"
+                done
+              done
+              chmod -R u+w "$out/bin"
+              ${packageLayout}
+            '';
         # Cross builds from Linux. A separate toolchain keeps native checks cached.
         crossToolchain =
           p:
@@ -266,18 +286,19 @@
             }
           );
         macUniversal =
-          pkgs.runCommand "nuschel-macos-universal" { nativeBuildInputs = [ pkgs.llvmPackages.llvm ]; } ''
-            mkdir -p "$out/bin"
-            for program in nuschel nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
-              llvm-lipo -create ${macSlice "x86_64"}/bin/$program ${macSlice "aarch64"}/bin/$program \
-                -output "$out/bin/$program"
-              llvm-lipo "$out/bin/$program" -verify_arch x86_64 arm64
-            done
-            if llvm-otool -L "$out/bin/nuschel" | grep -qE '^[[:space:]]+/nix/store/'; then
-              echo "macOS binary depends on a Nix store library" >&2
-              exit 1
-            fi
-          '';
+          pkgs.runCommand "nuschel-macos-universal" { nativeBuildInputs = [ pkgs.llvmPackages.llvm ]; }
+            ''
+              mkdir -p "$out/bin"
+              for program in nuschel nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
+                llvm-lipo -create ${macSlice "x86_64"}/bin/$program ${macSlice "aarch64"}/bin/$program \
+                  -output "$out/bin/$program"
+                llvm-lipo "$out/bin/$program" -verify_arch x86_64 arm64
+              done
+              if llvm-otool -L "$out/bin/nuschel" | grep -qE '^[[:space:]]+/nix/store/'; then
+                echo "macOS binary depends on a Nix store library" >&2
+                exit 1
+              fi
+            '';
         # Nuschel.app for macOS: the universal binaries, Info.plist with the
         # microphone usage text macOS requires, and an ad-hoc signature over
         # the whole bundle (rcodesign, from Linux). Updates replace every file
@@ -318,6 +339,7 @@
       in
       {
         packages.default = package;
+        packages.default-crane = cranePackage;
         packages.server = serverPackage;
         packages.windows = windowsPackage;
         packages.macos-universal = macUniversal;

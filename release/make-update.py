@@ -9,7 +9,7 @@
 Every file of each installation becomes one release asset named
 `<platform>--<path with / as __>`; `update.json` lists them with size and
 SHA-256, and `update.json.minisig` signs it (rsign2/minisign format). The
-updater in the app verifies the signature with the key in release/update-key.pub.
+updater in the app verifies the signature with the key in crates/update/update-key.pub.
 """
 import argparse
 import hashlib
