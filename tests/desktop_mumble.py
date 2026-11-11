@@ -292,6 +292,16 @@ class DesktopTest:
         ], input=data, capture_output=True, check=True, timeout=10)
 
     def captured_audio(self, session):
+        # A source-output appears as soon as the microphone opens, before
+        # opening the echo reference has finished. Wait for both recording
+        # streams before injecting the finite test signal, including after an
+        # audio-service restart that replaces the worker and its devices.
+        def capturing():
+            sources = {source["index"]: source["name"] for source in self.pulse_json("sources")}
+            recorded = {sources.get(stream["source"]) for stream in self.pulse_json("source-outputs")}
+            return {"nuschel_microphone.monitor", "nuschel_fixture.monitor"} <= recorded
+
+        eventually(capturing, "microphone and echo reference did not become ready", timeout=30)
         time.sleep(0.5)
         before = len(self.peer.events)
         self.inject_tone(2)
