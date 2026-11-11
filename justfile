@@ -28,6 +28,11 @@ desktop:
 server:
     cargo run -p nuscheld -- --help
 
+# The storage worker on a throwaway PostgreSQL from nixpkgs (a unix socket in a
+# temporary directory; nothing listens on the network), and on SQLite.
+test-postgres:
+    nix shell --inputs-from . nixpkgs#postgresql -c cargo test -p nuschel-storage-worker --test postgres -- --nocapture
+
 licenses:
     cargo deny check licenses bans sources
 

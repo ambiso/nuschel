@@ -497,7 +497,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          needs confirmation and applies to existing messages; `max_retention_days`).
    - [x] Server: history rate limits per network (IPv4 /24, IPv6 /56) and per
          account, failing the single page with `retry_after_ms`.
-   - [ ] Server: a PostgreSQL unit test (only the VM covers it).
+   - [x] Server: a PostgreSQL test that runs locally (`just test-postgres`: the
+         storage worker on a throwaway PostgreSQL from nixpkgs).
    - [ ] Session and desktop: honour `retry_after_ms` on `rate_limited` and `busy`
          (history pages today fail without a retry).
    - [ ] Capability negotiation in the Mumble handshake (extension message range or

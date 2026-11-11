@@ -19570,6 +19570,12 @@ rec {
             features = [ "macros" "rt" "io-std" "io-util" ];
           }
         ];
+        devDependencies = [
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+        ];
 
       };
       "nuschel-transfer-worker" = rec {

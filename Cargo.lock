@@ -5956,6 +5956,7 @@ dependencies = [
  "clap",
  "nuschel-ipc",
  "nuschel-storage",
+ "tempfile",
  "tokio",
 ]
 
