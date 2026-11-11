@@ -156,7 +156,7 @@
             cp -R ${pulseSource} "$out/vendor/pulseaudio"
             chmod -R u+w "$out/vendor/pulseaudio"
             # GPUI compiles against these patched crates during the dependency pass.
-            for crate in gpui-pre gpui-pre-windows gpui-pre-apple gpui-pre-wgpu; do
+            for crate in gpui-pre gpui-pre-windows gpui-pre-apple gpui-pre-wgpu gpui-pre-linux str0m-rust-crypto; do
               rm -rf "$out/vendor/$crate"
               cp -R ${./vendor}/$crate "$out/vendor/$crate"
               chmod -R u+w "$out/vendor/$crate"
@@ -166,6 +166,7 @@
         buildDeps =
           args: craneLib.buildDepsOnly ((builtins.removeAttrs args [ "src" ]) // { inherit dummySrc; });
         cargoArtifacts = buildDeps common;
+        webClient = import ./nix/web-client.nix { inherit pkgs lib toolchain; };
         serverCommon = common // {
           pname = "nuschld";
           cargoExtraArgs = "-p nuschld -p nuschl-storage-worker";
@@ -438,10 +439,14 @@
         packages.rtc-probe = rtcPackage;
         # The web client's tunnel relay and its probe (docs/web.md), from cached crates.
         packages.web-relay = crates.project.workspaceMembers."nuschl-web-relay".build;
-        # The web host's static files: the share-link landing page and, until
-        # the Svelte client exists, a placeholder.
+        packages.web-client = webClient.app;
+        packages.web-wasm = webClient.wasm;
+        # Keep share-link routes at the root; the Svelte client lives at /app/.
         packages.web-site = pkgs.runCommand "nuschl-web-site" { } ''
           cp -R ${./web/site} "$out"
+          chmod -R u+w "$out"
+          mkdir -p "$out/app"
+          cp -R ${webClient.app}/. "$out/app/"
         '';
         apps.rtc-probe =
           (flake-utils.lib.mkApp {
