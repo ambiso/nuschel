@@ -71,6 +71,21 @@ mod kind {
 
 const MAX_BLOB_REQUEST: usize = 64;
 
+// Known protocol types are not necessarily implemented by this client. In
+// particular knock/1 needs a native consumer before we negotiate typed notices;
+// stock-compatible admission notices remain available without that capability.
+const CLIENT_CAPABILITIES: &[&str] = &[
+    nuschl::capability::HISTORY,
+    nuschl::capability::SUBSCRIBE,
+    nuschl::capability::TYPING,
+    nuschl::capability::KT,
+    nuschl::capability::MLS,
+    nuschl::capability::E2EE,
+    nuschl::capability::KT_WITNESS,
+    nuschl::capability::SHARE,
+    nuschl::capability::PRIVACY,
+];
+
 /// Budgets against a hostile server. Stock Murmur defaults to 1,000 channels
 /// and 100 users, and caps comments and descriptions at 5,000 characters
 /// (128 KiB with images) and avatars at 128 KiB.
@@ -736,7 +751,7 @@ pub async fn run(
         };
         let hello = nuschl.then(|| v1::Hello {
             protocol: nuschl::PROTOCOL,
-            capabilities: nuschl::capability::ALL.iter().map(|c| (*c).to_owned()).collect(),
+            capabilities: CLIENT_CAPABILITIES.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
             client_version: client_version().to_string(),
@@ -3377,11 +3392,10 @@ fn negotiate(nuschl: bool, version: &[u8]) -> Result<Negotiated, Error> {
         .ok_or_else(|| {
             Error::Protocol("the server selected the Nuschl protocol but sent no hello".into())
         })?;
-    let capabilities: Vec<String> =
-        nuschl::intersect(&nuschl::capability::ALL, &hello.capabilities)
-            .into_iter()
-            .map(str::to_owned)
-            .collect();
+    let capabilities: Vec<String> = nuschl::intersect(CLIENT_CAPABILITIES, &hello.capabilities)
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
     let kt = capabilities.iter().any(|c| c == nuschl::capability::KT);
     // Key transparency without a log to pin fails closed, like a hello without ALPN.
     if kt && hello.kt_log.is_empty() {
