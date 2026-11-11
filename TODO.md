@@ -740,8 +740,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [ ] One MLS group per conversation; membership follows ACL changes; direct
          messages as two-party groups (direct conversations done on the `mls`
          branch; channels are 4c).
-   - [ ] Device linking (§3.4) and multi-device key-transparency publishing, so an
-         identity can have more than one real device.
+   - [ ] Device linking over the server's mailbox (§3.4) and its UI; the worker's
+         linking and multi-device key-transparency publishing exist on the `mls`
+         branch, with the messages relayed by the caller. Device revocation.
    - [ ] Desktop: send through the crypto worker and show decrypted messages in the
          timeline (the lock in the header exists).
    - [ ] Encrypted messages, files (the file-transfer design for Nuschel servers) and

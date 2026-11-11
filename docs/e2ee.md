@@ -1294,7 +1294,8 @@ depend on what it creates. How to bump is at the end of this section.
 | `nuscheld` (`apps/server/src/mls.rs`) | `mls/1`: the key package directory, the Welcome mailboxes, the group registry with epoch fencing, the shared `seq` stream, join info (see "The delivery service") |
 | `nuschel-crypto-worker` (`apps/crypto-worker/src/mls.rs`) | The OpenMLS state, credential checks against key-transparency rosters, pins, envelopes and chains, the lock; persisted sealed |
 | `nuschel-session` (`crates/session/src/mls.rs`) | Moves bytes between the server and the worker inside the key-transparency driver: key package uploads, Welcomes, creating a direct conversation's group, sending, catching up in `seq` order |
-| `nuschel-cli` | `e2ee_open`, `e2ee_send`, `e2ee_status`, `e2ee_sync` and `e2ee_*` events: the test driver |
+| `nuschel-cli` | `e2ee_open`, `e2ee_send`, `e2ee_status`, `e2ee_sync` and `e2ee_*` events: the test driver; `--offline` runs only the crypto worker for device linking (`link_offer`, `link_join`, `link_approve`, `link_complete`) |
+| Device linking (`apps/crypto-worker/src/link.rs`) | §3.4's protocol from nuschel-identity through the worker, with the messages relayed by the caller (the server mailbox is later work); multi-device publishing and self-monitoring (see decision 13) |
 | Desktop | Opens a direct conversation's group on `mls/1` servers and shows its lock (§7.4) in the conversation header; MLS rows never reach the timeline as text |
 
 **Wire** (docs/extension.md conventions; `crates/protocol/proto/nuschel.proto`):
@@ -1390,8 +1391,27 @@ Where §6–§10 left room, with the reason:
     cap is `nuschel_e2ee::MAX_GROUP_DEVICES`, enforced by the server and the client; the
     90-day bound is `INACTIVE_DEVICE_DAYS` (commits stay in the stream: retention and
     `--erase-user` never tombstone `MLS_HANDSHAKE` rows; removing inactive devices is not
-    implemented); the device-signing key stays where phase 3 put it (the first device),
-    as linking does not exist yet.
+    implemented); the device-signing key goes to every linked device (question 2's
+    default: every desktop).
+13. **Linking and several devices per identity.** The provisioning bundle carries the
+    device-signing key, the recovery blob and device-sync key if present, and as
+    application data the identity's device certificates, every pinned server (log
+    descriptor, account, account statement) and the identities verified out of band. So
+    the new device inherits the pins and publishes exactly the same binding value as the
+    existing one (same statement, same roster), and self-monitoring sees nothing foreign.
+    Each device keeps the identity's own devices (from linking and from lookups of its
+    own account that verify under its identity) and publishes all of them, at most 16;
+    a value another own device published (after a renewal, say) is accepted once a
+    lookup of the own account shows it with a statement signed for this account and
+    log. The key-transparency driver makes that lookup silently before publishing or
+    monitoring. Mumble allows one connection per registered account, and accounts are
+    identified by certificate: a second device uses the account's exported certificate
+    and connects while the first is offline (nuscheld disconnects the older session).
+14. **Crash consistency in the server.** Before acknowledging a commit, the delivery
+    service writes a pending record with the group after it; once the history row is
+    stored one batch promotes it. On start every pending record is adopted if the
+    stream has its commit (by hash) and dropped otherwise; an unreadable history stops
+    the start rather than guessing.
 
 ### The delivery service
 
@@ -1423,6 +1443,10 @@ nuschel-e2ee only; answers go out under the lock. It runs only with `kt/1` and
   back and the sender gets `BUSY`. Application messages are fenced under the lock
   against a per-conversation epoch cache, from their framing alone, so every message
   of epoch N gets a lower `seq` than the commit that ends N.
+- **Welcome mailboxes**: fetching subscribes the connection to pushes for that device
+  (at most 16 devices per account, forgotten on disconnect); fetches and
+  acknowledgements share a per-account limit of 60 a minute; entries older than
+  `welcome_days` are dropped when fetched.
 - **Join info** for readers of the conversation: epoch, the newest GroupInfo, the
   server's tree and the latest commit's `seq`.
 - **Persistence**, without new tables: the server's key-value table (`kt_records`, its
@@ -1433,10 +1457,11 @@ nuschel-e2ee only; answers go out under the lock. It runs only with `kt/1` and
   | --- | --- |
   | `E` ‖ group id | epoch, latest commit `seq`, conversation (read at start) |
   | `G` ‖ group id | conversation, commit `seq`, recent commit keys, the group's state (loaded on first use) |
-  | `P` ‖ account ‖ device ‖ time ‖ n | a one-time key package |
+  | `P` ‖ account ‖ device ‖ time ‖ n ‖ ref | a one-time key package |
   | `L` ‖ account ‖ device | the last-resort key package |
   | `K` ‖ key package ref | account, device, last-resort flag (Welcome routing) |
   | `W` ‖ account ‖ device ‖ id | a waiting Welcome |
+  | `N` ‖ group id | a commit's group state until its row is stored (decision 14) |
 
   Commits and application messages are history rows; their MLS message is base64 in
   the text column (`row_content`), which a binary column replaces later.
@@ -1447,7 +1472,9 @@ nuschel-e2ee only; answers go out under the lock. It runs only with `kt/1` and
 | --- | --- |
 | `cargo test -p nuschel-e2ee` | Envelope encoding and chains, prevalidation, the binding; in process: a direct conversation through the `DeliveryGroup`, stale epochs and a losing concurrent commit, restore of both halves, replay refused, the DS refusing what does not fit (wrong GroupInfo rolls back, another server's binding), a validly signed key package with a 32-byte X-Wing init key refused before libcrux (and OpenMLS 0.9.2 shown to accept it and libcrux-kem 0.0.9 to panic on it), a tree with a short key refused |
 | `cargo test -p nuschel-crypto-worker --test mls` | The worker against a delivery service in the test (in the style of `tests/malicious.rs`): two and three devices (a second device of one identity made with its device-signing key, standing in for linking), restarts, a server that drops, reorders, replays and forks, stale epoch with the same envelope resent, a stranger's commit refused, a device KT does not list (blocked, then unblocked by a lookup), a hostile key package, a Welcome for a pinned conversation, concurrent creations, a lost ack settled by the stream, removal |
-| `cargo test -p nuscheld --test mls` | The delivery service over the wire with raw protocol clients and real identities: upload, claim, creation, Welcome push, fetch and ack, join info, a message decrypted by the other side and a history page with both row formats; idempotent resends of the creation and of a message; `STALE_EPOCH` with epoch and head for an old-epoch message and a racing commit, catch-up and resend; plaintext and edits refused; hostile key packages (a short X-Wing init key as one-time and last-resort package, garbage, another identity's) refused while the server keeps serving; a claim without a direct conversation and a commit adding a third identity refused; the mailbox, epoch and fencing after a restart. Storage tests: delete on empty value, commits surviving expiry and erase |
+| `cargo test -p nuscheld --test mls` | The delivery service over the wire with raw protocol clients and real identities (6 tests): upload, claim, creation, Welcome push, fetch and ack, join info, a message decrypted by the other side and a history page with both row formats; idempotent resends of the creation and of a message; `STALE_EPOCH` with epoch and head for an old-epoch message and a racing commit, catch-up and resend; plaintext and edits refused; hostile key packages (a short X-Wing init key as one-time and last-resort package, garbage, another identity's) refused while the server keeps serving; a claim without a direct conversation and a commit adding a third identity refused; the mailbox, epoch and fencing after a restart; a commit stored just before a crash adopted on restart, and a pending commit without its row dropped. Storage tests: delete on empty value, commits surviving expiry and erase |
+| `cargo test -p nuschel-crypto-worker --test link` | Linking two workers in process; a wrong code and steps out of order refused |
+| `cargo test -p nuschel-cli --test e2ee_devices` (after `cargo build -p nuschel-crypto-worker`) | Three devices via `nuschel-cli`: Bob's phone linked to his laptop, the two-device roster published without an own-key alarm, Alice's group with three verified members, each Bob device reading Alice's message while online, the phone's reply reaching Alice and later the laptop as its own; and a device linked after the conversation existed, added through the missing-device report, which unblocks Alice after her next lookup |
 | `cargo test -p nuschel-cli --test e2ee` (after `cargo build -p nuschel-crypto-worker`) | Two `nuschel-cli` processes with sandboxed crypto workers through `nuscheld` on loopback: key packages, the group created by `e2ee_open`, the Welcome pushed, messages both ways in order, offline delivery read by a new worker process, plaintext into the conversation refused |
 | `python3 tests/with_local_nuscheld.py <bins> tests/e2ee_direct.py <bins> --port PORT` | The same as a script; `--state DIR` and `--phase second` check the group and stream after a server restart. `vm-server` runs it on SQLite across a restart and on PostgreSQL |
 | `fuzz/fuzz_targets/mls.rs` | Prevalidation, key package checks, Welcome routing, envelopes (one encoding), the `mls/1` messages, and the DS paths on a fixture group that garbage must never move |
@@ -1497,12 +1524,11 @@ libcrux-kem and libcrux-hmac-drbg):
 
 ### What remains for 4b to ship
 
-- **Device linking** (§3.4, phase 3c) and **multi-device publishing**: the worker can
-  only hold the identity of the device that created it. The MLS layer handles several
-  devices per identity (tested in process with a second device certified by the
-  device-signing key), but a real second device needs linking, publishing a roster
-  with every own device, and self-monitoring that accepts bindings made by the
-  identity's other devices. Until then the CLI tests use one device per identity.
+- **Linking over the server**: the `DeviceLink*` mailbox of §3.4 and a UI for the code;
+  today the caller relays the linking messages. Revoking a device (§3.6) is not
+  implemented. A binding value another own device published and replaced before this
+  device looked again is unknown to it and would raise the own-key alarm if it falls
+  after this device's monitoring checkpoint.
 - **Desktop timeline**: the desktop shows the lock and opens the group, but does not
   yet send through `MlsCommand::Send` or show decrypted messages
   (`MlsEvent::Received`) in its timeline and local history.
@@ -1514,8 +1540,9 @@ libcrux-kem and libcrux-hmac-drbg):
 - A KT-`Unavailable` contact turns the lock amber but does not block sending (§5.5 says
   messages stay encrypted to the pinned keys, which is what happens).
 - Server: if a commit's storage fails, application messages accepted for the new
-  epoch in that window become undecryptable gaps; `K` references of unused packages
-  and unfetched mailbox entries are pruned only lazily; loaded groups stay in memory;
+  epoch in that window become undecryptable gaps; `K` references of packages claimed
+  but never used in a commit, and unfetched mailbox entries, are pruned only lazily;
+  loaded groups stay in memory;
   commits have no rate limit of their own beyond the text bucket and the 16 requests in
   flight; a large group's state may exceed the key-value table's 4 MiB value limit.
 
