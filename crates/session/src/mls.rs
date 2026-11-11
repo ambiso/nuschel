@@ -47,6 +47,18 @@ const MAX_RESENDS: usize = 4;
 const MAX_PAGES: usize = 64;
 /// Failed key package uploads in a row before waiting for the hourly round.
 const MAX_UPLOAD_ATTEMPTS: u32 = 8;
+/// Attempts of one commit or message while the server answers `BUSY`.
+const MAX_BUSY_RETRIES: usize = 5;
+
+/// How long to wait before retrying, if the server answered `BUSY`.
+fn busy_delay(reply: &Reply) -> Option<Duration> {
+    match reply {
+        Reply::Error(error) if error.code == Code::Busy as i32 => {
+            Some(Duration::from_millis(error.retry_after_ms.clamp(100, 2000)))
+        }
+        _ => None,
+    }
+}
 
 /// What the frontend asks for in end-to-end conversations.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -508,15 +520,29 @@ impl Context {
                 tree: init.tree.clone(),
             }),
         };
-        let reply = self
-            .ask(kind::MLS_COMMIT, move |request_id| {
-                v1::MlsCommit {
-                    request_id,
-                    ..message
+        // A busy server (storage, or another commit of this group in flight) is
+        // retried with the same commit and key: it rolled ours back, if it had it.
+        let mut reply = None;
+        for _ in 0..MAX_BUSY_RETRIES {
+            let attempt = message.clone();
+            let answer = self
+                .ask(kind::MLS_COMMIT, move |request_id| {
+                    v1::MlsCommit {
+                        request_id,
+                        ..attempt
+                    }
+                    .encode_to_vec()
+                })
+                .await?;
+            match busy_delay(&answer) {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => {
+                    reply = Some(answer);
+                    break;
                 }
-                .encode_to_vec()
-            })
-            .await?;
+            }
+        }
+        let reply = reply.unwrap_or(Reply::Error(nuschel::error(0, Code::Busy, 0)));
         let (accepted, seq) = match reply {
             Reply::Frame(kind::MLS_ACK, payload) => {
                 let ack = v1::MlsAck::decode(payload)
@@ -796,7 +822,8 @@ impl Context {
         text: String,
         key: [u8; 16],
     ) -> Result<(), crate::Error> {
-        for _ in 0..MAX_RESENDS {
+        let mut busy = 0;
+        for _ in 0..MAX_RESENDS + MAX_BUSY_RETRIES {
             let encrypted = self
                 .mls_worker(CryptoRequest::MlsEncrypt {
                     server: self.server.key.clone(),
@@ -855,6 +882,16 @@ impl Context {
                 Reply::Error(error) if error.code == Code::StaleEpoch as i32 => {
                     // Catch up to the new epoch, then the same envelope again.
                     self.mls_rows(conversation, u64::MAX).await?;
+                }
+                Reply::Error(ref error)
+                    if error.code == Code::Busy as i32 && busy < MAX_BUSY_RETRIES =>
+                {
+                    // The same envelope again once the server is ready; a stored
+                    // first attempt returns its original seq (same key).
+                    busy += 1;
+                    if let Some(delay) = busy_delay(&reply) {
+                        tokio::time::sleep(delay).await;
+                    }
                 }
                 Reply::Error(error) => {
                     self.mls_emit(MlsEvent::NotSent {
