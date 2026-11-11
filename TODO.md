@@ -1,7 +1,8 @@
 # Nuschl TODO
 
-Current focus: **first release/CI builds, web client/deployment, server admission/moderation, and WebRTC**
-(user, 2026-11-11). The user has now supplied `Xcode_16.2.xip`, removing the
+Current focus: **web client feature parity, working voice, and mobile web layout**
+(user, 2026-11-12). The first release remains queued behind signing and packaging
+checks. The user has now supplied `Xcode_16.2.xip`, removing the
 earlier iOS download blocker; archive verification and installed-guest/Simulator
 feasibility are the next iOS gates, not yet completed.
 The desktop and server support stock Mumble interoperability; shared multi-server
@@ -11,6 +12,13 @@ Historical package/cross-build/VM verification remains recorded below; each new
 change has its own validation.
 
 Current integration checkpoint (2026-11-11):
+
+- Web parity work (2026-11-12): desktop double-click joins voice; touch gets an
+  explicit Join control. Mobile is chat-first with a hamburger/channel drawer
+  and a guarded swipe gesture, rather than squeezed sidebars. Independent owners
+  cover responsive UI, shared SDK/legacy and modern protocol support, and bounded
+  browser audio/WASM Opus. Synthetic media/private servers only. None of these
+  additions is claimed complete until integrated browser tests pass.
 
 - Release: prepare independent downloadable Linux, Windows and universal macOS CI
   builds plus web artifacts, then publish the first preview once hybrid update
