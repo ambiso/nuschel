@@ -1020,8 +1020,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       talks there (GPUI redraws whole windows); per-server volume has only the menu's
       ±10 % steps; on the tests' private PulseAudio a worker that records takes ~2 s
       to open (the PulseAudio client waits ~1.8 s per recording stream; not yet
-      investigated), so unmuting is heard late there; the terminal client (apps/tui)
-      still needs the talk-server controls.
+      investigated), so unmuting is heard late there. The terminal client has
+      `/speak here|both` controls and keeps voice disabled under `--no-audio`.
 - [ ] **Rename Nuschel → nuschl** (user, 2026-11-11; "nuschl is mumbled nuschel"),
       queued as a sync point: start no new agents, merge the running ones, rename on
       a quiet tree, verify, push, then start the next wave. Checklist:

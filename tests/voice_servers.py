@@ -358,7 +358,7 @@ class VoiceTest:
         self.press("push button", "Only on Alpha")
         self.sees("Alpha", muted=False)
         self.sees("Beta", muted=True)
-        time.sleep(1.5)
+        self.wait_capturing("moving voice to Alpha did not reopen the microphone")
         sent = self.transmit()
         assert sent["Alpha"] >= 20 and sent["Beta"] == 0, f"'Only on Alpha' should move the voice: {sent}"
         # Beta: "Speak on both", and the one microphone reaches both.
@@ -367,7 +367,7 @@ class VoiceTest:
         self.press("push button", "Speak on both")
         self.sees("Alpha", muted=False)
         self.sees("Beta", muted=False)
-        time.sleep(1)
+        self.wait_capturing("adding the second talk server did not reopen the microphone")
         sent = self.transmit()
         assert sent["Alpha"] >= 20 and sent["Beta"] >= 20, f"both talk servers should receive: {sent}"
         workers = media_workers(self.app.pid)
@@ -469,10 +469,11 @@ class VoiceTest:
         eventually(lambda: is_selected("Lobby"), "server jump did not open the unread Lobby")
         assert self.own("Alpha")["channel"] == 1
 
-        self.press("tree item", "Unread room 49")
         window = self.shell.window("Nuschel")
         self.shell.wheel(window["x"] + 200, window["y"] + 350, 100)
         time.sleep(0.5)
+        self.press("tree item", "Unread room 49")
+        eventually(lambda: is_selected("Unread room 49"), "could not browse the bottom room")
         self.peers["Alpha"].send(kind="text", channel=1, body="Andi: top channel notification")
         self.find("push button", "Unread channels above:", prefix=True)
         self.shot("10-unread-channel-above")
@@ -519,6 +520,16 @@ def main():
         test = VoiceTest(args, Path(temporary))
         try:
             test.run()
+        except BaseException:
+            if test.shell and getattr(test, "app", None) is not None and test.app.poll() is None:
+                try:
+                    test.shot("failure")
+                    (args.output / "failure-accessibility.txt").write_text("\n".join(
+                        f"{depth} {role} {name!r} {node.call('Accessible', 'GetState')}"
+                        for depth, node, role, name in test.nodes()))
+                except BaseException:
+                    pass
+            raise
         finally:
             test.close()
 

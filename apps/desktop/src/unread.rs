@@ -278,9 +278,12 @@ fn button(lane: Lane, above: bool, hint: Hint, cx: &mut Context<Desktop>) -> Opt
             .text_xs()
             .font_weight(FontWeight::SEMIBOLD)
             .cursor_pointer()
+            .occlude()
             .hover(|style| style.opacity(0.9))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.jump_unread(lane, hint.slot, &target, window, cx);
+                cx.stop_propagation();
             }))
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
