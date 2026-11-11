@@ -1,9 +1,10 @@
 # The Nuschel protocol extension
 
-Status: design for review (2026-11-11), not implemented. It covers roadmap phase 2
-(TODO.md, "Nuschel server"): negotiation, durable conversations, persistent history,
-subscriptions. Identity, key transparency and MLS (phases 3–4) are designed in
-`docs/e2ee.md` and build on the framing and identifiers defined here.
+Status: design (2026-11-11), revised after the security review of the same day; not
+implemented. It covers roadmap phase 2 (TODO.md, "Nuschel server"): negotiation,
+durable conversations, persistent history, subscriptions. Identity, key transparency
+and MLS (phases 3–4) are designed in `docs/e2ee.md` (in progress) and build on the
+framing and identifiers defined here.
 
 Goals, in priority order:
 
@@ -12,201 +13,295 @@ Goals, in priority order:
    negotiate it.
 2. One server implementation for both: the extension is Mumble's control protocol
    plus new messages, not a second protocol. A server can refuse legacy clients
-   (strict mode) without changing the protocol.
+   (end-to-end mode) without changing the protocol.
 3. Decisions that are hard to change later (identifiers, ordering, what the server
-   can see) are made for the end-to-end encrypted future, not just for today's
-   plaintext history.
+   can see, who may read what) are made for the end-to-end encrypted future, not just
+   for today's plaintext history.
 
 ## 1. Negotiation
 
-**Decision: TLS ALPN, plus a capability list in `Version`.**
+**Decision: TLS ALPN, plus a capability hello in `Version`.**
 
-- The Nuschel client offers ALPN protocols `nuschel/1` and then `mumble`. Stock
-  Murmur ignores ALPN; a Nuschel server selects `nuschel/1`. Both sides know before
-  the first Mumble message whether the extension is available, and a strict server
-  can reject a client that did not offer it with a `Reject` that stock clients can
-  display ("This server requires the Nuschel client").
-- After TLS, both sides send `Version` as usual. A Nuschel peer adds a field with a
-  high, unregistered field number (`nuschel = 7200`) holding a `NuschelHello`:
-  protocol version, capability strings with versions (`history/1`, `subscribe/1`,
-  `typing/1`, `files/1`, `mls/1`, `kt/1`), and the server's policy (strict or mixed,
-  minimum and recommended client versions, retention). Protobuf decoders skip unknown
-  fields, so stock peers are unaffected even if a server mistakenly sent it.
-- The effective capability set is the intersection. Each feature is used only if
-  both sides announced it; a capability is not a permission (ACLs still apply).
-
-Alternatives considered: a capability message right after `Version` (works, but a
-strict server would learn too late to reject cleanly); a separate port or protocol
-(two implementations, splits the ecosystem); encoding capabilities in `release` or
-`os` strings (fragile, user-visible).
+- The Nuschel client offers ALPN `nuschel/1` and `mumble` in one handshake. Stock
+  Murmur ignores ALPN; a Nuschel server selects `nuschel/1`. A server in end-to-end
+  mode rejects a client that did not offer it with a `Reject` stock clients can show
+  ("This server requires the Nuschel client") and closes without parsing or logging
+  the stock client's `Authenticate`.
+- After TLS both sides send `Version`. A Nuschel peer adds field 7200 holding a
+  `NuschelHello`: protocol version, capabilities (`history/1`, `subscribe/1`,
+  `typing/1`, `files/1`, `mls/1`, `kt/1`; at most 32, each ASCII
+  `[a-z0-9-]+/[0-9]+` up to 64 bytes, unknown ones ignored), and the server's policy
+  (mode, minimum and recommended client versions, retention).
+- **The extension is on if and only if ALPN selected `nuschel/1` and both hellos are
+  present.** Any mismatch (ALPN without a hello, a hello without ALPN) is a protocol
+  error, never stock mode. A Nuschel client ignores field 7200 and extension fields in
+  other messages unless ALPN selected `nuschel/1`; a server ignores field 7200 from a
+  client that did not offer ALPN.
+- The hello is accepted once, before `Authenticate`, and the capability set is then
+  frozen for the connection. The effective set is the intersection; a capability is
+  not a permission (§5).
+- A client with a sticky record (below) waits for the server's `Version` before
+  sending `Authenticate`, so credentials never go to a server that answers in a weaker
+  mode.
 
 **Downgrade protection.** The ALPN offer is covered by the TLS handshake transcript
-(authenticated by the Finished messages in TLS 1.2 and 1.3), and `Version` travels
-inside the authenticated channel, so a network attacker cannot strip `nuschel/1` or
-capabilities without breaking the connection, provided the server is authenticated
-(CA-validated certificate, pin, or later the key-transparency log). Three rules
-close the remaining gaps:
+(authenticated by the Finished messages), and `Version` travels inside the
+authenticated channel, so a network attacker cannot strip `nuschel/1` or capabilities
+without breaking the connection, provided the server is authenticated. Rules:
 
-1. *No fallback.* The client offers `nuschel/1` and `mumble` together in one
-   handshake and lets the server choose. It never reconnects with fewer options after
-   a failure (that is how POODLE-style downgrades worked).
+1. *No fallback.* The client never reconnects with fewer options after a failure.
 2. *Sticky policy, never downgrade.* A server that negotiated `nuschel/1` (or a
-   capability such as `mls/1`) is remembered with its pin, like HSTS. If it later
-   answers as plain Mumble or without that capability, the connection fails with an
-   error the user can act on; the client never continues in the weaker mode (failing
-   is fine: an attacker can always cut the connection anyway). Only the user can
-   reset this, explicitly, per server. An end-to-end encrypted conversation is never sent
-   plaintext, whatever the server announces: the client's own MLS state decides,
-   not the server's advertisement, and MLS groups declare required capabilities in
-   their group context.
+   capability such as `mls/1`) is remembered by its address (later by its identity
+   key), not by its leaf certificate: CA-issued certificates rotate every few months,
+   and a rotation (or a misissued certificate) must not reset the record. If the
+   server later answers as plain Mumble or without that capability, the connection
+   fails with an error the user can act on; the client never continues in the weaker
+   mode (failing is fine: an attacker can always cut the connection). Only the user
+   can reset this, explicitly, per server. An end-to-end encrypted conversation is
+   never sent plaintext, whatever the server announces: the client's own MLS state
+   decides, and MLS groups declare required capabilities in their group context.
 3. *First contact.* Trust on first use cannot stop a man in the middle on the very
-   first connection (he can impersonate the whole server, not just downgrade it).
-   CA-validated server certificates, out-of-band fingerprints and the server key in
-   the transparency log (phase 3) address that.
+   first connection. Invites and `mumble://` links carry the server's certificate or
+   identity-key fingerprint and required policy (`?fp=sha256:…&policy=nuschel`),
+   which closes first contact for invited users; CA-validated certificates,
+   out-of-band fingerprints and the transparency log (phase 3) cover the rest.
+4. *TLS settings.* No 0-RTT and no server session resumption. TLS 1.3 is preferred:
+   in TLS 1.2 the client certificate, a stable cross-server identity, crosses the
+   wire in cleartext.
 
-The ALPN offer is visible to network observers (it reveals that the client is
-Nuschel); hiding it would need Encrypted Client Hello and is not a goal now.
+The ALPN offer itself is visible to network observers (it reveals Nuschel); hiding
+it would need Encrypted Client Hello and is not a goal now.
 
-**Minimum versions** (user request, Signal-like): the hello carries
-`minimum_client` and `recommended_client`. A client below `recommended` shows an
-update notice; below `minimum` the server rejects after the announced grace date.
-Servers must never use this to lock out stock clients on a mixed server.
+**Minimum versions** (Signal-like): the hello carries `minimum_client` and
+`recommended_client`; below `recommended` the client shows an update notice, below
+`minimum` the server rejects after the announced grace date. These are self-reported
+and advisory, not a security control. A server must never use them to lock out stock
+clients in compatible mode.
 
-## 2. Framing and message types
+## 2. Framing, message types, limits
 
 Extension messages use the Mumble control framing (2-byte type, 4-byte length,
-protobuf body) with types from a reserved block, **0x4E00–0x4EFF** ("N"), far from
-Mumble's own range (0–26 today). They are defined in a separate protobuf package
-(`nuschel.v1`) in `crates/protocol`. Limits per message type are explicit (sizes,
-counts) and enforced on both sides; oversized input is answered with an error, never
-silently truncated.
+protobuf body) with types from a reserved block, **0x4E00–0x4EFF**, defined in a
+separate protobuf package (`nuschel.v1`) in `crates/protocol`.
 
-Every request carries a client-chosen `request_id` (u32, per connection), and every
-response or error echoes it. Server pushes have no `request_id`. Errors are one
-message type (`NuschelError { request_id, code, detail }`) with stable codes.
-
-Voice, channel and user state stay Mumble messages. Video and screen sharing are not
-carried on this connection (see the WebRTC plan in docs/architecture.md).
+- Every message type has a wire-size cap and element-count caps, enforced before and
+  after decoding (protobuf repeated fields expand several-fold in memory); the caps
+  also depend on connection state (much lower before authentication).
+- A frame from the reserved block before capabilities are frozen, or for a capability
+  that was not negotiated, means disconnect (before authentication) or
+  `NuschelError { unsupported }` (after); it is never processed.
+- Requests carry a client-chosen `request_id`; at most 16 may be outstanding per
+  connection, and a duplicate in-flight id is rejected. Responses echo it.
+- Errors are one type, `NuschelError { request_id, code, detail }`, with stable codes
+  and fixed detail strings (never SQL, paths or user text); clients show them as
+  plain text. "No such conversation" and "not allowed" are the same error, so ids
+  cannot be probed.
+- Voice, channel and user state stay Mumble messages. Video and screen sharing are
+  not carried on this connection (see docs/architecture.md, WebRTC).
 
 ## 3. Identifiers
 
-These are the decisions that are hardest to change.
+- **Server.** Its TLS certificate pin (trust on first use) and, from phase 3, a server
+  signing key that is also the key-transparency log key.
+- **Accounts.** Registered users get an immutable 128-bit account id; Mumble's
+  registration number (which Murmur reuses, lowest free first) is only a wire alias.
+  Deleting an account never lets a new registrant inherit its direct messages, edit
+  rights or ACL entries, and per-user ACL entries are removed on unregistration.
+  Unregistered users can read and write in channels as permitted, but have no durable
+  identity: no cross-reconnect idempotency and no stored direct messages.
+- **Conversations.** A 128-bit random `ConversationId` assigned by the server, stored
+  with the channel and never reused (Mumble channel ids are). Direct conversations get
+  one per pair of accounts. Temporary channels keep no history by default (it is
+  deleted with the channel); a deleted permanent channel's history becomes
+  administrator-only, since no ACL remains to authorise it.
+- **Messages.** A per-conversation sequence number (`seq`, u64 from 1) assigned when
+  the message is durably stored. A global counter would let members infer activity in
+  conversations they cannot read. `seq` reveals how many messages came before a
+  reader's window; that is accepted and documented.
+- **Identifiers are not capabilities.** Knowing a `ConversationId`, a `seq` or a
+  cursor grants nothing; every use is authorised (§5).
+- **End-to-end ordering.** A server-assigned `seq` lets a malicious server reorder,
+  withhold or fork history per member. MLS payloads therefore carry their own
+  per-sender counter and a hash of the sender's previous message inside the
+  ciphertext (docs/e2ee.md), so clients can detect it.
 
-- **Server.** Its TLS certificate pin (trust on first use, as today) and, from phase
-  3, a server signing key that is also the key-transparency log key.
-- **Users.** Registered users have a persistent server-side user id (u32, Mumble's
-  registration id). Unregistered users can read and write in channels but get no
-  persistent identity and no server history of their own direct messages. The
-  certificate hash stays the cross-server Mumble identity; the phase-3 identity key
-  replaces it for anything end-to-end.
-- **Conversations.** A 128-bit random `ConversationId` assigned by the server and
-  stored with the channel. Mumble channel ids are reused (temporary channels, a
-  deleted and recreated channel), so they must not key history. Direct
-  conversations get their own `ConversationId` per pair of registered users. The
-  `ChannelState` of a Nuschel server carries the conversation id in an extension
-  field.
-- **Messages.** A per-conversation sequence number (`seq`, u64 from 1), assigned by
-  the server when the message is durably stored. Not a global counter: a global
-  counter would let any member infer activity in conversations they cannot read
-  (gaps). Ordering within a conversation is total; across conversations there is no
-  order, only server timestamps.
-- **Idempotency.** Every send carries a client-generated 128-bit `idempotency_key`
-  (UUIDv7, random part from the OS RNG). The server stores `(user, key) → seq` for a
-  bounded period (e.g. 7 days) and answers a retry with the original `seq`. This is
-  how a client resends after a dropped connection without duplicates.
+**Idempotency.** Every send carries a client-generated 128-bit `idempotency_key`
+(random). It is scoped to `(account, conversation, key)` and stored on the message row
+under a unique constraint, inserted with `INSERT … ON CONFLICT DO NOTHING RETURNING
+seq` (two devices retrying at once cannot both insert). A retry with the same key and
+the same body returns the original `seq`; with a different body it returns
+`idempotency_conflict` (a buggy client must not lose messages silently). Keys are
+never forwarded to other users.
 
 ## 4. Sending and live delivery
 
-- `ChatSend { request_id, conversation, idempotency_key, content, reply_to? }`
-  → `ChatAck { request_id, conversation, seq, server_time }` after the message is
-  durably stored, or an error (permission, size, rate limit with `retry_after`).
-  The client shows the message as pending until the ack; that state already exists
-  for stock servers.
-- `content` is the user's text as typed (Nuschel's Markdown with fenced code) plus
-  attachments by reference. For stock clients in the same channel on a mixed
-  server, the sending client also supplies `legacy_html` (what it sends to stock
-  servers today: escaped, links as `<a>`, images inline). The server forwards that
-  to stock clients as an ordinary `TextMessage` and never renders Markdown itself.
-  In an end-to-end encrypted conversation `content` is an MLS ciphertext and there
-  is no `legacy_html` (stock clients are not members).
-- Messages from stock clients get a `seq` too and are stored (on servers that keep
-  history), so Nuschel clients see one history.
-- Live delivery is `ChatEvent { conversation, message }` to every connection
-  subscribed to that conversation that may read it now.
+- `ChatSend { request_id, conversation, idempotency_key, format, content, reply_to?,
+  attachments? }` → `ChatAck { request_id, conversation, seq, server_time }` once the
+  message is durably stored, or an error (permission, size, rate limit with
+  `retry_after`). The client shows the message as pending until the ack.
+- `content` is what the user typed, with a `format` tag (Nuschel Markdown with fenced
+  code today); every stored message keeps its format. `reply_to` is a `seq` in the
+  same conversation (at most the head), never a copied excerpt. Attachments are
+  references to the sender's own uploads (§8).
+- **Stock clients' copy is made by the server** from `content`, with the same pure
+  functions the client uses on stock servers (escaping, links, the code-fence
+  newline; today `legacy_body`/`text_html`, to move into a shared crate), and images
+  from attachments as pre-sized inline images. A sender therefore cannot show stock
+  users something different from what Nuschel users, moderators and the archive see,
+  and the server has no second HTML path to police. Murmur's text rules
+  (`isTextAllowed`, length, image limits) apply to that output.
+- In end-to-end conversations `content` is an MLS ciphertext and nothing is sent to
+  stock clients (they are not members).
+- Messages from stock clients are stored too (on servers that keep history) with a
+  `legacy_html` format, so Nuschel clients see one history. A stock `TextMessage`
+  with several channel or tree targets is deduplicated before traversal, capped in
+  target count, and stored in each reached channel the sender may write to; direct
+  messages to unregistered sessions are not stored.
+- **Rate limits.** `ChatSend` and edits share Murmur's text bucket with `TextMessage`
+  (`messagelimit`/`messageburst`, default 1/s with a burst of 5), so Nuschel clients
+  get no second allowance.
+- Live delivery is `ChatEvent { conversation, message }` to each subscribed
+  connection that may read the conversation at that moment (§5).
 
-## 5. Subscriptions
+## 5. Who may read, and subscriptions
 
-Text conversations are independent of voice: `Subscribe { conversations }` /
-`Unsubscribe`. The server checks the read permission at subscription time and on
-every ACL change that affects the subscriber (it unsubscribes and notifies, rather
-than letting events leak after a permission is removed). The client subscribes to
-the conversations shown in its sidebar, bounded per connection.
+Mumble has no "read" permission, and a new ACL bit would not survive: the stock ACL
+editor rebuilds grant/deny from the checkboxes it knows, so editing an entry with a
+stock client would silently erase (or, for a deny, open) it.
+
+- **`can_read(user, conversation)` = Enter on the channel ∨ the user is in the
+  channel ∨ listening to it**, evaluated with persistent credentials only (registered
+  account, certificate, persistent access tokens). Extension-only policy (history
+  visibility, guest access, moderation) lives in channel and server properties
+  outside the Mumble permission bitmask.
+- **Guests.** Unregistered users read no history by default (`history.guests = none`;
+  they see live messages, as on any Mumble server). Murmur's defaults give Enter to
+  everyone, and an archive kept forever should not be readable anonymously.
+- **History visibility** per channel: `members` (default, user decision: members read
+  the retained history) or `since_access`, which means the set of intervals in which
+  the user could read the channel, not first join (a user removed and later readmitted
+  does not see what was said while they were out). All anchors, including
+  `around(seq)`, are clipped to those intervals; outside them is indistinguishable from
+  nonexistent, and pages carry a `restricted` flag at the window's edge.
+- **One owner of authorisation state.** A single task owns channels, ACLs, groups,
+  memberships and tokens, with a version counter (`authz_epoch`). Every change that
+  can affect reading re-evaluates subscriptions: ACL edits, user moves, joining or
+  leaving a listening channel, token changes, registration and unregistration,
+  channel reparenting (inheritance), deletion. Fan-out of new messages, history pages
+  in flight and listeners all check against the current epoch; a history page is
+  re-checked just before it is sent.
+- `Subscribe { conversations }` / `Unsubscribe`, bounded per connection and per
+  account. On losing `can_read`, the server unsubscribes and notifies rather than
+  letting events leak. Subscribers are invisible to others (unlike Mumble's channel
+  members and listeners); see §9.
 
 ## 6. History
 
 - `HistoryRequest { request_id, conversation, anchor, limit }` with
-  `anchor = latest | before(seq) | after(seq) | around(seq)`; `limit ≤ 100`; the
-  server also caps a page at 256 KiB. Pages are chronological and say whether more
-  exists in each direction; a byte cap ends a page early but never skips a message,
-  and a single message larger than the cap is returned alone.
-- The read permission is checked on every page, against current ACLs. Being able to
-  read a channel now does not imply having been able to read it then; the default
-  policy is "members can read the retained history of conversations they can read",
-  and a per-channel setting can restrict it to "only since joining". End-to-end
-  encrypted channels need a history-sharing mechanism for the default (docs/e2ee.md).
-- Edits and deletions are events with their own `seq` that refer to the target
-  (`edits`, `deletes`). Pages return the current state of each message plus a
-  tombstone for deleted ones, so clients converge without replaying everything.
-  Stock clients see neither (they never see history).
-- Retention: a per-server and per-channel policy (keep forever, N days, or none);
-  the default is forever.
-  Expired messages become tombstones without content so that `seq` ranges stay
-  explicit. Moderators' deletions are tombstones with a reason code.
-- History queries run off the control path with bounded concurrency per
-  connection; a slow reader or a huge query never delays voice or control messages.
-- Search stays client-side (over pages the client has fetched and stored). This is
-  consistent for plaintext and encrypted conversations and keeps the server from
-  becoming a content index. A server-side search for plaintext servers can be added
-  later as a separate capability.
+  `anchor = latest | before(seq) | after(seq) | around(seq)`; `limit ≤ 100`, a page is
+  capped at 256 KiB, and requests have their own rate limits (pages and bytes per
+  minute). Pages are chronological, say whether more exists in each direction, end
+  early at the byte cap but never skip a message, and return a message larger than the
+  cap alone. Pages run off the control path with bounded concurrency per connection.
+- `can_read` and the visibility policy are checked on every page against current
+  state (§5).
+- **Edits:** only the original author (same account; unregistered authors cannot
+  edit), only while they may still post in that conversation, in the same
+  conversation, at most N times per message, counting against the text rate limit.
+  `reply_to` and attachments cannot change. An edit replaces the stored content;
+  earlier versions are not served and are purged (people edit to remove pasted
+  secrets).
+- **Deletions:** by the author at any time, even after losing access, or by
+  moderators (a server property per §5). A tombstone keeps `seq`, the deletion time
+  and, for moderator deletions, a reason code; it drops content, attachments,
+  `reply_to` previews and mentions. Attachments are released by reference count (§8).
+- Edits and deletions are events with their own `seq` that refer to the target;
+  pages return each message's current state plus tombstones, so clients converge
+  without replaying everything. Stock clients see neither: a "removed" message stays
+  on their screens and in their logs, and the UI says so to moderators.
+- **Retention:** per server and per channel (keep forever, N days, or none); the
+  default is forever (user decision). Expired messages become tombstones without
+  content, so `seq` ranges stay explicit.
+- **Search** stays client-side (over pages the client has fetched and stored),
+  consistent for plaintext and encrypted conversations; a server-side search for
+  plaintext servers can be added later as a separate capability.
 
 ## 7. Read state, typing, presence
 
-- `ReadMarker { conversation, seq }`: per user, synced across the user's devices by
-  default, never shown to others unless the user enables read receipts (off by
-  default).
-- `Typing { conversation }`: ephemeral, rate-limited (one per 3 s), forwarded only to
-  subscribers, never stored. In end-to-end conversations typing indicators are sent
-  as MLS application messages instead (the server would otherwise learn who types
-  where).
+- `ReadMarker { conversation, seq }`: per account, accepted only for readable
+  conversations, monotonic, `seq ≤ head`, bounded per account; synced across the
+  user's devices by default (user decision) and never shown to others unless read
+  receipts are enabled (off by default). In end-to-end conversations markers sync as
+  an encrypted per-user blob or an MLS message to oneself, so the server does not
+  learn reading times.
+- `Typing { conversation }`: ephemeral, rate-limited (one per 3 s per conversation),
+  forwarded only to subscribers, never stored; invisible subscribers also see it. In
+  end-to-end conversations typing travels as MLS application messages. Mumble's
+  `PluginDataTransmission` is forwarded by Murmur to any listed session without channel
+  authorisation, so on stock servers it is only usable for cosmetic hints.
 
 ## 8. Files
 
-On a Nuschel server, files are not wormhole codes in text: `files/1` is a
-chunked, resumable upload to the server's blob store, referenced from a message by
-content hash, with a per-server quota. In end-to-end conversations the blob is
-encrypted client-side with a per-file key carried inside the MLS message. Peer-to-peer
-transfer through the server as a relay (no storage) is a server policy option. The
-details belong to the files design once phase 4 exists; the wormhole transfer stays
-the Mumble-compatible path.
+On a Nuschel server, files are not wormhole codes in text: `files/1` is a chunked,
+resumable upload to the server's blob store.
 
-## 9. What the server can see
+- An upload has an `upload_id` owned by the uploading account; `ChatSend` may only
+  reference the sender's own uploads. A content hash is never a capability: downloads
+  are authorised by "can read a message that references this upload".
+- No cross-user deduplication (an instantly finished upload would confirm that someone
+  else holds the file); deduplicate per uploader at most, and never use convergent
+  encryption for end-to-end blobs.
+- Quota is reserved at upload start (declared size; per account, per conversation and
+  global). Chunk offsets are validated, the hash verified at completion, partial
+  uploads expire and are collected, and blobs are reference-counted so deletion and
+  retention remove them.
+- Clients never trust a server-supplied MIME type for rendering. A relay-only mode
+  (no storage) has per-user bandwidth caps and works only between members of the
+  conversation.
+- In end-to-end conversations the blob is encrypted client-side with a per-file key
+  carried inside the MLS message. The wormhole transfer stays the Mumble-compatible
+  path.
 
-On a plaintext (non-MLS) Nuschel server: everything, as on any Mumble server, plus
-the history it stores. In MLS conversations: membership, sizes, timing, `seq`,
-sender user id, and read markers if synced; not content, not typing, not file
-contents. The lock indicator rules in docs/architecture.md apply unchanged.
+## 9. Mixed servers and stock users
+
+Stock users cannot tell that their channel messages are archived and readable by
+people who join later, or that invisible subscribers receive them; Mumble shows who is
+in a channel and who listens. On a server in compatible mode:
+
+- Stock clients are told, in the welcome text and when entering an archived channel,
+  that text is retained and for how long; retention is visible per channel.
+- Direct messages from stock senders are not archived by default.
+- Operators get tools to erase a user's messages (and must, for GDPR requests).
+
+## 10. What the server can see
+
+In compatible mode: everything, as on any Mumble server, plus the history it stores.
+In MLS conversations: membership, sizes, timing, `seq`, sender account; not content,
+typing, read markers or file contents. The lock indicator rules in
+docs/architecture.md apply unchanged.
+
+## 11. Later
+
+- `udp-aead/1`: Mumble's OCB2 with a 24-bit tag is kept only for stock compatibility.
+  If Mumble-transport voice outlives the WebRTC plan, Nuschel↔Nuschel voice should
+  negotiate an AEAD with a 128-bit tag and an explicit counter.
 
 ## Decisions (user, 2026-11-11)
 
-1. **History for new members:** yes by default; a per-channel setting can restrict
-   it to "only since joining". In end-to-end encrypted channels this needs a history
-   sharing mechanism on top of MLS (MLS alone gives access only from the join epoch);
-   see docs/e2ee.md.
-2. **Read markers:** synced across the user's devices by default (never shown to
-   others unless read receipts are enabled, which stay off by default).
-3. **Strict servers:** a server in end-to-end mode rejects stock clients at the
-   connection stage (ALPN, with a `Reject` they can display). End-to-end mode is
-   the default for new Nuschel servers; "compatible" mode, which admits stock
-   clients and has no end-to-end encryption, is an explicit choice.
-4. **Retention:** keep forever by default, so that nobody loses data to a default
-   that was too low; shorter retention is an explicit server or channel setting.
+1. **History for new members:** yes by default (`members`); a per-channel setting
+   restricts it (`since_access`). In end-to-end channels this needs a history-sharing
+   mechanism on top of MLS (docs/e2ee.md).
+2. **Read markers:** synced across the user's devices by default.
+3. **End-to-end mode:** the default for new Nuschel servers; it rejects stock clients
+   at the connection stage. Compatible mode, which admits them and has no end-to-end
+   encryption, is an explicit choice.
+4. **Retention:** keep forever by default; shorter retention is an explicit server or
+   channel setting.
+
+Adopted from the security review (2026-11-11): server-made stock HTML instead of
+client-supplied `legacy_html`; `can_read` from existing Mumble permissions; guests
+read no history by default; account ids never reused; access intervals for
+`since_access`; edit and deletion rules with purging; scoped, atomic idempotency;
+fail-closed negotiation with frozen capabilities; upload ids instead of hash
+capabilities; notices for stock users on mixed servers; per-sender ordering inside
+end-to-end payloads.
