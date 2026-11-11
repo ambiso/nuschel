@@ -107,7 +107,12 @@ fn decode(
     limits.max_image_height = Some(max_dimension);
     limits.max_alloc = Some(max_alloc);
     reader.limits(limits);
-    reader.decode().ok()
+    // A GIF's screen may be 0 pixels high, and the decoder accepts it: an
+    // image without pixels is no image.
+    reader
+        .decode()
+        .ok()
+        .filter(|image| image.width() > 0 && image.height() > 0)
 }
 
 /// Shrink only: `thumbnail` would also enlarge a small image.
@@ -718,6 +723,26 @@ mod tests {
             "SVG is not accepted"
         );
         assert!(data_uri("https://example.invalid/a.png").is_none());
+    }
+
+    #[test]
+    fn images_without_pixels_are_rejected() {
+        // Found by fuzzing: a GIF whose screen is 110 × 0 pixels became an
+        // image block of that size without any pixels.
+        let gif = base64::engine::general_purpose::STANDARD
+            .decode("R0lGODlhbgAAAAAAACwBAAACAQAEAIB4RwAAACwBiVA=")
+            .unwrap();
+        assert!(decode_image(&gif, 640, 480).is_none());
+        assert!(decode_icon(&gif).is_none());
+        let uri = format!(
+            "data:image/gif;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&gif)
+        );
+        assert!(decode_view(&uri).is_none());
+        assert!(matches!(
+            encode_image_message(&gif, 131_072),
+            Err(Error::InvalidImage)
+        ));
     }
 
     #[test]
