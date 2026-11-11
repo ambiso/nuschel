@@ -2869,91 +2869,6 @@ rec {
         ];
 
       };
-      "aws-lc-rs" = rec {
-        crateName = "aws-lc-rs";
-        version = "1.19.0";
-        edition = "2021";
-        links = "aws_lc_rs_1_19_0_sys";
-        sha256 = "0lzbsbhak63niy7a1pdaj89af0p7wyricmkcir43q4040iwhd004";
-        libName = "aws_lc_rs";
-        authors = [
-          "AWS-LibCrypto"
-        ];
-        dependencies = [
-          {
-            name = "aws-lc-sys";
-            packageId = "aws-lc-sys";
-            optional = true;
-            usesDefaultFeatures = false;
-          }
-          {
-            name = "untrusted";
-            packageId = "untrusted 0.7.1";
-            optional = true;
-          }
-          {
-            name = "zeroize";
-            packageId = "zeroize";
-          }
-        ];
-        features = {
-          "asan" = [ "aws-lc-sys?/asan" "aws-lc-fips-sys?/asan" ];
-          "aws-lc-sys" = [ "dep:aws-lc-sys" ];
-          "bindgen" = [ "aws-lc-sys?/bindgen" "aws-lc-fips-sys?/bindgen" ];
-          "default" = [ "aws-lc-sys" "alloc" "ring-io" "ring-sig-verify" ];
-          "fips" = [ "dep:aws-lc-fips-sys" ];
-          "legacy-des" = [ "aws-lc-sys?/all-bindings" ];
-          "non-fips" = [ "aws-lc-sys" ];
-          "prebuilt-nasm" = [ "aws-lc-sys?/prebuilt-nasm" ];
-          "ring-io" = [ "dep:untrusted" ];
-          "ring-sig-verify" = [ "dep:untrusted" ];
-          "unstable" = [ "aws-lc-sys?/unstable" ];
-        };
-        resolvedDefaultFeatures = [ "alloc" "aws-lc-sys" "default" "prebuilt-nasm" "ring-io" "ring-sig-verify" ];
-      };
-      "aws-lc-sys" = rec {
-        crateName = "aws-lc-sys";
-        version = "0.47.0";
-        edition = "2021";
-        links = "aws_lc_0_47_0";
-        sha256 = "0lig4i9c4n2f58zqxmczd2fh5i0v31j58cffjs344g3bqcmf7ywb";
-        build = "builder/main.rs";
-        libName = "aws_lc_sys";
-        authors = [
-          "AWS-LC"
-        ];
-        buildDependencies = [
-          {
-            name = "cc";
-            packageId = "cc";
-            features = [ "parallel" ];
-          }
-          {
-            name = "cmake";
-            packageId = "cmake";
-          }
-          {
-            name = "dunce";
-            packageId = "dunce";
-          }
-          {
-            name = "fs_extra";
-            packageId = "fs_extra";
-          }
-          {
-            name = "pkg-config";
-            packageId = "pkg-config";
-            target = { target, features }: (target."unix" or false);
-          }
-        ];
-        features = {
-          "bindgen" = [ "dep:bindgen" ];
-          "default" = [ "all-bindings" ];
-          "fips" = [ "dep:bindgen" ];
-          "ssl" = [ "bindgen" "all-bindings" ];
-        };
-        resolvedDefaultFeatures = [ "prebuilt-nasm" ];
-      };
       "az" = rec {
         crateName = "az";
         version = "1.3.0";
@@ -5002,22 +4917,6 @@ rec {
         version = "1.1.1";
         edition = "2024";
         sha256 = "11k4m4ngn39iz39lnq6nn6kyxzp62mnm1d86qfad3q0vlk33n4qw";
-
-      };
-      "cmake" = rec {
-        crateName = "cmake";
-        version = "0.1.58";
-        edition = "2021";
-        sha256 = "0y06zxw5sv1p5vvpp5rz1qwbrq7ccawrl09nqy5ahx1a5418mxy0";
-        authors = [
-          "Alex Crichton <alex@alexcrichton.com>"
-        ];
-        dependencies = [
-          {
-            name = "cc";
-            packageId = "cc";
-          }
-        ];
 
       };
       "cmov" = rec {
@@ -8122,13 +8021,6 @@ rec {
             packageId = "arrayvec";
           }
           {
-            name = "aws-lc-rs";
-            packageId = "aws-lc-rs";
-            optional = true;
-            usesDefaultFeatures = false;
-            features = [ "aws-lc-sys" "prebuilt-nasm" ];
-          }
-          {
             name = "ccm";
             packageId = "ccm";
             optional = true;
@@ -8202,13 +8094,6 @@ rec {
             packageId = "rand 0.10.3";
           }
           {
-            name = "rcgen";
-            packageId = "rcgen";
-            optional = true;
-            usesDefaultFeatures = false;
-            features = [ "aws_lc_rs" ];
-          }
-          {
             name = "sec1";
             packageId = "sec1 0.8.1";
             optional = true;
@@ -8257,7 +8142,7 @@ rec {
           "rcgen" = [ "dep:rcgen" "aws-lc-rs" ];
           "rust-crypto" = [ "dep:aes-gcm" "dep:chacha20poly1305" "dep:chacha20" "dep:p256" "dep:p384" "dep:x25519-dalek" "dep:sha2" "dep:hmac" "dep:hkdf" "dep:ecdsa" "dep:ccm" "dep:aes" "_crypto-common" ];
         };
-        resolvedDefaultFeatures = [ "_crypto-common" "aws-lc-rs" "rcgen" "rust-crypto" ];
+        resolvedDefaultFeatures = [ "_crypto-common" "rust-crypto" ];
       };
       "directories" = rec {
         crateName = "directories";
@@ -10552,16 +10437,6 @@ rec {
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" ];
           }
-        ];
-
-      };
-      "fs_extra" = rec {
-        crateName = "fs_extra";
-        version = "1.3.0";
-        edition = "2018";
-        sha256 = "075i25z70j2mz9r7i9p9r521y8xdj81q7skslyb7zhqnnw33fw22";
-        authors = [
-          "Denis Kurilenko <webdesus@gmail.com>"
         ];
 
       };
@@ -32879,12 +32754,6 @@ rec {
         sha256 = "1n4aig4zp79qidnxhsfm9rhq4jv9f5zgwa3airc19q8dgmdf0x47";
         dependencies = [
           {
-            name = "aws-lc-rs";
-            packageId = "aws-lc-rs";
-            optional = true;
-            usesDefaultFeatures = false;
-          }
-          {
             name = "pem";
             packageId = "pem";
             optional = true;
@@ -32925,7 +32794,7 @@ rec {
           "x509-parser" = [ "dep:x509-parser" ];
           "zeroize" = [ "dep:zeroize" ];
         };
-        resolvedDefaultFeatures = [ "aws_lc_rs" "crypto" "pem" "ring" ];
+        resolvedDefaultFeatures = [ "crypto" "pem" "ring" ];
       };
       "read-fonts 0.37.0" = rec {
         crateName = "read-fonts";
@@ -33726,7 +33595,7 @@ rec {
           }
           {
             name = "untrusted";
-            packageId = "untrusted 0.9.0";
+            packageId = "untrusted";
           }
           {
             name = "windows-sys";
@@ -34652,7 +34521,7 @@ rec {
           }
           {
             name = "untrusted";
-            packageId = "untrusted 0.9.0";
+            packageId = "untrusted";
           }
         ];
         features = {
@@ -38061,7 +37930,7 @@ rec {
         crateName = "str0m-rust-crypto";
         version = "0.7.0";
         edition = "2024";
-        sha256 = "0h738cx1zp1pjj3c6m9wr11rb610wb12i1mzw3zdnjp23s0m9199";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/str0m-rust-crypto; };
         libName = "str0m_rust_crypto";
         authors = [
           "Martin Algesten <martin@algesten.se>"
@@ -38083,7 +37952,7 @@ rec {
             name = "dimpl";
             packageId = "dimpl";
             usesDefaultFeatures = false;
-            features = [ "rust-crypto" "rcgen" ];
+            features = [ "rust-crypto" ];
           }
           {
             name = "hmac";
@@ -38092,7 +37961,12 @@ rec {
           {
             name = "p256";
             packageId = "p256 0.14.0";
-            features = [ "ecdh" ];
+            features = [ "ecdh" "getrandom" ];
+          }
+          {
+            name = "rcgen";
+            packageId = "rcgen";
+            usesDefaultFeatures = false;
           }
           {
             name = "sha1";
@@ -42642,18 +42516,7 @@ rec {
         ];
 
       };
-      "untrusted 0.7.1" = rec {
-        crateName = "untrusted";
-        version = "0.7.1";
-        edition = "2018";
-        sha256 = "0jkbqaj9d3v5a91pp3wp9mffvng1nhycx6sh4qkdd9qyr62ccmm1";
-        libPath = "src/untrusted.rs";
-        authors = [
-          "Brian Smith <brian@briansmith.org>"
-        ];
-
-      };
-      "untrusted 0.9.0" = rec {
+      "untrusted" = rec {
         crateName = "untrusted";
         version = "0.9.0";
         edition = "2018";
@@ -51628,11 +51491,6 @@ rec {
             features = [ "datetime" ];
           }
           {
-            name = "aws-lc-rs";
-            packageId = "aws-lc-rs";
-            optional = true;
-          }
-          {
             name = "data-encoding";
             packageId = "data-encoding";
           }
@@ -51679,7 +51537,7 @@ rec {
           "verify" = [ "ring" ];
           "verify-aws" = [ "aws-lc-rs" ];
         };
-        resolvedDefaultFeatures = [ "aws-lc-rs" "default" "ring" "verify" "verify-aws" ];
+        resolvedDefaultFeatures = [ "default" "ring" "verify" ];
       };
       "xattr" = rec {
         crateName = "xattr";
