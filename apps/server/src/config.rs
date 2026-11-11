@@ -336,6 +336,9 @@ pub struct Config {
     /// it, a whispered packet is dropped for all its receivers and the
     /// speaker is told, at most every ten seconds. Channel voice is not counted.
     pub whisper_fanout_per_second: u64,
+    /// Seconds between the statistics lines in the log (connections, logins,
+    /// messages, voice in and out); 0 turns them off.
+    pub statistics_interval: u64,
     /// "1.2" (the default; Mumble clients built against OpenSSL before
     /// 1.1.1 speak nothing newer) or "1.3", which keeps client certificates
     /// off the wire in the clear.
@@ -405,6 +408,7 @@ impl Default for Config {
             max_queued_bytes: 8 * 1024 * 1024,
             temporary_channels_per_user: 16,
             whisper_fanout_per_second: 500_000,
+            statistics_interval: 300,
             minimum_tls_version: TlsVersion::Tls12,
             obfuscate: false,
             autoban: Autoban::default(),

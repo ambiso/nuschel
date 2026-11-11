@@ -130,6 +130,13 @@ impl State {
 
     /// Deliver one packet from `speaker` to everyone who should hear it.
     pub fn route(&mut self, speaker: u32, audio: &Audio, out: &mut Datagrams) {
+        self.counters
+            .voice_packets_in
+            .fetch_add(1, Ordering::Relaxed);
+        self.counters.voice_bytes_in.fetch_add(
+            (PACKET_OVERHEAD + audio.opus.len()) as u64,
+            Ordering::Relaxed,
+        );
         let max_bandwidth = u64::from(self.settings.config.max_bandwidth / 8);
         let Some(user) = self.users.get_mut(&speaker) else {
             return;
@@ -181,6 +188,7 @@ impl State {
             .map(|user| std::mem::take(&mut user.plugin_context))
             .unwrap_or_default();
         let mut plain = [0_u8; relay::MAX_PLAIN];
+        let (mut sent, mut sent_bytes) = (0_u64, 0_u64);
         for receiver in &scratch.receivers {
             let Some(user) = self.users.get_mut(&receiver.session) else {
                 continue;
@@ -199,6 +207,8 @@ impl State {
                 Some((socket, address)) => {
                     if let Some(length) = relay::encode(protobuf, audio, delivery, &mut plain) {
                         out.push(socket, address, &mut user.voice.crypt, &plain[..length]);
+                        sent += 1;
+                        sent_bytes += (PACKET_OVERHEAD + length) as u64;
                     }
                 }
                 None => {
@@ -220,10 +230,18 @@ impl State {
                             frame
                         }
                     };
+                    sent += 1;
+                    sent_bytes += frame.len() as u64;
                     user.link.send_voice(frame);
                 }
             }
         }
+        self.counters
+            .voice_packets_out
+            .fetch_add(sent, Ordering::Relaxed);
+        self.counters
+            .voice_bytes_out
+            .fetch_add(sent_bytes, Ordering::Relaxed);
         if let Some(user) = self.users.get_mut(&speaker) {
             user.plugin_context = context;
         }

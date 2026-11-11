@@ -97,6 +97,9 @@ temporary_channels_per_user = 16
 # (0: unlimited). A whispered packet over it reaches nobody and the speaker is told.
 # Channel voice is not counted.
 whisper_fanout_per_second = 500000
+# Seconds between "statistics" log lines (connections, logins, messages, voice in
+# and out during the interval); 0 turns them off.
+statistics_interval = 300
 
 [autoban]
 # Connection attempts from one address within timeframe seconds before it is banned

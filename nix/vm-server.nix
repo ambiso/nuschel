@@ -26,6 +26,7 @@ let
         superUserPasswordFile = "/run/keys/nuschel-superuser";
         settings = {
           welcome_text = "Welcome to the <b>Nuschel</b> VM server.";
+          statistics_interval = 5;
           max_bandwidth = 72000;
           # Negative certificate probes and several test profiles share one client IP.
           autoban.attempts = 0;
@@ -155,6 +156,9 @@ pkgs.testers.runNixOSTest {
     # Key transparency on PostgreSQL, with keys the server generated (0600).
     as_tester(f"python3 {tests}/key_transparency.py {bins} --host postgres")
     postgres.succeed("test \"$(stat -c %a /var/lib/private/nuschel/kt-vrf.key)\" = 600")
+    # The periodic statistics line.
+    server.wait_until_succeeds("journalctl -u nuschel.service --no-pager | grep -q 'statistics'", timeout=30)
+
     # SIGHUP reloads the (generated) certificate; the server keeps running.
     server.succeed("systemctl kill -s HUP nuschel.service")
     server.wait_until_succeeds("journalctl -u nuschel.service --no-pager | grep -q 'reloaded the server certificate'", timeout=30)

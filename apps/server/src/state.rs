@@ -749,6 +749,16 @@ pub struct Counters {
     pub rate_limited: AtomicU64,
     /// Whispered packets dropped for the fan-out budget.
     pub fanout_dropped: AtomicU64,
+    /// For the periodic statistics (`statistics_interval`).
+    pub connections: AtomicU64,
+    pub logins: AtomicU64,
+    pub rejected: AtomicU64,
+    pub control_messages: AtomicU64,
+    pub control_bytes: AtomicU64,
+    pub voice_packets_in: AtomicU64,
+    pub voice_bytes_in: AtomicU64,
+    pub voice_packets_out: AtomicU64,
+    pub voice_bytes_out: AtomicU64,
 }
 
 pub struct State {

@@ -498,7 +498,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          (2026-11-11): `temporary_channels_per_user` (16), `whisper_fanout_per_second`
          (500,000); generous, configurable, failing only the request with a reason
          (docs/server.md, "Limits").
-   - [ ] Rolling statistics; clients older than 1.2.2.
+   - [x] Rolling statistics and clients older than 1.2.2 (2026-11-11): a `statistics`
+         log line per `statistics_interval`; clients reporting a version below 1.2.2
+         are refused with WrongVersion (they cannot fetch blobs by hash and have no
+         Opus). Not done: a live metrics endpoint (`nuscheld admin` works offline).
    - [ ] Chat in the stock-client VM check (needs typing into the stock window).
    - [ ] Review deviations: permission checks inline per handler (one engine) rather
          than one `authorize()` module; one mutex instead of an actor.

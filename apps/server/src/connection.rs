@@ -121,6 +121,7 @@ pub async fn accept(server: Arc<Server>, listener: TcpListener) {
                     server.release(address.ip());
                     continue;
                 };
+                server.counters.connections.fetch_add(1, Ordering::Relaxed);
                 tokio::spawn(serve(server.clone(), stream, address, permit));
             }
             Err(error) => {
@@ -260,8 +261,12 @@ async fn serve(
                     break None;
                 };
                 match auth::authenticate(&server, &peer, message).await {
-                    Ok(session) => break Some(session),
+                    Ok(session) => {
+                        server.counters.logins.fetch_add(1, Ordering::Relaxed);
+                        break Some(session);
+                    }
                     Err(rejection) => {
+                        server.counters.rejected.fetch_add(1, Ordering::Relaxed);
                         tracing::info!(address = %server.settings.addresses.socket(address), reason = %rejection.reason, "rejected");
                         peer.link.message(
                             kind::REJECT,

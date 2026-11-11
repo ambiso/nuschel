@@ -744,6 +744,9 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         server.clone(),
         storage::start(backend.clone()),
     )));
+    if settings.config.statistics_interval > 0 {
+        tasks.push(tokio::spawn(statistics(server.clone())));
+    }
     if let Some(service) = kt_service {
         tasks.push(tokio::spawn(service.run(server.clone())));
     }
@@ -753,6 +756,103 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         fingerprint,
         tasks,
     })
+}
+
+/// What happened in one statistics interval, from the counters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Statistics {
+    pub connections: u64,
+    pub logins: u64,
+    pub rejected: u64,
+    pub control_messages: u64,
+    pub control_bytes: u64,
+    pub voice_packets_in: u64,
+    pub voice_bytes_in: u64,
+    pub voice_packets_out: u64,
+    pub voice_bytes_out: u64,
+    pub rate_limited: u64,
+    pub fanout_dropped: u64,
+}
+
+impl Statistics {
+    /// The counters' totals since startup.
+    pub fn totals(counters: &Counters) -> Self {
+        let load = |counter: &std::sync::atomic::AtomicU64| {
+            counter.load(std::sync::atomic::Ordering::Relaxed)
+        };
+        Self {
+            connections: load(&counters.connections),
+            logins: load(&counters.logins),
+            rejected: load(&counters.rejected),
+            control_messages: load(&counters.control_messages),
+            control_bytes: load(&counters.control_bytes),
+            voice_packets_in: load(&counters.voice_packets_in),
+            voice_bytes_in: load(&counters.voice_bytes_in),
+            voice_packets_out: load(&counters.voice_packets_out),
+            voice_bytes_out: load(&counters.voice_bytes_out),
+            rate_limited: load(&counters.rate_limited),
+            fanout_dropped: load(&counters.fanout_dropped),
+        }
+    }
+
+    pub fn since(&self, earlier: &Self) -> Self {
+        Self {
+            connections: self.connections.saturating_sub(earlier.connections),
+            logins: self.logins.saturating_sub(earlier.logins),
+            rejected: self.rejected.saturating_sub(earlier.rejected),
+            control_messages: self
+                .control_messages
+                .saturating_sub(earlier.control_messages),
+            control_bytes: self.control_bytes.saturating_sub(earlier.control_bytes),
+            voice_packets_in: self
+                .voice_packets_in
+                .saturating_sub(earlier.voice_packets_in),
+            voice_bytes_in: self.voice_bytes_in.saturating_sub(earlier.voice_bytes_in),
+            voice_packets_out: self
+                .voice_packets_out
+                .saturating_sub(earlier.voice_packets_out),
+            voice_bytes_out: self.voice_bytes_out.saturating_sub(earlier.voice_bytes_out),
+            rate_limited: self.rate_limited.saturating_sub(earlier.rate_limited),
+            fanout_dropped: self.fanout_dropped.saturating_sub(earlier.fanout_dropped),
+        }
+    }
+}
+
+/// Rolling statistics: every `statistics_interval` seconds one log line with
+/// what happened in that interval (and the users online), for operators
+/// reading the journal. Counts only, no names or addresses.
+async fn statistics(server: Arc<Server>) {
+    let seconds = server.settings.config.statistics_interval;
+    let mut tick = tokio::time::interval(Duration::from_secs(seconds));
+    tick.tick().await;
+    let mut last = Statistics::totals(&server.counters);
+    loop {
+        tick.tick().await;
+        let now = Statistics::totals(&server.counters);
+        let delta = now.since(&last);
+        last = now;
+        let (users, channels) = {
+            let state = server.lock();
+            (state.users.len(), state.channels.0.len())
+        };
+        tracing::info!(
+            interval_seconds = seconds,
+            users,
+            channels,
+            connections = delta.connections,
+            logins = delta.logins,
+            rejected = delta.rejected,
+            control_messages = delta.control_messages,
+            control_bytes = delta.control_bytes,
+            voice_packets_in = delta.voice_packets_in,
+            voice_bytes_in = delta.voice_bytes_in,
+            voice_packets_out = delta.voice_packets_out,
+            voice_bytes_out = delta.voice_bytes_out,
+            rate_limited = delta.rate_limited,
+            whisper_fanout_dropped = delta.fanout_dropped,
+            "statistics"
+        );
+    }
 }
 
 /// A rate limiter for unencrypted pings: per address prefix and global, and

@@ -49,6 +49,14 @@ impl State {
         let Some(user) = self.users.get_mut(&session) else {
             return;
         };
+        if frame.kind != kind::UDP_TUNNEL {
+            self.counters
+                .control_messages
+                .fetch_add(1, Ordering::Relaxed);
+            self.counters
+                .control_bytes
+                .fetch_add(frame.payload.len() as u64 + 6, Ordering::Relaxed);
+        }
         if frame.kind != kind::UDP_TUNNEL && frame.kind != kind::PING && user.flood.limited(now) {
             self.counters.rate_limited.fetch_add(1, Ordering::Relaxed);
             return;

@@ -311,6 +311,16 @@ fn complete(
             "A certificate is required to connect to this server",
         ));
     }
+    // Clients before 1.2.2 need what Murmur special-cases for them (comments,
+    // descriptions and avatars inline instead of by hash) and have no Opus;
+    // they are turned away with the reason instead of half working. A client
+    // that reports no version is taken as current, as before.
+    if peer.info.version != 0 && !peer.info.at_least(1, 2, 2) {
+        result = Err(reject(
+            RejectType::WrongVersion,
+            "This server needs Mumble 1.2.2 or later",
+        ));
+    }
     result?;
     let session = state
         .allocate_session()

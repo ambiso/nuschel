@@ -56,6 +56,12 @@ Every configuration key is optional; names and defaults follow murmur.ini
   `publish_interval` (10 s) and `refresh_interval` (an hour) pace epochs and re-signed
   heads; `history = "contacts"` (default) or `"members"` says who may fetch an
   account's history besides its owner.
+- **Statistics.** Every `statistics_interval` seconds (300; 0 turns it off) the log
+  gets one `statistics` line with what happened in that interval: users online,
+  channels, connections, logins, rejected logins, control messages and bytes, voice
+  packets and bytes in and out, rate-limited messages and whisper packets dropped
+  for the fan-out budget. Counts only, no names or addresses
+  (`journalctl -u nuschel | grep statistics`).
 - **History** (`[history]`): kept forever by default (`retention = "forever"`; or
   `"none"`, not archived, or a number of days; channels may set their own, see
   Retention below, never more than `max_retention_days`); guests read
@@ -311,9 +317,15 @@ Deliberate differences:
   the speaker is told why at most every ten seconds, and the drops are counted.
   Channel voice is not counted; the per-user `max_bandwidth` bounds what each
   speaker sends in.
+- **Clients older than 1.2.2** are refused with `Reject` (WrongVersion, "This
+  server needs Mumble 1.2.2 or later"). Murmur special-cases them (comments,
+  descriptions and avatars inline, since they cannot fetch blobs by hash), and they
+  have no Opus, so on this Opus-only server they could neither talk nor hear;
+  turning them away with the reason is clearer than half a session. A client that
+  reports no version is admitted, as Murmur does. 1.2.2 and 1.2.3 (no Opus either)
+  are admitted and told about the codec, as before.
 - Not implemented: Ice/gRPC, external authenticators, `strong` certificates (no
-  CA store; the group never matches), email login, rolling statistics, behaviour
-  specific to clients older than 1.2.2, recording
+  CA store; the group never matches), email login, recording
   notices for clients older than 1.2.3, the pre-1.4 Opus/CELT codec switching.
 
 ## Security measures

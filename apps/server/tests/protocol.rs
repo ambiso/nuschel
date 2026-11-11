@@ -1869,3 +1869,64 @@ async fn whispers_over_the_fanout_budget_are_dropped_with_a_notice() {
             >= 2
     );
 }
+
+/// Clients before 1.2.2 are turned away with the reason; 1.2.2 and clients
+/// that report no version are admitted.
+#[tokio::test]
+async fn clients_before_122_are_refused_with_the_reason() {
+    let fixture = Fixture::start("").await;
+    let old = identity();
+    let mut options = Options::new("Old", &old);
+    options.version = (1 << 48) | (2 << 32) | (1 << 16);
+    let rejected = Client::connect(fixture.address(), options)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+        reject_type(&rejected),
+        proto::reject::RejectType::WrongVersion
+    );
+    assert!(rejected.reason().contains("1.2.2"));
+    for version in [(1 << 48) | (2 << 32) | (2 << 16), 0] {
+        let mut options = Options::new("Older", &old);
+        options.version = version;
+        Client::connect(fixture.address(), options).await.unwrap();
+    }
+}
+
+/// The counters behind the periodic statistics line.
+#[tokio::test]
+async fn statistics_count_connections_messages_and_voice() {
+    let fixture = Fixture::start("").await;
+    let before = nuscheld::server::Statistics::totals(&fixture.running.server.counters);
+    let (alice_id, bob_id) = (identity(), identity());
+    let mut alice = Client::connect(fixture.address(), Options::new("Alice", &alice_id))
+        .await
+        .unwrap();
+    let mut bob = Client::connect(fixture.address(), Options::new("Bob", &bob_id))
+        .await
+        .unwrap();
+    bob.sync().await;
+    let wrong = Client::connect(
+        fixture.address(),
+        Options {
+            password: Some("wrong"),
+            ..Options::new("SuperUser", &identity())
+        },
+    )
+    .await;
+    assert!(wrong.is_err());
+    alice
+        .send_raw(&encode_tunnel(&voice(0, 1, &[0xf8, 0xff, 0xfe, 0x01])))
+        .await
+        .unwrap();
+    assert!(bob.receives(kind::UDP_TUNNEL, WAIT).await.is_some());
+    alice.sync().await;
+    let delta =
+        nuscheld::server::Statistics::totals(&fixture.running.server.counters).since(&before);
+    assert_eq!((delta.connections, delta.logins, delta.rejected), (3, 2, 1));
+    assert!(delta.control_messages >= 2 && delta.control_bytes > 0);
+    assert_eq!(delta.voice_packets_in, 1);
+    assert_eq!(delta.voice_packets_out, 1);
+    assert!(delta.voice_bytes_out > 0);
+}
