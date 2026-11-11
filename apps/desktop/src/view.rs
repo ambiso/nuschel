@@ -1897,6 +1897,7 @@ fn conversation(
                         .id("connection-notice-banner")
                         .role(Role::Status)
                         .aria_label("Connection notice")
+                        .flex_shrink_0()
                         .mx_4()
                         .mt_3()
                         .px_3()
