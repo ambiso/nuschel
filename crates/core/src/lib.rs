@@ -7,6 +7,7 @@ pub mod audio;
 pub mod bookmark;
 pub mod model;
 pub mod network;
+pub mod preview;
 pub mod search;
 pub mod share;
 pub mod transfer;

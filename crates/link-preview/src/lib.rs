@@ -3,5 +3,5 @@
 //! renderer or server calls a fetcher implicitly.
 #![forbid(unsafe_code)]
 
-pub mod model;
+pub use nuschl_core::preview as model;
 pub mod policy;

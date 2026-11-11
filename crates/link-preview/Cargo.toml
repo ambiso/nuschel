@@ -8,7 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-base64 = "0.22"
+nuschl-core.workspace = true
 ipnet = "2.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.21"

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Typed, carried data. A preview is not an instruction for a receiver to fetch.
-use crate::policy::{MAX_URL_BYTES, Target};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use url::Url;
 
 pub const VERSION: u16 = 1;
+pub const MAX_URL_BYTES: usize = 2048;
 pub const MAX_TITLE_BYTES: usize = 512;
 pub const MAX_DESCRIPTION_BYTES: usize = 2048;
 pub const MAX_ALT_BYTES: usize = 512;
@@ -81,16 +81,49 @@ pub struct Preview {
     pub image: Option<EmbeddedImage>,
 }
 
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
-    #[error("unsupported preview version")]
     Version,
-    #[error("invalid preview metadata")]
     Metadata,
-    #[error("preview URL differs from its sender's candidate")]
     Url,
-    #[error("preview image is empty, oversized, or invalid")]
     Image,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Version => "unsupported preview version",
+            Self::Metadata => "invalid preview metadata",
+            Self::Url => "invalid preview URL or mismatched sender candidate",
+            Self::Image => "preview image is empty, oversized, or invalid",
+        })
+    }
+}
+impl std::error::Error for Error {}
+
+/// Syntax only: receiving metadata never authorizes a network request. Sender
+/// fetch policy separately checks addresses, resolution, ports and proxy routing.
+pub fn canonical_url(input: &str) -> Result<String, Error> {
+    if input.is_empty()
+        || input.len() > MAX_URL_BYTES
+        || input.trim() != input
+        || input.chars().any(char::is_control)
+    {
+        return Err(Error::Url);
+    }
+    let mut url = Url::parse(input).map_err(|_| Error::Url)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.host().is_none()
+    {
+        return Err(Error::Url);
+    }
+    if let Some(url::Host::Domain(host)) = url.host() {
+        let host = host.trim_end_matches('.').to_owned();
+        url.set_host(Some(&host)).map_err(|_| Error::Url)?;
+    }
+    Ok(url.into())
 }
 
 impl Preview {
@@ -98,7 +131,7 @@ impl Preview {
         if self.version != VERSION {
             return Err(Error::Version);
         }
-        if self.url.len() > MAX_URL_BYTES || Target::parse(&self.url).is_err() {
+        if canonical_url(&self.url).as_ref() != Ok(&self.url) {
             return Err(Error::Url);
         }
         if !inert(&self.title, MAX_TITLE_BYTES)
@@ -121,9 +154,9 @@ impl Preview {
         }
         Ok(())
     }
-    pub fn validate_for(&self, target: &Target) -> Result<(), Error> {
+    pub fn validate_for(&self, target: &str) -> Result<(), Error> {
         self.validate()?;
-        if self.url != target.as_str() {
+        if self.url != canonical_url(target)? {
             return Err(Error::Url);
         }
         Ok(())
@@ -133,7 +166,7 @@ impl Preview {
 fn inert(text: &str, limit: usize) -> bool {
     text.len() <= limit
         && !text.chars().any(|ch| {
-            ch.is_control() || matches!(ch, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            ch.is_control() || matches!(ch, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}')
         })
 }
 
@@ -174,10 +207,10 @@ mod tests {
     #[test]
     fn carried_data_has_a_version_and_cannot_change_the_actual_url() {
         let mut preview = sample_preview();
-        let target = Target::parse("https://example.org/").unwrap();
-        preview.validate_for(&target).unwrap();
+        let target = "https://example.org/";
+        preview.validate_for(target).unwrap();
         preview.url = "https://different.example/".into();
-        assert_eq!(preview.validate_for(&target), Err(Error::Url));
+        assert_eq!(preview.validate_for(target), Err(Error::Url));
         preview.version += 1;
         assert_eq!(preview.validate(), Err(Error::Version));
         assert!(
