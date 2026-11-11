@@ -729,6 +729,22 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          before the bump break (new code point and X-Wing key derivation); the user
          accepted that while Nuschel is in early development, so the bump discards
          MLS state instead of migrating it.
+   - [ ] The user's answers to docs/e2ee.md §10 (2026-11-11), to implement:
+         - Remove the 1000-device cap (`nuschel_e2ee::MAX_GROUP_DEVICES`, the server's
+           `mls.max_devices`, the client check); bound hostile trees by message size
+           and process limits instead (prevalidate.rs's node bound follows from the
+           input size).
+         - End-to-end is a server-level switch: on an end-to-end server every channel,
+           direct message, whisper and shout is end-to-end encrypted (shouts and
+           whispers: the sender joins the target's voice group when it sets up the
+           voice target); no unencrypted channels, and every Nuschel feature
+           (WebRTC, video, files, several images, typing) is available.
+         - Registration required on end-to-end servers; ACLs apply in every case.
+         - The device-signing key on every linked device, phones included.
+         - Remove devices inactive for 90 days.
+         - History grants to every admitted member by default in `members` channels.
+         - Channel membership mode: pending the user's answer (recommendation:
+           subscribers with lazy external joins).
    - [x] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, which only the
          crypto worker and `nuscheld` link; no advisory ignores (patched instead).
          SECURITY.md: libcrux SIMD `unsafe` in the exceptions table.

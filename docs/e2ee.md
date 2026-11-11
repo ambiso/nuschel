@@ -978,9 +978,10 @@ Consequences:
 - Compact credentials and no tree in Welcomes (above).
 - The server batches ACL-driven changes into one task and names one committer.
 - Channel membership is subscribers, not every possible reader (§6.2).
-- **End-to-end channels are capped at 1000 member devices** by default (server setting,
-  open question 6). Above it the server refuses to create the group; the channel stays
-  transport-encrypted with a red lock, or the operator splits it.
+- **No size cap** (user, 2026-11-11): "MLS is designed to handle large groups". The
+  prototype's 1000-device cap (`MAX_GROUP_DEVICES`) is to be removed; what bounds a
+  hostile tree is the message size limit and the crypto worker's process limits, not a
+  member count.
 
 ### 6.8 Files
 
@@ -1171,6 +1172,45 @@ on flash become unreadable once the old key is gone from the OS credential store
   allow for it.
 
 ## 10. Open questions for the user
+
+### Answers (user, 2026-11-11)
+
+1. **Recovery key:** skippable; offered by default (as implemented).
+2. **Device-signing key:** on every linked device, phones included ("probably all
+   devices should be able to add new devices"). A stolen unlocked device can then add
+   devices until revoked; that stays visible (KT, self-monitoring, contacts see a new
+   device).
+3. **Key transparency backend:** akd. Follow-up: witnessing across federated servers
+   (docs/reviews/2026-11-11-key-transparency.md).
+4. **Channel membership:** explained to the user (subscribers with lazy external
+   joins versus every device with `can_read`); answer pending, the recommendation
+   stands meanwhile.
+5. **History grants:** `members` channels grant history to every admitted member
+   automatically; this is the default setting.
+6. **Size cap:** none. MLS commits scale logarithmically; the cost is the tree a joiner
+   fetches (X-Wing leaves ≈ 1.2 KB, ≈ 12 MB at 10,000 devices), served by the server.
+7. **Voice and shouts:** there are no unencrypted channels on an end-to-end server.
+   End-to-end is a **server-level switch**: a server is either legacy/Mumble-compatible
+   or a Nuschel server where everything is end-to-end encrypted and every Nuschel
+   feature is available (WebRTC, video, files, several images per message, typing,
+   …). Shouts and whispers are therefore encrypted too: a device joins a target
+   channel's voice group as a sender when it sets up the voice target. Voice groups per
+   channel of present devices were explained to the user; recommendation stands.
+8. **Inactive devices:** removed after 90 days.
+9. **Auditors:** the user would like every Nuschel server a client is connected to to
+   act as an auditor/witness; being worked out in the key-transparency review (the
+   client chooses witnesses; the single-server case needs a default witness set).
+10. **Release timing:** decided earlier: ship on OpenMLS 0.9.2 with the libcrux patch;
+    breaking changes are acceptable during early development.
+11. **Ciphersuite:** the draft's AES-128-GCM X-Wing suite
+    (`MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519`; 0x004F until OpenMLS carries
+    the draft's code point).
+12. **Guests:** users must register with the server, and ACLs apply in every case; on
+    an end-to-end server every channel is end-to-end encrypted, so unregistered
+    connections take no part.
+
+### The questions as asked
+
 
 1. **Recovery key**: required at identity creation (as Matrix pushes it), or offered and
    skippable? Without one, losing all devices that hold the device-signing key means a
