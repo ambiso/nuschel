@@ -492,6 +492,15 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          libcrux's `cfg(hax)` verification builds): confirm.
    - [ ] The same identity on every Nuschel server, bound per server in its
          key-transparency log; verification over the identity root holds everywhere.
+   - [x] `crates/kt` (2026-11-11): key-transparency directory behind a narrow,
+         backend-swappable interface (akd 0.13 today), signed heads, gossip with
+         evidence, client verification of lookups, self-monitoring, audits and TOFU
+         assessment; malicious-server tests; per-epoch stored audit proofs. Not wired.
+   - [ ] Wire KT into the server (KtStore over the storage worker, `nuschel.v1` KT
+         messages, lookup authorisation and rate limits, publish timer and hourly
+         head refresh, VRF secret and head signing key, descriptor in the hello) and
+         the client (crypto worker: pinned descriptor, KnownHeads, the §5.4 schedule,
+         `kt_head` in MLS messages). Nix build of nuschel-kt.
    - [ ] Trust on first use: pin a contact's identity key on first sight; a changed
          key is shown, never silently accepted.
    - [ ] Optional out-of-band verification: safety numbers and QR codes; verified
