@@ -106,7 +106,16 @@ Later (reported):
       present someone else's: group by server, never merge by name; linking by hash
       must say which servers vouch for it. Nuschel servers with end-to-end
       identities can do better.
+- [x] Keyboard shortcuts (Settings → Shortcuts): push to talk, toggle mute, toggle
+      deafen, push to mute; in the window and system-wide through the GlobalShortcuts
+      portal (tested end to end on GNOME), Windows and macOS hotkeys (compiled only).
 - [ ] Wire Ctrl+K (finder) and Ctrl+F (search) into the configurable shortcuts.
+- [ ] Shortcuts follow-ups: a plain-letter binding is also taken from the message box
+      while typing; GNOME keeps its own trigger after re-recording (needs portal v2
+      for "change in desktop settings"); X11 backend; KDE untested; optional actions
+      (focus window, next server, whisper).
+- [ ] `tests/accessibility.py --gnome-shell` is flaky on main (the "Disconnect" button
+      is sometimes missing when the tree is read).
 - [x] Friends and local nicknames by certificate hash (heart marker, nickname shown
       everywhere with the real name in tooltips, friends' presence server-wide,
       optional "friend connected" notification).
