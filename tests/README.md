@@ -68,7 +68,10 @@ allows, read the clipboard (the test puts text there first) or the autostart key
 create a registry key; content, storage and crypto (less privileged AppContainers)
 must also fail to read `HKCU\Environment`, which media and transfer can (printed, not
 failed). Storage and crypto must write their directory and transfer must read its
-offered file by handle. Then the real workers run in the same sandboxes: content decodes a
+offered file by handle. Each probe also reads its own job's limits from inside (one
+process, the memory limit, all eight UI restrictions); `--nested` first puts the test
+into a job of its own, so every worker's job has to nest in it, as it does when the
+desktop's kill-on-close job holds the launch stage. Then the real workers run in the same sandboxes: content decodes a
 PNG, storage writes and reads history, crypto creates an identity, media opens the
 default WASAPI devices (the VM's sound card has no host backend), transfer offers a
 file. For a full transfer, start the VM with `--forward 4710 --forward 4711`, run

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Windows only: every worker's sandbox, checked from the inside.
 //!
-//! `confinement.exe [--connect HOST:PORT] [--workers DIR [--rendezvous ws://HOST:PORT/v1
+//! `confinement.exe [--nested] [--connect HOST:PORT] [--workers DIR [--rendezvous ws://HOST:PORT/v1
 //! --relay tcp://HOST:PORT [--code-file PATH] [--receive CODE --expect TEXT]]]`
 //!
 //! This binary starts itself through `nuschel_ipc::host`'s real sandbox
@@ -78,7 +78,7 @@ mod windows {
             Ok(()) => "allowed".to_owned(),
             Err(error) => format!("denied ({error})"),
         };
-        let mut report = json!({ "app_container": is_app_container() });
+        let mut report = json!({ "app_container": is_app_container(), "job": job() });
         report["read_documents"] = outcome(std::fs::read(text("secret")).map(drop)).into();
         report["list_profile"] = outcome(std::fs::read_dir(text("profile")).map(drop)).into();
         report["write_profile"] = outcome(std::fs::write(text("outside"), b"escape")).into();
@@ -106,12 +106,18 @@ mod windows {
             .status();
         report["start_process"] = outcome(spawned.map(drop)).into();
         report["enumerate_processes"] = enumerate_processes().into();
-        let driver = request["driver"].as_u64().unwrap_or(0) as u32;
+        let driver = request["driver"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .unwrap_or(0);
         // PROCESS_QUERY_LIMITED_INFORMATION and PROCESS_TERMINATE.
         report["query_other_process"] = outcome(open_process(driver, 0x1000)).into();
         report["terminate_other_process"] = outcome(open_process(driver, 0x0001)).into();
         let mut memory: Vec<u8> = Vec::new();
-        let bytes = request["allocate"].as_u64().unwrap_or(0) as usize;
+        let bytes = request["allocate"]
+            .as_u64()
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .unwrap_or(0);
         report["commit_over_limit"] = outcome(
             memory
                 .try_reserve_exact(bytes)
@@ -152,9 +158,9 @@ mod windows {
         let mut key: HKEY = std::ptr::null_mut();
         // SAFETY: a NUL-terminated name and an out-pointer to a local.
         let error =
-            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, KEY_READ, &mut key) };
+            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, path.as_ptr(), 0, KEY_READ, &raw mut key) };
         if error != 0 {
-            return Err(std::io::Error::from_raw_os_error(error as i32));
+            return Err(std::io::Error::from_raw_os_error(error.cast_signed()));
         }
         // SAFETY: the key opened above, closed once.
         unsafe { RegCloseKey(key) };
@@ -180,12 +186,12 @@ mod windows {
                 REG_OPTION_NON_VOLATILE,
                 KEY_WRITE,
                 std::ptr::null(),
-                &mut key,
+                &raw mut key,
                 std::ptr::null_mut(),
             )
         };
         if error != 0 {
-            return Err(std::io::Error::from_raw_os_error(error as i32));
+            return Err(std::io::Error::from_raw_os_error(error.cast_signed()));
         }
         // SAFETY: the key created above, closed once.
         unsafe { RegCloseKey(key) };
@@ -210,6 +216,47 @@ mod windows {
         if data.is_null() { Err(error) } else { Ok(()) }
     }
 
+    /// The limits of the job this process is in (the innermost one, when
+    /// jobs nest), as the process itself sees them.
+    fn job() -> Value {
+        use windows_sys::Win32::System::JobObjects::{
+            JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JobObjectBasicUIRestrictions, JobObjectExtendedLimitInformation,
+            QueryInformationJobObject,
+        };
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        let mut interface = JOBOBJECT_BASIC_UI_RESTRICTIONS::default();
+        let limits_size = u32::try_from(size_of_val(&limits)).unwrap_or(0);
+        let interface_size = u32::try_from(size_of_val(&interface)).unwrap_or(0);
+        // SAFETY: a null job handle means the caller's own job; `limits` is a
+        // local of the class's structure and size; no length is returned.
+        let limits_read = unsafe {
+            QueryInformationJobObject(
+                std::ptr::null_mut(),
+                JobObjectExtendedLimitInformation,
+                (&raw mut limits).cast(),
+                limits_size,
+                std::ptr::null_mut(),
+            )
+        };
+        // SAFETY: as above, for the UI restrictions.
+        let interface_read = unsafe {
+            QueryInformationJobObject(
+                std::ptr::null_mut(),
+                JobObjectBasicUIRestrictions,
+                (&raw mut interface).cast(),
+                interface_size,
+                std::ptr::null_mut(),
+            )
+        };
+        json!({
+            "read": limits_read != 0 && interface_read != 0,
+            "active_processes": limits.BasicLimitInformation.ActiveProcessLimit,
+            "memory": limits.ProcessMemoryLimit,
+            "interface": interface.UIRestrictionsClass,
+        })
+    }
+
     fn is_app_container() -> bool {
         use windows_sys::Win32::{
             Foundation::{CloseHandle, HANDLE},
@@ -220,7 +267,7 @@ mod windows {
         // SAFETY: no arguments; returns a pseudo handle that needs no closing.
         let process = unsafe { GetCurrentProcess() };
         // SAFETY: the current-process pseudo handle and an out-pointer to a local.
-        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+        if unsafe { OpenProcessToken(process, TOKEN_QUERY, &raw mut token) } == 0 {
             return false;
         }
         let (mut value, mut length) = (0_u32, 0_u32);
@@ -231,7 +278,7 @@ mod windows {
                 TokenIsAppContainer,
                 (&raw mut value).cast(),
                 4,
-                &mut length,
+                &raw mut length,
             )
         };
         // SAFETY: the token handle opened above, closed once.
@@ -243,9 +290,10 @@ mod windows {
         use windows_sys::Win32::System::ProcessStatus::K32EnumProcesses;
         let mut ids = vec![0_u32; 4096];
         let mut needed = 0;
-        // SAFETY: `ids` has room for the byte count passed.
-        let listed =
-            unsafe { K32EnumProcesses(ids.as_mut_ptr(), (ids.len() * 4) as u32, &mut needed) };
+        let bytes = u32::try_from(size_of_val(ids.as_slice())).unwrap_or(0);
+        // SAFETY: `ids` has room for the byte count passed; `needed` is a
+        // local for one write.
+        let listed = unsafe { K32EnumProcesses(ids.as_mut_ptr(), bytes, &raw mut needed) };
         if listed == 0 {
             format!("denied ({})", std::io::Error::last_os_error())
         } else {
@@ -297,12 +345,38 @@ mod windows {
         arguments.get(position + 1).cloned()
     }
 
+    /// Puts this process into a new job (no limits); its children start in it.
+    fn enter_job() -> Result<String, String> {
+        use windows_sys::Win32::System::{
+            JobObjects::{AssignProcessToJobObject, CreateJobObjectW},
+            Threading::GetCurrentProcess,
+        };
+        // SAFETY: default security and no name (both may be null).
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        // SAFETY: no arguments; a pseudo handle that needs no closing.
+        let process = unsafe { GetCurrentProcess() };
+        // SAFETY: handles only. The job handle stays open (and the process in
+        // the job) until this test exits.
+        if unsafe { AssignProcessToJobObject(job, process) } == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok("every launch stage and worker starts in it".into())
+    }
+
     pub fn drive(arguments: &[String]) -> i32 {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime");
         let mut checks = Checks { failures: 0 };
+        // With --nested every launch stage starts inside a job, so each
+        // worker starts in it too and its own job (with UI limits) must nest.
+        if arguments.iter().any(|argument| argument == "--nested") {
+            checks.report("driver", "runs in a job", enter_job());
+        }
         // Only a probe that cannot read text the test itself can read means anything.
         if let Err(error) = clipboard_text() {
             println!("     the clipboard holds no text for this test ({error}); set some first");
@@ -390,6 +464,27 @@ mod windows {
                     Ok("yes".into())
                 } else {
                     Err("no".into())
+                },
+            );
+            // Its own job, as seen from inside: one process, the memory
+            // limit, all eight UI restrictions.
+            let job = &report["job"];
+            let memory: u64 = if kind == "content" {
+                512 << 20
+            } else {
+                1 << 30
+            };
+            let effective = job["read"] == true
+                && job["active_processes"] == 1
+                && job["memory"] == memory
+                && job["interface"] == 0xff;
+            checks.report(
+                kind,
+                "in its job",
+                if effective {
+                    Ok(job.to_string())
+                } else {
+                    Err(job.to_string())
                 },
             );
             for check in [
@@ -540,7 +635,7 @@ mod windows {
     ) -> Result<T, String> {
         let output = child.stdout.as_mut().ok_or("no stdout")?;
         let read = async {
-            let size = output.read_u32().await? as usize;
+            let size = usize::try_from(output.read_u32().await?).map_err(std::io::Error::other)?;
             let mut bytes = vec![0; size];
             output.read_exact(&mut bytes).await?;
             std::io::Result::Ok(bytes)
