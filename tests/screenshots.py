@@ -57,6 +57,9 @@ PATCH_WORD = (536, 254)
 PRINTLN_WORD = (478, 350)
 GOOD_WORD = (472, 450)
 SHIP_END = (464, 474)
+# In the message the links scene sends: "the guide" and "come to the Lobby".
+GUIDE_LINK = (497, 684)
+LOBBY_LINK = (835, 684)
 
 
 # GNOME Shell exports its freedesktop notification daemon but, headless, never
@@ -137,7 +140,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,links,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -235,6 +238,10 @@ def main():
                 window = shell.window("Nuschel")
                 shell.click(window["x"] - 12 + x, window["y"] - 12 + y, button=button, count=count)
 
+            def hover(x, y):
+                window = shell.window("Nuschel")
+                shell.move(window["x"] - 12 + x, window["y"] - 12 + y)
+
             def wheel(x, y, clicks):
                 window = shell.window("Nuschel")
                 shell.wheel(window["x"] - 12 + x, window["y"] - 12 + y, clicks)
@@ -297,6 +304,30 @@ def main():
                 assert copied == "Ship", copied
                 click(width // 2, 140)  # clears the selection
                 time.sleep(0.4)
+            if want("links"):
+                # Only the mumble link is clicked: an http one would start a browser.
+                bots[0].send(kind="html", channel=2, html=(
+                    "Read <a href=\"https://docs.example/guide\">the guide</a> or https://example.org/faq. "
+                    f"Then <a href=\"mumble://Andi@127.0.0.1:{port}/Lobby\">come to the Lobby</a>"
+                    " <a href=\"javascript:alert(1)\">(not a link)</a>"))
+                time.sleep(1.5)
+                shot("31-links")
+                hover(*GUIDE_LINK)
+                time.sleep(0.8)
+                shot("32-link-hover")
+                click(*GUIDE_LINK, button=3)
+                time.sleep(0.6)
+                shot("33-link-menu")
+                click(GUIDE_LINK[0] + 40, GUIDE_LINK[1] + 22)  # "Copy link"
+                time.sleep(0.4)
+                copied = clipboard()
+                assert copied == "https://docs.example/guide", copied
+                # A mumble link to this server's Lobby: Nuschel goes there itself.
+                click(*LOBBY_LINK)
+                time.sleep(1.5)
+                shot("34-mumble-link")
+                click(228, 299, count=2)  # back into Development, as the other scenes expect
+                time.sleep(1.5)
 
             if want("dialog"):
                 click(59, 227)

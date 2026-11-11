@@ -957,6 +957,7 @@ fn plain(source: &str) -> MessageDocument {
     MessageDocument {
         blocks: vec![ContentBlock::Text {
             text: source.into(),
+            spans: Vec::new(),
         }],
     }
 }

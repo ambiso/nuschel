@@ -5,7 +5,7 @@ use crate::{
     chrome,
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
     menus::MenuTarget,
-    selection::{BlockText, SelectionArea, TextSelection, Texts},
+    selection::{BlockText, HoveredLink, SelectionArea, TextBox, TextSelection, Texts},
     state::{COLLAPSED_HEIGHT, ChannelRow, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
 };
@@ -1988,10 +1988,19 @@ fn message_row(
         .selection
         .as_ref()
         .filter(|selection| selection.message == serial);
+    let hovered = this
+        .text
+        .hovered
+        .as_ref()
+        .filter(|hovered| hovered.message == serial);
     let mut texts = Vec::new();
-    let blocks = blocks(this, &message.document, selection, &mut texts, cx);
+    let blocks = blocks(this, &message.document, selection, hovered, &mut texts, cx);
     div()
         .id(("message", index))
+        .when_some(
+            hovered.filter(|hovered| hovered.deceptive && this.menu.is_none()),
+            |row, hovered| row.child(link_target(hovered)),
+        )
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -2084,6 +2093,7 @@ fn message_row(
                             cx.weak_entity(),
                             serial,
                             selection.is_some(),
+                            hovered.map(|hovered| (hovered.block, hovered.link)),
                             texts,
                             div()
                                 .flex()
@@ -2154,6 +2164,31 @@ fn message_row(
                 }),
         )
         .into_any_element()
+}
+
+/// Where a link leads, below the pointer, when its text says otherwise.
+fn link_target(hovered: &HoveredLink) -> impl IntoElement {
+    deferred(
+        anchored()
+            .position(hovered.position + point(px(0.), px(20.)))
+            .snap_to_window_with_margin(px(8.))
+            .child(
+                // As a tooltip looks.
+                div()
+                    .px_2()
+                    .py_1()
+                    .max_w(px(420.))
+                    .rounded(px(6.))
+                    .bg(color(APP))
+                    .border_1()
+                    .border_color(color(BORDER_STRONG))
+                    .text_sm()
+                    .text_color(color(TEXT))
+                    .shadow_md()
+                    .child(hovered.url.clone()),
+            ),
+    )
+    .with_priority(1)
 }
 
 fn composer(
@@ -2363,15 +2398,16 @@ pub fn document_blocks(
     document: &Document,
     cx: &mut Context<Desktop>,
 ) -> Vec<AnyElement> {
-    blocks(this, document, None, &mut Vec::new(), cx)
+    blocks(this, document, None, None, &mut Vec::new(), cx)
 }
 
-/// A document's blocks with `selection` highlighted; their laid-out text is
-/// collected into `texts` for selecting.
+/// A document's blocks with `selection` and the `hovered` link highlighted;
+/// their laid-out text is collected into `texts` for selecting.
 fn blocks(
     this: &Desktop,
     document: &Document,
     selection: Option<&TextSelection>,
+    hovered: Option<&HoveredLink>,
     texts: &mut Texts,
     cx: &mut Context<Desktop>,
 ) -> Vec<AnyElement> {
@@ -2380,12 +2416,32 @@ fn blocks(
         .iter()
         .enumerate()
         .map(|(index, block)| match block {
-            Block::Text(text) => {
+            Block::Text {
+                text,
+                highlights,
+                links,
+            } => {
                 let selected =
                     selection.and_then(|selection| selection.block_range(index, text.len()));
-                let content =
-                    BlockText::new(Some(("body", index).into()), text.clone(), &[], selected);
-                texts.push((index, text.clone(), content.layout()));
+                let underlined = hovered
+                    .filter(|hovered| hovered.block == index)
+                    .and_then(|hovered| Some(links.get(hovered.link)?.0.clone()));
+                let links = (!links.is_empty()).then(|| links.clone());
+                let id = Some(("body", index).into());
+                let content = BlockText::new(
+                    id,
+                    text.clone(),
+                    highlights,
+                    selected,
+                    underlined,
+                    links.clone(),
+                );
+                texts.push(TextBox {
+                    block: index,
+                    text: text.clone(),
+                    layout: content.layout(),
+                    links,
+                });
                 div().id(("text", index)).child(content).into_any_element()
             }
             Block::Image {
@@ -2437,8 +2493,13 @@ fn blocks(
                 let selected =
                     selection.and_then(|selection| selection.block_range(index, text.len()));
                 let id = Some(("code-text", index).into());
-                let content = BlockText::new(id, text.clone(), highlights, selected);
-                texts.push((index, text.clone(), content.layout()));
+                let content = BlockText::new(id, text.clone(), highlights, selected, None, None);
+                texts.push(TextBox {
+                    block: index,
+                    text: text.clone(),
+                    layout: content.layout(),
+                    links: None,
+                });
                 let copied = this.text.copied.as_ref() == Some(text);
                 div()
                     .id(("code", index))

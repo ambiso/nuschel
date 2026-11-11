@@ -3,15 +3,20 @@
 //! lays a block's text out like `StyledText`, with the selection as a
 //! background highlight under the glyphs, and exposes it to screen readers
 //! like `text!`. [`SelectionArea`] wraps a message's blocks and turns presses
-//! and drags into carets across them. The selection lives in [`Desktop`], so
-//! Ctrl+C and the message menu can copy it.
+//! and drags into carets across them, and clicks on links into opening them.
+//! The selection lives in [`Desktop`], so Ctrl+C and the message menu can
+//! copy it.
 use crate::{
-    document::Document,
+    document::{Document, Links},
     menus::{Menu, MenuTarget},
-    state::{Desktop, MessageView},
+    state::{Desktop, MessageView, Status},
     theme::{ACCENT, tint},
 };
 use gpui_kit::*;
+use nuschel_session::{
+    config::MumbleUrl,
+    connection::{Command, TextTarget},
+};
 use std::{ops::Range, rc::Rc, time::Duration};
 
 /// A place in a message: a block and a byte offset into its text.
@@ -58,13 +63,28 @@ impl TextSelection {
 pub struct MessageMenu {
     pub text: SharedString,
     pub selection: Option<SharedString>,
+    pub link: Option<SharedString>,
 }
 
-/// Message text state: the selection, the message a context menu is for, the
-/// code last copied with a code block's button (shown as a check for a
-/// moment), and the focus target that takes Ctrl+C while text is selected.
+/// The link under the pointer.
+pub struct HoveredLink {
+    pub message: u64,
+    pub block: usize,
+    pub link: usize,
+    pub url: SharedString,
+    /// Where the pointer came onto it, for the tooltip of a link whose text
+    /// is not its address.
+    pub position: Point<Pixels>,
+    pub deceptive: bool,
+}
+
+/// Message text state: the selection, the hovered link, the message a context
+/// menu is for, the code last copied with a code block's button (shown as a
+/// check for a moment), and the focus target that takes Ctrl+C while text is
+/// selected.
 pub struct TextState {
     pub selection: Option<TextSelection>,
+    pub hovered: Option<HoveredLink>,
     pub menu: Option<MessageMenu>,
     pub copied: Option<SharedString>,
     pub focus: FocusHandle,
@@ -74,6 +94,7 @@ impl TextState {
     pub fn new(cx: &mut App) -> Self {
         Self {
             selection: None,
+            hovered: None,
             menu: None,
             copied: None,
             focus: cx.focus_handle(),
@@ -127,7 +148,70 @@ impl Desktop {
         .detach();
     }
 
-    /// Right click on a message: Copy (the selection in it, if any) and Copy message.
+    /// A click on a link: mumble links are Nuschel's own, others go to the system.
+    pub fn open_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if !nuschel_core::allowed_link(url) {
+            return;
+        }
+        if !url
+            .get(..9)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("mumble://"))
+        {
+            cx.open_url(url);
+            return;
+        }
+        let mut url = match MumbleUrl::parse(url) {
+            Ok(url) => url,
+            Err(error) => {
+                self.error = Some(format!("Cannot open {url}: {error}"));
+                return;
+            }
+        };
+        let saved = self.servers.iter().position(|server| {
+            server.bookmark.host == url.host && server.bookmark.port == url.port
+        });
+        match saved.map(|index| (index, self.servers[index].status)) {
+            // Already there: go to the channel without connecting again.
+            Some((index, Status::Connected)) => {
+                let server = &self.servers[index];
+                let channel = url.channel.iter().try_fold(0, |parent, name| {
+                    server
+                        .channels
+                        .iter()
+                        .find(|channel| {
+                            channel.parent == Some(parent)
+                                && channel.name == *name
+                                && matches!(channel.target, TextTarget::Channel(_))
+                        })
+                        .map(|channel| channel.id)
+                });
+                match channel {
+                    Some(channel) => {
+                        self.browse_channel(index, channel, window, cx);
+                        self.run(index, Command::Join(channel));
+                    }
+                    None => {
+                        self.servers[index].notice =
+                            Some(format!("Channel /{} was not found.", url.channel.join("/")))
+                    }
+                }
+            }
+            Some((index, Status::Connecting)) => {
+                self.servers[index].pending_channel = url.channel;
+                self.browse_server(index, window, cx);
+            }
+            Some(_) => self.open_url(url, window, cx),
+            // A server that is not saved opens the form to confirm, rather than
+            // being saved and connected to from someone's message.
+            None => {
+                url.username = None;
+                self.open_url(url, window, cx);
+            }
+        }
+    }
+
+    /// Right click on a message: Copy link (the one under the pointer), Copy
+    /// (the selection in it) and Copy message.
     pub fn open_message_menu(&mut self, message: u64, position: Point<Pixels>) {
         let Some((server, _)) = self.selected_indices() else {
             return;
@@ -142,7 +226,17 @@ impl Desktop {
             .filter(|selection| selection.message == message)
             .and_then(|_| self.selected_text())
             .map(SharedString::from);
-        self.text.menu = Some(MessageMenu { text, selection });
+        let link = self
+            .text
+            .hovered
+            .as_ref()
+            .filter(|hovered| hovered.message == message)
+            .map(|hovered| hovered.url.clone());
+        self.text.menu = Some(MessageMenu {
+            text,
+            selection,
+            link,
+        });
         self.menu = Some(Menu {
             server,
             target: MenuTarget::Message,
@@ -234,55 +328,64 @@ fn line_at(text: &str, offset: usize) -> Range<usize> {
     start..end
 }
 
-/// `highlights` (sorted, disjoint) over a text of `len` bytes, split where the
-/// selection begins and ends, with the selection's background inside it.
-fn with_selection(
+/// `highlights` (sorted, disjoint) over a text of `len` bytes, split where
+/// `range` begins and ends, with `apply` changing the style inside it.
+fn overlay(
     highlights: &[(Range<usize>, HighlightStyle)],
-    selected: Range<usize>,
+    range: Range<usize>,
     len: usize,
+    apply: impl Fn(&mut HighlightStyle),
 ) -> Vec<(Range<usize>, HighlightStyle)> {
     let mut covered = Vec::with_capacity(2 * highlights.len() + 1);
     let mut end = 0;
-    for (range, style) in highlights {
-        if end < range.start {
-            covered.push((end..range.start, HighlightStyle::default()));
+    for (part, style) in highlights {
+        if end < part.start {
+            covered.push((end..part.start, HighlightStyle::default()));
         }
-        covered.push((range.clone(), *style));
-        end = range.end;
+        covered.push((part.clone(), *style));
+        end = part.end;
     }
     if end < len {
         covered.push((end..len, HighlightStyle::default()));
     }
     let mut split = Vec::with_capacity(covered.len() + 2);
-    for (range, style) in covered {
-        let inside = range.start.max(selected.start)..range.end.min(selected.end);
+    for (part, style) in covered {
+        let inside = part.start.max(range.start)..part.end.min(range.end);
         if inside.is_empty() {
-            split.push((range, style));
+            split.push((part, style));
             continue;
         }
-        if range.start < inside.start {
-            split.push((range.start..inside.start, style));
+        if part.start < inside.start {
+            split.push((part.start..inside.start, style));
         }
-        let background = Some(tint(ACCENT, 0x70).into());
-        split.push((
-            inside.clone(),
-            HighlightStyle {
-                background_color: background,
-                ..style
-            },
-        ));
-        if inside.end < range.end {
-            split.push((inside.end..range.end, style));
+        let mut changed = style;
+        apply(&mut changed);
+        split.push((inside.clone(), changed));
+        if inside.end < part.end {
+            split.push((inside.end..part.end, style));
         }
     }
     split
 }
 
-/// A block's text with its highlights and the selected part of it, if any.
-/// With an id it is a label for screen readers, as `text!` makes.
+fn select(style: &mut HighlightStyle) {
+    style.background_color = Some(tint(ACCENT, 0x70).into());
+}
+
+fn underline(style: &mut HighlightStyle) {
+    style.underline = Some(UnderlineStyle {
+        thickness: px(1.),
+        ..Default::default()
+    });
+}
+
+/// A block's text with its highlights, the selected part and the hovered
+/// link. With an id it is a label for screen readers, as `text!` makes, and
+/// its links are links in it.
 pub struct BlockText {
     id: Option<ElementId>,
     text: SharedString,
+    links: Option<Links>,
     styled: StyledText,
 }
 
@@ -292,16 +395,29 @@ impl BlockText {
         text: SharedString,
         highlights: &[(Range<usize>, HighlightStyle)],
         selected: Option<Range<usize>>,
+        hovered: Option<Range<usize>>,
+        links: Option<Links>,
     ) -> Self {
+        let mut styles: Option<Vec<_>> = None;
+        if let Some(range) = hovered {
+            styles = Some(overlay(highlights, range, text.len(), underline));
+        }
+        if let Some(range) = selected {
+            let base = styles.as_deref().unwrap_or(highlights);
+            styles = Some(overlay(base, range, text.len(), select));
+        }
         let styled = StyledText::new(text.clone());
-        let styled = match selected {
-            Some(selected) => {
-                styled.with_highlights(with_selection(highlights, selected, text.len()))
-            }
+        let styled = match styles {
+            Some(styles) => styled.with_highlights(styles),
             None if highlights.is_empty() => styled,
             None => styled.with_highlights(highlights.iter().cloned()),
         };
-        Self { id, text, styled }
+        Self {
+            id,
+            text,
+            links,
+            styled,
+        }
     }
 
     /// Maps positions to offsets once the text is laid out.
@@ -336,6 +452,15 @@ impl Element for BlockText {
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
         node.set_value(self.text.to_string());
+    }
+
+    fn a11y_synthetic_children(&mut self, _: &mut (), builder: &mut A11ySubtreeBuilder) {
+        for (index, (range, url)) in self.links.iter().flat_map(|links| links.iter()).enumerate() {
+            let mut node = accesskit::Node::new(Role::Link);
+            node.set_label(&self.text[range.clone()]);
+            node.set_url(url.to_string());
+            builder.push_child(builder.synthetic_node_id(index), node);
+        }
     }
 
     fn request_layout(
@@ -376,48 +501,91 @@ impl Element for BlockText {
     }
 }
 
-/// A message's text blocks as laid out this frame: block index, text, layout.
-pub type Texts = Vec<(usize, SharedString, TextLayout)>;
+/// A text block of a message as laid out this frame.
+pub struct TextBox {
+    pub block: usize,
+    pub text: SharedString,
+    pub layout: TextLayout,
+    pub links: Option<Links>,
+}
+
+/// A message's text blocks as laid out this frame.
+pub type Texts = Vec<TextBox>;
 
 /// The caret nearest to a position: in the text beside or under it, or at the
 /// start of the next text below.
-fn caret_near(
-    texts: &[(usize, SharedString, TextLayout)],
-    position: Point<Pixels>,
-) -> Option<Caret> {
-    for (block, _, layout) in texts {
-        let bounds = layout.bounds();
+fn caret_near(texts: &[TextBox], position: Point<Pixels>) -> Option<Caret> {
+    for text in texts {
+        let bounds = text.layout.bounds();
         if position.y < bounds.top() {
             return Some(Caret {
-                block: *block,
+                block: text.block,
                 offset: 0,
             });
         }
         if position.y <= bounds.bottom() {
             return Some(Caret {
-                block: *block,
-                offset: layout
+                block: text.block,
+                offset: text
+                    .layout
                     .index_for_position(position)
                     .unwrap_or_else(|near| near),
             });
         }
     }
-    let (block, text, _) = texts.last()?;
+    let text = texts.last()?;
     Some(Caret {
-        block: *block,
-        offset: text.len(),
+        block: text.block,
+        offset: text.text.len(),
     })
+}
+
+/// The text (by index) and link under the pointer.
+fn link_at(
+    texts: &[TextBox],
+    hitboxes: &[Hitbox],
+    position: Point<Pixels>,
+    window: &Window,
+) -> Option<(usize, usize)> {
+    let index = hitboxes
+        .iter()
+        .position(|hitbox| hitbox.is_hovered(window))?;
+    let text = &texts[index];
+    let offset = text.layout.index_for_position(position).ok()?;
+    let link = text
+        .links
+        .as_ref()?
+        .iter()
+        .position(|(range, _)| range.contains(&offset))?;
+    Some((index, link))
+}
+
+/// Whether a link's text names its address ("example.com/" for
+/// "https://example.com" does); otherwise its address shows on hover.
+fn names_target(text: &str, url: &str) -> bool {
+    let bare = |value: &str| {
+        let value = value.trim().to_lowercase();
+        value
+            .strip_prefix("https://")
+            .or_else(|| value.strip_prefix("http://"))
+            .unwrap_or(&value)
+            .trim_end_matches('/')
+            .to_owned()
+    };
+    bare(text) == bare(url)
 }
 
 /// Wraps a message's blocks: a press on its text starts a selection (a double
 /// click takes a word, a triple click a line), dragging extends it, and any
-/// other press clears it.
+/// other press clears it. A click on a link without dragging opens it.
 pub struct SelectionArea {
     desktop: WeakEntity<Desktop>,
     message: u64,
     /// Whether the selection is in this message.
     selected: bool,
-    texts: Rc<[(usize, SharedString, TextLayout)]>,
+    /// The block and link under the pointer, if in this message.
+    hovered: Option<(usize, usize)>,
+    texts: Rc<[TextBox]>,
     child: AnyElement,
 }
 
@@ -426,6 +594,7 @@ impl SelectionArea {
         desktop: WeakEntity<Desktop>,
         message: u64,
         selected: bool,
+        hovered: Option<(usize, usize)>,
         texts: Texts,
         child: impl IntoElement,
     ) -> Self {
@@ -433,9 +602,75 @@ impl SelectionArea {
             desktop,
             message,
             selected,
+            hovered,
             texts: texts.into(),
             child: child.into_any_element(),
         }
+    }
+
+    /// Follow the link under the pointer: underline it, change the cursor and
+    /// show where a link that does not say so leads.
+    fn track_links(&self, boxes: &Rc<[Hitbox]>, window: &mut Window) {
+        let (desktop, texts, hitboxes) = (self.desktop.clone(), self.texts.clone(), boxes.clone());
+        let (message, shown) = (self.message, self.hovered);
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            let found = link_at(&texts, &hitboxes, event.position, window);
+            let block = |(index, link): (usize, usize)| (texts[index].block, link);
+            if found.map(block) == shown {
+                return;
+            }
+            let hovered = found.and_then(|(index, link)| {
+                let text = &texts[index];
+                let (range, url) = text.links.as_ref()?.get(link)?;
+                Some(HoveredLink {
+                    message,
+                    block: text.block,
+                    link,
+                    url: url.clone(),
+                    position: event.position,
+                    deceptive: !names_target(&text.text[range.clone()], url),
+                })
+            });
+            let _ = desktop.update(cx, |this, cx| {
+                let mine = |hovered: &HoveredLink| hovered.message == message;
+                if hovered.is_some() || this.text.hovered.as_ref().is_some_and(mine) {
+                    this.text.hovered = hovered;
+                    cx.notify();
+                }
+            });
+        });
+        let (desktop, texts, hitboxes) = (self.desktop.clone(), self.texts.clone(), boxes.clone());
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                return;
+            }
+            let Some((index, link)) = link_at(&texts, &hitboxes, event.position, window) else {
+                return;
+            };
+            let text = &texts[index];
+            let Some((range, url)) = text.links.as_ref().and_then(|links| links.get(link)) else {
+                return;
+            };
+            let _ = desktop.update(cx, |this, cx| {
+                // Only a click: pressed on this link and released unmoved.
+                let pressed = this.text.selection.is_some_and(|selection| {
+                    let (start, end) = selection.range();
+                    selection.message == message
+                        && start == end
+                        && start.block == text.block
+                        && range.contains(&start.offset)
+                });
+                if pressed {
+                    // The link may take the conversation away from under the pointer.
+                    this.text.hovered = None;
+                    this.open_link(url, window, cx);
+                    cx.notify();
+                }
+            });
+        });
     }
 }
 
@@ -449,7 +684,7 @@ impl IntoElement for SelectionArea {
 
 impl Element for SelectionArea {
     type RequestLayoutState = ();
-    type PrepaintState = Vec<Hitbox>;
+    type PrepaintState = Rc<[Hitbox]>;
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -477,12 +712,12 @@ impl Element for SelectionArea {
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
-    ) -> Vec<Hitbox> {
+    ) -> Rc<[Hitbox]> {
         self.child.prepaint(window, cx);
         // Above the blocks, inside their clip; they let presses through.
         self.texts
             .iter()
-            .map(|(_, _, layout)| window.insert_hitbox(layout.bounds(), HitboxBehavior::Normal))
+            .map(|text| window.insert_hitbox(text.layout.bounds(), HitboxBehavior::Normal))
             .collect()
     }
 
@@ -492,13 +727,22 @@ impl Element for SelectionArea {
         _: Option<&InspectorElementId>,
         _: Bounds<Pixels>,
         _: &mut (),
-        hitboxes: &mut Vec<Hitbox>,
+        hitboxes: &mut Rc<[Hitbox]>,
         window: &mut Window,
         cx: &mut App,
     ) {
         self.child.paint(window, cx);
-        for hitbox in hitboxes.iter() {
-            window.set_cursor_style(CursorStyle::IBeam, hitbox);
+        for (text, hitbox) in self.texts.iter().zip(hitboxes.iter()) {
+            let on_link = self.hovered.is_some_and(|(block, _)| block == text.block);
+            let cursor = if on_link {
+                CursorStyle::PointingHand
+            } else {
+                CursorStyle::IBeam
+            };
+            window.set_cursor_style(cursor, hitbox);
+        }
+        if self.texts.iter().any(|text| text.links.is_some()) {
+            self.track_links(hitboxes, window);
         }
         let message = self.message;
         if self.selected {
@@ -546,32 +790,30 @@ impl Element for SelectionArea {
                 });
             }
         }
-        let (desktop, texts, hitboxes) = (
-            self.desktop.clone(),
-            self.texts.clone(),
-            std::mem::take(hitboxes),
-        );
+        let (desktop, texts, hitboxes) =
+            (self.desktop.clone(), self.texts.clone(), hitboxes.clone());
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                 return;
             }
-            let Some((block, text, layout)) = hitboxes
+            let Some(text) = hitboxes
                 .iter()
                 .position(|hitbox| hitbox.is_hovered(window))
                 .map(|index| &texts[index])
             else {
                 return;
             };
-            let offset = layout
+            let offset = text
+                .layout
                 .index_for_position(event.position)
                 .unwrap_or_else(|near| near);
             let taken = match event.click_count {
                 0 | 1 => offset..offset,
-                2 => word_at(text, offset),
-                _ => line_at(text, offset),
+                2 => word_at(&text.text, offset),
+                _ => line_at(&text.text, offset),
             };
             let caret = |offset| Caret {
-                block: *block,
+                block: text.block,
                 offset,
             };
             let origin = (caret(taken.start), caret(taken.end));
@@ -594,7 +836,9 @@ impl Element for SelectionArea {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: GPUI's glob would replace the standard `#[test]`.
-    use super::{Caret, TextSelection, line_at, selected_text, with_selection, word_at};
+    use super::{
+        Caret, TextSelection, line_at, names_target, overlay, select, selected_text, word_at,
+    };
     use crate::document::{Block, Document};
     use gpui_kit::{HighlightStyle, rgb};
 
@@ -635,14 +879,22 @@ mod tests {
         };
         let document = Document {
             blocks: vec![
-                Block::Text("Hello there".into()),
+                Block::Text {
+                    text: "Hello there".into(),
+                    highlights: Vec::new().into(),
+                    links: Vec::new().into(),
+                },
                 image,
                 Block::Code {
                     language: "rust".into(),
                     text: "fn main() {}".into(),
                     highlights: Vec::new().into(),
                 },
-                Block::Text("Bye".into()),
+                Block::Text {
+                    text: "Bye".into(),
+                    highlights: Vec::new().into(),
+                    links: Vec::new().into(),
+                },
             ],
         };
         let caret = |block, offset| Caret { block, offset };
@@ -679,7 +931,7 @@ mod tests {
             color: Some(rgb(0xff0000).into()),
             ..Default::default()
         };
-        let split = with_selection(&[(2..6, red)], 4..8, 10);
+        let split = overlay(&[(2..6, red)], 4..8, 10, select);
         let ranges: Vec<_> = split.iter().map(|(range, _)| range.clone()).collect();
         assert_eq!(ranges, [0..2, 2..4, 4..6, 6..8, 8..10]);
         let selected: Vec<_> = split
@@ -690,5 +942,14 @@ mod tests {
         // The selected part keeps its syntax colour.
         assert_eq!(split[2].1.color, red.color);
         assert_eq!(split[3].1.color, None);
+    }
+
+    #[test]
+    fn links_whose_text_is_not_their_address_are_flagged() {
+        assert!(names_target("https://example.com/", "https://example.com"));
+        assert!(names_target("example.com", "https://Example.com/"));
+        assert!(names_target("www.example.com", "http://www.example.com"));
+        assert!(!names_target("example.com", "https://evil.example"));
+        assert!(!names_target("the docs", "https://docs.example"));
     }
 }

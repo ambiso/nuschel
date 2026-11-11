@@ -4,19 +4,28 @@
 //! the sandboxed content worker; the UI never parses image formats.
 use base64::Engine as _;
 use gpui_kit::{FontStyle, FontWeight, HighlightStyle, RenderImage, SharedString, rgb};
-use nuschel_core::{CodeRun, ContentBlock, MessageDocument};
+use nuschel_core::{CodeRun, ContentBlock, MessageDocument, Span};
 use std::{ops::Range, sync::Arc};
+
+/// Styles by byte range, sorted and disjoint.
+pub type Highlights = Arc<[(Range<usize>, HighlightStyle)]>;
+/// Link targets (http, https or mumble) by byte range, sorted and disjoint.
+pub type Links = Arc<[(Range<usize>, SharedString)]>;
 
 #[derive(Clone)]
 pub enum Block {
     /// Text without the newlines that separated it from a neighbouring block.
-    Text(SharedString),
+    Text {
+        text: SharedString,
+        highlights: Highlights,
+        links: Links,
+    },
     Code {
         /// The language shown above the code ("code" when unknown).
         language: SharedString,
         text: SharedString,
-        /// Syntax colours by byte range, sorted and disjoint.
-        highlights: Arc<[(Range<usize>, HighlightStyle)]>,
+        /// Syntax colours.
+        highlights: Highlights,
     },
     Image {
         image: Arc<RenderImage>,
@@ -31,7 +40,7 @@ impl Block {
     /// The text a block shows, if it shows text (code included).
     pub fn text(&self) -> Option<&SharedString> {
         match self {
-            Block::Text(text) | Block::Code { text, .. } => Some(text),
+            Block::Text { text, .. } | Block::Code { text, .. } => Some(text),
             Block::Image { .. } => None,
         }
     }
@@ -71,7 +80,7 @@ impl From<MessageDocument> for Document {
                 .into_iter()
                 .enumerate()
                 .map(|(index, block)| match block {
-                    ContentBlock::Text { text } => Block::Text(separated(text, index, last)),
+                    ContentBlock::Text { text, spans } => text_block(text, spans, index, last),
                     ContentBlock::Code { language, runs } => code(language, runs),
                     ContentBlock::Image {
                         width,
@@ -85,7 +94,7 @@ impl From<MessageDocument> for Document {
                             height,
                             source: source.map(Arc::from),
                         },
-                        None => Block::Text("[image]".into()),
+                        None => text_block("[image]".into(), Vec::new(), index, last),
                     },
                 })
                 .collect(),
@@ -93,20 +102,54 @@ impl From<MessageDocument> for Document {
     }
 }
 
-/// Newlines inside a text block are kept; those next to a code fence are
-/// spacing the block layout already provides.
-fn separated(text: String, index: usize, last: usize) -> SharedString {
-    let mut trimmed = text.as_str();
+/// A text block without the newlines that separate it from a neighbouring
+/// block (the block layout spaces them; newlines inside it are kept), and
+/// its links: checked again here, since the worker's reply is not trusted
+/// to be ordered, in range or limited to the allowed schemes.
+fn text_block(text: String, spans: Vec<Span>, index: usize, last: usize) -> Block {
+    let mut kept = 0..text.len();
     if index < last {
-        trimmed = trimmed.trim_end_matches(['\n', '\r']);
+        kept.end = text.trim_end_matches(['\n', '\r']).len();
     }
     if index > 0 {
-        trimmed = trimmed.trim_start_matches(['\n', '\r']);
+        kept.start = kept.end - text[..kept.end].trim_start_matches(['\n', '\r']).len();
     }
-    if trimmed.len() == text.len() {
+    let mut links = Vec::new();
+    let mut covered = kept.start;
+    for span in spans {
+        let Some(url) = span.link.filter(|url| nuschel_core::allowed_link(url)) else {
+            continue;
+        };
+        let range = span.start.max(covered)..span.end.min(kept.end);
+        if range.is_empty()
+            || !text.is_char_boundary(range.start)
+            || !text.is_char_boundary(range.end)
+        {
+            continue;
+        }
+        covered = range.end;
+        links.push((
+            range.start - kept.start..range.end - kept.start,
+            SharedString::from(url),
+        ));
+    }
+    let link = HighlightStyle {
+        color: Some(rgb(crate::theme::ACCENT_HOVER).into()),
+        ..Default::default()
+    };
+    let highlights = links
+        .iter()
+        .map(|(range, _)| (range.clone(), link))
+        .collect();
+    let text = if kept.len() == text.len() {
         text.into()
     } else {
-        trimmed.to_string().into()
+        text[kept].to_owned().into()
+    };
+    Block::Text {
+        text,
+        highlights,
+        links: links.into(),
     }
 }
 
@@ -195,7 +238,7 @@ impl Document {
 mod tests {
     use super::{Block, Document, render_image};
     use base64::Engine as _;
-    use nuschel_core::{CodeRun, ContentBlock, MessageDocument};
+    use nuschel_core::{CodeRun, ContentBlock, MessageDocument, Span};
 
     #[test]
     fn saved_images_keep_their_bytes_and_type() {
@@ -221,7 +264,7 @@ mod tests {
                 source: None,
             }],
         });
-        assert!(matches!(document.blocks[0], Block::Text(ref text) if text == "[image]"));
+        assert!(matches!(document.blocks[0], Block::Text { ref text, .. } if text == "[image]"));
     }
 
     #[test]
@@ -236,6 +279,7 @@ mod tests {
             blocks: vec![
                 ContentBlock::Text {
                     text: "Hi!\nThe patch:\n\n".into(),
+                    spans: Vec::new(),
                 },
                 ContentBlock::Code {
                     language: None,
@@ -249,10 +293,13 @@ mod tests {
                 },
                 ContentBlock::Text {
                     text: "\nThanks\n".into(),
+                    spans: Vec::new(),
                 },
             ],
         });
-        assert!(matches!(&document.blocks[0], Block::Text(text) if text == "Hi!\nThe patch:"));
+        assert!(
+            matches!(&document.blocks[0], Block::Text { text, .. } if text == "Hi!\nThe patch:")
+        );
         let Block::Code {
             language,
             text,
@@ -270,10 +317,63 @@ mod tests {
             Some(gpui_kit::FontWeight::BOLD)
         );
         // Only separators next to other blocks are trimmed: the last block keeps its end.
-        assert!(matches!(&document.blocks[3], Block::Text(text) if text == "Thanks\n"));
+        assert!(matches!(&document.blocks[3], Block::Text { text, .. } if text == "Thanks\n"));
         assert_eq!(
             document.plain_text(),
             "Hi!\nThe patch:\nfn main() {}\nThanks\n"
         );
+    }
+
+    #[test]
+    fn links_from_the_worker_are_checked_and_follow_the_trimmed_text() {
+        let span = |start, end, url: &str| Span {
+            start,
+            end,
+            link: Some(url.into()),
+        };
+        // Between two code blocks, so its separating newlines are trimmed.
+        let text = "\nsee a.example, b and c\n";
+        let code = || ContentBlock::Code {
+            language: None,
+            runs: Vec::new(),
+        };
+        let document = Document::from(MessageDocument {
+            blocks: vec![
+                code(),
+                ContentBlock::Text {
+                    text: text.into(),
+                    spans: vec![
+                        span(5, 14, "https://a.example"),
+                        // Overlapping, disallowed or out of range: clipped or dropped.
+                        span(10, 17, "https://overlap.example"),
+                        span(16, 17, "javascript:alert(1)"),
+                        span(22, 99, "https://c.example"),
+                    ],
+                },
+                code(),
+            ],
+        });
+        let Block::Text {
+            text,
+            links,
+            highlights,
+        } = &document.blocks[1]
+        else {
+            panic!("not text");
+        };
+        assert_eq!(text.as_ref(), "see a.example, b and c");
+        let found: Vec<_> = links
+            .iter()
+            .map(|(range, url)| (&text[range.clone()], url.as_ref()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("a.example", "https://a.example"),
+                (", b", "https://overlap.example"),
+                ("c", "https://c.example")
+            ]
+        );
+        assert_eq!(highlights.len(), 3);
     }
 }

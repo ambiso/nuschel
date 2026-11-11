@@ -54,6 +54,9 @@ pub struct MessageDocument {
 pub enum ContentBlock {
     Text {
         text: String,
+        /// Formatting over parts of the text, sorted by start and disjoint.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        spans: Vec<Span>,
     },
     Code {
         language: Option<String>,
@@ -69,6 +72,27 @@ pub enum ContentBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },
+}
+
+/// Formatting over the bytes `start..end` of a text block.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+    /// The http, https or mumble URL this part links to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+}
+
+/// The link schemes messages may use; anything else stays plain text.
+pub fn allowed_link(url: &str) -> bool {
+    url.split_once("://").is_some_and(|(scheme, rest)| {
+        !rest.is_empty()
+            && ["http", "https", "mumble"]
+                .iter()
+                .any(|allowed| scheme.eq_ignore_ascii_case(allowed))
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

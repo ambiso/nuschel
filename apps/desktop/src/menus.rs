@@ -359,6 +359,11 @@ impl Desktop {
             }
             MenuTarget::Message => {
                 if let Some(menu) = &self.text.menu {
+                    if let Some(link) = menu.link.clone() {
+                        entries.push(item("Copy link", "link", move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(link.to_string()))
+                        }));
+                    }
                     if let Some(selection) = menu.selection.clone() {
                         entries.push(item("Copy", "copy", move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(selection.to_string()))

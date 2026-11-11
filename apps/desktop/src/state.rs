@@ -2576,7 +2576,7 @@ impl Desktop {
                         let mut image = None;
                         for block in &message.document.blocks {
                             match block {
-                                nuschel_core::ContentBlock::Text { text: part } => {
+                                nuschel_core::ContentBlock::Text { text: part, .. } => {
                                     text.push_str(part)
                                 }
                                 nuschel_core::ContentBlock::Code { runs, .. } => {
