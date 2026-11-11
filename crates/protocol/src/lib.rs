@@ -7,6 +7,7 @@ use thiserror::Error;
 pub mod crypt;
 pub mod nuschel;
 pub mod relay;
+pub mod tunnel;
 pub mod voice;
 
 pub mod control {

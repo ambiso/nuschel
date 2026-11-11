@@ -3227,7 +3227,11 @@ name = "nuschel-client"
 version = "0.1.0"
 dependencies = [
  "nuschel-core",
+ "nuschel-ipc",
+ "nuschel-protocol",
+ "nuschel-session",
  "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -3249,6 +3253,8 @@ name = "nuschel-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "sha2 0.11.1",
+ "uuid",
 ]
 
 [[package]]
@@ -3376,7 +3382,6 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "directories",
- "nuschel-client",
  "nuschel-core",
  "nuschel-ipc",
  "nuschel-legacy-html",
@@ -3389,7 +3394,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
- "sha2 0.11.1",
  "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
