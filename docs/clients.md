@@ -369,12 +369,20 @@ High-quality video without transcoding, so servers stay cheap:
 2. The terminal client (done: `apps/tui`).
 3. Finish and push the verified Nuschel → Nuschl rename.
 4. **iOS first** (user priority, 2026-11-11): SwiftUI over UniFFI. Start with the
-   bindings and iOS build/app foundation; implement the server/channel/chat view
+   Linux-hosted macOS VM feasibility check (Docker-OSX/QEMU-KVM), bindings and iOS
+   build/app foundation; implement the server/channel/chat view
    and the iOS audio adapter in parallel. The first usable milestone is text and
-   voice against private Mumble and compatible Nuschl servers on a physical phone,
+   voice against private Mumble and compatible Nuschl servers in iOS Simulator,
    with bookmarks, local history and reconnects. Then harden background audio,
    routes, interruptions, accessibility and distribution. Review the in-process
    codec/content boundary explicitly, preferring memory-safe code and OS services.
+   No owned Apple hardware is assumed. Pin a compatible guest/Xcode/simulator
+   combination and prove SwiftUI rendering/UI tests, including the Intel simulator
+   build of the Rust library. Docker-OSX documents Xcode and headless operation,
+   but lists GPU acceleration as unfinished, so actual simulator compatibility is
+   an early experiment, not an assumed capability ([project documentation](https://github.com/sickcodes/Docker-OSX)).
+   Record physical-device audio/background validation separately; simulator results
+   are not evidence of hardware behavior ([Apple's testing guidance](https://developer.apple.com/documentation/xcode/testing-a-release-build)).
 5. Authenticated per-device Nuschl sessions before simultaneous linked desktop/phone
    logins; do not clone private device keys. Optional recovery and preferences sync
    follow their own prerequisites and do not block the initial iOS client.

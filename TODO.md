@@ -17,6 +17,13 @@ final package and VM verification is running before the push.
    completing the browser UI, video/SFrame and additional encrypted-history features.
    Swift + SwiftUI over the shared Rust SDK through UniFFI remains the chosen approach.
    Build a small usable client, rather than requiring every remaining SDK feature first:
+   - [ ] **Linux-hosted macOS VM first** (user, 2026-11-11): no owned Apple
+         hardware or paid macOS runner is a development prerequisite. Evaluate
+         Docker-OSX/QEMU-KVM with a disk-backed image, pinned guest/Xcode/SDK versions
+         and the appropriate Intel simulator target. Prove a minimal SwiftUI app
+         builds, boots in Simulator, renders and runs an automated UI test before
+         committing to this environment. Check graphics support explicitly; a booted
+         macOS guest alone is insufficient. Keep CI as an optional alternative.
    - [ ] Swift bindings for connect/disconnect, bookmarks, channel/user snapshots,
          text/history and mute/deafen/join-voice commands; an iOS Rust build and a
          minimal simulator/device app that exercises the bindings.
@@ -27,11 +34,15 @@ final package and VM verification is running before the push.
          Do not copy the desktop subprocess topology or automatically allow its
          unsafe dependencies in-process; prefer memory-safe implementations and OS
          services, and explicitly review remaining mobile exceptions.
-   - [ ] First usable milestone: a physical iPhone joins a private legacy Mumble
+   - [ ] First app milestone: the iOS Simulator in the Linux-hosted macOS guest
+         joins a private legacy Mumble
          server and a compatible Nuschl server, exchanges text and voice, and
          reconnects without losing bookmarks or local history.
    - [ ] Background/locked-phone audio, Bluetooth/headset routes, call integration,
          accessibility and a reproducible device build/signing/testing workflow.
+         Physical-device audio, Bluetooth, battery and background checks remain
+         separate validation work, potentially with external testers; acquiring a
+         Mac or iPhone must not gate the SDK, UI or simulator milestones.
 3. **Desktop + phone with one linked identity:** authenticated per-device server
    sessions must avoid the current ghost kick before enabling simultaneous linked
    logins or synced auto-connect. This can follow the initial iOS client; it does
