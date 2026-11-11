@@ -593,20 +593,20 @@ fn bare_links(text: &str, spans: &[Span], count: &mut usize) -> Vec<(usize, usiz
             .map_or(text.len(), |length| colon + length);
         from = end;
         // Sentence punctuation after a URL is not part of it, nor is a closing
-        // bracket that has no opening one inside it.
+        // bracket that has no opening one inside it. Brackets are counted once:
+        // counting again for every character trimmed is quadratic in the URL.
+        let url = &text[start..end];
+        let unclosed =
+            |open, close| url.matches(open).count() as isize - url.matches(close).count() as isize;
+        let (mut parens, mut brackets) = (unclosed('(', ')'), unclosed('[', ']'));
         while let Some(last) = text[start..end].chars().next_back() {
-            let url = &text[start..end];
-            let unbalanced = |open, close| {
-                last == close && url.matches(open).count() < url.matches(close).count()
-            };
-            if matches!(last, '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"')
-                || unbalanced('(', ')')
-                || unbalanced('[', ']')
-            {
-                end -= last.len_utf8();
-            } else {
-                break;
+            match last {
+                ')' if parens < 0 => parens += 1,
+                ']' if brackets < 0 => brackets += 1,
+                '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' => {}
+                _ => break,
             }
+            end -= last.len_utf8();
         }
         let linked = |span: &Span| span.link.is_some() && span.start < end && start < span.end;
         if spans.iter().any(linked) {
@@ -1060,6 +1060,31 @@ mod tests {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn closing_brackets_after_a_url_take_linear_time() -> Result<(), Error> {
+        // Brackets were counted again for every one trimmed: this took longer
+        // than the content worker's five seconds, so the message never showed.
+        let renderer = ContentRenderer::new()?;
+        for close in [")", "]"] {
+            let source = format!("see https://a.example/x{}", close.repeat(200_000));
+            let started = std::time::Instant::now();
+            let document = renderer.render(&source)?;
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "{:?}",
+                started.elapsed()
+            );
+            assert_eq!(
+                links(&document)[0].1,
+                [(
+                    "https://a.example/x".to_owned(),
+                    "https://a.example/x".to_owned()
+                )]
+            );
         }
         Ok(())
     }
