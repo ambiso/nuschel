@@ -4,6 +4,13 @@
 //! The caller owns UDP, authenticated signaling and scheduling. Drain `poll` to
 //! `WakeAt` after each input, then wake by that deadline. Never drain an unbounded
 //! socket backlog before polling output: doing so can starve RTCP and the pacer.
+//!
+//! `offer_tracks` binds semantic purposes to MIDs in a structured description.
+//! The caller must authenticate that entire value and provide the expected fresh
+//! signaling ID at both acceptance steps. The legacy string API supports only
+//! microphone plus optional camera; it never guesses roles for a second stream.
+//! This is an encoded-media transport foundation, not a capture, calling,
+//! ownership/consent, relay, or end-to-end media encryption implementation.
 
 use std::{
     net::SocketAddr,
@@ -111,7 +118,7 @@ pub enum Error {
     Address,
     #[error("invalid or oversized datagram")]
     Datagram,
-    #[error("invalid track, codec, or encoded frame length")]
+    #[error("invalid track, codec, encoded frame length, or RTP timestamp")]
     Frame,
     #[error("media transport is not connected")]
     NotConnected,
@@ -406,7 +413,11 @@ impl Peer {
     }
 
     /// Submit an already encoded frame. Audio uses a 48 kHz clock, video 90 kHz.
-    /// The caller bounds its capture queue and drops stale video on backpressure.
+    /// Timestamps increase independently per track. The caller bounds its capture
+    /// queue and drops stale video on backpressure; a failed write consumes no
+    /// frame budget or timestamp. Both audio roles have dedicated allocations,
+    /// videos get equal shares, and the total admission budget follows BWE with
+    /// transport headroom. An encoder must still adapt its rate/size to feedback.
     pub fn write(
         &mut self,
         track: Track,
