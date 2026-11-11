@@ -7,7 +7,7 @@
 use crate::{
     adaptive::{Controller, WINDOW},
     dsp::{CapturePipeline, FRAME, RATE},
-    jitter::{JitterBuffer, Pull},
+    mixer::{Mixer, Voice},
     probe::EchoProbe,
     reference::{self, Clock, Played, ReferenceConverter, Stamper, Step, Timeline},
     sounds::Effects,
@@ -18,10 +18,10 @@ use cpal::{
 };
 use nuschel_core::audio::{AudioDevice, AudioSettings, EchoMode, EchoSource};
 use nuschel_ipc::{Envelope, LiveMediaEvent, LiveMediaRequest, read_frame, write_frame};
-use opus_pure::{Application, MAX_PACKET_BYTES, MAX_PACKET_SAMPLES, OpusDecoder, OpusEncoder};
+use opus_pure::{Application, MAX_PACKET_BYTES, OpusEncoder};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::VecDeque,
     io::{self, Write},
     sync::{
         Arc,
@@ -39,7 +39,6 @@ const RING: usize = 20 * FRAME;
 /// Nuschel's ring, so the ring's own fill is not part of the delay.
 const ECHO_DELAY_HINT_MS: i32 = 30;
 
-const MAX_SPEAKERS: usize = 64;
 const LEVEL_EVERY: u32 = 10;
 
 /// Call a stream builder with the sample type of `format`.
@@ -81,63 +80,6 @@ struct Reference {
     timeline: Timeline,
     channels: usize,
     index: u64,
-}
-
-struct Speaker {
-    decoder: OpusDecoder,
-    jitter: JitterBuffer,
-    pcm: VecDeque<f32>,
-    volume: f32,
-    last_packet: Instant,
-}
-
-impl Speaker {
-    /// Top up decoded audio for one output frame.
-    fn fill(&mut self, scratch: &mut [f32]) {
-        while self.pcm.len() < FRAME {
-            match self.jitter.pull() {
-                Pull::Packet { opus, end } => {
-                    if let Ok(count) = self.decoder.decode(&opus, MAX_PACKET_SAMPLES, scratch) {
-                        self.jitter.observe_frames((count / FRAME) as u64);
-                        self.extend(&scratch[..count]);
-                    }
-                    if end {
-                        let _ = self.decoder.reset_state();
-                    }
-                }
-                Pull::Lost { fec, frames } => {
-                    let size = (frames as usize * FRAME).min(MAX_PACKET_SAMPLES);
-                    let decoded = match fec {
-                        Some(next) => self.decoder.decode_fec(&next, size, scratch),
-                        None => self.decoder.decode(&[], size, scratch),
-                    };
-                    if let Ok(count) = decoded {
-                        self.extend(&scratch[..count]);
-                    } else {
-                        break;
-                    }
-                }
-                Pull::Idle => break,
-            }
-        }
-    }
-
-    fn extend(&mut self, samples: &[f32]) {
-        let volume = self.volume;
-        // Malformed packets can decode far outside full scale (libopus does the
-        // same); clamp per speaker so one bad stream cannot swamp the mix.
-        self.pcm.extend(samples.iter().map(|sample| {
-            let value = sample * volume;
-            if value.is_finite() {
-                value.clamp(-1., 1.)
-            } else {
-                0.
-            }
-        }));
-        // Never accumulate more than 200 ms of decoded audio per speaker.
-        let excess = self.pcm.len().saturating_sub(RING / 2);
-        self.pcm.drain(..excess);
-    }
 }
 
 struct Transmit {
@@ -217,7 +159,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut state_known = false;
     let mut epoch = 0;
     let mut push_to_talk = false;
-    let mut speakers = BTreeMap::<u32, Speaker>::new();
+    // Every server's voice, mixed (see mixer.rs).
+    let mut mixer = Mixer::default();
     let mut devices: Option<Devices> = None;
     let mut pipeline: Option<CapturePipeline> = None;
     let mut retry_at = Instant::now();
@@ -230,7 +173,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut skip_window = true;
     let mut capture_frame = [0.; FRAME];
     let mut mix = [0.; FRAME];
-    let mut scratch = vec![0.; MAX_PACKET_SAMPLES];
     // Local test mode (Settings): capture and process, but never encode or send.
     let mut preview = false;
     let mut loopback = false;
@@ -357,7 +299,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 deafened = deaf;
                 state_known = true;
                 if deaf {
-                    speakers.clear();
+                    mixer.clear();
                 }
                 if was_transmitting && muted {
                     // Audio captured before this request arrived may already
@@ -441,38 +383,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 effects.play(sound, volume, Instant::now());
             }
             Some(Event::Request(LiveMediaRequest::Playback {
+                stream,
                 sender,
                 sequence,
                 opus,
                 end,
                 volume,
             })) => {
-                if deafened || opus.is_empty() || opus.len() > 1024 || !volume.is_finite() {
+                if deafened {
                     continue;
                 }
-                if !speakers.contains_key(&sender) && speakers.len() >= MAX_SPEAKERS {
-                    continue;
-                }
-                let speaker = match speakers.entry(sender) {
-                    std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                    std::collections::btree_map::Entry::Vacant(entry) => entry.insert(Speaker {
-                        decoder: OpusDecoder::new(48_000, 1)?,
-                        jitter: JitterBuffer::default(),
-                        pcm: VecDeque::with_capacity(RING / 2),
-                        volume: 1.,
-                        last_packet: Instant::now(),
-                    }),
+                let voice = Voice {
+                    stream,
+                    sender,
+                    sequence,
+                    opus,
+                    end,
+                    volume,
                 };
-                // A restarted stream (sequence reset after silence) gets a fresh buffer.
-                if speaker.last_packet.elapsed() > Duration::from_secs(1)
-                    && !speaker.jitter.is_playing()
-                {
-                    speaker.jitter = JitterBuffer::default();
-                    let _ = speaker.decoder.reset_state();
-                }
-                speaker.volume = volume.clamp(0., 4.);
-                speaker.last_packet = Instant::now();
-                speaker.jitter.push(sequence, opus, end, Instant::now());
+                mixer.push(voice, Instant::now())?;
+            }
+            Some(Event::Request(LiveMediaRequest::EndStream { stream })) => {
+                mixer.end_stream(stream)
             }
             None => {}
         }
@@ -484,15 +416,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             && RING - open.playback.slots() < controller.playback_samples()
         {
             mix.fill(0.);
-            for speaker in speakers.values_mut() {
-                speaker.fill(&mut scratch);
-                for (out, sample) in mix
-                    .iter_mut()
-                    .zip(speaker.pcm.drain(..speaker.pcm.len().min(FRAME)))
-                {
-                    *out += sample;
-                }
-            }
+            mixer.mix(&mut mix);
             if loopback {
                 for (out, sample) in mix.iter_mut().zip(looped.drain(..looped.len().min(FRAME))) {
                     *out += sample;
@@ -669,10 +593,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if last_cleanup.elapsed() > Duration::from_secs(2) {
-            speakers.retain(|_, speaker| {
-                speaker.last_packet.elapsed() < Duration::from_secs(5)
-                    || speaker.jitter.is_playing()
-            });
+            mixer.cleanup(Instant::now());
             last_cleanup = Instant::now();
         }
     }
@@ -1582,6 +1503,7 @@ fn device_buffer(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opus_pure::{MAX_PACKET_SAMPLES, OpusDecoder};
 
     fn device(id: &str, name: &str) -> AudioDevice {
         AudioDevice {

@@ -1174,7 +1174,7 @@ async fn connect_once(
                     if muted_locally { continue; }
                     mark_talking(events, &id, generation, &mut speaking, packet.sender, !packet.end).await;
                     if let Some(media) = &media {
-                        let _ = media.commands.try_send(LiveMediaRequest::Playback { sender: packet.sender, sequence: packet.sequence, opus: packet.opus, end: packet.end, volume: packet.volume * volume });
+                        let _ = media.commands.try_send(LiveMediaRequest::Playback { stream: 0, sender: packet.sender, sequence: packet.sequence, opus: packet.opus, end: packet.end, volume: packet.volume * volume });
                     }
                 },
                 SessionEvent::User(user) => {

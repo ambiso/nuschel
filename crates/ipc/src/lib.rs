@@ -417,13 +417,25 @@ pub enum LiveMediaRequest {
     PushToTalk {
         active: bool,
     },
+    /// Voice from a server. One worker mixes every server the user listens
+    /// to into one output (docs/architecture.md, "Voice on several servers").
     Playback {
+        /// The server it came from, as the supervisor numbers them: sessions
+        /// are per server, so one sender number on two servers is two people.
+        #[serde(default)]
+        stream: u32,
         sender: u32,
         sequence: u64,
         opus: Vec<u8>,
         end: bool,
-        /// Product of the sender's volume adjustment and the local per-user volume.
+        /// Product of the sender's volume adjustment, the local per-user
+        /// volume and the server's playback volume.
         volume: f32,
+    },
+    /// Drop a server's voice at once (deafened there, or disconnected):
+    /// what its speakers had buffered is not played.
+    EndStream {
+        stream: u32,
     },
     /// Local test mode instead of `SetState`: nothing is ever encoded or sent.
     /// `capture` opens the microphone; `loopback` plays the processed voice back.
@@ -540,6 +552,7 @@ mod voice_ipc_cost {
         let request = Envelope::new(
             0,
             LiveMediaRequest::Playback {
+                stream: 1,
                 sender: 42,
                 sequence: 123_456,
                 opus,
@@ -579,6 +592,22 @@ mod voice_ipc_cost {
 #[cfg(test)]
 mod hostile_frames {
     use super::*;
+
+    #[test]
+    fn playback_without_a_stream_is_stream_zero() -> Result<(), serde_json::Error> {
+        let request: LiveMediaRequest = serde_json::from_str(
+            r#"{"kind":"playback","sender":3,"sequence":2,"opus":[1],"end":false,"volume":1.0}"#,
+        )?;
+        assert!(matches!(
+            request,
+            LiveMediaRequest::Playback {
+                stream: 0,
+                sender: 3,
+                ..
+            }
+        ));
+        Ok(())
+    }
     #[test]
     fn random_frames_are_rejected_without_panicking() {
         let mut state = 0x1234_5678_9abc_def0_u64;
