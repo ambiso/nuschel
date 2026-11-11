@@ -37,6 +37,7 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(again.token, link.token);
         assert_eq!((again.host.as_str(), again.port), (link.host.as_str(), link.port));
         assert_eq!(again.certificate_sha256, link.certificate_sha256);
+        assert_eq!(again.require_nuschel, link.require_nuschel);
     }
     if let Some(pin) = &url.certificate_sha256 {
         assert!(pin.len() == 64 && pin.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')));

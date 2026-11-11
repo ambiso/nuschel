@@ -29,9 +29,13 @@
   }
 
   function parse() {
+    if (location.href.length > 8192) return null;
     const path = /^\/join\/([A-Za-z0-9_-]{16,64})?\/?$/.exec(location.pathname);
     if (!path) return null;
     const params = new URLSearchParams(location.hash.replace(/^#/, ""));
+    for (const key of ["s", "c", "fp", "policy", "n"]) {
+      if (params.getAll(key).length > 1) return null;
+    }
     const server = parseServer(params.get("s") || "");
     if (!server) return null;
     const channel = (params.get("c") || "").split("/").filter(function (part) {
@@ -44,7 +48,9 @@
       if (!match) return null;
       pin = match[1].toLowerCase();
     }
-    const policy = (params.get("policy") || "").split("+").indexOf("nuschel") >= 0;
+    const policies = (params.get("policy") || "").split(/[+ ]/).filter(Boolean);
+    if (policies.some(function (policy) { return policy !== "nuschel"; })) return null;
+    const policy = policies.indexOf("nuschel") >= 0;
     const name = (params.get("n") || "").slice(0, 100);
     return {
       token: path[1] || "",

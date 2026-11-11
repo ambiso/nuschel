@@ -91,10 +91,24 @@ impl ShareLink {
             ..Self::default()
         };
         let mut server = None;
+        let mut seen = 0_u8;
         for pair in fragment.split('&').filter(|pair| !pair.is_empty()) {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let name = decode(name)?;
             let value = decode(value)?;
-            match name {
+            let option = match name.as_str() {
+                "s" => 1,
+                "c" => 2,
+                "fp" => 4,
+                "policy" => 8,
+                "n" => 16,
+                _ => 0,
+            };
+            if seen & option != 0 {
+                return Err("the share link repeats an option".into());
+            }
+            seen |= option;
+            match name.as_str() {
                 "s" => server = Some(value),
                 "c" => {
                     link.channel = value
@@ -118,7 +132,14 @@ impl ShareLink {
                         .ok_or("the share link's fp= must be sha256: and 64 hex digits")?;
                     link.certificate_sha256 = Some(hex.to_ascii_lowercase());
                 }
-                "policy" => link.require_nuschel = value.split(['+', ' ']).any(|p| p == "nuschel"),
+                "policy" => {
+                    for policy in value.split(['+', ' ']).filter(|part| !part.is_empty()) {
+                        if policy != "nuschel" {
+                            return Err("the share link requires an unsupported policy".into());
+                        }
+                        link.require_nuschel = true;
+                    }
+                }
                 "n" => {
                     let name: String = value.chars().take(MAX_NAME).collect();
                     link.name = Some(name).filter(|name| !name.trim().is_empty());
@@ -373,6 +394,32 @@ mod tests {
         assert_eq!(link.channel, ["Lobby"]);
         assert_eq!(link.name.as_deref(), Some("A B"));
         assert!(ShareLink::parse("NUSCHEL://join#s=a.b").is_ok());
+    }
+
+    #[test]
+    fn security_options_are_decoded_once_and_never_ambiguous() {
+        for fragment in [
+            "policy=nuschel",
+            "pol%69cy=nuschel",
+            "policy=nuschel+nuschel",
+            "policy=nuschel%2Bnuschel",
+        ] {
+            let link = ShareLink::parse(&format!("nuschel://join/#s=a.b&{fragment}")).unwrap();
+            assert!(link.require_nuschel, "{fragment}");
+        }
+        for fragment in [
+            "policy=nuschel&policy=",
+            "policy=&pol%69cy=nuschel",
+            "policy=nuschel+future",
+            "policy=future",
+            "s=a.b&%73=other.example",
+            "fp=sha256:bad&fp=",
+        ] {
+            assert!(
+                ShareLink::parse(&format!("nuschel://join/#s=a.b&{fragment}")).is_err(),
+                "{fragment}"
+            );
+        }
     }
 
     #[test]
