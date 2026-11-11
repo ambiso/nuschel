@@ -510,6 +510,33 @@ otherwise, so that a fresh signed head always exists. Heads are signed with the
 server's identity key, the same key extension.md §3 names as the log key; it is pinned
 like the server (sticky, carried in invites).
 
+**Implemented** in [`crates/kt`](../crates/kt) (`nuschel-kt`), with these refinements
+(2026-11-11):
+
+- **`acct:` carries the roster.** Its value is an `AccountBinding` (value format 1): the
+  identity root public key (1986 bytes, so one lookup is enough to check the
+  device-signing certificate) and a *roster commitment*, SHA-256 over a context label,
+  the hash of the device-signing certificate, and the sorted `DeviceCertificate::hash`
+  and revocation hashes. A device change is a new version of `acct:` with the same
+  root; TOFU compares roots, never whole values. `roster_for_binding` checks the
+  certificates from the directory API against the commitment and builds the identity
+  crate's `DeviceRoster`. `id:` keeps its place in the label encoding for a later
+  per-identity record (several accounts of one identity on a server, Mumble bindings),
+  and the account-binding statement's hash joins the value as a new format once the
+  identity crate signs binding statements. `name:` values are format 2 (the account id).
+  Every value is `uint16 format || opaque data<0..4096>`, so new formats leave old
+  proofs valid, and a client that does not know a format says so.
+- **Hourly heads re-sign the current epoch.** akd creates no epoch without changes, so
+  "hourly otherwise" means the server signs its current epoch again with a newer
+  `issued_at`. Heads of one epoch must name the same root, and `issued_at` never
+  decreases across epochs (the server clamps it if its clock goes back). A head for an
+  older epoch signed after a newer one is itself evidence (*stale signing*: the server
+  was hiding updates from someone), as are two roots for one epoch (*equivocation*).
+- **The head-signing key is behind a `HeadSigner` trait** so the server's identity key
+  can sign; Ed25519 today. The pinned `LogDescriptor` (suite, signing key, VRF public
+  key; 71 bytes) is hashed into a `log_id` that every head names, so a head binds the
+  VRF key as well.
+
 ### 5.2 Implementation: `akd` behind a narrow interface
 
 | | [`akd`](https://crates.io/crates/akd) 0.13.0 (2026-08-13) | [IETF KEYTRANS](https://datatracker.ietf.org/doc/draft-ietf-keytrans-protocol/) (protocol -06, architecture -11) |
@@ -524,6 +551,58 @@ like the server (sticky, carried in invites).
 `history`, `audit` and their client-side verifiers, so a KEYTRANS implementation can
 replace it once there is an RFC and a maintained Rust implementation. Writing our own
 Merkle prefix tree and VRF from a draft is the larger risk.
+
+**As implemented.** The server uses only the `Directory` trait (`publish`,
+`refresh_head`, `latest_head`, `head_at`, `lookup`, `history`, `audit`). `AkdDirectory`
+implements it on a `KtStore`, an ordered key-value store with atomic batches; the
+server backs it with one table through the storage worker (`kt_records(key, value)`,
+point reads and prefix scans; the record layout belongs to `nuschel-kt`, so the worker
+never interprets it). Clients use pure functions: `verify_head`, `check_freshness`,
+`KnownHeads`, `verify_lookup`, `verify_history` with `monitor_own`, `verify_audit`,
+`roster_for_binding`, `ContactTrust::assess`. A backend is a *suite* in the pinned
+descriptor; heads, gossip, response envelopes, values and every client result are
+independent of it, so a KEYTRANS log would be suite 2 and only its proof encodings and
+verifiers would be new.
+
+- **Configuration:** akd 0.13.0 with default features off plus `experimental` and
+  `parallel_vrf`; akd's current configuration (`ExperimentalConfiguration`, the one akd's
+  main branch deploys; `WhatsAppV1Configuration` exists for WhatsApp's tree) with the
+  domain label `nuschel-kt/v1 akd`; BLAKE3 with `pure`; ECVRF-EDWARDS25519-SHA512-TAI
+  (RFC 9381), akd's only VRF. The VRF secret is the server's second KT secret: it also
+  keys the value commitments and can never change for a log.
+- **Findings while integrating akd:**
+  1. akd 0.13 does not build without `akd_core/protobuf` (it re-exports `proto`
+     unconditionally). The protobuf runtime is linked but never used: proofs travel in
+     `nuschel-kt`'s own strict encoding (§5.6).
+  2. `akd_core` turns on ed25519-dalek's `legacy_compatibility`, which accepts
+     non-canonical (malleable) Ed25519 signatures *for every crate in the same binary*.
+     `nuschel-kt` checks `s < ℓ` itself; no other crate linked with it may rely on
+     ed25519-dalek for canonical signatures (`nuschel-identity` uses libcrux).
+  3. akd's verifier asserts on version 0 and does unchecked arithmetic on epochs.
+     `nuschel-kt` rejects such proofs first, caps epochs at 2^48 and runs akd's
+     verifiers under `catch_unwind`.
+  4. akd's verifier never hashes the label of a membership proof's first sibling entry
+     (the root), so 34 bytes per membership proof were malleable (found by the mutation
+     test). The decoder requires the root label there.
+  5. akd has no absence proof in its public API: "not found" is unauthenticated, a
+     failure, never "this account has no key".
+  6. akd builds every audit proof against its *latest* tree, so a proof for an older
+     epoch walks every path changed since; a range audit cost the span times the later
+     changes (238 KB for four quiet epochs at 10,000 accounts). The directory therefore
+     stores each epoch's proof while that epoch is the newest (minimal, and valid
+     forever because it only links two fixed roots), written atomically with its head,
+     and joins them for range audits (§5.8).
+  7. The auditor is async and spawns Tokio tasks; `verify_audit` runs it on its own
+     thread and runtime, which works inside or outside a caller's runtime.
+- **`unsafe` and licences.** akd and akd_core contain only `unsafe impl Send/Sync` on
+  types whose fields are thread-safe already. Dependencies with `unsafe` internals:
+  curve25519-dalek, BLAKE3's Rust SIMD intrinsics (no C with `pure`), dashmap 5, tokio;
+  at build time only, protobuf-codegen's tree (`which`, rustix 0.38). New crates: akd,
+  akd_core, ed25519, protobuf 3.7.2 (with protobuf-codegen, -parse, -support),
+  value-bag, home: MIT and/or Apache-2.0; dashmap 5.5.3, which: MIT; ed25519-dalek
+  2.2.0: BSD-3-Clause; blake3 1.8.7, constant_time_eq: CC0-1.0 or Apache-2.0; rustix,
+  linux-raw-sys: Apache-2.0 (LLVM exception) or MIT. `cargo deny` passes, and its
+  wrapper rules confine `akd` and `akd_core` to `nuschel-kt`.
 
 ### 5.3 Auditing and gossip
 
@@ -540,6 +619,14 @@ Merkle prefix tree and VRF from a draft is the larger risk.
   the `NuschelHello`; clients pin the list (sticky) and then require an auditor
   countersignature on a head no older than 7 days, Signal's bound. Without auditors,
   gossip and monitoring are the defence. Who runs auditors is open question 9.
+- **As implemented:** the payload is `HeadGossip { version 1, type 6, SignedHead }`,
+  150 bytes, attached when the sender's latest head is newer than any head seen in the
+  conversation and a day has passed (`should_gossip`). `check_gossip` compares it with
+  the receiver's `KnownHeads`: a contradiction yields `Evidence` (two signed heads, 299
+  bytes, checkable by anyone holding the descriptor); a newer head needs an audit proof
+  from the receiver's latest head, and a server that cannot produce one has forked; a
+  malformed or wrongly signed head is the sender's fault (members cannot forge heads)
+  and is dropped.
 
 ### 5.4 What clients check, and when
 
@@ -551,6 +638,10 @@ Merkle prefix tree and VRF from a draft is the larger risk.
 | Every new device in a roster | The device certificate's hash is in the identity record at an epoch ≥ its addition. Until included (≤ 1 min) the device shows as "pending"; after that, failure is a warning, and a direct conversation blocks |
 | Each connect, for DM contacts and verified contacts | History proofs, so a temporary fake binding cannot come and go between lookups |
 
+With the roster in `acct:` (§5.1), one lookup serves the first-contact and the
+new-device rows. Audit responses span at most 4096 epochs; longer gaps are audited in
+steps between signed heads (`head_at`).
+
 ### 5.5 Key transparency and TOFU
 
 - TOFU pins the root, and KT shows whether the server tells everyone the same thing.
@@ -560,6 +651,85 @@ Merkle prefix tree and VRF from a draft is the larger risk.
   day. A second marks the conversation "Automatic verification unavailable" (amber,
   with the reason) and offers manual verification. Messages stay encrypted to the
   pinned keys, and a manually verified contact stays verified.
+- **Which error means what** (`KtError::class`, `Assessment::surface`):
+
+  | Errors | Class | Shown |
+  | --- | --- | --- |
+  | Bad head signature, head of another log, stale head (> 25 h) or from the future, rollback (an older head replayed), invalid lookup or history proof, response for another label, malformed message or value, unauthenticated "not found", certificates not matching the roster commitment or not verifying under the bound root | Failure | First: nothing, retry within a day. Again: "Automatic verification unavailable" |
+  | Equivocation, stale signing (both with signed evidence), failed audit between two signed heads, a history that contradicts an earlier verified one, a version that went back | Server misbehaviour | Alarm; the evidence is kept |
+  | A version of an own label with a value the user's devices did not make | Own-key alarm | Blocking "This wasn't me: revoke" |
+
+  A failed audit counts as misbehaviour because the server signed both heads and a
+  correct server can always connect them. A KT-consistent rebinding is a key change
+  per §4: a verified direct contact blocks sending until accepted (the verified pin is
+  kept until then), a verified channel member turns the lock amber, otherwise an inline
+  notice re-pins. A history in which another root came and went shows a notice too.
+
+### 5.6 Wire formats
+
+Every message starts with `uint8 version = 1, uint8 type`. Integers are big-endian,
+every variable-length field has a length prefix and a maximum, enum and option tags
+accept only defined values, trailing bytes are an error, and counts are checked against
+the remaining input before anything is allocated. Each value has one encoding: parsed
+messages re-encode to the same bytes (the fuzz target checks this).
+
+| Type | Message | Size |
+| --- | --- | --- |
+| 1 | `LogDescriptor`: suite, signature scheme, signing key, suite parameters (VRF key) | 71 bytes |
+| 2 | `SignedHead`: log id, epoch (≤ 2^48), root, `issued_at` (ms), signature over a context label and the fields | 148 bytes |
+| 3, 4 | `LookupResponse`, `HistoryResponse`: head, label, suite proof | ≤ 256 KiB, ≤ 8 MiB proof |
+| 5 | `AuditResponse`: epochs, the roots in between, suite proof | ≤ 4096 epochs, ≤ 32 MiB |
+| 6 | `HeadGossip` | 150 bytes |
+| 7 | `Evidence`: kind, two heads | 299 bytes |
+
+Suite 1's proof encodings (node labels, membership and non-membership proofs, VRF
+proofs, update, history and append-only proofs) are specified in
+`crates/kt/src/akd_backend/codec.rs`. Known-answer vectors: `crates/kt/tests/vectors/kt-v1.txt`.
+
+### 5.7 Privacy
+
+- **Labels are hidden by the VRF.** A label's position in the tree is
+  `VRF(label, version)`; only the server can compute it, and a client can only check a
+  VRF proof for a label it already knows. Other users appear in proofs as pseudorandom
+  256-bit node labels, so the tree cannot be enumerated or joined with a list of
+  account ids, fingerprints or names without asking the server, which sees and can
+  rate-limit every lookup.
+- **Values are hidden by commitments** keyed by the VRF secret; sibling hashes reveal
+  nothing about other users' keys.
+- **A lookup reveals** about others only the approximate directory size (path length)
+  and, across epochs, whether neighbouring subtrees changed; about the looked-up label,
+  its value, version count and the epoch of its latest change. A history reveals every
+  past value and when it changed (served only for one's own labels and contacts). Audit
+  proofs reveal how many leaves each epoch added (one per new label, two per change),
+  not whose.
+- **Post-quantum:** label and value hiding rest on the discrete logarithm (recovering
+  the VRF secret also opens the commitments), and heads are Ed25519. Tree integrity
+  rests on BLAKE3. A hybrid head signature is a new signature scheme in the descriptor.
+
+### 5.8 Measurements
+
+Release build, in-memory store, 4 Tokio worker threads, 2018-byte values
+(`crates/kt/tests/perf.rs`):
+
+| | 10,000 accounts | 100,000 accounts |
+| --- | --- | --- |
+| Initial publish of all accounts (one epoch) | 1.1 s | 12 s |
+| Store size | 30k records, 27 MB | 300k records, 266 MB |
+| Publish 1 change / 100 updates (incl. storing the audit proof) | 1 ms / 13 ms | 1 ms / 17 ms |
+| Lookup response (avg; 2.2 KB of it value and head): generate, verify | 6.8 KB: 0.7 ms, 0.5 ms | 7.8 KB: 0.9 ms, 0.7 ms |
+| History of 3 versions: size, generate, verify | 15.6 KB: 1.8 ms, 1.3 ms | 17.7 KB: 1.9 ms, 1.5 ms |
+| Audit of an epoch with 1 change: size, verify | 1.8 KB, 0.7 ms | 2.3 KB, 0.8 ms |
+| Audit of an epoch with 100 updates: size, verify | 66 KB, 7 ms | 99 KB, 14 ms |
+| Audit of the initial import (epoch 0 → 1): size, verify | 660 KB, 41 ms | 6.6 MB, 0.39 s |
+| Head: verify | 0.05 ms | 0.05 ms |
+
+A client audits each epoch it skipped at about 0.5 to 1 KB per changed leaf (one
+leaf per new label, two per change; each costs the siblings along its path that it
+does not share with the others). On a quiet server
+that is negligible; on a busy one (an epoch every 10 s) a client offline for a day
+would download megabytes, which is when auditor countersignatures (§5.3) should replace
+client audits. Clients never audit from epoch 0: the first head is trusted on first
+use, like the server's key.
 
 ## 6. MLS integration
 
