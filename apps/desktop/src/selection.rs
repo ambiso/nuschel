@@ -387,6 +387,17 @@ impl Desktop {
             .as_ref()
             .filter(|hovered| hovered.message == message)
             .map(|hovered| hovered.url.clone());
+        // A moderator's Delete depends on Write here (editing.rs); it
+        // appears once the server has said.
+        if let Some((_, channel)) = self.selected_indices()
+            && let TextTarget::Channel(id) = self.servers[server].channels[channel].target
+            && self.servers[server].status == Status::Connected
+            && !self.servers[server].permissions.contains_key(&id)
+        {
+            let _ = self
+                .backend
+                .command(&self.servers[server].id, Command::RequestPermissions(id));
+        }
         self.text.menu = Some(MessageMenu {
             serial: message,
             text,
