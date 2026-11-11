@@ -30,6 +30,7 @@ image = { version = "0.25", default-features = false }
 nuschel-client = { path = "../crates/client" }
 nuschel-legacy-html = { path = "../crates/legacy-html" }
 nuschel-session = { path = "../crates/session" }
+opus-pure = "0.2.3"
 
 [[bin]]
 name = "html"
@@ -146,6 +147,13 @@ bench = false
 [[bin]]
 name = "client_messages"
 path = "fuzz_targets/client_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "voice_playback"
+path = "fuzz_targets/voice_playback.rs"
 test = false
 doc = false
 bench = false
