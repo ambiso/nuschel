@@ -17,12 +17,17 @@ let
       cfg.database.urlFile;
   # Secrets never go into this file: it is in the world-readable Nix store.
   configFile = toml.generate "nuscheld.toml" (
-    {
+    lib.recursiveUpdate {
       inherit (cfg) security port;
       bind = cfg.listenAddresses;
       state_directory = stateDirectory;
-    }
-    // cfg.settings
+      # Witnessing (docs/witness.md): where this server's epoch log is submitted.
+      kt = {
+        inherit (cfg.kt) origins;
+        default_witnesses = cfg.kt.defaultWitnesses;
+        witnesses = map (witness: { inherit (witness) key url; }) cfg.kt.witnesses;
+      };
+    } cfg.settings
   );
   databaseArguments =
     if cfg.database.type == "sqlite" then
@@ -242,6 +247,47 @@ in
           one once in its state directory.
         '';
       };
+      origins = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = lib.optional (config.networking.domain != null) (
+          lib.toLower "${config.networking.hostName}.${config.networking.domain}:${toString cfg.port}"
+        );
+        defaultText = lib.literalExpression ''[ "''${networking.fqdn}:''${port}" ]'';
+        example = [ "chat.example.org:64738" ];
+        description = ''
+          The names clients reach this server under, `host:port` in lower case as in
+          their bookmarks. Each is an origin of the server's epoch log whose
+          checkpoints the witnesses cosign (docs/witness.md); clients that require
+          witnesses accept only the origin they connect to.
+        '';
+      };
+      defaultWitnesses = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = ''
+          Submit to Nuschel's built-in witnesses (the project auditor; none until it
+          is deployed).
+        '';
+      };
+      witnesses = lib.mkOption {
+        type = lib.types.listOf (
+          lib.types.submodule {
+            options = {
+              key = lib.mkOption {
+                type = lib.types.str;
+                description = "The witness's verifier key (`nuschel-witness vkey`).";
+              };
+              url = lib.mkOption {
+                type = lib.types.str;
+                example = "https://witness.example.org";
+                description = "Its base URL.";
+              };
+            };
+          }
+        );
+        default = [ ];
+        description = "More witnesses to submit this server's epoch log to.";
+      };
     };
     importMurmur = {
       databaseFile = lib.mkOption {
@@ -414,9 +460,7 @@ in
         # Reading and writing a large server can take a while.
         TimeoutStartSec = "infinity";
         ExecStartPre = "+${copyMurmur}";
-        ExecStart = lib.escapeShellArgs (
-          [ "${importMurmur}" ] ++ serverDatabaseArguments ++ tlsArguments
-        );
+        ExecStart = lib.escapeShellArgs ([ "${importMurmur}" ] ++ serverDatabaseArguments ++ tlsArguments);
       }
       // hardening
       // {

@@ -73,5 +73,6 @@ in
     "nuschel-transfer-worker"
     "nuschel-tui"
     "nuscheld"
+    "nuschel-witness"
   ];
 }

@@ -39,6 +39,8 @@
     }:
     {
       nixosModules.default = import ./nix/module.nix { inherit self; };
+      # The key-transparency auditor (docs/witness.md).
+      nixosModules.witness = import ./nix/witness-module.nix { inherit self; };
       homeModules.default = import ./nix/home-manager.nix { inherit self; };
       homeManagerModules.default = self.homeModules.default;
     }
@@ -167,6 +169,10 @@
           cargoExtraArgs = "-p nuschel-rtc -p nuschel-rtc-probe";
           buildInputs = [ ];
         };
+        witnessPackage = pkgs.runCommand "nuschel-witness-0.1.0" { meta.mainProgram = "nuschel-witness"; } ''
+          install -Dm755 ${crates.project.workspaceMembers.nuschel-witness.build}/bin/nuschel-witness "$out/bin/nuschel-witness"
+          install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
+        '';
         rtcPackage = craneLib.buildPackage (
           rtcCommon
           // {
@@ -417,6 +423,7 @@
         legacyPackages.crate2nixInputs = crate2nixInputs;
         packages.default-crane = cranePackage;
         packages.server = serverPackage;
+        packages.witness = witnessPackage;
         packages.windows = windowsPackage;
         packages.macos-universal = macUniversal;
         packages.macos-app = macApp;
@@ -508,6 +515,7 @@
               inherit pkgs;
               nuschel = package;
               module = self.nixosModules.default;
+              witnessModule = self.nixosModules.witness;
             };
             vm-smoke = import ./nix/vm-smoke.nix {
               inherit pkgs;

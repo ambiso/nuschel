@@ -152,13 +152,29 @@ let
     "wormhole_relay"
     "appearance"
     "recovery_key"
+    "key_transparency"
   ];
   unknownSettings = lib.subtractLists settingNames (lib.attrNames cfg.settings);
+  # `programs.nuschel.keyTransparency`, in the format of `key_transparency`.
+  keyTransparency = lib.optionalAttrs (cfg.keyTransparency != null) {
+    key_transparency = {
+      default_witnesses = cfg.keyTransparency.defaultWitnesses;
+      witnesses = map (witness: {
+        inherit (witness) key enabled;
+      }) cfg.keyTransparency.witnesses;
+      max_age_hours = cfg.keyTransparency.maxAgeHours;
+      block_new_devices = cfg.keyTransparency.blockNewDevices;
+    }
+    // lib.optionalAttrs (cfg.keyTransparency.required != null) {
+      inherit (cfg.keyTransparency) required;
+    };
+  };
+  managedSettings = cfg.settings // keyTransparency;
   managedFile = json.generate "nuschel-managed.json" {
-    inherit (cfg) settings;
+    settings = managedSettings;
     servers = map bookmark cfg.servers;
   };
-  managed = cfg.settings != { } || cfg.servers != [ ];
+  managed = managedSettings != { } || cfg.servers != [ ];
 
   # Bookmark lists checked like Nuschel checks them.
   serverAssertions =
@@ -296,6 +312,75 @@ in
         own choices return when you remove a setting here. Unknown top-level
         names fail evaluation; Nuschel reports any other invalid value and then
         ignores `managed.json` until it is fixed.
+      '';
+    };
+
+    keyTransparency = mkOption {
+      type = types.nullOr (
+        types.submodule {
+          options = {
+            defaultWitnesses = mkOption {
+              type = types.bool;
+              default = true;
+              description = "Require Nuschel's built-in witnesses (the project auditor; none until it is deployed).";
+            };
+            witnesses = mkOption {
+              type = types.listOf (
+                types.submodule {
+                  options = {
+                    key = mkOption {
+                      type = types.strMatching "[^+[:space:]]{1,255}\\+[0-9a-f]{8}\\+[A-Za-z0-9+/=]+";
+                      example = "witness.example.org/nuschel-kt+5d32ee69+BuajLAZT…";
+                      description = "The witness's verifier key (`nuschel-witness vkey`).";
+                    };
+                    enabled = mkOption {
+                      type = types.bool;
+                      default = true;
+                      description = "False turns a witness off, also a built-in one.";
+                    };
+                  };
+                }
+              );
+              default = [ ];
+              description = "Further witnesses every server's key-transparency log must be cosigned by.";
+            };
+            required = mkOption {
+              type = types.nullOr (types.ints.between 1 16);
+              default = null;
+              description = ''
+                How many of the enabled witnesses must have cosigned; null: all of them.
+                Every group of clients that requires k of the same n witnesses is safe
+                from split views only if 2k > n.
+              '';
+            };
+            maxAgeHours = mkOption {
+              type = types.ints.between 1 168;
+              default = 24;
+              description = "How old the newest cosignatures may be (a frozen view lasts at most this long).";
+            };
+            blockNewDevices = mkOption {
+              type = types.bool;
+              default = true;
+              description = ''
+                While a server's log is not witnessed ("Automatic verification
+                unavailable"), do not add contacts' new devices to existing end-to-end
+                conversations. First contact proceeds either way, as "not verified".
+              '';
+            };
+          };
+        }
+      );
+      default = null;
+      example = lib.literalExpression ''
+        {
+          witnesses = [ { key = "witness.example.org/nuschel-kt+5d32ee69+BuajLAZT…"; } ];
+          maxAgeHours = 24;
+        }
+      '';
+      description = ''
+        Key-transparency witnesses (docs/witness.md), written to `managed.json` as
+        `key_transparency` and shown as set by your system configuration. Takes
+        precedence over `settings.key_transparency`.
       '';
     };
 

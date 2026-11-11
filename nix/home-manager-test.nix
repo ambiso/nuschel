@@ -81,6 +81,14 @@ let
     programs.nuschel.autostart = true;
   };
   plain = homeWith { };
+  # Key-transparency witnesses as typed options (docs/witness.md).
+  witnessKey = lib.removeSuffix "\n" (builtins.readFile ../tests/fixtures/witness-test.vkey);
+  witnessed = homeWith {
+    programs.nuschel.keyTransparency = {
+      witnesses = [ { key = witnessKey; } ];
+      maxAgeHours = 12;
+    };
+  };
 
   # Bookmarks and settings crates/session/src/config.rs would refuse (Nuschel
   # would set the file aside or ignore it) fail evaluation instead.
@@ -125,6 +133,8 @@ let
     // refusedServers "servers"
     // {
       unknown-setting.programs.nuschel.settings.enter_send = false;
+      witness-without-key-id.programs.nuschel.keyTransparency.witnesses = [ { key = "witness+AQ=="; } ];
+      witness-max-age.programs.nuschel.keyTransparency.maxAgeHours = 169;
     };
   # A type error throws; a failed assertion is false. Forcing only these
   # is much cheaper than evaluating the whole activation package.
@@ -132,9 +142,11 @@ let
     extra:
     let
       inherit (homeWith extra) config;
-      inherit (config.programs.nuschel) initialServers servers;
+      inherit (config.programs.nuschel) initialServers servers keyTransparency;
       result = builtins.tryEval (
-        builtins.deepSeq [ initialServers servers ] (lib.all (a: a.assertion) config.assertions)
+        builtins.deepSeq [ initialServers servers keyTransparency ] (
+          lib.all (a: a.assertion) config.assertions
+        )
       );
     in
     result.success && result.value;
@@ -212,6 +224,11 @@ assert lib.assertMsg (accepts {
         jq -e '.servers | length == 2 and .[0].id != .[1].id' "$managed"
         jq -e '.servers[1] == {id: .servers[1].id, name: "Managed.Example.org", host: "managed.example.org",
           port: 1234, username: "bob", tokens: [], certificate_sha256: "${pin}", auto_connect: false}' "$managed"
+
+        # Witnesses as typed options land in managed.json as key_transparency.
+        jq -e --arg key "${witnessKey}" '.settings.key_transparency == {default_witnesses: true,
+          witnesses: [{key: $key, enabled: true}], max_age_hours: 12, block_new_devices: true}' \
+          ${witnessed.activationPackage}/home-files/.config/nuschel/managed.json
 
         # Without autostart or initial files the module installs the package only.
         test ! -e ${plain.activationPackage}/home-files/.config/nuschel/managed.json

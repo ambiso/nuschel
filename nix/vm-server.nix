@@ -3,13 +3,21 @@
 # client suites vm-smoke runs against stock Murmur; and Nuschel with the
 # extension's server history (SQLite and PostgreSQL) and key transparency (its
 # keys as credentials on one node, generated on the other). A second node runs
-# the server on local PostgreSQL. State must survive service restarts.
+# the server on local PostgreSQL. State must survive service restarts. A third
+# runs nuschel-witness behind nginx; the first server submits its epoch log to it
+# and clients require its cosignatures (docs/witness.md).
 {
   pkgs,
   nuschel,
   module,
+  witnessModule,
 }:
 let
+  # A test witness key (public: never use it elsewhere) and its verifier key; and
+  # another witness's key that the server does not reach.
+  witnessSeed = "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e";
+  witnessKey = ../tests/fixtures/witness-test.vkey;
+  otherWitnessKey = ../tests/fixtures/witness-other.vkey;
   superuser = "nuschel-super";
   opus = "${pkgs.libopus}/lib/libopus.so";
   # The SuperUser password is a runtime file (the module refuses store paths);
@@ -34,6 +42,8 @@ let
             memory_kib = 4096;
             passes = 1;
           };
+          # Submissions to the witness every two seconds instead of every minute.
+          kt.witness_interval = 2;
         };
       }
       // extra;
@@ -50,9 +60,19 @@ pkgs.testers.runNixOSTest {
       {
         imports = [
           (serverNode {
-            # Key-transparency keys as credentials (written by the test, never in the store).
-            kt.signingKeyFile = "/run/keys/nuschel-kt-signing";
-            kt.vrfSecretFile = "/run/keys/nuschel-kt-vrf";
+            kt = {
+              # Key-transparency keys as credentials (written by the test, never in the store).
+              signingKeyFile = "/run/keys/nuschel-kt-signing";
+              vrfSecretFile = "/run/keys/nuschel-kt-vrf";
+              # Witnessed by the witness node, under the name clients use.
+              origins = [ "server:64738" ];
+              witnesses = [
+                {
+                  key = pkgs.lib.removeSuffix "\n" (builtins.readFile witnessKey);
+                  url = "http://witness";
+                }
+              ];
+            };
           })
         ];
         # Builds the Murmur fixture database (tests/fixtures/murmur-1.5.sql).
@@ -67,6 +87,24 @@ pkgs.testers.runNixOSTest {
       database.type = "postgresql";
       database.createLocally = true;
     };
+    witness =
+      { lib, pkgs, ... }:
+      {
+        imports = [ witnessModule ];
+        services.nuschel-witness = {
+          enable = true;
+          package = nuschel;
+          name = "witness/nuschel-kt";
+          keyFile = "/run/keys/witness-key";
+          virtualHost = "witness";
+          openFirewall = true;
+          # The test network is private.
+          enrolPrivateAddresses = true;
+        };
+        # Started by the test once the key file exists.
+        systemd.services.nuschel-witness.wantedBy = lib.mkForce [ ];
+        environment.systemPackages = [ pkgs.curl ];
+      };
     client =
       { ... }:
       {
@@ -110,6 +148,15 @@ pkgs.testers.runNixOSTest {
         client.succeed(f"su - tester -c '{command}'")
 
     start_all()
+    # The witness first, with its key as a credential: the server submits to it.
+    witness.wait_for_unit("multi-user.target")
+    witness.succeed("install -d -m 0700 /run/keys && printf %s ${witnessSeed} > /run/keys/witness-key && chmod 0600 /run/keys/witness-key")
+    witness.succeed("systemctl start nuschel-witness.service")
+    witness.wait_for_unit("nuschel-witness.service")
+    witness.wait_for_unit("nginx.service")
+    witness.wait_for_open_port(80)
+    witness.succeed("curl -sf http://witness/nuschel-kt/v1/vkey | diff - ${witnessKey}")
+    witness.succeed("test \"$(stat -c %a /var/lib/private/nuschel-witness)\" = 700")
     for node in (server, postgres):
         node.wait_for_unit("multi-user.target")
         start_server(node)
@@ -142,6 +189,18 @@ pkgs.testers.runNixOSTest {
     server.wait_for_open_port(64738)
     as_tester(f"python3 {tests}/key_transparency.py {bins} --host server")
     server.succeed("test ! -e /var/lib/private/nuschel/kt-vrf.key")
+
+    # Witnessing (docs/witness.md): the server enrolled with the witness (which
+    # read the server's hello), submits its epochs, and clients that require the
+    # witness see its cosignatures; a witness the server does not reach is
+    # "unavailable". The witness keeps its state across a restart.
+    as_tester(f"python3 {tests}/kt_witness.py {bins} --host server --witness-key ${witnessKey} --other-key ${otherWitnessKey}")
+    witness.succeed("journalctl -u nuschel-witness.service --no-pager | grep -q 'enrolled a log'")
+    server.wait_until_succeeds("journalctl -u nuschel.service --no-pager | grep -q 'a witness cosigns this server'", timeout=30)
+    witness.succeed("curl -sf http://witness/nuschel-kt/v1/checkpoints/$(printf %s server:64738/nuschel-kt/v1 | sha256sum | cut -c1-64) | grep -q '^server:64738/nuschel-kt/v1$'")
+    witness.succeed("systemctl restart nuschel-witness.service")
+    witness.wait_for_open_port(8473)
+    as_tester(f"python3 {tests}/kt_witness.py {bins} --host server --witness-key ${witnessKey} --other-key ${otherWitnessKey}")
 
     # End-to-end-encrypted direct conversations (mls/1, docs/e2ee.md "Phase 4
     # prototype"): group creation, messages both ways, offline delivery, and the

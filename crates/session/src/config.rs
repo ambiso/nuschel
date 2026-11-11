@@ -2451,6 +2451,48 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn witnesses_are_settings_and_managed_ones_are_locked() {
+        let (root, profile) = temporary_profile("managed-witnesses");
+        let vkey = format!("witness.example.org/kt+0a1b2c3d+{}", "A".repeat(40));
+        write(
+            &profile,
+            "settings.json",
+            r#"{"key_transparency": {"witnesses": [{"key": "mine+00000000+AQ=="}], "max_age_hours": 48}}"#,
+        );
+        write(
+            &profile,
+            "managed.json",
+            &format!(
+                r#"{{"settings": {{"key_transparency": {{"witnesses": [{{"key": "{vkey}"}},
+                    {{"key": "not a key", "enabled": true}}], "max_age_hours": 900,
+                    "block_new_devices": false}}}}}}"#
+            ),
+        );
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let witnessing = &loaded.settings.key_transparency;
+        // The managed list replaces the user's; values are sanitised.
+        assert_eq!(witnessing.witnesses.len(), 1);
+        assert_eq!(witnessing.witnesses[0].key, vkey);
+        assert!(witnessing.witnesses[0].enabled);
+        assert_eq!(witnessing.max_age_hours, 168);
+        assert!(!witnessing.block_new_devices && witnessing.default_witnesses);
+        assert!(loaded.managed.contains("key_transparency.witnesses"));
+        assert!(loaded.managed.contains("key_transparency.max_age_hours"));
+        assert!(!loaded.managed.contains("key_transparency.required"));
+        // Without managed.json, the user's own choice returns; defaults are the
+        // proposed ones (24 hours, new devices blocked while unwitnessed).
+        fs::remove_file(profile.config_dir.join("managed.json")).unwrap();
+        let own = profile.load().settings.key_transparency;
+        assert_eq!(own.witnesses[0].key, "mine+00000000+AQ==");
+        assert_eq!(own.max_age_hours, 48);
+        let defaults = ClientSettings::default().key_transparency;
+        assert_eq!(defaults.max_age_hours, 24);
+        assert!(defaults.block_new_devices && defaults.default_witnesses);
+        assert_eq!(defaults.required, None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn system_wide_managed_settings_yield_to_the_users_own() {
         let (root, mut profile) = temporary_profile("system-managed");
         let system = root.join("etc/xdg/nuschel/managed.json");
