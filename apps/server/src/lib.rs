@@ -5,6 +5,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod acl;
+pub mod admin;
 pub mod auth;
 pub mod chat;
 pub mod config;

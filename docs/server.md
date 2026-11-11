@@ -10,9 +10,8 @@ history, edits and deletions, subscriptions, read markers and direct conversatio
 
 ```sh
 nuscheld --config nuscheld.toml          # see apps/server/nuscheld.example.toml
-printf %s 'secret' | nuscheld --config nuscheld.toml --set-superuser-password
 nuscheld --config nuscheld.toml --check-config
-nuscheld --config nuscheld.toml --erase-user Alice   # GDPR: her stored messages become tombstones
+nuscheld --config nuscheld.toml admin users list     # operator commands, see Administration
 ```
 
 Every configuration key is optional; names and defaults follow murmur.ini
@@ -60,6 +59,60 @@ The NixOS module (`services.nuschel`, nix/module.nix) generates the TOML file
 from `settings` (never secrets), runs a database preflight, and hardens the unit
 (DynamicUser, a private state directory, no capabilities, system call filter,
 `SocketBindAllow` for the server port only).
+
+## Administration
+
+`nuscheld admin` works offline on the database, through the storage worker as
+the server does, and changes it with the server's own state code (validation,
+cascades, persistence). Options before `admin` (`--config`, `--state-directory`,
+`--sqlite-path`, `--database-url-file`) select the database as for the server.
+
+```sh
+nuscheld --config nuscheld.toml admin check-config     # also: does the database open, is it in use
+nuscheld --config nuscheld.toml admin users list
+nuscheld --config nuscheld.toml admin users show Alice  # or '#3'
+nuscheld --config nuscheld.toml admin users rename Alice Alicia
+nuscheld --config nuscheld.toml admin users remove Alice --yes
+printf %s 'secret' | nuscheld --config nuscheld.toml admin users set-password '#0'   # SuperUser
+nuscheld --config nuscheld.toml admin channels list
+nuscheld --config nuscheld.toml admin channels retention Lobby 30 --yes   # forever, none, default, days
+nuscheld --config nuscheld.toml admin bans list
+nuscheld --config nuscheld.toml admin bans add --address 192.0.2.0/24 --reason spam --duration 3600
+nuscheld --config nuscheld.toml admin bans remove 0
+nuscheld --config nuscheld.toml admin history export Lobby --output lobby.json
+nuscheld --config nuscheld.toml admin history erase-user Alice --yes   # GDPR requests
+```
+
+- **Subcommands, not a second binary**: one executable to deploy and keep at
+  the server's version (the schema and its migrations match), the same
+  configuration and storage-worker discovery, and nothing new on the network
+  (the review's P0 asks for no network RPC for administration; this has none).
+  The older flags `--set-superuser-password` and `--erase-user` remain.
+- **Never against a live server.** The server and an admin command both keep
+  the state in memory and write it back, so they must not share a database. The
+  server's state worker, and each admin command's, takes an operator lock before
+  it opens (or migrates) the database: an exclusive `flock` on
+  `<database>.lock` next to a SQLite file (SQLite's own locks are per
+  statement, not per process lifetime), a session advisory lock on PostgreSQL.
+  Whoever comes second gets "another process … is using this database" and
+  changes nothing; `check-config` only reports it. A second server on the same
+  database is refused the same way. If the state worker crashes, the server
+  restarts it, which takes the lock again (or, if an admin command took it in
+  between, every write fails and is logged rather than interleaved). A lock file
+  that cannot be opened or locked at all (an unusual file system) is warned
+  about and ignored rather than keeping a server from starting.
+- **Destructive commands need `--yes`** and say first what they do: removing a
+  user (ACL entries and group memberships go; the account never comes back; its
+  messages stay), erasing a user's messages, and shortening a channel's retention
+  (with the number of stored messages that will expire).
+- **Exports** are JSON: the conversation, its retention and head, and every row
+  (author account, number and name, format, content, times, edits, deletions),
+  without idempotency keys and without content past the retention. A file given
+  with `--output` is created 0600. A conversation id exports a deleted channel's
+  archive or a direct conversation.
+- Run admin commands as the user the server runs as (on NixOS the unit uses
+  `DynamicUser`): files created as another user (SQLite's `-wal` and `-shm`,
+  say) can keep the server from opening the database.
 
 ## Design
 
@@ -242,10 +295,11 @@ descriptor exhaustion.
 | Command | What it covers |
 | --- | --- |
 | `cargo test -p nuscheld` | ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames |
+| `cargo test -p nuscheld --test admin` | `nuscheld admin` on a stopped server's state: users (list, show, rename, set a password, remove with its ACL entries), channel retention (refused without `--yes` when it removes messages), bans, exporting a channel (0600, nothing past the retention), erasing a user |
 | `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends |
 | `cargo test -p nuschel-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |
 | `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase, retention batches and live-only heads; the key-transparency table |
-| `just test-postgres` (`cargo test -p nuschel-storage-worker --test postgres`) | the storage worker as `nuscheld` drives it, on SQLite and on a throwaway PostgreSQL from nixpkgs (`initdb` in a temporary directory, a unix socket only, no TCP): migrations, users, history pages, idempotency, edits, deletions, retention, live-only heads, erasure, purging, a second worker on the same database. Without `initdb`/`postgres` on `PATH` (or in `NUSCHEL_POSTGRES_BIN`) the PostgreSQL half says SKIPPED and passes |
+| `just test-postgres` (`cargo test -p nuschel-storage-worker --test postgres`) | the storage worker as `nuscheld` drives it, on SQLite and on a throwaway PostgreSQL from nixpkgs (`initdb` in a temporary directory, a unix socket only, no TCP): migrations, users, history pages, idempotency, edits, deletions, retention, live-only heads, erasure, purging, a second worker on the same database, and the operator lock (one holder; the others answer `Held` without opening the database). Without `initdb`/`postgres` on `PATH` (or in `NUSCHEL_POSTGRES_BIN`) the PostgreSQL half says SKIPPED and passes |
 | `cargo test -p nuschel-crypto-worker` | key transparency end to end: nuscheld, the session and the crypto worker in its sandbox (publish and look up, TOFU and verification, key changes, the self-monitoring alarm, a forked and a replaced log), and the worker against a malicious directory in process |
 | `python3 tests/with_local_nuscheld.py <bins> tests/<suite>.py <bins> --port PORT …` | `mumble_client.py`, `udp_voice.py`, `protocol_features.py` against nuscheld; `with_local_murmur.py` runs the same scripts against stock Murmur |
 | `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), key transparency (`tests/key_transparency.py`, keys as credentials and generated), and the stock Mumble GUI (login with a Nuschel-exported certificate, voice both ways) |

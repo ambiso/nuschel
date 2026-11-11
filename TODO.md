@@ -582,8 +582,14 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          green lock only after authenticated MLS establishment.
    - [ ] Media later: SFrame with MLS-exported keys (with the WebRTC work below).
 5. **Moderation and operations**
-   - [ ] Moderation tools on top of E2EE (reports, membership removal), retention
-         policies, server admin CLI, metrics.
+   - [ ] Moderation tools on top of E2EE (reports, membership removal), metrics.
+   - [x] Retention policies (per server and channel, see phase 2).
+   - [x] Server admin CLI: `nuscheld admin` (users, channels and retention, bans,
+         history export and erasure, check-config), offline under an operator
+         lock (docs/server.md, "Administration").
+   - [ ] Admin CLI follow-ups: ACL and group editing; a NixOS wrapper that runs
+         `nuscheld admin` as the unit's dynamic user with its credentials; the
+         Murmur import under the operator lock; `--json` output for lists.
 
 ### WebRTC and video (follow-ups to the str0m trial)
 

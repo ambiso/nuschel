@@ -17,6 +17,9 @@ use std::{collections::HashMap, path::Path, str::FromStr, time::Duration};
 
 mod history;
 mod kt;
+mod lock;
+
+pub use lock::OperatorLock;
 
 /// Its own migrations table, so a database can also hold the history schema.
 const MIGRATIONS_TABLE: &str = "_nuscheld_migrations";

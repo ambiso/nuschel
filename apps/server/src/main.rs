@@ -54,6 +54,16 @@ struct Arguments {
     /// and exit: they become tombstones without content (GDPR requests).
     #[arg(long, value_name = "USER")]
     erase_user: Option<String>,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Operator commands on the database, with the server stopped
+    /// (docs/server.md, "Administration").
+    #[command(subcommand)]
+    Admin(nuscheld::admin::Admin),
 }
 
 fn settings(arguments: &Arguments) -> Result<Settings, Box<dyn std::error::Error>> {
@@ -109,13 +119,17 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         server::default_backend(&settings)?
     };
+    if let Some(Command::Admin(command)) = arguments.command {
+        return nuscheld::admin::run(settings, backend, command).await;
+    }
     if arguments.set_superuser_password {
         let mut password = String::new();
         std::io::stdin().take(4096).read_to_string(&mut password)?;
         let password = password.trim_end_matches(['\r', '\n']).to_owned();
         let mut settings = settings;
         settings.config.bind.clear();
-        let storage = storage::start(backend);
+        let storage = storage::start_locked(backend);
+        server::hold_operator_lock(&storage).await?;
         let counters = Default::default();
         let mut state = server::load_state_for_admin(&settings, &storage, &counters).await?;
         server::set_superuser_password(&mut state, password, &settings).await?;
@@ -124,7 +138,8 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if let Some(user) = &arguments.erase_user {
-        let storage = storage::start(backend);
+        let storage = storage::start_locked(backend);
+        server::hold_operator_lock(&storage).await?;
         let counters = Default::default();
         let state = server::load_state_for_admin(&settings, &storage, &counters).await?;
         let (account, name) = server::find_account(&state, user)?;

@@ -118,6 +118,19 @@ impl Queues {
     }
 }
 
+/// Queues whose writes go straight to `storage`, in order, for
+/// administrative commands (no server finishes them). Drop the queues and await
+/// the task to know every write was handed to storage.
+pub fn direct(storage: StorageHandle) -> (Queues, tokio::task::JoinHandle<()>) {
+    let (queues, mut receivers) = queues();
+    let task = tokio::spawn(async move {
+        while let Some(job) = receivers.writes.recv().await {
+            let _ = storage.request(job.request).await;
+        }
+    });
+    (queues, task)
+}
+
 /// Start the writer and the reader.
 pub fn spawn(
     server: &Arc<Server>,

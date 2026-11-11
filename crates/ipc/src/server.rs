@@ -568,6 +568,11 @@ pub enum ServerStorageRequest {
     HistoryPage {
         query: PageQuery,
     },
+    /// Whether this worker holds the operator lock (`--operator-lock`): `Done`,
+    /// or `Held` when another process (a running `nuscheld`, `nuscheld admin`)
+    /// has it; such a worker never opened the database and answers everything
+    /// with `Held`.
+    OperatorLock,
     /// Key transparency (nuschel-kt's `KtStore`, docs/e2ee.md §5.2): the values of
     /// these keys, in order (`KtValues`). Keys and values are base64; the record layout
     /// belongs to nuschel-kt and `nuscheld`, and the worker never interprets it.
@@ -624,6 +629,8 @@ pub enum ServerStorageResponse {
     Access(Vec<StoredAccess>),
     ReadMarkers(Vec<(String, u64)>),
     Retentions(Vec<StoredRetention>),
+    /// Another process holds the operator lock on this database.
+    Held,
     Page(StoredPage),
     KtValues(Vec<Option<String>>),
     KtRecords(Vec<(String, String)>),

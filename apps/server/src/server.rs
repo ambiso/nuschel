@@ -33,6 +33,11 @@ pub const PROTOCOL_VERSION: u64 = (1 << 48) | (5 << 32);
 pub enum StartError {
     #[error("storage unavailable: {0}")]
     Storage(String),
+    #[error(
+        "another process (a running nuscheld, or `nuscheld admin`) is using this database; \
+         stop it first"
+    )]
+    Held,
     #[error(transparent)]
     Tls(#[from] tls::TlsError),
     #[error("cannot bind {address}: {source}")]
@@ -376,6 +381,19 @@ fn bind_udp(address: SocketAddr) -> io::Result<UdpSocket> {
     UdpSocket::from_std(socket.into())
 }
 
+/// Take the operator lock through a worker from [`storage::start_locked`]:
+/// a running server and administrative commands never share a database.
+pub async fn hold_operator_lock(storage: &StorageHandle) -> Result<(), StartError> {
+    use nuschel_ipc::server::{ServerStorageRequest as Request, ServerStorageResponse as Response};
+    match storage.request(Request::OperatorLock).await {
+        Some(Response::Done) => Ok(()),
+        Some(Response::Held) => Err(StartError::Held),
+        _ => Err(StartError::Storage(
+            "could not open or lock the database".into(),
+        )),
+    }
+}
+
 /// The persisted state for administrative commands, without starting the server.
 pub async fn load_state_for_admin(
     settings: &Settings,
@@ -572,7 +590,10 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     // Three workers on one database: server state, history writes, history
     // reads; a history page never waits behind a write, nor a chat behind a
     // channel save.
-    let storage = storage::start(backend.clone());
+    // The state worker holds the operator lock (taken before it opens the
+    // database) for as long as the server runs.
+    let storage = storage::start_locked(backend.clone());
+    hold_operator_lock(&storage).await?;
     let history_writer = storage::start(backend.clone());
     let history_reads = storage::start(backend.clone());
     let counters = Arc::new(Counters::default());

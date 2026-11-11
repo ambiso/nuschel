@@ -1074,7 +1074,7 @@ impl State {
 
     /// Murmur's `unregisterUser`: forget the account and every ACL entry and
     /// group membership naming it.
-    fn unregister(&mut self, id: u32) {
+    pub fn unregister(&mut self, id: u32) {
         if id == 0 {
             return;
         }

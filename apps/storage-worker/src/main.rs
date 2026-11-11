@@ -5,7 +5,10 @@ use nuschel_ipc::{
     server::{ServerStorageRequest as Request, ServerStorageResponse as Response},
     write_frame,
 };
-use nuschel_storage::{History, server::ServerStore};
+use nuschel_storage::{
+    History,
+    server::{OperatorLock, ServerStore},
+};
 use std::{
     io,
     path::PathBuf,
@@ -28,6 +31,10 @@ struct Arguments {
     /// Serve `nuscheld`'s server state (channels, ACLs, users, bans) instead of history.
     #[arg(long)]
     server: bool,
+    /// With `--server`: take the operator lock before opening the database; if
+    /// another process holds it, answer every request with `Held` instead.
+    #[arg(long, requires = "server")]
+    operator_lock: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -142,10 +149,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Another process holds the operator lock: the database stays closed.
+fn serve_held() -> Result<(), Box<dyn std::error::Error>> {
+    let mut input = io::stdin().lock();
+    let mut output = io::stdout().lock();
+    while let Some(request) = read_frame::<Request>(&mut input)? {
+        write_frame(
+            &mut output,
+            &Envelope::new(request.request_id, Response::Held),
+        )?;
+    }
+    Ok(())
+}
+
 async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
-    let store = match (arguments.database, arguments.database_url_file) {
+    let url = match &arguments.database_url_file {
+        Some(path) => Some(std::fs::read_to_string(path)?.trim().to_owned()),
+        None => None,
+    };
+    // Held for the life of this process.
+    let lock = if arguments.operator_lock {
+        let lock = match (&arguments.database, &url) {
+            (Some(path), None) => OperatorLock::sqlite(path)?,
+            (None, Some(url)) => OperatorLock::url(url).await?,
+            _ => return Err("select exactly one database configuration".into()),
+        };
+        match lock {
+            Some(lock) => Some(lock),
+            None if arguments.check_database => {
+                return Err("another process (a running nuscheld?) holds the database".into());
+            }
+            None => return serve_held(),
+        }
+    } else {
+        None
+    };
+    let store = match (arguments.database, url) {
         (Some(path), None) => ServerStore::open(&path).await?,
-        (None, Some(path)) => ServerStore::connect(std::fs::read_to_string(path)?.trim()).await?,
+        (None, Some(url)) => ServerStore::connect(&url).await?,
         _ => return Err("select exactly one database configuration".into()),
     };
     if arguments.check_database {
@@ -280,6 +321,10 @@ async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::err
                 .await
                 .map(Response::ReadMarkers),
             Request::HistoryPage { query } => store.history_page(&query).await.map(Response::Page),
+            Request::OperatorLock => Ok(match lock {
+                Some(_) => Response::Done,
+                None => Response::Rejected("started without --operator-lock".into()),
+            }),
             Request::KtGet { keys } => store.kt_get(&keys).await.map(Response::KtValues),
             Request::KtScan { prefix } => store.kt_scan(&prefix).await.map(Response::KtRecords),
             Request::KtWrite { records } => done(store.kt_write(&records).await),

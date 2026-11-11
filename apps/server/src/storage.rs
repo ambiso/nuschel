@@ -253,12 +253,23 @@ pub enum Backend {
 }
 
 pub fn start(backend: Backend) -> StorageHandle {
+    start_with(backend, false)
+}
+
+/// A worker that takes the operator lock before it opens the database (a
+/// running server's state worker, `nuscheld admin`); ask it
+/// `OperatorLock` first: `Held` means another process uses the database.
+pub fn start_locked(backend: Backend) -> StorageHandle {
+    start_with(backend, true)
+}
+
+fn start_with(backend: Backend, lock: bool) -> StorageHandle {
     let (jobs, receiver) = mpsc::unbounded_channel();
-    tokio::spawn(run(backend, receiver));
+    tokio::spawn(run(backend, receiver, lock));
     StorageHandle { jobs }
 }
 
-async fn run(backend: Backend, mut jobs: mpsc::UnboundedReceiver<Job>) {
+async fn run(backend: Backend, mut jobs: mpsc::UnboundedReceiver<Job>, lock: bool) {
     let mut worker: Option<Worker> = None;
     let mut request_id = 0_u64;
     while let Some(job) = jobs.recv().await {
@@ -270,6 +281,8 @@ async fn run(backend: Backend, mut jobs: mpsc::UnboundedReceiver<Job>) {
                 continue;
             }
         };
+        // Its caller reports a held lock itself.
+        let probe = matches!(request, Request::OperatorLock);
         let response = match &backend {
             Backend::Memory(store) => Some(
                 store
@@ -290,7 +303,7 @@ async fn run(backend: Backend, mut jobs: mpsc::UnboundedReceiver<Job>) {
                 let mut response = None;
                 for _ in 0..2 {
                     if worker.is_none() {
-                        match Worker::spawn(executable, path, url) {
+                        match Worker::spawn(executable, path, url, lock) {
                             Ok(spawned) => worker = Some(spawned),
                             Err(error) => {
                                 tracing::error!(%error, "cannot start the storage worker");
@@ -318,6 +331,10 @@ async fn run(backend: Backend, mut jobs: mpsc::UnboundedReceiver<Job>) {
         };
         if let Some(Response::Rejected(error)) = &response {
             tracing::error!(%error, "storage request was rejected; this change is not persisted");
+        } else if let Some(Response::Held) = &response
+            && !probe
+        {
+            tracing::error!("another process holds the database; this change is not persisted");
         } else if response.is_none() {
             tracing::error!("storage is unavailable; this change is not persisted");
         }
@@ -334,10 +351,18 @@ struct Worker {
 }
 
 impl Worker {
-    fn spawn(executable: &PathBuf, path: &PathBuf, url_file: bool) -> std::io::Result<Self> {
+    fn spawn(
+        executable: &PathBuf,
+        path: &PathBuf,
+        url_file: bool,
+        lock: bool,
+    ) -> std::io::Result<Self> {
         let mut command = Command::new(executable);
+        command.arg("--server");
+        if lock {
+            command.arg("--operator-lock");
+        }
         command
-            .arg("--server")
             .arg(if url_file {
                 "--database-url-file"
             } else {
@@ -830,6 +855,8 @@ impl MemoryStore {
                 self.next_user_id = self.next_user_id.max(id);
                 Response::Done
             }
+            // In memory, nobody else can hold it.
+            Request::OperatorLock => Response::Done,
             Request::KtGet { keys } => {
                 let values: Option<Vec<Option<String>>> = keys
                     .iter()

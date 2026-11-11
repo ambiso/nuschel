@@ -82,6 +82,8 @@ pub enum Error {
     InvalidSearch,
     #[error("expected a sqlite:, postgres:, or postgresql: database URL")]
     UnsupportedDatabase,
+    #[error("cannot lock the database: {0}")]
+    Lock(String),
 }
 
 enum Pool {

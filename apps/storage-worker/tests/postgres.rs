@@ -35,9 +35,14 @@ struct Worker {
 
 impl Worker {
     fn start(url_file: &Path) -> Self {
+        Self::start_with(url_file, &[])
+    }
+
+    fn start_with(url_file: &Path, extra: &[&str]) -> Self {
         let mut child = Command::new(WORKER)
             .args(["--server", "--database-url-file"])
             .arg(url_file)
+            .args(extra)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -55,6 +60,14 @@ impl Worker {
     }
 
     fn request(&mut self, request: Request) -> Response {
+        let answer = self.raw(request);
+        if let Response::Rejected(error) = &answer {
+            panic!("the worker rejected request {}: {error}", self.next);
+        }
+        answer
+    }
+
+    fn raw(&mut self, request: Request) -> Response {
         self.next += 1;
         write_frame(&mut self.input, &Envelope::new(self.next, request)).unwrap();
         self.input.flush().unwrap();
@@ -62,9 +75,6 @@ impl Worker {
             .unwrap()
             .expect("the worker answers");
         assert_eq!(answer.request_id, self.next);
-        if let Response::Rejected(error) = &answer.payload {
-            panic!("the worker rejected request {}: {error}", self.next);
-        }
         answer.payload
     }
 
@@ -333,6 +343,48 @@ fn exercise(worker: &mut Worker) {
     ));
 }
 
+/// One holder of the operator lock at a time; the others never open the
+/// database and answer everything with `Held`.
+fn operator_lock(url_file: &Path) {
+    let mut first = Worker::start_with(url_file, &["--operator-lock"]);
+    assert!(matches!(
+        first.request(Request::OperatorLock),
+        Response::Done
+    ));
+    let mut second = Worker::start_with(url_file, &["--operator-lock"]);
+    assert!(matches!(second.raw(Request::OperatorLock), Response::Held));
+    assert!(matches!(second.raw(Request::Load), Response::Held));
+    let check = Command::new(WORKER)
+        .args([
+            "--server",
+            "--check-database",
+            "--operator-lock",
+            "--database-url-file",
+        ])
+        .arg(url_file)
+        .env_clear()
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(!check.success(), "the preflight refuses a held database");
+    // A worker without the flag (the server's others) is not kept out.
+    let mut unlocked = Worker::start(url_file);
+    assert!(matches!(
+        unlocked.request(Request::Load),
+        Response::Snapshot(_)
+    ));
+    assert!(matches!(
+        unlocked.raw(Request::OperatorLock),
+        Response::Rejected(_)
+    ));
+    drop((first, second));
+    let mut third = Worker::start_with(url_file, &["--operator-lock"]);
+    assert!(matches!(
+        third.request(Request::OperatorLock),
+        Response::Done
+    ));
+}
+
 fn url_file(directory: &Path, url: &str) -> PathBuf {
     let path = directory.join("database-url");
     std::fs::write(&path, url).unwrap();
@@ -344,8 +396,11 @@ fn the_server_schema_through_the_worker_on_sqlite() {
     let directory = tempfile::tempdir().unwrap();
     let database = directory.path().join("server.sqlite3");
     let url = format!("sqlite://{}", database.display());
-    let mut worker = Worker::start(&url_file(directory.path(), &url));
+    let url_file = url_file(directory.path(), &url);
+    let mut worker = Worker::start(&url_file);
     exercise(&mut worker);
+    drop(worker);
+    operator_lock(&url_file);
 }
 
 /// A PostgreSQL server in a temporary directory, on a unix socket only.
@@ -485,4 +540,6 @@ fn the_server_schema_through_the_worker_on_postgresql() {
         again.request(Request::HistoryHeads { after: None }),
         Response::Heads(heads) if heads == [(LIVE.to_owned(), 7)]
     ));
+    drop(again);
+    operator_lock(&url_file);
 }
