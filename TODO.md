@@ -745,4 +745,28 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 - [ ] macOS Developer ID signing and notarisation with `rcodesign` (needs an Apple
       Developer account); until then first start needs "Open Anyway".
 - [ ] Third-party notices and attribution; walk through the release gates in `SECURITY.md`.
-- [ ] Mobile and web clients (renderer open; shared core already compiles to WASM).
+- [ ] Mobile, web and terminal clients (user, 2026-11-11), queued; architecture under
+      discussion with the user. Proposal: first a headless client SDK, the desktop's
+      UI-independent state (`apps/desktop/src/state.rs`/`backend.rs`: unread, edit
+      ordering, history merge, typing, trust, reconnects) moved into `crates/client`
+      with commands in and events out, so every client shares it and the GPUI desktop
+      becomes one view over it. Then:
+  - [ ] **TUI** (ratatui), the SDK's second consumer; full protocol and voice.
+  - [ ] **Android**: Kotlin + Compose over UniFFI; full protocol natively; workers as
+        `isolatedProcess` services; platform echo cancellation; foreground service.
+  - [ ] **iOS**: Swift + SwiftUI over UniFFI; workers in-process behind the same
+        boundary (no subprocesses on iOS); CallKit, background audio, push extension.
+  - [ ] **Web**: SDK in WASM in a Web Worker, DOM UI; needs a gateway in nuscheld
+        (WebSocket control with the same framing, WebRTC voice via str0m without
+        re-encoding); content in a sandboxed iframe on its own origin; trust model for
+        E2EE in a served web app to decide.
+  - [ ] Push for mobile: content-free pushes (Signal-style), UnifiedPush on Android.
+  Start each sub-agent once the SDK and the protocol interfaces are semi-stable.
+- [ ] Channel share links (user, 2026-11-11): a link you send to someone that opens
+      Nuschel if installed, else joins in the browser. Proposal:
+      `https://<server>/join/<opaque token>#<client-only data>` served by nuscheld (token
+      revocable, expiring, optionally an access token; the fragment carries the
+      certificate pin and later an E2EE invite secret, never logged), App Links and
+      Universal Links for the apps, a `nuschel://` scheme for the desktop, "join in
+      browser" via the web client; for stock Murmur servers perhaps a static
+      project-run page with the target only in the fragment.
