@@ -522,10 +522,10 @@ pub fn section(
             .into_any_element();
     }
     let Some(view) = state.contact_of(user_id) else {
-        let text = if state.checking.contains_key(&user_id) {
-            "Checking their identity…"
-        } else if state.log.is_none() {
+        let text = if state.log.is_none() {
             "This server does not publish identities (no key transparency)."
+        } else if state.checking.contains_key(&user_id) {
+            "Checking their identity…"
         } else {
             "Not checked yet."
         };

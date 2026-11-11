@@ -77,6 +77,11 @@ pub struct ServerState {
     pub evidence: Vec<Vec<u8>>,
     /// Contacts by account id (hex).
     pub contacts: BTreeMap<String, Contact>,
+    /// Registration numbers and the account (hex) the server showed for them.
+    /// Registration numbers are never reused on Nuschel servers, so another account
+    /// behind one is worth a notice.
+    #[serde(default)]
+    pub aliases: BTreeMap<u32, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

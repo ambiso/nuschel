@@ -236,11 +236,17 @@ impl Worker {
                 lookup,
                 record,
                 direct,
+                user_id,
             } => {
                 let account = account_id(&account)?;
                 match self.contact(&server, account, &lookup, record.as_ref(), direct)? {
                     Some(NeedAudit { from, to }) => CryptoResponse::NeedAudit { from, to },
-                    None => CryptoResponse::Contact(self.view(&server, &account)),
+                    None => {
+                        if let Some(user_id) = user_id {
+                            self.alias(&server, user_id, &account)?;
+                        }
+                        CryptoResponse::Contact(self.view(&server, &account))
+                    }
                 }
             }
             CryptoRequest::ContactHistory {
@@ -899,6 +905,26 @@ impl Worker {
         Ok(None)
     }
 
+    /// Remembers which account the server showed for a registration number; another
+    /// account for the same number gets a notice (the server cannot rename someone
+    /// into a stranger silently).
+    fn alias(&mut self, key: &str, user_id: u32, account: &[u8; 16]) -> Result<(), String> {
+        let id = hex(account);
+        let entry = self.server_mut(key)?;
+        let previous = entry.aliases.get(&user_id).cloned();
+        if previous.is_none() && entry.aliases.len() >= MAX_CONTACTS {
+            return Ok(());
+        }
+        entry.aliases.insert(user_id, id.clone());
+        if previous.is_some_and(|previous| previous != id) {
+            self.contact_entry(key, account)?.notice = Some(format!(
+                "The server now shows another account for this person (registration \
+                 #{user_id}). Treat them as someone new until you compare safety numbers."
+            ));
+        }
+        self.save()
+    }
+
     fn contact_history(
         &mut self,
         key: &str,
@@ -978,11 +1004,12 @@ impl Worker {
                     at_ms,
                 },
             );
+            // Comparing safety numbers settles what the notices asked for.
             let contact = self.contact_entry(key, account)?;
             if matches!(contact.state, ContactState::KeyChanged { blocking: false }) {
                 contact.state = ContactState::Unverified;
-                contact.notice = None;
             }
+            contact.notice = None;
         } else {
             self.state.verified.remove(&root);
         }

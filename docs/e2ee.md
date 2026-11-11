@@ -1241,6 +1241,11 @@ settled, beyond the refinements marked "as implemented" above:
   server (and its label) where it was made; on another server whose log binds the same
   identity (with the identity's statement for that account), the contact shows
   "verified (same identity as on X)", by server label, never by name.
+- **Registration numbers.** The client looks users up by registration number (what
+  Mumble shows), which only the server maps to an account. The worker remembers the
+  account it was shown for each number; another account behind the same number later
+  (numbers are never reused on Nuschel servers) puts a notice on that contact: "treat
+  them as someone new until you compare safety numbers".
 - **Gossip** (§5.3) is ready: `MakeGossip` and `CheckGossip` produce and check
   `HeadGossip` against the worker's `KnownHeads` and keep `Evidence`; carrying it in
   MLS application messages comes with phase 4.

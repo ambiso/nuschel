@@ -122,6 +122,23 @@ impl Client {
             lookup: lookup.encode().unwrap(),
             record: Some(person.record.clone()),
             direct: true,
+            user_id: None,
+        }) {
+            CryptoResponse::Contact(view) => view,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A lookup that named a registration number.
+    pub async fn contact_as(&mut self, dir: &Dir, person: &Person, user_id: u32) -> ContactView {
+        let lookup = dir.lookup(&person.label()).await.unwrap();
+        match self.ask(CryptoRequest::Contact {
+            server: self.server.into(),
+            account: person.account.to_vec(),
+            lookup: lookup.encode().unwrap(),
+            record: Some(person.record.clone()),
+            direct: false,
+            user_id: Some(user_id),
         }) {
             CryptoResponse::Contact(view) => view,
             other => panic!("{other:?}"),

@@ -273,6 +273,8 @@ struct Context {
     account: Vec<u8>,
     /// Self-monitoring found our newest binding not published yet.
     publication_pending: bool,
+    /// Our identity exists (created on first need).
+    identity_ready: bool,
 }
 
 /// A server reply, or its error.
@@ -563,6 +565,22 @@ impl Context {
         account: Option<[u8; 16]>,
         direct: bool,
     ) -> Result<(), Error> {
+        // A safety number needs our identity: made on first need (also for guests,
+        // who publish nothing).
+        if !self.identity_ready
+            && let Ok(CryptoResponse::Identity(view)) = self
+                .worker(CryptoRequest::CreateIdentity {
+                    device_name: self.device_name.clone(),
+                    recovery: self.recovery,
+                })
+                .await
+        {
+            if view.created {
+                self.emit(IdentityEvent::Own(view)).await;
+            }
+            self.identity_ready = true;
+        }
+        let account_given = account;
         let target = match (account, user_id) {
             (Some(account), _) => v1::kt_lookup::Target::Account(account.to_vec()),
             (None, Some(user_id)) => v1::kt_lookup::Target::UserId(user_id),
@@ -588,6 +606,7 @@ impl Context {
                     lookup: reply.response,
                     record: reply.record.map(record_bytes),
                     direct,
+                    user_id: account_given.is_none().then_some(user_id).flatten(),
                 })
                 .await?
             }
@@ -771,6 +790,7 @@ pub async fn drive(driver: Driver) {
         next_request: 0,
         account: Vec::new(),
         publication_pending: false,
+        identity_ready: false,
     };
     let healthy = match context.connect(descriptor.clone()).await {
         Ok(accepted) => accepted,

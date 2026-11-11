@@ -183,6 +183,7 @@ async fn hidden_changes_wrong_accounts_and_foreign_records_are_not_accepted() {
         lookup: wrong.encode().unwrap(),
         record: Some(alice.record.clone()),
         direct: false,
+        user_id: None,
     }) else {
         panic!()
     };
@@ -203,6 +204,7 @@ async fn hidden_changes_wrong_accounts_and_foreign_records_are_not_accepted() {
         lookup: lookup.encode().unwrap(),
         record: Some(alice.record.clone()),
         direct: false,
+        user_id: None,
     }) else {
         panic!()
     };
@@ -280,4 +282,30 @@ async fn a_binding_that_came_and_went_is_shown_and_self_monitoring_catches_it() 
         monitor(&mut alice, history),
         MonitorOutcome::OwnKeyAlarm { reason } if reason.contains("version 2")
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn another_account_behind_the_same_registration_number_is_flagged() {
+    let dir = directory([0x11; 32]).await;
+    let alice = Person::new(&dir, 1);
+    let mallory = Person::new(&dir, 2);
+    alice.publish(&dir, T0 + 10).await;
+    mallory.publish(&dir, T0 + 20).await;
+    let mut bob = Client::new();
+    bob.sync(&dir).await;
+    // Registration #7 is Alice's account; later the server answers #7 with Mallory's.
+    let first = bob.contact_as(&dir, &alice, 7).await;
+    assert_eq!(first.notice, None);
+    let swapped = bob.contact_as(&dir, &mallory, 7).await;
+    assert_eq!(swapped.state, ContactState::Unverified);
+    assert!(
+        swapped
+            .notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("another account")),
+        "{swapped:?}"
+    );
+    // The same answer again is no news.
+    let again = bob.contact_as(&dir, &mallory, 8).await;
+    assert!(again.notice.is_some(), "the notice stays with the contact");
 }

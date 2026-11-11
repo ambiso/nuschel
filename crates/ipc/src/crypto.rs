@@ -173,6 +173,10 @@ pub enum CryptoRequest {
         record: Option<KtRecordBytes>,
         /// We talk to them in a direct conversation.
         direct: bool,
+        /// The registration number the lookup named, if it named one: a server that
+        /// later shows another account for it is flagged.
+        #[serde(default)]
+        user_id: Option<u32>,
     },
     /// A contact's history: `Contact`.
     ContactHistory {
@@ -558,6 +562,7 @@ mod tests {
                 statement: vec![4],
             }),
             direct: true,
+            user_id: Some(3),
         };
         let mut bytes = Vec::new();
         write_frame(&mut bytes, &Envelope::new(3, &request)).unwrap();
