@@ -16,6 +16,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 nuschel-content = { path = "../crates/content" }
+nuschel-math = { path = "../crates/math" }
+pulldown-cmark = { version = "0.13.6", default-features = false }
 nuschel-core = { path = "../crates/core" }
 nuschel-protocol = { path = "../crates/protocol" }
 nuscheld = { path = "../apps/server" }
@@ -154,6 +156,20 @@ bench = false
 [[bin]]
 name = "voice_playback"
 path = "fuzz_targets/voice_playback.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "math"
+path = "fuzz_targets/math.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "math_tokens"
+path = "fuzz_targets/math_tokens.rs"
 test = false
 doc = false
 bench = false
