@@ -9,6 +9,8 @@ pub mod conversation;
 pub mod favicon;
 pub mod finder;
 pub mod input;
+#[cfg(feature = "native")]
+mod link;
 pub mod names;
 #[cfg(feature = "native")]
 pub mod native;

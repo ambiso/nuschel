@@ -605,94 +605,38 @@ impl Desktop {
             self.ptt_wake.notify_one();
         }
     }
-    /// Connect to a `mumble://` link, reusing a matching saved server.
+    /// Connect to a `mumble://` link, reusing a matching saved server (the
+    /// SDK decides); a link naming nobody for a new server opens the form.
     pub fn open_url(&mut self, url: MumbleUrl, window: &mut Window, cx: &mut Context<Self>) {
-        // An invite's policy=nuschel holds from the very first connection
-        // (it only ever raises the server's record).
-        if url.require_nuschel
-            && let Err(error) = self
-                .profile
-                .policy()
-                .and_then(|mut store| store.raise(&url.host, url.port, true, &[]))
-        {
-            self.error = Some(format!(
-                "Could not save the invite's security policy: {error}"
-            ));
-            return;
-        }
-        let existing = self.client.servers.iter().position(|server| {
-            server.bookmark.host == url.host
-                && server.bookmark.port == url.port
-                && url
-                    .username
-                    .as_ref()
-                    .is_none_or(|name| *name == server.bookmark.username)
-        });
-        let index = match existing {
-            Some(index) => index,
-            None => {
-                let Some(username) = url.username.clone() else {
-                    self.open_form(None, window, cx);
-                    if let Some(form) = &self.form {
-                        let host = url.host.clone();
-                        let port = url.port.to_string();
-                        form.host
-                            .update(cx, |input, cx| input.set_value(host, window, cx));
-                        form.port
-                            .update(cx, |input, cx| input.set_value(port, window, cx));
-                        form.username
-                            .update(cx, |input, cx| input.focus(window, cx));
-                    }
-                    return;
-                };
-                let mut bookmark = match ServerBookmark::new("", &url.host, url.port, &username) {
-                    Ok(bookmark) => bookmark,
-                    Err(error) => {
-                        self.error = Some(error);
-                        return;
-                    }
-                };
-                // An invite's fp= pins the certificate before the first connection.
-                bookmark.certificate_sha256 = url.certificate_sha256.clone();
-                let mut bookmarks = self
-                    .client
-                    .servers
-                    .iter()
-                    .map(|server| server.bookmark.clone())
-                    .collect::<Vec<_>>();
-                bookmarks.push(bookmark.clone());
-                if let Err(error) = self.write_servers(&bookmarks) {
-                    self.error = Some(error.to_string());
-                    return;
+        let (host, port) = (url.host.clone(), url.port);
+        let index = match self.client.open_url(url, &self.profile, false) {
+            Ok(Some(index)) => index,
+            Ok(None) => {
+                self.open_form(None, window, cx);
+                if let Some(form) = &self.form {
+                    let port = port.to_string();
+                    form.host
+                        .update(cx, |input, cx| input.set_value(host, window, cx));
+                    form.port
+                        .update(cx, |input, cx| input.set_value(port, window, cx));
+                    form.username
+                        .update(cx, |input, cx| input.focus(window, cx));
                 }
-                self.ui
-                    .insert(bookmark.id.clone(), ServerUi::new(&bookmark));
-                let index = self.client.add_server(bookmark);
-                self.refresh_icons();
-                index
+                return;
+            }
+            Err(error) => {
+                self.error = Some(error);
+                return;
             }
         };
-        // A link never replaces a pin; it only fills one in.
-        if self.client.servers[index]
-            .bookmark
-            .certificate_sha256
-            .is_none()
-            && let Some(pin) = url.certificate_sha256
-        {
-            self.client.servers[index].bookmark.certificate_sha256 = Some(pin);
-            let bookmarks = self
-                .client
-                .servers
-                .iter()
-                .map(|server| server.bookmark.clone())
-                .collect::<Vec<_>>();
-            if let Err(error) = self.write_servers(&bookmarks) {
-                self.error = Some(error.to_string());
-            }
+        let bookmark = &self.client.servers[index].bookmark;
+        if !self.ui.contains_key(&bookmark.id) {
+            self.ui.insert(bookmark.id.clone(), ServerUi::new(bookmark));
+            self.refresh_icons();
         }
-        self.client.servers[index].pending_channel = url.channel;
+        // A new server, or a pin from an invite, is saved now.
+        self.apply_updates(cx);
         self.browse_server(index, window, cx);
-        self.connect(index, url.password);
     }
     /// The lock in the selected conversation's header (docs/e2ee.md §7.4): a direct
     /// conversation with an end-to-end group shows its own state; anything else the

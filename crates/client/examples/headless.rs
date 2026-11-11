@@ -99,10 +99,9 @@ impl Person {
                 ));
             }
             // A certificate seen for the first time: trust it (a server we run).
-            if let Some(prompt) = self.client.servers[0].certificate.take() {
+            if let Some(prompt) = &self.client.servers[0].certificate {
                 self.say(format!("trusts the certificate {}…", &prompt.sha256[..16]));
-                self.client.servers[0].bookmark.certificate_sha256 = Some(prompt.sha256);
-                self.client.connect(0, None, true);
+                self.client.trust_certificate(0, true);
             }
         }
         self.say(what);

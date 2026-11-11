@@ -161,7 +161,7 @@ pub struct Client {
     typing_sent: Option<((String, u32), u64)>,
     /// Passwords of this run's connections, until they log in.
     passwords: BTreeMap<String, String>,
-    updates: Vec<Update>,
+    pub(crate) updates: Vec<Update>,
     now_ms: u64,
 }
 
@@ -267,6 +267,23 @@ impl Client {
             }
             Err(error) => server.notice = Some(error),
         }
+    }
+
+    /// Trust the certificate server `index` presented (its
+    /// [`ServerState::certificate`] prompt): pin it on the saved server and
+    /// connect again. The saved servers change
+    /// ([`Update::BookmarksChangedNow`]). Returns false if nothing asked.
+    pub fn trust_certificate(&mut self, index: usize, deafened: bool) -> bool {
+        let Some(server) = self.servers.get_mut(index) else {
+            return false;
+        };
+        let Some(prompt) = server.certificate.take() else {
+            return false;
+        };
+        server.bookmark.certificate_sha256 = Some(prompt.sha256);
+        self.updates.push(Update::BookmarksChangedNow);
+        self.connect(index, None, deafened);
+        true
     }
 
     pub fn disconnect(&mut self, index: usize) {
