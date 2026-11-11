@@ -2,14 +2,17 @@
 use crate::document::Document;
 use crate::{
     attachments::{Attachment, Kind, Source},
-    backend::{Backend, Event, RenderKey, RenderedMessage},
+    backend::{Backend, Event, RenderKey},
     scrolling::{Anchor, SmoothScroll},
 };
 use gpui_kit::{
     base::input::{InputEvent, InputState, TextareaState},
     *,
 };
-use nuschel_client::{Conversation, HistorySource, Navigation, SessionSecurity};
+use nuschel_client::{
+    Conversation, HistorySource, Navigation, SessionSecurity,
+    timeline::{MAX_TIMELINE, Timeline},
+};
 use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_session::{
     config::{
@@ -27,39 +30,6 @@ use std::{
 
 pub use crate::panels::Panel;
 
-pub struct MessageView {
-    pub id: Option<i64>,
-    /// Identifies the message to the UI (its text selection) while it lives.
-    pub serial: u64,
-    pub author: String,
-    pub observed_at_ms: i64,
-    pub time: String,
-    pub status: Option<&'static str>,
-    pub document: Document,
-    pub expanded: bool,
-    /// Laid-out content height from the last frame, so "Show more" follows
-    /// the real wrapped height (window width, images, code) rather than a
-    /// character count.
-    pub measured: std::rc::Rc<std::cell::Cell<f32>>,
-    /// A file offered with this message (transfer.rs shows it as a card).
-    pub offer: Option<nuschel_core::transfer::Offer>,
-    /// The row's height when last laid out, for the room it keeps while
-    /// scrolled out of view.
-    pub height: crate::scrolling::Height,
-    /// Our message on a Nuschel server until it is acknowledged: its key.
-    pub pending: Option<[u8; 16]>,
-    /// Sent from this device (or our account's other one).
-    pub outgoing: bool,
-    /// Nuschel servers: its seq in the conversation (edits, deletions and
-    /// read markers name it), and the author's registration number.
-    pub seq: Option<u64>,
-    pub author_id: Option<u32>,
-    /// What was typed (the composer edits it).
-    pub source: String,
-    /// Nuschel servers: when it was last edited, or that it was deleted.
-    pub edited_ms: Option<i64>,
-    pub deleted: Option<crate::backend::Deletion>,
-}
 /// Name a text field for screen readers. GPUI-kit inputs expose no role or
 /// name to AT-SPI/UIA/AX unless the state is told what it is.
 pub fn accessible<M: gpui_kit::base::input::InputModeKind>(
@@ -82,56 +52,6 @@ pub fn accessible<M: gpui_kit::base::input::InputModeKind>(
     );
     state
 }
-/// Messages taller than this are collapsed until expanded.
-pub const COLLAPSED_HEIGHT: f32 = 300.;
-/// Messages a timeline keeps while its reader is at the bottom; older ones
-/// are dropped and load again from local history on scrolling up.
-pub const MAX_TIMELINE: usize = 1000;
-impl MessageView {
-    pub fn has_more(&self) -> bool {
-        self.measured.get() > COLLAPSED_HEIGHT + 1.
-    }
-    /// Ours, on a Nuschel server: sent from here, or by our registration.
-    pub fn ours(&self, own_user_id: Option<u32>) -> bool {
-        self.outgoing || (self.author_id.is_some() && self.author_id == own_user_id)
-    }
-}
-impl From<RenderedMessage> for MessageView {
-    fn from(message: RenderedMessage) -> Self {
-        static SERIALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let offer = nuschel_core::transfer::parse_offer(&message.message.body);
-        Self {
-            id: message.id,
-            serial: SERIALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            author: message.message.author,
-            observed_at_ms: message.message.observed_at_ms,
-            time: local_time(message.message.observed_at_ms),
-            status: if message.deleted.is_some() {
-                None
-            } else if message.pending.is_some() {
-                Some("sending…")
-            } else if message.id.is_none() {
-                Some("not saved")
-            } else if message.outgoing {
-                Some("sent")
-            } else {
-                None
-            },
-            measured: Default::default(),
-            height: Default::default(),
-            document: message.document.into(),
-            expanded: false,
-            offer,
-            pending: message.pending,
-            outgoing: message.outgoing,
-            seq: message.seq,
-            author_id: message.author_id,
-            source: message.message.body,
-            edited_ms: message.edited_ms,
-            deleted: message.deleted,
-        }
-    }
-}
 /// "Disconnected from 14:51 to 14:52 (40 s)…", with dates only when they differ from today.
 fn gap_text(from_ms: i64, to_ms: i64) -> String {
     let seconds = (to_ms - from_ms).max(0) / 1000;
@@ -146,6 +66,14 @@ fn gap_text(from_ms: i64, to_ms: i64) -> String {
         strip(local_time(from_ms)),
         strip(local_time(to_ms))
     )
+}
+
+/// Milliseconds on a monotonic clock, for the SDK's timers (it reads no
+/// clock itself).
+pub fn monotonic_ms() -> u64 {
+    static START: std::sync::LazyLock<std::time::Instant> =
+        std::sync::LazyLock::new(std::time::Instant::now);
+    u64::try_from(START.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Local observation time, labelled relative to today for recent messages.
@@ -202,23 +130,9 @@ pub struct ChannelView {
     pub target: TextTarget,
     pub direct_peer: Option<User>,
     pub storage_key: String,
-    /// One timeline: the latest page, older pages prepended as the reader
-    /// scrolls up, and live messages appended.
-    pub messages: Vec<MessageView>,
-    /// Cursor for the next older page, if local history has more.
-    pub next_before: Option<i64>,
-    /// Set while the timeline shows older history apart from the newest
-    /// (after a search result opened a message): the next newer page.
-    pub next_after: Option<i64>,
-    /// A live message was left out of such a timeline since the newer page
-    /// was asked for.
-    pub missed_live: bool,
-    /// The oldest stored message is loaded: there is nothing further up.
-    pub beginning: bool,
-    /// The latest page is in memory; live messages keep it current, so
-    /// opening the conversation again needs no reload.
-    pub loaded: bool,
-    pub loading: bool,
+    /// The latest page of history, older pages prepended as the reader
+    /// scrolls up, and live messages appended (see `nuschel_client::timeline`).
+    pub timeline: Timeline,
     /// Messages that arrived while the reader was scrolled up.
     pub new_messages: usize,
     /// Messages that arrived out of sight, and whether one mentions you or
@@ -286,13 +200,7 @@ impl ChannelView {
             target: TextTarget::Channel(0),
             direct_peer: None,
             storage_key: "0".into(),
-            messages: Vec::new(),
-            next_before: None,
-            next_after: None,
-            missed_live: false,
-            beginning: false,
-            loaded: false,
-            loading: false,
+            timeline: Timeline::default(),
             new_messages: 0,
             unread: 0,
             unread_mention: false,
@@ -416,8 +324,7 @@ pub struct ServerView {
     /// Our direct conversations on a Nuschel server, by id.
     pub directs: BTreeMap<[u8; 16], nuschel_protocol::nuschel::v1::Direct>,
     /// Edits and deletions of messages not in a timeline yet (editing.rs).
-    pub waiting_changes:
-        std::collections::VecDeque<([u8; 16], u64, crate::editing::Change, std::time::Instant)>,
+    pub waiting_changes: nuschel_client::timeline::WaitingChanges,
     pub talking: BTreeSet<u32>,
     pub transport: Option<TransportStats>,
     pub audio: AudioInfo,
@@ -478,9 +385,6 @@ impl ServerView {
                 target: TextTarget::Channel(channel.id),
                 direct_peer: None,
                 storage_key: channel.id.to_string(),
-                messages: Vec::new(),
-                next_before: None,
-                loading: false,
                 new_messages: 0,
                 ..Default::default()
             })
@@ -817,6 +721,8 @@ struct Outgoing {
 pub struct Desktop {
     pub servers: Vec<ServerView>,
     pub navigation: Navigation,
+    /// What drawing derives from the timelines' messages (presentation.rs).
+    pub presentation: crate::presentation::Presentation,
     pub history_enabled: bool,
     pub backend: Backend,
     pub profile: Profile,
@@ -1081,6 +987,7 @@ impl Desktop {
         let mut desktop = Self {
             servers: bookmarks.into_iter().map(ServerView::new).collect(),
             navigation: Navigation::default(),
+            presentation: Default::default(),
             history_enabled: true,
             notes: crate::notify::start(&handle),
             backend,
@@ -1405,8 +1312,8 @@ impl Desktop {
             .iter_mut()
             .find(|channel| channel.id == id)
             .expect("checked above");
-        if channel.loaded {
-            channel.trim_oldest(MAX_TIMELINE);
+        if channel.timeline.loaded {
+            channel.timeline.trim_oldest(MAX_TIMELINE);
             channel.new_messages = 0;
         } else {
             self.load_history(None);
@@ -1419,13 +1326,30 @@ impl Desktop {
                 .command(&server.id, Command::RequestPermissions(id));
         }
     }
-    pub fn toggle_message(&mut self, index: usize) {
-        if let Some((server, channel)) = self.selected_indices()
-            && let Some(message) = self.servers[server].channels[channel]
-                .messages
-                .get_mut(index)
-        {
+    /// Show all of a long message, or collapse it again.
+    pub fn toggle_message(&mut self, serial: u64) {
+        if let Some(message) = self.presentation.message_mut(serial) {
             message.expanded = !message.expanded;
+        }
+    }
+    /// Present the open conversation's messages for drawing, and now and
+    /// then forget the presentations of messages no timeline holds.
+    pub fn present_selected(&mut self) {
+        if let Some((server, channel)) = self.selected_indices() {
+            let messages = &self.servers[server].channels[channel].timeline.messages;
+            self.presentation.present(messages);
+        }
+        if self.presentation.wants_pruning() {
+            let live = self.servers.iter().flat_map(|server| {
+                server.channels.iter().flat_map(|channel| {
+                    channel
+                        .timeline
+                        .messages
+                        .iter()
+                        .map(|message| message.serial)
+                })
+            });
+            self.presentation.prune(live.collect::<Vec<_>>());
         }
     }
     pub fn smooth_scroll(
@@ -1856,9 +1780,7 @@ impl Desktop {
         if server.history_source == HistorySource::ServerArchive {
             server.history_source = HistorySource::LocalObserved;
             for channel in &mut server.channels {
-                channel.loaded = false;
-                channel.messages.clear();
-                channel.next_before = None;
+                channel.timeline.reset();
             }
         }
         server.users.clear();
@@ -2716,9 +2638,6 @@ impl Desktop {
                 target: TextTarget::Direct(session),
                 direct_peer: Some(peer),
                 storage_key: key,
-                messages: Vec::new(),
-                next_before: None,
-                loading: false,
                 new_messages: 0,
                 ..Default::default()
             });
@@ -2740,7 +2659,7 @@ impl Desktop {
             channel: server.channels[channel].storage_key.clone(),
         });
         let channel = &mut server.channels[channel];
-        channel.loading = true;
+        channel.timeline.loading = true;
         if before.is_none() {
             channel.new_messages = 0;
         }
@@ -2757,13 +2676,13 @@ impl Desktop {
                 server.id.clone(),
                 conversation,
                 (ticket, cache),
-                crate::backend::Page::Before(before),
+                nuschel_client::timeline::Page::Before(before),
             ),
             // Until the server names the conversation, nothing loads.
             None if server.history_source == HistorySource::ServerArchive
                 && matches!(channel.target, TextTarget::Channel(_)) =>
             {
-                channel.loading = false;
+                channel.timeline.loading = false;
                 return;
             }
             None => self.backend.history(
@@ -2775,7 +2694,7 @@ impl Desktop {
             ),
         };
         if let Err(error) = requested {
-            channel.loading = false;
+            channel.timeline.loading = false;
             self.older_paused = true;
             self.error = Some(error);
         }
@@ -2785,8 +2704,8 @@ impl Desktop {
     pub fn load_older(&mut self) -> bool {
         if let Some((server, channel)) = self.selected_indices()
             && !self.older_paused
-            && !self.servers[server].channels[channel].loading
-            && let Some(before) = self.servers[server].channels[channel].next_before
+            && !self.servers[server].channels[channel].timeline.loading
+            && let Some(before) = self.servers[server].channels[channel].timeline.next_before
         {
             self.load_history(Some(before));
             return true;
@@ -2814,7 +2733,7 @@ impl Desktop {
             let channel = &mut self.servers[server].channels[channel];
             channel.new_messages = 0;
             // Out of sight above while at the bottom; they load again on scrolling up.
-            channel.trim_oldest(MAX_TIMELINE);
+            channel.timeline.trim_oldest(MAX_TIMELINE);
             self.scroll.scroll_to_bottom();
         }
     }
@@ -2896,7 +2815,7 @@ impl Desktop {
                     &server,
                     conversation,
                     seq,
-                    crate::editing::Change::Edited {
+                    nuschel_client::timeline::Change::Edited {
                         source,
                         document,
                         edited_ms,
@@ -2911,7 +2830,7 @@ impl Desktop {
                     &server,
                     conversation,
                     seq,
-                    crate::editing::Change::Deleted(deletion),
+                    nuschel_client::timeline::Change::Deleted(deletion),
                 ),
                 Event::ChangeFailed {
                     server,
@@ -2936,7 +2855,7 @@ impl Desktop {
                             .iter_mut()
                             .find(|entry| entry.id == ticket.conversation.channel)
                     {
-                        channel.loading = false;
+                        channel.timeline.loading = false;
                     }
                     self.older_paused = true;
                     self.error = Some(format!("Server history: {reason}"));
@@ -2960,7 +2879,7 @@ impl Desktop {
                     self.older_paused = true;
                     for server in &mut self.servers {
                         for channel in &mut server.channels {
-                            channel.loading = false;
+                            channel.timeline.loading = false;
                         }
                     }
                 }
@@ -2980,10 +2899,10 @@ impl Desktop {
                             .iter_mut()
                             .find(|entry| entry.id == ticket.conversation.channel)
                     {
-                        channel.loading = false;
+                        channel.timeline.loading = false;
                         self.older_paused = false;
                         tracing::debug!(?before, count = messages.len(), "history page");
-                        channel.take_page(before, messages, next_before);
+                        channel.timeline.take_page(before, messages, next_before);
                         if before.is_none() {
                             // A conversation opens at its newest message.
                             self.anchor.reset();
@@ -3377,9 +3296,6 @@ impl Desktop {
                             target: target.clone(),
                             direct_peer: peer.clone(),
                             storage_key: storage_key.clone(),
-                            messages: Vec::new(),
-                            next_before: None,
-                            loading: false,
                             new_messages: 0,
                             ..Default::default()
                         });
@@ -3511,14 +3427,9 @@ impl Desktop {
                             matches!(block, nuschel_core::ContentBlock::Text { text, .. }
                                     if crate::notify::mentions(text, &server.bookmark.username))
                         }));
-                    // Older history is shown apart from the newest: the
-                    // message arrives with the newer pages.
-                    let added = if channel.next_after.is_some() && message.id.is_some() {
-                        channel.missed_live = true;
-                        true
-                    } else {
-                        merge_message(channel, message)
-                    };
+                    // Older history shown apart from the newest gets the
+                    // message with the newer pages.
+                    let added = channel.timeline.receive(message);
                     let in_sight = self.window_active
                         && self.following
                         && self.navigation.selection().is_some_and(|selected| {
@@ -3540,7 +3451,7 @@ impl Desktop {
                             channel.new_messages += 1;
                         }
                     } else {
-                        channel.trim_oldest(MAX_TIMELINE);
+                        channel.timeline.trim_oldest(MAX_TIMELINE);
                     }
                 }
             }
@@ -3664,9 +3575,7 @@ impl Desktop {
                 if history && server.history_source != HistorySource::ServerArchive {
                     server.history_source = HistorySource::ServerArchive;
                     for channel in &mut server.channels {
-                        channel.loaded = false;
-                        channel.messages.clear();
-                        channel.next_before = None;
+                        channel.timeline.reset();
                     }
                 }
             }
@@ -3676,7 +3585,7 @@ impl Desktop {
                 });
                 if let Some(view) = server.channel_view(channel) {
                     view.conversation = info.conversation.as_slice().try_into().ok();
-                    if selected && !view.loaded && !view.loading {
+                    if selected && !view.timeline.loaded && !view.timeline.loading {
                         self.load_history(None);
                     }
                 }
@@ -3790,7 +3699,7 @@ impl Desktop {
                 let server = &mut self.servers[index];
                 if server.history_identity() != identity {
                     for channel in &mut server.channels {
-                        channel.loaded = false;
+                        channel.timeline.loaded = false;
                     }
                     if self
                         .navigation
@@ -3909,9 +3818,6 @@ impl Desktop {
                         target: TextTarget::Channel(update.id),
                         direct_peer: None,
                         storage_key: update.id.to_string(),
-                        messages: Vec::new(),
-                        next_before: None,
-                        loading: false,
                         new_messages: 0,
                         links: update.links,
                         temporary: update.temporary,
@@ -4130,239 +4036,13 @@ fn lost_messages(server: &mut ServerView) -> Option<String> {
         lost => format!("{lost} messages waiting to be sent were not sent."),
     })
 }
-/// Returns whether the message is new to this timeline.
 /// Our message on a Nuschel server was acknowledged as `seq` (or refused):
 /// returns whether it is shown yet.
 fn settle_pending(server: &mut ServerView, key: [u8; 16], seq: Option<u64>) -> bool {
-    for channel in &mut server.channels {
-        if let Some(message) = channel
-            .messages
-            .iter_mut()
-            .find(|message| message.pending == Some(key))
-        {
-            message.pending = None;
-            match seq {
-                Some(seq) => {
-                    message.id = Some(seq as i64);
-                    message.seq = Some(seq);
-                    message.status = Some("sent");
-                }
-                None => message.status = Some("not sent"),
-            }
-            return true;
-        }
-    }
-    false
-}
-
-pub(crate) fn merge_message(channel: &mut ChannelView, message: RenderedMessage) -> bool {
-    if message
-        .id
-        .is_some_and(|id| channel.messages.iter().any(|entry| entry.id == Some(id)))
-    {
-        return false;
-    }
-    channel.messages.push(message.into());
-    // Observation time first: an unsaved message still appears where it arrived.
-    channel
-        .messages
-        .sort_by_key(|message| (message.observed_at_ms, message.id.unwrap_or(i64::MAX)));
-    true
-}
-impl ChannelView {
-    /// Fold a page of local history into the timeline. The latest page
-    /// (`before` is None) starts it over, keeping only what arrived since;
-    /// an older page is prepended if it continues from the oldest loaded
-    /// message. Returns whether the page was used.
-    fn take_page(
-        &mut self,
-        before: Option<i64>,
-        messages: Vec<RenderedMessage>,
-        next_before: Option<i64>,
-    ) -> bool {
-        match before {
-            None => {
-                self.loaded = true;
-                self.next_after = None;
-                self.missed_live = false;
-                // What arrived since the page was asked for stays: newer by
-                // time (local pages run by time, and rows stored later may
-                // hold older messages) or by id (a server's seqs; our own
-                // message keeps this device's clock).
-                let newest = messages
-                    .iter()
-                    .filter_map(|message| Some((message.message.observed_at_ms, message.id?)))
-                    .max();
-                let newest_id = messages.iter().filter_map(|message| message.id).max();
-                self.messages.retain(|message| {
-                    message.id.is_none_or(|id| {
-                        newest.is_none_or(|newest| (message.observed_at_ms, id) > newest)
-                            || newest_id.is_none_or(|newest| id > newest)
-                    })
-                });
-            }
-            // Trimmed while the page was on its way: the next request
-            // starts from the new oldest message.
-            Some(before) if self.next_before != Some(before) => return false,
-            Some(_) => {}
-        }
-        for message in messages {
-            merge_message(self, message);
-        }
-        self.next_before = next_before;
-        self.beginning = next_before.is_none();
-        true
-    }
-    /// Drop the oldest messages beyond `cap`; they load again from local history.
-    fn trim_oldest(&mut self, cap: usize) {
-        if self.messages.len() <= cap {
-            return;
-        }
-        self.messages.drain(..self.messages.len() - cap);
-        // The oldest in timeline order, which need not have the smallest id.
-        if let Some(oldest) = self.messages.iter().find_map(|message| message.id) {
-            self.next_before = Some(oldest);
-            self.beginning = false;
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::{ChannelView, RenderedMessage, ServerView, merge_message, settle_pending};
-
-    fn message(id: Option<i64>, observed_at_ms: i64) -> RenderedMessage {
-        RenderedMessage::plain(
-            id,
-            nuschel_core::ChatMessage {
-                server: "server".into(),
-                channel: "2".into(),
-                author: "Ada".into(),
-                observed_at_ms,
-                body: format!("message {id:?}"),
-            },
-            nuschel_core::MessageDocument { blocks: Vec::new() },
-            false,
-        )
-    }
-
-    fn page(ids: std::ops::RangeInclusive<i64>) -> Vec<RenderedMessage> {
-        ids.map(|id| message(Some(id), id * 1000)).collect()
-    }
-
-    #[test]
-    fn local_pages_follow_time_not_row_ids() {
-        // A server page kept after live messages: newer rows, older times.
-        let mut channel = ChannelView::default();
-        let mut live = message(Some(2), 9500);
-        live.outgoing = true;
-        merge_message(&mut channel, live);
-        merge_message(&mut channel, message(Some(1), 500));
-        channel.take_page(
-            None,
-            vec![message(Some(10), 5000), message(Some(3), 9000)],
-            Some(10),
-        );
-        let shown: Vec<_> = channel.messages.iter().map(|message| message.id).collect();
-        // What arrived after the page's newest stays; what is older goes.
-        assert_eq!(shown, [Some(10), Some(3), Some(2)]);
-        channel.trim_oldest(2);
-        assert_eq!(
-            channel.next_before,
-            Some(3),
-            "the oldest shown, not the smallest id"
-        );
-    }
-
-    #[test]
-    fn our_messages_are_pending_until_the_server_acknowledges_them() {
-        let bookmark =
-            nuschel_session::config::ServerBookmark::new("", "example.org", 64738, "Ada").unwrap();
-        let mut server = ServerView::new(bookmark);
-        let mut pending = message(None, 1000);
-        pending.outgoing = true;
-        pending.pending = Some([7; 16]);
-        merge_message(&mut server.channels[0], pending);
-        assert_eq!(server.channels[0].messages[0].status, Some("sending…"));
-        assert!(!settle_pending(&mut server, [8; 16], Some(3)));
-        assert!(settle_pending(&mut server, [7; 16], Some(42)));
-        let shown = &server.channels[0].messages[0];
-        assert_eq!(
-            (shown.id, shown.status, shown.pending),
-            (Some(42), Some("sent"), None)
-        );
-        // A latest page keeps it (by seq) and does not show it twice.
-        assert!(!merge_message(
-            &mut server.channels[0],
-            message(Some(42), 1000)
-        ));
-    }
-
-    fn ids(channel: &ChannelView) -> Vec<Option<i64>> {
-        channel.messages.iter().map(|message| message.id).collect()
-    }
-
-    #[test]
-    fn older_pages_prepend_to_one_timeline_until_the_beginning() {
-        let mut channel = ChannelView::default();
-        assert!(channel.take_page(None, page(81..=120), Some(81)));
-        assert!(!channel.beginning);
-        // A live message joins the same timeline; its echo from history does not repeat it.
-        assert!(merge_message(&mut channel, message(Some(121), 121_000)));
-        assert!(!merge_message(&mut channel, message(Some(121), 121_000)));
-        assert!(channel.take_page(Some(81), page(41..=80), Some(41)));
-        assert!(channel.take_page(Some(41), page(1..=40), None));
-        assert!(channel.beginning);
-        assert_eq!(channel.next_before, None);
-        assert_eq!(ids(&channel), (1..=121).map(Some).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn a_page_for_a_stale_cursor_is_dropped() {
-        let mut channel = ChannelView::default();
-        channel.take_page(None, page(81..=120), Some(81));
-        channel.trim_oldest(20);
-        assert_eq!(channel.next_before, Some(101));
-        // Asked for before the trim: it no longer continues the timeline.
-        assert!(!channel.take_page(Some(81), page(41..=80), Some(41)));
-        assert_eq!(ids(&channel), (101..=120).map(Some).collect::<Vec<_>>());
-        assert!(channel.take_page(Some(101), page(61..=100), Some(61)));
-        assert_eq!(channel.messages.len(), 60);
-    }
-
-    #[test]
-    fn the_latest_page_starts_over_but_keeps_what_arrived_since() {
-        let mut channel = ChannelView::default();
-        channel.take_page(None, page(81..=120), Some(81));
-        channel.take_page(Some(81), page(41..=80), Some(41));
-        merge_message(&mut channel, message(Some(121), 121_000));
-        merge_message(&mut channel, message(None, 122_000));
-        // Reopened: the latest page again, with the newer and unsaved messages.
-        channel.take_page(None, page(82..=120), Some(82));
-        assert_eq!(
-            ids(&channel),
-            (82..=121)
-                .map(Some)
-                .chain(std::iter::once(None))
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(channel.next_before, Some(82));
-    }
-
-    #[test]
-    fn trimming_drops_only_the_oldest_and_rewinds_the_cursor() {
-        let mut channel = ChannelView::default();
-        channel.take_page(None, page(1..=40), None);
-        assert!(channel.beginning);
-        channel.trim_oldest(40);
-        assert!(channel.beginning, "nothing beyond the cap, nothing dropped");
-        channel.trim_oldest(30);
-        assert_eq!(ids(&channel).first(), Some(&Some(11)));
-        assert_eq!(channel.messages.len(), 30);
-        assert_eq!(channel.next_before, Some(11));
-        assert!(!channel.beginning);
-    }
+    server
+        .channels
+        .iter_mut()
+        .any(|channel| channel.timeline.settle(key, seq))
 }
 
 #[cfg(test)]

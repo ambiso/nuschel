@@ -639,15 +639,17 @@ pub fn card(
     position: usize,
     cx: &mut Context<Desktop>,
 ) -> Option<AnyElement> {
-    let message = channel.messages.get(position)?;
+    let message = channel.timeline.messages.get(position)?;
     let offer = message.offer.as_ref()?;
-    let replaced = channel.messages[position + 1..].iter().any(|later| {
-        later.author == message.author
-            && later
-                .offer
-                .as_ref()
-                .is_some_and(|later| later.same_file(offer))
-    });
+    let replaced = channel.timeline.messages[position + 1..]
+        .iter()
+        .any(|later| {
+            later.author == message.author
+                && later
+                    .offer
+                    .as_ref()
+                    .is_some_and(|later| later.same_file(offer))
+        });
     if replaced {
         return Some(
             div()

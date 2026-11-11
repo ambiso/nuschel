@@ -5,10 +5,9 @@
 //! older and newer history loads around it as the reader scrolls.
 use crate::{
     assets::icon,
-    backend::{Page, RenderedMessage},
     dialogs::{Tone, styled_button},
     names,
-    state::{Desktop, ServerView, accessible, local_time, merge_message},
+    state::{Desktop, ServerView, accessible, local_time},
     theme::{self, *},
 };
 use gpui_kit::{
@@ -16,7 +15,10 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_client::{Conversation, HistoryTicket};
+use nuschel_client::{
+    Conversation, HistoryTicket,
+    timeline::{IncomingMessage, Page},
+};
 use nuschel_core::{SearchCursor, SearchPage, search::Query};
 use nuschel_session::connection::TextTarget;
 use std::{
@@ -417,6 +419,7 @@ impl Desktop {
             until: None,
         });
         let loaded = self.servers[index].channels[position]
+            .timeline
             .messages
             .iter()
             .any(|message| message.id == Some(id));
@@ -438,7 +441,7 @@ impl Desktop {
         let archived = server.archived(&server.channels[position]);
         let source = server.history_source;
         let channel = &mut server.channels[position];
-        channel.loading = true;
+        channel.timeline.loading = true;
         let ticket = self.navigation.browse(
             Conversation {
                 server: server.id.clone(),
@@ -468,7 +471,7 @@ impl Desktop {
             ),
         };
         if let Err(error) = requested {
-            channel.loading = false;
+            channel.timeline.loading = false;
             self.older_paused = true;
             self.error = Some(error);
         }
@@ -502,7 +505,7 @@ impl Desktop {
     pub fn apply_history_window(
         &mut self,
         (server, ticket, page): (String, HistoryTicket, Page),
-        messages: Vec<RenderedMessage>,
+        messages: Vec<IncomingMessage>,
         (next_before, next_after): (Option<i64>, Option<i64>),
         cx: &mut Context<Self>,
     ) {
@@ -522,50 +525,16 @@ impl Desktop {
         else {
             return;
         };
-        channel.loading = false;
+        channel.timeline.loading = false;
         self.older_paused = false;
-        match page {
-            Page::Around(_) => {
-                // The page replaces the timeline; if it reaches the newest
-                // message, what arrived since stays.
-                let newest = messages.iter().filter_map(|message| message.id).max();
-                channel.messages.retain(|message| {
-                    next_after.is_none() && message.id.is_none_or(|id| Some(id) > newest)
-                });
-                for message in messages {
-                    merge_message(channel, message);
-                }
-                channel.next_before = next_before;
-                channel.beginning = next_before.is_none();
-                channel.next_after = next_after;
-                channel.missed_live = false;
-                channel.loaded = next_after.is_none();
-                channel.new_messages = 0;
-                self.anchor.reset();
-                self.following = false;
-                self.reveal_jumped(cx);
-            }
-            Page::After(after) if channel.next_after == Some(after) => {
-                for message in messages {
-                    merge_message(channel, message);
-                }
-                // A live message left out meanwhile is newer than this page.
-                channel.next_after = next_after.or_else(|| {
-                    channel
-                        .missed_live
-                        .then(|| {
-                            channel
-                                .messages
-                                .iter()
-                                .filter_map(|message| message.id)
-                                .max()
-                        })
-                        .flatten()
-                });
-                channel.missed_live = false;
-                channel.loaded = channel.next_after.is_none();
-            }
-            _ => {}
+        let used = channel
+            .timeline
+            .take_window(page, messages, (next_before, next_after));
+        if used && matches!(page, Page::Around(_)) {
+            channel.new_messages = 0;
+            self.anchor.reset();
+            self.following = false;
+            self.reveal_jumped(cx);
         }
     }
 
@@ -579,11 +548,11 @@ impl Desktop {
             return false;
         };
         let channel = &self.servers[index].channels[position];
-        let Some(after) = channel.next_after else {
+        let Some(after) = channel.timeline.next_after else {
             return false;
         };
         if self.following {
-            if !channel.loading {
+            if !channel.timeline.loading {
                 self.load_history(None);
             }
             return false;
@@ -595,7 +564,7 @@ impl Desktop {
             self.older_paused = false;
         }
         let below = self.scroll.max_offset().y + self.scroll.offset().y;
-        if !channel.loading
+        if !channel.timeline.loading
             && !self.older_paused
             && below < self.scroll.bounds().size.height.max(px(200.))
         {

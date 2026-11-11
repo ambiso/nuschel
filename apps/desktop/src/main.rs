@@ -27,6 +27,7 @@ mod motion;
 mod names;
 mod notify;
 mod panels;
+mod presentation;
 mod preview;
 mod scrolling;
 mod search;

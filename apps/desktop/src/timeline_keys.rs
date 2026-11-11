@@ -11,12 +11,13 @@
 //! link and where it really leads, also for screen readers. A printable key
 //! moves to the composer and is typed there.
 use crate::{
-    document::Block,
+    document::{Block, Document},
     scrolling::Key,
     selection::HoveredLink,
-    state::{Desktop, MessageView},
+    state::Desktop,
 };
 use gpui_kit::*;
+use nuschel_client::timeline::Message;
 
 /// A link in a message: its block, its index in that block, its text and
 /// where it leads.
@@ -28,12 +29,12 @@ pub struct MessageLink {
 }
 
 /// The links of a message, in reading order.
-pub fn message_links(message: &MessageView) -> Vec<MessageLink> {
+pub fn message_links(message: &Message, document: &Document) -> Vec<MessageLink> {
     let mut found = Vec::new();
     if message.deleted.is_some() {
         return found;
     }
-    for (block, content) in message.document.blocks.iter().enumerate() {
+    for (block, content) in document.blocks.iter().enumerate() {
         if let Block::Text { text, links, .. } = content {
             for (link, (range, url)) in links.iter().enumerate() {
                 found.push(MessageLink {
@@ -66,13 +67,19 @@ pub fn typed_text(keystroke: &Keystroke) -> Option<&str> {
 }
 
 impl Desktop {
+    /// The links of a message of the open timeline, as it is drawn.
+    fn links_of(&self, message: &Message) -> Vec<MessageLink> {
+        message_links(message, &self.presentation.message(message.serial).document)
+    }
+
     /// The message the keyboard is on in the open timeline, if it is one.
-    fn keyboard_message(&self) -> Option<&MessageView> {
+    fn keyboard_message(&self) -> Option<&Message> {
         let Some(Key::Message(serial)) = self.timeline_current.get() else {
             return None;
         };
         let (server, channel) = self.selected_indices()?;
         self.servers[server].channels[channel]
+            .timeline
             .messages
             .iter()
             .find(|message| message.serial == serial)
@@ -91,7 +98,7 @@ impl Desktop {
             self.link_focus = None;
             return false;
         };
-        let (serial, count) = (message.serial, message_links(message).len());
+        let (serial, count) = (message.serial, self.links_of(message).len());
         let next = match (self.keyboard_link().map(|(_, index)| index), backwards) {
             (None, false) if count > 0 => Some(0),
             (Some(index), false) if index + 1 < count => Some(index + 1),
@@ -132,7 +139,7 @@ impl Desktop {
         };
         let Some(found) = self
             .keyboard_message()
-            .and_then(|message| message_links(message).into_iter().nth(index))
+            .and_then(|message| self.links_of(message).into_iter().nth(index))
         else {
             return;
         };
@@ -154,7 +161,7 @@ impl Desktop {
         let Some(message) = self.keyboard_message() else {
             return false;
         };
-        let links = message_links(message);
+        let links = self.links_of(message);
         let index = match self.keyboard_link() {
             Some((_, index)) => index,
             None if links.len() == 1 => 0,
@@ -171,7 +178,7 @@ impl Desktop {
     /// one, its text and where it leads.
     pub fn link_status(&self) -> Option<String> {
         let (_, index) = self.keyboard_link()?;
-        let links = message_links(self.keyboard_message()?);
+        let links = self.links_of(self.keyboard_message()?);
         let link = links.get(index)?;
         let text = if link.text.trim().is_empty() || link.text == link.url {
             String::new()

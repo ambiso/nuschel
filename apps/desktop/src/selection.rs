@@ -12,10 +12,11 @@
 use crate::{
     document::{Document, InlineMath, Links},
     menus::{Menu, MenuTarget},
-    state::{Desktop, MessageView, Status},
+    state::{Desktop, Status},
     theme::{ACCENT, tint},
 };
 use gpui_kit::*;
+use nuschel_client::timeline::Message;
 use nuschel_session::{
     config::MumbleUrl,
     connection::{Command, TextTarget},
@@ -46,7 +47,7 @@ pub struct Order {
     pub serial: u64,
 }
 
-pub fn order(message: &MessageView) -> Order {
+pub fn order(message: &Message) -> Order {
     Order {
         observed_at_ms: message.observed_at_ms,
         serial: message.serial,
@@ -178,9 +179,10 @@ impl TextState {
 
 impl Desktop {
     /// A message of the open conversation.
-    fn message(&self, serial: u64) -> Option<&MessageView> {
+    fn message(&self, serial: u64) -> Option<&Message> {
         let (server, channel) = self.selected_indices()?;
         self.servers[server].channels[channel]
+            .timeline
             .messages
             .iter()
             .find(|message| message.serial == serial)
@@ -192,11 +194,13 @@ impl Desktop {
         let selection = self.text.selection?;
         let (server, channel) = self.selected_indices()?;
         let parts: Vec<String> = self.servers[server].channels[channel]
+            .timeline
             .messages
             .iter()
             .filter_map(|message| {
                 let (start, end) = selection.carets(order(message))?;
-                Some(selected_text(&message.document, start, end))
+                let document = &self.presentation.message(message.serial).document;
+                Some(selected_text(document, start, end))
             })
             .filter(|part| !part.is_empty())
             .collect();
@@ -374,7 +378,12 @@ impl Desktop {
         let Some(view) = self.message(message) else {
             return;
         };
-        let text = view.document.plain_text().into();
+        let text = self
+            .presentation
+            .message(message)
+            .document
+            .plain_text()
+            .into();
         let selection = self
             .text
             .selection

@@ -6,9 +6,10 @@ use crate::{
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
     menus::MenuTarget,
     names,
+    presentation::COLLAPSED_HEIGHT,
     scrolling::{EntryAction, Focus, Key, Reveal, Unseen},
     selection::{self, BlockText, Caret, HoveredLink, SelectionArea, TextBox, Texts},
-    state::{COLLAPSED_HEIGHT, ChannelRow, Desktop, ServerView, Status, TreeRow},
+    state::{ChannelRow, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
 };
 use gpui_kit::{
@@ -36,6 +37,7 @@ impl Render for Desktop {
         self.reconcile_selection(window, cx);
         self.settle_timeline();
         self.mark_read();
+        self.present_selected();
         let selected = self.selected_indices();
         let title = selected
             .map(|(server, channel)| {
@@ -1374,14 +1376,15 @@ impl Desktop {
         let channel = &self.servers[server].channels[index];
         match key {
             Key::Message(serial) => {
-                let Some(position) = channel
+                let shown = channel
+                    .timeline
                     .messages
                     .iter()
-                    .position(|message| message.serial == serial && message.has_more())
-                else {
+                    .any(|message| message.serial == serial);
+                if !shown || !self.presentation.message(serial).has_more() {
                     return false;
-                };
-                self.toggle_message(position);
+                }
+                self.toggle_message(serial);
             }
             Key::Run(serial) => {
                 let Some(line) = channel.activity.iter().find(|line| line.serial == serial) else {
@@ -1408,10 +1411,8 @@ impl Desktop {
             // A Nuschel server keeps the read marker (synced to the account's
             // other devices; unread counts come from it).
             let newest = channel
-                .messages
-                .iter()
-                .filter_map(|message| message.seq)
-                .max()
+                .timeline
+                .newest_seq()
                 .and_then(|seq| i64::try_from(seq).ok());
             if archive
                 && let Some(newest) = newest
@@ -1570,11 +1571,12 @@ fn conversation(
         .is_some_and(|voice| channel.target == TextTarget::Channel(voice));
     let anchor = this.anchor.frame();
     // The timeline in order: activity lines among the messages, by time.
-    let mut entries = Vec::with_capacity(channel.messages.len() + channel.activity.len());
+    let messages = &channel.timeline.messages;
+    let mut entries = Vec::with_capacity(messages.len() + channel.activity.len());
     let mut previous: Option<(&str, i64)> = None;
     let mut activity = channel.activity.iter().enumerate().peekable();
     let mut pending = Vec::new();
-    for (position, message) in channel.messages.iter().enumerate() {
+    for (position, message) in messages.iter().enumerate() {
         pending.clear();
         while let Some((index, _)) =
             activity.next_if(|(_, line)| line.observed_at_ms <= message.observed_at_ms)
@@ -1603,7 +1605,9 @@ fn conversation(
     let height = |entry: &Entry| match *entry {
         Entry::Activity(index) => &channel.activity[index].height,
         Entry::Run { first, .. } => &channel.activity[first].run_height,
-        Entry::Message { position, .. } => &channel.messages[position].height,
+        Entry::Message { position, .. } => {
+            &this.presentation.message(messages[position].serial).height
+        }
     };
     let heights: Rc<[Pixels]> = std::iter::once(this.anchor.intro())
         .chain(entries.iter().map(height))
@@ -1613,7 +1617,7 @@ fn conversation(
         .chain(entries.iter().map(|entry| match *entry {
             Entry::Activity(index) => Key::Activity(channel.activity[index].serial),
             Entry::Run { first, .. } => Key::Run(channel.activity[first].serial),
-            Entry::Message { position, .. } => Key::Message(channel.messages[position].serial),
+            Entry::Message { position, .. } => Key::Message(messages[position].serial),
         }))
         .collect();
     // What waits to be revealed is laid out wherever it is (a search result,
@@ -1623,7 +1627,7 @@ fn conversation(
         Reveal::Message(id) => entries
             .iter()
             .position(|entry| {
-                matches!(*entry, Entry::Message { position, .. } if channel.messages[position].id == Some(id))
+                matches!(*entry, Entry::Message { position, .. } if messages[position].id == Some(id))
             })
             .map(|entry| entry + 1),
         Reveal::Entry(key) => keys.iter().position(|entry| *entry == key),
@@ -1698,7 +1702,7 @@ fn conversation(
                     (row, None, &channel.activity[first].run_height)
                 }
                 Some(&Entry::Message { position, grouped }) => {
-                    let message = &channel.messages[position];
+                    let message = &messages[position];
                     let author = names::author(
                         &message.author,
                         server.users.values(),
@@ -1706,7 +1710,8 @@ fn conversation(
                     );
                     let row = message_row(this, server, channel, position, author, grouped, cx);
                     let row = crate::search::mark_jumped(this, message.id, row);
-                    (row, message.id, &message.height)
+                    let height = &this.presentation.message(message.serial).height;
+                    (row, message.id, height)
                 }
             };
             // Wrapped only for a screen reader or the focus ring: an element
@@ -1757,16 +1762,17 @@ fn conversation(
     // Prepending happens while the reader looks up the timeline, with no
     // button or separate mode: the anchor keeper asks once the top is near.
     let older =
-        (channel.next_before.is_some() && !channel.loading && !this.older_paused).then(|| {
-            let desktop = cx.entity().downgrade();
-            move |cx: &mut App| {
-                let _ = desktop.update(cx, |this, cx| {
-                    if this.load_older() {
-                        cx.notify();
-                    }
-                });
-            }
-        });
+        (channel.timeline.next_before.is_some() && !channel.timeline.loading && !this.older_paused)
+            .then(|| {
+                let desktop = cx.entity().downgrade();
+                move |cx: &mut App| {
+                    let _ = desktop.update(cx, |this, cx| {
+                        if this.load_older() {
+                            cx.notify();
+                        }
+                    });
+                }
+            });
     let topic = if !is_channel {
         "Private conversation".to_string()
     } else if in_this_voice {
@@ -2115,12 +2121,12 @@ fn timeline_intro(
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let is_channel = matches!(channel.target, TextTarget::Channel(_));
-    if !channel.loaded && channel.loading {
+    if !channel.timeline.loaded && channel.timeline.loading {
         // The first page usually arrives within a frame or two: showing the
         // welcome or a loading line meanwhile would only flash and shift.
         return div().into_any_element();
     }
-    let loading = channel.loading.then(|| {
+    let loading = channel.timeline.loading.then(|| {
         let label = "Loading older messages…";
         div()
             .id("history-loading")
@@ -2133,7 +2139,7 @@ fn timeline_intro(
             .text_color(color(TEXT_FAINT))
             .child(text!(label).with_id("history-loading-label"))
     });
-    if channel.next_before.is_some() {
+    if channel.timeline.next_before.is_some() {
         // More above: the welcome would only flash by before the next page.
         // The indicator's room is kept, so it appears without moving anything.
         return div()
@@ -2219,9 +2225,10 @@ fn timeline_intro(
             },
         )
         .children(loading)
-        .when(channel.beginning && !channel.loading, |view| {
-            view.child(history_start(server.archived(channel)))
-        })
+        .when(
+            channel.timeline.beginning && !channel.timeline.loading,
+            |view| view.child(history_start(server.archived(channel))),
+        )
         .into_any_element()
 }
 
@@ -2399,10 +2406,13 @@ fn entry_label(
 ) -> Option<String> {
     let time = crate::state::local_time;
     let Some(entry) = entry else {
-        if channel.loading {
-            return channel.loaded.then(|| "Loading older messages…".into());
+        if channel.timeline.loading {
+            return channel
+                .timeline
+                .loaded
+                .then(|| "Loading older messages…".into());
         }
-        if channel.next_before.is_some() {
+        if channel.timeline.next_before.is_some() {
             return Some("Older messages".into());
         }
         let source = if server.archived(channel) {
@@ -2410,7 +2420,7 @@ fn entry_label(
         } else {
             "Local history, messages seen on this device"
         };
-        let start = match (channel.beginning, server.archived(channel)) {
+        let start = match (channel.timeline.beginning, server.archived(channel)) {
             (true, true) => ". Beginning of server history",
             (true, false) => ". Beginning of local history",
             (false, _) => "",
@@ -2431,7 +2441,8 @@ fn entry_label(
             format!("{summary}, {times}")
         }
         Entry::Message { position, .. } => {
-            let message = &channel.messages[position];
+            let message = &channel.timeline.messages[position];
+            let ui = this.presentation.message(message.serial);
             let author = authors.get(message.author.as_str()).copied();
             let name = names::author_name(&message.author, author, &this.settings);
             if let Some(deletion) = message.deleted {
@@ -2442,11 +2453,11 @@ fn entry_label(
                     } else {
                         ""
                     },
-                    message.time
+                    ui.time
                 ));
             }
-            let mut text = message.document.plain_text();
-            let images = message.document.blocks.iter();
+            let mut text = ui.document.plain_text();
+            let images = ui.document.blocks.iter();
             let images = images.filter(|block| matches!(block, Block::Image { .. }));
             match images.count() {
                 0 => {}
@@ -2454,9 +2465,9 @@ fn entry_label(
                 1 => text.push_str(" (image)"),
                 count => text.push_str(&format!(" ({count} images)")),
             }
-            let status = message.status.map(|status| format!(", {status}"));
+            let status = message.status.label().map(|status| format!(", {status}"));
             // Tab reaches them (timeline_keys.rs).
-            match crate::timeline_keys::message_links(message).len() {
+            match crate::timeline_keys::message_links(message, &ui.document).len() {
                 0 => {}
                 1 => text.push_str(", 1 link"),
                 count => text.push_str(&format!(", {count} links")),
@@ -2468,7 +2479,7 @@ fn entry_label(
             };
             format!(
                 "{name}: {text}, {}{edited}{}",
-                message.time,
+                ui.time,
                 status.unwrap_or_default()
             )
         }
@@ -2688,7 +2699,8 @@ fn message_row(
     grouped: bool,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
-    let message = &channel.messages[index];
+    let message = &channel.timeline.messages[index];
+    let ui = this.presentation.message(message.serial);
     if let Some(deletion) = message.deleted {
         return tombstone_row(this, message, index, deletion, author, grouped);
     }
@@ -2717,7 +2729,7 @@ fn message_row(
     let mut texts = Vec::new();
     // A file offer shows as a card in place of its text (transfer.rs).
     let blocks = card.map_or_else(
-        || blocks(this, &message.document, selected, hovered, &mut texts, cx),
+        || blocks(this, &ui.document, selected, hovered, &mut texts, cx),
         |card| vec![card],
     );
     div()
@@ -2785,9 +2797,9 @@ fn message_row(
                             )
                             .child(
                                 div().text_xs().text_color(color(TEXT_FAINT)).child(
-                                    text!(match message.status {
-                                        Some(status) => format!("{} · {status}", message.time),
-                                        None => message.time.clone(),
+                                    text!(match message.status.label() {
+                                        Some(status) => format!("{} · {status}", ui.time),
+                                        None => ui.time.clone(),
                                     })
                                     .with_id(("time", index)),
                                 ),
@@ -2795,8 +2807,8 @@ fn message_row(
                     )
                 })
                 .child({
-                    let measured = message.measured.clone();
-                    let clamped = !message.expanded;
+                    let measured = ui.measured.clone();
+                    let clamped = !ui.expanded;
                     div()
                         .on_children_prepainted(move |bounds, window, _| {
                             // The inner column never shrinks, so its height is
@@ -2833,7 +2845,7 @@ fn message_row(
                                 .gap_2()
                                 .children(blocks),
                         ))
-                        .when(clamped && message.has_more(), |content| {
+                        .when(clamped && ui.has_more(), |content| {
                             // Fade the cut-off edge into the row background
                             // (which darkens slightly while hovered).
                             let fade = |background: Token| {
@@ -2868,13 +2880,13 @@ fn message_row(
                             .child(text!("(edited)").with_id(("edited-label", index))),
                     )
                 })
-                .when(message.has_more(), |view| {
+                .when(ui.has_more(), |view| {
                     view.child(
                         div()
                             .id(("show-more", index))
                             .role(Role::Button)
                             .tab_index(0)
-                            .aria_label(if message.expanded {
+                            .aria_label(if ui.expanded {
                                 "Show less"
                             } else {
                                 "Show more"
@@ -2885,17 +2897,17 @@ fn message_row(
                             .text_color(color(ACCENT_HOVER))
                             .hover(|style| style.underline())
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_message(index);
+                                this.toggle_message(serial);
                                 cx.notify();
                             }))
                             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                                 if activation_key(event) {
-                                    this.toggle_message(index);
+                                    this.toggle_message(serial);
                                     cx.notify();
                                 }
                             }))
                             .child(
-                                text!(if message.expanded {
+                                text!(if ui.expanded {
                                     "Show less"
                                 } else {
                                     "Show more"
@@ -2912,9 +2924,9 @@ fn message_row(
 /// conversation keeps its shape (and its author's header when it led a group).
 fn tombstone_row(
     this: &Desktop,
-    message: &crate::state::MessageView,
+    message: &nuschel_client::timeline::Message,
     index: usize,
-    deletion: crate::backend::Deletion,
+    deletion: nuschel_client::timeline::Deletion,
     author: Option<&User>,
     grouped: bool,
 ) -> AnyElement {

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The desktop sees typed events; transport, parsing, audio and history run off its thread.
-use nuschel_client::HistoryTicket;
+use nuschel_client::{
+    HistoryTicket,
+    timeline::{Deletion, IncomingMessage, Page},
+};
 use nuschel_core::audio::{AudioDevice, EchoSource, Sound, TransmitMode};
 use nuschel_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
 use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
@@ -20,55 +23,6 @@ use tokio::{
     runtime::Handle,
     sync::{mpsc, watch},
 };
-
-pub struct RenderedMessage {
-    /// The local row id, or on a Nuschel server the server's seq.
-    pub id: Option<i64>,
-    pub message: ChatMessage,
-    pub document: MessageDocument,
-    pub outgoing: bool,
-    /// Our message on a Nuschel server until it is acknowledged: its key.
-    pub pending: Option<[u8; 16]>,
-    /// Nuschel servers: the message's seq in its conversation (on a server
-    /// history timeline also its id; never a local row id).
-    pub seq: Option<u64>,
-    /// Nuschel servers: the author's registration number (who may edit it).
-    pub author_id: Option<u32>,
-    /// When it was last edited (Nuschel servers).
-    pub edited_ms: Option<i64>,
-    /// A tombstone: the message was deleted (Nuschel servers).
-    pub deleted: Option<Deletion>,
-}
-
-/// A deleted message's tombstone: when, and whether a moderator deleted it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Deletion {
-    pub at_ms: i64,
-    pub moderator: bool,
-}
-
-impl RenderedMessage {
-    /// A message as the timeline shows it, without Nuschel server details.
-    #[cfg(test)]
-    pub fn plain(
-        id: Option<i64>,
-        message: ChatMessage,
-        document: MessageDocument,
-        outgoing: bool,
-    ) -> Self {
-        Self {
-            id,
-            message,
-            document,
-            outgoing,
-            pending: None,
-            seq: None,
-            author_id: None,
-            edited_ms: None,
-            deleted: None,
-        }
-    }
-}
 
 /// Where a conversation of a Nuschel server is kept in local history: the
 /// history identity of the server and the conversation's storage key.
@@ -147,7 +101,7 @@ async fn render_server_page(
     page: v1::HistoryPage,
     cache: Option<&CacheKey>,
 ) -> (
-    Vec<RenderedMessage>,
+    Vec<IncomingMessage>,
     (Option<i64>, Option<i64>),
     Vec<nuschel_core::ServerRecord>,
 ) {
@@ -202,7 +156,7 @@ async fn render_server_page(
                 deleted_ms: deleted.map(|deleted| deleted.at_ms),
             });
         }
-        out.push(RenderedMessage {
+        out.push(IncomingMessage {
             id: Some(message.seq as i64),
             message: ChatMessage {
                 server: String::new(),
@@ -270,14 +224,14 @@ pub enum Event {
         target: TextTarget,
         storage_key: String,
         peer: Option<connection::User>,
-        message: RenderedMessage,
+        message: IncomingMessage,
     },
     History {
         server: String,
         ticket: HistoryTicket,
         /// The cursor this page was asked for: None is the latest page.
         before: Option<i64>,
-        messages: Vec<RenderedMessage>,
+        messages: Vec<IncomingMessage>,
         next_before: Option<i64>,
     },
     Sent {
@@ -291,7 +245,7 @@ pub enum Event {
         server: String,
         ticket: HistoryTicket,
         page: Page,
-        messages: Vec<RenderedMessage>,
+        messages: Vec<IncomingMessage>,
         next_before: Option<i64>,
         next_after: Option<i64>,
     },
@@ -400,16 +354,6 @@ pub enum Event {
         session: u32,
         talking: bool,
     },
-}
-/// Which page of a conversation's local history to load.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Page {
-    /// Older than this message; None is the latest page.
-    Before(Option<i64>),
-    /// Newer than this message.
-    After(i64),
-    /// Around this message, which a search result jumps to.
-    Around(i64),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderKey {
@@ -1845,7 +1789,7 @@ async fn storage_loop(
                         target: job.text.target,
                         storage_key,
                         peer: job.text.peer,
-                        message: RenderedMessage {
+                        message: IncomingMessage {
                             id,
                             message,
                             document,
@@ -2018,7 +1962,7 @@ async fn history_loop(
             .messages
             .into_iter()
             .zip(documents)
-            .map(|(entry, document)| RenderedMessage {
+            .map(|(entry, document)| IncomingMessage {
                 id: Some(entry.id),
                 document: match entry.deleted_ms {
                     Some(_) => MessageDocument { blocks: Vec::new() },

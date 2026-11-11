@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Shared client state and policies; platform adapters execute the resulting commands.
+//! The headless client SDK every Nuschel client shares (docs/clients.md, "The
+//! SDK"): timelines, conversations and server state, and the policies that
+//! decide them. Plain data only, no runtime and no clock: it builds for
+//! `wasm32-unknown-unknown`, and platform adapters execute what it decides.
 
 pub mod favicon;
 mod navigation;
+pub mod timeline;
 pub use navigation::*;
+pub use nuschel_core::model;
 
 use serde::{Deserialize, Serialize};
 

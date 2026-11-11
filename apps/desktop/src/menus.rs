@@ -432,6 +432,7 @@ impl Desktop {
                             let view = &self.servers[server];
                             let channel = &view.channels[channel];
                             let message = channel
+                                .timeline
                                 .messages
                                 .iter()
                                 .find(|message| message.serial == serial)?;

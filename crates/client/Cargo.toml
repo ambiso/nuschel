@@ -1,6 +1,6 @@
 [package]
 name = "nuschel-client"
-description = "Renderer-independent client state and audio policy"
+description = "The headless client SDK: timelines, conversations, server state and policies"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -6,13 +6,15 @@
 //! they may (`moderators_delete`) and they hold Write on the channel. The
 //! server checks every request again; its refusals show like a failed send.
 use crate::{
-    backend::{CacheKey, ChangeRequest, Deletion},
+    backend::{CacheKey, ChangeRequest},
     menus::PromptAction,
-    state::{ChannelView, Desktop, MessageView, ServerView, Status},
+    state::{ChannelView, Desktop, ServerView, Status},
 };
 use gpui_kit::*;
-use nuschel_client::HistorySource;
-use nuschel_core::MessageDocument;
+use nuschel_client::{
+    HistorySource,
+    timeline::{Change, Message},
+};
 use nuschel_session::{connection::TextTarget, model::permission as perm};
 
 /// The message the composer is editing, and what it held before.
@@ -52,7 +54,7 @@ impl ServerView {
             .flatten()
     }
     /// Whether we may edit this message: ours, stored, and we are registered.
-    pub fn may_edit(&self, channel: &ChannelView, message: &MessageView) -> bool {
+    pub fn may_edit(&self, channel: &ChannelView, message: &Message) -> bool {
         let own = self.own_user_id();
         self.changeable(channel).is_some()
             && own.is_some()
@@ -64,7 +66,7 @@ impl ServerView {
     }
     /// Whether we may delete this message: our own (registered), or as a
     /// moderator where the server allows it.
-    pub fn may_delete(&self, channel: &ChannelView, message: &MessageView) -> bool {
+    pub fn may_delete(&self, channel: &ChannelView, message: &Message) -> bool {
         if self.changeable(channel).is_none()
             || message.deleted.is_some()
             || message.pending.is_some()
@@ -96,6 +98,7 @@ impl Desktop {
     fn located(&self, serial: u64) -> Option<(usize, usize, usize)> {
         let (server, channel) = self.selected_indices()?;
         let position = self.servers[server].channels[channel]
+            .timeline
             .messages
             .iter()
             .position(|message| message.serial == serial)?;
@@ -110,7 +113,7 @@ impl Desktop {
         let view = &self.servers[server];
         let (channel_view, message) = (
             &view.channels[channel],
-            &view.channels[channel].messages[position],
+            &view.channels[channel].timeline.messages[position],
         );
         if !view.may_edit(channel_view, message) {
             return;
@@ -150,6 +153,7 @@ impl Desktop {
         let view = &self.servers[server];
         let channel_view = &view.channels[channel];
         let Some(serial) = channel_view
+            .timeline
             .messages
             .iter()
             .rev()
@@ -198,6 +202,7 @@ impl Desktop {
         let channel_view = &view.channels[channel];
         // By seq: a reloaded timeline has new serials.
         let message = channel_view
+            .timeline
             .messages
             .iter()
             .find(|message| message.seq == Some(seq));
@@ -267,7 +272,7 @@ impl Desktop {
         };
         let view = &self.servers[server];
         let channel_view = &view.channels[channel];
-        let message = &channel_view.messages[position];
+        let message = &channel_view.timeline.messages[position];
         if !view.may_delete(channel_view, message) {
             return;
         }
@@ -301,7 +306,7 @@ impl Desktop {
         };
         let view = &self.servers[server];
         let channel_view = &view.channels[channel];
-        let message = &channel_view.messages[position];
+        let message = &channel_view.timeline.messages[position];
         if !view.may_delete(channel_view, message) {
             return;
         }
@@ -328,11 +333,12 @@ impl Desktop {
             return;
         };
         if let Err(change) = self.change_message(index, conversation, seq, change) {
-            let waiting = &mut self.servers[index].waiting_changes;
-            while waiting.len() >= MAX_WAITING_CHANGES {
-                waiting.pop_front();
-            }
-            waiting.push_back((conversation, seq, change, std::time::Instant::now()));
+            self.servers[index].waiting_changes.push(
+                conversation,
+                seq,
+                change,
+                crate::state::monotonic_ms(),
+            );
         }
     }
 
@@ -340,17 +346,11 @@ impl Desktop {
     /// A page on its way takes seconds; older ones were for messages that
     /// are not loaded, and go.
     pub fn apply_waiting_changes(&mut self, server: usize) {
-        let waiting = std::mem::take(&mut self.servers[server].waiting_changes);
-        for (conversation, seq, change, since) in waiting {
-            if since.elapsed() > WAITING_CHANGE_FOR {
-                continue;
-            }
-            if let Err(change) = self.change_message(server, conversation, seq, change) {
-                self.servers[server]
-                    .waiting_changes
-                    .push_back((conversation, seq, change, since));
-            }
-        }
+        let mut waiting = std::mem::take(&mut self.servers[server].waiting_changes);
+        waiting.retry(crate::state::monotonic_ms(), |conversation, seq, change| {
+            self.change_message(server, conversation, seq, change)
+        });
+        self.servers[server].waiting_changes = waiting;
     }
 
     /// Apply `change` to message `seq` of `conversation`, or hand it back if
@@ -387,77 +387,27 @@ impl ServerView {
         seq: u64,
         change: Change,
     ) -> Result<bool, Change> {
-        let Some(message) = self
+        match self
             .channels
             .iter_mut()
             .find(|channel| channel.conversation == Some(conversation))
-            .and_then(|channel| {
-                channel
-                    .messages
-                    .iter_mut()
-                    .find(|message| message.seq == Some(seq))
-            })
-        else {
-            return Err(change);
-        };
-        match change {
-            Change::Edited {
-                source,
-                document,
-                edited_ms,
-            } => {
-                // A late edit never undoes a deletion, nor a newer edit.
-                if message.deleted.is_some()
-                    || message.edited_ms.is_some_and(|shown| shown > edited_ms)
-                {
-                    return Ok(false);
-                }
-                message.source = source;
-                message.document = document.into();
-                message.edited_ms = Some(edited_ms);
-                message.offer = nuschel_core::transfer::parse_offer(&message.source);
-                Ok(false)
-            }
-            Change::Deleted(deletion) => {
-                message.deleted = Some(deletion);
-                message.document = MessageDocument { blocks: Vec::new() }.into();
-                message.source.clear();
-                message.offer = None;
-                message.status = None;
-                message.expanded = false;
-                Ok(true)
-            }
+        {
+            Some(channel) => channel.timeline.apply_change(seq, change),
+            None => Err(change),
         }
     }
-}
-
-/// Changes kept for messages not shown yet, per server, and for how long.
-const MAX_WAITING_CHANGES: usize = 256;
-const WAITING_CHANGE_FOR: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// What changed about a message (see `Desktop::apply_change`).
-#[derive(Clone)]
-pub enum Change {
-    Edited {
-        source: String,
-        document: MessageDocument,
-        edited_ms: i64,
-    },
-    Deleted(Deletion),
 }
 
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::{
-        Change, ChannelView, Deletion, HistorySource, MessageView, ServerView, Status, perm,
-    };
-    use crate::backend::RenderedMessage;
+    use super::{Change, ChannelView, HistorySource, Message, ServerView, Status, perm};
+    use nuschel_client::timeline::{Deletion, IncomingMessage};
     use nuschel_core::{ChatMessage, MessageDocument};
     use nuschel_session::connection::{TextTarget, User};
 
-    fn message(id: i64, author_id: Option<u32>, outgoing: bool) -> MessageView {
-        let mut rendered = RenderedMessage::plain(
+    fn message(id: i64, author_id: Option<u32>, outgoing: bool) -> Message {
+        let mut rendered = IncomingMessage::plain(
             Some(id),
             ChatMessage {
                 server: String::new(),
@@ -539,7 +489,7 @@ mod tests {
     #[test]
     fn changes_apply_in_order_and_wait_for_their_message() {
         let (mut server, mut channel) = server(true, false, false);
-        channel.messages.push(message(5, Some(8), false));
+        channel.timeline.messages.push(message(5, Some(8), false));
         server.channels.push(channel);
         let edit = |text: &str, at| Change::Edited {
             source: text.into(),
@@ -547,7 +497,7 @@ mod tests {
             edited_ms: at,
         };
         let shown = |server: &ServerView| {
-            let message = &server.channels.last().unwrap().messages[0];
+            let message = &server.channels.last().unwrap().timeline.messages[0];
             (
                 message.source.clone(),
                 message.edited_ms,
