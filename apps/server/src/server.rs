@@ -151,7 +151,10 @@ impl Server {
                 admission
                     .banned_until
                     .insert(key, now + Duration::from_secs(config.autoban.duration));
-                tracing::info!(address = %address, "autoban: too many connection attempts");
+                tracing::info!(
+                    address = %self.settings.addresses.ip(address),
+                    "autoban: too many connection attempts"
+                );
                 return false;
             }
             if admission.attempts.len() > 100_000 {

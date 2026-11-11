@@ -191,7 +191,7 @@ async fn serve(
         .as_deref()
         .is_some_and(|hash| server.banned_certificate(hash))
     {
-        tracing::info!(%address, "refused a banned certificate");
+        tracing::info!(address = %server.settings.addresses.socket(address), "refused a banned certificate");
         return;
     }
     let (mut reader, writer) = tokio::io::split(tls);
@@ -245,7 +245,7 @@ async fn serve(
                     .negotiation
                     .version(&frame.payload, server.capabilities)
                 {
-                    tracing::info!(%address, %error, "closed a nuschel/1 connection");
+                    tracing::info!(address = %server.settings.addresses.socket(address), %error, "closed a nuschel/1 connection");
                     break None;
                 }
             }
@@ -253,7 +253,7 @@ async fn serve(
                 // ALPN `nuschel/1` without a hello fails closed, before the
                 // credentials are even decoded.
                 if peer.negotiation.freeze().is_err() {
-                    tracing::info!(%address, "closed a nuschel/1 connection without a hello");
+                    tracing::info!(address = %server.settings.addresses.socket(address), "closed a nuschel/1 connection without a hello");
                     break None;
                 }
                 let Ok(message) = proto::Authenticate::decode(frame.payload) else {
@@ -262,7 +262,7 @@ async fn serve(
                 match auth::authenticate(&server, &peer, message).await {
                     Ok(session) => break Some(session),
                     Err(rejection) => {
-                        tracing::info!(%address, reason = %rejection.reason, "rejected");
+                        tracing::info!(address = %server.settings.addresses.socket(address), reason = %rejection.reason, "rejected");
                         peer.link.message(
                             kind::REJECT,
                             &proto::Reject {
@@ -288,10 +288,10 @@ async fn serve(
     // Let the writer flush what is queued (a Reject, a kick reason), unless the
     // client stopped reading.
     if signal.overflowed.load(Ordering::Relaxed) {
-        tracing::info!(%address, "disconnected a client that stopped reading");
+        tracing::info!(address = %server.settings.addresses.socket(address), "disconnected a client that stopped reading");
         writer.abort();
     } else if timeout(Duration::from_secs(5), writer).await.is_err() {
-        tracing::debug!(%address, "gave up flushing to a closing connection");
+        tracing::debug!(address = %server.settings.addresses.socket(address), "gave up flushing to a closing connection");
     }
 }
 

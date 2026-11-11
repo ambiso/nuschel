@@ -332,6 +332,9 @@ pub struct Config {
     /// 1.1.1 speak nothing newer) or "1.3", which keeps client certificates
     /// off the wire in the clear.
     pub minimum_tls_version: TlsVersion,
+    /// Logs show a keyed hash of each client address instead of the address
+    /// (murmur.ini `obfuscate`); the key is random per start.
+    pub obfuscate: bool,
     pub autoban: Autoban,
     pub password_hashing: PasswordHashing,
     pub history: History,
@@ -393,6 +396,7 @@ impl Default for Config {
             max_pending_connections: 256,
             max_queued_bytes: 8 * 1024 * 1024,
             minimum_tls_version: TlsVersion::Tls12,
+            obfuscate: false,
             autoban: Autoban::default(),
             password_hashing: PasswordHashing::default(),
             history: History::default(),
@@ -431,6 +435,8 @@ pub struct Settings {
     pub suggest_version: Option<u64>,
     pub minimum_client: Option<u64>,
     pub recommended_client: Option<u64>,
+    /// How client addresses appear in logs (`obfuscate`).
+    pub addresses: crate::obfuscate::Addresses,
 }
 
 fn read(path: &Path) -> Result<String, ConfigError> {
@@ -562,6 +568,7 @@ impl Config {
             "history.recommended_client",
             &self.history.recommended_client,
         )?;
+        let obfuscate = self.obfuscate;
         Ok(Settings {
             config: self,
             username,
@@ -571,6 +578,7 @@ impl Config {
             suggest_version,
             minimum_client,
             recommended_client,
+            addresses: crate::obfuscate::Addresses::new(obfuscate),
         })
     }
 }

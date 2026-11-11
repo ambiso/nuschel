@@ -19,6 +19,7 @@ pub mod history;
 pub mod kt;
 pub mod limits;
 pub mod murmur;
+pub mod obfuscate;
 pub mod page_limits;
 pub mod password;
 pub mod retention;

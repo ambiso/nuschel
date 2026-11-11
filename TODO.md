@@ -491,7 +491,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          handshakes get the new certificate, a broken one keeps the old one. The
          NixOS module copies certificate credentials at start, so there a renewal
          still needs a restart.
-   - [ ] IP obfuscation in logs.
+   - [x] IP obfuscation in logs (2026-11-11): `obfuscate = true`, HMAC-SHA256 tokens
+         under a per-start key (Murmur's 32-bit key is reversible).
    - [ ] CA-verified ("strong") certificates.
    - [ ] A per-user cap on temporary channels and a global budget for shout fan-out;
          rolling statistics; clients older than 1.2.2.

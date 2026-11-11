@@ -411,7 +411,7 @@ fn complete(
     send_initial_state(state, session, channel, crypt_setup, listeners);
     tracing::info!(
         user = %state.log_name(session),
-        address = %peer.address,
+        address = %state.settings.addresses.socket(peer.address),
         nuschel = peer.negotiation != crate::extension::Negotiation::Stock,
         "authenticated"
     );

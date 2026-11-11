@@ -309,7 +309,15 @@ someone else's certificate fails (tested). TLS session resumption is off, TLS 1.
 can be refused (`minimum_tls_version`). Debug
 output of protocol messages redacts passwords, tokens, keys, comments and
 message bodies; logs contain user names, session ids and addresses, never
-contents. The database file is created 0600 in a 0700 directory. Handshake (TLS
+contents. With `obfuscate = true` (murmur.ini's name) every logged client address
+is replaced by `<<token>>`, the first 64 bits of an HMAC-SHA256 under a key drawn at
+startup and kept only in memory: one address keeps its token while the process runs
+(lines of one client, or an abusive address, can still be correlated), tokens change
+with every start, and without the key they cannot be mapped back, not even by
+trying every IPv4 address (Murmur hashes under a 32-bit random number, which such a
+search undoes). The server's own listening addresses are logged as configured;
+`UserStats` still shows addresses to users allowed to see them, as in Murmur. The
+database file is created 0600 in a 0700 directory. Handshake (TLS
 within `handshake_timeout`, authentication within 1.5×) and idle timeouts,
 autoban (Murmur's 10 attempts in 120 s → 300 s) and IP and certificate bans are
 checked before a connection gets anywhere. The accept loop backs off on
