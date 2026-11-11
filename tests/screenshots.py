@@ -55,6 +55,9 @@ CLIPPING_WARNING = (205, 728)
 ECHO_TEST_BUTTON = (862, 225)
 RECORD_SHORTCUT = [(795, 478 + 54 * row) for row in range(4)]
 CLEAR_SHORTCUT = [(872, 478 + 54 * row) for row in range(4)]
+# Settings' "Voice activity" option, and the second server in the rail (managed scene).
+VOICE_ACTIVITY = (483, 319)
+FRIENDS_SERVER = (58, 152)
 # The cog next to the server name, Lobby's chevron, and the channel list's right edge.
 SERVER_SETTINGS_BUTTON = (279, 86)
 LOBBY_CHEVRON = (129, 234)
@@ -177,7 +180,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; resize (not in all) measures resizing")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; resize (not in all) measures resizing,maximize; managed (not in all)")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
@@ -267,6 +270,12 @@ def main():
                       "port": 1, "username": "Andi", "certificate_sha256": None, "cached_channels": []}
             (profile / "config/servers.json").write_text(json.dumps([bookmark, second]))
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme, "zoom": args.zoom}}))
+            if "managed" in args.scenes.split(","):
+                # What Home Manager's programs.nuschel.settings and .servers write
+                # (only on request: managed controls move the other scenes' targets).
+                (profile / "config/managed.json").write_text(json.dumps({
+                    "settings": {"audio": {"transmit": "push_to_talk"}, "shortcuts": {"push-to-talk": "f13"}},
+                    "servers": [{key: second[key] for key in ("id", "name", "host", "port", "username")}]}))
             if args.portals:
                 # As the package installs it: the portal finds an unsandboxed app's ID by its entry.
                 applications = shell.home / "data/applications"
@@ -785,6 +794,22 @@ def main():
                 click(228, 267)  # back to Development: read
                 time.sleep(0.8)
                 shot("39-read")
+            if "managed" in scenes:
+                click(239, 773)  # Settings
+                time.sleep(1.0)
+                shot("40-managed-settings")
+                click(*VOICE_ACTIVITY)  # does nothing: the system configuration sets it
+                time.sleep(0.6)
+                shot("41-managed-settings-unchanged")
+                shell.key("Escape")
+                time.sleep(0.4)
+                click(*FRIENDS_SERVER)
+                time.sleep(0.8)
+                click(*SERVER_SETTINGS_BUTTON)
+                time.sleep(1.0)
+                shot("42-managed-server")
+                shell.key("Escape")
+                time.sleep(0.4)
             if want("toggles"):
                 # Mute animates (slash, red); rapid clicks reverse it smoothly.
                 def footer(name):

@@ -7,7 +7,7 @@
 //! images and input all grow, and glyphs are rasterised at the new size.
 use crate::{
     dialogs::{Tone, styled_button},
-    settings::{Action, segmented},
+    settings::{Action, managed, segmented},
     state::{Desktop, accessible},
     theme::{self, *},
 };
@@ -548,110 +548,114 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
     } else {
         "Ctrl"
     };
-    let mut rows = vec![
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(text!("Theme").with_id("theme-heading")),
-            )
-            .child(segmented(
-                "theme",
-                "Theme",
-                vec![
-                    (
-                        "System",
-                        appearance.theme == ThemeChoice::System,
-                        set_theme(ThemeChoice::System),
-                    ),
-                    (
-                        "Light",
-                        appearance.theme == ThemeChoice::Light,
-                        set_theme(ThemeChoice::Light),
-                    ),
-                    (
-                        "Dark",
-                        appearance.theme == ThemeChoice::Dark,
-                        set_theme(ThemeChoice::Dark),
-                    ),
-                ],
-                cx,
-            ))
-            .child(
-                div().text_xs().text_color(color(TEXT_MUTED)).child(
-                    text!(if appearance.theme == ThemeChoice::System {
-                        format!("Follows your desktop's light or dark style (now {system}).")
-                    } else {
-                        "System follows your desktop's light or dark style.".to_string()
-                    })
-                    .with_id("theme-detail"),
+    let theme = div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child(text!("Theme").with_id("theme-heading")),
+        )
+        .child(segmented(
+            "theme",
+            "Theme",
+            vec![
+                (
+                    "System",
+                    appearance.theme == ThemeChoice::System,
+                    set_theme(ThemeChoice::System),
                 ),
-            )
-            .into_any_element(),
-        font_row(this, FontRole::Interface, appearance.ui_font.as_deref(), cx),
+                (
+                    "Light",
+                    appearance.theme == ThemeChoice::Light,
+                    set_theme(ThemeChoice::Light),
+                ),
+                (
+                    "Dark",
+                    appearance.theme == ThemeChoice::Dark,
+                    set_theme(ThemeChoice::Dark),
+                ),
+            ],
+            cx,
+        ))
+        .child(
+            div().text_xs().text_color(color(TEXT_MUTED)).child(
+                text!(if appearance.theme == ThemeChoice::System {
+                    format!("Follows your desktop's light or dark style (now {system}).")
+                } else {
+                    "System follows your desktop's light or dark style.".to_string()
+                })
+                .with_id("theme-detail"),
+            ),
+        )
+        .into_any_element();
+    let mut rows = vec![
+        managed(this, "appearance.theme", theme),
+        managed(
+            this,
+            "appearance.ui_font",
+            font_row(this, FontRole::Interface, appearance.ui_font.as_deref(), cx),
+        ),
     ];
     if this.appearance.picker.as_ref().map(|picker| picker.role) == Some(FontRole::Interface) {
         rows.extend(picker(this, cx));
     }
-    rows.push(font_row(
+    rows.push(managed(
         this,
-        FontRole::Code,
-        appearance.mono_font.as_deref(),
-        cx,
+        "appearance.mono_font",
+        font_row(this, FontRole::Code, appearance.mono_font.as_deref(), cx),
     ));
     if this.appearance.picker.as_ref().map(|picker| picker.role) == Some(FontRole::Code) {
         rows.extend(picker(this, cx));
     }
-    rows.push(stepper(
+    let text_size_row = stepper(
         "text-size",
         "Message text size",
         format!("{text_size:.0} px"),
         ("Smaller text", resize(text_size - 1.)),
         ("Larger text", resize(text_size + 1.)),
         cx,
-    ));
-    rows.push(
-        div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(stepper(
-                "zoom",
-                "Zoom",
-                format!("{:.0} %", zoom * 100.),
-                ("Zoom out", zoom_to(smaller(zoom))),
-                ("Zoom in", zoom_to(larger(zoom))),
-                cx,
-            ))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div().flex_1().text_xs().text_color(color(TEXT_FAINT)).child(
-                            text!(format!(
-                                "{shortcut}+= and {shortcut}+− zoom anywhere; {shortcut}+0 returns to 100 %."
-                            ))
-                            .with_id("zoom-detail"),
-                        ),
-                    )
-                    .when(zoom != 1., |row| {
-                        row.child(styled_button(
-                            "reset-zoom",
-                            "Reset",
-                            Tone::Ghost,
-                            |this, window, cx| this.zoom(1., window, cx),
-                            cx,
-                        ))
-                    }),
-            )
-            .into_any_element(),
     );
+    rows.push(managed(this, "appearance.text_size", text_size_row));
+    let zoom_row = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(stepper(
+            "zoom",
+            "Zoom",
+            format!("{:.0} %", zoom * 100.),
+            ("Zoom out", zoom_to(smaller(zoom))),
+            ("Zoom in", zoom_to(larger(zoom))),
+            cx,
+        ))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div().flex_1().text_xs().text_color(color(TEXT_FAINT)).child(
+                        text!(format!(
+                            "{shortcut}+= and {shortcut}+− zoom anywhere; {shortcut}+0 returns to 100 %."
+                        ))
+                        .with_id("zoom-detail"),
+                    ),
+                )
+                .when(zoom != 1., |row| {
+                    row.child(styled_button(
+                        "reset-zoom",
+                        "Reset",
+                        Tone::Ghost,
+                        |this, window, cx| this.zoom(1., window, cx),
+                        cx,
+                    ))
+                }),
+        )
+        .into_any_element();
+    rows.push(managed(this, "appearance.zoom", zoom_row));
     rows
 }
 

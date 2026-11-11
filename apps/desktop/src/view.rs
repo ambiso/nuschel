@@ -53,7 +53,7 @@ impl Render for Desktop {
                     .child(sidebar(self, server, channel, cx))
                     .child(sidebar_handle(self, cx))
                     .child(conversation(self, server, channel, window, cx)),
-                None => body.child(dialogs::empty(cx)),
+                None => body.child(dialogs::empty(self, cx)),
             });
         let content = div()
             .size_full()

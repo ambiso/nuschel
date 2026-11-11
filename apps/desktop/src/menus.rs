@@ -824,10 +824,13 @@ impl Desktop {
                             move |this, _, _| this.run(index, Command::RegisterSelf),
                         ));
                     }
-                    let tokens = server.bookmark.tokens.join(", ");
-                    entries.push(item("Access tokens…", "keyboard", move |this, window, cx| {
-                        this.open_prompt(index, PromptAction::Tokens, "Access tokens", "Comma-separated. Tokens grant membership in password-protected groups and are saved with this server.", tokens.clone(), window, cx);
-                    }));
+                    // managed.json declares a managed server's tokens.
+                    if !server.bookmark.managed {
+                        let tokens = server.bookmark.tokens.join(", ");
+                        entries.push(item("Access tokens…", "keyboard", move |this, window, cx| {
+                            this.open_prompt(index, PromptAction::Tokens, "Access tokens", "Comma-separated. Tokens grant membership in password-protected groups and are saved with this server.", tokens.clone(), window, cx);
+                        }));
+                    }
                     if server.may(0, perm::REGISTER) {
                         entries.push(item("Registered users…", "user", move |this, _, _| {
                             this.servers[index].registered_users = None;

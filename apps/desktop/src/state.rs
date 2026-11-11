@@ -12,7 +12,10 @@ use gpui_kit::{
 use nuschel_client::{Conversation, HistorySource, Navigation, SessionSecurity};
 use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_session::{
-    config::{CachedChannel, ClientSettings, MumbleUrl, Profile, ServerBookmark, ShortcutAction},
+    config::{
+        CachedChannel, ClientSettings, Loaded, ManagedSettings, MumbleUrl, Profile, ServerBookmark,
+        ShortcutAction,
+    },
     connection::{Command, ServerLimits, SessionEvent, TextTarget, User},
     model::{Acl, Ban, ContextAction, RegisteredUser, RejectKind, UserStats},
     udp::TransportStats,
@@ -709,6 +712,8 @@ pub struct ServerForm {
     pub username: Entity<InputState>,
     pub password: Entity<InputState>,
     pub auto_connect: bool,
+    /// managed.json declares the server: only the password can be entered.
+    pub managed: bool,
     pub error: Option<String>,
     /// The address the name last followed: the name tracks the address
     /// until it is changed to something else.
@@ -763,6 +768,8 @@ pub struct Desktop {
     /// Pointer x and sidebar width where a sidebar resize started, and the live width.
     pub sidebar_drag: Option<(f32, f32, f32)>,
     pub settings: ClientSettings,
+    /// What the system configuration (managed.json) sets; read-only here.
+    pub managed: ManagedSettings,
     pub settings_open: bool,
     /// Theme, fonts and zoom (see crate::appearance).
     pub appearance: crate::appearance::Appearance,
@@ -849,7 +856,7 @@ impl Drop for Desktop {
 impl Desktop {
     pub fn new(
         profile: Profile,
-        bookmarks: Vec<ServerBookmark>,
+        loaded: Loaded,
         startup: Option<MumbleUrl>,
         handle: tokio::runtime::Handle,
         window: &mut Window,
@@ -887,7 +894,12 @@ impl Desktop {
                     _ => {}
                 },
             );
-        let settings = profile.load_settings().unwrap_or_default();
+        let Loaded {
+            settings,
+            managed,
+            servers: bookmarks,
+            problems,
+        } = loaded;
         let activation = cx.observe_window_activation(window, |this: &mut Self, window, _| {
             this.window_active = window.is_window_active();
             if !this.window_active {
@@ -971,10 +983,11 @@ impl Desktop {
             anchor: Anchor::default(),
             following: true,
             older_paused: false,
-            error: None,
+            error: (!problems.is_empty()).then(|| problems.join("\n")),
             title_drag: false,
             sidebar_drag: None,
             settings,
+            managed,
             settings_open: false,
             appearance: crate::appearance::Appearance::new(window, cx),
             preview: None,
@@ -1304,11 +1317,13 @@ impl Desktop {
             .map(|server| server.bookmark.username.clone())
             .unwrap_or_default();
         let auto_connect = server.is_none_or(|server| server.bookmark.auto_connect);
+        let managed = server.is_some_and(|server| server.bookmark.managed);
         let last_host = host.clone();
         self.form = Some(ServerForm {
             last_host,
             _subscriptions: Vec::new(),
             auto_connect,
+            managed,
             editing: server.map(|server| server.id.clone()),
             name: cx.new(|cx| {
                 accessible(
@@ -1390,7 +1405,13 @@ impl Desktop {
                 },
             ));
             form._subscriptions = subscriptions;
-            form.host.update(cx, |input, cx| input.focus(window, cx));
+            if managed {
+                for input in [&form.name, &form.host, &form.port, &form.username] {
+                    input.update(cx, |input, cx| input.set_disabled(true, cx));
+                }
+            }
+            let first = if managed { &form.password } else { &form.host };
+            first.update(cx, |input, cx| input.focus(window, cx));
         }
         cx.notify();
     }
@@ -1447,6 +1468,10 @@ impl Desktop {
             .as_ref()
             .and_then(|id| self.servers.iter().find(|server| &server.id == id))
         {
+            if previous.bookmark.managed {
+                // Declared in managed.json: only the password changes.
+                bookmark = previous.bookmark.clone();
+            }
             bookmark.id = previous.id.clone();
             bookmark.tokens = previous.bookmark.tokens.clone();
             let same_address =
@@ -1614,7 +1639,12 @@ impl Desktop {
         }
     }
     pub fn remove_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.form.as_ref().and_then(|form| form.editing.clone()) else {
+        let Some(id) = self
+            .form
+            .as_ref()
+            .filter(|form| !form.managed)
+            .and_then(|form| form.editing.clone())
+        else {
             return;
         };
         let bookmarks = self
@@ -1741,11 +1771,11 @@ impl Desktop {
     pub fn update_settings(&mut self, change: impl FnOnce(&mut ClientSettings)) {
         let mut settings = self.settings.clone();
         change(&mut settings);
-        let settings = settings.sanitized();
+        let settings = self.managed.apply(settings.sanitized());
         if settings == self.settings {
             return;
         }
-        if let Err(error) = self.profile.save_settings(&settings) {
+        if let Err(error) = self.profile.save_settings(&settings, &self.managed) {
             self.error = Some(format!("Could not save settings: {error}"));
         }
         self.backend.apply_settings(settings.clone());
@@ -3996,10 +4026,10 @@ mod server_writes_tests {
             .write(&profile, 2, &[server("a"), server("b")])
             .unwrap();
         writes.write(&profile, 1, &[server("a")]).unwrap();
-        assert_eq!(profile.load_servers().unwrap().len(), 2);
+        assert_eq!(profile.load_servers(None).unwrap().len(), 2);
         assert_eq!(writes.written(), 2);
         writes.write(&profile, 3, &[]).unwrap();
-        assert!(profile.load_servers().unwrap().is_empty());
+        assert!(profile.load_servers(None).unwrap().is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

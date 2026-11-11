@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeSet,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, PoisonError},
 };
 use uuid::Uuid;
 
@@ -44,6 +47,10 @@ pub struct ServerBookmark {
     /// The channel you were last in; rejoined when Nuschel connects again.
     #[serde(default)]
     pub last_channel: Option<u32>,
+    /// Declared in managed.json: its name, address, username, tokens and
+    /// automatic connection come from there on every start.
+    #[serde(default)]
+    pub managed: bool,
 }
 
 /// A small RGBA image (base64), as decoded by the sandboxed content worker.
@@ -98,6 +105,7 @@ impl ServerBookmark {
             icon: None,
             icon_checked_ms: 0,
             last_channel: None,
+            managed: false,
         })
     }
 
@@ -510,28 +518,316 @@ fn insert_name(
     true
 }
 
+/// What a system configuration (Home Manager, an administrator) sets in
+/// managed.json: settings that win over settings.json on every start, and
+/// bookmarks. Nuschel never writes it.
+#[derive(Clone, Debug, Default)]
+pub struct Managed {
+    settings: Map<String, Value>,
+    servers: Vec<ServerBookmark>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedFile {
+    #[serde(default)]
+    settings: Map<String, Value>,
+    #[serde(default)]
+    servers: Vec<ManagedServer>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedServer {
+    id: String,
+    #[serde(default)]
+    name: String,
+    host: String,
+    #[serde(default = "mumble_port")]
+    port: u16,
+    username: String,
+    #[serde(default)]
+    tokens: Vec<String>,
+    #[serde(default = "connect_on_startup")]
+    auto_connect: bool,
+    #[serde(default)]
+    certificate_sha256: Option<String>,
+}
+
+fn mumble_port() -> u16 {
+    64738
+}
+
+impl Managed {
+    fn parse(bytes: &[u8]) -> io::Result<Self> {
+        let file: ManagedFile = serde_json::from_slice(bytes)?;
+        // Only settings Nuschel knows, with values of the right types.
+        ClientSettings::deserialize(&Value::Object(file.settings.clone())).map_err(|error| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("settings: {error}"))
+        })?;
+        let mut ids = BTreeSet::new();
+        let servers = file
+            .servers
+            .into_iter()
+            .map(|declared| {
+                let mut server = ServerBookmark::new(
+                    &declared.name,
+                    &declared.host,
+                    declared.port,
+                    &declared.username,
+                )
+                .map_err(io::Error::other)?;
+                server.id = declared.id;
+                server.tokens = declared.tokens;
+                server.auto_connect = declared.auto_connect;
+                server.certificate_sha256 = declared
+                    .certificate_sha256
+                    .map(|pin| pin.to_ascii_lowercase());
+                server.managed = true;
+                check_bookmark(&server)?;
+                if !ids.insert(server.id.clone()) {
+                    return Err(io::Error::other("two servers have the same id"));
+                }
+                Ok(server)
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        if servers.len() > MAX_SERVERS {
+            return Err(io::Error::other("more than 100 servers"));
+        }
+        Ok(Self {
+            settings: file.settings,
+            servers,
+        })
+    }
+
+    /// `own` (settings.json, already checked) with the managed settings over it.
+    fn settings_over(&self, own: Map<String, Value>) -> (ClientSettings, ManagedSettings) {
+        let settings = ClientSettings::deserialize(&Value::Object(own.clone()))
+            .unwrap_or_default()
+            .sanitized();
+        let managed = ManagedSettings::new(self.settings.clone(), own);
+        (managed.apply(settings), managed)
+    }
+}
+
+/// The settings managed.json sets, and settings.json's own values beneath them.
+#[derive(Clone, Debug, Default)]
+pub struct ManagedSettings {
+    layer: Map<String, Value>,
+    own: Map<String, Value>,
+    /// Paths to the values `layer` sets, like `["audio", "transmit"]`.
+    keys: Vec<Vec<String>>,
+}
+
+impl ManagedSettings {
+    fn new(layer: Map<String, Value>, own: Map<String, Value>) -> Self {
+        fn leaves(map: &Map<String, Value>, path: &mut Vec<String>, keys: &mut Vec<Vec<String>>) {
+            for (key, value) in map {
+                path.push(key.clone());
+                match value {
+                    Value::Object(inner) => leaves(inner, path, keys),
+                    _ => keys.push(path.clone()),
+                }
+                path.pop();
+            }
+        }
+        let mut keys = Vec::new();
+        leaves(&layer, &mut Vec::new(), &mut keys);
+        Self { layer, own, keys }
+    }
+
+    /// Whether managed.json sets `key` (dotted, like `audio.transmit`) or part of it.
+    pub fn contains(&self, key: &str) -> bool {
+        self.keys.iter().any(|managed| {
+            managed
+                .iter()
+                .zip(key.split('.'))
+                .all(|(managed, key)| managed == key)
+        })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// `settings` with the managed values back in place, whatever changed them.
+    pub fn apply(&self, settings: ClientSettings) -> ClientSettings {
+        if self.keys.is_empty() {
+            return settings;
+        }
+        let Ok(Value::Object(mut map)) = serde_json::to_value(&settings) else {
+            return settings;
+        };
+        merge(&mut map, &self.layer);
+        ClientSettings::deserialize(&Value::Object(map)).map_or(settings, ClientSettings::sanitized)
+    }
+
+    /// What settings.json keeps of `settings`: under the managed keys, its own
+    /// values or nothing.
+    fn unmanaged(&self, settings: &ClientSettings) -> serde_json::Result<Value> {
+        let mut value = serde_json::to_value(settings)?;
+        if let Value::Object(map) = &mut value {
+            for key in &self.keys {
+                put(map, key, lookup(&self.own, key).cloned());
+            }
+        }
+        Ok(value)
+    }
+}
+
+/// Objects merge key by key; any other value of `over` replaces `base`'s.
+fn merge(base: &mut Map<String, Value>, over: &Map<String, Value>) {
+    for (key, value) in over {
+        match (base.get_mut(key), value) {
+            (Some(Value::Object(base)), Value::Object(over)) => merge(base, over),
+            _ => {
+                base.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn lookup<'a>(map: &'a Map<String, Value>, path: &[String]) -> Option<&'a Value> {
+    let (first, rest) = path.split_first()?;
+    let value = map.get(first)?;
+    match rest {
+        [] => Some(value),
+        rest => lookup(value.as_object()?, rest),
+    }
+}
+
+/// Set the value at `path`, or remove it with `None`.
+fn put(map: &mut Map<String, Value>, path: &[String], value: Option<Value>) {
+    match (path, value) {
+        ([key], Some(value)) => {
+            map.insert(key.clone(), value);
+        }
+        ([key], None) => {
+            map.remove(key);
+        }
+        ([first, rest @ ..], value) => {
+            if let Some(Value::Object(inner)) = map.get_mut(first) {
+                put(inner, rest, value);
+            }
+        }
+        ([], _) => {}
+    }
+}
+
+/// Saved bookmarks with the declared ones over them. A declared bookmark keeps
+/// what Nuschel saved about it (an accepted certificate, the channel tree, the
+/// icon, the last channel) while its address stays the same; one no longer
+/// declared is dropped.
+fn merge_servers(
+    mut saved: Vec<ServerBookmark>,
+    declared: &[ServerBookmark],
+) -> Vec<ServerBookmark> {
+    saved.retain(|server| !server.managed || declared.iter().any(|known| known.id == server.id));
+    for server in declared {
+        let mut server = server.clone();
+        match saved.iter_mut().find(|known| known.id == server.id) {
+            Some(known) => {
+                if known.host == server.host && known.port == server.port {
+                    server.certificate_sha256 = server
+                        .certificate_sha256
+                        .or_else(|| known.certificate_sha256.take());
+                    server.cached_channels = std::mem::take(&mut known.cached_channels);
+                    server.icon = known.icon.take();
+                    server.icon_checked_ms = known.icon_checked_ms;
+                    server.last_channel = known.last_channel;
+                }
+                *known = server;
+            }
+            None => saved.push(server),
+        }
+    }
+    saved
+}
+
+/// What servers.json and managed.json must hold for each bookmark.
+fn check_bookmark(server: &ServerBookmark) -> io::Result<()> {
+    ServerBookmark::new(&server.name, &server.host, server.port, &server.username)
+        .map_err(io::Error::other)?;
+    if server.tokens.len() > 64 || server.tokens.iter().any(|token| token.len() > 256) {
+        return Err(io::Error::other("too many or oversized access tokens"));
+    }
+    if Uuid::parse_str(&server.id).is_err()
+        || server
+            .certificate_sha256
+            .as_ref()
+            .is_some_and(|pin| pin.len() != 64 || !pin.bytes().all(|c| c.is_ascii_hexdigit()))
+    {
+        return Err(io::Error::other(
+            "invalid saved server identity or certificate fingerprint",
+        ));
+    }
+    Ok(())
+}
+
+/// At most 100 servers of your own, and 100 managed ones.
+fn too_many(servers: &[ServerBookmark]) -> bool {
+    let managed = servers.iter().filter(|server| server.managed).count();
+    managed > MAX_SERVERS || servers.len() - managed > MAX_SERVERS
+}
+
+/// The first `nuschel/managed.json` in `$XDG_CONFIG_DIRS` (`/etc/xdg` by default).
+fn system_managed() -> Option<PathBuf> {
+    if !cfg!(all(unix, not(target_os = "macos"))) {
+        return None;
+    }
+    let directories = std::env::var_os("XDG_CONFIG_DIRS")
+        .filter(|directories| !directories.is_empty())
+        .unwrap_or_else(|| "/etc/xdg".into());
+    std::env::split_paths(&directories)
+        .filter(|directory| directory.is_absolute())
+        .map(|directory| directory.join("nuschel").join(MANAGED_FILE))
+        .find(|path| path.exists())
+}
+
 #[derive(Clone)]
 pub struct Profile {
     pub config_dir: PathBuf,
     /// The local history folder, the storage worker's only writable directory.
     /// It never holds configuration, the identity or other credentials.
     pub data_dir: PathBuf,
+    /// System-wide managed configuration, under the configuration folder's own.
+    system_managed: Option<PathBuf>,
+    /// Files that could be neither read nor renamed: never written over.
+    kept: Arc<Mutex<BTreeSet<&'static str>>>,
 }
 
 const HISTORY_FILE: &str = "history.sqlite3";
+const SETTINGS_FILE: &str = "settings.json";
+const SERVERS_FILE: &str = "servers.json";
+/// Written by Home Manager or an administrator; Nuschel only reads it.
+const MANAGED_FILE: &str = "managed.json";
+const MAX_SETTINGS_FILE: u64 = 1024 * 1024;
 const MAX_SERVERS: usize = 100;
 const MAX_SERVERS_FILE: usize = 8 * 1024 * 1024;
 const MAX_CACHED_CHANNELS: usize = 4096;
 const MAX_CHANNEL_NAME: usize = 512;
 
+/// Everything Nuschel reads at start (see [`Profile::load`]).
+pub struct Loaded {
+    pub settings: ClientSettings,
+    pub managed: ManagedSettings,
+    pub servers: Vec<ServerBookmark>,
+    /// What went wrong, in sentences to show.
+    pub problems: Vec<String>,
+}
+
 impl Profile {
+    /// With `override_dir` (tests, separate profiles) the system-wide managed
+    /// configuration is not read either.
     pub fn open(override_dir: Option<PathBuf>) -> io::Result<Self> {
         if let Some(root) = override_dir {
             return Self::at(root.join("config"), root.join("data"));
         }
         let paths = directories::ProjectDirs::from("org", "Nuschel", "Nuschel")
             .ok_or_else(|| io::Error::other("could not find the application data directory"))?;
-        Self::at(paths.config_dir().into(), paths.data_local_dir().into())
+        let mut profile = Self::at(paths.config_dir().into(), paths.data_local_dir().into())?;
+        profile.system_managed = system_managed();
+        Ok(profile)
     }
 
     /// macOS keeps configuration and data in one folder (Application Support),
@@ -545,6 +841,8 @@ impl Profile {
                 data_dir.clone()
             },
             config_dir,
+            system_managed: None,
+            kept: Default::default(),
         };
         for directory in [&profile.config_dir, &profile.data_dir] {
             fs::create_dir_all(directory)?;
@@ -558,22 +856,102 @@ impl Profile {
         Ok(profile)
     }
 
-    pub fn load_servers(&self) -> io::Result<Vec<ServerBookmark>> {
-        let path = self.config_dir.join("servers.json");
-        if !path.exists() {
-            return Ok(Vec::new());
+    /// Settings, managed configuration and servers. A settings.json or
+    /// servers.json that cannot be read is renamed to `<name>.invalid` (or
+    /// `.invalid.N`) and Nuschel goes on without it; an invalid managed.json
+    /// is ignored and left alone. Either way the problem is reported.
+    pub fn load(&self) -> Loaded {
+        let mut problems = Vec::new();
+        let managed = match self.load_managed() {
+            Ok(managed) => Some(managed),
+            Err(error) => {
+                problems.push(format!(
+                    "The system configuration is invalid, so Nuschel ignored it: {error}."
+                ));
+                None
+            }
+        };
+        let declared = managed.clone().unwrap_or_default();
+        let (settings, managed_settings) = self.load_settings(&declared).unwrap_or_else(|error| {
+            problems.push(self.set_aside(SETTINGS_FILE, &error, "default settings"));
+            declared.settings_over(Map::new())
+        });
+        let servers = self.load_servers(managed.as_ref()).unwrap_or_else(|error| {
+            problems.push(self.set_aside(SERVERS_FILE, &error, "no saved servers"));
+            merge_servers(Vec::new(), &declared.servers)
+        });
+        Loaded {
+            settings,
+            managed: managed_settings,
+            servers,
+            problems,
         }
-        let mut servers: Vec<ServerBookmark> =
-            serde_json::from_slice(&read_bounded(&path, MAX_SERVERS_FILE as u64)?)?;
-        if servers.len() > MAX_SERVERS {
+    }
+
+    /// managed.json, over the first `nuschel/managed.json` in
+    /// `$XDG_CONFIG_DIRS`. Missing files declare nothing.
+    pub fn load_managed(&self) -> io::Result<Managed> {
+        let mut managed = Managed::default();
+        let own = self.config_dir.join(MANAGED_FILE);
+        for path in self.system_managed.iter().chain([&own]) {
+            let file = match read_bounded(path, MAX_SETTINGS_FILE) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                bytes => bytes.and_then(|bytes| Managed::parse(&bytes)),
+            }
+            .map_err(|error| {
+                io::Error::new(error.kind(), format!("{}: {error}", path.display()))
+            })?;
+            merge(&mut managed.settings, &file.settings);
+            for server in file.servers {
+                match managed
+                    .servers
+                    .iter_mut()
+                    .find(|known| known.id == server.id)
+                {
+                    Some(known) => *known = server,
+                    None => managed.servers.push(server),
+                }
+            }
+        }
+        if managed.servers.len() > MAX_SERVERS {
+            return Err(io::Error::other("more than 100 managed servers"));
+        }
+        Ok(managed)
+    }
+
+    /// settings.json with the managed settings over it, and which those are.
+    pub fn load_settings(
+        &self,
+        managed: &Managed,
+    ) -> io::Result<(ClientSettings, ManagedSettings)> {
+        let own = match read_bounded(&self.config_dir.join(SETTINGS_FILE), MAX_SETTINGS_FILE) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Map::new(),
+            bytes => {
+                let own: Map<String, Value> = serde_json::from_slice(&bytes?)?;
+                ClientSettings::deserialize(&Value::Object(own.clone()))?;
+                own
+            }
+        };
+        Ok(managed.settings_over(own))
+    }
+
+    /// servers.json, with the bookmarks `managed` declares over it. Without
+    /// `managed` (an invalid managed.json) the saved ones stay as they are.
+    pub fn load_servers(&self, managed: Option<&Managed>) -> io::Result<Vec<ServerBookmark>> {
+        let bytes = match read_bounded(&self.config_dir.join(SERVERS_FILE), MAX_SERVERS_FILE as u64)
+        {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => b"[]".to_vec(),
+            bytes => bytes?,
+        };
+        let mut servers: Vec<ServerBookmark> = serde_json::from_slice(&bytes)?;
+        if too_many(&servers) {
             return Err(io::Error::other("too many saved servers"));
         }
-        let mut ids = std::collections::BTreeSet::new();
+        let mut ids = BTreeSet::new();
         for server in &mut servers {
-            ServerBookmark::new(&server.name, &server.host, server.port, &server.username)
-                .map_err(io::Error::other)?;
-            if server.tokens.len() > 64 || server.tokens.iter().any(|token| token.len() > 256) {
-                return Err(io::Error::other("too many or oversized access tokens"));
+            check_bookmark(server)?;
+            if !ids.insert(&server.id) {
+                return Err(io::Error::other("two saved servers have the same id"));
             }
             // Only a cache, written by earlier versions without limits: drop it
             // rather than refuse every bookmark.
@@ -585,18 +963,11 @@ impl Profile {
             {
                 server.cached_channels.clear();
             }
-            if Uuid::parse_str(&server.id).is_err()
-                || !ids.insert(&server.id)
-                || server.certificate_sha256.as_ref().is_some_and(|pin| {
-                    pin.len() != 64 || !pin.bytes().all(|c| c.is_ascii_hexdigit())
-                })
-            {
-                return Err(io::Error::other(
-                    "invalid saved server identity or certificate fingerprint",
-                ));
-            }
         }
-        Ok(servers)
+        Ok(match managed {
+            Some(managed) => merge_servers(servers, &managed.servers),
+            None => servers,
+        })
     }
 
     /// The cached channel trees are the only part a server controls, and JSON
@@ -606,7 +977,7 @@ impl Profile {
     /// fits, so a server can never stop bookmarks or certificate pins from
     /// being saved.
     pub fn save_servers(&self, servers: &[ServerBookmark]) -> io::Result<()> {
-        if servers.len() > MAX_SERVERS {
+        if too_many(servers) {
             return Err(io::Error::other("at most 100 servers may be saved"));
         }
         let mut servers = servers.to_vec();
@@ -618,7 +989,7 @@ impl Profile {
         loop {
             let bytes = serde_json::to_vec_pretty(&servers)?;
             if bytes.len() <= MAX_SERVERS_FILE {
-                return atomic_private_write(&self.config_dir.join("servers.json"), &bytes);
+                return self.write(SERVERS_FILE, &bytes);
             }
             let size =
                 |cache: &Vec<CachedChannel>| serde_json::to_vec(cache).map_or(0, |b| b.len());
@@ -632,20 +1003,61 @@ impl Profile {
         }
     }
 
-    pub fn load_settings(&self) -> io::Result<ClientSettings> {
-        let path = self.config_dir.join("settings.json");
-        if !path.exists() {
-            return Ok(ClientSettings::default());
-        }
-        let settings: ClientSettings = serde_json::from_slice(&read_bounded(&path, 1024 * 1024)?)?;
-        Ok(settings.sanitized())
+    /// Managed keys keep settings.json's own values (or stay out of it), so
+    /// the file holds only what the user chose.
+    pub fn save_settings(
+        &self,
+        settings: &ClientSettings,
+        managed: &ManagedSettings,
+    ) -> io::Result<()> {
+        self.write(
+            SETTINGS_FILE,
+            &serde_json::to_vec_pretty(&managed.unmanaged(settings)?)?,
+        )
     }
 
-    pub fn save_settings(&self, settings: &ClientSettings) -> io::Result<()> {
-        atomic_private_write(
-            &self.config_dir.join("settings.json"),
-            &serde_json::to_vec_pretty(settings)?,
-        )
+    fn write(&self, name: &'static str, bytes: &[u8]) -> io::Result<()> {
+        if self
+            .kept
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(name)
+        {
+            return Err(io::Error::other(format!(
+                "{name} could not be read, so Nuschel does not overwrite it"
+            )));
+        }
+        atomic_private_write(&self.config_dir.join(name), bytes)
+    }
+
+    /// Rename a file that could not be read to `<name>.invalid` (`.invalid.N`
+    /// when taken), so that saving never overwrites it, and say so.
+    fn set_aside(&self, name: &'static str, error: &io::Error, instead: &str) -> String {
+        let renamed = (0..1000)
+            .map(|n| match n {
+                0 => format!("{name}.invalid"),
+                n => format!("{name}.invalid.{n}"),
+            })
+            .find(|candidate| fs::symlink_metadata(self.config_dir.join(candidate)).is_err())
+            .ok_or_else(|| io::Error::other("too many earlier copies"))
+            .and_then(|target| {
+                fs::rename(self.config_dir.join(name), self.config_dir.join(&target))?;
+                Ok(target)
+            });
+        match renamed {
+            Ok(target) => format!(
+                "{name} could not be read ({error}). It was renamed to {target}, and Nuschel started with {instead}."
+            ),
+            Err(rename) => {
+                self.kept
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(name);
+                format!(
+                    "{name} could not be read ({error}) or renamed ({rename}). Nuschel started with {instead} and will not save over it."
+                )
+            }
+        }
     }
 
     pub fn history_path(&self) -> PathBuf {
@@ -903,6 +1315,7 @@ fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nuschel_core::audio::TransmitMode;
     #[test]
     fn validates_endpoints_and_binds_history_to_certificate() {
         assert!(ServerBookmark::new("", "mumble://example.org", 64738, "me").is_err());
@@ -1007,7 +1420,7 @@ mod tests {
         }];
         friendly.certificate_sha256 = Some("ab".repeat(32));
         profile.save_servers(&[hostile, friendly]).unwrap();
-        let loaded = profile.load_servers().unwrap();
+        let loaded = profile.load_servers(None).unwrap();
         assert_eq!(loaded.len(), 2);
         // Only the hostile cache was dropped; the other bookmark and its pin survive.
         assert!(loaded[0].cached_channels.is_empty());
@@ -1023,7 +1436,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            profile.load_servers().unwrap()[1]
+            profile.load_servers(None).unwrap()[1]
                 .cached_channels
                 .is_empty()
         );
@@ -1033,13 +1446,18 @@ mod tests {
     fn settings_round_trip_and_are_sanitized() {
         let root = std::env::temp_dir().join(format!("nuschel-settings-{}", Uuid::new_v4()));
         let profile = Profile::open(Some(root.clone())).unwrap();
-        assert_eq!(profile.load_settings().unwrap(), ClientSettings::default());
+        assert_eq!(
+            profile.load_settings(&Managed::default()).unwrap().0,
+            ClientSettings::default()
+        );
         let mut settings = ClientSettings::default();
         settings.user_volumes.insert("abc".into(), 9.);
         settings.local_mutes.insert("def".into());
         settings.sound_volume = 3.;
-        profile.save_settings(&settings).unwrap();
-        let loaded = profile.load_settings().unwrap();
+        profile
+            .save_settings(&settings, &ManagedSettings::default())
+            .unwrap();
+        let loaded = profile.load_settings(&Managed::default()).unwrap().0;
         assert_eq!(loaded.volume_for(Some("abc")), 4.);
         assert_eq!(loaded.sound_volume, 1.);
         assert!(loaded.locally_muted(Some("def")));
@@ -1099,7 +1517,7 @@ mod tests {
             r#"{"force_tcp": true, "sidebar_width": 300.0}"#,
         )
         .unwrap();
-        let loaded = profile.load_settings().unwrap();
+        let loaded = profile.load_settings(&Managed::default()).unwrap().0;
         assert!(loaded.force_tcp);
         assert_eq!(loaded.appearance, AppearanceSettings::default());
         assert_eq!(loaded.appearance.theme, ThemeChoice::System);
@@ -1109,15 +1527,24 @@ mod tests {
             r#"{"appearance": {"theme": "light", "zoom": 9.0, "text_size": 2.0, "ui_font": " "}}"#,
         )
         .unwrap();
-        let loaded = profile.load_settings().unwrap().appearance;
+        let loaded = profile
+            .load_settings(&Managed::default())
+            .unwrap()
+            .0
+            .appearance;
         assert_eq!(loaded.theme, ThemeChoice::Light);
         assert_eq!((loaded.zoom, loaded.text_size), (3., 12.));
         assert_eq!(loaded.ui_font, None);
         let mut settings = ClientSettings::default();
         settings.appearance.mono_font = Some("Iosevka".into());
         settings.appearance.zoom = 1.25;
-        profile.save_settings(&settings).unwrap();
-        assert_eq!(profile.load_settings().unwrap(), settings);
+        profile
+            .save_settings(&settings, &ManagedSettings::default())
+            .unwrap();
+        assert_eq!(
+            profile.load_settings(&Managed::default()).unwrap().0,
+            settings
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1163,6 +1590,292 @@ mod tests {
                 format!("\"{}\"", action.id())
             );
         }
+    }
+    fn temporary_profile(name: &str) -> (PathBuf, Profile) {
+        let root = std::env::temp_dir().join(format!("nuschel-{name}-{}", Uuid::new_v4()));
+        let profile = Profile::open(Some(root.clone())).unwrap();
+        (root, profile)
+    }
+    fn write(profile: &Profile, name: &str, contents: &str) {
+        fs::write(profile.config_dir.join(name), contents).unwrap();
+    }
+    fn read(profile: &Profile, name: &str) -> String {
+        fs::read_to_string(profile.config_dir.join(name)).unwrap()
+    }
+    #[test]
+    fn managed_settings_win_and_stay_out_of_settings_json() {
+        let (root, profile) = temporary_profile("managed-settings");
+        write(
+            &profile,
+            "settings.json",
+            r#"{"enter_sends": true, "sound_volume": 0.2}"#,
+        );
+        write(
+            &profile,
+            "managed.json",
+            r#"{"settings": {"enter_sends": false, "audio": {"transmit": "push_to_talk"},
+                "sound_volume": 3.0, "shortcuts": {"push-to-talk": "f13"}}}"#,
+        );
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let (settings, managed) = (loaded.settings, loaded.managed);
+        assert!(!settings.enter_sends);
+        assert_eq!(settings.audio.transmit, TransmitMode::PushToTalk);
+        // Managed values are sanitised like any other.
+        assert_eq!(settings.sound_volume, 1.);
+        for key in [
+            "enter_sends",
+            "audio.transmit",
+            "audio",
+            "shortcuts.push-to-talk",
+        ] {
+            assert!(managed.contains(key), "{key}");
+        }
+        for key in [
+            "force_tcp",
+            "audio.vad_sensitivity",
+            "shortcuts.toggle-mute",
+        ] {
+            assert!(!managed.contains(key), "{key}");
+        }
+        // A change to managed keys does not hold; other changes do.
+        let mut changed = settings.clone();
+        changed.enter_sends = true;
+        changed.audio.transmit = TransmitMode::Continuous;
+        changed.force_tcp = true;
+        let changed = managed.apply(changed);
+        assert!(!changed.enter_sends && changed.force_tcp);
+        assert_eq!(changed.audio.transmit, TransmitMode::PushToTalk);
+        // settings.json keeps its own values under managed keys, or none.
+        profile.save_settings(&changed, &managed).unwrap();
+        let saved: Value = serde_json::from_str(&read(&profile, "settings.json")).unwrap();
+        assert_eq!(saved["enter_sends"], true);
+        assert_eq!(saved["sound_volume"], 0.2);
+        assert_eq!(saved["force_tcp"], true);
+        assert!(saved["audio"].get("transmit").is_none(), "{saved}");
+        assert_eq!(saved["shortcuts"], serde_json::json!({}));
+        assert_eq!(profile.load().settings, changed);
+        // Without managed.json, the user's own choices return.
+        fs::remove_file(profile.config_dir.join("managed.json")).unwrap();
+        let loaded = profile.load();
+        assert!(loaded.managed.is_empty());
+        assert!(loaded.settings.enter_sends && loaded.settings.force_tcp);
+        assert_eq!(loaded.settings.audio.transmit, TransmitMode::VoiceActivity);
+        assert_eq!(loaded.settings.sound_volume, 0.2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn system_wide_managed_settings_yield_to_the_users_own() {
+        let (root, mut profile) = temporary_profile("system-managed");
+        let system = root.join("etc/xdg/nuschel/managed.json");
+        fs::create_dir_all(system.parent().unwrap()).unwrap();
+        let id = |n: u8| format!("00000000-0000-4000-8000-0000000000{n:02}");
+        fs::write(
+            &system,
+            serde_json::json!({
+                "settings": {"force_tcp": true, "enter_sends": false},
+                "servers": [{"id": id(1), "name": "System", "host": "a.example", "username": "me"},
+                            {"id": id(2), "host": "b.example", "username": "me"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        profile.system_managed = Some(system);
+        write(
+            &profile,
+            "managed.json",
+            &serde_json::json!({
+                "settings": {"enter_sends": true},
+                "servers": [{"id": id(1), "name": "Mine", "host": "c.example", "port": 1234,
+                             "username": "me", "auto_connect": false}]
+            })
+            .to_string(),
+        );
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert!(loaded.settings.force_tcp && loaded.settings.enter_sends);
+        let servers = loaded.servers;
+        assert_eq!(servers.len(), 2);
+        assert_eq!((servers[0].name.as_str(), servers[0].port), ("Mine", 1234));
+        assert_eq!(
+            (servers[1].name.as_str(), servers[1].port),
+            ("b.example", 64738)
+        );
+        assert!(!servers[0].auto_connect && servers[1].auto_connect);
+        assert!(servers.iter().all(|server| server.managed));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn managed_servers_keep_their_runtime_state_until_no_longer_declared() {
+        let (root, profile) = temporary_profile("managed-servers");
+        let id = "6f1e1b8e-2b9f-4c57-9a7e-6a0b0d1e2f30";
+        let declare = |host: &str, pin: Option<&str>| {
+            write(
+                &profile,
+                "managed.json",
+                &serde_json::json!({"servers": [{"id": id, "name": "Team", "host": host,
+                    "port": 64738, "username": "alice", "tokens": ["blue"], "auto_connect": true,
+                    "certificate_sha256": pin}]})
+                .to_string(),
+            )
+        };
+        declare("Voice.Example.org", None);
+        let mut own = ServerBookmark::new("Mine", "own.example", 64738, "me").unwrap();
+        own.certificate_sha256 = Some("cd".repeat(32));
+        profile.save_servers(&[own.clone()]).unwrap();
+        let mut servers = profile.load().servers;
+        assert_eq!(servers.len(), 2);
+        assert!(servers[1].managed && !servers[0].managed);
+        let team = &mut servers[1];
+        // What Nuschel learns at run time is saved with it, and kept.
+        team.certificate_sha256 = Some("ab".repeat(32));
+        team.last_channel = Some(7);
+        team.cached_channels = vec![CachedChannel {
+            id: 0,
+            parent: None,
+            name: "Root".into(),
+            position: 0,
+        }];
+        // An edit to declared fields does not survive the next start.
+        team.name = "Renamed".into();
+        team.tokens.clear();
+        profile.save_servers(&servers).unwrap();
+        let servers = profile.load().servers;
+        let team = &servers[1];
+        assert_eq!(
+            (team.name.as_str(), team.host.as_str()),
+            ("Team", "voice.example.org")
+        );
+        assert_eq!(team.tokens, ["blue"]);
+        assert_eq!(team.certificate_sha256, Some("ab".repeat(32)));
+        assert_eq!(
+            (team.last_channel, team.cached_channels.len()),
+            (Some(7), 1)
+        );
+        assert_eq!(servers[0].certificate_sha256, own.certificate_sha256);
+        // A declared certificate wins over an accepted one.
+        declare("voice.example.org", Some(&"EF".repeat(32)));
+        let servers = profile.load().servers;
+        assert_eq!(servers[1].certificate_sha256, Some("ef".repeat(32)));
+        assert_eq!(servers[1].last_channel, Some(7));
+        // A new address starts afresh.
+        profile.save_servers(&servers).unwrap();
+        declare("other.example.org", None);
+        let servers = profile.load().servers;
+        assert_eq!(servers[1].certificate_sha256, None);
+        assert!(servers[1].last_channel.is_none() && servers[1].cached_channels.is_empty());
+        // No longer declared: gone; your own bookmark stays.
+        profile.save_servers(&servers).unwrap();
+        write(&profile, "managed.json", "{}");
+        let servers = profile.load().servers;
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].id, own.id);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn broken_files_are_set_aside_and_never_overwritten() {
+        let (root, profile) = temporary_profile("broken");
+        let servers = ServerBookmark::new("", "voice.example.org", 64738, "me").unwrap();
+        profile.save_servers(&[servers]).unwrap();
+        write(&profile, "settings.json", r#"{"enter_sends": false,"#);
+        let loaded = profile.load();
+        assert_eq!(loaded.settings, ClientSettings::default());
+        assert_eq!(loaded.servers.len(), 1);
+        assert_eq!(loaded.problems.len(), 1);
+        assert!(
+            loaded.problems[0].starts_with("settings.json could not be read (")
+                && loaded.problems[0].contains("renamed to settings.json.invalid"),
+            "{:?}",
+            loaded.problems
+        );
+        assert!(!profile.config_dir.join("settings.json").exists());
+        assert_eq!(
+            read(&profile, "settings.json.invalid"),
+            r#"{"enter_sends": false,"#
+        );
+        // Saving writes a new file beside it.
+        profile
+            .save_settings(&loaded.settings, &loaded.managed)
+            .unwrap();
+        assert!(profile.load().problems.is_empty());
+        // A later broken file does not replace the first one.
+        write(&profile, "settings.json", r#"{"unknown": 1}"#);
+        write(&profile, "servers.json", "[{}]");
+        let loaded = profile.load();
+        assert_eq!(loaded.problems.len(), 2, "{:?}", loaded.problems);
+        assert!(loaded.servers.is_empty());
+        assert!(loaded.problems[1].contains("renamed to servers.json.invalid,"));
+        assert_eq!(
+            read(&profile, "settings.json.invalid.1"),
+            r#"{"unknown": 1}"#
+        );
+        assert_eq!(
+            read(&profile, "settings.json.invalid"),
+            r#"{"enter_sends": false,"#
+        );
+        assert_eq!(read(&profile, "servers.json.invalid"), "[{}]");
+        // Invalid values are refused just like invalid JSON.
+        let pin = ServerBookmark::new("", "voice.example.org", 64738, "me").unwrap();
+        let mut file = serde_json::to_value([pin]).unwrap();
+        file[0]["certificate_sha256"] = "not a pin".into();
+        write(&profile, "servers.json", &file.to_string());
+        let loaded = profile.load();
+        assert!(
+            loaded.problems[0].contains("servers.json.invalid.1"),
+            "{:?}",
+            loaded.problems
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn an_invalid_managed_file_is_ignored_and_left_alone() {
+        let (root, profile) = temporary_profile("invalid-managed");
+        let id = "6f1e1b8e-2b9f-4c57-9a7e-6a0b0d1e2f30";
+        let valid = format!(
+            r#"{{"settings": {{"force_tcp": true}}, "servers": [{{"id": "{id}", "host": "voice.example.org", "username": "me"}}]}}"#
+        );
+        write(&profile, "managed.json", &valid);
+        write(&profile, "settings.json", r#"{"enter_sends": false}"#);
+        let loaded = profile.load();
+        assert!(loaded.settings.force_tcp && loaded.problems.is_empty());
+        profile.save_servers(&loaded.servers).unwrap();
+        let server = |fields: &str| {
+            format!(
+                r#"{{"servers": [{{"id": "{id}", "host": "voice.example.org", "username": "me"{fields}}}]}}"#
+            )
+        };
+        for invalid in [
+            "{".to_string(),
+            r#"{"settings": {}, "extra": 1}"#.into(),
+            r#"{"settings": {"no_such_setting": true}}"#.into(),
+            r#"{"settings": {"force_tcp": "yes"}}"#.into(),
+            r#"{"settings": {"audio": {"transmit": "telepathy"}}}"#.into(),
+            server(r#", "cached_channels": []"#),
+            server(r#", "port": 0"#),
+            server(r#", "certificate_sha256": "abcd""#),
+            server(r#", "id": "not-a-uuid""#).replace(&format!(r#""id": "{id}", "#), ""),
+            format!(
+                r#"{{"servers": [{{"id": "{id}", "host": "a.example", "username": "me"}}, {{"id": "{id}", "host": "b.example", "username": "me"}}]}}"#
+            ),
+        ] {
+            write(&profile, "managed.json", &invalid);
+            assert!(profile.load_managed().is_err(), "{invalid}");
+            let loaded = profile.load();
+            assert_eq!(loaded.problems.len(), 1, "{invalid}");
+            assert!(loaded.problems[0].starts_with("The system configuration is invalid"));
+            // Nothing managed applies, settings.json does, and the last known
+            // managed bookmark stays.
+            assert!(loaded.managed.is_empty() && !loaded.settings.force_tcp);
+            assert!(!loaded.settings.enter_sends);
+            assert_eq!(loaded.servers.len(), 1, "{invalid}");
+            assert!(loaded.servers[0].managed);
+            profile
+                .save_settings(&loaded.settings, &loaded.managed)
+                .unwrap();
+            assert_eq!(read(&profile, "managed.json"), invalid);
+            assert!(!profile.config_dir.join("managed.json.invalid").exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn parses_mumble_urls_like_stock_clients() {

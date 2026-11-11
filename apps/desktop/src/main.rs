@@ -145,7 +145,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let profile = Profile::open(arguments.profile_dir)?;
     update::remember_state_in(&profile.config_dir);
-    let bookmarks = profile.load_servers()?;
+    let loaded = profile.load();
+    for problem in &loaded.problems {
+        tracing::warn!("{problem}");
+    }
     let startup = arguments
         .url
         .as_deref()
@@ -209,14 +212,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     window.minimize_window();
                 }
                 cx.new(|cx| {
-                    let mut desktop = state::Desktop::new(
-                        profile,
-                        bookmarks,
-                        startup,
-                        runtime_handle,
-                        window,
-                        cx,
-                    );
+                    let mut desktop =
+                        state::Desktop::new(profile, loaded, startup, runtime_handle, window, cx);
                     desktop.offer_when_connected(offers, cx);
                     desktop
                 })

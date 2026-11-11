@@ -362,28 +362,51 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                 .flex_col()
                 .gap_4()
                 // The address comes first (and has focus); the name follows it.
+                // A managed server's are disabled and dimmed.
                 .child(
                     div()
                         .flex()
-                        .gap_3()
-                        .child(div().flex_1().child(field("server-host-field", "Hostname or IP address", &form.host)))
-                        .child(div().w(px(110.)).child(field("server-port-field", "Port", &form.port))),
+                        .flex_col()
+                        .gap_4()
+                        .when(form.managed, |fields| fields.opacity(0.5))
+                        .child(
+                            div()
+                                .flex()
+                                .gap_3()
+                                .child(div().flex_1().child(field("server-host-field", "Hostname or IP address", &form.host)))
+                                .child(div().w(px(110.)).child(field("server-port-field", "Port", &form.port))),
+                        )
+                        .child(field("server-name-field", "Server name", &form.name))
+                        .child(field("server-username-field", "Username", &form.username)),
                 )
-                .child(field("server-name-field", "Server name", &form.name))
-                .child(field("server-username-field", "Username", &form.username))
                 .child(field("server-password-field", "Password (optional)", &form.password))
-                .child(crate::settings::toggle(
+                .child(div().when(form.managed, |row| row.opacity(0.5)).child(crate::settings::toggle(
                     "server-auto-connect",
                     "Connect when Nuschel starts",
                     "You join muted and deafened until you unmute.".into(),
                     form.auto_connect,
                     std::rc::Rc::new(|this, _, _| {
-                        if let Some(form) = &mut this.form {
+                        if let Some(form) = this.form.as_mut().filter(|form| !form.managed) {
                             form.auto_connect = !form.auto_connect;
                         }
                     }),
                     cx,
-                ))
+                )))
+                .when(form.managed, |view| {
+                    view.child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .items_start()
+                            .text_xs()
+                            .text_color(color(TEXT_MUTED))
+                            .child(icon("lock", 14., color(TEXT_MUTED)))
+                            .child(div().flex_1().min_w_0().child(
+                                text!("Set by your system configuration: only the password can be entered here.")
+                                    .with_id("managed-server-note"),
+                            )),
+                    )
+                })
                 .child(
                     div()
                         .flex()
@@ -416,7 +439,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                 .flex()
                 .gap_3()
                 .justify_end()
-                .when(editing, |view| {
+                .when(editing && !form.managed, |view| {
                     view.child(styled_button("remove-server", "Remove saved server", Tone::Ghost, |this, window, cx| this.remove_server(window, cx), cx))
                         .child(div().flex_1())
                 })
@@ -438,8 +461,9 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
     )
 }
 
-/// Main area shown before any server has been saved.
-pub fn empty(cx: &mut Context<Desktop>) -> AnyElement {
+/// Main area shown before any server has been saved, with a problem found
+/// at start (such as a configuration file that could not be read).
+pub fn empty(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
     div()
         .flex_1()
         .h_full()
@@ -461,6 +485,32 @@ pub fn empty(cx: &mut Context<Desktop>) -> AnyElement {
                 .text_color(color(TEXT_MUTED))
                 .child(text!("Add a Mumble server to start talking.").with_id("welcome-text")),
         )
+        .when_some(this.error.clone(), |view, error| {
+            view.child(
+                div()
+                    .id("welcome-error")
+                    .role(Role::Status)
+                    .w_full()
+                    .max_w(px(560.))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(8.))
+                    .bg(tint(DANGER, 0x26))
+                    .border_1()
+                    .border_color(tint(DANGER, 0x60))
+                    .flex()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(color(DANGER_TEXT))
+                    .child(icon("alert", 16., color(DANGER_HOVER)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(text!(error).with_id("welcome-error-text")),
+                    ),
+            )
+        })
         .child(styled_button(
             "welcome-add-server",
             "Add a server",

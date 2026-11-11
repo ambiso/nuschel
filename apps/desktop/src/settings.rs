@@ -19,6 +19,42 @@ fn activation(event: &KeyDownEvent) -> bool {
     event.keystroke.key == "enter" || event.keystroke.key == "space"
 }
 
+/// The control of a setting the system configuration (managed.json) sets:
+/// shown with its value, dimmed and out of the pointer's reach, with a note.
+/// Whatever reaches it anyway, `Desktop::update_settings` keeps the value.
+pub fn managed(this: &Desktop, key: &str, control: AnyElement) -> AnyElement {
+    if !this.managed.contains(key) {
+        return control;
+    }
+    div()
+        .id(SharedString::from(format!("managed-{key}")))
+        .role(Role::Group)
+        .aria_label("Set by your system configuration")
+        .relative()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(div().opacity(0.5).child(control))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .text_xs()
+                .text_color(color(TEXT_MUTED))
+                .child(icon("lock", 12., color(TEXT_MUTED)))
+                .child(text!("Set by your system configuration").with_id("managed-note")),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .cursor_not_allowed()
+                .block_mouse_except_scroll(),
+        )
+        .into_any_element()
+}
+
 fn section(title: &'static str, children: Vec<AnyElement>) -> AnyElement {
     div()
         .flex()
@@ -538,36 +574,41 @@ pub fn dialog(
             },
         )
     };
-    let mut voice = vec![segmented(
-        "transmit-mode",
-        "Transmission mode",
-        vec![
-            (
-                "Voice activity",
-                transmit == TransmitMode::VoiceActivity,
-                set_transmit(TransmitMode::VoiceActivity),
-            ),
-            (
-                "Push to talk",
-                transmit == TransmitMode::PushToTalk,
-                set_transmit(TransmitMode::PushToTalk),
-            ),
-            (
-                "Continuous",
-                transmit == TransmitMode::Continuous,
-                set_transmit(TransmitMode::Continuous),
-            ),
-        ],
-        cx,
+    let mut voice = vec![managed(
+        this,
+        "audio.transmit",
+        segmented(
+            "transmit-mode",
+            "Transmission mode",
+            vec![
+                (
+                    "Voice activity",
+                    transmit == TransmitMode::VoiceActivity,
+                    set_transmit(TransmitMode::VoiceActivity),
+                ),
+                (
+                    "Push to talk",
+                    transmit == TransmitMode::PushToTalk,
+                    set_transmit(TransmitMode::PushToTalk),
+                ),
+                (
+                    "Continuous",
+                    transmit == TransmitMode::Continuous,
+                    set_transmit(TransmitMode::Continuous),
+                ),
+            ],
+            cx,
+        ),
     )];
     if transmit == TransmitMode::VoiceActivity {
-        voice.push(labelled_slider(
+        let slider = labelled_slider(
             "sensitivity",
             ("Sensitivity", "Voice activity sensitivity"),
             audio.vad_sensitivity,
             |this, value| this.update_settings(|settings| settings.audio.vad_sensitivity = value),
             cx,
-        ));
+        );
+        voice.push(managed(this, "audio.vad_sensitivity", slider));
     }
     if transmit == TransmitMode::PushToTalk
         && !settings.shortcuts.contains_key(&ShortcutAction::PushToTalk)
@@ -642,30 +683,38 @@ pub fn dialog(
     let noise = audio.noise_suppression;
     let gain = audio.automatic_gain;
     let processing = vec![
-        toggle(
-            "noise-suppression",
-            "Noise suppression",
-            match &upstream_noise {
-                Some(name) if noise => format!(
-                    "Using system noise suppression: {name}. Nuschel's is off to avoid doubling it."
-                ),
-                _ => "RNNoise removes steady background noise.".into(),
-            },
-            noise,
-            Rc::new(move |this, _, _| {
-                this.update_settings(|settings| settings.audio.noise_suppression = !noise)
-            }),
-            cx,
+        managed(
+            this,
+            "audio.noise_suppression",
+            toggle(
+                "noise-suppression",
+                "Noise suppression",
+                match &upstream_noise {
+                    Some(name) if noise => format!(
+                        "Using system noise suppression: {name}. Nuschel's is off to avoid doubling it."
+                    ),
+                    _ => "RNNoise removes steady background noise.".into(),
+                },
+                noise,
+                Rc::new(move |this, _, _| {
+                    this.update_settings(|settings| settings.audio.noise_suppression = !noise)
+                }),
+                cx,
+            ),
         ),
-        toggle(
-            "automatic-gain",
-            "Automatic gain",
-            "Keeps your voice at a steady level, with a limiter.".into(),
-            gain,
-            Rc::new(move |this, _, _| {
-                this.update_settings(|settings| settings.audio.automatic_gain = !gain)
-            }),
-            cx,
+        managed(
+            this,
+            "audio.automatic_gain",
+            toggle(
+                "automatic-gain",
+                "Automatic gain",
+                "Keeps your voice at a steady level, with a limiter.".into(),
+                gain,
+                Rc::new(move |this, _, _| {
+                    this.update_settings(|settings| settings.audio.automatic_gain = !gain)
+                }),
+                cx,
+            ),
         ),
         div()
             .flex()
@@ -677,19 +726,27 @@ pub fn dialog(
                     .font_weight(FontWeight::MEDIUM)
                     .child(text!("Echo cancellation").with_id("echo-heading")),
             )
-            .child(segmented(
-                "echo-mode",
-                "Echo cancellation",
-                vec![
-                    (
-                        "Automatic",
-                        mode == EchoMode::Auto,
-                        set_echo(EchoMode::Auto),
-                    ),
-                    ("Always on", mode == EchoMode::On, set_echo(EchoMode::On)),
-                    ("Off", mode == EchoMode::Off, set_echo(EchoMode::Off)),
-                ],
-                cx,
+            .child(managed(
+                this,
+                if remembered {
+                    "audio.device_overrides"
+                } else {
+                    "audio.echo_cancellation"
+                },
+                segmented(
+                    "echo-mode",
+                    "Echo cancellation",
+                    vec![
+                        (
+                            "Automatic",
+                            mode == EchoMode::Auto,
+                            set_echo(EchoMode::Auto),
+                        ),
+                        ("Always on", mode == EchoMode::On, set_echo(EchoMode::On)),
+                        ("Off", mode == EchoMode::Off, set_echo(EchoMode::Off)),
+                    ],
+                    cx,
+                ),
             ))
             .when_some(echo_status, |column, status| {
                 column.child(
@@ -746,21 +803,25 @@ pub fn dialog(
                 } else {
                     "Remember the echo setting for this microphone only.".to_string()
                 };
-                column.child(toggle(
-                    "echo-override",
-                    "Per-microphone setting",
-                    detail,
-                    remembered,
-                    Rc::new(move |this, _, _| {
-                        let id = id.clone();
-                        this.update_settings(|settings| {
-                            if settings.audio.device_overrides.remove(&id).is_none() {
-                                let current = settings.audio.echo_cancellation;
-                                settings.audio.device_overrides.insert(id, current);
-                            }
-                        })
-                    }),
-                    cx,
+                column.child(managed(
+                    this,
+                    "audio.device_overrides",
+                    toggle(
+                        "echo-override",
+                        "Per-microphone setting",
+                        detail,
+                        remembered,
+                        Rc::new(move |this, _, _| {
+                            let id = id.clone();
+                            this.update_settings(|settings| {
+                                if settings.audio.device_overrides.remove(&id).is_none() {
+                                    let current = settings.audio.echo_cancellation;
+                                    settings.audio.device_overrides.insert(id, current);
+                                }
+                            })
+                        }),
+                        cx,
+                    ),
                 ))
             })
             .into_any_element(),
@@ -798,30 +859,38 @@ pub fn dialog(
                 .font_weight(FontWeight::MEDIUM)
                 .child(text!("Microphone").with_id("input-heading"))
                 .into_any_element(),
-            device_list(
-                "input-devices",
-                &inputs,
-                audio.input_device.as_deref(),
-                active_input.as_deref(),
-                Rc::new(|this, device| {
-                    this.update_settings(|settings| settings.audio.input_device = device)
-                }),
-                cx,
+            managed(
+                this,
+                "audio.input_device",
+                device_list(
+                    "input-devices",
+                    &inputs,
+                    audio.input_device.as_deref(),
+                    active_input.as_deref(),
+                    Rc::new(|this, device| {
+                        this.update_settings(|settings| settings.audio.input_device = device)
+                    }),
+                    cx,
+                ),
             ),
             div()
                 .text_sm()
                 .font_weight(FontWeight::MEDIUM)
                 .child(text!("Speakers or headphones").with_id("output-heading"))
                 .into_any_element(),
-            device_list(
-                "output-devices",
-                &outputs,
-                audio.output_device.as_deref(),
-                active_output.as_deref(),
-                Rc::new(|this, device| {
-                    this.update_settings(|settings| settings.audio.output_device = device)
-                }),
-                cx,
+            managed(
+                this,
+                "audio.output_device",
+                device_list(
+                    "output-devices",
+                    &outputs,
+                    audio.output_device.as_deref(),
+                    active_output.as_deref(),
+                    Rc::new(|this, device| {
+                        this.update_settings(|settings| settings.audio.output_device = device)
+                    }),
+                    cx,
+                ),
             ),
         ],
         None => {
@@ -860,36 +929,44 @@ pub fn dialog(
             Rc::new(move |this, _, _| this.set_autostart(!autostart)),
             cx,
         ),
-        toggle(
-            "enter-sends",
-            "Enter sends messages",
-            if enter_sends {
-                "Shift+Enter starts a new line.".into()
-            } else {
-                "Enter starts a new line; Ctrl/Cmd+Enter sends.".into()
-            },
-            enter_sends,
-            Rc::new(move |this, _, _| {
-                this.update_settings(|settings| settings.enter_sends = !enter_sends)
-            }),
-            cx,
+        managed(
+            this,
+            "enter_sends",
+            toggle(
+                "enter-sends",
+                "Enter sends messages",
+                if enter_sends {
+                    "Shift+Enter starts a new line.".into()
+                } else {
+                    "Enter starts a new line; Ctrl/Cmd+Enter sends.".into()
+                },
+                enter_sends,
+                Rc::new(move |this, _, _| {
+                    this.update_settings(|settings| settings.enter_sends = !enter_sends)
+                }),
+                cx,
+            ),
         ),
     ];
     let mut general = general;
     let server_icons = settings.server_icons;
-    general.push(toggle(
-        "server-icons",
-        "Server icons",
-        "Shows each server's website icon, fetched over HTTPS from its address.".into(),
-        server_icons,
-        Rc::new(move |this, _, _| {
-            this.update_settings(|settings| settings.server_icons = !server_icons);
-            this.refresh_icons();
-        }),
-        cx,
+    general.push(managed(
+        this,
+        "server_icons",
+        toggle(
+            "server-icons",
+            "Server icons",
+            "Shows each server's website icon, fetched over HTTPS from its address.".into(),
+            server_icons,
+            Rc::new(move |this, _, _| {
+                this.update_settings(|settings| settings.server_icons = !server_icons);
+                this.refresh_icons();
+            }),
+            cx,
+        ),
     ));
     let notifications = settings.notifications;
-    general.push(toggle(
+    general.push(managed(this, "notifications", toggle(
         "notifications",
         "Desktop notifications",
         if cfg!(target_os = "linux") {
@@ -903,9 +980,9 @@ pub fn dialog(
             this.update_settings(|settings| settings.notifications = !notifications)
         }),
         cx,
-    ));
+    )));
     let sound_effects = settings.sound_effects;
-    general.push(toggle(
+    general.push(managed(this, "sound_effects", toggle(
         "sound-effects",
         "Sound effects",
         "People joining and leaving your channel, mute and deafen, push-to-talk, messages and the connection.".into(),
@@ -914,44 +991,53 @@ pub fn dialog(
             this.update_settings(|settings| settings.sound_effects = !sound_effects)
         }),
         cx,
-    ));
+    )));
     if sound_effects {
-        general.push(labelled_slider(
+        let slider = labelled_slider(
             "sound-volume",
             ("Volume", "Sound effect volume"),
             settings.sound_volume,
             |this, value| this.update_settings(|settings| settings.sound_volume = value),
             cx,
-        ));
+        );
+        general.push(managed(this, "sound_volume", slider));
     }
     let friends = settings.friend_notifications;
-    general.push(toggle(
-        "friend-notifications",
-        "Notify when friends connect",
-        if cfg!(target_os = "linux") {
-            "When someone you added as a friend comes online while Nuschel is not in front."
-        } else {
-            "Not available on this system yet."
-        }
-        .into(),
-        friends,
-        Rc::new(move |this, _, _| {
-            this.update_settings(|settings| settings.friend_notifications = !friends)
-        }),
-        cx,
+    general.push(managed(
+        this,
+        "friend_notifications",
+        toggle(
+            "friend-notifications",
+            "Notify when friends connect",
+            if cfg!(target_os = "linux") {
+                "When someone you added as a friend comes online while Nuschel is not in front."
+            } else {
+                "Not available on this system yet."
+            }
+            .into(),
+            friends,
+            Rc::new(move |this, _, _| {
+                this.update_settings(|settings| settings.friend_notifications = !friends)
+            }),
+            cx,
+        ),
     ));
     if crate::update::supported() {
         use crate::update::UpdateState;
         let check = settings.check_updates;
-        general.push(toggle(
-            "check-updates",
-            "Check for updates",
-            "Looks for signed releases on GitHub every few hours.".into(),
-            check,
-            Rc::new(move |this, _, _| {
-                this.update_settings(|settings| settings.check_updates = !check)
-            }),
-            cx,
+        general.push(managed(
+            this,
+            "check_updates",
+            toggle(
+                "check-updates",
+                "Check for updates",
+                "Looks for signed releases on GitHub every few hours.".into(),
+                check,
+                Rc::new(move |this, _, _| {
+                    this.update_settings(|settings| settings.check_updates = !check)
+                }),
+                cx,
+            ),
         ));
         let status = match &this.update {
             UpdateState::Idle => format!("Nuschel {}", env!("CARGO_PKG_VERSION")),
@@ -993,10 +1079,10 @@ pub fn dialog(
     let force_tcp = settings.force_tcp;
     let reconnect = settings.auto_reconnect;
     let network = vec![
-        toggle("force-tcp", "Force TCP voice", "Send voice through the encrypted control connection instead of UDP. Applies on reconnect.".into(), force_tcp,
-            Rc::new(move |this, _, _| this.update_settings(|settings| settings.force_tcp = !force_tcp)), cx),
-        toggle("auto-reconnect", "Reconnect automatically", "Retry with backoff after an unexpected disconnect.".into(), reconnect,
-            Rc::new(move |this, _, _| this.update_settings(|settings| settings.auto_reconnect = !reconnect)), cx),
+        managed(this, "force_tcp", toggle("force-tcp", "Force TCP voice", "Send voice through the encrypted control connection instead of UDP. Applies on reconnect.".into(), force_tcp,
+            Rc::new(move |this, _, _| this.update_settings(|settings| settings.force_tcp = !force_tcp)), cx)),
+        managed(this, "auto_reconnect", toggle("auto-reconnect", "Reconnect automatically", "Retry with backoff after an unexpected disconnect.".into(), reconnect,
+            Rc::new(move |this, _, _| this.update_settings(|settings| settings.auto_reconnect = !reconnect)), cx)),
     ];
 
     let identity = this.profile.identity().ok();
@@ -1139,7 +1225,7 @@ fn shortcut_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
             } else {
                 binding.map_or_else(|| "Not set".into(), display)
             };
-            div()
+            let row = div()
                 .id(("shortcut", index))
                 .role(Role::Group)
                 .aria_label(format!("{name} shortcut"))
@@ -1227,7 +1313,8 @@ fn shortcut_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
                             ))
                         }),
                 )
-                .into_any_element()
+                .into_any_element();
+            managed(this, &format!("shortcuts.{}", action.id()), row)
         })
         .collect();
     if let Some((status, detail)) = shortcuts.status.clone() {
