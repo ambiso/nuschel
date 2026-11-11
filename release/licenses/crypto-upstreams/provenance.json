@@ -1,0 +1,1242 @@
+{
+  "schema_version": 1,
+  "scope": "Supplement missing upstream notice files for selected normal, non-proc-macro runtime packages only. This is not a complete audit of bundled assets, native runtimes, or distribution obligations.",
+  "packages": [
+    {
+      "name": "akd",
+      "version": "0.13.0",
+      "declared_license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/facebook/akd",
+      "revision": "43a60ccf7dfdd8f4b628186410e871192adaf65b",
+      "path_in_vcs": "akd",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "akd/43a60ccf7dfdd8f4b628186410e871192adaf65b/LICENSE-APACHE",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/facebook/akd/43a60ccf7dfdd8f4b628186410e871192adaf65b/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "local": "akd/43a60ccf7dfdd8f4b628186410e871192adaf65b/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/facebook/akd/43a60ccf7dfdd8f4b628186410e871192adaf65b/LICENSE-MIT",
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json"
+    },
+    {
+      "name": "akd_core",
+      "version": "0.13.0",
+      "declared_license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/facebook/akd",
+      "revision": "43a60ccf7dfdd8f4b628186410e871192adaf65b",
+      "path_in_vcs": "akd_core",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "akd/43a60ccf7dfdd8f4b628186410e871192adaf65b/LICENSE-APACHE",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/facebook/akd/43a60ccf7dfdd8f4b628186410e871192adaf65b/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        },
+        {
+          "local": "akd/43a60ccf7dfdd8f4b628186410e871192adaf65b/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/facebook/akd/43a60ccf7dfdd8f4b628186410e871192adaf65b/LICENSE-MIT",
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json"
+    },
+    {
+      "name": "hax-lib",
+      "version": "0.3.7",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/hacspec/hax",
+      "revision": "d8b5b3d3b666fee8943a351445d2b680105e8ea3",
+      "path_in_vcs": "hax-lib",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "hax/d8b5b3d3b666fee8943a351445d2b680105e8ea3/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/hacspec/hax/d8b5b3d3b666fee8943a351445d2b680105e8ea3/LICENSE",
+          "sha256": "9a50bad5a51e0ad726ea3a7f4b7b758e1b4d1784e6abefe1367f5bf01e972725"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json"
+    },
+    {
+      "name": "hpke-rs",
+      "version": "0.7.0",
+      "declared_license": "MPL-2.0",
+      "repository": "https://github.com/celabshq/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/protocols/hpke",
+      "status": "unresolved",
+      "files": [
+        {
+          "local": "hpke-license-evidence/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/Cargo.toml",
+          "upstream_path": "crates/protocols/hpke/Cargo.toml",
+          "url": "https://raw.githubusercontent.com/celabshq/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/Cargo.toml",
+          "sha256": "0b8bcb1d06c5aa6c86f217d28ded736237ab00d2462a138a9a64db7daef37182"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs",
+      "version": "0.8.0",
+      "declared_license": "MPL-2.0",
+      "repository": "https://github.com/celabshq/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/protocols/hpke",
+      "status": "unresolved",
+      "files": [
+        {
+          "local": "hpke-license-evidence/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/Cargo.toml",
+          "upstream_path": "crates/protocols/hpke/Cargo.toml",
+          "url": "https://raw.githubusercontent.com/celabshq/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/Cargo.toml",
+          "sha256": "aadbb66358f98bc73dc1a52876d082ee0f4b4282650d9dd06bfae78457b1d382"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs-crypto",
+      "version": "0.7.0",
+      "declared_license": "MPL-2.0",
+      "repository": "https://github.com/celabshq/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/protocols/hpke/traits",
+      "status": "unresolved",
+      "files": [
+        {
+          "local": "hpke-license-evidence/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/traits/Cargo.toml",
+          "upstream_path": "crates/protocols/hpke/traits/Cargo.toml",
+          "url": "https://raw.githubusercontent.com/celabshq/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/traits/Cargo.toml",
+          "sha256": "d0a22ee02c05e4cda97659017e42b4b28d350a543592bd83e64a5de1927c139f"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs-crypto",
+      "version": "0.8.0",
+      "declared_license": "MPL-2.0",
+      "repository": "https://github.com/celabshq/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/protocols/hpke/traits",
+      "status": "unresolved",
+      "files": [
+        {
+          "local": "hpke-license-evidence/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/traits/Cargo.toml",
+          "upstream_path": "crates/protocols/hpke/traits/Cargo.toml",
+          "url": "https://raw.githubusercontent.com/celabshq/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/traits/Cargo.toml",
+          "sha256": "bb9f75251f4961b2079762ab98cfbe68fc16e5f8f44d3e69c50e63e40883beab"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs-libcrux",
+      "version": "0.7.0",
+      "declared_license": "MPL-2.0",
+      "repository": "https://github.com/celabshq/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/protocols/hpke/libcrux_provider",
+      "status": "unresolved",
+      "files": [
+        {
+          "local": "hpke-license-evidence/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/libcrux_provider/Cargo.toml",
+          "upstream_path": "crates/protocols/hpke/libcrux_provider/Cargo.toml",
+          "url": "https://raw.githubusercontent.com/celabshq/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/crates/protocols/hpke/libcrux_provider/Cargo.toml",
+          "sha256": "20694d71a15bfb79d91f7a2aa59cb6ae837230a6492afe39dcc9f90bb327b0ea"
+        }
+      ],
+      "revision_source": "Original crates.io package .cargo_vcs_info.json; the local patched package retains the published base version",
+      "patch_note": "The local NUSCHEL-PATCH.md records dependency-only changes; no upstream source changes.",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs-libcrux",
+      "version": "0.8.0",
+      "declared_license": "MPL-2.0",
+      "repository": "https://github.com/celabshq/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/protocols/hpke/libcrux_provider",
+      "status": "unresolved",
+      "files": [
+        {
+          "local": "hpke-license-evidence/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/libcrux_provider/Cargo.toml",
+          "upstream_path": "crates/protocols/hpke/libcrux_provider/Cargo.toml",
+          "url": "https://raw.githubusercontent.com/celabshq/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/crates/protocols/hpke/libcrux_provider/Cargo.toml",
+          "sha256": "c3e45b44ba632d1816c65d02b7281dff5636021c70f3fc9959cf6edbe062e196"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "libcrux-aead",
+      "version": "0.0.10",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/primitives/aead",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-aead",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/primitives/aead",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-aes",
+      "version": "0.0.10",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/aes",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-aes",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/algorithms/aes",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-chacha20poly1305",
+      "version": "0.0.10",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/chacha20poly1305",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-chacha20poly1305",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/algorithms/chacha20poly1305",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-curve25519",
+      "version": "0.0.8",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/algorithms/curve25519",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-curve25519",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/curve25519",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-ecdh",
+      "version": "0.0.8",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "libcrux-ecdh",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-ecdh",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "libcrux-ecdh",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-ed25519",
+      "version": "0.0.10",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/ed25519",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-ed25519",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/algorithms/ed25519",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-hacl-rs",
+      "version": "0.0.5",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "451259bb704d4a9dab8cd31ac68a97e766fbd2bc",
+      "path_in_vcs": "crates/utils/hacl-rs",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/451259bb704d4a9dab8cd31ac68a97e766fbd2bc/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/451259bb704d4a9dab8cd31ac68a97e766fbd2bc/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/451259bb704d4a9dab8cd31ac68a97e766fbd2bc/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/451259bb704d4a9dab8cd31ac68a97e766fbd2bc/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-hacl-rs",
+      "version": "0.0.6",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/utils/hacl-rs",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-hkdf",
+      "version": "0.0.8",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/algorithms/hkdf",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-hkdf",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/hkdf",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-hmac",
+      "version": "0.0.8",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/algorithms/hmac",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-hmac",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/hmac",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-hmac-drbg",
+      "version": "0.0.2",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/hmac-drbg",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-intrinsics",
+      "version": "0.0.8",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/utils/intrinsics",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-intrinsics",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/utils/intrinsics",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-kem",
+      "version": "0.0.10",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "libcrux-kem",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-ml-dsa",
+      "version": "0.0.11",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "libcrux-ml-dsa",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-ml-kem",
+      "version": "0.0.11",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "libcrux-ml-kem",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-p256",
+      "version": "0.0.8",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/algorithms/p256",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-p256",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/p256",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-platform",
+      "version": "0.0.3",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "316fcd6c19c2e33bd0429e1319b6557d91038512",
+      "path_in_vcs": "crates/sys/platform",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/316fcd6c19c2e33bd0429e1319b6557d91038512/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/316fcd6c19c2e33bd0429e1319b6557d91038512/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/316fcd6c19c2e33bd0429e1319b6557d91038512/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/316fcd6c19c2e33bd0429e1319b6557d91038512/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-platform",
+      "version": "0.0.4",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/sys/platform",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-poly1305",
+      "version": "0.0.6",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "451259bb704d4a9dab8cd31ac68a97e766fbd2bc",
+      "path_in_vcs": "crates/algorithms/poly1305",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/451259bb704d4a9dab8cd31ac68a97e766fbd2bc/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/451259bb704d4a9dab8cd31ac68a97e766fbd2bc/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/451259bb704d4a9dab8cd31ac68a97e766fbd2bc/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/451259bb704d4a9dab8cd31ac68a97e766fbd2bc/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-poly1305",
+      "version": "0.0.7",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/poly1305",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-secrets",
+      "version": "0.0.6",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/utils/secrets",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-secrets",
+      "version": "0.0.7",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/utils/secrets",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-sha2",
+      "version": "0.0.8",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/algorithms/sha2",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-sha2",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/sha2",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-sha3",
+      "version": "0.0.10",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "crates/algorithms/sha3",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-sha3",
+      "version": "0.0.11",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "crates/algorithms/sha3",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-traits",
+      "version": "0.0.8",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd",
+      "path_in_vcs": "traits",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/c5fb80f37530ee9b2df9501ae5ff8cb4a973a4bd/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "libcrux-traits",
+      "version": "0.0.9",
+      "declared_license": "Apache-2.0",
+      "repository": "https://github.com/cryspen/libcrux",
+      "revision": "42d68bd49b244b09bd02626c6ffa95e54dc64f91",
+      "path_in_vcs": "traits",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE",
+          "sha256": "c517c468fc7f8d83319dd8b3743923f6891e0dfbaf7c57a874758c8f39b98564"
+        },
+        {
+          "local": "libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/cryspen/libcrux/42d68bd49b244b09bd02626c6ffa95e54dc64f91/LICENSE-MIT",
+          "sha256": "e40d41f94826514279cc7648088180e19621f7acd281dd394a0534d535da51fd"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json",
+      "note": "Exact monorepo root Apache terms and accompanying MIT notice retained. Notices from the unrelated p384 package are excluded; that package is not in this selected runtime inventory."
+    },
+    {
+      "name": "openmls",
+      "version": "0.9.2",
+      "declared_license": "MIT",
+      "repository": "https://github.com/openmls/openmls/",
+      "revision": "8a8f83b4b61fc45f28facec25e914992b3465de6",
+      "path_in_vcs": "openmls",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "openmls/8a8f83b4b61fc45f28facec25e914992b3465de6/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/openmls/openmls/8a8f83b4b61fc45f28facec25e914992b3465de6/LICENSE",
+          "sha256": "43e5e3c4b5cca67f9ea912f7e1929702a848aa765d3b3e14f25d3838a5a5565d"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json"
+    },
+    {
+      "name": "openmls_libcrux_crypto",
+      "version": "0.4.0",
+      "declared_license": "MIT",
+      "repository": "https://github.com/openmls/openmls/tree/main/openmls_libcrux_crypto",
+      "revision": "3a3e35de3feeca8f6605143c464d5452ae584d43",
+      "path_in_vcs": "libcrux_crypto",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "openmls/3a3e35de3feeca8f6605143c464d5452ae584d43/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/openmls/openmls/3a3e35de3feeca8f6605143c464d5452ae584d43/LICENSE",
+          "sha256": "43e5e3c4b5cca67f9ea912f7e1929702a848aa765d3b3e14f25d3838a5a5565d"
+        }
+      ],
+      "revision_source": "Original crates.io package .cargo_vcs_info.json; the local patched package retains the published base version",
+      "patch_note": "The local NUSCHEL-PATCH.md records dependency-only changes; no upstream source changes."
+    },
+    {
+      "name": "openmls_memory_storage",
+      "version": "0.6.0",
+      "declared_license": "MIT",
+      "repository": "https://github.com/openmls/openmls/tree/main/memory_storage",
+      "revision": "3a3e35de3feeca8f6605143c464d5452ae584d43",
+      "path_in_vcs": "memory_storage",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "openmls/3a3e35de3feeca8f6605143c464d5452ae584d43/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/openmls/openmls/3a3e35de3feeca8f6605143c464d5452ae584d43/LICENSE",
+          "sha256": "43e5e3c4b5cca67f9ea912f7e1929702a848aa765d3b3e14f25d3838a5a5565d"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json"
+    },
+    {
+      "name": "openmls_traits",
+      "version": "0.6.0",
+      "declared_license": "MIT",
+      "repository": "https://github.com/openmls/openmls/tree/main/traits",
+      "revision": "3a3e35de3feeca8f6605143c464d5452ae584d43",
+      "path_in_vcs": "traits",
+      "status": "resolved",
+      "files": [
+        {
+          "local": "openmls/3a3e35de3feeca8f6605143c464d5452ae584d43/LICENSE",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/openmls/openmls/3a3e35de3feeca8f6605143c464d5452ae584d43/LICENSE",
+          "sha256": "43e5e3c4b5cca67f9ea912f7e1929702a848aa765d3b3e14f25d3838a5a5565d"
+        }
+      ],
+      "revision_source": "Published crate .cargo_vcs_info.json"
+    }
+  ],
+  "unresolved": [
+    {
+      "name": "hpke-rs",
+      "version": "0.7.0",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs",
+      "version": "0.8.0",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs-crypto",
+      "version": "0.7.0",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs-crypto",
+      "version": "0.8.0",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs-libcrux",
+      "version": "0.7.0",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    },
+    {
+      "name": "hpke-rs-libcrux",
+      "version": "0.8.0",
+      "reason": "The published package and exact pinned Cargo.toml declare MPL-2.0, but no corresponding MPL license/notice text was found in the complete pinned repository tree. The monorepo root Apache/MIT texts are not substituted. The filtered imported HPKE history also lacks that text."
+    }
+  ]
+}
