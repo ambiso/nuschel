@@ -221,6 +221,12 @@ start until end-to-end encryption exists. Design, configuration and deviations
 from Murmur: [docs/server.md](docs/server.md). Options include `listenAddresses`,
 `settings`, `passwordFile` and `superUserPasswordFile`.
 
+With Nuschel clients the server negotiates its extension (docs/extension.md): durable
+server history that new members can read, sends that survive reconnects, read
+markers and typing. Nuschel never falls back to plain Mumble with a server that
+once offered the extension. Invite links can carry the server's certificate
+fingerprint and policy (`mumble://…?fp=sha256:…&policy=nuschel`).
+
 External PostgreSQL URLs and TLS keys come from runtime credential files, not inline
 Nix values. `openFirewall` is off by default. The service uses DynamicUser, a private
 state directory, restricted permissions and systemd hardening. See

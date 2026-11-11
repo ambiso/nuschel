@@ -465,7 +465,19 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          NixOS module made deployable (today config-only in the VM).
    - [ ] Rate limits as configurable and visible as Murmur's; the VM matrix rows:
          stock client → Nuschel server, Nuschel → Nuschel, Nuschel → stock server.
-2. **Nuschel extension** (negotiated; stock clients keep working)
+2. **Nuschel extension** (negotiated; stock clients keep working) — done
+   (2026-11-11), see docs/extension.md "Implementation notes": ALPN + hello with a
+   sticky, fail-closed client policy (and a reset), `nuschel.v1` messages, account
+   ids, conversation ids, durable idempotent sends with per-conversation seq,
+   ACL-checked history pages, `can_read`, guests without history, `since_access`
+   intervals, subscriptions, edits/deletions with tombstones, read markers, typing,
+   stock-client notices, `nuscheld --erase-user`; the desktop shows server history and
+   pending sends. Open:
+   - [ ] Desktop: direct messages as durable direct conversations; edit and delete UI
+         (events are ignored today); typing indicators; write fetched server pages
+         into the local cache.
+   - [ ] Server: per-channel and "none" retention; history rate limits per address
+         prefix; a PostgreSQL unit test (only the VM covers it).
    - [ ] Capability negotiation in the Mumble handshake (extension message range or
          `Version` fields) and a protocol version with a minimum-version policy.
    - [ ] Persistent history: server message ids, network pagination with ACL checks

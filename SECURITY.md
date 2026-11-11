@@ -83,6 +83,15 @@ lives in the storage worker, which then also holds the database credential; unde
 `nuscheld` that worker runs without bwrap, confined by the systemd unit. Secrets
 reach the service only through `LoadCredential`; the module refuses store paths.
 
+The extension (docs/extension.md): logs never contain message text or idempotency
+keys. An edited message's old text is overwritten in SQLite (`secure_delete`); in
+PostgreSQL old row versions remain until VACUUM. Erasing a user removes their
+messages on the server, not copies clients already hold. Stock clients are told
+that channels are archived, and their direct messages are not stored by default.
+Unregistered users read no history by default. The client's sticky record
+(`nuschel-policy.json`, per host and port) refuses any weaker answer from a server
+that once negotiated the extension or a capability; only an explicit reset clears it.
+
 The transfer worker (magic-wormhole file offers) is the one worker with network
 access: rendezvous and transit relay, plus only the offered file read-only. The
 peer's transit hints decide where it connects (inherent to magic-wormhole), and the
