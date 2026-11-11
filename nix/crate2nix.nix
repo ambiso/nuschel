@@ -67,6 +67,7 @@ in
     "nuschel-content-worker"
     "nuschel-media-worker"
     "nuschel-storage-worker"
+    "nuschel-transfer-worker"
     "nuscheld"
   ];
 }

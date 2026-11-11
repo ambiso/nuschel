@@ -180,7 +180,7 @@
             }")
           mkdir -p "$out/libexec/nuschel"
           mv "$out/bin/nuschel" "$out/libexec/nuschel/nuschel"
-          for worker in nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
+          for worker in nuschel-content-worker nuschel-media-worker nuschel-storage-worker nuschel-transfer-worker; do
             ln -s "../../bin/$worker" "$out/libexec/nuschel/$worker"
           done
           makeWrapper "$out/libexec/nuschel/nuschel" "$out/bin/nuschel" "''${runtimeFlags[@]}"
@@ -252,7 +252,7 @@
               "aarch64-apple-darwin"
             ];
           };
-        desktopCrates = "-p nuschel -p nuschel-content-worker -p nuschel-media-worker -p nuschel-storage-worker";
+        desktopCrates = "-p nuschel -p nuschel-content-worker -p nuschel-media-worker -p nuschel-storage-worker -p nuschel-transfer-worker";
         crossCommon = {
           version = "0.1.0";
           inherit src dummySrc;
@@ -272,7 +272,7 @@
             __CRANE_EXPORT_CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER = "${pkgs.coreutils}/bin/false";
             CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-C target-feature=+crt-static -L native=${mingw.windows.pthreads}/lib";
             postInstall = ''
-              for program in nuschel nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
+              for program in nuschel nuschel-content-worker nuschel-media-worker nuschel-storage-worker nuschel-transfer-worker; do
                 test -f "$out/bin/$program.exe"
               done
               if ${pkgs.binutils}/bin/objdump -p "$out/bin/nuschel.exe" | grep -iE 'DLL Name:.*(libgcc|libstdc|libwinpthread)'; then
@@ -331,7 +331,7 @@
           pkgs.runCommand "nuschel-macos-universal" { nativeBuildInputs = [ pkgs.llvmPackages.llvm ]; }
             ''
               mkdir -p "$out/bin"
-              for program in nuschel nuschel-content-worker nuschel-media-worker nuschel-storage-worker; do
+              for program in nuschel nuschel-content-worker nuschel-media-worker nuschel-storage-worker nuschel-transfer-worker; do
                 llvm-lipo -create ${macSlice "x86_64"}/bin/$program ${macSlice "aarch64"}/bin/$program \
                   -output "$out/bin/$program"
                 llvm-lipo "$out/bin/$program" -verify_arch x86_64 arm64

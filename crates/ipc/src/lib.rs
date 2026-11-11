@@ -141,6 +141,76 @@ pub enum MediaResponse {
     Rejected(String),
 }
 
+/// The magic-wormhole servers a transfer uses, chosen by the supervisor.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WormholeServers {
+    /// Rendezvous (mailbox) server, `ws://`.
+    pub rendezvous: String,
+    /// Transit relay, `tcp://host:port`.
+    pub relay: String,
+    /// Also try direct connections (this asks a public STUN server for the
+    /// external address and tells the peer our addresses); otherwise relay only.
+    pub direct: bool,
+}
+
+/// To the transfer worker. The first request says what it does for its whole
+/// life; `Cancel` (or closing its input) may follow at any time.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TransferRequest {
+    /// Offer the one file the supervisor exposed to this worker, under
+    /// `name`: a fresh code after every pickup, until cancelled.
+    Offer {
+        name: String,
+        servers: WormholeServers,
+    },
+    /// Receive one file of at most `max_size` bytes with `code`; it comes
+    /// back as [`TransferEvent::Data`].
+    Receive {
+        code: String,
+        max_size: u64,
+        servers: WormholeServers,
+    },
+    Cancel,
+}
+
+/// From the transfer worker, all with request_id 0. `peer` numbers the
+/// pickups of one offer; a receiver's single transfer is peer 0.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TransferEvent {
+    /// A code waiting for someone to receive with it.
+    Code {
+        code: String,
+    },
+    /// Someone connected with the code. For a receiver, the sender's own
+    /// (untrusted) name for the file and its size.
+    Started {
+        peer: u32,
+        name: String,
+        size: u64,
+    },
+    Progress {
+        peer: u32,
+        done: u64,
+        total: u64,
+    },
+    /// The next part of the file being received, base64.
+    Data {
+        bytes: String,
+    },
+    Done {
+        peer: u32,
+    },
+    /// A transfer failed; `None`: waiting with a code did (a wrong code was
+    /// tried, the server went away). An offer continues with a new code.
+    Failed {
+        peer: Option<u32>,
+        reason: String,
+    },
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("worker frame exceeds {MAX_FRAME_BYTES} bytes")]

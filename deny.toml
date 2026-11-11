@@ -38,6 +38,16 @@ allow = [
   "Unicode-3.0",
   "Zlib",
 ]
+# Public-domain dedications in magic-wormhole's tree (transfer worker only):
+# its Noise transit encryption, compiled in although 0.8 does not negotiate it,
+# and its WebAssembly-only WebSocket stack.
+exceptions = [
+  { allow = ["Unlicense"], crate = "noise-protocol" },
+  { allow = ["Unlicense"], crate = "noise-rust-crypto" },
+  { allow = ["Unlicense"], crate = "ws_stream_wasm" },
+  { allow = ["Unlicense"], crate = "async_io_stream" },
+  { allow = ["Unlicense"], crate = "pharos" },
+]
 
 [bans]
 multiple-versions = "warn"
@@ -80,6 +90,9 @@ deny = [
   { name = "nuschel-content", wrappers = [
     "nuschel-content-worker",
   ], reason = "The UI consumes typed text spans over IPC" },
+  { name = "magic-wormhole", wrappers = [
+    "nuschel-transfer-worker",
+  ], reason = "Peer-to-peer file transfer talks to untrusted peers from the sandboxed transfer worker" },
 ]
 
 [sources]

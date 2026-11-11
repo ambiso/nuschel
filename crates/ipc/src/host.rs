@@ -356,6 +356,38 @@ pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
     Ok(sandbox.run(["--live"]))
 }
 
+/// magic-wormhole transfers: the network (rendezvous server, transit relay,
+/// peers' direct addresses) and name resolution, and when offering, the one
+/// file at `/input`, read-only. Nothing else of the filesystem: a received
+/// file streams back to the supervisor, which writes it where the user chose.
+#[cfg(target_os = "linux")]
+pub fn transfer_sandbox_command(executable: &Path, file: Option<&Path>) -> Result<Command, Error> {
+    let mut sandbox = Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?;
+    let command = &mut sandbox.0;
+    command.arg("--share-net");
+    for name in [
+        "/etc/resolv.conf",
+        "/etc/hosts",
+        "/etc/nsswitch.conf",
+        "/etc/gai.conf",
+    ] {
+        if Path::new(name).exists() {
+            command.args(["--ro-bind", name, name]);
+        }
+    }
+    let arguments: &[&str] = match file {
+        Some(file) => {
+            command
+                .arg("--ro-bind")
+                .arg(file.canonicalize()?)
+                .arg("/input");
+            &["--file", "/input"]
+        }
+        None => &[],
+    };
+    Ok(sandbox.run(arguments))
+}
+
 #[cfg(target_os = "linux")]
 fn content_sandbox(
     executable: &Path,
@@ -450,6 +482,18 @@ mod seatbelt {
 (deny file-read* (subpath (param "HOME")))
 (allow file-read* (subpath (param "AUDIO_PREFERENCES")) (subpath (param "PREFERENCES")))
 "#;
+
+    /// Network and name resolution (mDNSResponder), and only the offered
+    /// `FILE` (`/dev/null` when receiving) to read.
+    pub const TRANSFER: &str = r#"(version 1)
+(deny default)
+(import "system.sb")
+(allow process-exec (literal (param "WORKER")))
+(allow file-read* (literal (param "WORKER")) (literal (param "FILE")))
+(allow system-socket)
+(allow network-bind network-inbound network-outbound)
+(allow mach-lookup (global-name "com.apple.dnssd.service"))
+"#;
 }
 
 #[cfg(target_os = "macos")]
@@ -509,6 +553,19 @@ pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
     Ok(command)
 }
 
+#[cfg(target_os = "macos")]
+pub fn transfer_sandbox_command(executable: &Path, file: Option<&Path>) -> Result<Command, Error> {
+    let file = match file {
+        Some(file) => file.canonicalize()?,
+        None => "/dev/null".into(),
+    };
+    let mut command = sandbox_exec(seatbelt::TRANSFER, executable, &[("FILE", &file)])?;
+    if file != Path::new("/dev/null") {
+        command.arg("--file").arg(&file);
+    }
+    Ok(command)
+}
+
 /// Windows: no OS sandbox yet. Workers run without the user's environment and
 /// without a console window, inside a kill-on-close job object (see
 /// [`contain`]). AppContainer or restricted-token confinement needs unsafe
@@ -551,6 +608,15 @@ pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
     Ok(command)
 }
 
+#[cfg(windows)]
+pub fn transfer_sandbox_command(executable: &Path, file: Option<&Path>) -> Result<Command, Error> {
+    let mut command = windows_worker(executable);
+    if let Some(file) = file {
+        command.arg("--file").arg(file);
+    }
+    Ok(command)
+}
+
 #[cfg(test)]
 mod tests {
     use super::seatbelt;
@@ -572,7 +638,12 @@ mod tests {
 
     #[test]
     fn seatbelt_profiles_are_well_formed_and_restrictive() {
-        for profile in [seatbelt::CONTENT, seatbelt::STORAGE, seatbelt::MEDIA] {
+        for profile in [
+            seatbelt::CONTENT,
+            seatbelt::STORAGE,
+            seatbelt::MEDIA,
+            seatbelt::TRANSFER,
+        ] {
             assert!(profile.starts_with("(version 1)"));
             assert!(balanced(profile), "{profile}");
             assert!(profile.contains(r#"(allow process-exec (literal (param "WORKER")))"#));
@@ -586,6 +657,8 @@ mod tests {
         }
         assert!(seatbelt::MEDIA.contains("(deny network*)"));
         assert!(seatbelt::MEDIA.contains("(deny file-write*)"));
+        assert!(seatbelt::TRANSFER.contains("(deny default)"));
+        assert!(!seatbelt::TRANSFER.contains("file-write"));
     }
 
     #[cfg(target_os = "linux")]
@@ -600,6 +673,9 @@ mod tests {
         let storage = super::storage_sandbox_command(&executable, &std::env::temp_dir());
         let storage = arguments(storage.unwrap());
         let media = arguments(super::media_sandbox_command(&executable).unwrap());
+        let offer = super::transfer_sandbox_command(&executable, Some(&executable));
+        let offer = arguments(offer.unwrap());
+        let receive = arguments(super::transfer_sandbox_command(&executable, None).unwrap());
         assert_eq!(content[..3], ["--as=536870912", "--cpu=7", "--"]);
         assert_eq!(storage[..2], ["--as=1073741824", "--"]);
         assert_eq!(media[..2], ["--as=1073741824", "--"]);
@@ -610,6 +686,8 @@ mod tests {
                 &["/worker", "--database", "/data/history.sqlite3"],
             ),
             (&media, &["/worker", "--live"]),
+            (&offer, &["/worker", "--file", "/input"]),
+            (&receive, &["/worker"]),
         ] {
             let end = command.iter().rposition(|a| a == "--").unwrap();
             assert_eq!(&command[end + 1..], worker);
@@ -620,7 +698,14 @@ mod tests {
             }
             // Variables are set after the environment is cleared.
             assert!(position("--setenv").is_none_or(|set| set > position("--clearenv").unwrap()));
+            // Only transfers keep the network namespace.
+            let network = std::ptr::eq(command, &offer) || std::ptr::eq(command, &receive);
+            assert_eq!(position("--share-net").is_some(), network, "{options:?}");
         }
+        // The offered file is the only path bound from outside the system.
+        let input = offer.iter().position(|a| a == "/input").unwrap();
+        assert_eq!(offer[input - 2], "--ro-bind");
+        assert!(!receive.iter().any(|a| a == "/input"));
     }
 
     /// Runs only on macOS: the profiles must actually load and confine.

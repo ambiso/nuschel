@@ -1,0 +1,20 @@
+[package]
+name = "nuschel-transfer-worker"
+description = "Isolated magic-wormhole file transfer process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-executor = "1.13"
+async-fs = "2.0"
+async-io = "2.2"
+base64 = "0.22"
+futures = "0.3.12"
+magic-wormhole = { version = "0.8.1", default-features = false, features = ["transfer"] }
+nuschel-ipc.workspace = true
+
+[lints]
+workspace = true

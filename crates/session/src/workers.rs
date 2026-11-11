@@ -4,7 +4,7 @@ use crate::Error;
 use nuschel_core::{ChatMessage, HistoryPage};
 use nuschel_ipc::{
     Envelope, LiveMediaEvent, LiveMediaRequest, MAX_FRAME_BYTES, PROTOCOL_VERSION, StorageRequest,
-    StorageResponse, write_frame,
+    StorageResponse, TransferEvent, TransferRequest, write_frame,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
@@ -197,6 +197,74 @@ impl Media {
     }
 }
 impl Drop for Media {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// One magic-wormhole offer or download in its own sandboxed worker. An offer
+/// exposes only `file`, read-only; a download gets no file at all. Dropping it
+/// kills the worker.
+pub struct Transfer {
+    pub commands: mpsc::Sender<TransferRequest>,
+    pub events: mpsc::Receiver<TransferEvent>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl Transfer {
+    pub fn start(file: Option<&Path>) -> Result<Self, Error> {
+        let executable = sibling("nuschel-transfer-worker")?;
+        let mut command = nuschel_ipc::host::transfer_sandbox_command(&executable, file)
+            .map_err(|e| Error::Worker(e.to_string()))?;
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()?;
+        let containment =
+            nuschel_ipc::host::contain(&child).map_err(|e| Error::Worker(e.to_string()))?;
+        let (Some(mut input), Some(mut output)) = (child.stdin.take(), child.stdout.take()) else {
+            return Err(Error::Worker("transfer worker pipes missing".into()));
+        };
+        let (commands, mut requests) = mpsc::channel(4);
+        // Few events in flight: a slow disk slows the worker, and the sender with it.
+        let (events_tx, events) = mpsc::channel(8);
+        let task = tokio::spawn(async move {
+            let _containment = containment;
+            let mut reader = tokio::spawn(async move {
+                while let Ok(frame) = receive::<TransferEvent>(&mut output).await {
+                    if events_tx.send(frame.payload).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut exited = false;
+            loop {
+                tokio::select! {
+                    _ = &mut reader => { exited = true; break },
+                    request = requests.recv() => {
+                        let Some(request) = request else { break };
+                        if send(&mut input, &Envelope::new(1, request)).await.is_err() {
+                            break;
+                        }
+                    },
+                }
+            }
+            // A cancelled worker gets a moment to say goodbye to its peers.
+            drop(input);
+            if !exited && timeout(Duration::from_secs(2), &mut reader).await.is_err() {
+                reader.abort();
+            }
+            let _ = child.kill().await;
+        });
+        Ok(Self {
+            commands,
+            events,
+            task,
+        })
+    }
+}
+impl Drop for Transfer {
     fn drop(&mut self) {
         self.task.abort();
     }
