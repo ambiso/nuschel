@@ -52,7 +52,10 @@ worker to fit the server's limit and sent the way stock Mumble sends it), and Ct
 or Ctrl+; opens an emoji picker. Volume mixers name each stream (microphone, voice
 chat, echo reference). Search finds messages saved on this device. History and
 cached channel trees survive restarts, including offline browsing. Controls and
-text fields are exposed to screen readers (AT-SPI on Linux is tested).
+text fields are exposed to screen readers (AT-SPI on Linux is tested), and screen
+readers reach the whole loaded conversation: the timeline is one Tab stop, walked with
+↑/↓, Page Up/Down and Home/End (Home loads older history); Enter or Space expands a
+long message or a collapsed run of joins and leaves.
 
 Linux is covered by integration tests in NixOS VMs. Windows and macOS packages are
 cross-built from Linux (`.#windows`, `.#macos-app`, `.#macos-universal`,

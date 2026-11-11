@@ -125,8 +125,17 @@ Later (reported):
       while typing; GNOME keeps its own trigger after re-recording (needs portal v2
       for "change in desktop settings"); X11 backend; KDE untested; optional actions
       (focus window, next server, whisper).
-- [ ] `tests/accessibility.py --gnome-shell` is flaky on main (the "Disconnect" button
-      is sometimes missing when the tree is read).
+- [ ] `tests/accessibility.py --gnome-shell` is flaky on main: whole subtrees (the
+      "Disconnect" button, groups of on-screen messages) are sometimes missing once the
+      app goes idle; root cause in GPUI or AccessKit not found.
+- [ ] Orca's structural navigation by list item ("No more list items") needs AT-SPI
+      Collection support in AccessKit (upstream).
+- [ ] Links inside messages cannot be activated from the keyboard; typing while the
+      timeline has focus does not go to the composer.
+- [ ] An optional Orca step in `tests/accessibility.py` (Orca 51 has a D-Bus test
+      interface; a probe exists in the 2026-11-11 session's scratchpad).
+- [ ] With a screen reader, 1000 loaded messages cost about 4–5 ms per frame (labels
+      plus AccessKit work); still 60 fps.
 - [x] Friends and local nicknames by certificate hash (heart marker, nickname shown
       everywhere with the real name in tooltips, friends' presence server-wide,
       optional "friend connected" notification).
@@ -142,8 +151,10 @@ Later (reported):
       AA); Ctrl+scroll / pinch zoom; IME placement at zoom ≠ 100 % untested.
 - [x] Smooth resizing: only messages near the viewport are laid out (1000-message
       resize: 113 ms → 7 ms per frame), full frame rate during drag-resizes.
-- [ ] Off-screen messages are missing from the accessibility tree (virtualised
-      timeline); the channel tree is now the largest per-frame cost (~2.4 ms for 80
+- [x] Off-screen messages are in the accessibility tree again (2026-11-11): every
+      entry is a list item, off-screen ones as label-only 1×1 px elements with the same
+      id, only while a screen reader listens.
+- [ ] The channel tree is now the largest per-frame cost (~2.4 ms for 80
       rows); report upstream: wgpu/Mesa capability queries on every reconfigure, and
       GPUI's 30 fps cap for windows without focus during compositor grabs.
 - [ ] Proper Windows sandboxing for the workers (AppContainer or a restricted
@@ -211,8 +222,9 @@ From the timeline and icon work:
 
 - [ ] Memory while scrolled far up is unbounded and every loaded message renders each
       frame: a virtualised list, or paging towards newer messages.
-- [ ] A keyboard and screen-reader way to load older history; keyboard scrolling of
-      the timeline.
+- [x] Keyboard and screen-reader navigation of the timeline (2026-11-11): one Tab
+      stop, ↑/↓, Page Up/Down, Home/End (Home loads older history), Enter/Space
+      expands; AT-SPI ScrollTo and GrabFocus on any entry.
 - [ ] The channel description shows only at the beginning of local history.
 - [ ] A screenshot scene for the 1000-message limit.
 - [ ] Installs without Nix get no desktop entry (no icon on Wayland); no icon for MSVC
