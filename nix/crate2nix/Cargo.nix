@@ -20271,7 +20271,7 @@ rec {
         crateName = "magic-wormhole";
         version = "0.8.1";
         edition = "2024";
-        sha256 = "038r54rqki5cqjx8hhnsckqlx5lm99yvj79cp08qphlmggr8vx3p";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/magic-wormhole; };
         libName = "magic_wormhole";
         authors = [
           "Fina Wilke <code@felinira.net>"
@@ -23093,6 +23093,10 @@ rec {
             name = "openmls_traits";
             packageId = "openmls_traits";
             features = [ "draft-ietf-mls-pq-ciphersuites" ];
+          }
+          {
+            name = "rayon";
+            packageId = "rayon";
           }
           {
             name = "thiserror";
