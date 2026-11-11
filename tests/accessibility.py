@@ -23,7 +23,8 @@ Orca would and checks that:
   timeline lays out only what is near it); ScrollTo and GrabFocus through
   AT-SPI bring such items into view; with --gnome-shell, Shift+Tab from the
   composer lands on the newest message and the arrow keys and Home walk to
-  the oldest.
+  the oldest; Tab walks the newest message's links, each announced with its
+  address, and a letter typed in the timeline goes to the composer.
 
 Uses busctl for D-Bus calls, so no Python bindings are needed.
 """
@@ -334,7 +335,11 @@ class AccessibilityTest:
         timeline = self.find(snapshot(nuschel), "list", "Messages in #Development")
         for n in range(1, HISTORY + 1):
             # Every fifth is two lines, so the rows differ in height.
-            peer.send(kind="text", channel=2, body=f"History message {n}" + ("\nwith a second line" * (n % 5 == 0)))
+            body = f"History message {n}" + ("\nwith a second line" * (n % 5 == 0))
+            if n == HISTORY:
+                # The newest has two links, which the keyboard reaches with Tab.
+                body += " see https://example.org/first and https://example.org/second"
+            peer.send(kind="text", channel=2, body=body)
             time.sleep(0.01)
         eventually(lambda: f"History message {HISTORY}" in timeline.children()[-1].name,
                    "the long conversation did not arrive", timeout=60)
@@ -392,6 +397,29 @@ class AccessibilityTest:
             focus_on(newest, "End")
             print("Keyboard: Shift+Tab reached the newest message, Up the one before, Home the welcome, "
                   "Down the oldest, each scrolled into view.", flush=True)
+            # Tab walks the message's links, announced with where they lead;
+            # a letter goes to the composer.
+            assert ", 2 links" in newest.name, f"the links are not announced: {newest.name!r}"
+
+            def link_status(number):
+                return any(role == "status bar" and name.startswith(f"Link {number} of 2: https://example.org/")
+                           for _, _, role, name in snapshot(nuschel))
+            self.shell.key("Tab")
+            eventually(lambda: link_status(1), "Tab did not reach the first link", timeout=10)
+            self.shell.key("Tab")
+            eventually(lambda: link_status(2), "Tab did not reach the second link", timeout=10)
+            self.shell.chord("Shift_L", "Tab")
+            eventually(lambda: link_status(1), "Shift+Tab did not go back to the first link", timeout=10)
+            assert newest.focused, "the message lost focus while Tab walked its links"
+            self.shell.type("x")
+            composer = self.find(snapshot(nuschel), "entry", "Message")
+            eventually(lambda: composer.focused, "typing in the timeline did not move to the composer", timeout=10)
+            # Sent from there: the letter reached the composer.
+            self.shell.key("Return")
+            peer.wait(lambda event: event["kind"] == "text" and event["body"] == "x" and not event["outgoing"],
+                      timeout=10)
+            print("Keyboard: Tab walked the newest message's two links (announced with their address), "
+                  "and a letter typed in the timeline went to the composer.", flush=True)
         # A screen reader asking to see one (ScrollTo, as VoiceOver and
         # Narrator do on other platforms) or moving its focus there
         # (GrabFocus) brings it into view.

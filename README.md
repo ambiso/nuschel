@@ -55,7 +55,9 @@ cached channel trees survive restarts, including offline browsing. Controls and
 text fields are exposed to screen readers (AT-SPI on Linux is tested), and screen
 readers reach the whole loaded conversation: the timeline is one Tab stop, walked with
 ↑/↓, Page Up/Down and Home/End (Home loads older history); Enter or Space expands a
-long message or a collapsed run of joins and leaves.
+long message or a collapsed run of joins and leaves. Tab steps through a message's
+links (the line under the composer says where each leads) and Enter opens one, or a
+message's only link; typing while the timeline has focus goes to the composer.
 
 Linux is covered by integration tests in NixOS VMs. Windows and macOS packages are
 cross-built from Linux (`.#windows`, `.#macos-app`, `.#macos-universal`,

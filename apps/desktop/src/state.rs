@@ -888,6 +888,10 @@ pub struct Desktop {
     acknowledged: Vec<(Conversation, String)>,
     /// The message the composer edits instead of sending a new one.
     pub editing: Option<crate::editing::Editing>,
+    /// The link the keyboard is on in the timeline (timeline_keys.rs), and
+    /// the entry the keyboard is on, as last rendered.
+    pub link_focus: Option<(u64, usize)>,
+    pub timeline_current: std::cell::Cell<Option<crate::scrolling::Key>>,
     /// Typing indicators (see typing.rs): when we last said we type, where.
     pub typing_sent: Option<((String, u32), std::time::Instant)>,
     /// A timer to clear others' typing indicators is running.
@@ -987,6 +991,28 @@ impl Desktop {
         });
         let window_focus = cx.focus_handle();
         window.focus(&window_focus, cx);
+        // Tab in the timeline goes through the current message's links first
+        // (timeline_keys.rs); bindings would move focus before it sees the key.
+        let desktop = cx.weak_entity();
+        let links = cx.intercept_keystrokes({
+            move |event, window, cx| {
+                let keystroke = &event.keystroke;
+                let modifiers = &keystroke.modifiers;
+                if keystroke.key != "tab"
+                    || modifiers.control
+                    || modifiers.alt
+                    || modifiers.platform
+                {
+                    return;
+                }
+                let _ = desktop.update(cx, |this, cx| {
+                    if this.text.focus.is_focused(window) && this.timeline_tab(modifiers.shift) {
+                        cx.stop_propagation();
+                        cx.notify();
+                    }
+                });
+            }
+        });
         // A closed dialog or menu leaves nothing focused.
         let focus_lost = cx.on_focus_lost(window, |this: &mut Self, window, cx| {
             let target = window
@@ -1097,6 +1123,8 @@ impl Desktop {
             server_writes: ServerWrites::default(),
             sending: None,
             editing: None,
+            link_focus: None,
+            timeline_current: Default::default(),
             typing_sent: None,
             typing_timer: false,
             direct_requests: BTreeMap::new(),
@@ -1109,7 +1137,7 @@ impl Desktop {
             attachment_ids: 0,
             dragged_files: Default::default(),
             outgoing: std::collections::VecDeque::new(),
-            _subscriptions: vec![subscription, activation, focus_lost],
+            _subscriptions: vec![subscription, activation, focus_lost, links],
             _receive: receive,
             ptt_wake,
             _ptt_poll: ptt_poll,

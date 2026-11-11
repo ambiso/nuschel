@@ -132,8 +132,10 @@ Later (reported):
       app goes idle; root cause in GPUI or AccessKit not found.
 - [ ] Orca's structural navigation by list item ("No more list items") needs AT-SPI
       Collection support in AccessKit (upstream).
-- [ ] Links inside messages cannot be activated from the keyboard; typing while the
-      timeline has focus does not go to the composer.
+- [x] Links inside messages from the keyboard: Tab walks the current message's links
+      (the composer's footer line names each and where it leads, as a polite status),
+      Enter opens it, or a message's only link, as a click would; Space still expands.
+      A printable key in the timeline goes to the composer and is typed there.
 - [ ] An optional Orca step in `tests/accessibility.py` (Orca 51 has a D-Bus test
       interface; a probe exists in the 2026-11-11 session's scratchpad).
 - [ ] With a screen reader, 1000 loaded messages cost about 4–5 ms per frame (labels

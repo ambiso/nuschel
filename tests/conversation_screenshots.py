@@ -17,6 +17,9 @@ Checks along the way (each scene is also a screenshot to look at):
 - Ada's direct messages from while Andi was offline wait for him: the direct
   conversation is listed unread, opens with the server's history and takes
   his reply as a stored message;
+- the keyboard reaches a link in a message (Tab), Enter opens it as a click
+  would (an unsaved server's form first), and a letter typed in the timeline
+  goes to the composer;
 - the desktop's local history keeps what the server's pages brought, by seq:
   the edited text, the tombstone without text, and the direct messages.
 """
@@ -261,6 +264,32 @@ def main():
             assert bytes(reply["target"]["id"]).hex() == direct and reply["seq"], reply
             time.sleep(1.0)
             shot("conversation-08-direct-reply")
+
+            # The keyboard reaches links: Shift+Tab to the newest message, Tab
+            # to its link (named under the timeline), Enter opens it as a
+            # click would: a server that is not saved opens the form first.
+            ada.tell(direct, "Join us there: mumble://voice.example.invalid/Lobby")
+            time.sleep(1.0)
+            click(*composer)
+            # Back past the paperclip to the timeline, on its newest message.
+            for _ in range(2):
+                shell.chord("Shift_L", "Tab")
+                time.sleep(0.3)
+            shell.key("Tab")
+            time.sleep(0.5)
+            shot("conversation-09-keyboard-link")
+            shell.key("Return")
+            time.sleep(1.0)
+            shot("conversation-10-link-confirm")
+            shell.key("Escape")
+            time.sleep(0.5)
+            # A letter typed in the timeline goes to the composer.
+            for _ in range(2):
+                shell.chord("Shift_L", "Tab")
+                time.sleep(0.3)
+            shell.type("Sounds good")
+            shell.key("Return")
+            ada.client.wait(lambda e: e["kind"] == "text" and e["body"] == "Sounds good", timeout=10)
 
             # What the pages brought is in local history, by seq.
             database = next(profile.rglob("history.sqlite3"))

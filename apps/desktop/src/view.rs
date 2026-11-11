@@ -1357,6 +1357,7 @@ impl Desktop {
             return false;
         };
         self.anchor.set_cursor(keys[to]);
+        self.focus_link(None);
         if to + 1 == keys.len() {
             self.jump_to_latest();
         } else {
@@ -1630,6 +1631,8 @@ fn conversation(
             }
         });
     let ring = this.text.focus.is_focused(window) && window.last_input_was_keyboard();
+    // For the keyboard outside rendering: Tab through its links, Enter.
+    this.timeline_current.set(keys.get(current).copied());
     // Screen readers get every entry by its label (see `Unseen` for those
     // not laid out); authors are looked up once a frame.
     let a11y = window.is_a11y_active();
@@ -1998,18 +2001,28 @@ fn conversation(
                                 format!("Messages with {}", channel.name)
                             })
                             .track_focus(&this.text.focus)
-                            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                                let keystroke = &event.keystroke;
-                                if keystroke.key == "c"
-                                    && keystroke.modifiers.secondary(cx)
-                                    && this.copy_selection(cx)
-                                    || this
-                                        .timeline_key(&keys, &heights, current, keystroke, viewport)
-                                {
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }
-                            }))
+                            .on_key_down(cx.listener(
+                                move |this, event: &KeyDownEvent, window, cx| {
+                                    let keystroke = &event.keystroke;
+                                    // Enter opens the link the keyboard is on, or
+                                    // the message's only one (timeline_keys.rs).
+                                    let link = keystroke.key == "enter"
+                                        && !keystroke.modifiers.modified()
+                                        && this.open_keyboard_link(window, cx);
+                                    if link
+                                        || keystroke.key == "c"
+                                            && keystroke.modifiers.secondary(cx)
+                                            && this.copy_selection(cx)
+                                        || this.timeline_key(
+                                            &keys, &heights, current, keystroke, viewport,
+                                        )
+                                        || this.type_into_composer(keystroke, window, cx)
+                                    {
+                                        cx.stop_propagation();
+                                        cx.notify();
+                                    }
+                                },
+                            ))
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
@@ -2033,7 +2046,7 @@ fn conversation(
                     .when_some(jump_pill(this, channel, cx), |view, pill| view.child(pill)),
             ),
         })
-        .child(composer(this, server, channel, cx))
+        .child(composer(this, server, channel, window, cx))
         .child(file_drop(this, cx))
         .into_any_element()
 }
@@ -2417,6 +2430,12 @@ fn entry_label(
                 count => text.push_str(&format!(" ({count} images)")),
             }
             let status = message.status.map(|status| format!(", {status}"));
+            // Tab reaches them (timeline_keys.rs).
+            match crate::timeline_keys::message_links(message).len() {
+                0 => {}
+                1 => text.push_str(", 1 link"),
+                count => text.push_str(&format!(", {count} links")),
+            }
             let edited = if message.edited_ms.is_some() {
                 ", edited"
             } else {
@@ -2945,13 +2964,20 @@ fn composer(
     this: &Desktop,
     server: &ServerView,
     channel: &crate::state::ChannelView,
+    window: &Window,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let channel_name = channel.name.clone();
-    // Who is typing here takes the place of the composer's target, so the
-    // line is always there and nothing moves when it changes.
-    let typing =
-        crate::typing::typing_line(server, channel, &this.settings, std::time::Instant::now());
+    // The link the keyboard is on in the timeline (where it really leads),
+    // or who is typing here, takes the place of the composer's target: the
+    // line is always there, so nothing moves when it changes.
+    let link = this
+        .link_status()
+        .filter(|_| this.text.focus.is_focused(window));
+    let linked = link.is_some();
+    let typing = link.or_else(|| {
+        crate::typing::typing_line(server, channel, &this.settings, std::time::Instant::now())
+    });
     let note = this
         .attach_note
         .as_ref()
@@ -3134,7 +3160,7 @@ fn composer(
                             .min_w_0()
                             .truncate()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(color(TEXT_MUTED))
+                            .text_color(color(if linked { ACCENT_HOVER } else { TEXT_MUTED }))
                             .child(text!(typing).with_id("typing-label"))
                             .into_any_element(),
                         None => div()

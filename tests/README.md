@@ -37,7 +37,13 @@ all protocol traffic.
 Development aids outside the VM: `screenshots.py` (scenes under a private headless
 GNOME Shell on the real GPU; it never touches the user's session) and
 `accessibility.py --gnome-shell` (the same check with Nuschel's own window controls,
-and the timeline walked with the keyboard: Shift+Tab, arrows, Home and End).
+and the timeline walked with the keyboard: Shift+Tab, arrows, Home and End, Tab through
+a message's links, a letter typed into the composer). Against a loopback `nuscheld`:
+`with_local_nuscheld.py <binaries> nuschel_conversations.py <binaries> --port PORT`
+(edits, deletions and their authorisation, typing, direct conversations, with
+`nuschel-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,
+the typing line, a direct conversation from server history, keyboard links, and the
+local cache it leaves, in a private headless GNOME Shell).
 
 `windows_vm.py` installs Windows 11 Enterprise (evaluation ISO from Microsoft)
 unattended into a KVM guest with two vCPUs and drives it through a PowerShell agent

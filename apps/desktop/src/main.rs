@@ -35,6 +35,7 @@ mod shortcuts;
 mod sounds;
 mod state;
 mod theme;
+mod timeline_keys;
 mod transfer;
 mod typing;
 mod update;
