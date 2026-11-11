@@ -50,10 +50,26 @@ def JUMP_TO_LATEST(width, height):
 # The screenshot sent into #Development, and the Lobby row.
 CHAT_IMAGE = (580, 670)
 LOBBY_ROW = (189, 233)
+# The patch's copy button, and words in the first messages: "patch:", "println",
+# "good" and the end of "Ship" in Grace's reply.
+COPY_CODE = (1240, 288)
+PATCH_WORD = (536, 254)
+PRINTLN_WORD = (478, 350)
+GOOD_WORD = (472, 450)
+SHIP_END = (464, 474)
 
 
 # GNOME Shell exports its freedesktop notification daemon but, headless, never
 # claims the bus name: claim it, so Nuschel's notifications reach the real one.
+# Ask GNOME Shell for the clipboard's text; CLIPBOARD_TEXT reads the answer.
+READ_CLIPBOARD = """
+global._nuschelClipboard = null;
+imports.gi.St.Clipboard.get_default().get_text(imports.gi.St.ClipboardType.CLIPBOARD,
+    (_, text) => { global._nuschelClipboard = text; });
+'ok'
+"""
+CLIPBOARD_TEXT = "global._nuschelClipboard"
+
 CLAIM_NOTIFICATIONS = """
 imports.gi.Gio.bus_own_name_on_connection(imports.gi.Gio.DBus.session,
     'org.freedesktop.Notifications', 0, null, null);
@@ -121,7 +137,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -229,6 +245,58 @@ def main():
                 shell.drag((origin[0] + start[0], origin[1] + start[1]), (origin[0] + end[0], origin[1] + end[1]))
             click(width // 2, 140)  # the first click after mapping can be swallowed; spend it on the timeline
             time.sleep(0.4)
+
+            def clipboard():
+                shell.eval(READ_CLIPBOARD)
+                time.sleep(0.5)
+                return shell.eval(CLIPBOARD_TEXT)
+
+            def copy_shortcut():
+                # Ctrl+C on the virtual keyboard: press Control, press and release C, release Control.
+                keyval = "imports.gi.Clutter.KEY_"
+                state = "imports.gi.Clutter.KeyState."
+                shell.eval("const k = global._nuschelKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
+                           f" k.notify_keyval(t, {keyval}Control_L, {state}PRESSED);"
+                           f" k.notify_keyval(t + 10000, {keyval}c, {state}PRESSED);"
+                           f" k.notify_keyval(t + 20000, {keyval}c, {state}RELEASED);"
+                           f" k.notify_keyval(t + 30000, {keyval}Control_L, {state}RELEASED); 'ok'")
+                time.sleep(0.4)
+
+            if want("select"):
+                # Runs first, while the patch is where the coordinates expect it.
+                click(*COPY_CODE)
+                time.sleep(0.6)
+                shot("27-code-copied")
+                copied = clipboard()
+                assert copied == 'fn main() {\n    println!("hello");\n}', copied
+                # Drag over Grace's reply: "good to me." and "Ship".
+                drag(GOOD_WORD, SHIP_END)
+                time.sleep(0.6)
+                shot("28-text-selected")
+                copy_shortcut()
+                copied = clipboard()
+                assert copied.startswith("good to me.\nShi"), copied
+                click(SHIP_END[0] + 40, SHIP_END[1] - 12, button=3)  # right-click the selected message
+                time.sleep(0.6)
+                shot("29-message-menu")
+                click(SHIP_END[0] + 80, SHIP_END[1] + 46)  # "Copy message", below "Copy"
+                time.sleep(0.4)
+                copied = clipboard()
+                assert copied == "Looks good to me.\nShip it!", copied
+                # Across a text and a code block, then a word by double click.
+                drag(PATCH_WORD, PRINTLN_WORD)
+                time.sleep(0.6)
+                shot("30-selected-into-code")
+                copy_shortcut()
+                copied = clipboard()
+                assert copied.startswith("patch:\nfn main() {\n    pr"), copied
+                click(SHIP_END[0] - 20, SHIP_END[1], count=2)
+                time.sleep(0.4)
+                copy_shortcut()
+                copied = clipboard()
+                assert copied == "Ship", copied
+                click(width // 2, 140)  # clears the selection
+                time.sleep(0.4)
 
             if want("dialog"):
                 click(59, 227)

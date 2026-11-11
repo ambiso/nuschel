@@ -5,6 +5,7 @@ use crate::{
     chrome,
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
     menus::MenuTarget,
+    selection::{BlockText, SelectionArea, TextSelection, Texts},
     state::{COLLAPSED_HEIGHT, ChannelRow, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
 };
@@ -1223,7 +1224,7 @@ fn conversation(
                 .values()
                 .find(|user| user.name == message.author),
         );
-        let row = message_row(message, position, grouped, image, cx);
+        let row = message_row(this, message, position, grouped, image, cx);
         messages.push(match message.id {
             Some(id) => anchor.row(id, row),
             None => row,
@@ -1471,6 +1472,17 @@ fn conversation(
                                 server.id, channel.id
                             )))
                             .track_scroll(&this.scroll)
+                            // Takes the keyboard while message text is selected.
+                            .track_focus(&this.text.focus)
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                let keystroke = &event.keystroke;
+                                if keystroke.key == "c"
+                                    && keystroke.modifiers.secondary(cx)
+                                    && this.copy_selection(cx)
+                                {
+                                    cx.stop_propagation();
+                                }
+                            }))
                             .flex_1()
                             .min_h_0()
                             .overflow_y_scroll()
@@ -1486,7 +1498,7 @@ fn conversation(
                                     .on_scroll(cx.listener(|this, event, window, cx| {
                                         this.smooth_scroll(false, event, window, cx)
                                     }))
-                                    .child(timeline_intro(server, channel, cx))
+                                    .child(timeline_intro(this, server, channel, cx))
                                     .children(messages),
                             ),
                     )
@@ -1500,6 +1512,7 @@ fn conversation(
 /// The top of the timeline: older history on its way, or what the
 /// conversation is and where its local history begins.
 fn timeline_intro(
+    this: &Desktop,
     server: &ServerView,
     channel: &crate::state::ChannelView,
     cx: &mut Context<Desktop>,
@@ -1583,7 +1596,7 @@ fn timeline_intro(
                         .flex_col()
                         .gap_2()
                         .text_sm()
-                        .children(document_blocks(description, cx)),
+                        .children(document_blocks(this, description, cx)),
                 )
             },
         )
@@ -1962,14 +1975,30 @@ fn banner(
 }
 
 fn message_row(
+    this: &Desktop,
     message: &crate::state::MessageView,
     index: usize,
     grouped: bool,
     image: Option<std::sync::Arc<RenderImage>>,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let serial = message.serial;
+    let selection = this
+        .text
+        .selection
+        .as_ref()
+        .filter(|selection| selection.message == serial);
+    let mut texts = Vec::new();
+    let blocks = blocks(this, &message.document, selection, &mut texts, cx);
     div()
         .id(("message", index))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                this.open_message_menu(serial, event.position);
+                cx.notify();
+            }),
+        )
         .flex()
         .gap_3()
         .px_2()
@@ -2051,14 +2080,18 @@ fn message_row(
                                 .max_h(px(COLLAPSED_HEIGHT))
                                 .overflow_hidden()
                         })
-                        .child(
+                        .child(SelectionArea::new(
+                            cx.weak_entity(),
+                            serial,
+                            selection.is_some(),
+                            texts,
                             div()
                                 .flex()
                                 .flex_col()
                                 .flex_shrink_0()
                                 .gap_2()
-                                .children(document_blocks(&message.document, cx)),
-                        )
+                                .children(blocks),
+                        ))
                         .when(clamped && message.has_more(), |content| {
                             // Fade the cut-off edge into the row background
                             // (which darkens slightly while hovered).
@@ -2324,27 +2357,36 @@ fn security_icon(security: SessionSecurity, id: usize, size: f32) -> AnyElement 
         .into_any_element()
 }
 
-pub fn document_blocks(document: &Document, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
-    let count = document.blocks.len();
+/// A document's blocks, where its text is not selectable (descriptions, comments).
+pub fn document_blocks(
+    this: &Desktop,
+    document: &Document,
+    cx: &mut Context<Desktop>,
+) -> Vec<AnyElement> {
+    blocks(this, document, None, &mut Vec::new(), cx)
+}
+
+/// A document's blocks with `selection` highlighted; their laid-out text is
+/// collected into `texts` for selecting.
+fn blocks(
+    this: &Desktop,
+    document: &Document,
+    selection: Option<&TextSelection>,
+    texts: &mut Texts,
+    cx: &mut Context<Desktop>,
+) -> Vec<AnyElement> {
     document
         .blocks
         .iter()
         .enumerate()
         .map(|(index, block)| match block {
-            // Newlines inside a block are preserved; the separator newlines next to a
-            // code fence are spacing already provided by the block layout.
-            Block::Text(source) => {
-                let mut source = source.as_str();
-                if index + 1 < count {
-                    source = source.trim_end_matches(['\n', '\r']);
-                }
-                if index > 0 {
-                    source = source.trim_start_matches(['\n', '\r']);
-                }
-                div()
-                    .id(("text", index))
-                    .child(text!(source.to_string()).with_id(("body", index)))
-                    .into_any_element()
+            Block::Text(text) => {
+                let selected =
+                    selection.and_then(|selection| selection.block_range(index, text.len()));
+                let content =
+                    BlockText::new(Some(("body", index).into()), text.clone(), &[], selected);
+                texts.push((index, text.clone(), content.layout()));
+                div().id(("text", index)).child(content).into_any_element()
             }
             Block::Image {
                 image,
@@ -2387,31 +2429,17 @@ pub fn document_blocks(document: &Document, cx: &mut Context<Desktop>) -> Vec<An
                     .child(img(image.clone()).size_full())
                     .into_any_element()
             }
-            Block::Code { language, runs } => {
-                let mut source = String::new();
-                let mut highlights = Vec::new();
-                for run in runs {
-                    let start = source.len();
-                    source.push_str(&run.text);
-                    let color = (u32::from(run.foreground[0]) << 16)
-                        | (u32::from(run.foreground[1]) << 8)
-                        | u32::from(run.foreground[2]);
-                    highlights.push((
-                        start..source.len(),
-                        HighlightStyle {
-                            color: Some(rgb(color).into()),
-                            font_weight: run.bold.then_some(FontWeight::BOLD),
-                            font_style: run.italic.then_some(FontStyle::Italic),
-                            ..Default::default()
-                        },
-                    ));
-                }
-                let trimmed = source.trim_end_matches(['\n', '\r']).len();
-                source.truncate(trimmed);
-                highlights.retain_mut(|(range, _)| {
-                    range.end = range.end.min(trimmed);
-                    range.start < range.end
-                });
+            Block::Code {
+                language,
+                text,
+                highlights,
+            } => {
+                let selected =
+                    selection.and_then(|selection| selection.block_range(index, text.len()));
+                let id = Some(("code-text", index).into());
+                let content = BlockText::new(id, text.clone(), highlights, selected);
+                texts.push((index, text.clone(), content.layout()));
+                let copied = this.text.copied.as_ref() == Some(text);
                 div()
                     .id(("code", index))
                     .rounded(px(8.))
@@ -2424,27 +2452,60 @@ pub fn document_blocks(document: &Document, cx: &mut Context<Desktop>) -> Vec<An
                     .flex_col()
                     .child(
                         div()
-                            .px_3()
-                            .py_1()
+                            .pl_3()
+                            .pr_1()
+                            .py(px(2.))
                             .border_b_1()
                             .border_color(color(BORDER))
+                            .flex()
+                            .items_center()
+                            .justify_between()
                             .text_xs()
                             .text_color(color(TEXT_FAINT))
-                            .child(
-                                text!(language.clone().unwrap_or_else(|| "code".into()))
-                                    .with_id(("language", index)),
-                            ),
+                            .child(text!(language.clone()).with_id(("language", index)))
+                            .child(copy_code_button(index, text.clone(), copied, cx)),
                     )
-                    .child(
-                        div()
-                            .id(("code-text", index))
-                            .p_3()
-                            .role(Role::Label)
-                            .aria_label(source.clone())
-                            .child(StyledText::new(source).with_highlights(highlights)),
-                    )
+                    .child(div().p_3().child(content))
                     .into_any_element()
             }
         })
         .collect()
+}
+
+/// The small button in a code block's header; a check shows for a moment
+/// after copying.
+fn copy_code_button(
+    index: usize,
+    code: SharedString,
+    copied: bool,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let key = code.clone();
+    div()
+        .id(("copy-code", index))
+        .role(Role::Button)
+        .aria_label("Copy code")
+        .tab_index(0)
+        .cursor_pointer()
+        .size(px(22.))
+        .flex_shrink_0()
+        .rounded(px(5.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .hover(|style| style.bg(color(SELECTED)))
+        .tooltip(|_, cx| cx.new(|_| Tooltip("Copy code".into())).into())
+        .on_click(cx.listener(move |this, _, _, cx| this.copy_code(code.clone(), cx)))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+            if activation_key(event) {
+                this.copy_code(key.clone(), cx);
+                cx.stop_propagation();
+            }
+        }))
+        .child(if copied {
+            icon("check", 14., color(SUCCESS))
+        } else {
+            icon("copy", 14., color(TEXT_FAINT))
+        })
+        .into_any_element()
 }

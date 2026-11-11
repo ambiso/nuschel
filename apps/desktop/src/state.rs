@@ -25,6 +25,8 @@ pub use crate::panels::Panel;
 
 pub struct MessageView {
     pub id: Option<i64>,
+    /// Identifies the message to the UI (its text selection) while it lives.
+    pub serial: u64,
     pub author: String,
     pub observed_at_ms: i64,
     pub time: String,
@@ -70,8 +72,10 @@ impl MessageView {
 }
 impl From<RenderedMessage> for MessageView {
     fn from(message: RenderedMessage) -> Self {
+        static SERIALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         Self {
             id: message.id,
+            serial: SERIALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             author: message.message.author,
             observed_at_ms: message.message.observed_at_ms,
             time: local_time(message.message.observed_at_ms),
@@ -748,6 +752,8 @@ pub struct Desktop {
     pub mute_ease: Option<crate::motion::Ease>,
     pub deafen_ease: Option<crate::motion::Ease>,
     pub menu: Option<crate::menus::Menu>,
+    /// Message text: its selection, the message a menu is for, copy feedback.
+    pub text: crate::selection::TextState,
     pub prompt: Option<crate::menus::Prompt>,
     pub panel: Option<Panel>,
     pub recording_ptt: bool,
@@ -912,6 +918,7 @@ impl Desktop {
             mute_ease: None,
             deafen_ease: None,
             menu: None,
+            text: crate::selection::TextState::new(cx),
             prompt: None,
             panel: None,
             recording_ptt: false,

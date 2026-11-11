@@ -28,6 +28,8 @@ pub enum MenuTarget {
     Server,
     /// An image in a message (`Desktop::menu_image`).
     Image,
+    /// A message's text (`Desktop::text.menu`).
+    Message,
 }
 
 pub struct Menu {
@@ -109,7 +111,7 @@ impl Desktop {
             let channel = match target {
                 MenuTarget::Channel(channel) => Some(channel),
                 MenuTarget::User(session) => view.users.get(&session).map(|user| user.channel),
-                MenuTarget::Server | MenuTarget::Image => None,
+                MenuTarget::Server | MenuTarget::Image | MenuTarget::Message => None,
             };
             for channel in channel.into_iter().chain([0]) {
                 if !view.permissions.contains_key(&channel) {
@@ -351,6 +353,21 @@ impl Desktop {
                     if image.source.is_some() {
                         entries.push(item("Save image as…", "record", move |this, _, cx| {
                             this.save_image(&image, cx)
+                        }));
+                    }
+                }
+            }
+            MenuTarget::Message => {
+                if let Some(menu) = &self.text.menu {
+                    if let Some(selection) = menu.selection.clone() {
+                        entries.push(item("Copy", "copy", move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(selection.to_string()))
+                        }));
+                    }
+                    if !menu.text.is_empty() {
+                        let text = menu.text.clone();
+                        entries.push(item("Copy message", "copy", move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))
                         }));
                     }
                 }

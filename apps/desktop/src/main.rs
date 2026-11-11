@@ -19,6 +19,7 @@ mod notify;
 mod panels;
 mod preview;
 mod scrolling;
+mod selection;
 mod settings;
 mod state;
 mod theme;

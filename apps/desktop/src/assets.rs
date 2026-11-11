@@ -19,9 +19,11 @@ macro_rules! icons {
 const ICONS: &[(&str, &[u8])] = icons!(
     "alert",
     "certificate",
+    "check",
     "chevron-down",
     "chevron-right",
     "cog",
+    "copy",
     "ear",
     "hang-up",
     "hash",

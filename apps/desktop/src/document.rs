@@ -1,17 +1,22 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Worker documents converted once into renderer-ready values. Images arrive as
-//! raw RGBA from the sandboxed content worker; the UI never parses image formats.
+//! Worker documents converted once into renderer-ready values: shared text,
+//! code with its highlight ranges, and images. Images arrive as raw RGBA from
+//! the sandboxed content worker; the UI never parses image formats.
 use base64::Engine as _;
-use gpui_kit::RenderImage;
+use gpui_kit::{FontStyle, FontWeight, HighlightStyle, RenderImage, SharedString, rgb};
 use nuschel_core::{CodeRun, ContentBlock, MessageDocument};
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 #[derive(Clone)]
 pub enum Block {
-    Text(String),
+    /// Text without the newlines that separated it from a neighbouring block.
+    Text(SharedString),
     Code {
-        language: Option<String>,
-        runs: Vec<CodeRun>,
+        /// The language shown above the code ("code" when unknown).
+        language: SharedString,
+        text: SharedString,
+        /// Syntax colours by byte range, sorted and disjoint.
+        highlights: Arc<[(Range<usize>, HighlightStyle)]>,
     },
     Image {
         image: Arc<RenderImage>,
@@ -20,6 +25,16 @@ pub enum Block {
         /// The original `data:` URI (viewer and Save as), when known.
         source: Option<Arc<str>>,
     },
+}
+
+impl Block {
+    /// The text a block shows, if it shows text (code included).
+    pub fn text(&self) -> Option<&SharedString> {
+        match self {
+            Block::Text(text) | Block::Code { text, .. } => Some(text),
+            Block::Image { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -49,13 +64,15 @@ pub fn render_image(width: u32, height: u32, rgba: &str) -> Option<Arc<RenderIma
 
 impl From<MessageDocument> for Document {
     fn from(document: MessageDocument) -> Self {
+        let last = document.blocks.len().saturating_sub(1);
         Self {
             blocks: document
                 .blocks
                 .into_iter()
-                .map(|block| match block {
-                    ContentBlock::Text { text } => Block::Text(text),
-                    ContentBlock::Code { language, runs } => Block::Code { language, runs },
+                .enumerate()
+                .map(|(index, block)| match block {
+                    ContentBlock::Text { text } => Block::Text(separated(text, index, last)),
+                    ContentBlock::Code { language, runs } => code(language, runs),
                     ContentBlock::Image {
                         width,
                         height,
@@ -73,6 +90,54 @@ impl From<MessageDocument> for Document {
                 })
                 .collect(),
         }
+    }
+}
+
+/// Newlines inside a text block are kept; those next to a code fence are
+/// spacing the block layout already provides.
+fn separated(text: String, index: usize, last: usize) -> SharedString {
+    let mut trimmed = text.as_str();
+    if index < last {
+        trimmed = trimmed.trim_end_matches(['\n', '\r']);
+    }
+    if index > 0 {
+        trimmed = trimmed.trim_start_matches(['\n', '\r']);
+    }
+    if trimmed.len() == text.len() {
+        text.into()
+    } else {
+        trimmed.to_string().into()
+    }
+}
+
+/// A code block's runs joined into one text with their colours as ranges.
+fn code(language: Option<String>, runs: Vec<CodeRun>) -> Block {
+    let mut text = String::new();
+    let mut highlights = Vec::with_capacity(runs.len());
+    for run in runs {
+        let start = text.len();
+        text.push_str(&run.text);
+        let [red, green, blue, _] = run.foreground;
+        highlights.push((
+            start..text.len(),
+            HighlightStyle {
+                color: Some(rgb(u32::from_be_bytes([0, red, green, blue])).into()),
+                font_weight: run.bold.then_some(FontWeight::BOLD),
+                font_style: run.italic.then_some(FontStyle::Italic),
+                ..Default::default()
+            },
+        ));
+    }
+    let trimmed = text.trim_end_matches(['\n', '\r']).len();
+    text.truncate(trimmed);
+    highlights.retain_mut(|(range, _)| {
+        range.end = range.end.min(trimmed);
+        range.start < range.end
+    });
+    Block::Code {
+        language: language.map_or("code".into(), SharedString::from),
+        text: text.into(),
+        highlights: highlights.into(),
     }
 }
 
@@ -111,13 +176,26 @@ impl Document {
             _ => None,
         })
     }
+
+    /// What "Copy message" copies: text as text, code as its code, one block
+    /// per line; images are left out.
+    pub fn plain_text(&self) -> String {
+        let parts: Vec<&str> = self
+            .blocks
+            .iter()
+            .filter_map(Block::text)
+            .map(|text| text.as_ref())
+            .filter(|text| !text.is_empty())
+            .collect();
+        parts.join("\n")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Block, Document, render_image};
     use base64::Engine as _;
-    use nuschel_core::{ContentBlock, MessageDocument};
+    use nuschel_core::{CodeRun, ContentBlock, MessageDocument};
 
     #[test]
     fn saved_images_keep_their_bytes_and_type() {
@@ -144,5 +222,58 @@ mod tests {
             }],
         });
         assert!(matches!(document.blocks[0], Block::Text(ref text) if text == "[image]"));
+    }
+
+    #[test]
+    fn builds_blocks_once_and_copies_their_plain_text() {
+        let run = |text: &str| CodeRun {
+            text: text.into(),
+            foreground: [0x11, 0x22, 0x33, 0xff],
+            bold: true,
+            italic: false,
+        };
+        let document = Document::from(MessageDocument {
+            blocks: vec![
+                ContentBlock::Text {
+                    text: "Hi!\nThe patch:\n\n".into(),
+                },
+                ContentBlock::Code {
+                    language: None,
+                    runs: vec![run("fn main() {}"), run("\n")],
+                },
+                ContentBlock::Image {
+                    width: 1,
+                    height: 1,
+                    rgba: base64::engine::general_purpose::STANDARD.encode([0, 0, 0, 0]),
+                    source: None,
+                },
+                ContentBlock::Text {
+                    text: "\nThanks\n".into(),
+                },
+            ],
+        });
+        assert!(matches!(&document.blocks[0], Block::Text(text) if text == "Hi!\nThe patch:"));
+        let Block::Code {
+            language,
+            text,
+            highlights,
+        } = &document.blocks[1]
+        else {
+            panic!("not code");
+        };
+        assert_eq!((language.as_ref(), text.as_ref()), ("code", "fn main() {}"));
+        // The trailing newline's run is gone with the newline.
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].0, 0..12);
+        assert_eq!(
+            highlights[0].1.font_weight,
+            Some(gpui_kit::FontWeight::BOLD)
+        );
+        // Only separators next to other blocks are trimmed: the last block keeps its end.
+        assert!(matches!(&document.blocks[3], Block::Text(text) if text == "Thanks\n"));
+        assert_eq!(
+            document.plain_text(),
+            "Hi!\nThe patch:\nfn main() {}\nThanks\n"
+        );
     }
 }
