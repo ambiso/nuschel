@@ -715,11 +715,12 @@ impl History {
         with_pool!(&self.pool, |pool| {
             let mut transaction = pool.begin().await?;
             let found: Option<(i64, String)> = sqlx::query_as(
-                "SELECT id, author FROM messages WHERE server = $1 AND channel = $2 AND seq = $3 AND deleted_ms IS NULL",
+                "SELECT id, author FROM messages WHERE server = $1 AND channel = $2 AND seq = $3 AND deleted_ms IS NULL AND (edited_ms IS NULL OR edited_ms <= $4)",
             )
             .bind(server)
             .bind(channel)
             .bind(seq)
+            .bind(edited_ms)
             .fetch_optional(&mut *transaction)
             .await?;
             let Some((id, author)) = found else {
@@ -1812,6 +1813,9 @@ mod tests {
         assert!(history.edit("nuschel", "3", 2, "edited words", 650).await?);
         assert!(search("message 2").await?.is_empty());
         assert_eq!(search("edited").await?, [stored[1]]);
+        // An older edit arriving late changes nothing.
+        assert!(!history.edit("nuschel", "3", 2, "older words", 600).await?);
+        assert!(search("older").await?.is_empty());
         // A late copy from before the edit does not undo it; a newer one wins.
         history.store_server(&[record(2, 200, "message 2")]).await?;
         let entry = |page: HistoryPage, seq| page.messages.into_iter().find(|e| e.seq == Some(seq));

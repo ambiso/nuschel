@@ -2010,16 +2010,23 @@ impl State {
                 }
                 message.session.push(id);
             }
-            // Only through the extension (`send_chat`).
-            TextTarget::DirectConversation(_) => {
-                return emit(
-                    events,
-                    SessionEvent::Notice(
-                        "This direct conversation is not available on this connection.".into(),
-                    ),
-                )
-                .await;
-            }
+            // What the extension does not carry (images, more than 64 KiB)
+            // goes the stock way, to the other account's session while it
+            // is online; our timeline shows it in the conversation.
+            TextTarget::DirectConversation(id) => match self.direct_peer(&id) {
+                Some(peer) => message.session.push(peer.session),
+                None => {
+                    return emit(
+                        events,
+                        SessionEvent::Notice(
+                            "Images and messages over 64 KiB reach someone in a direct \
+                             conversation only while they are online."
+                                .into(),
+                        ),
+                    )
+                    .await;
+                }
+            },
         }
         self.queue(kind::TEXT_MESSAGE, &message);
         let author = self
@@ -2029,6 +2036,7 @@ impl State {
             .unwrap_or_default();
         let peer = match target {
             TextTarget::Direct(id) => self.users.get(&id).cloned(),
+            TextTarget::DirectConversation(id) => self.direct_peer(&id),
             _ => None,
         };
         emit(
@@ -3740,6 +3748,25 @@ mod tests {
             [nuschel::kind::LIST_DIRECT],
             "the list is asked for again"
         );
+        // An image goes the stock way to Bob's session, shown in the conversation.
+        state.outbound.clear();
+        while rx.try_recv().is_ok() {}
+        let image = "<img src=\"data:image/png;base64,iVBORw0KGgo%3D\" />".to_string();
+        let html = Command::SendHtml {
+            target: TextTarget::DirectConversation([5; 16]),
+            html: vec![image.clone()],
+            expected_peer: None,
+        };
+        state.command(html, &tx).await.unwrap();
+        let [(kind::TEXT_MESSAGE, wire)] = state.outbound.as_slice() else {
+            panic!("one text message: {:?}", state.outbound)
+        };
+        let wire = proto::TextMessage::decode(wire.as_slice()).unwrap();
+        assert_eq!((wire.message, wire.session), (image, vec![9]));
+        let Ok(SessionEvent::Text(echo)) = rx.try_recv() else {
+            panic!("no outgoing echo")
+        };
+        assert_eq!(echo.target, TextTarget::DirectConversation([5; 16]));
     }
 
     #[tokio::test]
