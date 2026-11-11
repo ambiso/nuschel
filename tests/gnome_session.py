@@ -6,6 +6,10 @@ bar, controls and resize edges exactly as on a GNOME desktop. The shell runs
 on its own Wayland socket and D-Bus session in unsafe mode, which permits
 screenshots and Clutter virtual input via `org.gnome.Shell.Eval`. Nothing is
 shown on, or read from, the user's desktop session.
+
+With `portals` (xdg-desktop-portal, xdg-desktop-portal-gnome and, for the
+global shortcuts dialog, gnome-control-center), the private bus activates the
+real desktop portal, so applications reach it exactly as on a GNOME desktop.
 """
 import ast
 import json
@@ -30,8 +34,9 @@ def find_gnome_shell():
 class GnomeSession:
     DISPLAY = "nuschel-wl"
 
-    def __init__(self, shell=None, width=1440, height=900, log=None):
+    def __init__(self, shell=None, width=1440, height=900, log=None, portals=()):
         self.shell = Path(shell) if shell else find_gnome_shell()
+        self.portals = [Path(package) for package in portals]
         self.width, self.height = width, height
         # Wayland socket paths are limited to 108 bytes, so keep this short.
         self.runtime = Path(tempfile.mkdtemp(prefix="nwl-", dir=os.environ.get("NUSCHEL_WL_TMP", "/tmp")))
@@ -48,6 +53,17 @@ class GnomeSession:
         env.update(XDG_RUNTIME_DIR=str(self.runtime), XDG_CONFIG_HOME=str(self.home / "config"),
                    XDG_DATA_HOME=str(self.home / "data"), XDG_CACHE_HOME=str(self.home / "cache"),
                    XDG_STATE_HOME=str(self.home / "state"))
+        if self.portals:
+            # D-Bus finds the portal services here, and the portal its GNOME back end.
+            env["XDG_DATA_DIRS"] = ":".join([f"{package}/share" for package in self.portals]
+                                            + [env.get("XDG_DATA_DIRS", "")]).rstrip(":")
+            # Activated services draw their dialogs in this session. GTK must not ask
+            # the portal for its settings while it starts (each waits on the other),
+            # and a host that tells GLib it is sandboxed would make the portal wait
+            # on itself.
+            env.update(XDG_CURRENT_DESKTOP="GNOME", XDG_SESSION_TYPE="wayland",
+                       WAYLAND_DISPLAY=self.DISPLAY, GDK_DEBUG="no-portals")
+            env.pop("GIO_USE_PORTALS", None)
         return env
 
     def app_environment(self):
@@ -58,7 +74,7 @@ class GnomeSession:
 
     def start(self):
         bus_file = self.runtime / "bus-address"
-        command = (f"echo \"$DBUS_SESSION_BUS_ADDRESS\" > {bus_file}; exec {self.shell} --headless --wayland "
+        command = (f"echo \"$DBUS_SESSION_BUS_ADDRESS\" > {bus_file}; exec env -u WAYLAND_DISPLAY {self.shell} --headless --wayland "
                    f"--no-x11 --virtual-monitor {self.width}x{self.height} --wayland-display {self.DISPLAY} --unsafe-mode")
         self.process = subprocess.Popen(["dbus-run-session", "--", "bash", "-c", command], env=self.environment(),
                                         stdout=self.log or subprocess.DEVNULL, stderr=subprocess.STDOUT,
@@ -188,6 +204,16 @@ class GnomeSession:
                   " const C = imports.gi.Clutter, P = C.KeyState.PRESSED, R = C.KeyState.RELEASED;"
                   f" k.notify_keyval(t, C.KEY_{modifier}, P); k.notify_keyval(t + 10000, C.KEY_{keysym_name}, P);"
                   f" k.notify_keyval(t + 20000, C.KEY_{keysym_name}, R); k.notify_keyval(t + 30000, C.KEY_{modifier}, R); 'ok'")
+
+    def press(self, *keysym_names):
+        """Press keys in order and release them in reverse, e.g. press("Control_L", "Shift_L", "m")."""
+        self._pointer()
+        presses = [f"k.notify_keyval(t + {index * 10000}, C.KEY_{name}, C.KeyState.PRESSED);"
+                   for index, name in enumerate(keysym_names)]
+        releases = [f"k.notify_keyval(t + {(len(keysym_names) + index) * 10000}, C.KEY_{name}, C.KeyState.RELEASED);"
+                    for index, name in enumerate(reversed(keysym_names))]
+        self.eval("const k = global._nuschelKeyboard; const t = imports.gi.GLib.get_monotonic_time();"
+                  " const C = imports.gi.Clutter; " + " ".join(presses + releases) + " 'ok'")
 
     def type(self, text):
         self._pointer()

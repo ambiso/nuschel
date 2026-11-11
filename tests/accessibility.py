@@ -14,11 +14,14 @@ Orca would and checks that:
   "Mute";
 - with --gnome-shell (which has a clipboard): a pasted image shows in the
   composer's tray as a named list item, and its "Remove" button works through
-  the Action interface.
+  the Action interface;
+- Settings' shortcut rows name each action's Record button, and recording is
+  announced as a status that a screen reader reads out.
 
 Uses busctl for D-Bus calls, so no Python bindings are needed.
 """
 import argparse
+from itertools import takewhile
 import json
 import os
 from pathlib import Path
@@ -38,7 +41,7 @@ from mumble_client import Client, certificate_pin  # noqa: E402
 ROLES = {23: "frame", 29: "label", 43: "push button", 54: "status bar", 61: "text", 62: "toggle button",
          65: "tree", 69: "window", 75: "application", 79: "entry", 91: "tree item", 27: "image",
          40: "password text", 16: "dialog", 33: "menu", 35: "menu item", 85: "section", 99: "grouping",
-         31: "list", 32: "list item"}
+         31: "list", 32: "list item", 39: "panel"}
 INTERACTIVE = {"push button", "toggle button", "text", "entry", "password text", "tree item", "menu item"}
 # A 2×2 RGB PNG.
 PNG = (b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x02\x08\x02\0\0\0\xfd\xd4\x9as\0\0\0\x12IDATx"
@@ -206,6 +209,7 @@ class AccessibilityTest:
                        "the button did not change to Mute", timeout=10)
             print("Unmuted through the AT-SPI Action interface; the server saw it and the button became Mute.",
                   flush=True)
+            self.check_shortcuts(nuschel)
             if self.shell:
                 self.check_attachments(nuschel)
         finally:
@@ -240,6 +244,40 @@ class AccessibilityTest:
         eventually(lambda: not any(name == "Remove Pasted image 1" for _, _, _, name in snapshot(nuschel)),
                    "the image stayed after Remove", timeout=10)
         print("A pasted image showed in the tray as a named item and was removed through AT-SPI.", flush=True)
+
+    def check_shortcuts(self, nuschel):
+        self.find(snapshot(nuschel), "push button", "Settings").call("Action", "DoAction", "i", "0")
+        actions = ("Push to talk", "Toggle mute", "Toggle deafen", "Push to mute")
+
+        def rows():
+            nodes = snapshot(nuschel)
+            names = {name for _, _, _, name in nodes}
+            return nodes if all(f"Record {action} shortcut" in names for action in actions) else None
+        nodes = eventually(rows, "the shortcut rows did not appear in Settings", timeout=15)
+        self.write_tree(nodes, "settings-tree.txt")
+        for action in actions:
+            assert any(name == f"{action} shortcut" for _, _, _, name in nodes), f"no group for {action}"
+        self.find(nodes, "push button", "Record Toggle mute shortcut").call("Action", "DoAction", "i", "0")
+
+        def recording():
+            nodes = snapshot(nuschel)
+            cancel = [node for _, node, role, name in nodes
+                      if role == "push button" and name == "Cancel recording Toggle mute shortcut"]
+            # The prompt is a label inside a status, which a screen reader announces.
+            announced = any(role == "status bar" and any(
+                inner_depth > depth and name.startswith("Press the key")
+                for inner_depth, _, _, name in takewhile(lambda entry: entry[0] > depth, nodes[index + 1:]))
+                for index, (depth, _, role, _) in enumerate(nodes))
+            return cancel[0] if cancel and announced else None
+        cancel = eventually(recording, "recording a shortcut was not announced", timeout=10)
+        cancel.call("Action", "DoAction", "i", "0")
+        eventually(lambda: any(name == "Record Toggle mute shortcut" for _, _, _, name in snapshot(nuschel)),
+                   "cancelling did not restore the Record button", timeout=10)
+        self.find(snapshot(nuschel), "push button", "Done").call("Action", "DoAction", "i", "0")
+        eventually(lambda: not any(name == "Done" for _, _, _, name in snapshot(nuschel)),
+                   "Settings did not close", timeout=10)
+        print("Settings: every shortcut row has a named Record button; recording is announced as a status.",
+              flush=True)
 
     @staticmethod
     def try_call(function, *arguments):

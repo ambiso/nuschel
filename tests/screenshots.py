@@ -35,8 +35,11 @@ def SEARCH_BUTTON(width):
 
 # The voice card's warning line, in window screenshot pixels.
 CLIPPING_WARNING = (205, 728)
-# Settings: "Test echo" before the microphone test has started.
+# Settings: "Test echo" before the microphone test has started, and each
+# shortcut row's Record and Clear (push to talk, toggle mute, toggle deafen, push to mute).
 ECHO_TEST_BUTTON = (862, 225)
+RECORD_SHORTCUT = [(795, 478 + 54 * row) for row in range(4)]
+CLEAR_SHORTCUT = [(872, 478 + 54 * row) for row in range(4)]
 # The cog next to the server name, Lobby's chevron, and the channel list's right edge.
 SERVER_SETTINGS_BUTTON = (279, 86)
 LOBBY_CHEVRON = (129, 234)
@@ -159,7 +162,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,shortcuts,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
@@ -168,6 +171,10 @@ def main():
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     parser.add_argument("--wormhole-python", type=Path,
                         help="a python with magic-wormhole-mailbox-server and -transit-relay (transfer scene)")
+    parser.add_argument("--portals", type=Path, nargs="+", default=[],
+                        help="xdg-desktop-portal, xdg-desktop-portal-gnome and gnome-control-center packages: "
+                             "the shortcuts scene then binds through the real GlobalShortcuts portal")
+    parser.add_argument("--zenity", type=Path, help="zenity, for another focused window in the shortcuts scene")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     width, height = map(int, args.size.split("x"))
@@ -189,7 +196,7 @@ def main():
         wormhole = None
         offered = None
         shell = GnomeSession(args.gnome_shell, width + 160, height + 100,
-                             log=(args.output / "gnome-shell.log").open("w"))
+                             log=(args.output / "gnome-shell.log").open("w"), portals=args.portals)
         pulse = None
         try:
             shell.start()
@@ -233,6 +240,12 @@ def main():
                       "port": 1, "username": "Andi", "certificate_sha256": None, "cached_channels": []}
             (profile / "config/servers.json").write_text(json.dumps([bookmark, second]))
             (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme, "zoom": args.zoom}}))
+            if args.portals:
+                # As the package installs it: the portal finds an unsandboxed app's ID by its entry.
+                applications = shell.home / "data/applications"
+                applications.mkdir(parents=True)
+                (applications / "org.nuschel.Nuschel.desktop").write_text(
+                    f"[Desktop Entry]\nType=Application\nName=Nuschel\nExec={args.binaries / 'nuschel'} %u\n")
             env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHEL_SCREENSHOT_LOG", "nuschel=info")}
             if wormhole:
                 env |= wormhole.environment()
@@ -505,6 +518,79 @@ def main():
                 shot("05b-echo-test")
                 shell.key("Escape")
                 time.sleep(0.4)
+            if want("shortcuts"):
+                andi = next(e["user"]["session"] for e in reversed(bots[0].events)
+                            if e["kind"] == "user" and e["user"]["name"] == "Andi")
+
+                def toggle_mute(where):
+                    # Ctrl+Shift+M flips Andi's mute as the server sees it, once.
+                    muted = bots[0].users[andi]["self_muted"]
+                    shell.press("Control_L", "Shift_L", "m")
+                    eventually(lambda: bots[0].users[andi]["self_muted"] != muted,
+                               f"Toggle mute did nothing {where}", timeout=10)
+                    time.sleep(1.0)
+                    assert bots[0].users[andi]["self_muted"] != muted, f"Toggle mute acted twice {where}"
+                    print(f"Toggle mute {where}: {'unmuted' if muted else 'muted'}", flush=True)
+
+                def portal_dialog():
+                    return next((w for w in shell.windows()
+                                 if not (w["title"] or "").startswith(("Nuschel", "Another window"))), None)
+
+                def add_in_portal_dialog(name):
+                    # GNOME asks whether to add shortcuts it has not seen, proposing Nuschel's keys.
+                    dialog = eventually(portal_dialog, "GNOME did not ask to add the shortcut", timeout=20)
+                    time.sleep(1.0)
+                    print(shell.screenshot(args.output / name), dialog["title"], flush=True)
+                    shell.click(dialog["x"] + dialog["width"] - 39, dialog["y"] + 21)  # Add
+                    eventually(lambda: not portal_dialog(), "the shortcut dialog did not close", timeout=10)
+                    time.sleep(1.5)
+                click(239, 773)  # Settings
+                time.sleep(1.0)
+                shot("37-shortcuts")
+                click(*RECORD_SHORTCUT[1])  # Toggle mute
+                time.sleep(0.5)
+                shot("38-shortcut-recording")
+                shell.press("Control_L", "Shift_L", "m")
+                time.sleep(1.5)
+                if args.portals:
+                    add_in_portal_dialog("39a-portal-dialog.png")
+                shot("39-shortcut-bound")
+                shell.key("Escape")
+                time.sleep(0.5)
+                # With a system-wide binding GNOME takes the key before the window
+                # does; either way the press acts once.
+                toggle_mute("in the window")
+                toggle_mute("in the window again")
+                if args.portals and args.zenity:
+                    other = subprocess.Popen([str(args.zenity), "--entry", "--title=Another window", "--text=Type here"],
+                                             env=shell.app_environment(), stdout=subprocess.DEVNULL,
+                                             stderr=(args.output / "zenity.log").open("w"), start_new_session=True)
+                    try:
+                        eventually(lambda: shell.window("Another window"), "the other window did not appear")
+                        shell.place("Another window", 700, 300, 420, 200)
+                        time.sleep(1.0)
+                        toggle_mute("while another window is focused")
+                        print(shell.screenshot(args.output / "40-other-window.png"), flush=True)
+                        toggle_mute("while another window is focused, again")
+                        # Changed bindings bind again: GNOME asks about a new one only.
+                        shell.place("Nuschel", 40, 40, width, height)
+                        time.sleep(0.6)
+                        click(239, 773)
+                        time.sleep(1.0)
+                        click(*RECORD_SHORTCUT[2])  # Toggle deafen
+                        time.sleep(0.5)
+                        shell.press("Control_L", "Shift_L", "d")
+                        add_in_portal_dialog("41-portal-dialog-again.png")
+                        shot("42-two-shortcuts")
+                        click(*CLEAR_SHORTCUT[2])
+                        time.sleep(3.0)
+                        assert not portal_dialog(), "GNOME asked again about a shortcut it knows"
+                        shell.key("Escape")
+                        shell.place("Another window", 700, 300, 420, 200)
+                        time.sleep(1.0)
+                        toggle_mute("while another window is focused, after binding again")
+                    finally:
+                        os.killpg(other.pid, signal.SIGTERM)
             if want("server"):
                 click(*SERVER_SETTINGS_BUTTON)
                 time.sleep(1.0)
