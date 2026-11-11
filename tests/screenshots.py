@@ -292,7 +292,9 @@ def main():
             second = {"id": str(uuid.uuid4()), "name": "Friends", "host": "127.0.0.1",
                       "port": 1, "username": "Andi", "certificate_sha256": None}
             (profile / "config/servers.json").write_text(json.dumps([bookmark, second]))
-            (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme, "zoom": args.zoom}}))
+            # The web host share links point at (docs/web.md); nothing is fetched from it.
+            (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme, "zoom": args.zoom},
+                                                                      "share_web_host": "web.example.org"}))
             if "managed" in args.scenes.split(","):
                 # What Home Manager's programs.nuschel.settings and .servers write
                 # (only on request: managed controls move the other scenes' targets).
@@ -879,6 +881,14 @@ def main():
                 click(200, 233, button=3)  # Lobby
                 time.sleep(0.8)
                 shot("09-channel-menu")
+                # Copy share link: a stock server, so the channel's path and the
+                # certificate pin travel in the fragment (docs/web.md).
+                click(287, 430)
+                time.sleep(0.8)
+                shot("09b-share-link-copied")
+                copied = clipboard()
+                expected = f"https://web.example.org/join/#s=127.0.0.1:{port}&c=Lobby&fp=sha256:{pin}"
+                assert copied == expected, copied
                 shell.key("Escape")
                 time.sleep(0.4)
             if want("long"):

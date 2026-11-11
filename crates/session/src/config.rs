@@ -17,7 +17,8 @@ fn connect_on_startup() -> bool {
     true
 }
 
-/// A `mumble://` link as produced by Mumble's "Copy URL" and web server lists.
+/// A `mumble://` link as produced by Mumble's "Copy URL" and web server lists,
+/// or a Nuschel share link (`https://<web host>/join/…`, `nuschel://join/…`).
 #[derive(Clone, PartialEq, Eq)]
 pub struct MumbleUrl {
     pub host: String,
@@ -33,6 +34,9 @@ pub struct MumbleUrl {
     /// From an invite (`?policy=nuschel`): the server must speak the Nuschel
     /// protocol, from the very first connection.
     pub require_nuschel: bool,
+    /// From a share link: the server's token, resolved once connected
+    /// (`share/1`); `channel` is then only the fallback.
+    pub share_token: Option<String>,
 }
 impl std::fmt::Debug for MumbleUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,11 +48,22 @@ impl std::fmt::Debug for MumbleUrl {
             .field("channel", &self.channel)
             .field("certificate_sha256", &self.certificate_sha256)
             .field("require_nuschel", &self.require_nuschel)
+            .field(
+                "share_token",
+                &self.share_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
 impl MumbleUrl {
     pub fn parse(url: &str) -> Result<Self, String> {
+        if !url
+            .get(..9)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("mumble://"))
+            && let Ok(link) = nuschel_core::share::ShareLink::parse(url)
+        {
+            return Self::from_share(link);
+        }
         let invalid =
             || "expected mumble://[user[:password]@]host[:port][/channel/path]".to_string();
         if url.len() > 2048 {
@@ -124,6 +139,29 @@ impl MumbleUrl {
             channel,
             certificate_sha256,
             require_nuschel,
+            share_token: None,
+        })
+    }
+
+    /// A share link, checked like any link.
+    pub fn from_share(link: nuschel_core::share::ShareLink) -> Result<Self, String> {
+        ServerBookmark::new("", &link.host, link.port, "user")?;
+        if link
+            .channel
+            .iter()
+            .any(|name| name.chars().any(char::is_control))
+        {
+            return Err("the share link's channel contains control characters".into());
+        }
+        Ok(Self {
+            host: link.host,
+            port: link.port,
+            username: None,
+            password: None,
+            channel: link.channel,
+            certificate_sha256: link.certificate_sha256,
+            require_nuschel: link.require_nuschel,
+            share_token: link.token,
         })
     }
 }
@@ -265,6 +303,9 @@ pub struct ClientSettings {
     /// auditor is included unless `default_witnesses` is false; until it is
     /// deployed nothing is required.
     pub key_transparency: nuschel_ipc::crypto::KeyTransparencySettings,
+    /// The web host for share links (`web.example.org`, docs/web.md) when the
+    /// server names none; empty: the project's, if it has one.
+    pub share_web_host: String,
 }
 
 /// Light or dark, or as the desktop prefers.
@@ -355,6 +396,7 @@ impl Default for ClientSettings {
             recovery_key: Default::default(),
             e2ee_direct_messages: false,
             key_transparency: Default::default(),
+            share_web_host: String::new(),
         }
     }
 }
@@ -2775,6 +2817,34 @@ mod tests {
         ] {
             assert!(MumbleUrl::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn share_links_open_like_invites() {
+        let pin = "cd".repeat(32);
+        for link in [
+            format!(
+                "https://web.example.org/join/AAAAAAAAAAAAAAAAAAAAAA#s=Voice.Example.org:1234&c=Lobby/Dev%20Talk&fp=sha256:{pin}&policy=nuschel"
+            ),
+            format!(
+                "nuschel://join/AAAAAAAAAAAAAAAAAAAAAA#s=voice.example.org:1234&c=Lobby/Dev%20Talk&fp=sha256:{pin}&policy=nuschel"
+            ),
+        ] {
+            let url = MumbleUrl::parse(&link).unwrap();
+            assert_eq!((url.host.as_str(), url.port), ("voice.example.org", 1234));
+            assert_eq!(url.channel, ["Lobby", "Dev Talk"]);
+            assert_eq!(url.certificate_sha256.as_deref(), Some(pin.as_str()));
+            assert!(url.require_nuschel);
+            assert_eq!(url.share_token.as_deref(), Some("AAAAAAAAAAAAAAAAAAAAAA"));
+            assert_eq!(url.username, None);
+            assert!(!format!("{url:?}").contains("AAAAAAAAAAAAAAAAAAAAAA"));
+        }
+        // Without a token: a stock server, all in the fragment.
+        let url = MumbleUrl::parse("https://web.example.org/join/#s=[2001:db8::1]").unwrap();
+        assert_eq!((url.host.as_str(), url.port), ("2001:db8::1", 64738));
+        assert_eq!(url.share_token, None);
+        assert!(MumbleUrl::parse("https://web.example.org/elsewhere#s=a.b").is_err());
+        assert!(MumbleUrl::parse("nuschel://join/#c=Lobby").is_err());
     }
 
     #[test]

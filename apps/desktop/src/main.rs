@@ -57,7 +57,8 @@ use nuschel_session::config::Profile;
 struct Arguments {
     #[arg(long, global = true)]
     profile_dir: Option<PathBuf>,
-    /// Connect on startup: `mumble://[user@]host[:port][/channel/path]`.
+    /// Connect on startup: `mumble://[user@]host[:port][/channel/path]`, or a
+    /// share link (`nuschel://join/<token>#…`, `https://<web host>/join/…`).
     #[arg(value_name = "URL")]
     url: Option<String>,
     /// Started at login: open minimised.

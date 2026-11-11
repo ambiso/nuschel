@@ -178,6 +178,9 @@ pub struct ServerForm {
     /// The address the name last followed: the name tracks the address
     /// until it is changed to something else.
     last_host: String,
+    /// The link (an invite or share link without a user name) that opened
+    /// the form: its pin, channel and share token apply to the new server.
+    pub link: Option<MumbleUrl>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -607,15 +610,50 @@ impl Desktop {
             self.ptt_wake.notify_one();
         }
     }
-    /// Connect to a `mumble://` link, reusing a matching saved server (the
-    /// SDK decides); a link naming nobody for a new server opens the form.
+    /// A share link as text: on the server's web host, else the one in the
+    /// settings, else the project's; with none, the app's own `nuschel://` link.
+    pub fn share_url(
+        &self,
+        link: &nuschel_core::share::ShareLink,
+        server_host: Option<&str>,
+    ) -> String {
+        let configured = Some(self.settings.share_web_host.trim()).filter(|host| !host.is_empty());
+        match server_host
+            .or(configured)
+            .or(nuschel_core::share::PROJECT_WEB_HOST)
+        {
+            Some(host) => link.web_url(host),
+            None => link.app_url(),
+        }
+    }
+    /// Copy a channel's share link: at once, or when the server's token comes
+    /// (`Update::ShareLink`).
+    pub fn copy_share_link(&mut self, index: usize, channel: u32, cx: &mut Context<Self>) {
+        match self.client.share_link(index, channel) {
+            Ok(Some(link)) => {
+                let url = self.share_url(&link, None);
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(url));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.client.servers[index].notice = Some(format!("No share link: {error}"))
+            }
+        }
+        cx.notify();
+    }
+    /// Connect to a `mumble://` or share link, reusing a matching saved server
+    /// (the SDK decides); a link naming nobody for a new server opens the form,
+    /// and the link's pin, policy, channel and token apply to the server saved
+    /// from it.
     pub fn open_url(&mut self, url: MumbleUrl, window: &mut Window, cx: &mut Context<Self>) {
         let (host, port) = (url.host.clone(), url.port);
+        let link = url.clone();
         let index = match self.client.open_url(url, &self.profile, false) {
             Ok(Some(index)) => index,
             Ok(None) => {
                 self.open_form(None, window, cx);
-                if let Some(form) = &self.form {
+                if let Some(form) = &mut self.form {
+                    form.link = Some(link);
                     let port = port.to_string();
                     form.host
                         .update(cx, |input, cx| input.set_value(host, window, cx));
@@ -921,6 +959,7 @@ impl Desktop {
         let last_host = host.clone();
         self.form = Some(ServerForm {
             last_host,
+            link: None,
             _subscriptions: Vec::new(),
             auto_connect,
             managed,
@@ -1061,6 +1100,24 @@ impl Desktop {
         let editing = form.editing.clone();
         let password = form.password.read(cx).value().to_string();
         bookmark.auto_connect = form.auto_connect;
+        // The link that opened the form, if the address is still its own.
+        let link = form.link.clone().filter(|link| {
+            editing.is_none() && link.host == bookmark.host && link.port == bookmark.port
+        });
+        if let Some(link) = &link {
+            bookmark.certificate_sha256 = link.certificate_sha256.clone();
+            if link.require_nuschel
+                && let Err(error) = self
+                    .profile
+                    .policy()
+                    .and_then(|mut store| store.raise(&link.host, link.port, true, &[]))
+            {
+                self.error = Some(format!(
+                    "Could not save the invite's security policy: {error}"
+                ));
+                return;
+            }
+        }
         // A new or offline server connects on save; an online one reconnects
         // only when its address, name or password changed.
         let mut connect = editing.is_none();
@@ -1144,6 +1201,12 @@ impl Desktop {
             self.client.replace_server(index, bookmark);
         } else {
             self.client.add_server(bookmark);
+        }
+        if let Some(link) = link {
+            self.client.servers[index].pending_channel = link.channel;
+            if let Some(token) = link.share_token {
+                self.client.open_share_token(index, token);
+            }
         }
         self.refresh_icons();
         self.form = None;
@@ -2235,6 +2298,19 @@ impl Desktop {
                             ui.comments.insert(session, (source, document.into()));
                         }
                     }
+                }
+                Update::ShareLink {
+                    server,
+                    link,
+                    web_host,
+                    ..
+                } => {
+                    if self.client.server_index(&server).is_none() {
+                        continue;
+                    }
+                    // Copied as quietly as "Copy link"; only failures are shown.
+                    let url = self.share_url(&link, web_host.as_deref());
+                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(url));
                 }
                 Update::Avatar {
                     server,

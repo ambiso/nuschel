@@ -23,7 +23,7 @@ let
     Icon=${appId}
     Terminal=false
     Categories=Network;Chat;AudioVideo;
-    MimeType=x-scheme-handler/mumble;
+    MimeType=x-scheme-handler/mumble;x-scheme-handler/nuschel;
     Keywords=Mumble;voice;VoIP;
     StartupWMClass=${appId}
     X-GNOME-UsesNotifications=true

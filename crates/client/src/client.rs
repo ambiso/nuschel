@@ -115,6 +115,14 @@ pub enum Update {
         hash: String,
         document: MessageDocument,
     },
+    /// A share link the server issued for `channel` (asked for with
+    /// [`Client::share_link`]), and the web host its operator chose, if any.
+    ShareLink {
+        server: String,
+        channel: u32,
+        link: nuschel_core::share::ShareLink,
+        web_host: Option<String>,
+    },
 }
 
 /// A notification for something that arrived out of sight.
@@ -139,6 +147,8 @@ pub enum SendError {
     Refused,
 }
 
+mod share;
+
 struct PendingSend {
     conversation: Conversation,
     target: TextTarget,
@@ -157,6 +167,8 @@ pub struct Client {
     /// Direct conversations asked for (`OpenDirect`), by request id: the
     /// server, the peer's session, and whether to open it once known.
     direct_requests: BTreeMap<u64, (String, u32, bool)>,
+    /// Share links asked for, by request id.
+    share_requests: BTreeMap<u64, share::ShareRequest>,
     /// When we last said we type, where (the platform's monotonic ms).
     typing_sent: Option<((String, u32), u64)>,
     /// Passwords of this run's connections, until they log in.
@@ -179,6 +191,7 @@ impl Client {
             platform,
             sending: None,
             direct_requests: BTreeMap::new(),
+            share_requests: BTreeMap::new(),
             typing_sent: None,
             passwords: BTreeMap::new(),
             updates: Vec::new(),
@@ -1482,7 +1495,12 @@ impl Client {
             }
             ServerEvent::DirectList(directs) => self.directs_listed(index, directs),
             ServerEvent::DirectOpened(opened) => self.direct_opened(index, opened),
-            ServerEvent::ExtensionError(error) => self.direct_failed(index, error),
+            ServerEvent::ExtensionError(error) => {
+                if !self.share_failed(index, &error) {
+                    self.direct_failed(index, error);
+                }
+            }
+            ServerEvent::ShareLink(link) => self.share_reply(index, link),
             ServerEvent::ReadMarker(marker) => {
                 // Read on our account's other device.
                 if let Some(channel) = server.channels.iter_mut().find(|channel| {
@@ -1538,32 +1556,12 @@ impl Client {
                 server.own_session = Some(session);
                 server.expand_occupied();
                 self.passwords.remove(&server.id);
-                let path = std::mem::take(&mut server.pending_channel);
-                if !path.is_empty() {
-                    let mut current = 0;
-                    let mut found = true;
-                    for name in &path {
-                        match server.channels.iter().find(|channel| {
-                            channel.parent == Some(current)
-                                && channel.name == *name
-                                && matches!(channel.target, TextTarget::Channel(_))
-                        }) {
-                            Some(channel) => current = channel.id,
-                            None => {
-                                found = false;
-                                break;
-                            }
-                        }
-                    }
-                    if found {
-                        let _ = self.platform.request(&server.id, Request::Join(current));
-                        self.updates.push(Update::Browse {
-                            server: server.id.clone(),
-                            channel: current,
-                        });
-                    } else {
-                        server.notice = Some(format!("Channel /{} was not found.", path.join("/")));
-                    }
+                // A share link's token decides first; its path is the fallback.
+                if server.share_token.is_some() && server.has(nuschel::capability::SHARE) {
+                    self.share_connected(index);
+                } else {
+                    server.share_token = None;
+                    self.join_pending(index);
                 }
             }
             ServerEvent::Channel(update) => {
@@ -1916,6 +1914,39 @@ impl Client {
 
     /// The server would not open the conversation (the other person cannot
     /// receive text there, say): fall back to the stock path.
+    /// Join the channel a link named by its path, once the tree is known.
+    fn join_pending(&mut self, index: usize) {
+        let server = &mut self.servers[index];
+        let path = std::mem::take(&mut server.pending_channel);
+        if path.is_empty() {
+            return;
+        }
+        let mut current = 0;
+        let mut found = true;
+        for name in &path {
+            match server.channels.iter().find(|channel| {
+                channel.parent == Some(current)
+                    && channel.name == *name
+                    && matches!(channel.target, TextTarget::Channel(_))
+            }) {
+                Some(channel) => current = channel.id,
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        if found {
+            let _ = self.platform.request(&server.id, Request::Join(current));
+            self.updates.push(Update::Browse {
+                server: server.id.clone(),
+                channel: current,
+            });
+        } else {
+            server.notice = Some(format!("Channel /{} was not found.", path.join("/")));
+        }
+    }
+
     fn direct_failed(&mut self, index: usize, error: v1::Error) {
         let Some((server_id, session, open)) = self.direct_requests.remove(&error.request_id)
         else {
@@ -2364,5 +2395,234 @@ mod tests {
     fn previews_are_short_and_flat() {
         assert_eq!(preview("one\n\ntwo   three"), "one two three");
         assert!(preview(&"x".repeat(500)).ends_with('…'));
+    }
+
+    // ---- share links (docs/web.md) ----
+
+    fn share_input(id: &str, event: ServerEvent) -> Input {
+        Input::Server {
+            server: id.into(),
+            generation: 1,
+            event,
+        }
+    }
+
+    #[test]
+    fn share_links_name_the_channel_without_a_token() {
+        let (mut client, recorder, _) = connected();
+        let link = client.share_link(0, 3).unwrap().expect("at once");
+        assert_eq!(link.token, None);
+        assert_eq!(link.channel, ["Three"]);
+        assert_eq!(link.host, "localhost");
+        assert_eq!(link.certificate_sha256, Some("ab".repeat(32)));
+        assert!(!link.require_nuschel, "a stock server");
+        assert!(recorder.requests.lock().unwrap().is_empty());
+        assert!(client.share_link(0, 99).is_err());
+    }
+
+    #[test]
+    fn share_links_come_from_the_server_with_share_1() {
+        let (mut client, recorder, id) = connected();
+        client.handle(share_input(
+            &id,
+            ServerEvent::Negotiated {
+                capabilities: vec!["history/1".into(), "share/1".into()],
+                policy: None,
+            },
+        ));
+        client.handle(share_input(
+            &id,
+            ServerEvent::User(User {
+                session: 1,
+                name: "andi".into(),
+                channel: 2,
+                user_id: Some(5),
+                ..Default::default()
+            }),
+        ));
+        assert_eq!(client.share_link(0, 3).unwrap(), None);
+        let request_id = match recorder.requests.lock().unwrap().pop() {
+            Some((
+                _,
+                Request::CreateShareLink {
+                    request_id,
+                    channel: 3,
+                    ..
+                },
+            )) => request_id,
+            other => panic!("{other:?}"),
+        };
+        client.take_updates();
+        client.handle(share_input(
+            &id,
+            ServerEvent::ShareLink(v1::ShareLink {
+                request_id,
+                token: vec![7; 16],
+                channel: 3,
+                web_host: "web.example.org".into(),
+                ..Default::default()
+            }),
+        ));
+        let update = client
+            .take_updates()
+            .into_iter()
+            .find(|update| matches!(update, Update::ShareLink { .. }));
+        let Some(Update::ShareLink {
+            channel,
+            link,
+            web_host,
+            ..
+        }) = update
+        else {
+            panic!("no share link");
+        };
+        assert_eq!(channel, 3);
+        assert_eq!(web_host.as_deref(), Some("web.example.org"));
+        assert_eq!(
+            link.token.as_deref(),
+            Some(nuschel_core::share::encode_token(&[7; 16]).as_str())
+        );
+        assert!(link.require_nuschel);
+        // An answer nobody asked for is ignored.
+        client.handle(share_input(
+            &id,
+            ServerEvent::ShareLink(v1::ShareLink {
+                request_id,
+                token: vec![7; 16],
+                ..Default::default()
+            }),
+        ));
+        assert!(client.take_updates().is_empty());
+    }
+
+    #[test]
+    fn opening_a_share_link_resolves_its_token_then_joins() {
+        let recorder = Arc::new(Recorder::default());
+        let bookmark = ServerBookmark::new("Test", "localhost", 64738, "andi").unwrap();
+        let id = bookmark.id.clone();
+        let mut client = Client::new(
+            Box::new(recorder.clone()),
+            vec![bookmark],
+            Preferences::default(),
+        );
+        let token = nuschel_core::share::encode_token(&[9; 16]);
+        client.open_share_token(0, token);
+        client.servers[0].pending_channel = vec!["Two".into()];
+        client.connect(0, None, false);
+        client.handle(share_input(
+            &id,
+            ServerEvent::Negotiated {
+                capabilities: vec!["share/1".into()],
+                policy: None,
+            },
+        ));
+        client.handle(share_input(
+            &id,
+            ServerEvent::Channel(Channel {
+                id: 2,
+                parent: Some(0),
+                name: "Two".into(),
+                ..Default::default()
+            }),
+        ));
+        client.handle(share_input(&id, ServerEvent::Connected { session: 1 }));
+        // The token first; the path waits as the fallback.
+        let request_id = match recorder.requests.lock().unwrap().pop() {
+            Some((_, Request::ResolveShareLink { request_id, token })) => {
+                assert_eq!(token, [9; 16]);
+                request_id
+            }
+            other => panic!("{other:?}"),
+        };
+        client.handle(share_input(
+            &id,
+            ServerEvent::ShareLink(v1::ShareLink {
+                request_id,
+                token: vec![9; 16],
+                channel: 2,
+                access_token: "door".into(),
+                ..Default::default()
+            }),
+        ));
+        let requests: Vec<Request> = recorder
+            .requests
+            .lock()
+            .unwrap()
+            .drain(..)
+            .map(|(_, request)| request)
+            .collect();
+        assert!(
+            matches!(&requests[..], [Request::SetTokens(tokens), Request::Join(2)] if tokens == &["door".to_string()]),
+            "{requests:?}"
+        );
+        assert_eq!(client.servers[0].bookmark.tokens, ["door"]);
+        assert!(client.servers[0].pending_channel.is_empty());
+        let updates = client.take_updates();
+        assert!(
+            updates
+                .iter()
+                .any(|update| matches!(update, Update::BookmarksChanged))
+        );
+        assert!(
+            updates
+                .iter()
+                .any(|update| matches!(update, Update::Browse { channel: 2, .. }))
+        );
+
+        // A token the server no longer knows: the path still leads there.
+        client.open_share_token(0, nuschel_core::share::encode_token(&[8; 16]));
+        client.servers[0].pending_channel = vec!["Two".into()];
+        let request_id = match recorder.requests.lock().unwrap().pop() {
+            Some((_, Request::ResolveShareLink { request_id, .. })) => request_id,
+            other => panic!("{other:?}"),
+        };
+        client.handle(share_input(
+            &id,
+            ServerEvent::ExtensionError(v1::Error {
+                request_id,
+                code: v1::error::Code::NotFound as i32,
+                ..Default::default()
+            }),
+        ));
+        let requests: Vec<Request> = recorder
+            .requests
+            .lock()
+            .unwrap()
+            .drain(..)
+            .map(|(_, request)| request)
+            .collect();
+        assert!(matches!(&requests[..], [Request::Join(2)]), "{requests:?}");
+
+        // A server without share/1: the path decides.
+        let recorder = Arc::new(Recorder::default());
+        let bookmark = ServerBookmark::new("Test", "localhost", 64738, "andi").unwrap();
+        let id = bookmark.id.clone();
+        let mut client = Client::new(
+            Box::new(recorder.clone()),
+            vec![bookmark],
+            Preferences::default(),
+        );
+        client.open_share_token(0, nuschel_core::share::encode_token(&[1; 16]));
+        client.servers[0].pending_channel = vec!["Three".into()];
+        client.connect(0, None, false);
+        client.handle(share_input(
+            &id,
+            ServerEvent::Channel(Channel {
+                id: 3,
+                parent: Some(0),
+                name: "Three".into(),
+                ..Default::default()
+            }),
+        ));
+        client.handle(share_input(&id, ServerEvent::Connected { session: 1 }));
+        assert_eq!(client.servers[0].share_token, None);
+        let requests: Vec<Request> = recorder
+            .requests
+            .lock()
+            .unwrap()
+            .drain(..)
+            .map(|(_, request)| request)
+            .collect();
+        assert!(matches!(&requests[..], [Request::Join(3)]), "{requests:?}");
     }
 }

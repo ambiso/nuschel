@@ -162,6 +162,8 @@ pub struct ServerState {
     pub whisper: Option<String>,
     /// Channel path from a `mumble://` link, joined once the tree has loaded.
     pub pending_channel: Vec<String>,
+    /// A share link's token, resolved once connected (`share/1`).
+    pub share_token: Option<String>,
     /// Branches opened or closed by hand this session, by channel id.
     pub expansion: BTreeMap<u32, bool>,
     /// Channel updates arrived since `channels` was last sorted.
@@ -233,6 +235,7 @@ impl ServerState {
             avatars: BTreeSet::new(),
             whisper: None,
             pending_channel: Vec::new(),
+            share_token: None,
             expansion: BTreeMap::new(),
             unsorted: false,
         }
@@ -296,6 +299,26 @@ impl ServerState {
     /// Whether the extension negotiated `capability` on this connection.
     pub fn has(&self, capability: &str) -> bool {
         self.capabilities.iter().any(|have| have == capability)
+    }
+
+    /// Channel names from the root to `channel` (empty for the root), if
+    /// every channel on the way is known.
+    pub fn channel_path(&self, channel: u32) -> Option<Vec<String>> {
+        let mut path = Vec::new();
+        let mut current = channel;
+        while current != 0 {
+            let view = self
+                .channels
+                .iter()
+                .find(|view| view.target == TextTarget::Channel(current))?;
+            path.push(view.name.clone());
+            current = view.parent?;
+            if path.len() > 64 {
+                return None;
+            }
+        }
+        path.reverse();
+        Some(path)
     }
 
     /// Our registration number, if we are registered.

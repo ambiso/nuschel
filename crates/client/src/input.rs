@@ -225,6 +225,8 @@ pub enum ServerEvent {
     Typing(v1::Typing),
     DirectList(Vec<v1::Direct>),
     DirectOpened(v1::DirectOpened),
+    /// A share link created or resolved (`share/1`).
+    ShareLink(v1::ShareLink),
     /// An extension request of ours failed.
     ExtensionError(v1::Error),
     /// Read on our account's other device.

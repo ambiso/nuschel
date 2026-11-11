@@ -814,6 +814,11 @@ impl Desktop {
                         cx.write_to_clipboard(ClipboardItem::new_string(url));
                     }
                 }));
+                // A link that opens Nuschel, or the channel in a browser
+                // (docs/web.md, "Share links").
+                entries.push(item("Copy share link", "link", move |this, _, cx| {
+                    this.copy_share_link(index, channel, cx);
+                }));
                 let write = server.may(channel, perm::WRITE);
                 let create = server.may(channel, perm::MAKE_CHANNEL)
                     || server.may(channel, perm::MAKE_TEMP_CHANNEL);

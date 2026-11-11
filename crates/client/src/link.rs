@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Opening `mumble://` links on native platforms, where the link's parser
+//! Opening `mumble://` and share links on native platforms, where the link's parser
 //! and the servers' security records are `nuschel-session`'s.
 use crate::{Client, Update};
 use nuschel_session::config::{MumbleUrl, Profile, ServerBookmark};
@@ -58,6 +58,8 @@ impl Client {
             self.updates.push(Update::BookmarksChangedNow);
         }
         server.pending_channel = url.channel;
+        // A share link's token is resolved once connected (`share/1`).
+        server.share_token = url.share_token;
         self.connect(index, url.password, deafened);
         Ok(Some(index))
     }

@@ -2010,6 +2010,24 @@ impl Platform for Driver {
                 request_id,
                 user_id,
             })),
+            Request::SetTokens(tokens) => Command::SetTokens(tokens),
+            Request::CreateShareLink {
+                request_id,
+                channel,
+                expires_at,
+                access_token,
+            } => Command::Nuschel(NuschelRequest::ShareLinkCreate(v1::ShareLinkCreate {
+                request_id,
+                channel,
+                expires_at,
+                access_token,
+            })),
+            Request::ResolveShareLink { request_id, token } => {
+                Command::Nuschel(NuschelRequest::ShareLinkResolve(v1::ShareLinkResolve {
+                    request_id,
+                    token: token.to_vec(),
+                }))
+            }
         };
         self.command(server, command)
     }
@@ -2389,6 +2407,7 @@ fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> 
             ServerEvent::DirectOpened(opened)
         }
         SessionEvent::Nuschel(NuschelEvent::Error(error)) => ServerEvent::ExtensionError(error),
+        SessionEvent::Nuschel(NuschelEvent::ShareLink(link)) => ServerEvent::ShareLink(link),
         SessionEvent::Nuschel(NuschelEvent::ReadMarker(marker)) => ServerEvent::ReadMarker(marker),
         SessionEvent::Identity(event) => return Err(Some(Unmodelled::Identity(Box::new(event)))),
         SessionEvent::Mls(event) => return Err(Some(Unmodelled::Mls(Box::new(event)))),

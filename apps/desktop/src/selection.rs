@@ -307,7 +307,8 @@ impl Desktop {
         .detach();
     }
 
-    /// A click on a link: mumble links are Nuschel's own, others go to the system.
+    /// A click on a link: mumble links and share links are Nuschel's own,
+    /// others go to the system.
     pub fn open_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
         if !nuschel_core::allowed_link(url) {
             return;
@@ -315,6 +316,7 @@ impl Desktop {
         if !url
             .get(..9)
             .is_some_and(|scheme| scheme.eq_ignore_ascii_case("mumble://"))
+            && nuschel_core::share::ShareLink::parse(url).is_err()
         {
             cx.open_url(url);
             return;
@@ -330,6 +332,15 @@ impl Desktop {
             server.bookmark.host == url.host && server.bookmark.port == url.port
         });
         match saved.map(|index| (index, self.client.servers[index].status)) {
+            // A share link's token: the server resolves it (the path is the
+            // fallback).
+            Some((index, Status::Connected)) if url.share_token.is_some() => {
+                self.client.servers[index].pending_channel = std::mem::take(&mut url.channel);
+                self.browse_server(index, window, cx);
+                if let Some(token) = url.share_token.take() {
+                    self.client.open_share_token(index, token);
+                }
+            }
             // Already there: go to the channel without connecting again.
             Some((index, Status::Connected)) => {
                 let server = &self.client.servers[index];
@@ -357,6 +368,7 @@ impl Desktop {
             }
             Some((index, Status::Connecting)) => {
                 self.client.servers[index].pending_channel = url.channel;
+                self.client.servers[index].share_token = url.share_token;
                 self.browse_server(index, window, cx);
             }
             Some(_) => self.open_url(url, window, cx),

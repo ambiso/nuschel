@@ -60,6 +60,20 @@ pub enum Request {
         request_id: u64,
         user_id: u32,
     },
+    /// Our access tokens (Mumble's `#token` groups), all of them.
+    SetTokens(Vec<String>),
+    /// A share link to `channel` (`share/1`): answered as a `ShareLink`.
+    CreateShareLink {
+        request_id: u64,
+        channel: u32,
+        expires_at: u64,
+        access_token: String,
+    },
+    /// What a share link's token opens.
+    ResolveShareLink {
+        request_id: u64,
+        token: [u8; 16],
+    },
 }
 
 /// Where a conversation of a Nuschel server is kept in local history: the

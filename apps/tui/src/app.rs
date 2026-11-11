@@ -526,7 +526,8 @@ impl App {
                     }
                 }
                 Update::SearchResults { request, result } => self.search_results(request, result),
-                Update::Rendered { .. } | Update::Avatar { .. } => {}
+                // Share links: the terminal has no menu for them yet.
+                Update::Rendered { .. } | Update::Avatar { .. } | Update::ShareLink { .. } => {}
             }
         }
     }
