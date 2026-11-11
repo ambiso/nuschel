@@ -562,6 +562,11 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Chat in the stock-client VM check (2026-11-11): xdotool types into the stock
          window's chat bar and the Nuschel peer receives it from StockUser; the peer's
          message is read back from the stock client's log (F6, copy, xclip).
+   - [ ] `vm-smoke` had been red since the content worker's answers changed shape
+         (workers.py, then the RTC probe's path; both fixed 2026-11-11). It now stops
+         at desktop_mumble.py: OCR does not read the welcome screen's "Add a server"
+         button. Make the desktop suites find UI by AT-SPI rather than OCR, and run
+         every VM check before merging so none rots unnoticed.
    - [x] `stock_client.py` under heavy host load (2026-11-11): the "0 packets" came
          from counting in a slice of a deque capped at 1000 events, which stays empty
          once full; packets now come from the event queue, the tone plays until the
@@ -764,11 +769,17 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
            without being a member.
          - Voice: one MLS group per voice channel of the devices present or
            listening (SFrame keys from it).
-         - Key transparency witnesses: the other servers a client uses witness each
-           other, plus one project-run auditor enabled by default once the user
-           deploys it (built now, switched on by its key and endpoint); configurable
-           in global settings and Home Manager; a NixOS module to deploy it. Design
-           in docs/reviews/2026-11-11-key-transparency.md (in progress).
+         - Key transparency witnesses, option B (docs/reviews/2026-11-11-key-
+           transparency.md §5, §7, "Answers"): each server keeps a small checkpoint
+           log of its akd heads and collects cosignatures itself from a small fixed
+           witness set that every client checks, led by one project-run auditor
+           (`nuschel-witness`, enabled by default once the user deploys it: built
+           now, switched on by its key and endpoint; configurable in global settings
+           and Home Manager; a NixOS module that is easy to set up). Cosignatures in
+           ML-DSA-44; user names and registration numbers in the log. Proposed,
+           awaiting the user: a 24 h freshness bound; when the cosignature is
+           missing, show "Automatic verification unavailable" and block only adding
+           new devices to existing conversations.
    - [x] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, which only the
          crypto worker and `nuscheld` link; no advisory ignores (patched instead).
          SECURITY.md: libcrux SIMD `unsafe` in the exceptions table.
@@ -856,6 +867,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         (`services.nginx.virtualHosts` with `enableACME = true`, optionally a
         subdomain).
   - [ ] Push for mobile: content-free pushes (Signal-style), UnifiedPush on Android.
+- [ ] Knocking (user, 2026-11-11): someone who may not enter a voice or chat channel
+      knocks; online users with **Move and Enter** in that channel get a notice with
+      Admit / Decline (knocks rate-limited). Admitting grants temporary Enter, Speak,
+      text and read in that channel, shown as "admitted by X", **until the person
+      leaves the channel or disconnects**; **no earlier history** (in end-to-end
+      channels the device joins the group without a history grant). Stock admins admit
+      by moving the person in; a stock client's refused Enter can knock for it.
 - [ ] Channel share links (user, 2026-11-11): a link you send to someone that opens
       Nuschel if installed, else joins in the browser; on the optional project
       domain or any web host (docs/clients.md). Proposal:
