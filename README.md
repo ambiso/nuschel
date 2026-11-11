@@ -1,313 +1,174 @@
 # Nuschel
 
-Nuschel is an EUPL-1.2 Rust workspace for a Mumble-compatible desktop client and
-server. GPUI is the desktop renderer. Shared state, protocol framing, and message
-presentation do not depend on GPUI, leaving mobile and web adapters open.
+![Nuschel in a voice channel: the channel tree with the people in it, and a conversation with code, a photo and a formula while Ada talks](docs/images/nuschel.png)
 
-The desktop connects to stock Mumble servers (tested against 1.5, 1.4 and 1.3) with
-TLS and a persistent client certificate. Identities are RSA-2048 so that stock Mumble
-can import them; PKCS#12 import and export are in **Settings → Identity**. Use
-**+** in the server rail to add a server, or open a `mumble://` link. **Connect**
-uses the saved details; the cog beside the server name edits them. Saved servers
-connect when Nuschel starts (per server), self-muted and deafened until you unmute,
-and **Settings → General** can start Nuschel at login (minimised). Self-signed
-certificates require confirmation before credentials are sent, and accepted
-fingerprints are saved. Passwords stay in memory for the connection attempt only.
+Nuschel is a voice and text chat app for [Mumble](https://www.mumble.info/) servers.
+It works with the Mumble servers you already use, keeps your chat history, and shows
+code, images and formulas in messages. Nuschel also has its own server, `nuscheld`,
+which stock Mumble clients can use too: with Nuschel on both ends, the server keeps
+the history, you can edit messages, and direct messages reach people who are
+offline. End-to-end encryption is being built ([how far it is](#security-and-privacy)).
+Nuschel's own code is memory-safe Rust, and what other people send you is handled in
+sandboxed helper processes.
 
-Voice uses Mumble's encrypted UDP transport, with automatic fallback to the TLS
-tunnel when UDP is blocked and a force-TCP option. Transmission is by voice activity
-(RNNoise), push-to-talk (in the window, and system-wide where the desktop grants a
-shortcut), or continuous. Capture runs echo cancellation, noise suppression and
-automatic gain in Rust. Nuschel's canceller works from a recording of what the
-speakers play (all applications, mono or stereo), time-aligned with the microphone,
-so music and other programs are removed from your microphone too; the recording is
-made only while the microphone is open and never leaves the device (macOS asks for
-system audio permission). On Linux Nuschel follows PipeWire's graph upstream from
-the microphone: a system echo canceller (PipeWire/PulseAudio echo-cancel) anywhere
-in the chain replaces Nuschel's and receives Nuschel's playback as its reference, and
-a noise suppressor (e.g. an RNNoise filter-chain) replaces Nuschel's suppressor; a
-per-microphone override remains. **Settings → Microphone test** meters the
-microphone, plays back what others would hear, and runs an echo test, without a
-server and without unmuting; nothing is sent. An adaptive controller watches for playback stutters, residual echo and
-a clipping microphone. It adjusts only Nuschel's own buffer and voice gate, and
-tells you what it cannot fix. Microphone capture starts muted. Audio service
-failures restart only the media worker and keep the connection and mute state.
+Nuschel is in early development: version 0.1, no published release yet, and things
+still change. More about the app: [docs/desktop.md](docs/desktop.md).
 
-Click a channel to open its conversation: one continuous timeline that follows new
-messages at the bottom. Scrolling up loads older local history without moving what
-is on screen, down to **Beginning of local history**; while you read further up, a
-pill counts new messages and jumps back to the latest. Double-click a channel, or use **Join
-channel**, to move your voice connection. Right-click users, channels and servers
-for whisper and shout, channel listening and links, per-user volume and local mute,
-direct messages, comments and avatars, registration, moderation, the channel
-editor, ACLs, bans and registered users. Entries appear only when the server's
-permissions allow them. Lost connections reconnect with backoff, rejoin your
-channel with mute state intact, and mark the gap in the timeline. Enter sends and
-Shift+Enter starts a new line (switchable in Settings). Drag the channel list's edge
-to fit long names; collapsed branches show how many people are inside, and branches
-with people open on connect. Messages keep blank lines, highlight fenced
-code, show inline images (decoded in a sandboxed worker), typeset LaTeX between `$…$` and `$$…$$` (docs/math.md), and collapse by measured
-height behind **Show more**. Ctrl+V pastes an image (re-encoded in the sandboxed
-worker to fit the server's limit and sent the way stock Mumble sends it), and Ctrl+.
-or Ctrl+; opens an emoji picker. Volume mixers name each stream (microphone, voice
-chat, echo reference). Search finds messages saved on this device. History and
-cached channel trees survive restarts, including offline browsing. Controls and
-text fields are exposed to screen readers (AT-SPI on Linux is tested), and screen
-readers reach the whole loaded conversation: the timeline is one Tab stop, walked with
-↑/↓, Page Up/Down and Home/End (Home loads older history); Enter or Space expands a
-long message or a collapsed run of joins and leaves. Tab steps through a message's
-links (the line under the composer says where each leads) and Enter opens one, or a
-message's only link; typing while the timeline has focus goes to the composer.
+## Install
 
-Linux is covered by integration tests in NixOS VMs. Windows and macOS packages are
-cross-built from Linux (`.#windows`, `.#macos-app`, `.#macos-universal`,
-`.#macos-aarch64`). The Windows build runs in an unattended Windows 11 VM
-(`tests/windows_vm.py`): GUI, connection, autostart, audio devices, the microphone
-and echo tests, in-place updates, and the workers' AppContainer sandboxes
-(docs/windows-sandbox.md). macOS has not been run. The macOS build needs
-macOS 14.2 or later because the audio library links Core Audio's process-tap API.
+### NixOS and Nix
 
-## Where Nuschel keeps its files
-
-On Linux Nuschel follows the XDG Base Directory specification (unset, empty or
-relative variables fall back to the defaults):
-
-| Folder | Holds |
-| --- | --- |
-| `$XDG_CONFIG_HOME/nuschel` (`~/.config/nuschel`) | `settings.json`, `servers.json` (bookmarks and accepted certificates), `managed.json`: safe to keep with your dotfiles |
-| `$XDG_DATA_HOME/nuschel` (`~/.local/share/nuschel`) | `identity/` (your Mumble certificate and its private key), `keys/` (end-to-end keys), `history/` (local history), `nuschel-policy.json` (servers' security records): back this up, keep it private |
-| `$XDG_STATE_HOME/nuschel` (`~/.local/state/nuschel`) | last channel per server, the update check |
-| `$XDG_CACHE_HOME/nuschel` (`~/.cache/nuschel`) | channel trees and server icons: safe to delete |
-
-`nuschel/managed.json` in `$XDG_CONFIG_DIRS` (`/etc/xdg`) is read as well. macOS uses
-`~/Library/Application Support/org.Nuschel.Nuschel` (state in its `state` folder) and
-`~/Library/Caches/org.Nuschel.Nuschel`; Windows `%APPDATA%\Nuschel\Nuschel\config`,
-`%LOCALAPPDATA%\Nuschel\Nuschel\data` (and `data\state`) and `…\cache`.
-`--profile-dir DIR` puts the four under `DIR/config`, `data`, `state` and `cache`.
-Folders are created owner-only (0700) when first needed.
-
-Earlier versions kept the identity, keys, security records and caches in the
-configuration folder. The first start moves each file to its new place (renamed, or
-copied, synced and only then removed), never over a newer one, and logs what moved;
-an interrupted move finishes on the next start, and anything that cannot be moved is
-used where it is and reported. Quit older Nuschel instances first: one still running
-would create a fresh identity in the old place, which Nuschel then reports and leaves
-alone. A downgrade does not find the moved identity; copy
-`~/.local/share/nuschel/identity/identity.json` back to `~/.config/nuschel` for it.
-See [SECURITY.md](SECURITY.md#where-secrets-live) for which worker can reach what.
-
-## Releases and updates
-
-Tagging `vX.Y.Z` runs `.github/workflows/release.yml` on one Linux runner: the
-Windows build and a universal, ad-hoc signed `Nuschel.app` are cross-compiled by
-the flake (no macOS runner), zipped, and published with `update.json`, which lists
-every file with its size and SHA-256 and is signed with minisign. The workflow needs
-the repository secret `UPDATE_SIGNING_KEY`; its public half is
-`crates/update/update-key.pub` and is built into the client.
-
-Windows and macOS copies check for a newer release 20 seconds after start and every
-six hours (**Settings → General → Check for updates**). They verify the signature,
-accept only newer versions, check each file's hash, and swap the files by renaming,
-rolling back on failure; old files are removed on the next start. Linux installs
-update through their package manager (`nix run github:ambiso/nuschel`).
-
-On macOS the app is ad-hoc signed, not notarised: the first start of a downloaded
-copy needs **System Settings → Privacy & Security → Open Anyway**. Updates fetched by
-Nuschel itself are not quarantined and start normally, as long as `Nuschel.app` was
-moved out of Downloads (macOS runs quarantined apps from a read-only copy). Developer
-ID signing and notarisation can be added from the same Linux job with `rcodesign`
-and an Apple Developer account.
-See [SECURITY.md](SECURITY.md) for what each platform's worker confinement does and
-does not provide. The Nuschel server and MLS implementation are deferred.
-
-The modern media transport is now a str0m trial in `nuschel-rtc`. Run
-`nix run --cores 2 .#rtc-probe` for the headless audio/video loopback probe, or
-`just rtc` inside the development shell to include worker Opus encoding/decoding.
-Both send Opus and a generated VP8 test pattern between two loopback UDP peers.
-No microphone, camera, public STUN service or external server is used.
-The probe reports encoded-frame delivery delay and
-checks received bytes; it is not a microphone-to-speaker latency measurement.
-Video admission follows the bandwidth estimate, reserves room for audio and drops
-frames rather than accumulating a stale queue. Desktop video calls, authenticated
-server signaling, TURN, browser interoperability and adaptive playout remain future work.
-
-## Development
+Try it without installing anything:
 
 ```sh
-direnv allow
-# Or enter the same pinned environment explicitly:
-nix develop --cores 2
-just build
-just check
-just workers
-# Linux VM packaging, confinement, SQLx/PostgreSQL and service preflight:
-just vm
+nix run github:ambiso/nuschel
 ```
 
-The icon's source is `apps/desktop/assets/nuschel.svg`. The Linux package installs
-the desktop entry and icons and registers `mumble://` links; after changing the icon,
-regenerate the committed Windows `.ico` with the command at the top of
-`nix/desktop-files.nix`.
-
-`cargo add` is built into the pinned Cargo. `Cargo.lock` and `flake.lock` are tracked.
-The Linux package (`nix build .#default`, also used by the VM tests) is built per
-crate with crate2nix, so a change rebuilds only the crates that depend on it; after
-changing dependencies run `just crate2nix` (a flake check fails while
-`nix/crate2nix/Cargo.nix` is out of date). Clippy, tests and the Windows/macOS cross
-builds use crane (`.#default-crane` builds the package the same way).
-The Nix environment uses Rust's latest stable release from the locked rust-overlay
-revision; `nix flake update rust-overlay` advances it. Outside Nix, rustup follows
-the `stable` channel independently of `flake.lock`.
-`nix flake check --cores 2` runs the native build, tests, Clippy, formatting, dependency policy,
-and a vulnerability check using a pinned advisory database. `cargo deny check` also
-checks the current advisory database and registry yanks outside the Nix sandbox.
-
-Use `jj` for incremental commits. See [the architecture](docs/architecture.md),
-[the safety policy](SECURITY.md), and [the integration test plan](tests/README.md).
-
-On NixOS, the desktop loads the host's Vulkan driver. The flake's glibc must be new
-enough to load that driver; an older nixpkgs pin can produce `No GPU adapters found`
-even when other applications work. Diagnose driver loading with
-`VK_LOADER_DEBUG=error,warn RUST_LOG=nuschel=info,gpui_wgpu=info nix run .`.
-If the log reports a missing `GLIBC_*` version, update the pin with
-`nix flake update nixpkgs` and rebuild. Adding driver search paths cannot fix that
-ABI mismatch.
-
-## Home Manager
-
-The flake exports a Home Manager module, `homeModules.default` (also
-`homeManagerModules.default`). It installs the package with its desktop entry and
-icons and works with your own nixpkgs: only the package comes from this flake, and
-`programs.nuschel.package` replaces it.
+To keep it, add the flake as an input and install
+`inputs.nuschel.packages.${pkgs.stdenv.hostPlatform.system}.default`, or use the Home
+Manager module:
 
 ```nix
-# Flake input: nuschel.url = "github:ambiso/nuschel";
+# flake.nix: inputs.nuschel.url = "github:ambiso/nuschel";
 imports = [ inputs.nuschel.homeModules.default ];
 programs.nuschel = {
   enable = true;
-  # Start minimised at login (Linux), with the entry Settings → General writes.
-  autostart = true;
-  # Applied on every start; read-only in the app.
-  settings = {
-    enter_sends = false;
-    shortcuts."push-to-talk" = "f13";
-    audio.transmit = "push_to_talk";
-  };
-  servers = [
-    { name = "Team"; host = "voice.example.org"; username = "alice"; }
-  ];
-  # Written only where Nuschel has no settings.json or servers.json yet.
-  initialSettings.sound_volume = 0.5;
-  initialServers = [
-    { name = "Friends"; host = "mumble.example.net"; username = "alice"; }
-  ];
+  autostart = true; # start minimised when you log in (Linux)
 };
 ```
 
-`settings` and `servers` go into a read-only `managed.json` in Nuschel's folder
-(`~/.config/nuschel`, or `~/Library/Application Support/org.Nuschel.Nuschel`).
-Nuschel never writes it. On every start its settings are merged key by key over
-`settings.json` and win; Settings shows those controls dimmed with "Set by your
-system configuration", and `settings.json` keeps only your own values, which
-return once a key is no longer managed. Its bookmarks cannot be removed and only
-take a password in their form; Nuschel keeps what it learns about them (an
-accepted certificate in `servers.json`, the channel tree in the cache, the last
-channel in the state folder), and a bookmark removed from `servers` disappears on
-the next start. A `nuschel/managed.json` in
-`$XDG_CONFIG_DIRS` (such as `/etc/xdg`) sets system-wide defaults under the user's
-own (profiles opened with `--profile-dir` skip it).
+The module can also set settings and servers for you, which then show as read-only
+in the app. The package registers `mumble://` links and updates with your flake
+inputs, not by itself. Details, and what to do about `No GPU adapters found`:
+[docs/install.md](docs/install.md#nix-and-nixos).
 
-`initialSettings` and `initialServers` only seed a new profile: once the files
-exist, Nuschel owns them and later changes to these options do not apply. A bookmark
-in `servers` with the host, port and username of one in `initialServers` takes it
-over. With `autostart`, turning the switch off in the app lasts until the next
-`home-manager switch`.
+### Other Linux distributions
 
-Nuschel never overwrites a configuration file it cannot read: a broken
-`settings.json` or `servers.json` is renamed to `settings.json.invalid` (or
-`.invalid.1`, …), the app starts without it and says so. An invalid
-`managed.json` is reported and ignored until it is fixed. The check
-`.#checks.x86_64-linux.vm-home-manager` boots a VM in which logging in starts
-Nuschel and managed settings show as set by the system configuration and stay so.
+Not yet: there is no Flatpak, AppImage or distribution package. You can build it
+from source (see [Development](#development)); it needs a Vulkan driver, and
+bubblewrap (`bwrap`) for its sandbox.
 
-## Server module and databases
+### Windows
 
-The flake exports `nixosModules.default` and a headless `packages.<system>.server`
-containing `nuscheld` and the storage worker, without the GPUI/audio stack. The module
-defaults to SQLite and also supports PostgreSQL, either through `database.urlFile`
-or local peer authentication:
+[Releases](https://github.com/ambiso/nuschel/releases) will have a portable zip,
+`nuschel-<version>-windows-x86_64.zip`. Unpack it into a folder of your own (not
+Program Files) and start `nuschel.exe`. There is no installer yet; Nuschel updates
+itself in that folder.
+
+Releases are not code-signed for now, so on the first start Windows shows "Windows
+protected your PC". Choose **More info**, then **Run anyway**. Windows with Smart App
+Control turned on refuses unsigned apps altogether. The Windows build is tested in a
+Windows 11 VM.
+
+### macOS
+
+[Releases](https://github.com/ambiso/nuschel/releases) will have
+`nuschel-<version>-macos-universal.zip` with `Nuschel.app` (Intel and Apple silicon,
+macOS 14.2 or later). Move it to Applications first, so that it can update itself.
+The app is not notarised for now, so macOS refuses the first start: then open
+**System Settings → Privacy & Security** and choose **Open Anyway** next to the note
+that Nuschel was blocked. The macOS build has not been tried on a Mac yet.
+
+### Android, iOS, the web, a terminal client
+
+Planned ([docs/clients.md](docs/clients.md)).
+
+## Getting started
+
+**Add a server.** Click **+** in the left rail and enter the server's address and the
+user name you want. On its first start Nuschel creates a certificate that Mumble
+servers know you by; **Settings → Identity** can export it, for stock Mumble or a
+backup. If a server's certificate is self-signed, Nuschel shows its fingerprint and
+asks before connecting, once.
+
+**Links.** A `mumble://` link (`mumble://voice.example.org/Games`) opens the server and
+joins that channel. Right-click a channel and choose **Copy link** to share one. With
+the Linux package, links open in Nuschel from your browser too; on Windows and macOS,
+click them inside Nuschel for now. A link can also carry the server's certificate
+fingerprint (`?fp=sha256:…`), and then nobody needs to confirm it.
+
+**Talking.** Click a channel to read its conversation; double-click it to join its
+voice. You join muted: unmute with the microphone button at the bottom left. Nuschel
+then sends your voice whenever you speak. For push to talk, open Settings (the
+sliders next to the microphone), choose **Push to talk** under Transmission, and
+record a key under Shortcuts. The key also works while Nuschel is in the background,
+where the desktop allows system-wide shortcuts (GNOME asks you once).
+
+**Your microphone.** **Settings → Microphone test** lets you hear yourself as others
+would and check for echo, without being on a server. Nuschel cancels echo and noise
+itself, or uses the system's echo cancellation on Linux when it finds one.
+
+## Running a server
+
+`nuscheld` is Nuschel's server. Stock Mumble clients (1.3 to 1.5) use it like the
+standard Mumble server, and it can import an existing one with its users, channels
+and permissions. On NixOS:
 
 ```nix
 imports = [ inputs.nuschel.nixosModules.default ];
 services.nuschel = {
   enable = true;
-  security = "compatible"; # stock Mumble clients, no end-to-end encryption (yet)
-  database.type = "postgresql";
-  database.createLocally = true;
+  openFirewall = true;
+  security = "compatible";
 };
 ```
 
-`nuscheld` is a Mumble 1.5 server (with the legacy UDP format for 1.4/1.3 clients)
-that stock Mumble clients and Nuschel use: certificates and passwords, channels,
-ACLs and groups with Murmur's semantics, text, whisper and shout, listeners, and
-voice routing over UDP and the TCP tunnel, with state in SQLite or PostgreSQL behind
-the storage worker. The `vm-server` check runs Nuschel's protocol suites and the
-stock Mumble GUI against it. `security = "e2ee"` (the planned default) refuses to
-start until end-to-end encryption exists. Design, configuration and deviations
-from Murmur: [docs/server.md](docs/server.md). Options include `listenAddresses`,
-`settings`, `passwordFile` and `superUserPasswordFile`. `nuscheld admin` manages
-users, channels and their retention, bans and stored history offline, and refuses to
-touch a database a running server holds.
+It keeps its data in SQLite, or in PostgreSQL (`database.type = "postgresql"` with
+`database.createLocally = true`).
 
-With Nuschel clients the server negotiates its extension (docs/extension.md): durable
-server history that new members can read (kept forever unless the server or a
-channel sets a shorter retention, or "none" for live-only channels), sends that
-survive reconnects, read markers and typing. On such a server you can edit and delete
-your messages (right-click a message, or Up in an empty composer to edit your last
-one), moderators can delete others' where the server allows it, you see who is typing
-under the composer (**Settings → Privacy** stops showing that you type), and direct
-messages between registered users are stored by the server, so they reach someone who
-is offline and come back with their history. Server history you read is also kept on
-your device for offline reading and search. Nuschel never falls back to plain Mumble with a server that
-once offered the extension. Like Signal, a server can require a current client:
-older Nuschel versions are told to update and, after an announced date, refused
-(`minimum_client`, docs/server.md); stock Mumble clients are not affected. Invite links can carry the server's certificate
-fingerprint and policy (`mumble://…?fp=sha256:…&policy=nuschel`).
+There are two security modes. **Compatible**, the only one today, admits stock Mumble
+clients: messages and voice are encrypted on the way, as with any Mumble server, but
+the server can read them. **End-to-end** mode will admit only Nuschel clients and keep
+the server out of conversations; it is not finished, and the server refuses to start
+with it.
 
-Nuschel users also have an identity of their own, independent of any server and of
-the Mumble certificate (docs/e2ee.md): a hybrid ML-DSA-65 + Ed25519 root certifying
-each device, kept in a sandboxed crypto worker. Servers with `kt/1` publish it in a
-key-transparency log, as in Signal's automatic key verification. The client pins
-contacts on first use, checks them against the log, shows "verified (same identity as
-on …)" across servers, and flags a changed key or a lying server. Safety numbers allow
-verification in person. End-to-end encryption with MLS builds on this next.
+Configuration, administration, importing a Mumble server, and running it without
+Nix: [docs/server.md](docs/server.md).
 
-External PostgreSQL URLs and TLS keys come from runtime credential files, not inline
-Nix values. `openFirewall` is off by default. The service uses DynamicUser, a private
-state directory, restricted permissions and systemd hardening. See
-[module options](nix/module.nix) for the configuration interface.
+## Security and privacy
 
-## Message defaults
+- **Sandboxes.** Message text and images, formulas, voice, file transfers, your local
+  history and your keys are each handled by a sandboxed helper process of its own.
+  Only the file-transfer helper may use the network, and only the history and key
+  helpers reach a folder, each just their own. The sandboxes use bubblewrap on Linux and AppContainers on
+  Windows (both tested), and Seatbelt on macOS (not yet tested). Details and
+  exceptions: [SECURITY.md](SECURITY.md).
+- **Encryption today.** Connections are encrypted (TLS, and Mumble's encrypted voice),
+  but by default nothing is end-to-end encrypted: the server can read messages and
+  hear voice. A red open lock in the app says so.
+- **End-to-end encryption** is being built on MLS with post-quantum keys
+  ([docs/e2ee.md](docs/e2ee.md)). Working now on Nuschel servers: an identity of your
+  own that is the same on every server, and key transparency, which lets Nuschel
+  notice when a contact's key changes or a server lies about it; safety numbers let
+  you verify someone in person. End-to-end encrypted direct messages are an
+  experiment, off by default; channels and voice come later.
+- **Your data.** History is kept on your device, and on Nuschel servers also by the
+  server (forever, unless the server or channel sets a shorter time). Server
+  passwords are never saved. Where everything is stored:
+  [docs/desktop.md](docs/desktop.md#where-nuschel-keeps-its-files).
 
-- Newlines and blank lines remain visible. Ordinary text is literal; HTML is inert.
-- Long messages collapse with a keyboard-accessible **Show more** control.
-- Fenced code is highlighted in the content worker with Syntect's Rust regex backend.
-- Local chat history is enabled by default, including on legacy Mumble servers.
-  Legacy history contains messages observed locally, not messages sent while offline.
-- Nuschel server archives use bounded cursor pages so the full retained history is
-  reachable. Pages the client fetched are kept in local history by their sequence
-  number: edits overwrite them, deleted messages stay as tombstones without text.
+## Development
 
-Red open locks mean **no end-to-end encryption**, not an absence of Mumble transport
-encryption. Green locks are reserved for authenticated MLS sessions. MLS is a planned
-strict server mode, incompatible with stock clients; no MLS session exists yet.
-See [the MLS and archive design](docs/architecture.md#mls-and-encrypted-history).
+Everything comes from the flake's development shell:
 
-These rules live in shared crates; a mobile renderer can implement the same behavior.
+```sh
+direnv allow          # or: nix develop
+just build            # build everything
+just desktop          # build and start the app
+just check            # formatting, Clippy, tests, licences and advisories
+just vm               # Linux integration tests in NixOS VMs
+just fuzz <target>    # fuzz a parser; `just fuzz-list` lists them
+just readme-screenshot  # regenerate the picture above
+```
 
-## License
+Windows and macOS builds are cross-compiled on Linux (`nix build .#windows`,
+`.#macos-app`). More in [docs/development.md](docs/development.md), what the tests
+cover in [tests/README.md](tests/README.md), how it fits together in
+[docs/architecture.md](docs/architecture.md), and what is next in [TODO.md](TODO.md).
 
-Nuschel is licensed under [EUPL-1.2](LICENSE). Vendored Mumble schemas retain their
-[upstream BSD license](crates/protocol/proto/LICENSE.mumble). Dependency license
-allowances are reviewed separately in `deny.toml`; SPDX allowlisting does not replace
-release attribution or license-compliance review.
+## Licence
+
+Nuschel is licensed under the [EUPL-1.2](LICENSE). Vendored Mumble schemas keep their
+[upstream BSD licence](crates/protocol/proto/LICENSE.mumble). Dependency licences are
+reviewed in `deny.toml`; that allowlist does not replace attribution or a
+licence-compliance review for releases.

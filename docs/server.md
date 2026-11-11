@@ -1,10 +1,15 @@
 # The Nuschel server (`nuscheld`)
 
 `nuscheld` is a Mumble-compatible server: protocol 1.5, with the legacy UDP voice
-format for 1.4 and 1.3 clients. Stock Mumble clients use it like a stock Murmur. It
-routes Opus voice without decoding it. Nuschel clients also get the Nuschel
-extension (docs/extension.md, phase 2 of the roadmap): durable conversations, server
-history, edits and deletions, subscriptions, read markers and direct conversations.
+format for 1.4 and 1.3 clients. Stock Mumble clients use it like a stock Murmur:
+certificates and passwords, channels, ACLs and groups with Murmur's semantics, text,
+whisper and shout, listeners, and voice over UDP and the TCP tunnel, with state in
+SQLite or PostgreSQL behind the storage worker. It routes Opus voice without
+decoding it. Nuschel clients also get the Nuschel extension (docs/extension.md,
+phase 2 of the roadmap): durable conversations, server history, edits and
+deletions, subscriptions, read markers and direct conversations. The `vm-server`
+check runs Nuschel's protocol suites and the stock Mumble GUI against it (Tests,
+below).
 
 ## Running it
 
@@ -114,7 +119,32 @@ Every configuration key is optional; names and defaults follow murmur.ini
   about them). `recommended_client` below `minimum_client`, or a date without a
   minimum, is a configuration error.
 
-The NixOS module (`services.nuschel`, nix/module.nix) generates the TOML file
+## The NixOS module
+
+The flake exports `nixosModules.default` and a headless `packages.<system>.server`
+containing `nuscheld` and the storage worker, without the GPUI and audio stack. The
+module defaults to SQLite and also supports PostgreSQL, either through
+`database.urlFile` (a runtime credential file with the URL) or local peer
+authentication:
+
+```nix
+imports = [ inputs.nuschel.nixosModules.default ];
+services.nuschel = {
+  enable = true;
+  security = "compatible"; # stock Mumble clients, no end-to-end encryption (yet)
+  openFirewall = true; # off by default
+  database.type = "postgresql";
+  database.createLocally = true;
+};
+```
+
+Other options include `listenAddresses`, `port`, `settings` (the TOML keys above),
+`passwordFile`, `superUserPasswordFile`, `tls.certificateFile` and `keyFile`,
+`kt.signingKeyFile` and `vrfSecretFile`, and `importMurmur.databaseFile`; all are
+described in [nix/module.nix](../nix/module.nix). Secrets are runtime files passed
+with `LoadCredential`, never Nix store values.
+
+The module (`services.nuschel`, nix/module.nix) generates the TOML file
 from `settings` (never secrets), runs a database preflight under the operator lock
 (so the service does not start while `nuscheld admin` uses the database), and
 hardens the unit

@@ -198,7 +198,7 @@ Windows' microphone privacy setting; no physical hardware has been tested.
 ## Where secrets live
 
 Nuschel's folders (`crates/session/src/layout.rs`; on Linux the XDG Base Directory
-ones, see the README) keep secrets out of the configuration folder, which people keep
+ones, see docs/desktop.md) keep secrets out of the configuration folder, which people keep
 in dotfiles repositories, and give each persistent worker one folder with nothing
 else in it. Folders are created 0700, files 0600.
 

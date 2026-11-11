@@ -95,8 +95,9 @@ use its measured layout height to handle narrow windows and text scaling.
 Parsing and history each have explicit limits. The initial content limit is 64 KiB;
 the adapter must report a rejected message rather than silently truncate it. Revisit
 the storage limit separately when adding attachments or legacy HTML. Legacy Mumble HTML is converted to inert text in the content worker: entities and
-line breaks are preserved, executable/resource elements are discarded. Images and
-arbitrary rich formatting are not rendered.
+line breaks are preserved, executable/resource elements are discarded. Images
+embedded as `data:` URIs (as stock Mumble sends them) are decoded in the content
+worker; remote images and other rich formatting are not rendered.
 
 History is on by default, including with stock servers. Server and channel identities
 scope queries; persist author display snapshots and local observation timestamps.
