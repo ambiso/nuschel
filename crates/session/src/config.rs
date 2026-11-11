@@ -252,6 +252,10 @@ pub struct ClientSettings {
     pub nicknames: std::collections::BTreeMap<String, String>,
     /// A desktop notification when a friend connects.
     pub friend_notifications: bool,
+    /// magic-wormhole rendezvous server for offering files (`ws://`).
+    pub wormhole_rendezvous: String,
+    /// magic-wormhole transit relay (`tcp://host:port`).
+    pub wormhole_relay: String,
 }
 
 pub const SIDEBAR_WIDTH: std::ops::RangeInclusive<f32> = 200.0..=560.0;
@@ -274,6 +278,8 @@ impl Default for ClientSettings {
             friends: Default::default(),
             nicknames: Default::default(),
             friend_notifications: false,
+            wormhole_rendezvous: nuschel_core::transfer::PUBLIC_RENDEZVOUS.into(),
+            wormhole_relay: nuschel_core::transfer::PUBLIC_RELAY.into(),
         }
     }
 }
@@ -316,6 +322,12 @@ impl ClientSettings {
         } else {
             248.
         };
+        if !nuschel_core::transfer::valid_url(&self.wormhole_rendezvous) {
+            self.wormhole_rendezvous = nuschel_core::transfer::PUBLIC_RENDEZVOUS.into();
+        }
+        if !self.wormhole_relay.starts_with("tcp://") || self.wormhole_relay.len() > 256 {
+            self.wormhole_relay = nuschel_core::transfer::PUBLIC_RELAY.into();
+        }
         self
     }
     pub fn volume_for(&self, hash: Option<&str>) -> f32 {

@@ -1374,7 +1374,7 @@ fn conversation(
             server.users.values(),
             channel.direct_peer.as_ref(),
         );
-        let row = message_row(this, server, message, author, position, grouped, cx);
+        let row = message_row(this, server, channel, position, author, grouped, cx);
         messages.push(match message.id {
             Some(id) => anchor.row(id, row),
             None => row,
@@ -2171,12 +2171,15 @@ fn banner(
 fn message_row(
     this: &Desktop,
     server: &ServerView,
-    message: &crate::state::MessageView,
-    author: Option<&User>,
+    channel: &crate::state::ChannelView,
     index: usize,
+    author: Option<&User>,
     grouped: bool,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let message = &channel.messages[index];
+    // A file offer shows as a card in place of its text (transfer.rs).
+    let card = crate::transfer::card(this, server, channel, index, cx);
     let serial = message.serial;
     let name = names::author_name(&message.author, author, &this.settings).to_string();
     // With a nickname shown, the name they sent it under.
@@ -2194,7 +2197,11 @@ fn message_row(
         .as_ref()
         .filter(|hovered| hovered.message == serial);
     let mut texts = Vec::new();
-    let blocks = blocks(this, &message.document, selected, hovered, &mut texts, cx);
+    // A file offer shows as a card in place of its text (transfer.rs).
+    let blocks = card.map_or_else(
+        || blocks(this, &message.document, selected, hovered, &mut texts, cx),
+        |card| vec![card],
+    );
     div()
         .id(("message", index))
         .when_some(

@@ -38,6 +38,8 @@ pub struct MessageView {
     /// the real wrapped height (window width, images, code) rather than a
     /// character count.
     pub measured: std::rc::Rc<std::cell::Cell<f32>>,
+    /// A file offered with this message (transfer.rs shows it as a card).
+    pub offer: Option<nuschel_core::transfer::Offer>,
 }
 /// Name a text field for screen readers. GPUI-kit inputs expose no role or
 /// name to AT-SPI/UIA/AX unless the state is told what it is.
@@ -74,6 +76,7 @@ impl MessageView {
 impl From<RenderedMessage> for MessageView {
     fn from(message: RenderedMessage) -> Self {
         static SERIALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let offer = nuschel_core::transfer::parse_offer(&message.message.body);
         Self {
             id: message.id,
             serial: SERIALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -90,6 +93,7 @@ impl From<RenderedMessage> for MessageView {
             measured: Default::default(),
             document: message.document.into(),
             expanded: false,
+            offer,
         }
     }
 }
@@ -778,6 +782,8 @@ pub struct Desktop {
     /// Message text: its selection, the message a menu is for, copy feedback.
     pub text: crate::selection::TextState,
     pub prompt: Option<crate::menus::Prompt>,
+    /// File offers and downloads (transfer.rs).
+    pub transfers: crate::transfer::Transfers,
     pub panel: Option<Panel>,
     pub recording_ptt: bool,
     pub ptt_active: bool,
@@ -952,6 +958,7 @@ impl Desktop {
             menu: None,
             text: crate::selection::TextState::new(cx),
             prompt: None,
+            transfers: Default::default(),
             panel: None,
             recording_ptt: false,
             ptt_active: false,

@@ -11,6 +11,7 @@ import struct
 import zlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import signal
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gnome_session import GnomeSession  # noqa: E402
 from local_murmur import Murmur, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
+from transfer import Wormhole, Worker  # noqa: E402
 
 def SEARCH_BUTTON(width):
     """The conversation header's search button, in window screenshot pixels."""
@@ -57,6 +59,8 @@ MENU_ADD_FRIEND = (300, 471)
 MENU_NICKNAME = (300, 506)
 PROFILE_DONE = (925, 178)
 
+# Andi's file card's "Stop offering" once Ada's offer has ended below it.
+STOP_OFFERING = (835, 461)
 # The screenshot sent into #Development, and the Lobby row.
 CHAT_IMAGE = (580, 670)
 LOBBY_ROW = (189, 233)
@@ -152,9 +156,11 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,maximize")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
+    parser.add_argument("--wormhole-python", type=Path,
+                        help="a python with magic-wormhole-mailbox-server and -transit-relay (transfer scene)")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     width, height = map(int, args.size.split("x"))
@@ -173,11 +179,20 @@ def main():
         murmur.start()
         bots = []
         app = None
+        wormhole = None
+        offered = None
         shell = GnomeSession(args.gnome_shell, width + 160, height + 100,
                              log=(args.output / "gnome-shell.log").open("w"))
         pulse = None
         try:
             shell.start()
+            if args.wormhole_python and {"all", "transfer"} & set(args.scenes.split(",")):
+                # A private mailbox server and transit relay on loopback; Andi
+                # offers a file in Development as soon as Nuschel has joined it.
+                wormhole = Wormhole(args.wormhole_python, root)
+                offered = root / "offered" / "holiday-photos.zip"
+                offered.parent.mkdir()
+                offered.write_bytes(os.urandom(48 * 1000 * 1000))
             if args.pulse_bin:
                 socket_dir = shell.runtime / "pulse"
                 socket_dir.mkdir(mode=0o700, exist_ok=True)
@@ -211,9 +226,12 @@ def main():
                       "port": 1, "username": "Andi", "certificate_sha256": None, "cached_channels": []}
             (profile / "config/servers.json").write_text(json.dumps([bookmark, second]))
             env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHEL_SCREENSHOT_LOG", "nuschel=info")}
+            if wormhole:
+                env |= wormhole.environment()
             log = (args.output / "desktop.log").open("w")
             app = subprocess.Popen([str(args.binaries / "nuschel"), "--profile-dir", str(profile),
-                                    f"mumble://Andi@127.0.0.1:{port}/Lobby/Development"],
+                                    f"mumble://Andi@127.0.0.1:{port}/Lobby/Development"]
+                                   + (["--offer", str(offered)] if offered else []),
                                    env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             eventually(lambda: app.poll() is None and shell.window("Nuschel"), "Nuschel window did not appear")
             shell.place("Nuschel", 40, 40, width, height)
@@ -790,6 +808,49 @@ def main():
                 wheel(800, 400, -2 * SCROLL_CLICKS)  # up to the text that went with the first picture
                 time.sleep(1.0)
                 shot("32-attach-caption")
+            if want("transfer") and wormhole:
+                click(228, 268)  # #Development
+                time.sleep(0.6)
+                offer = bots[0].wait(lambda e: e["kind"] == "text" and e["author"] == "Andi"
+                                     and "wormhole" in e["body"], timeout=60)
+                code = re.search(r"receive ([0-9]+-[a-z0-9-]+)</code>", offer["body"]).group(1)
+                print("Andi offers with", code, flush=True)
+                time.sleep(1.0)
+                shot("30-offer-waiting")
+                # Someone receives (slowly: a 4 MB/s disk), and the next code is posted.
+                receiver = Worker(args.binaries, {"kind": "receive", "code": code, "max_size": 60 * 1000 * 1000,
+                                                  "servers": wormhole.servers})
+                receiver.slow = 0.06
+                receiver.wait("started")
+                time.sleep(4.0)
+                shot("31-offer-sending")
+                receiver.wait("done", timeout=120)
+                receiver.close()
+                time.sleep(2.5)
+                shot("32-offer-sent")
+                # Ada offers a file the same way, and then stops offering it.
+                (root / "notes.txt").write_text("meeting notes\n" * 5000)
+                sender = Worker(args.binaries, {"kind": "offer", "name": "meeting-notes.txt",
+                                                "servers": wormhole.servers}, root / "notes.txt")
+                ada_code = sender.wait("code")["code"]
+                announcement = (f"📎 <b>meeting-notes.txt</b> (70 kB) — receive with <a href=\"https://magic-wormhole."
+                                f"readthedocs.io/\">magic-wormhole</a>: <code>wormhole --relay-url="
+                                f"{wormhole.servers['rendezvous']} receive {ada_code}</code>")
+                bots[0].send(kind="html", channel=2, html=announcement)
+                time.sleep(2.0)
+                shot("33-offer-received")
+                sender.send({"kind": "cancel"})
+                sender.close()
+                bots[0].send(kind="html", channel=2,
+                             html="📎 <b>meeting-notes.txt</b> (70 kB) — no longer available.")
+                time.sleep(2.0)
+                shot("34-offer-ended")
+                # Andi stops offering: the channel is told, the card says so.
+                click(*STOP_OFFERING)
+                bots[0].wait(lambda e: e["kind"] == "text" and e["author"] == "Andi"
+                             and "no longer available" in e["body"], timeout=30)
+                time.sleep(1.5)
+                shot("35-offer-stopped")
             if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)
@@ -814,6 +875,8 @@ def main():
                 os.killpg(pulse.pid, signal.SIGTERM)
             shell.stop()
             murmur.stop()
+            if wormhole:
+                wormhole.stop()
 
 
 if __name__ == "__main__":

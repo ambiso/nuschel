@@ -51,6 +51,10 @@ struct Arguments {
     /// Started at login: open minimised.
     #[arg(long)]
     autostart: bool,
+    /// Offer this file in the conversation the URL opens, once connected
+    /// (magic-wormhole); repeat for more files.
+    #[arg(long = "offer", value_name = "FILE")]
+    offers: Vec<PathBuf>,
     #[command(subcommand)]
     command: Option<Action>,
 }
@@ -72,6 +76,15 @@ enum Action {
     #[cfg(target_os = "linux")]
     #[command(hide = true)]
     MediaSandbox,
+    /// Run the transfer worker in the sandbox an offer (`--file`) or a
+    /// download gives it, speaking its protocol on this process's standard
+    /// input and output (transfer tests).
+    #[cfg(target_os = "linux")]
+    #[command(hide = true)]
+    TransferSandbox {
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -105,6 +118,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(Action::MediaSandbox) = arguments.command {
         let worker = nuschel_session::workers::sibling("nuschel-media-worker")?;
         let mut command = nuschel_ipc::host::media_sandbox_command(&worker)?;
+        let status = runtime.block_on(async { command.status().await })?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    #[cfg(target_os = "linux")]
+    if let Some(Action::TransferSandbox { file }) = &arguments.command {
+        let worker = nuschel_session::workers::sibling("nuschel-transfer-worker")?;
+        let mut command = nuschel_ipc::host::transfer_sandbox_command(&worker, file.as_deref())?;
         let status = runtime.block_on(async { command.status().await })?;
         std::process::exit(status.code().unwrap_or(1));
     }
@@ -172,13 +193,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ..Default::default()
             };
             let minimised = arguments.autostart;
+            let offers = arguments.offers;
             if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
                 window.set_window_title("Nuschel");
                 if minimised {
                     window.minimize_window();
                 }
                 cx.new(|cx| {
-                    state::Desktop::new(profile, bookmarks, startup, runtime_handle, window, cx)
+                    let mut desktop = state::Desktop::new(
+                        profile,
+                        bookmarks,
+                        startup,
+                        runtime_handle,
+                        window,
+                        cx,
+                    );
+                    desktop.offer_when_connected(offers, cx);
+                    desktop
                 })
             }) {
                 *window_error.borrow_mut() =
