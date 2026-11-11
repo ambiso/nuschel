@@ -1109,6 +1109,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       OS adapters may need the existing system-service unsafe exception; identity
       decryption stays in the crypto worker. Mobile uses native credential APIs
       where PRF is supported.
+      Required user choices (confirmed 2026-11-11): browser-based passkey backup,
+      writing down a recovery key, or skipping recovery setup entirely. Native is
+      an additional route, never a prerequisite. Identity creation/normal use must
+      not require a provider, native API, passkey or completed backup. If a chosen
+      browser/provider lacks PRF support, retain the recovery-key and skip choices
+      without blocking the user; do not substitute a weaker derivation. Skipping
+      must not block chat or repeatedly reopen recovery setup.
       A passkey stored in desktop Chrome/Google Password Manager is not necessarily
       exposed to native OS APIs; Android's Credential Manager is a different case.
       Credential access and PRF support are separate compatibility requirements.
