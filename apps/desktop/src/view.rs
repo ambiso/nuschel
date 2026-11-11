@@ -26,6 +26,7 @@ impl Render for Desktop {
         self.ease_voice_toggles(window, cx);
         // Which dialog the last frame showed (see dialogs::modal).
         self.modal_seen.set(self.modal_shown.take());
+        self.keep_dialog_focus(window, cx);
         self.apply_composer_acks(window, cx);
         self.reconcile_selection(window, cx);
         self.settle_timeline();
@@ -58,7 +59,10 @@ impl Render for Desktop {
             .font_family("sans-serif")
             .text_size(px(15.))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if crate::emoji::shortcut(&event.keystroke) && this.selected_indices().is_some() {
+                if crate::emoji::shortcut(&event.keystroke)
+                    && this.selected_indices().is_some()
+                    && !this.dialog_open()
+                {
                     this.open_emoji(window, cx);
                     cx.stop_propagation();
                     cx.notify();
@@ -1166,6 +1170,24 @@ fn eased(ease: &Option<crate::motion::Ease>, on: bool) -> f32 {
 }
 
 impl Desktop {
+    pub fn dialog_open(&self) -> bool {
+        self.form.is_some() || self.settings_open || self.panel.is_some() || self.prompt.is_some()
+    }
+
+    /// While a dialog is open, keyboard focus stays inside it, so nothing
+    /// behind it (the composer: Enter would send) takes keys; when it closes,
+    /// the composer gets focus back.
+    fn keep_dialog_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open() {
+            if !self.modal_focus.contains_focused(window, cx) {
+                window.focus(&self.modal_focus, cx);
+            }
+        } else if self.modal_seen.get().is_some() {
+            self.composer
+                .update(cx, |input, cx| input.focus(window, cx));
+        }
+    }
+
     /// Retarget the footer's mute and deafen animations to the selected
     /// server's state, and keep frames coming while they move.
     fn ease_voice_toggles(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -750,6 +750,8 @@ pub struct Desktop {
     pub emoji_focus: FocusHandle,
     /// The footer's mute and deafen animations (created on first render).
     pub mute_ease: Option<crate::motion::Ease>,
+    /// Focus stays inside an open dialog (see `keep_dialog_focus`).
+    pub modal_focus: FocusHandle,
     pub deafen_ease: Option<crate::motion::Ease>,
     pub menu: Option<crate::menus::Menu>,
     /// Message text: its selection, the message a menu is for, copy feedback.
@@ -916,6 +918,7 @@ impl Desktop {
             emoji_recent: Vec::new(),
             emoji_focus: cx.focus_handle(),
             mute_ease: None,
+            modal_focus: cx.focus_handle(),
             deafen_ease: None,
             menu: None,
             text: crate::selection::TextState::new(cx),
@@ -1370,8 +1373,8 @@ impl Desktop {
         let editing = form.editing.clone();
         let password = form.password.read(cx).value().to_string();
         bookmark.auto_connect = form.auto_connect;
-        // A new server connects right away; an edited one reconnects only when
-        // it was online and its address, name or password changed.
+        // A new or offline server connects on save; an online one reconnects
+        // only when its address, name or password changed.
         let mut connect = editing.is_none();
         if let Some(previous) = editing
             .as_ref()
@@ -1392,7 +1395,7 @@ impl Desktop {
             let changed = !same_address
                 || bookmark.username != previous.bookmark.username
                 || !password.is_empty();
-            connect = online && changed;
+            connect = !online || changed;
             if !connect {
                 // Keep the live view (users, history, state); only the saved details change.
                 let index = self

@@ -448,6 +448,20 @@ def main():
                 time.sleep(0.6)
                 footer("34-after-rapid-clicks")
             if want("emoji"):
+                # Behind an open dialog, neither the picker nor Enter-to-send work.
+                click(800, 738)  # the composer
+                shell.type("draft")
+                click(239, 773)  # Settings
+                time.sleep(0.8)
+                shell.chord("Control_L", "period")
+                shell.key("Return")
+                time.sleep(0.8)
+                shot("26-settings-keeps-keys")
+                shell.key("Escape")
+                time.sleep(0.6)
+                for _ in range(5):
+                    shell.key("BackSpace")
+                time.sleep(0.4)
                 # Ctrl+. opens the picker; typing searches; Enter inserts the first match.
                 click(800, 738)  # the composer
                 time.sleep(0.4)

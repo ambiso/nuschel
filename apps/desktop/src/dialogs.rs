@@ -274,6 +274,7 @@ pub fn modal(
         .child(
             div()
                 .id(id)
+                .track_focus(&this.modal_focus)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .role(Role::Dialog)
                 .aria_label(label)
@@ -305,6 +306,18 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
         return div().into_any_element();
     };
     let editing = form.editing.is_some();
+    // Saving an offline server connects it; an online one reconnects only
+    // when its address, name or password changed.
+    let online = form
+        .editing
+        .as_ref()
+        .and_then(|id| this.servers.iter().find(|server| &server.id == id))
+        .is_some_and(|server| server.status != crate::state::Status::Disconnected);
+    let save = match (editing, online) {
+        (false, _) => "Add and connect",
+        (true, false) => "Save and connect",
+        (true, true) => "Save",
+    };
     let content = div()
         .flex()
         .flex_col()
@@ -397,7 +410,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
                     this.form = None;
                     cx.notify();
                 }, cx))
-                .child(styled_button("save-connect", if editing { "Save" } else { "Add and connect" }, Tone::Primary, |this, window, cx| this.submit_form(window, cx), cx)),
+                .child(styled_button("save-connect", save, Tone::Primary, |this, window, cx| this.submit_form(window, cx), cx)),
         )
         .into_any_element();
     modal(
