@@ -167,7 +167,6 @@ struct Connection {
 pub struct Backend {
     handle: Handle,
     profile: Profile,
-    pub events: mpsc::Receiver<Event>,
     sender: mpsc::Sender<Event>,
     storage: mpsc::Sender<StorageCommand>,
     content: mpsc::Sender<ContentJob>,
@@ -210,7 +209,12 @@ enum StorageCommand {
     },
 }
 impl Backend {
-    pub fn new(handle: Handle, profile: Profile, settings: ClientSettings) -> Self {
+    /// The backend, and the events it reports for the desktop to apply.
+    pub fn new(
+        handle: Handle,
+        profile: Profile,
+        settings: ClientSettings,
+    ) -> (Self, mpsc::Receiver<Event>) {
         let (sender, events) = mpsc::channel(512);
         let (storage, storage_rx) = mpsc::channel(128);
         let (content, content_rx) = mpsc::channel(64);
@@ -220,10 +224,9 @@ impl Backend {
             sender.clone(),
         ));
         let content_task = handle.spawn(content_loop(content_rx, storage.clone(), sender.clone()));
-        Self {
+        let backend = Self {
             handle,
             profile,
-            events,
             sender,
             storage,
             content,
@@ -235,7 +238,8 @@ impl Backend {
             storage_task,
             content_task,
             preview: None,
-        }
+        };
+        (backend, events)
     }
     /// Start the Settings audio check (devices only until the microphone test starts).
     pub fn start_preview(&mut self) {

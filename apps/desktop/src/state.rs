@@ -763,7 +763,10 @@ pub struct Desktop {
     passwords: BTreeMap<String, String>,
     drafts: BTreeMap<(String, u32), String>,
     _subscriptions: Vec<Subscription>,
-    _poll: Task<()>,
+    _receive: Task<()>,
+    /// Wakes the push-to-talk poll when a system-wide shortcut is bound.
+    ptt_wake: Arc<tokio::sync::Notify>,
+    _ptt_poll: Task<()>,
 }
 impl Drop for Desktop {
     /// The latest saved servers reach disk even when a delayed write is
@@ -821,20 +824,43 @@ impl Desktop {
         let activation = cx.observe_window_activation(window, |this: &mut Self, window, _| {
             this.window_active = window.is_window_active();
         });
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(20))
-                    .await;
-                if this
-                    .update(cx, |this, cx| {
-                        if this.drain_events(cx) {
-                            cx.notify();
-                        }
-                    })
-                    .is_err()
+        let (backend, mut events) = Backend::new(handle.clone(), profile.clone(), settings.clone());
+        // Events apply as they arrive, a bounded batch per update.
+        let receive = cx.spawn(async move |this, cx| {
+            let mut batch = Vec::new();
+            while let Some(event) = events.recv().await {
+                batch.push(event);
+                while batch.len() < 256
+                    && let Ok(event) = events.try_recv()
                 {
+                    batch.push(event);
+                }
+                let applied = this.update(cx, |this, cx| {
+                    this.apply_events(batch.drain(..), cx);
+                    cx.notify();
+                });
+                if applied.is_err() {
                     break;
+                }
+                // Let a frame render between the batches of a burst.
+                tokio::task::yield_now().await;
+            }
+        });
+        // System-wide shortcuts report through a queue that has to be polled.
+        let ptt_wake = Arc::new(tokio::sync::Notify::new());
+        let ptt_poll = cx.spawn({
+            let wake = ptt_wake.clone();
+            async move |this, cx| {
+                loop {
+                    match this.update(cx, |this, cx| this.poll_global_ptt(cx)) {
+                        Ok(true) => {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(20))
+                                .await
+                        }
+                        Ok(false) => wake.notified().await,
+                        Err(_) => break,
+                    }
                 }
             }
         });
@@ -843,7 +869,7 @@ impl Desktop {
             navigation: Navigation::default(),
             history_enabled: true,
             notes: crate::notify::start(&handle),
-            backend: Backend::new(handle, profile.clone(), settings.clone()),
+            backend,
             profile,
             form: None,
             composer,
@@ -894,7 +920,9 @@ impl Desktop {
             passwords: BTreeMap::new(),
             drafts: BTreeMap::new(),
             _subscriptions: vec![subscription, activation],
-            _poll: poll,
+            _receive: receive,
+            ptt_wake,
+            _ptt_poll: ptt_poll,
         };
         if !desktop.servers.is_empty() {
             desktop.browse_server(0, window, cx);
@@ -941,6 +969,7 @@ impl Desktop {
                     crate::global_ptt::GlobalPtt::start(self.backend.runtime(), key.clone()),
                 ));
                 self.global_ptt_status = Some("Requesting a system-wide shortcut…".into());
+                self.ptt_wake.notify_one();
             }
             (None, _) => {
                 self.global_ptt = None;
@@ -1957,14 +1986,14 @@ impl Desktop {
             self.servers[server].channels[channel].new_messages = 0;
         }
     }
-    fn drain_events(&mut self, cx: &mut Context<Self>) -> bool {
-        let mut changed = false;
+    /// Apply system-wide push-to-talk events; false while no shortcut is wanted.
+    fn poll_global_ptt(&mut self, cx: &mut Context<Self>) -> bool {
         while let Some(event) = self
             .global_ptt
             .as_mut()
             .and_then(|(_, global)| global.try_next())
         {
-            changed = true;
+            cx.notify();
             match event {
                 crate::global_ptt::GlobalEvent::Pressed => self.set_push_to_talk(true),
                 crate::global_ptt::GlobalEvent::Released => self.set_push_to_talk(false),
@@ -1978,11 +2007,10 @@ impl Desktop {
                 }
             }
         }
-        for _ in 0..256 {
-            let Ok(event) = self.backend.events.try_recv() else {
-                break;
-            };
-            changed = true;
+        self.global_ptt.is_some()
+    }
+    fn apply_events(&mut self, events: impl IntoIterator<Item = Event>, cx: &mut Context<Self>) {
+        for event in events {
             match event {
                 Event::Sent {
                     server,
@@ -2539,7 +2567,6 @@ impl Desktop {
         if std::mem::take(&mut self.cache_dirty) {
             self.save_servers_soon(cx);
         }
-        changed
     }
     /// Write `servers` now, for an action the user waits on; a delayed write
     /// of an older state never lands after it.
