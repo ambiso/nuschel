@@ -816,6 +816,34 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [ ] Media later: SFrame with MLS-exported keys (with the WebRTC work below).
 5. **Moderation and operations**
    - [ ] Moderation tools on top of E2EE (reports, membership removal), metrics.
+   - [ ] **Reporting messages** (user, 2026-11-11). Moderators are users with Kick/Ban
+         in the channel (server-wide for server-wide reports). The reported user is
+         never told. Deniable MLS is not a goal (MLS messages are signed, so a report
+         proves authorship). Flow: "Report" on a message (optionally with the few
+         before it as context); the report carries the plaintext, the MLS signature
+         and framing, the sender's credential, and the server's **delivery stamp** (a
+         server MAC over the ciphertext hash, sender, conversation, seq and time, made
+         at delivery); attachments add their file key, which the files/1 root commits
+         to. Moderators' clients verify signature, credential (KT) and stamp, then act
+         (delete for everyone, kick/ban, remove from the group). **A reporter gains no
+         key that opens other reports**: the moderators form an MLS group and derive
+         an HPKE (X-Wing) report key pair per epoch from it; the server publishes the
+         public key signed by a moderator; reporters encrypt each report to it
+         without joining anything; a moderator losing Kick/Ban is removed and the key
+         rotates. On compatible servers a report references the stored message.
+   - [ ] **Spam holds and a moderation queue** (user, 2026-11-11): against scam bots
+         that join and post in every channel. Light, configurable server-side
+         signals that work without content on end-to-end servers: a new account
+         posting in ≥ 3 channels within a minute, bursts of near-identical sizes
+         across channels, a new member's first messages; on compatible servers also
+         identical text across channels and link-heavy first messages. A flagged
+         message is **held**: hidden from members (end-to-end: delivered marked held,
+         since MLS cannot decrypt it after the epoch moves on, and clients hide it;
+         stock clients receive it only once allowed); the sender sees it as sent.
+         Moderators get a **queue** with Allow (released at its original place) and
+         Ban user; a ban resolves all of that user's held items so the queue stays
+         clear; every decision stays retrievable in a **moderation log** (who, what,
+         when, which signal), filterable by user.
    - [x] Retention policies (per server and channel, see phase 2).
    - [x] Server admin CLI: `nuscheld admin` (users, channels and retention, bans,
          history export and erasure, check-config), offline under an operator
