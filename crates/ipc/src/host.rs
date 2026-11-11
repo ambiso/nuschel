@@ -306,6 +306,20 @@ pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Co
     Ok(sandbox.run(["--database", "/data/history.sqlite3"]))
 }
 
+/// The crypto worker: its own directory (the encrypted keystore, its state and,
+/// for now, the store key file) is writable at `/data`; no network, no home, no
+/// D-Bus. The trusted supervisor chooses the directory.
+#[cfg(target_os = "linux")]
+pub fn crypto_sandbox_command(executable: &Path, directory: &Path) -> Result<Command, Error> {
+    let mut sandbox = Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?;
+    sandbox
+        .0
+        .arg("--bind")
+        .arg(directory.canonicalize()?)
+        .arg("/data");
+    Ok(sandbox.run(["--data", "/data"]))
+}
+
 /// Audio service sockets and ALSA devices only. No session credentials, home,
 /// D-Bus socket, or network namespace are granted to native audio/codec processing.
 #[cfg(target_os = "linux")]
@@ -535,6 +549,14 @@ pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Co
 }
 
 #[cfg(target_os = "macos")]
+pub fn crypto_sandbox_command(executable: &Path, directory: &Path) -> Result<Command, Error> {
+    let directory = directory.canonicalize()?;
+    let mut command = sandbox_exec(seatbelt::STORAGE, executable, &[("DATA", &directory)])?;
+    command.arg("--data").arg(&directory);
+    Ok(command)
+}
+
+#[cfg(target_os = "macos")]
 pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
     let home = std::path::PathBuf::from(std::env::var_os("HOME").ok_or(Error::InvalidResponse)?);
     let mut command = sandbox_exec(
@@ -598,6 +620,13 @@ pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Co
     command
         .arg("--database")
         .arg(directory.join("history.sqlite3"));
+    Ok(command)
+}
+
+#[cfg(windows)]
+pub fn crypto_sandbox_command(executable: &Path, directory: &Path) -> Result<Command, Error> {
+    let mut command = windows_worker(executable);
+    command.arg("--data").arg(directory);
     Ok(command)
 }
 
@@ -673,12 +702,15 @@ mod tests {
         let storage = super::storage_sandbox_command(&executable, &std::env::temp_dir());
         let storage = arguments(storage.unwrap());
         let media = arguments(super::media_sandbox_command(&executable).unwrap());
+        let crypto = super::crypto_sandbox_command(&executable, &std::env::temp_dir());
+        let crypto = arguments(crypto.unwrap());
         let offer = super::transfer_sandbox_command(&executable, Some(&executable));
         let offer = arguments(offer.unwrap());
         let receive = arguments(super::transfer_sandbox_command(&executable, None).unwrap());
         assert_eq!(content[..3], ["--as=536870912", "--cpu=7", "--"]);
         assert_eq!(storage[..2], ["--as=1073741824", "--"]);
         assert_eq!(media[..2], ["--as=1073741824", "--"]);
+        assert_eq!(crypto[..2], ["--as=1073741824", "--"]);
         for (command, worker) in [
             (&content, &["/worker", "x"][..]),
             (
@@ -686,6 +718,7 @@ mod tests {
                 &["/worker", "--database", "/data/history.sqlite3"],
             ),
             (&media, &["/worker", "--live"]),
+            (&crypto, &["/worker", "--data", "/data"]),
             (&offer, &["/worker", "--file", "/input"]),
             (&receive, &["/worker"]),
         ] {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Worker IPC. Workers receive explicit data over inherited pipes, never credentials.
 
+pub mod crypto;
 #[cfg(not(target_family = "wasm"))]
 pub mod host;
 pub mod server;
