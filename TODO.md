@@ -68,7 +68,7 @@ Later (reported):
 - [x] LaTeX/math in messages: `$…$`, `$$…$$` and ```` ```math ```` as tokens of the
       Markdown grammar, rendered by Typst in the sandboxed math worker (docs/math.md).
       Remaining: the worker on Windows has only process separation; `\text` in
-      other scripts than Latin lacks glyphs (one font); math in links' URLs.
+      other scripts than Latin lacks glyphs (one font).
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
       relays (perhaps a small chunk cache, content-defined chunking); resumable
       across restarts and lost connections; clearly shown while still uploading.

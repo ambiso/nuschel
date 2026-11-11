@@ -17,7 +17,7 @@ use thiserror::Error;
 
 mod markup;
 pub mod math;
-pub use markup::{MAX_LINKS, MAX_URL_BYTES};
+pub use markup::{MAX_LINKS, MAX_URL_BYTES, bare_urls};
 
 #[derive(Debug, Error)]
 pub enum Error {

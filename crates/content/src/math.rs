@@ -66,9 +66,10 @@ impl Token {
 /// pair with a `$` inside it (`$a `$x$` b`). So the text is parsed in that
 /// order: first without math, and what is code (spans and blocks), an
 /// autolink or HTML there has its content masked, byte for byte, keeping
-/// line breaks; then the masked text is parsed with math. No `$` inside those
-/// is seen by the second parse, and a token that would take in masked bytes
-/// differs from the text and is refused (`Token::new`).
+/// line breaks, as are the bare URLs the linkifier links
+/// ([`crate::bare_urls`]); then the masked text is parsed with math. No `$`
+/// inside those is seen by the second parse, and a token that would take in
+/// masked bytes differs from the text and is refused (`Token::new`).
 pub fn tokens(source: &str) -> Vec<Token> {
     use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
     let mut masked = source.as_bytes().to_vec();
@@ -102,6 +103,10 @@ pub fn tokens(source: &str) -> Vec<Token> {
             }) if range.len() >= 2 => mask(range.start + 1..range.end - 1),
             _ => {}
         }
+    }
+    // Bare URLs bind tighter too: `https://a.example/$x$` stays a link.
+    for (range, _) in crate::bare_urls(source) {
+        mask(range);
     }
     let Ok(masked) = String::from_utf8(masked) else {
         return Vec::new();
@@ -260,7 +265,17 @@ mod spec {
                 ("> $x$ and $$y$$", &[("$x$", "x", 'i'), ("$$y$$", "y", 'd')]),
                 ("- $a\n  b$", &[]),
                 ("> $$\n> x\n> $$", &[]),
-                // Links, autolinks and raw HTML.
+                // Links, autolinks and raw HTML. A bare URL binds tighter than
+                // a formula, as code does.
+                ("https://a.example/$x$", &[]),
+                ("https://a.example/a$x$b", &[]),
+                ("see https://a.example/?q=$x$&r=$y$ now", &[]),
+                ("https://a.example/$x$ and $y$", &[("$y$", "y", 'i')]),
+                ("$x$ https://a.example/$y", &[("$x$", "x", 'i')]),
+                ("$x$https://a.example/", &[("$x$", "x", 'i')]),
+                ("https://a.example $x$", &[("$x$", "x", 'i')]),
+                ("$a https://a.example/ b$", &[]),
+                ("mumble://host/$x$ $$y$$", &[("$$y$$", "y", 'd')]),
                 ("[$x$](https://a.example)", &[("$x$", "x", 'i')]),
                 ("[a](https://a.example/$x$)", &[]),
                 ("<https://a.example/$x$>", &[]),
@@ -294,6 +309,20 @@ mod spec {
             ],
             true,
         );
+    }
+
+    /// A URL with dollars in it is a link, whole.
+    #[test]
+    fn urls_bind_tighter_than_formulas() {
+        let renderer = ContentRenderer::default();
+        let input = "go to https://a.example/?q=$x$&r=1 then $y$";
+        let document = renderer.render(input).unwrap();
+        let ContentBlock::Text { text, spans, .. } = &document.blocks[0] else {
+            panic!("not text");
+        };
+        let link = spans.iter().find(|span| span.link.is_some()).unwrap();
+        assert_eq!(&text[link.start..link.end], "https://a.example/?q=$x$&r=1");
+        assert_eq!(found(&document), [("$y$".into(), "y".into(), 'i')]);
     }
 
     /// Nothing changes the text: a document's text, formulas as written,

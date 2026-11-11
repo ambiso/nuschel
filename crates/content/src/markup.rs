@@ -576,15 +576,15 @@ pub fn legacy_text(source: &str) -> Result<String, crate::Error> {
     Ok(text)
 }
 
-/// Bare http, https and mumble URLs in `text` outside existing links.
-fn bare_links(text: &str, spans: &[Span], count: &mut usize) -> Vec<(usize, usize, String)> {
+/// The bare http, https and mumble URLs in `text` that are links, in order:
+/// their byte range and their target. The linkifier links them, and formulas
+/// are found only outside them (`crate::math::tokens`), so a URL binds
+/// tighter than math: `https://a.example/$x$` is a link.
+pub fn bare_urls(text: &str) -> Vec<(std::ops::Range<usize>, String)> {
     let bytes = text.as_bytes();
     let mut found = Vec::new();
     let mut from = 0;
     for (colon, _) in text.match_indices("://") {
-        if *count >= MAX_LINKS {
-            break;
-        }
         if colon < from {
             continue;
         }
@@ -626,16 +626,30 @@ fn bare_links(text: &str, spans: &[Span], count: &mut usize) -> Vec<(usize, usiz
             }
             end -= last.len_utf8();
         }
+        if let Some(url) = link_target(&text[start..end]) {
+            found.push((start..end, url));
+        }
+    }
+    found
+}
+
+/// Bare URLs in `text` outside existing links and formulas, up to the limit.
+fn bare_links(text: &str, spans: &[Span], count: &mut usize) -> Vec<(usize, usize, String)> {
+    let mut found = Vec::new();
+    for (range, url) in bare_urls(text) {
+        if *count >= MAX_LINKS {
+            break;
+        }
         let linked = |span: &Span| {
-            (span.link.is_some() || span.math.is_some()) && span.start < end && start < span.end
+            (span.link.is_some() || span.math.is_some())
+                && span.start < range.end
+                && range.start < span.end
         };
         if spans.iter().any(linked) {
             continue;
         }
-        if let Some(url) = link_target(&text[start..end]) {
-            *count += 1;
-            found.push((start, end, url));
-        }
+        *count += 1;
+        found.push((range.start, range.end, url));
     }
     found
 }

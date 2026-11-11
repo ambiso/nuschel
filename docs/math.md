@@ -28,12 +28,13 @@ code and formulas), but the parser decides what is code, an autolink or HTML,
 and so where math cannot be.
 
 CommonMark ranks code spans, autolinks and raw HTML above every other inline
-construct. pulldown-cmark's math (`Options::ENABLE_MATH`) does not quite: a `$`
+construct, and Nuschel adds the bare URLs it links (`bare_urls`, the
+linkifier's own detection). pulldown-cmark's math (`Options::ENABLE_MATH`) does not quite: a `$`
 before a code span can pair with a `$` inside it (``$a `$x$` b`` gives the
 formula ``a ` ``, and the code span is gone), which the fuzzer found. So the
 text is parsed in CommonMark's order: once without math, where the contents of
-code spans, code blocks, autolinks and HTML are masked byte for byte (line
-breaks kept, so every offset stays); then the masked text with math. The
+code spans, code blocks, autolinks and HTML, and bare URLs, are masked byte for
+byte (line breaks kept, so every offset stays); then the masked text with math. The
 second parse never sees a `$` inside code, and a token that takes in masked
 bytes differs from the text and is refused.
 
@@ -47,7 +48,7 @@ bytes differs from the text and is refused.
 | Escapes | `\$` is a dollar sign and never a delimiter. Inside a formula nothing is unescaped: the LaTeX is the bytes typed (`$a \$ b \_ \{$` keeps every backslash). |
 | Code | Code spans (backticks), fenced and indented code blocks bind tighter: nothing in them is math, `$` included. A formula never contains a backtick. |
 | Emphasis | Formulas bind tighter: `*` and `_` inside one are LaTeX. Emphasis around a formula leaves it whole (`*$x$*`). |
-| Links | Formulas in a Markdown link's text count (`[$x$](…)`; Nuschel shows Markdown links as typed); none in its destination, in an autolink `<https://…>` or in HTML. A bare URL is not a token of the grammar, so `https://a.example/$x$` has a formula and loses its link. |
+| Links | A bare URL (`https://`, `http://`, `mumble://`, as the linkifier finds it) binds tighter, like code: `https://a.example/?q=$x$` is a link, whole. Formulas in a Markdown link's text count (`[$x$](…)`; Nuschel shows Markdown links as typed); none in its destination, in an autolink `<https://…>` or in HTML. |
 | Raw HTML | Inline tags are tokens and formulas around them count (`<span>$x$</span>`); an HTML block (a line starting `<div>` and so on, up to a blank line) holds none. |
 | Line breaks | An inline formula may continue on the next line of its paragraph; no formula spans a blank line. |
 | Lists and quotes | A formula within a line of an item or quote counts. One whose continuation lines carry `>` or indentation does not: its bytes would not be its LaTeX. |
@@ -86,7 +87,7 @@ was typed. Each of those cases is a row of the spec test in
 `crates/content/src/math.rs` (input → expected tokens), and the `math_tokens`
 fuzz target checks the invariants for any input: every token is exactly the
 bytes between its delimiters, none overlaps what is code when the same text is
-parsed without math, the document shows the tokens in order as written, and
+parsed without math or a URL the linkifier links, the document shows the tokens in order as written, and
 the document's text, formulas included, is the message's.
 
 ### Messages from stock clients (HTML)

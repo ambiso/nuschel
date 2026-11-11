@@ -2,13 +2,14 @@
 //! The grammar of formulas in messages (docs/math.md): hostile text through
 //! the content worker's parse. Every formula token is exactly the bytes typed
 //! between its delimiters; none comes from what is code when the text is
-//! parsed without math (code spans, fenced and indented code); the document
+//! parsed without math (code spans, fenced and indented code) or overlaps a
+//! URL the linkifier links; the document
 //! shows the tokens in order, as typed; and its text, formulas included, is
 //! the message's: rendering changes nothing that stock clients receive.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use nuschel_content::{ContentRenderer, math};
+use nuschel_content::{ContentRenderer, bare_urls, math};
 use nuschel_core::{ContentBlock, EMBED};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
@@ -34,6 +35,7 @@ fuzz_target!(|data: &[u8]| {
             _ => {}
         }
     }
+    let urls = bare_urls(source);
     let mut end = 0;
     for token in &tokens {
         assert!(end <= token.range.start, "tokens are in order and disjoint");
@@ -47,6 +49,12 @@ fuzz_target!(|data: &[u8]| {
             assert!(
                 token.range.end <= code.start || code.end <= token.range.start,
                 "{written:?} overlaps code at {code:?}"
+            );
+        }
+        for (link, _) in &urls {
+            assert!(
+                token.range.end <= link.start || link.end <= token.range.start,
+                "{written:?} overlaps the link at {link:?}"
             );
         }
     }
