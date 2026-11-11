@@ -272,6 +272,11 @@ enum Input {
     E2eeSync {
         conversation: String,
     },
+    /// Open a channel's end-to-end conversation (its conversation id from
+    /// `channel_info`, 32 hex digits): join its group, creating it if needed.
+    E2eeOpenChannel {
+        conversation: String,
+    },
     /// Device linking (`--offline` only; docs/e2ee.md §3.4): on a device with the
     /// identity, a code to show and the first message for the new device.
     LinkOffer,
@@ -370,8 +375,13 @@ fn mls_json(event: &MlsEvent) -> serde_json::Value {
         MlsEvent::Received {
             conversation,
             received,
+            author,
         } => json!({"kind":"e2ee_received",
-            "conversation":hex(conversation), "received":received}),
+            "conversation":hex(conversation), "received":received,
+            "author":author.as_ref().map(|author| json!({"account":hex(&author.account),
+                "user_id":author.user_id, "name":author.name}))}),
+        MlsEvent::Activity { conversation, seq } => json!({"kind":"e2ee_activity",
+            "conversation":hex(conversation), "seq":seq}),
         MlsEvent::Sent {
             conversation,
             key,
@@ -648,6 +658,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 },
                 Ok(Input::E2eeSync { conversation }) => match account(&conversation) {
                     Some(conversation) => Command::Mls(MlsCommand::Sync { conversation }),
+                    None => {
+                        let _ = output(json!({"kind":"error", "message":"bad conversation"}));
+                        continue;
+                    }
+                },
+                Ok(Input::E2eeOpenChannel { conversation }) => match account(&conversation) {
+                    Some(conversation) => Command::Mls(MlsCommand::OpenChannel { conversation }),
                     None => {
                         let _ = output(json!({"kind":"error", "message":"bad conversation"}));
                         continue;

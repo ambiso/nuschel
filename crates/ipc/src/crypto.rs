@@ -505,6 +505,34 @@ pub enum CryptoRequest {
         idempotency_key: Vec<u8>,
         seq: u64,
     },
+    /// Channels (docs/e2ee.md §6.2, phase 4c): the first device to open a channel
+    /// that has no group creates it, alone, with the server as external sender
+    /// (`MlsOutgoing` with `create`; pending until `MlsCommitDone`).
+    MlsCreateChannel {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+    },
+    /// Join a channel's group by external commit, from the server's newest
+    /// GroupInfo and tree (`MlsJoinInfo`); every member's credential is checked
+    /// against the rosters the worker has (look the members' accounts up first).
+    /// `MlsOutgoing`, pending until `MlsCommitDone`; a refusal forgets the group.
+    MlsJoinChannel {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        group_info: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        tree: Vec<u8>,
+    },
+    /// Commit the server's pending removals (it named this device to:
+    /// `MlsTask`), after the stream up to them was received (`MlsOutgoing`).
+    MlsCommitProposals {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+    },
 
     // ---- Device linking (docs/e2ee.md §3.4) ----
     // nuschel-identity's protocol; the caller relays the messages between the two
@@ -830,6 +858,28 @@ impl CryptoRequest {
                 conversation(c)?;
                 key(idempotency_key)
             }
+            Self::MlsCreateChannel {
+                server: s,
+                conversation: c,
+            }
+            | Self::MlsCommitProposals {
+                server: s,
+                conversation: c,
+            } => {
+                server(s)?;
+                conversation(c)
+            }
+            Self::MlsJoinChannel {
+                server: s,
+                conversation: c,
+                group_info,
+                tree,
+            } => {
+                server(s)?;
+                conversation(c)?;
+                at_most(group_info.len(), MAX_MLS_BYTES, "group info")?;
+                at_most(tree.len(), MAX_MLS_BYTES, "tree")
+            }
             Self::LinkOffer => Ok(()),
             Self::LinkJoin {
                 code,
@@ -1120,9 +1170,16 @@ pub struct ConversationView {
     pub pending_commit: bool,
     /// Accounts (16 bytes: the peer, or our own) whose key-transparency roster
     /// lists devices that are not members yet: claim key packages for them and
-    /// send `MlsAddDevices`.
+    /// send `MlsAddDevices`. Direct conversations only: channel devices join by
+    /// themselves.
     #[serde(default, with = "base64_list")]
     pub missing: Vec<Vec<u8>>,
+    /// A channel's group (server-driven membership), not a direct conversation's.
+    #[serde(default)]
+    pub channel: bool,
+    /// Removals the server proposed that wait for a member's commit.
+    #[serde(default)]
+    pub removals: u32,
 }
 
 /// A commit to send as `MlsCommit`.

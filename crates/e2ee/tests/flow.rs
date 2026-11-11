@@ -1,15 +1,24 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! The client and delivery-service halves together, in process: a direct
 //! conversation between two identities through the `DeliveryGroup`, epoch fencing,
-//! and hostile key packages.
+//! hostile key packages, and a channel with external joins and the server's
+//! removals (docs/e2ee.md §6.2).
 use nuschel_e2ee::client::{Client, Incoming, ValidKeyPackage};
-use nuschel_e2ee::ds::{DeliveryGroup, DsError, check_key_package};
+use nuschel_e2ee::ds::{DeliveryGroup, DsError, ServerSigner, check_key_package};
 use nuschel_e2ee::prevalidate::{self, Malformed};
 use nuschel_e2ee::{ConversationBinding, Error, SUITE_KEM_PUBLIC_KEY_LEN};
 use nuschel_identity::{DisplayName, NewIdentity, Validity};
+use std::sync::LazyLock;
 
 const SERVER: [u8; 32] = [7; 32];
 const CONVERSATION: [u8; 16] = [1; 16];
+
+/// The server's external-sender key (its head-signing key in nuscheld).
+static SIGNER: LazyLock<ServerSigner> = LazyLock::new(|| ServerSigner::generate().unwrap());
+
+fn server_key() -> [u8; 32] {
+    *SIGNER.public_key()
+}
 
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -63,6 +72,7 @@ fn pair() -> (Device, Device, DeliveryGroup, Vec<u8>) {
             &alice.identity.device,
             &alice.identity.device_credential,
             &binding(),
+            &server_key(),
             &[valid],
         )
         .unwrap();
@@ -71,6 +81,7 @@ fn pair() -> (Device, Device, DeliveryGroup, Vec<u8>) {
         &created.init_tree,
         &SERVER,
         &CONVERSATION,
+        &server_key(),
     )
     .unwrap();
     assert_eq!(members.len(), 1);
@@ -189,6 +200,7 @@ fn the_delivery_service_refuses_what_does_not_fit() {
             &other.identity.device,
             &other.identity.device_credential,
             &ConversationBinding::direct([8; 32], CONVERSATION),
+            &server_key(),
             &[],
         )
         .unwrap();
@@ -197,7 +209,30 @@ fn the_delivery_service_refuses_what_does_not_fit() {
             &created.init_group_info,
             &created.init_tree,
             &SERVER,
-            &CONVERSATION
+            &CONVERSATION,
+            &server_key(),
+        )
+        .is_err()
+    );
+    // A group naming another external sender (someone who could forge the
+    // server's removals) is refused too.
+    let created = other
+        .client
+        .create(
+            &other.identity.device,
+            &other.identity.device_credential,
+            &ConversationBinding::direct(SERVER, [2; 16]),
+            &[9; 32],
+            &[],
+        )
+        .unwrap();
+    assert!(
+        DeliveryGroup::create(
+            &created.init_group_info,
+            &created.init_tree,
+            &SERVER,
+            &[2; 16],
+            &server_key(),
         )
         .is_err()
     );
@@ -306,4 +341,166 @@ fn trees_with_short_keys_are_refused() {
     assert_eq!(&broken[prefix..prefix + 4], &[1, 1, 0x44, 0xc0]);
     broken[prefix + 3] = 0xbf;
     assert!(prevalidate::ratchet_tree(&broken).is_err());
+}
+
+/// A channel (docs/e2ee.md §6.2): its first device creates the group alone; others
+/// join by external commit from the server's GroupInfo and tree; members cannot
+/// add anyone; the server proposes a removal, a member commits it, and the removed
+/// device learns it is out.
+#[test]
+fn a_channel_with_external_joins_and_the_servers_removals() {
+    let alice = Device::new("alice");
+    let bob = Device::new("bob");
+    let carol = Device::new("carol");
+    let binding = ConversationBinding::channel(SERVER, [3; 16]);
+    let created = alice
+        .client
+        .create(
+            &alice.identity.device,
+            &alice.identity.device_credential,
+            &binding,
+            &server_key(),
+            &[],
+        )
+        .unwrap();
+    let (mut ds, _) = DeliveryGroup::create(
+        &created.init_group_info,
+        &created.init_tree,
+        &SERVER,
+        &[3; 16],
+        &server_key(),
+    )
+    .unwrap();
+    // The first commit is a self-update: the GroupInfo external joiners need.
+    let outcome = ds
+        .commit(&created.first.commit, &created.first.group_info, None)
+        .unwrap();
+    assert_eq!((outcome.epoch, outcome.members.len()), (1, 1));
+    alice.client.merge_pending(&created.group_id).unwrap();
+    let group = created.group_id;
+
+    // Bob and Carol join by themselves.
+    let mut join = |device: &Device| {
+        let (info, tree) = ds.join_info().unwrap();
+        let joined = device
+            .client
+            .join_external(
+                &device.identity.device,
+                &device.identity.device_credential,
+                &info,
+                &tree,
+                &server_key(),
+            )
+            .unwrap();
+        assert_eq!(joined.binding, binding);
+        let outcome = ds
+            .commit(&joined.outgoing.commit, &joined.outgoing.group_info, None)
+            .unwrap();
+        assert!(outcome.external_join);
+        assert_eq!(outcome.added.len(), 1);
+        joined.outgoing.commit
+    };
+    let bob_join = join(&bob);
+    match alice.client.process(&group, &bob_join).unwrap() {
+        Incoming::Commit(commit) => {
+            assert!(commit.external_join && commit.adds == 0);
+            alice.client.merge(&group, commit).unwrap();
+        }
+        _ => panic!("expected the join"),
+    }
+    let carol_join = join(&carol);
+    for member in [&alice, &bob] {
+        match member.client.process(&group, &carol_join).unwrap() {
+            Incoming::Commit(commit) => {
+                assert_eq!(commit.members.len(), 3);
+                member.client.merge(&group, commit).unwrap();
+            }
+            _ => panic!("expected the join"),
+        }
+    }
+    let message = carol
+        .client
+        .encrypt(&carol.identity.device, &group, b"hello channel")
+        .unwrap();
+    ds.fence(&message).unwrap();
+    for member in [&alice, &bob] {
+        assert!(matches!(
+            member.client.process(&group, &message).unwrap(),
+            Incoming::Application { data, .. } if data == b"hello channel"
+        ));
+    }
+
+    // Members do not add devices to a channel.
+    let dave = Device::new("dave");
+    let package = ValidKeyPackage::check(&dave.key_package()).unwrap();
+    let add = alice
+        .client
+        .add(&alice.identity.device, &group, &[package])
+        .unwrap();
+    assert!(
+        ds.commit(&add.commit, &add.group_info, add.welcome.as_deref())
+            .is_err()
+    );
+    alice.client.clear_pending(&group).unwrap();
+    // Nor remove anyone the server did not ask to remove.
+    let bob_leaf = bob.client.own_index(&group).unwrap();
+    let removal = alice
+        .client
+        .remove(&alice.identity.device, &group, &[bob_leaf])
+        .unwrap();
+    assert!(
+        ds.commit(&removal.commit, &removal.group_info, None)
+            .is_err()
+    );
+    alice.client.clear_pending(&group).unwrap();
+
+    // The server proposes Bob's removal; Carol commits it.
+    let proposal = ds.propose_removal(bob_leaf, &SIGNER).unwrap();
+    for member in [&alice, &bob, &carol] {
+        assert!(matches!(
+            member.client.process(&group, &proposal).unwrap(),
+            Incoming::Proposal { from_server: true, removes: Some(leaf) } if leaf == bob_leaf
+        ));
+    }
+    assert_eq!(
+        carol.client.pending_removals(&group).unwrap(),
+        vec![bob_leaf]
+    );
+    // Bob cannot commit his own removal.
+    assert!(
+        bob.client
+            .commit_proposals(&bob.identity.device, &group)
+            .is_err()
+    );
+    let commit = carol
+        .client
+        .commit_proposals(&carol.identity.device, &group)
+        .unwrap();
+    let outcome = ds.commit(&commit.commit, &commit.group_info, None).unwrap();
+    assert_eq!(outcome.removed.len(), 1);
+    assert_eq!(outcome.members.len(), 2);
+    carol.client.merge_pending(&group).unwrap();
+    match alice.client.process(&group, &commit.commit).unwrap() {
+        Incoming::Commit(commit) => {
+            assert!(commit.removals_by_server && commit.removed.len() == 1);
+            alice.client.merge(&group, commit).unwrap();
+        }
+        _ => panic!("expected the removal"),
+    }
+    match bob.client.process(&group, &commit.commit).unwrap() {
+        Incoming::Commit(commit) => {
+            assert!(commit.self_removed);
+            bob.client.merge(&group, commit).unwrap();
+            assert!(!bob.client.is_active(&group));
+        }
+        _ => panic!("expected the removal"),
+    }
+    assert_eq!(
+        alice.client.epoch_authenticator(&group).unwrap(),
+        carol.client.epoch_authenticator(&group).unwrap()
+    );
+    // A proposal for someone who is not there, or forged by another key, is refused.
+    assert!(ds.propose_removal(99, &SIGNER).is_err());
+    let forger = ServerSigner::generate().unwrap();
+    assert!(ds.propose_removal(0, &forger).is_err());
 }

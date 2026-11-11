@@ -155,12 +155,13 @@ in
         "compatible"
         "e2ee"
       ];
-      # "e2ee" becomes the default once end-to-end encryption is implemented;
-      # until then nuscheld refuses to start with it.
+      # "e2ee" becomes the default once voice is end-to-end encrypted too (SFrame).
       default = "compatible";
       description = ''
         "compatible" admits stock Mumble clients and has no end-to-end encryption.
-        "e2ee" is not implemented yet; the server refuses to start with it.
+        "e2ee" turns stock clients away, carries text only in MLS groups (every
+        channel and direct message) and admits unregistered users only to register;
+        voice is not end-to-end encrypted yet (docs/server.md, "Security mode").
       '';
     };
     listenAddresses = lib.mkOption {

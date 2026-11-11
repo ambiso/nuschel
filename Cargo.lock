@@ -7065,6 +7065,7 @@ dependencies = [
  "openmls_libcrux_crypto",
  "openmls_memory_storage",
  "openmls_traits",
+ "rayon",
  "thiserror 2.0.21",
  "zeroize",
 ]

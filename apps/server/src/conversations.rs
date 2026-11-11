@@ -324,6 +324,8 @@ impl State {
             }
         }
         self.update_access(&pending);
+        // End-to-end groups follow access too (docs/e2ee.md §6.2).
+        self.mls_sweep();
     }
 
     pub fn unsubscribe(&mut self, session: u32, id: &Id) {
@@ -343,7 +345,7 @@ impl State {
     }
 
     /// Online connections by account.
-    fn sessions_by_account(&self) -> HashMap<Id, Vec<u32>> {
+    pub(crate) fn sessions_by_account(&self) -> HashMap<Id, Vec<u32>> {
         let mut out: HashMap<Id, Vec<u32>> = HashMap::new();
         for user in self.users.values() {
             if let Some(account) = user.account {

@@ -37,6 +37,8 @@ struct Ds {
     /// seq - 1 → message
     stream: Vec<Vec<u8>>,
     log_id: [u8; 32],
+    /// The log's head-signing key: the groups' external sender.
+    server_key: [u8; 32],
 }
 
 impl Ds {
@@ -45,14 +47,25 @@ impl Ds {
             group: None,
             stream: Vec::new(),
             log_id: dir.descriptor().log_id().0,
+            server_key: dir
+                .descriptor()
+                .signing_key()
+                .to_bytes()
+                .try_into()
+                .unwrap(),
         }
     }
 
     fn commit(&mut self, outgoing: &MlsOutgoing) -> Result<u64, DsError> {
         if let Some(init) = &outgoing.create {
-            let (group, _) =
-                DeliveryGroup::create(&init.group_info, &init.tree, &self.log_id, &CONVERSATION)
-                    .map_err(DsError::from)?;
+            let (group, _) = DeliveryGroup::create(
+                &init.group_info,
+                &init.tree,
+                &self.log_id,
+                &CONVERSATION,
+                &self.server_key,
+            )
+            .map_err(DsError::from)?;
             self.group = Some(group);
         }
         let welcome = (!outgoing.welcome.is_empty()).then_some(outgoing.welcome.as_slice());
@@ -528,6 +541,7 @@ async fn a_welcome_for_a_pinned_conversation_is_refused() {
             mallory.device(),
             mallory.credential(),
             &ConversationBinding::direct(ds.log_id, CONVERSATION),
+            &ds.server_key,
             &[package],
         )
         .unwrap();
@@ -537,6 +551,7 @@ async fn a_welcome_for_a_pinned_conversation_is_refused() {
         &created.init_tree,
         &other.log_id,
         &CONVERSATION,
+        &other.server_key,
     )
     .unwrap();
     other.group = Some(group);

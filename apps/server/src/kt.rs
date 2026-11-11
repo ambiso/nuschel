@@ -112,6 +112,12 @@ impl Keys {
             vrf: Zeroizing::new(vrf),
         }
     }
+
+    /// The head-signing key's seed, which also signs the MLS groups' external
+    /// proposals (crate::mls; docs/e2ee.md §6.2).
+    pub(crate) fn signing_seed(&self) -> Zeroizing<[u8; 32]> {
+        Zeroizing::new(*self.signing)
+    }
 }
 
 /// 32 raw bytes, or 64 hex digits with optional surrounding whitespace.

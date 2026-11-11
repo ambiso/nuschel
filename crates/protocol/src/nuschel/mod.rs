@@ -105,6 +105,9 @@ pub mod kind {
     pub const SHARE_LINK: u16 = 0x4e91;
     pub const SHARE_LINK_REVOKE: u16 = 0x4e92;
     pub const SHARE_LINK_RESOLVE: u16 = 0x4e93;
+    /// Channels (phase 4c, docs/e2ee.md §6.2): 0x4E2D–0x4E2F and 0x4E80–0x4E8F.
+    pub const MLS_TASK: u16 = 0x4e2d;
+    pub const MLS_OPENED: u16 = 0x4e2e;
 }
 
 /// Requests in flight per connection.
@@ -161,6 +164,8 @@ pub const MAX_MLS_WELCOME_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_MLS_GROUP_INFO_BYTES: usize = 256 * 1024;
 /// A ratchet tree (1.5 MB at 1000 X-Wing members).
 pub const MAX_MLS_TREE_BYTES: usize = 2 * 1024 * 1024;
+/// Member accounts in one `MlsJoinInfo`.
+pub const MAX_MLS_JOIN_ACCOUNTS: usize = 4096;
 /// Welcomes in one `MlsWelcomes` and ids in one `MlsWelcomeAck`.
 pub const MAX_MLS_WELCOMES: usize = 32;
 /// `MlsCommit` from a client: commit, GroupInfo, Welcome and a new group's
@@ -199,7 +204,7 @@ pub fn required_capability(kind: u16) -> Option<&'static str> {
         | MLS_SEND
         | MLS_WELCOME_FETCH
         | MLS_WELCOME_ACK
-        | MLS_JOIN_INFO_REQUEST => Some(capability::MLS),
+        | MLS_JOIN_INFO_REQUEST | MLS_OPENED => Some(capability::MLS),
         SHARE_LINK_CREATE | SHARE_LINK_REVOKE | SHARE_LINK_RESOLVE => Some(capability::SHARE),
         PRIVACY => Some(capability::PRIVACY),
         _ => None,
@@ -239,7 +244,9 @@ pub fn server_limit(kind: u16) -> usize {
         MLS_KEY_PACKAGES => MAX_MLS_CLAIM_PACKAGES * (MAX_MLS_KEY_PACKAGE_BYTES + 8) + 64,
         MLS_WELCOME_PUSH => MAX_MLS_WELCOME_BYTES + 256,
         MLS_WELCOMES => 4 * MAX_MLS_WELCOME_BYTES,
-        MLS_JOIN_INFO => MAX_MLS_GROUP_INFO_BYTES + MAX_MLS_TREE_BYTES + 256,
+        MLS_JOIN_INFO => {
+            MAX_MLS_GROUP_INFO_BYTES + MAX_MLS_TREE_BYTES + MAX_MLS_JOIN_ACCOUNTS * 20 + 256
+        }
         SUBSCRIBED => MAX_SUBSCRIBE_PER_MESSAGE * 64 + 32,
         DIRECT_LIST => MAX_DIRECTS * (MAX_NAME_BYTES + 96) + 32,
         DIRECT_OPENED => MAX_NAME_BYTES + 128,

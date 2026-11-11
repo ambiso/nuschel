@@ -21,12 +21,75 @@
 //! (leaf lifetimes would expire), so it must only ever come from this module.
 use crate::prevalidate::{self, ContentType, WireFormat};
 use crate::provider::{
-    MemberInfo, Provider, binding_of, key_package_in, member_info, message_in, serialize, tree_in,
+    MemberInfo, Provider, binding_of, key_package_in, member_info, message_in, serialize,
+    server_is_sole_sender, tree_in,
 };
-use crate::{ConversationBinding, Error, SUITE, guard, mls};
+use crate::{ConversationBinding, Error, Membership, SUITE, guard, mls};
 use openmls::messages::group_info::VerifiableGroupInfo;
 use openmls::prelude::*;
 use openmls_traits::OpenMlsProvider;
+use openmls_traits::crypto::OpenMlsCrypto;
+use openmls_traits::signatures::{Signer, SignerError};
+use zeroize::Zeroizing;
+
+/// The server's signing key as the groups' external sender (docs/e2ee.md §6.2): its
+/// key-transparency head-signing key (Ed25519), which clients pin with the log.
+/// MLS signs with `SignWithLabel` ("MLS 1.0 " and a label, RFC 9420 §5.1.2) and
+/// key-transparency heads under their own context label, so a signature of one
+/// is never valid as the other.
+pub struct ServerSigner {
+    seed: Zeroizing<[u8; 32]>,
+    public: [u8; 32],
+    crypto: Provider,
+}
+
+impl ServerSigner {
+    /// From the head-signing key's 32-byte seed and its public key (as the log
+    /// descriptor carries it).
+    pub fn new(seed: &[u8; 32], public: [u8; 32]) -> Result<Self, Error> {
+        Ok(Self {
+            seed: Zeroizing::new(*seed),
+            public,
+            crypto: Provider::new()?,
+        })
+    }
+
+    /// A fresh key (tests and tools; a server uses its head-signing key).
+    pub fn generate() -> Result<Self, Error> {
+        let crypto = Provider::new()?;
+        let (seed, public) = crypto
+            .crypto()
+            .signature_key_gen(SignatureScheme::ED25519)
+            .map_err(mls)?;
+        Ok(Self {
+            seed: Zeroizing::new(
+                seed.try_into()
+                    .map_err(|_| Error::Invalid("an Ed25519 seed is 32 bytes"))?,
+            ),
+            public: public
+                .try_into()
+                .map_err(|_| Error::Invalid("an Ed25519 key is 32 bytes"))?,
+            crypto,
+        })
+    }
+
+    pub fn public_key(&self) -> &[u8; 32] {
+        &self.public
+    }
+}
+
+impl Signer for ServerSigner {
+    fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, SignerError> {
+        self.crypto
+            .crypto()
+            .sign(SignatureScheme::ED25519, payload, self.seed.as_slice())
+            .map_err(|_| SignerError::SigningError)
+    }
+
+    fn signature_scheme(&self) -> SignatureScheme {
+        SignatureScheme::ED25519
+    }
+}
 
 /// Why the delivery service refused a handshake or application message.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -82,10 +145,17 @@ pub struct CommitOutcome {
     pub epoch: u64,
     /// Every member after the commit.
     pub members: Vec<MemberInfo>,
-    /// Leaves added by the commit.
+    /// Leaves added by the commit (an external joiner's own leaf included).
     pub added: Vec<MemberInfo>,
+    /// Members it removed, as they were before.
+    pub removed: Vec<MemberInfo>,
     /// The `KeyPackageRef`s the Welcome is for (those of the added key packages).
     pub welcome_for: Vec<Vec<u8>>,
+    /// An external commit: the joiner committed itself in.
+    pub external_join: bool,
+    /// The committing member's leaf (before the commit); `None` for an external
+    /// commit.
+    pub committer: Option<u32>,
 }
 
 pub struct DeliveryGroup {
@@ -127,6 +197,7 @@ impl DeliveryGroup {
         tree: &[u8],
         server: &[u8; 32],
         conversation: &[u8; 16],
+        server_key: &[u8; 32],
     ) -> Result<(Self, Vec<MemberInfo>), Error> {
         prevalidate::ratchet_tree(tree)?;
         guard(|| {
@@ -155,6 +226,11 @@ impl DeliveryGroup {
             }
             if public.group_context().extensions().ratchet_tree().is_some() {
                 return Err(Error::Invalid("a ratchet tree in the group context"));
+            }
+            // The server proposes removals (inactive devices, lost access): it must
+            // be the group's only external sender.
+            if !server_is_sole_sender(public.group_context().extensions(), server_key) {
+                return Err(Error::Invalid("the external sender is not this server"));
             }
             let group = Self {
                 provider,
@@ -209,6 +285,12 @@ impl DeliveryGroup {
 
     pub fn binding(&self) -> ConversationBinding {
         self.binding
+    }
+
+    /// The group names this server as its only external sender, so it takes the
+    /// server's removals (groups made before phase 4c do not).
+    pub fn takes_server_proposals(&self, server_key: &[u8; 32]) -> bool {
+        server_is_sole_sender(self.public.group_context().extensions(), server_key)
     }
 
     pub fn members(&self) -> Result<Vec<MemberInfo>, Error> {
@@ -288,6 +370,33 @@ impl DeliveryGroup {
         result.map_err(DsError::from)
     }
 
+    /// The server's own proposal to remove `leaf` (docs/e2ee.md §6.2: lost access,
+    /// inactive, or a channel not opened for long), queued here like a member's
+    /// and returned for the stream; a member commits it.
+    pub fn propose_removal(
+        &mut self,
+        leaf: u32,
+        signer: &ServerSigner,
+    ) -> Result<Vec<u8>, DsError> {
+        if self.public.leaf(LeafNodeIndex::new(leaf)).is_none() {
+            return Err(Error::Invalid("no such member").into());
+        }
+        let bytes = guard(|| {
+            serialize(
+                &ExternalProposal::new_remove::<Provider>(
+                    LeafNodeIndex::new(leaf),
+                    self.public.group_id().clone(),
+                    self.public.group_context().epoch(),
+                    signer,
+                    SenderExtensionIndex::new(0),
+                )
+                .map_err(mls)?,
+            )
+        })?;
+        self.proposal(&bytes)?;
+        Ok(bytes)
+    }
+
     fn roll_back(&mut self, snapshot: &[u8]) {
         if let Ok(provider) = Provider::restore(snapshot) {
             self.provider.replace_with(provider);
@@ -336,9 +445,30 @@ impl DeliveryGroup {
             .public
             .process_message(self.provider.crypto(), message)
             .map_err(mls)?;
+        let external_join = matches!(processed.sender(), Sender::NewMemberCommit);
+        let committer = match processed.sender() {
+            Sender::Member(index) => Some(index.u32()),
+            _ => None,
+        };
         let ProcessedMessageContent::StagedCommitMessage(staged) = processed.into_content() else {
             return Err(Error::Invalid("not a commit"));
         };
+        // Server-driven membership (channels): devices join by external commit,
+        // members never add anyone, and only the server's proposals (or a joiner's
+        // resync of its own old leaf) remove (docs/e2ee.md §6.2).
+        if self.binding.membership == Membership::Server {
+            if staged.add_proposals().next().is_some() {
+                return Err(Error::Invalid("members do not add devices to a channel"));
+            }
+            if !staged.remove_proposals().all(|remove| {
+                matches!(
+                    remove.sender(),
+                    Sender::External(_) | Sender::NewMemberCommit
+                )
+            }) {
+                return Err(Error::Invalid("a removal the server did not propose"));
+            }
+        }
         let mut welcome_for = Vec::new();
         for add in staged.add_proposals() {
             let reference = add
@@ -349,6 +479,12 @@ impl DeliveryGroup {
             welcome_for.push(reference.as_slice().to_vec());
         }
         let before: Vec<MemberInfo> = self.members()?;
+        let senders_before = self
+            .public
+            .group_context()
+            .extensions()
+            .external_senders()
+            .cloned();
         self.public
             .merge_commit(self.provider.storage(), *staged)
             .map_err(mls)?;
@@ -359,6 +495,9 @@ impl DeliveryGroup {
             return Err(Error::Invalid(
                 "the commit changed the conversation binding",
             ));
+        }
+        if self.public.group_context().extensions().external_senders() != senders_before.as_ref() {
+            return Err(Error::Invalid("the commit changed the external sender"));
         }
         self.check_group_info(group_info)?;
         self.check_welcome(welcome, &welcome_for)?;
@@ -372,11 +511,23 @@ impl DeliveryGroup {
             })
             .cloned()
             .collect();
+        let removed = before
+            .iter()
+            .filter(|old| {
+                !members.iter().any(|member| {
+                    old.index == member.index && old.signature_key == member.signature_key
+                })
+            })
+            .cloned()
+            .collect();
         Ok(CommitOutcome {
             epoch: self.epoch(),
             members,
             added,
+            removed,
             welcome_for,
+            external_join,
+            committer,
         })
     }
 

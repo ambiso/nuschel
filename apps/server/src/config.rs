@@ -359,6 +359,10 @@ pub struct Mls {
     /// Welcomes older than this are dropped from the mailbox (the catch-up window,
     /// docs/e2ee.md §6.3).
     pub welcome_days: u32,
+    /// Seconds between the checks that remove inactive devices and channel
+    /// members who stopped opening the channel (access changes are acted on at
+    /// once).
+    pub sweep_interval: u64,
 }
 
 impl Default for Mls {
@@ -367,6 +371,7 @@ impl Default for Mls {
             claims_per_minute: 30,
             uploads_per_minute: 10,
             welcome_days: nuschel_e2ee::INACTIVE_DEVICE_DAYS as u32,
+            sweep_interval: 60,
         }
     }
 }
@@ -741,7 +746,11 @@ impl Config {
             )));
         }
         let mls = &self.mls;
-        if mls.claims_per_minute == 0 || mls.uploads_per_minute == 0 || mls.welcome_days == 0 {
+        if mls.claims_per_minute == 0
+            || mls.uploads_per_minute == 0
+            || mls.welcome_days == 0
+            || mls.sweep_interval == 0
+        {
             return Err(ConfigError::Invalid("mls limits must be nonzero".into()));
         }
         if self.max_queued_bytes < 64 * 1024 {

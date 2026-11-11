@@ -23,5 +23,8 @@ openmls_libcrux_crypto = { version = "=0.4.0", features = ["draft-ietf-mls-pq-ci
 openmls_traits = { version = "=0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
 openmls_memory_storage = { version = "=0.6.0", features = ["draft-ietf-mls-pq-ciphersuites"] }
 libcrux-sha2 = "0.0.9"
+# OpenMLS parallelises TreeKEM with rayon's global pool; `limit_threads` sizes it
+# (the crypto worker's address-space limit cannot hold a thread per CPU).
+rayon = "1.12.0"
 thiserror = "2.0.21"
 zeroize = "1.9.1"

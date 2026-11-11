@@ -1067,6 +1067,7 @@ fn kt_reply(
     // Pushes for end-to-end conversations: Welcomes, and rows the frontend never
     // sees as text.
     let push = frame.kind == kind::MLS_WELCOME_PUSH
+        || frame.kind == kind::MLS_TASK
         || (frame.kind == kind::CHAT_EVENT
             && v1::ChatEvent::decode(frame.payload.clone()).is_ok_and(|event| {
                 event
@@ -1992,7 +1993,11 @@ impl State {
                 let Some(message) = chat.message else {
                     return Ok(());
                 };
-                if message.kind != v1::message::Kind::Message as i32 {
+                // MLS rows are ciphertext: the end-to-end driver reads them (and
+                // without a crypto worker nothing can).
+                if message.kind != v1::message::Kind::Message as i32
+                    || nuschel::is_mls_format(message.format)
+                {
                     return Ok(());
                 }
                 let target = match self.channel_of(&chat.conversation) {

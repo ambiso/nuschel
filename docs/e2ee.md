@@ -1747,3 +1747,65 @@ refuses a bundle without it, so every linked device (phones included) can link t
 next one; `apps/crypto-worker/tests/link.rs` links a tablet from a phone after the
 laptop is gone. A stolen unlocked device can therefore add devices until it is revoked;
 that stays visible in key transparency, to self-monitoring and to contacts.
+
+### Channels: subscribers, lazy external joins and the server's removals (answers 4 and 8)
+
+Implemented across `nuschel-e2ee`, the crypto worker, `nuscheld` and the session:
+
+- **Binding version 2** (56 bytes) adds the policy: history (`members`, the default,
+  or `since_join`) and membership (`server` for channels, `members` for direct
+  conversations; a direct conversation with server membership does not decode).
+  Version 1 still decodes, as a direct conversation.
+- **The server as external sender.** Every new group names exactly one external
+  sender: the server's key-transparency head-signing key (Ed25519), with a Basic
+  credential `nuschel-server`. Clients take the key from the log descriptor they
+  pin, the delivery service refuses a group that names any other, and commits may
+  not change it. Reusing the head-signing key is safe because MLS signs with
+  `SignWithLabel` ("MLS 1.0 " and a label) and heads under their own context
+  label; it needs no new key to pin or distribute.
+- **Lazy external joins.** A channel's first opener creates its group alone (the
+  first commit is a self-update, so a member-signed GroupInfo with `external_pub`
+  exists for joiners). Every later device joins by external commit the first time it
+  opens the channel: the session fetches join info, which now lists the accounts of
+  the members (`MlsJoinInfo.accounts`), looks each up in key transparency, and the
+  worker checks every member's credential before it sends the commit. OpenMLS 0.9.2
+  merges an external commit as it makes it, so a refused join deletes the group. The
+  delivery service accepts a channel commit only from a reader of the channel
+  (`MlsCommit` is authorised by `can_read` for channels), and what it adds must be
+  the committer's own device, in its account's key-transparency record. Members
+  check joiners the same way: the session looks up the author account of a handshake
+  row first, so the worker has the roster; an identity nobody looked up yet makes the
+  lock pending, never green.
+- **Every reader learns the `seq`.** Rows of a channel go to every reader as before
+  (subscriptions, heads in `Subscribed`); a device that is not a member gets
+  `MlsEvent::Activity { conversation, seq }` for each application row and decrypts
+  nothing.
+- **Removals are the server's proposals.** The delivery service keeps, per group,
+  each member device's account, and per device when it was last seen (a connection
+  that fetched its mailbox, a send, a commit; records `A`) and when it last opened
+  each channel (`MlsOpened`, sends, commits; records `O`). After every access change,
+  commit, device connection, and every `[mls] sweep_interval` seconds (60) it
+  computes the removals: devices whose account can no longer read the channel
+  (`can_read`, also for offline accounts), devices not seen for
+  `INACTIVE_DEVICE_DAYS` (90) in any group, channel members that did not open the
+  channel for `UNOPENED_CHANNEL_DAYS` (30). It signs one external Remove proposal per
+  device for the current epoch, stores them as `MLS_HANDSHAKE` rows from nobody, and
+  asks one connected member that is not being removed to commit them (`MlsTask`,
+  0x4E2D), the next one after 30 s; proposals of an epoch that moved on are proposed
+  again. Members store the server's proposals (removals only; anything else from the
+  external sender is refused) and commit them only when asked (`MlsCommitProposals`),
+  so there are no commit storms. In a channel a member's commit may not add anyone or
+  remove anyone the server did not propose; the delivery service and every member
+  refuse it. A device that loses access stops getting rows at once (`Unsubscribed`),
+  before the removal is committed.
+- **Direct conversations** take the server's removals too (a device inactive for 90
+  days, a deleted account), but never server-driven adds. Groups made before this
+  change name no external sender and are skipped.
+- **Clock.** The delivery service's clock can be moved in tests
+  (`MlsHandle::advance_clock`); `apps/cli/tests/e2ee_channels.rs` removes a device
+  after 91 days, and checks that 89 are not enough.
+- **Threads.** OpenMLS parallelises TreeKEM on rayon's global pool, which by default
+  starts a thread per CPU; under the crypto worker's 1 GiB address-space limit that
+  failed on a 24-CPU machine and panicked mid-commit. The worker now sizes the pool to
+  two threads first (`nuschel_e2ee::limit_threads`), and a contained panic carries
+  its message (`Error::Panicked`).

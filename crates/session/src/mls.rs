@@ -25,6 +25,16 @@
 //!   (§7.2), never shown.
 //! - **New devices.** When the worker reports accounts with devices outside the
 //!   group (`ConversationView::missing`), their key packages are claimed and added.
+//! - **Channels** (phase 4c, docs/e2ee.md §6.2; [`MlsCommand::OpenChannel`]). The
+//!   first time this device opens a channel it joins the channel's group by
+//!   external commit, after looking up every member's account; the first device
+//!   of all creates it. Each opening tells the server (`MlsOpened`), which keeps
+//!   the device in the group while it opens the channel within 30 days. A handshake
+//!   row from an account not looked up on this connection (an external joiner) is
+//!   preceded by its lookup. When the server asks this device to commit its
+//!   removals (`MlsTask`), the stream is read up to them and the worker commits.
+//!   Rows of channels this device is not a member of are only counted
+//!   ([`MlsEvent::Activity`]): every reader learns where conversations happen.
 use crate::identity::{Context, Reply};
 use nuschel_ipc::crypto::{ConversationView, CryptoRequest, CryptoResponse, MlsOutgoing, Received};
 use nuschel_protocol::nuschel::{
@@ -76,6 +86,9 @@ pub enum MlsCommand {
     Status { conversation: [u8; 16] },
     /// Catch up from the server's stream.
     Sync { conversation: [u8; 16] },
+    /// The user opened this channel's conversation: join its group (creating it
+    /// if it has none), or catch up, and tell the server it was opened.
+    OpenChannel { conversation: [u8; 16] },
 }
 
 /// What happens in end-to-end conversations.
@@ -87,11 +100,17 @@ pub enum MlsEvent {
         view: ConversationView,
         peer: Option<u32>,
     },
-    /// A message of an end-to-end conversation (decrypted, or explicitly not).
+    /// A message of an end-to-end conversation (decrypted, or explicitly not),
+    /// with its author as the server named it (the worker verified the sender's
+    /// identity in `received`).
     Received {
         conversation: [u8; 16],
         received: Received,
+        author: Option<v1::Author>,
     },
+    /// A message in a channel whose group this device is not in: counted (unread,
+    /// activity), never shown (docs/e2ee.md §6.2).
+    Activity { conversation: [u8; 16], seq: u64 },
     /// Our message was stored as `seq`.
     Sent {
         conversation: [u8; 16],
@@ -127,7 +146,17 @@ pub(crate) struct MlsState {
     directs: BTreeMap<[u8; 16], ([u8; 16], Option<u32>)>,
     /// Our own account was looked up on this connection (own devices' roster).
     own_checked: bool,
+    /// Channels' conversations (opened, or rows seen).
+    channels: std::collections::BTreeSet<[u8; 16]>,
+    /// Accounts looked up on this connection for channel members.
+    looked_up: std::collections::BTreeSet<[u8; 16]>,
 }
+
+/// Accounts looked up before joining one channel (more are looked up as their
+/// rows arrive).
+const MAX_JOIN_LOOKUPS: usize = 64;
+/// Attempts to join or create a channel's group while others race.
+const MAX_JOIN_ATTEMPTS: usize = 4;
 
 impl MlsState {
     pub(crate) fn upload_due(&self) -> Option<Instant> {
@@ -317,7 +346,8 @@ impl Context {
             .await?
         {
             CryptoResponse::MlsConversation(view) => {
-                if view.pinned {
+                // Rows are read only while this device is in the group.
+                if view.pinned && view.active {
                     let cursor = self.mls().cursors.entry(conversation).or_insert(0);
                     *cursor = (*cursor).max(view.cursor);
                 } else {
@@ -488,8 +518,13 @@ impl Context {
         }
     }
 
-    /// Sends a commit the worker made, and tells the worker the answer.
-    async fn mls_commit(&mut self, outgoing: MlsOutgoing) -> Result<Option<u64>, crate::Error> {
+    /// Sends a commit the worker made, and tells the worker the answer. `join`:
+    /// an external commit, after which the stream before it is not ours to read.
+    async fn mls_commit(
+        &mut self,
+        outgoing: MlsOutgoing,
+        join: bool,
+    ) -> Result<Option<u64>, crate::Error> {
         let Some(conversation) = id16(&outgoing.conversation) else {
             return Ok(None);
         };
@@ -535,7 +570,7 @@ impl Context {
                 // Application messages stored before our commit are of the old
                 // epoch: read them before the commit is merged, which forgets that
                 // epoch's secrets (max_past_epochs = 0). A new group has none.
-                if outgoing.create.is_none() {
+                if outgoing.create.is_none() && !join {
                     self.mls_rows(conversation, ack.seq.saturating_sub(1))
                         .await?;
                 }
@@ -643,7 +678,7 @@ impl Context {
                 return Ok(());
             }
         };
-        if self.mls_commit(outgoing).await?.is_none() {
+        if self.mls_commit(outgoing, false).await?.is_none() {
             // Someone else created it meanwhile: their Welcome is in our mailbox.
             self.mls_fetch_welcomes().await?;
             let view = self.mls_status(conversation).await?;
@@ -725,6 +760,17 @@ impl Context {
             return Ok(());
         }
         let seq = message.seq;
+        let author = message.author.clone();
+        // A channel's new member (an external joiner commits itself in): look its
+        // account up first, so the worker can check its credential.
+        if message.format == v1::Format::MlsHandshake as i32
+            && self.mls().channels.contains(&conversation)
+            && let Some(account) = author.as_ref().and_then(|author| id16(&author.account))
+            && id16(&self.account) != Some(account)
+            && self.mls().looked_up.insert(account)
+        {
+            self.check_contact(None, Some(account), false).await?;
+        }
         // The worker answers every message it could not use with `Undecryptable`
         // (an explicit gap); an error here means the worker itself failed, so the
         // row stays unprocessed and the next catch-up hands it over again.
@@ -750,6 +796,7 @@ impl Context {
         self.mls_emit(MlsEvent::Received {
             conversation,
             received,
+            author,
         })
         .await;
         if recheck && let Some((peer, _)) = self.mls().directs.get(&conversation).copied() {
@@ -786,7 +833,7 @@ impl Context {
                 key_packages,
             })
             .await
-            && self.mls_commit(outgoing).await?.is_none()
+            && self.mls_commit(outgoing, false).await?.is_none()
         {
             // Lost to another commit: catch up; the next sync tries again.
             self.mls_rows(conversation, u64::MAX).await?;
@@ -906,7 +953,136 @@ impl Context {
                 Ok(())
             }
             MlsCommand::Sync { conversation } => self.mls_sync(conversation).await,
+            MlsCommand::OpenChannel { conversation } => self.mls_open_channel(conversation).await,
         }
+    }
+
+    /// Opens a channel's end-to-end conversation: catch up if this device is in
+    /// its group, else join it (or create it), then tell the server.
+    async fn mls_open_channel(&mut self, conversation: [u8; 16]) -> Result<(), crate::Error> {
+        if self.account.len() != 16 {
+            // Unregistered connections take no part (docs/e2ee.md §10, answer 12).
+            return Ok(());
+        }
+        self.mls().channels.insert(conversation);
+        let view = self.mls_status(conversation).await?;
+        if !(view.pinned && view.active) {
+            self.mls_join_channel(conversation).await?;
+        }
+        let view = self.mls_status(conversation).await?;
+        if view.pinned && view.active {
+            self.mls_sync(conversation).await?;
+            self.tell(
+                kind::MLS_OPENED,
+                v1::MlsOpened {
+                    conversation: conversation.to_vec(),
+                }
+                .encode_to_vec(),
+            )
+            .await?;
+        }
+        let view = self.mls_status(conversation).await?;
+        self.mls_view(view).await;
+        Ok(())
+    }
+
+    /// Joins a channel's group by external commit, or creates it.
+    async fn mls_join_channel(&mut self, conversation: [u8; 16]) -> Result<(), crate::Error> {
+        if let Some(own) = id16(&self.account)
+            && !self.mls().own_checked
+        {
+            self.check_contact(None, Some(own), false).await?;
+            self.mls().own_checked = true;
+        }
+        let mut reason = String::from("the channel's group kept changing");
+        for _ in 0..MAX_JOIN_ATTEMPTS {
+            let outgoing = match self.mls_join_info(conversation, true).await? {
+                None => match self
+                    .mls_worker(CryptoRequest::MlsCreateChannel {
+                        server: self.server.key.clone(),
+                        conversation: conversation.to_vec(),
+                    })
+                    .await
+                {
+                    Ok(CryptoResponse::MlsOutgoing(outgoing)) => outgoing,
+                    Ok(_) => return Err(crate::Error::Worker("unexpected worker answer".into())),
+                    Err(error) => {
+                        reason = error.to_string();
+                        break;
+                    }
+                },
+                Some(info) => {
+                    // Every member's identity, so the worker can check them.
+                    let own = id16(&self.account);
+                    for account in info
+                        .accounts
+                        .iter()
+                        .filter_map(|account| id16(account))
+                        .filter(|account| Some(*account) != own)
+                        .take(MAX_JOIN_LOOKUPS)
+                    {
+                        if self.mls().looked_up.insert(account) {
+                            self.check_contact(None, Some(account), false).await?;
+                        }
+                    }
+                    match self
+                        .mls_worker(CryptoRequest::MlsJoinChannel {
+                            server: self.server.key.clone(),
+                            conversation: conversation.to_vec(),
+                            group_info: info.group_info,
+                            tree: info.tree,
+                        })
+                        .await
+                    {
+                        Ok(CryptoResponse::MlsOutgoing(outgoing)) => outgoing,
+                        Ok(_) => {
+                            return Err(crate::Error::Worker("unexpected worker answer".into()));
+                        }
+                        Err(error) => {
+                            reason = error.to_string();
+                            break;
+                        }
+                    }
+                }
+            };
+            let join = outgoing.create.is_none();
+            if self.mls_commit(outgoing, join).await?.is_some() {
+                return Ok(());
+            }
+        }
+        self.mls_emit(MlsEvent::Failed(format!(
+            "Could not join the channel's end-to-end group: {reason}"
+        )))
+        .await;
+        Ok(())
+    }
+
+    /// The server asks this device to commit its removals (`MlsTask`): read the
+    /// stream up to them, then commit.
+    async fn mls_task(&mut self, task: v1::MlsTask) -> Result<(), crate::Error> {
+        let Some(conversation) = id16(&task.conversation) else {
+            return Ok(());
+        };
+        if !task.commit {
+            return Ok(());
+        }
+        self.mls_rows(conversation, u64::MAX).await?;
+        let view = self.mls_status(conversation).await?;
+        if !view.pinned || !view.active || view.epoch != task.epoch || view.removals == 0 {
+            return Ok(());
+        }
+        if let Ok(CryptoResponse::MlsOutgoing(outgoing)) = self
+            .mls_worker(CryptoRequest::MlsCommitProposals {
+                server: self.server.key.clone(),
+                conversation: conversation.to_vec(),
+            })
+            .await
+            && self.mls_commit(outgoing, false).await?.is_none()
+        {
+            // Lost to another commit: the server asks again for the next epoch.
+            self.mls_rows(conversation, u64::MAX).await?;
+        }
+        Ok(())
     }
 
     /// A push from the server: a Welcome for us, or a row of a conversation.
@@ -916,6 +1092,11 @@ impl Context {
         payload: bytes::Bytes,
     ) -> Result<(), crate::Error> {
         match kind {
+            kind::MLS_TASK => {
+                if let Ok(task) = v1::MlsTask::decode(payload) {
+                    self.mls_task(task).await?;
+                }
+            }
             kind::MLS_WELCOME_PUSH => {
                 let Some(welcome) = v1::MlsWelcomePush::decode(payload)
                     .ok()
@@ -949,8 +1130,21 @@ impl Context {
                     Some(cursor) => *cursor,
                     None => {
                         let view = self.mls_status(conversation).await?;
-                        if !view.pinned {
-                            // No group of ours yet: its Welcome comes first.
+                        if view.channel {
+                            self.mls().channels.insert(conversation);
+                        }
+                        if !view.pinned || !view.active {
+                            // Not a member (yet): a direct conversation's Welcome
+                            // comes first; a channel's message is only counted.
+                            if message.format == v1::Format::MlsApplication as i32
+                                && !self.mls().directs.contains_key(&conversation)
+                            {
+                                self.mls_emit(MlsEvent::Activity {
+                                    conversation,
+                                    seq: message.seq,
+                                })
+                                .await;
+                            }
                             return Ok(());
                         }
                         view.cursor

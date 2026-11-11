@@ -21,6 +21,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let data = data.ok_or("usage: nuschel-crypto-worker --data DIR")?;
+    // Two threads for OpenMLS's TreeKEM work: one per CPU would not fit the
+    // sandbox's address-space limit (crates/ipc host.rs) on a large machine.
+    nuschel_e2ee::limit_threads(2);
     let store = Store::open(&data, KeySource::File(data.join("store.key")))?;
     let mut worker = Worker::open(store)?;
     let mut input = io::stdin().lock();

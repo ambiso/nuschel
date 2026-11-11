@@ -256,7 +256,8 @@ pub enum Action<'a> {
     MlsClaim {
         account: &'a Id,
     },
-    /// Create `conversation`'s group or commit to it: those who may post there.
+    /// Create `conversation`'s group or commit to it: those who may post there
+    /// (a direct conversation), or read it (a channel's group holds its readers).
     MlsCommit(&'a Id),
     /// An application message to `conversation`'s group.
     MlsSend(&'a Id),
@@ -589,7 +590,14 @@ impl State {
             A::MlsClaim { account } => found(user.account.is_some_and(|me| {
                 me == *account || self.conversations.direct(me, *account).is_some()
             })),
-            A::MlsCommit(id) | A::MlsSend(id) => found(self.can_write(actor, id)),
+            // A channel's group holds its readers (docs/e2ee.md §6.2): joining,
+            // creating it and committing the server's removals need reading
+            // only; sending needs writing.
+            A::MlsCommit(id) => found(match self.conversations.kind(id) {
+                Some(Kind::Channel(_)) => user.account.is_some() && self.can_read(actor, id),
+                _ => self.can_write(actor, id),
+            }),
+            A::MlsSend(id) => found(self.can_write(actor, id)),
             A::MlsJoinInfo(id) => found(self.can_read(actor, id)),
         }
     }

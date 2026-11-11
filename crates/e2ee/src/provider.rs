@@ -141,10 +141,17 @@ pub(crate) fn capabilities() -> Capabilities {
         .build()
 }
 
-/// The binding, and required capabilities so that no member without Nuschel's
-/// extension and credential type can be added.
+/// The external sender's credential: the server, named by nothing more than this
+/// label (its key is what members check, against the pinned key-transparency log).
+pub(crate) const SERVER_SENDER: &[u8] = b"nuschel-server";
+
+/// The binding, required capabilities so that no member without Nuschel's
+/// extension and credential type can be added, and the server as the one external
+/// sender (docs/e2ee.md §6.2): its key-transparency head-signing key (Ed25519),
+/// which every client already pins, signs the removals it proposes.
 pub(crate) fn group_context_extensions(
     binding: &ConversationBinding,
+    server_key: &[u8; 32],
 ) -> Result<Extensions<GroupContext>, Error> {
     Extensions::from_vec(vec![
         Extension::Unknown(BINDING_EXTENSION, UnknownExtension(binding.encode())),
@@ -153,8 +160,24 @@ pub(crate) fn group_context_extensions(
             &[],
             &[CredentialType::Other(CREDENTIAL_TYPE)],
         )),
+        Extension::ExternalSenders(vec![server_sender(server_key)]),
     ])
     .map_err(crate::mls)
+}
+
+fn server_sender(server_key: &[u8; 32]) -> ExternalSender {
+    ExternalSender::new(
+        server_key.to_vec().into(),
+        Credential::new(CredentialType::Basic, SERVER_SENDER.to_vec()),
+    )
+}
+
+/// The group's only external sender is the server with this key.
+pub(crate) fn server_is_sole_sender(
+    extensions: &Extensions<GroupContext>,
+    server_key: &[u8; 32],
+) -> bool {
+    extensions.external_senders().map(Vec::as_slice) == Some(&[server_sender(server_key)][..])
 }
 
 /// The binding in a group context, if it is there and well-formed.

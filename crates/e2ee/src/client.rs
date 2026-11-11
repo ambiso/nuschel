@@ -16,7 +16,8 @@
 use crate::prevalidate::{self, ContentType, WireFormat};
 use crate::provider::{
     Provider, binding_in, binding_of, capabilities, group_context_extensions, join_config,
-    key_package_in, member_info, message_in, serialize, tree_in, wire_policy,
+    key_package_in, member_info, message_in, serialize, server_is_sole_sender, tree_in,
+    wire_policy,
 };
 use crate::{CREDENTIAL_TYPE, ConversationBinding, Error, SUITE, guard, mls};
 use nuschel_identity::{DeviceCredential, DeviceKeys};
@@ -114,16 +115,44 @@ pub struct PendingCommit {
     pub epoch: u64,
     /// Every member after the commit.
     pub members: Vec<MemberInfo>,
+    /// Members the commit removes (as they were before it).
+    pub removed: Vec<MemberInfo>,
     /// This device is removed by it.
     pub self_removed: bool,
+    /// An external commit: a device joined by itself (docs/e2ee.md §6.2).
+    pub external_join: bool,
+    /// Add proposals in it (members adding devices; channels have none).
+    pub adds: usize,
+    /// Every removal in it was proposed by the server (the external sender), or is
+    /// an external joiner's resync of its own old leaf.
+    pub removals_by_server: bool,
     staged: Box<StagedCommit>,
 }
 
 /// What an incoming handshake or application message is.
 pub enum Incoming {
-    Application { sender: MemberInfo, data: Vec<u8> },
+    Application {
+        sender: MemberInfo,
+        data: Vec<u8>,
+    },
     Commit(PendingCommit),
-    Proposal,
+    /// A proposal, kept for the next commit. The server's are removals only:
+    /// `removes` is the leaf it asks to remove.
+    Proposal {
+        from_server: bool,
+        removes: Option<u32>,
+    },
+}
+
+/// An external join (docs/e2ee.md §6.2): the group as this device will see it, and
+/// the commit to send. OpenMLS merges an external commit as it makes it, so a
+/// refused join is undone by deleting the group ([`Client::delete_group`]).
+pub struct ExternalJoin {
+    pub binding: ConversationBinding,
+    /// Every member after the join, this device included.
+    pub members: Vec<MemberInfo>,
+    pub own_index: u32,
+    pub outgoing: Outgoing,
 }
 
 pub struct Client {
@@ -212,12 +241,17 @@ impl Client {
     }
 
     /// Creates the group for `binding` and the commit adding `members` (their
-    /// credentials checked by the caller). The commit is pending.
+    /// credentials checked by the caller); without members (a channel's first
+    /// device) the commit is a self-update, so the group's first GroupInfo for
+    /// external joiners comes from a commit. `server_key` is the server's
+    /// key-transparency signing key: its only external sender. The commit is
+    /// pending.
     pub fn create(
         &self,
         device: &DeviceKeys,
         credential: &DeviceCredential,
         binding: &ConversationBinding,
+        server_key: &[u8; 32],
         members: &[ValidKeyPackage],
     ) -> Result<Created, Error> {
         guard(|| {
@@ -226,7 +260,7 @@ impl Client {
                 .with_group_id(GroupId::from_slice(&binding.group_id()))
                 .ciphersuite(SUITE)
                 .with_capabilities(capabilities())
-                .with_group_context_extensions(group_context_extensions(binding)?)
+                .with_group_context_extensions(group_context_extensions(binding, server_key)?)
                 .with_wire_format_policy(wire_policy())
                 .use_ratchet_tree_extension(false)
                 .max_past_epochs(0)
@@ -261,6 +295,7 @@ impl Client {
         let bundle = group
             .commit_builder()
             .propose_adds(members.iter().map(|member| member.package.clone()))
+            .force_self_update(members.is_empty())
             .load_psks(self.provider.storage())
             .map_err(mls)?
             .create_group_info(true)
@@ -324,6 +359,164 @@ impl Client {
             let bundle = group
                 .commit_builder()
                 .force_self_update(true)
+                .load_psks(self.provider.storage())
+                .map_err(mls)?
+                .create_group_info(true)
+                .build(
+                    self.provider.rand(),
+                    self.provider.crypto(),
+                    &LeafSigner(device),
+                    |_| true,
+                )
+                .map_err(mls)?
+                .stage_commit(&self.provider)
+                .map_err(mls)?;
+            Self::commit_messages(&mut group, bundle)
+        })
+    }
+
+    /// Joins a group by external commit (docs/e2ee.md §6.2, a channel's lazy join)
+    /// from the server's newest GroupInfo and tree (checked first). The group must
+    /// name `server_key` as its only external sender. Nothing is sent yet; the
+    /// caller checks the binding and every member, then sends the commit, and
+    /// deletes the group if the server refuses it.
+    pub fn join_external(
+        &self,
+        device: &DeviceKeys,
+        credential: &DeviceCredential,
+        group_info: &[u8],
+        tree: &[u8],
+        server_key: &[u8; 32],
+    ) -> Result<ExternalJoin, Error> {
+        if prevalidate::wire_format(group_info)? != WireFormat::GroupInfo {
+            return Err(Error::Invalid("not a GroupInfo"));
+        }
+        let before = members_of_tree(tree)?;
+        guard(|| {
+            let MlsMessageBodyIn::GroupInfo(info) = message_in(group_info)?.extract() else {
+                return Err(Error::Invalid("not a GroupInfo"));
+            };
+            if info.ciphersuite() != SUITE {
+                return Err(Error::Invalid("a group of another ciphersuite"));
+            }
+            if info.extensions().ratchet_tree().is_some() {
+                return Err(Error::Invalid("a ratchet tree in the GroupInfo"));
+            }
+            let (mut group, bundle) = MlsGroup::external_commit_builder()
+                .with_config(join_config())
+                .with_ratchet_tree(tree_in(tree)?)
+                .build_group(
+                    &self.provider,
+                    info,
+                    credential_with_key(device, credential),
+                )
+                .map_err(mls)?
+                // The joiner's new leaf supports what every Nuschel leaf does.
+                .leaf_node_parameters(
+                    LeafNodeParameters::builder()
+                        .with_capabilities(capabilities())
+                        .build(),
+                )
+                .load_psks(self.provider.storage())
+                .map_err(mls)?
+                .create_group_info(true)
+                .build(
+                    self.provider.rand(),
+                    self.provider.crypto(),
+                    &LeafSigner(device),
+                    |_| true,
+                )
+                .map_err(mls)?
+                .finalize(&self.provider)
+                .map_err(mls)?;
+            let checked = (|| {
+                let binding = binding_in(group.extensions())
+                    .ok_or(Error::Invalid("no conversation binding"))?;
+                if group.group_id().as_slice() != binding.group_id() {
+                    return Err(Error::Invalid("the group id does not match its binding"));
+                }
+                if !server_is_sole_sender(group.extensions(), server_key) {
+                    return Err(Error::Invalid(
+                        "the group's external sender is not this server",
+                    ));
+                }
+                let members = group
+                    .members()
+                    .map(|member| member_info(&member))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let own_index = group.own_leaf_index().u32();
+                // The server's tree, and nothing else, plus this device.
+                if members
+                    .iter()
+                    .any(|member| member.index != own_index && !before.contains(member))
+                {
+                    return Err(Error::Invalid("the tree does not match the group"));
+                }
+                let (commit, _, group_info) = bundle.into_messages();
+                let group_info = group_info.ok_or(Error::Invalid("no GroupInfo for the commit"))?;
+                Ok(ExternalJoin {
+                    binding,
+                    members,
+                    own_index,
+                    outgoing: Outgoing {
+                        commit: serialize(&commit)?,
+                        group_info: serialize(&group_info)?,
+                        welcome: None,
+                        epoch: group.epoch().as_u64(),
+                    },
+                })
+            })();
+            if checked.is_err() {
+                let _ = group.delete(self.provider.storage());
+            }
+            checked
+        })
+    }
+
+    /// The leaves the server's pending proposals remove (docs/e2ee.md §6.2).
+    pub fn pending_removals(&self, group_id: &[u8]) -> Result<Vec<u32>, Error> {
+        let group = self.group(group_id)?;
+        Ok(group
+            .pending_proposals()
+            .filter(|queued| matches!(queued.sender(), Sender::External(_)))
+            .filter_map(|queued| match queued.proposal() {
+                Proposal::Remove(remove) => Some(remove.removed().u32()),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// A commit of the pending proposals: the server's removals (it asked this
+    /// device to commit them). Refused when there are none, or anything else is
+    /// pending, or one would remove this device (another member must).
+    pub fn commit_proposals(
+        &self,
+        device: &DeviceKeys,
+        group_id: &[u8],
+    ) -> Result<Outgoing, Error> {
+        guard(|| {
+            let mut group = self.group(group_id)?;
+            let own = group.own_leaf_index();
+            let mut any = false;
+            for queued in group.pending_proposals() {
+                let Proposal::Remove(remove) = queued.proposal() else {
+                    return Err(Error::Invalid("a pending proposal that is not a removal"));
+                };
+                if !matches!(queued.sender(), Sender::External(_)) {
+                    return Err(Error::Invalid(
+                        "a pending removal the server did not propose",
+                    ));
+                }
+                if remove.removed() == own {
+                    return Err(Error::Invalid("the server asks to remove this device"));
+                }
+                any = true;
+            }
+            if !any {
+                return Err(Error::Invalid("nothing to commit"));
+            }
+            let bundle = group
+                .commit_builder()
                 .load_psks(self.provider.storage())
                 .map_err(mls)?
                 .create_group_info(true)
@@ -448,6 +641,8 @@ impl Client {
             let processed = group
                 .process_message(&self.provider, message)
                 .map_err(mls)?;
+            let external_join = matches!(processed.sender(), Sender::NewMemberCommit);
+            let from_server = matches!(processed.sender(), Sender::External(_));
             let sender = match processed.sender() {
                 Sender::Member(index) => Some(*index),
                 _ => None,
@@ -481,18 +676,56 @@ impl Client {
                             "the commit changes the conversation binding",
                         ));
                     }
+                    if staged.group_context().extensions().external_senders()
+                        != group.extensions().external_senders()
+                    {
+                        return Err(Error::Invalid("the commit changes the external sender"));
+                    }
+                    let before: Vec<MemberInfo> = group
+                        .members()
+                        .map(|member| member_info(&member))
+                        .collect::<Result<_, _>>()?;
+                    let removed_leaves: Vec<u32> = staged
+                        .remove_proposals()
+                        .map(|remove| remove.remove_proposal().removed().u32())
+                        .collect();
+                    let removals_by_server = staged.remove_proposals().all(|remove| {
+                        matches!(
+                            remove.sender(),
+                            Sender::External(_) | Sender::NewMemberCommit
+                        )
+                    });
+                    let removed = before
+                        .into_iter()
+                        .filter(|member| removed_leaves.contains(&member.index))
+                        .collect();
                     Ok(Incoming::Commit(PendingCommit {
                         epoch: staged.epoch().as_u64(),
                         members,
+                        removed,
                         self_removed: staged.self_removed(),
+                        external_join,
+                        adds: staged.add_proposals().count(),
+                        removals_by_server,
                         staged,
                     }))
                 }
                 ProcessedMessageContent::ProposalMessage(proposal) => {
+                    // The server proposes removals only (docs/e2ee.md §6.2).
+                    let removes = match proposal.proposal() {
+                        Proposal::Remove(remove) => Some(remove.removed().u32()),
+                        _ => None,
+                    };
+                    if from_server && removes.is_none() {
+                        return Err(Error::Invalid("the server may only propose removals"));
+                    }
                     group
                         .store_pending_proposal(self.provider.storage(), *proposal)
                         .map_err(mls)?;
-                    Ok(Incoming::Proposal)
+                    Ok(Incoming::Proposal {
+                        from_server,
+                        removes,
+                    })
                 }
                 _ => Err(Error::Invalid("unexpected message")),
             }

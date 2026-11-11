@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! End-to-end-encrypted direct conversations (docs/e2ee.md §6, §7): the worker's
-//! MLS state and the `Mls*` requests of `nuschel_ipc::crypto`.
+//! End-to-end-encrypted conversations (docs/e2ee.md §6, §7): the worker's MLS state
+//! and the `Mls*` requests of `nuschel_ipc::crypto`. Direct conversations are groups
+//! of the two identities' devices; channels (phase 4c) are groups of the devices that
+//! opened them, which join by external commit and are removed when the server
+//! proposes it (lost access, inactive, not opened for long).
 //!
 //! - **State.** One `nuschel_e2ee::client::Client` (OpenMLS's records, private keys
 //!   included) and, per server and conversation, a [`Conversation`]: its group, pin
@@ -10,13 +13,21 @@
 //!   every request that changed anything and before the answer goes out, so a crash
 //!   never leaves a cursor that disagrees with the group.
 //! - **Credentials.** Every member of a group we create, join or a commit leads to
-//!   must be one of our own devices or one of the direct conversation's peer, by
-//!   identity, and its credential must verify against that identity's device roster
-//!   as key transparency last confirmed it (`Contact::roster`, kept by `Contact`
-//!   lookups). A stranger, a forged or copied credential, or a revoked device is
-//!   refused: nothing is merged and the conversation is blocked. A device of the
-//!   right identity that the roster does not list (yet) is merged, to stay in sync,
-//!   but blocks sending until a lookup confirms it.
+//!   must verify against its identity's device roster as key transparency last
+//!   confirmed it (`Contact::roster`, kept by `Contact` lookups). In a direct
+//!   conversation it must also be one of our own devices or the peer's, by
+//!   identity; in a channel anyone the server admits may be a member (it follows
+//!   its ACLs), and an identity nobody looked up yet is unconfirmed, not refused. A
+//!   stranger in a direct conversation, a forged or copied credential, or a revoked
+//!   device is refused: nothing is merged and the conversation is blocked. A device
+//!   key transparency does not confirm (yet) is merged, to stay in sync, but blocks
+//!   sending until a lookup confirms it.
+//! - **The server's part** (docs/e2ee.md §6.2). Each group names the server's
+//!   key-transparency signing key (from the pinned log) as its only external
+//!   sender. Its proposals are removals only, and a commit of them happens when the
+//!   server asks this device to (`MlsCommitProposals`). In a channel, members never
+//!   add anyone and remove only what the server proposed; a commit that does
+//!   otherwise is refused.
 //! - **Pins.** A conversation with a group is pinned: the session refuses plaintext
 //!   for it, and a Welcome for a pinned, active conversation is refused (a server
 //!   cannot replace a group). Bindings must name this server's log and the
@@ -151,9 +162,12 @@ pub struct Conversation {
     /// Empty: no group (yet, or the creation was refused).
     #[serde(with = "base64_bytes")]
     pub group_id: Vec<u8>,
-    /// The other account of the direct conversation.
+    /// The other account of the direct conversation; empty for a channel.
     #[serde(with = "base64_bytes")]
     pub peer: Vec<u8>,
+    /// A channel's group (server-driven membership).
+    #[serde(default)]
+    pub channel: bool,
     /// Pinned (§7.2): the server accepted our group, or we joined one.
     pub pinned: bool,
     pub generation: u32,
@@ -200,6 +214,7 @@ impl Conversation {
         let peer = std::mem::take(&mut self.peer);
         *self = Self {
             peer,
+            channel: self.channel,
             ..Self::default()
         };
     }
@@ -276,11 +291,15 @@ enum Verdict {
     Refused(String),
 }
 
-/// The rosters a direct conversation's members are checked against.
+/// The rosters a conversation's members are checked against.
 struct Rosters {
     own: DeviceRoster,
-    /// The peer's pinned identity and its roster, if a lookup confirmed one.
-    peer: Option<(IdentityFingerprint, Option<DeviceRoster>)>,
+    /// Other identities with their rosters (when a lookup confirmed one): the
+    /// peer of a direct conversation, or everyone looked up on this server for a
+    /// channel.
+    others: Vec<(IdentityFingerprint, Option<DeviceRoster>)>,
+    /// A direct conversation: no identity but ours and `others` may be in it.
+    closed: bool,
 }
 
 fn roster_from(contact: &Contact) -> Option<DeviceRoster> {
@@ -317,14 +336,16 @@ impl Rosters {
         let (roster, own) = if identity == self.own.identity().fingerprint() {
             (Some(&self.own), true)
         } else {
-            match &self.peer {
-                Some((peer, roster)) if *peer == identity => (roster.as_ref(), false),
-                _ => {
+            match self.others.iter().find(|(other, _)| *other == identity) {
+                Some((_, roster)) => (roster.as_ref(), false),
+                None if self.closed => {
                     return Verdict::Refused(format!(
                         "a device of another identity ({}) was added to a direct conversation",
                         &identity.to_hex()[..16]
                     ));
                 }
+                // A channel member nobody looked up yet: unconfirmed until a lookup.
+                None => (None, false),
             }
         };
         let device = *credential.device_id().as_bytes();
@@ -396,9 +417,13 @@ fn assess(rosters: &Rosters, members: &[MemberInfo], now_s: u64) -> Assessment {
                         "One of your devices in this conversation is not confirmed by key \
                          transparency yet; sending waits until it is."
                             .into()
-                    } else {
+                    } else if rosters.closed {
                         "Your contact has a device that key transparency has not confirmed \
                          yet; sending waits until it is."
+                            .into()
+                    } else {
+                        "A member's device is not confirmed by key transparency yet; \
+                         sending waits until it is."
                             .into()
                     }
                 });
@@ -552,6 +577,34 @@ impl Worker {
                 self.mls.save(&self.store)?;
                 CryptoResponse::Done
             }
+            CryptoRequest::MlsCreateChannel {
+                server,
+                conversation,
+            } => {
+                let conversation = array16(&conversation, "a conversation id")?;
+                CryptoResponse::MlsOutgoing(self.create_channel(&server, &conversation)?)
+            }
+            CryptoRequest::MlsJoinChannel {
+                server,
+                conversation,
+                group_info,
+                tree,
+            } => {
+                let conversation = array16(&conversation, "a conversation id")?;
+                CryptoResponse::MlsOutgoing(self.join_channel(
+                    &server,
+                    &conversation,
+                    &group_info,
+                    &tree,
+                )?)
+            }
+            CryptoRequest::MlsCommitProposals {
+                server,
+                conversation,
+            } => {
+                let conversation = array16(&conversation, "a conversation id")?;
+                CryptoResponse::MlsOutgoing(self.commit_proposals(&server, &conversation)?)
+            }
             _ => return Err("unsupported request".into()),
         };
         Ok(response)
@@ -589,6 +642,33 @@ impl Worker {
             .0)
     }
 
+    /// The rosters for a conversation's members: its peer's (direct), or every
+    /// identity looked up on this server (a channel).
+    fn rosters_for(&self, server: &str, entry: &Conversation) -> Result<Rosters, String> {
+        if entry.channel {
+            return self.channel_rosters(server);
+        }
+        let peer = array16(&entry.peer, "an account id")?;
+        self.rosters(server, &peer)
+    }
+
+    fn channel_rosters(&self, server: &str) -> Result<Rosters, String> {
+        let mut rosters = self.rosters(server, &[0; 16])?;
+        let own = rosters.own.identity().fingerprint();
+        let entry = self.server(server)?;
+        for contact in entry.contacts.values() {
+            let Some(pinned) = contact.pinned.as_deref().and_then(fingerprint_of) else {
+                continue;
+            };
+            if pinned == own || rosters.others.iter().any(|(other, _)| *other == pinned) {
+                continue;
+            }
+            rosters.others.push((pinned, roster_from(contact)));
+        }
+        rosters.closed = false;
+        Ok(rosters)
+    }
+
     fn rosters(&self, server: &str, peer: &[u8; 16]) -> Result<Rosters, String> {
         let keystore = self.keystore.as_ref().ok_or("no identity yet")?;
         let mut own = DeviceRoster::new(keystore.identity().clone());
@@ -615,11 +695,31 @@ impl Worker {
                 }
             }
         }
-        let peer = entry.contacts.get(&hex(peer)).and_then(|contact| {
-            let pinned = fingerprint_of(contact.pinned.as_deref()?)?;
-            Some((pinned, roster_from(contact)))
-        });
-        Ok(Rosters { own, peer })
+        let others = entry
+            .contacts
+            .get(&hex(peer))
+            .and_then(|contact| {
+                let pinned = fingerprint_of(contact.pinned.as_deref()?)?;
+                Some((pinned, roster_from(contact)))
+            })
+            .into_iter()
+            .collect();
+        Ok(Rosters {
+            own,
+            others,
+            closed: true,
+        })
+    }
+
+    /// This server's key-transparency signing key: the groups' external sender.
+    fn server_key(&self, server: &str) -> Result<[u8; 32], String> {
+        let entry: &ServerState = self.server(server)?;
+        LogDescriptor::decode(&entry.descriptor)
+            .map_err(|error| error.to_string())?
+            .signing_key()
+            .to_bytes()
+            .try_into()
+            .map_err(|_| "the log's signing key is not an Ed25519 key".to_owned())
     }
 
     fn peer_contact(&self, server: &str, peer: &[u8]) -> Option<&Contact> {
@@ -637,9 +737,8 @@ impl Worker {
         if entry.group_id.is_empty() || !self.mls.client.has_group(&entry.group_id) {
             return Ok(());
         }
-        let peer = array16(&entry.peer, "an account id")?;
         let group_id = entry.group_id.clone();
-        let rosters = self.rosters(server, &peer)?;
+        let rosters = self.rosters_for(server, &entry.clone())?;
         let members = self
             .mls
             .client
@@ -671,8 +770,9 @@ impl Worker {
         let mut members = Vec::new();
         let mut epoch = 0;
         let mut missing = Vec::new();
-        if has_group && let Ok(peer) = array16(&entry.peer, "an account id") {
-            let rosters = self.rosters(server, &peer)?;
+        let mut removals = 0;
+        if has_group && (entry.channel || entry.peer.len() == 16) {
+            let rosters = self.rosters_for(server, &entry)?;
             let infos = self
                 .mls
                 .client
@@ -684,7 +784,16 @@ impl Worker {
                 .client
                 .epoch(&entry.group_id)
                 .map_err(|error| error.to_string())?;
-            missing = self.missing_accounts(server, &peer, &rosters, &members);
+            if let Ok(peer) = array16(&entry.peer, "an account id")
+                && !entry.channel
+            {
+                missing = self.missing_accounts(server, &peer, &rosters, &members);
+            }
+            removals = self
+                .mls
+                .client
+                .pending_removals(&entry.group_id)
+                .map_or(0, |leaves| leaves.len() as u32);
         }
         let peer_contact = self.peer_contact(server, &entry.peer).cloned();
         let key_change = peer_contact.as_ref().is_some_and(|contact| {
@@ -692,6 +801,11 @@ impl Worker {
         });
         let blocked = if !has_group {
             None
+        } else if !entry.active && entry.channel {
+            Some(
+                "This device left the channel's encrypted group; open the channel to join again."
+                    .to_owned(),
+            )
         } else if !entry.active {
             Some("You were removed from this conversation.".to_owned())
         } else if let Some(reason) = &entry.blocked {
@@ -774,6 +888,8 @@ impl Worker {
             notices,
             pending_commit: entry.pending.is_some(),
             missing,
+            channel: entry.channel,
+            removals,
         })
     }
 
@@ -797,7 +913,7 @@ impl Worker {
                 .any(|device| !present.contains(hex(device.device_id.as_bytes()).as_str()))
         };
         let mut missing = Vec::new();
-        if let Some((_, Some(roster))) = &rosters.peer
+        if let Some((_, Some(roster))) = rosters.others.first()
             && lacks(roster)
         {
             missing.push(peer.to_vec());
@@ -908,6 +1024,7 @@ impl Worker {
         {
             let _ = self.mls.client.delete_group(&entry.group_id.clone());
         }
+        let server_key = self.server_key(server)?;
         let keystore = self.keystore.as_ref().ok_or("no identity yet")?;
         let binding = ConversationBinding::direct(log_id, *conversation);
         let created = self
@@ -917,6 +1034,7 @@ impl Worker {
                 keystore.device(),
                 keystore.device_credential(),
                 &binding,
+                &server_key,
                 &admitted,
             )
             .map_err(|error| error.to_string())?;
@@ -972,6 +1090,9 @@ impl Worker {
         // Key transparency without fresh witness cosignatures (crate::witness).
         if let Some(reason) = self.new_devices_blocked(server) {
             return Err(reason);
+        }
+        if entry.channel {
+            return Err("devices join a channel by themselves".into());
         }
         let peer = array16(&entry.peer, "an account id")?;
         let rosters = self.rosters(server, &peer)?;
@@ -1063,6 +1184,202 @@ impl Worker {
             self.mls.save(&self.store)?;
         }
         Ok(())
+    }
+
+    // ---- channels (docs/e2ee.md §6.2) ----
+
+    fn create_channel(
+        &mut self,
+        server: &str,
+        conversation: &[u8; 16],
+    ) -> Result<MlsOutgoing, String> {
+        if let Some(entry) = self.conversation(server, conversation)
+            && entry.pinned
+            && entry.active
+        {
+            return Err("this channel already has an end-to-end group".into());
+        }
+        let log_id = self.log_id(server)?;
+        let server_key = self.server_key(server)?;
+        self.forget_group(server, conversation);
+        let keystore = self.keystore.as_ref().ok_or("no identity yet")?;
+        let binding = ConversationBinding::channel(log_id, *conversation);
+        let created = self
+            .mls
+            .client
+            .create(
+                keystore.device(),
+                keystore.device_credential(),
+                &binding,
+                &server_key,
+                &[],
+            )
+            .map_err(|error| error.to_string())?;
+        let idempotency_key = random_key()?;
+        let entry = self.conversation_mut(server, conversation)?;
+        entry.reset_group();
+        entry.channel = true;
+        entry.peer.clear();
+        entry.group_id = created.group_id.clone();
+        entry.active = true;
+        entry.pending = Some(PendingCommit {
+            commit: created.first.commit.clone(),
+            idempotency_key: idempotency_key.clone(),
+            create: true,
+            epoch: created.first.epoch,
+        });
+        self.mls.save(&self.store)?;
+        Ok(MlsOutgoing {
+            conversation: conversation.to_vec(),
+            idempotency_key,
+            commit: created.first.commit,
+            group_info: created.first.group_info,
+            welcome: Vec::new(),
+            create: Some(GroupInit {
+                group_info: created.init_group_info,
+                tree: created.init_tree,
+            }),
+            epoch: created.first.epoch,
+        })
+    }
+
+    /// A group of ours for this conversation that is not (or no longer) the one
+    /// to keep: an unaccepted creation, or the one we were removed from.
+    fn forget_group(&mut self, server: &str, conversation: &[u8; 16]) {
+        if let Some(entry) = self.conversation(server, conversation)
+            && !entry.group_id.is_empty()
+            && self.mls.client.has_group(&entry.group_id)
+        {
+            let _ = self.mls.client.delete_group(&entry.group_id.clone());
+        }
+    }
+
+    fn join_channel(
+        &mut self,
+        server: &str,
+        conversation: &[u8; 16],
+        group_info: &[u8],
+        tree: &[u8],
+    ) -> Result<MlsOutgoing, String> {
+        let existing = self
+            .conversation(server, conversation)
+            .cloned()
+            .unwrap_or_default();
+        if existing.pinned && existing.active {
+            return Err("this device is already in the channel's group".into());
+        }
+        if !existing.peer.is_empty() {
+            return Err("this is a direct conversation".into());
+        }
+        let log_id = self.log_id(server)?;
+        let server_key = self.server_key(server)?;
+        self.forget_group(server, conversation);
+        let rosters = self.channel_rosters(server)?;
+        let keystore = self.keystore.as_ref().ok_or("no identity yet")?;
+        let joined = self
+            .mls
+            .client
+            .join_external(
+                keystore.device(),
+                keystore.device_credential(),
+                group_info,
+                tree,
+                &server_key,
+            )
+            .map_err(|error| format!("cannot join the channel's group: {error}"))?;
+        let binding = joined.binding;
+        let mismatch = if binding.server != log_id {
+            Some("the channel's group is bound to another server")
+        } else if binding.conversation != *conversation {
+            Some("the group is bound to another conversation")
+        } else if binding.generation != 0
+            || binding.kind != ConversationKind::Channel
+            || binding.membership != nuschel_e2ee::Membership::Server
+        {
+            Some("the group is not this channel's")
+        } else {
+            None
+        };
+        let assessment = assess(&rosters, &joined.members, self.now() / 1000);
+        if let Some(reason) = mismatch.map(str::to_owned).or(assessment.refused) {
+            let _ = self.mls.client.delete_group(&binding.group_id());
+            self.mls.save(&self.store)?;
+            return Err(format!("refused the channel's group: {reason}"));
+        }
+        let rejoined = existing.pinned && !existing.active;
+        let idempotency_key = random_key()?;
+        let entry = self.conversation_mut(server, conversation)?;
+        entry.reset_group();
+        entry.channel = true;
+        entry.group_id = binding.group_id();
+        entry.active = true;
+        entry.cursor = existing.cursor;
+        entry.unverified = assessment.unverified;
+        // OpenMLS merged the external commit as it made it: a refusal forgets the
+        // group, as for a creation.
+        entry.pending = Some(PendingCommit {
+            commit: joined.outgoing.commit.clone(),
+            idempotency_key: idempotency_key.clone(),
+            create: true,
+            epoch: joined.outgoing.epoch,
+        });
+        if rejoined {
+            entry.notice("This device joined the channel's encrypted group again.".into());
+        }
+        self.mls.save(&self.store)?;
+        Ok(MlsOutgoing {
+            conversation: conversation.to_vec(),
+            idempotency_key,
+            commit: joined.outgoing.commit,
+            group_info: joined.outgoing.group_info,
+            welcome: Vec::new(),
+            create: None,
+            epoch: joined.outgoing.epoch,
+        })
+    }
+
+    fn commit_proposals(
+        &mut self,
+        server: &str,
+        conversation: &[u8; 16],
+    ) -> Result<MlsOutgoing, String> {
+        let entry = self
+            .conversation(server, conversation)
+            .cloned()
+            .ok_or("no end-to-end group for this conversation")?;
+        if !entry.pinned || !entry.active || entry.group_id.is_empty() {
+            return Err("no end-to-end group for this conversation".into());
+        }
+        if entry.pending.is_some() {
+            return Err("a commit is waiting for the server".into());
+        }
+        if let Some(reason) = &entry.blocked {
+            return Err(reason.clone());
+        }
+        let keystore = self.keystore.as_ref().ok_or("no identity yet")?;
+        let outgoing = self
+            .mls
+            .client
+            .commit_proposals(keystore.device(), &entry.group_id)
+            .map_err(|error| error.to_string())?;
+        let idempotency_key = random_key()?;
+        let stored = self.conversation_mut(server, conversation)?;
+        stored.pending = Some(PendingCommit {
+            commit: outgoing.commit.clone(),
+            idempotency_key: idempotency_key.clone(),
+            create: false,
+            epoch: outgoing.epoch,
+        });
+        self.mls.save(&self.store)?;
+        Ok(MlsOutgoing {
+            conversation: conversation.to_vec(),
+            idempotency_key,
+            commit: outgoing.commit,
+            group_info: outgoing.group_info,
+            welcome: outgoing.welcome.unwrap_or_default(),
+            create: None,
+            epoch: outgoing.epoch,
+        })
     }
 
     // ---- joining ----
@@ -1232,15 +1549,18 @@ impl Worker {
                     reason: error.to_string(),
                 }
             }
-            Ok(Incoming::Proposal) => {
+            Ok(Incoming::Proposal { .. }) => {
                 self.conversation_mut(server, conversation)?.cursor = seq;
                 Received::Nothing { seq }
             }
             Ok(Incoming::Commit(commit)) => {
-                let peer = array16(&entry.peer, "an account id")?;
-                let rosters = self.rosters(server, &peer)?;
+                let rosters = self.rosters_for(server, &entry)?;
                 let assessment = assess(&rosters, &commit.members, self.now() / 1000);
-                if let Some(reason) = assessment.refused {
+                // Server-driven membership (docs/e2ee.md §6.2): devices join by
+                // themselves, and members remove only what the server proposed.
+                let policy = (entry.channel && (commit.adds > 0 || !commit.removals_by_server))
+                    .then(|| "a member changed the channel's membership on its own".to_owned());
+                if let Some(reason) = assessment.refused.or(policy) {
                     let stored = self.conversation_mut(server, conversation)?;
                     stored.cursor = seq;
                     stored.blocked = Some(format!(
@@ -1251,12 +1571,26 @@ impl Worker {
                     return Ok(Received::Refused { seq, reason, view });
                 }
                 let self_removed = commit.self_removed;
+                let removed: Vec<MemberView> =
+                    assess(&rosters, &commit.removed, self.now() / 1000).members;
+                let joined = commit.external_join;
                 self.mls
                     .client
                     .merge(&group_id, commit)
                     .map_err(|error| error.to_string())?;
                 let stored = self.conversation_mut(server, conversation)?;
                 stored.cursor = seq;
+                if !self_removed {
+                    for member in removed.iter().take(4) {
+                        stored.notice(format!(
+                            "{} left the encrypted group (the server removed it).",
+                            member.device_name
+                        ));
+                    }
+                }
+                if joined && !stored.channel {
+                    stored.notice("A device joined this conversation by itself.".into());
+                }
                 let had = stored.unverified.is_some();
                 stored.unverified = assessment.unverified;
                 if !had && stored.unverified.is_some() {
@@ -1295,8 +1629,7 @@ impl Worker {
             .conversation(server, conversation)
             .cloned()
             .unwrap_or_default();
-        let peer = array16(&entry.peer, "an account id")?;
-        let rosters = self.rosters(server, &peer)?;
+        let rosters = self.rosters_for(server, &entry)?;
         let view = assess(&rosters, std::slice::from_ref(sender), self.now() / 1000)
             .members
             .pop();

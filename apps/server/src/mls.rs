@@ -25,6 +25,18 @@
 //!   account's current record); claims for one's own account and direct-conversation
 //!   partners, rate-limited per account; groups of a direct conversation hold only
 //!   the two accounts' identities' devices.
+//! - **Channels** (phase 4c, docs/e2ee.md §6.2). A reader of the channel creates its
+//!   group (alone) or joins it by external commit; the joiner's credential must be
+//!   its own account's, in that account's key-transparency record. Members never add
+//!   anyone; the server removes devices by external proposals signed with its
+//!   key-transparency signing key, the groups' only external sender: when the
+//!   account can no longer read the channel, when the device was not seen for 90
+//!   days (any group), or did not open the channel for 30 days. The proposals are
+//!   rows of the stream; then one online member device is asked to commit them
+//!   (`MlsTask`), the next one if it does not within [`TASK_TIMEOUT_MS`]. Who is a
+//!   member is kept per group (device → account), and when each device was last
+//!   seen and opened each channel (`MlsOpened`, sends and commits), against a clock
+//!   tests can move ([`MlsHandle::advance_clock`]).
 //! - **Persistence** is the server's key-value table (`kt_records`) through its own
 //!   storage worker, under uppercase prefixes (nuschel-kt uses lowercase ones, the
 //!   key-transparency module `R` and `C`):
@@ -38,6 +50,12 @@
 //!   | `K` ‖ key package ref | account ‖ device ‖ last resort (1): where a Welcome goes |
 //!   | `W` ‖ account ‖ device ‖ id (16) | a waiting Welcome (`v1::MlsWelcome`) |
 //!   | `N` ‖ group id | a commit waiting for its row: the group after it ([`pending_record`]) |
+//!   | `A` ‖ account ‖ device | when the device was last seen (Unix ms, 8) |
+//!   | `O` ‖ conversation ‖ device | when the device last opened the conversation (Unix ms, 8) |
+//!
+//!   `E` carries, after its first 32 bytes, whether the group is a channel's (1) and
+//!   its members: count (2) and device ‖ account (32 each); `G` (version 2) the same
+//!   member list after the recent commit keys.
 //!
 //!   An empty value deletes a key.
 //!
@@ -61,7 +79,8 @@ use crate::{
 };
 use base64::Engine as _;
 use nuschel_e2ee::{
-    ds::{DeliveryGroup, DsError, check_key_package},
+    INACTIVE_DEVICE_DAYS, UNOPENED_CHANNEL_DAYS,
+    ds::{DeliveryGroup, DsError, ServerSigner, check_key_package},
     prevalidate::{self, ContentType, WireFormat},
 };
 use nuschel_identity::{DeviceCertificate, DeviceCredential, IdentityFingerprint};
@@ -81,8 +100,11 @@ use nuschel_protocol::{
 };
 use prost::Message as _;
 use std::{
-    collections::{BTreeSet, HashMap, VecDeque},
-    sync::Arc,
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
     time::Instant,
 };
 use tokio::sync::mpsc;
@@ -102,6 +124,14 @@ const PREFIX_LAST_RESORT: u8 = b'L';
 const PREFIX_REFERENCE: u8 = b'K';
 const PREFIX_WELCOME: u8 = b'W';
 const PREFIX_PENDING: u8 = b'N';
+const PREFIX_SEEN: u8 = b'A';
+const PREFIX_OPENED: u8 = b'O';
+/// A member asked to commit the server's removals gets this long before the next
+/// one is asked.
+pub const TASK_TIMEOUT_MS: u64 = 30_000;
+/// Activity records are rewritten at most this often per device.
+const TOUCH_WRITE_MS: u64 = 3_600_000;
+const DAY_MS: u64 = 86_400_000;
 /// `P` ‖ account ‖ device ‖ time ‖ n, before the key package reference.
 const PACKAGE_KEY_FIXED: usize = 1 + 16 + 16 + 8 + 4;
 /// History pages read per pending record at start.
@@ -162,7 +192,7 @@ pub fn group_id(conversation: &Id) -> Vec<u8> {
 // ---- the state's end ----
 
 /// What the state knows of a conversation's group.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct GroupCache {
     pub group_id: Vec<u8>,
     pub epoch: u64,
@@ -172,6 +202,33 @@ pub struct GroupCache {
     pub established: bool,
     /// A commit is being validated or stored.
     pub committing: bool,
+    /// A channel's group (server-driven membership).
+    pub channel: bool,
+    /// Member devices and their accounts, as of the newest commit.
+    pub members: BTreeMap<Device, Id>,
+    /// The server's removals proposed in an epoch, waiting for a commit.
+    pub proposed: Option<Proposed>,
+}
+
+/// Removals the server proposed, and who was asked to commit them.
+#[derive(Clone, Debug, Default)]
+pub struct Proposed {
+    pub epoch: u64,
+    pub devices: BTreeSet<Device>,
+    /// Proposal rows stored so far, of `total`.
+    pub stored: usize,
+    pub total: usize,
+    /// The connection asked, and when (server clock, ms).
+    pub task: Option<(u32, u64)>,
+    /// Connections asked already in this epoch.
+    pub asked: BTreeSet<u32>,
+}
+
+/// When a device was last seen (or opened a conversation), and last written.
+#[derive(Clone, Copy, Debug, Default)]
+struct Touch {
+    at: u64,
+    written: u64,
 }
 
 /// The handlers' end: the queue, each group's epoch and the Welcome listeners.
@@ -188,11 +245,52 @@ pub struct MlsHandle {
     uploads: HashMap<Id, LeakyBucket>,
     mailboxes: HashMap<Id, LeakyBucket>,
     config: MlsConfig,
+    /// (account, device) → last seen.
+    seen: HashMap<(Id, Device), Touch>,
+    /// (conversation, device) → last opened.
+    opened: HashMap<(Id, Device), Touch>,
+    /// Added to the system clock (tests move time with it).
+    clock_offset: Arc<AtomicI64>,
 }
 
 impl MlsHandle {
     pub fn has_group(&self, conversation: &Id) -> bool {
         self.groups.contains_key(conversation)
+    }
+
+    /// The delivery service's clock (Unix ms).
+    pub fn now_ms(&self) -> u64 {
+        now_ms().saturating_add_signed(self.clock_offset.load(Ordering::Relaxed))
+    }
+
+    /// Moves the service's clock (tests: a device inactive for 90 days).
+    #[doc(hidden)]
+    pub fn advance_clock(&self, ms: i64) {
+        self.clock_offset.fetch_add(ms, Ordering::Relaxed);
+    }
+
+    /// The device of a connection: the one whose mailbox it fetched.
+    fn device_of(&self, session: u32) -> Option<(Id, Device)> {
+        self.listening.get(&session)?.first().copied()
+    }
+
+    /// Records activity; returns the record to write when it is due.
+    fn touch(
+        map: &mut HashMap<(Id, Device), Touch>,
+        prefix: u8,
+        key: (Id, Device),
+        now: u64,
+    ) -> Option<(Vec<u8>, Vec<u8>)> {
+        let entry = map.entry(key).or_default();
+        entry.at = entry.at.max(now);
+        if now.saturating_sub(entry.written) < TOUCH_WRITE_MS {
+            return None;
+        }
+        entry.written = now;
+        Some((
+            self::key(prefix, &[&key.0, &key.1]),
+            now.to_be_bytes().to_vec(),
+        ))
     }
 
     fn limited(&mut self, account: Id, bucket: Bucket) -> bool {
@@ -268,6 +366,9 @@ impl MlsHandle {
             uploads: HashMap::new(),
             mailboxes: HashMap::new(),
             config,
+            seen: HashMap::new(),
+            opened: HashMap::new(),
+            clock_offset: Arc::new(AtomicI64::new(0)),
         }
     }
 }
@@ -308,6 +409,13 @@ pub enum Job {
         conversation: Id,
         tree: bool,
     },
+    /// The server's removals of these devices (docs/e2ee.md §6.2).
+    Propose {
+        conversation: Id,
+        devices: BTreeSet<Device>,
+    },
+    /// Activity records to write.
+    Touch(Records),
 }
 
 pub struct Task {
@@ -332,6 +440,10 @@ pub struct Accepted {
     account: Id,
     key: [u8; 16],
     hash: [u8; 32],
+    /// The members after the commit, and the devices it added.
+    members: BTreeMap<Device, Id>,
+    added: Vec<Device>,
+    channel: bool,
 }
 
 pub enum Reply {
@@ -347,6 +459,13 @@ pub enum Reply {
     Welcomes(v1::MlsWelcomes),
     Done,
     JoinInfo(v1::MlsJoinInfo),
+    /// The server's removal proposals, for the stream.
+    Proposed {
+        conversation: Id,
+        epoch: u64,
+        devices: BTreeSet<Device>,
+        rows: Vec<Vec<u8>>,
+    },
     Failed(Failure),
     /// A commit refused before storage: its group is free again.
     CommitFailed {
@@ -365,6 +484,8 @@ pub struct Stored {
     message: v1::Message,
     /// For a commit: the group, and its cache before the commit.
     commit: Option<CommitRollback>,
+    /// The server's own proposal: nobody to acknowledge.
+    proposal: bool,
 }
 
 struct CommitRollback {
@@ -372,6 +493,10 @@ struct CommitRollback {
     created: bool,
     epoch: u64,
     commit_seq: u64,
+    /// The cache's members once the commit is stored, and the devices it added.
+    members: BTreeMap<Device, Id>,
+    added: Vec<Device>,
+    channel: bool,
 }
 
 // ---- the service ----
@@ -387,6 +512,7 @@ struct Recent {
 struct Pending {
     /// The state before the commit (`None`: the commit created the group).
     previous: Option<Vec<u8>>,
+    previous_members: BTreeMap<Device, Id>,
     welcome: Option<Vec<u8>>,
     recipients: Vec<(Id, Device, bool, Vec<u8>)>,
     epoch: u64,
@@ -398,6 +524,14 @@ struct Loaded {
     commit_seq: u64,
     recent: VecDeque<Recent>,
     pending: Option<Pending>,
+    /// Member devices → accounts.
+    members: BTreeMap<Device, Id>,
+}
+
+impl Loaded {
+    fn channel(&self) -> bool {
+        self.group.binding().kind == nuschel_e2ee::ConversationKind::Channel
+    }
 }
 
 /// One account's devices under its current key-transparency record.
@@ -432,6 +566,8 @@ pub struct Service {
     groups: HashMap<Vec<u8>, Loaded>,
     /// The server's binding id: its key-transparency log id.
     server_id: [u8; 32],
+    /// Its key-transparency signing key: the groups' external sender.
+    signer: ServerSigner,
     config: MlsConfig,
 }
 
@@ -450,34 +586,35 @@ pub async fn open(
     config: &MlsConfig,
     storage: StorageHandle,
     server_id: [u8; 32],
+    signer: ServerSigner,
 ) -> Result<(MlsHandle, Service), crate::server::StartError> {
+    let failed =
+        |error: nuschel_kt::StoreError| crate::server::StartError::Storage(format!("mls: {error}"));
     let store = StorageKt::new(storage.clone());
     resolve_pending(&store, &storage)
         .await
         .map_err(|error| crate::server::StartError::Storage(format!("mls: {error}")))?;
-    let epochs = store
-        .scan_prefix(&[PREFIX_EPOCH])
-        .await
-        .map_err(|error| crate::server::StartError::Storage(format!("mls: {error}")))?;
+    let epochs = store.scan_prefix(&[PREFIX_EPOCH]).await.map_err(failed)?;
     let mut groups = HashMap::new();
     for (key, value) in epochs {
-        if value.len() != 32 {
-            continue;
-        }
-        let Ok(conversation) = <Id>::try_from(&value[16..32]) else {
+        let Some((conversation, cache)) = decode_epoch(&key[1..], &value) else {
             continue;
         };
-        groups.insert(
-            conversation,
-            GroupCache {
-                group_id: key[1..].to_vec(),
-                epoch: u64::from_be_bytes(value[..8].try_into().unwrap_or_default()),
-                commit_seq: u64::from_be_bytes(value[8..16].try_into().unwrap_or_default()),
-                established: true,
-                committing: false,
-            },
-        );
+        groups.insert(conversation, cache);
     }
+    let read_touches = |records: Vec<(Vec<u8>, Vec<u8>)>| {
+        records
+            .into_iter()
+            .filter_map(|(key, value)| {
+                let first: Id = key.get(1..17)?.try_into().ok()?;
+                let device: Device = key.get(17..33)?.try_into().ok()?;
+                let at = u64::from_be_bytes(value.as_slice().try_into().ok()?);
+                Some(((first, device), Touch { at, written: at }))
+            })
+            .collect::<HashMap<_, _>>()
+    };
+    let seen = read_touches(store.scan_prefix(&[PREFIX_SEEN]).await.map_err(failed)?);
+    let opened = read_touches(store.scan_prefix(&[PREFIX_OPENED]).await.map_err(failed)?);
     tracing::info!(groups = groups.len(), "MLS delivery service");
     let (tasks, receiver) = mpsc::channel(QUEUE);
     let (stored, stored_receiver) = mpsc::unbounded_channel();
@@ -492,6 +629,9 @@ pub async fn open(
             uploads: HashMap::new(),
             mailboxes: HashMap::new(),
             config: config.clone(),
+            seen,
+            opened,
+            clock_offset: Arc::new(AtomicI64::new(0)),
         },
         Service {
             store,
@@ -499,15 +639,69 @@ pub async fn open(
             stored: stored_receiver,
             groups: HashMap::new(),
             server_id,
+            signer,
             config: config.clone(),
         },
     ))
 }
 
+/// `E` ‖ group id: epoch, commit seq, conversation, then (since phase 4c) the
+/// channel flag and the members.
+fn encode_epoch(
+    epoch: u64,
+    commit_seq: u64,
+    conversation: &Id,
+    channel: bool,
+    members: &BTreeMap<Device, Id>,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(35 + members.len() * 32);
+    out.extend_from_slice(&epoch.to_be_bytes());
+    out.extend_from_slice(&commit_seq.to_be_bytes());
+    out.extend_from_slice(conversation);
+    out.push(u8::from(channel));
+    out.extend_from_slice(&(members.len().min(usize::from(u16::MAX)) as u16).to_be_bytes());
+    for (device, account) in members.iter().take(usize::from(u16::MAX)) {
+        out.extend_from_slice(device);
+        out.extend_from_slice(account);
+    }
+    out
+}
+
+fn decode_epoch(group_id: &[u8], value: &[u8]) -> Option<(Id, GroupCache)> {
+    let conversation: Id = value.get(16..32)?.try_into().ok()?;
+    let mut cache = GroupCache {
+        group_id: group_id.to_vec(),
+        epoch: u64::from_be_bytes(value.get(..8)?.try_into().ok()?),
+        commit_seq: u64::from_be_bytes(value.get(8..16)?.try_into().ok()?),
+        established: true,
+        ..GroupCache::default()
+    };
+    if value.len() > 32 {
+        cache.channel = *value.get(32)? == 1;
+        let count = usize::from(u16::from_be_bytes(value.get(33..35)?.try_into().ok()?));
+        let list = value.get(35..35 + count * 32)?;
+        for entry in list.as_chunks::<32>().0 {
+            cache
+                .members
+                .insert(entry[..16].try_into().ok()?, entry[16..].try_into().ok()?);
+        }
+    }
+    Some((conversation, cache))
+}
+
+fn encode_members(out: &mut Vec<u8>, members: &BTreeMap<Device, Id>) {
+    out.extend_from_slice(&(members.len().min(usize::from(u16::MAX)) as u16).to_be_bytes());
+    for (device, account) in members.iter().take(usize::from(u16::MAX)) {
+        out.extend_from_slice(device);
+        out.extend_from_slice(account);
+    }
+}
+
 fn encode_group(loaded: &Loaded) -> Vec<u8> {
     let state = loaded.group.state();
-    let mut out = Vec::with_capacity(64 + loaded.recent.len() * 80 + state.len());
-    out.push(1);
+    let mut out =
+        Vec::with_capacity(64 + loaded.recent.len() * 80 + loaded.members.len() * 32 + state.len());
+    out.push(2);
     out.extend_from_slice(&loaded.conversation);
     out.extend_from_slice(&loaded.commit_seq.to_be_bytes());
     out.push(loaded.recent.len() as u8);
@@ -518,6 +712,7 @@ fn encode_group(loaded: &Loaded) -> Vec<u8> {
         out.extend_from_slice(&recent.seq.to_be_bytes());
         out.extend_from_slice(&recent.epoch.to_be_bytes());
     }
+    encode_members(&mut out, &loaded.members);
     out.extend_from_slice(&state);
     out
 }
@@ -529,7 +724,8 @@ fn decode_group(group_id: &[u8], bytes: &[u8]) -> Option<Loaded> {
         at += n;
         Some(slice)
     };
-    if take(1)? != [1] {
+    let version = take(1)?[0];
+    if version != 1 && version != 2 {
         return None;
     }
     let conversation: Id = take(16)?.try_into().ok()?;
@@ -545,6 +741,14 @@ fn decode_group(group_id: &[u8], bytes: &[u8]) -> Option<Loaded> {
             epoch: u64::from_be_bytes(take(8)?.try_into().ok()?),
         });
     }
+    let mut members = BTreeMap::new();
+    if version == 2 {
+        let count = usize::from(u16::from_be_bytes(take(2)?.try_into().ok()?));
+        for _ in 0..count {
+            let device: Device = take(16)?.try_into().ok()?;
+            members.insert(device, take(16)?.try_into().ok()?);
+        }
+    }
     let state = bytes.get(at..)?;
     let group = DeliveryGroup::restore(group_id, state).ok()?;
     Some(Loaded {
@@ -553,6 +757,7 @@ fn decode_group(group_id: &[u8], bytes: &[u8]) -> Option<Loaded> {
         commit_seq,
         recent,
         pending: None,
+        members,
     })
 }
 
@@ -659,9 +864,7 @@ fn promote(
         last.seq = seq;
     }
     let conversation = loaded.conversation;
-    let mut epoch_value = epoch.to_be_bytes().to_vec();
-    epoch_value.extend_from_slice(&seq.to_be_bytes());
-    epoch_value.extend_from_slice(&conversation);
+    let epoch_value = encode_epoch(epoch, seq, &conversation, loaded.channel(), &loaded.members);
     let mut records = vec![
         (key(PREFIX_GROUP, &[group_id]), encode_group(loaded)),
         (key(PREFIX_EPOCH, &[group_id]), epoch_value),
@@ -780,6 +983,10 @@ fn credential_identity(credential: &[u8]) -> Option<(IdentityFingerprint, Device
 
 impl Service {
     pub async fn run(mut self, server: Arc<Server>) {
+        // Removals follow the clock too (inactive devices, channels not opened).
+        let mut sweep =
+            tokio::time::interval(std::time::Duration::from_secs(self.config.sweep_interval));
+        sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 biased;
@@ -795,6 +1002,7 @@ impl Service {
                     let reply = self.answer(task.session, task.job).await;
                     server.lock().mls_answer(task.session, task.request_id, reply);
                 }
+                _ = sweep.tick() => server.lock().mls_sweep(),
             }
         }
     }
@@ -903,8 +1111,62 @@ impl Service {
                 self.write(records).await.map(|()| Reply::Done)
             }
             Job::JoinInfo { conversation, tree } => self.join_info(conversation, tree).await,
+            Job::Propose {
+                conversation,
+                devices,
+            } => self.propose(conversation, devices).await,
+            Job::Touch(records) => self.write(records).await.map(|()| Reply::Done),
         };
         result.unwrap_or_else(Reply::Failed)
+    }
+
+    /// The server's removal proposals for `devices` (docs/e2ee.md §6.2), queued in
+    /// the group (and saved with it) and returned for the stream.
+    async fn propose(
+        &mut self,
+        conversation: Id,
+        devices: BTreeSet<Device>,
+    ) -> Result<Reply, Failure> {
+        let group_id = group_id(&conversation);
+        if !self.load(&group_id).await? {
+            return Err((Code::NotFound, 0));
+        }
+        let signer = &self.signer;
+        let loaded = self.groups.get_mut(&group_id).ok_or((Code::NotFound, 0))?;
+        if loaded.pending.is_some() {
+            return Err((Code::Busy, 500));
+        }
+        let epoch = loaded.group.epoch();
+        let mut rows = Vec::new();
+        if loaded.group.takes_server_proposals(signer.public_key()) {
+            let members = loaded.group.members().map_err(|error| {
+                tracing::error!(%error, "could not read an MLS group");
+                (Code::Busy, 1000)
+            })?;
+            for member in members {
+                let Some((_, credential)) = credential_identity(&member.credential) else {
+                    continue;
+                };
+                if !devices.contains(credential.device_id().as_bytes()) {
+                    continue;
+                }
+                match loaded.group.propose_removal(member.index, signer) {
+                    Ok(row) => rows.push(row),
+                    Err(error) => tracing::warn!(%error, "could not propose an MLS removal"),
+                }
+            }
+        }
+        if !rows.is_empty() {
+            let record = encode_group(loaded);
+            self.write(vec![(key(PREFIX_GROUP, &[&group_id]), record)])
+                .await?;
+        }
+        Ok(Reply::Proposed {
+            conversation,
+            epoch,
+            devices,
+            rows,
+        })
     }
 
     async fn upload(
@@ -1085,11 +1347,19 @@ impl Service {
                     &init.tree,
                     &self.server_id,
                     &conversation,
+                    self.signer.public_key(),
                 )
                 .map_err(|error| {
                     tracing::info!(%error, "refused a new MLS group");
                     (Code::Malformed, 0)
                 })?;
+                // The creator's own device: its leaf is the group's first.
+                let mut members = BTreeMap::new();
+                for member in group.members().unwrap_or_default() {
+                    if let Some((_, credential)) = credential_identity(&member.credential) {
+                        members.insert(*credential.device_id().as_bytes(), account);
+                    }
+                }
                 self.groups.insert(
                     group_id.clone(),
                     Loaded {
@@ -1098,6 +1368,7 @@ impl Service {
                         commit_seq: 0,
                         recent: VecDeque::new(),
                         pending: None,
+                        members,
                     },
                 );
                 true
@@ -1139,11 +1410,16 @@ impl Service {
         hash: [u8; 32],
         created: bool,
     ) -> Result<Reply, Failure> {
-        // The identities that may be in the group, before touching it.
+        // The identities that may be in the group, before touching it; for a
+        // channel, the committer's own (its rosters admit what it adds: itself).
         let mut identities = Vec::new();
+        let mut committer_roster = None;
         for allowed in allowed {
             if let Some(roster) = self.roster(allowed).await? {
                 identities.push(roster.identity);
+                if *allowed == account {
+                    committer_roster = Some(roster);
+                }
             }
         }
         let loaded = self.groups.get_mut(group_id).ok_or((Code::NotFound, 0))?;
@@ -1193,11 +1469,24 @@ impl Service {
                 loaded.group = group;
             }
         };
-        // Every member must belong to one of the conversation's identities.
-        let strangers = outcome.members.iter().any(|member| {
-            credential_identity(&member.credential)
-                .is_none_or(|(identity, _)| !identities.contains(&identity))
-        });
+        // A direct conversation: every member belongs to one of its two
+        // identities. A channel: the server admitted the readers already in it;
+        // what a commit adds (an external joiner, or the creator) must be the
+        // committer's own device, in its account's key-transparency record.
+        let strangers = if loaded.channel() {
+            outcome.added.iter().any(|member| {
+                credential_identity(&member.credential).is_none_or(|(identity, credential)| {
+                    committer_roster.as_ref().is_none_or(|roster| {
+                        identity != roster.identity || roster.device(&credential).is_none()
+                    })
+                })
+            })
+        } else {
+            outcome.members.iter().any(|member| {
+                credential_identity(&member.credential)
+                    .is_none_or(|(identity, _)| !identities.contains(&identity))
+            })
+        };
         if strangers {
             roll_back(loaded);
             return Err(malformed("a member outside the conversation"));
@@ -1230,8 +1519,33 @@ impl Service {
             ));
         }
         let after_seq = loaded.commit_seq;
+        // Who the members are now: the removed go, the added come with their
+        // accounts (the Welcome's recipients, or the committer for itself).
+        let previous_members = loaded.members.clone();
+        let device_of = |member: &nuschel_e2ee::ds::Member| {
+            credential_identity(&member.credential).map(|(_, c)| *c.device_id().as_bytes())
+        };
+        for member in &outcome.removed {
+            if let Some(device) = device_of(member) {
+                loaded.members.remove(&device);
+            }
+        }
+        let mut added = Vec::new();
+        for member in &outcome.added {
+            if let Some(device) = device_of(member) {
+                let owner = recipients
+                    .iter()
+                    .find(|(_, recipient, _, _)| *recipient == device)
+                    .map_or(account, |(owner, _, _, _)| *owner);
+                loaded.members.insert(device, owner);
+                added.push(device);
+            }
+        }
+        let members = loaded.members.clone();
+        let channel = loaded.channel();
         loaded.pending = Some(Pending {
             previous,
+            previous_members,
             welcome: welcome.map(<[u8]>::to_vec),
             recipients: recipients.clone(),
             epoch,
@@ -1272,6 +1586,9 @@ impl Service {
             account,
             key: key_bytes,
             hash,
+            members,
+            added,
+            channel,
         })))
     }
 
@@ -1291,6 +1608,7 @@ impl Service {
                 if let Ok(group) = DeliveryGroup::restore(group_id, previous) {
                     loaded.group = group;
                 }
+                loaded.members = pending.previous_members;
                 loaded.recent.pop_back();
             }
         }
@@ -1377,6 +1695,7 @@ impl Service {
             tracing::error!(%error, "could not export an MLS group");
             (Code::Busy, 1000)
         })?;
+        let accounts: BTreeSet<Id> = loaded.members.values().copied().collect();
         Ok(Reply::JoinInfo(v1::MlsJoinInfo {
             request_id: 0,
             conversation: conversation.to_vec(),
@@ -1384,6 +1703,11 @@ impl Service {
             group_info,
             tree: if tree { tree_bytes } else { Vec::new() },
             commit_seq: loaded.commit_seq,
+            accounts: accounts
+                .into_iter()
+                .take(nuschel::MAX_MLS_JOIN_ACCOUNTS)
+                .map(|account| account.to_vec())
+                .collect(),
         }))
     }
 }
@@ -1521,8 +1845,23 @@ impl State {
                     mls.listen(session, account, device, |session| {
                         users.contains_key(&session)
                     });
-                    state.mls_submit(session, request_id, Job::Welcomes { account, device })
+                    state.mls_submit(session, request_id, Job::Welcomes { account, device })?;
+                    // The device is here: it is seen, and may be the committer a
+                    // group waits for.
+                    state.mls_seen(session, None);
+                    state.mls_sweep();
+                    Ok(())
                 });
+            }
+            kind::MLS_OPENED => {
+                let Ok(message) = v1::MlsOpened::decode(payload) else {
+                    return;
+                };
+                if let Ok(conversation) = conversation_id(&message.conversation)
+                    && self.allowed(session, Action::MlsJoinInfo(&conversation))
+                {
+                    self.mls_seen(session, Some(conversation));
+                }
             }
             kind::MLS_WELCOME_ACK => {
                 let message = decoded!(v1::MlsWelcomeAck);
@@ -1586,9 +1925,11 @@ impl State {
         self.text_limited(session)?;
         let account = self.mls_account(session)?;
         self.authorize(session, Action::MlsCommit(&conversation))?;
-        // Direct conversations only for now (channels are phase 4c).
-        let allowed = match self.conversations.kind(&conversation) {
-            Some(Kind::Direct(a, b)) => vec![a, b],
+        // A direct conversation's two accounts; a channel's committer, who may
+        // add only itself (an external join, or the group's creation).
+        let (allowed, channel) = match self.conversations.kind(&conversation) {
+            Some(Kind::Direct(a, b)) => (vec![a, b], false),
+            Some(Kind::Channel(_)) => (vec![account], true),
             _ => return Err((Code::Unsupported, 0)),
         };
         let request_id = message.request_id;
@@ -1604,14 +1945,14 @@ impl State {
                     conversation,
                     GroupCache {
                         group_id: group_id(&conversation),
-                        epoch: 0,
-                        commit_seq: 0,
-                        established: false,
                         committing: true,
+                        channel,
+                        ..GroupCache::default()
                     },
                 );
             }
         }
+        self.mls_seen(session, Some(conversation));
         let submitted = self.mls_submit(
             session,
             request_id,
@@ -1675,6 +2016,7 @@ impl State {
             self.end_request(session, message.request_id);
             return Ok(());
         }
+        self.mls_seen(session, Some(conversation));
         let format = v1::Format::MlsApplication as u8;
         let (_, user_id, name) = self.mls_author(session);
         let seq = self.conversations.next_seq(conversation);
@@ -1705,6 +2047,7 @@ impl State {
                 epoch: cache.epoch,
                 message: wire,
                 commit: None,
+                proposal: false,
             })),
         );
         Ok(())
@@ -1775,7 +2118,261 @@ impl State {
                 self.failed(session, request_id, failure);
             }
             Reply::Accepted(accepted) => self.mls_accepted(session, request_id, *accepted),
+            Reply::Proposed {
+                conversation,
+                epoch,
+                devices,
+                rows,
+            } => self.mls_proposed(conversation, epoch, devices, rows),
         }
+    }
+
+    /// The server's removal proposals: rows of the stream, from nobody (the
+    /// server signed them). Once all are stored a member is asked to commit.
+    fn mls_proposed(
+        &mut self,
+        conversation: Id,
+        epoch: u64,
+        devices: BTreeSet<Device>,
+        rows: Vec<Vec<u8>>,
+    ) {
+        let Some(cache) = self
+            .mls
+            .as_mut()
+            .and_then(|mls| mls.groups.get_mut(&conversation))
+        else {
+            return;
+        };
+        if cache.epoch != epoch || cache.committing {
+            // The group moved on meanwhile: the next sweep proposes again.
+            cache.proposed = None;
+            return;
+        }
+        cache.proposed = Some(Proposed {
+            epoch,
+            devices,
+            stored: 0,
+            total: rows.len(),
+            task: None,
+            asked: BTreeSet::new(),
+        });
+        for row in rows {
+            let seq = self.conversations.next_seq(conversation);
+            let stored = StoredMessage {
+                conversation: hex(&conversation),
+                seq,
+                kind: MessageKind::Message,
+                author_account: None,
+                author_user_id: None,
+                author_name: String::new(),
+                format: v1::Format::MlsHandshake as u8,
+                content: base64(&row),
+                sent_ms: crate::chat::now_ms(),
+                idempotency_key: None,
+                body_hash: Some(crate::tls::hex(&sha256(&[&row]))),
+                ..StoredMessage::default()
+            };
+            let wire = self.wire_message(stored.clone());
+            self.history.store(
+                Request::HistoryAppend { message: stored },
+                Done::Mls(Box::new(Stored {
+                    session: 0,
+                    request_id: 0,
+                    conversation,
+                    seq,
+                    epoch,
+                    message: wire,
+                    commit: None,
+                    proposal: true,
+                })),
+            );
+        }
+    }
+
+    /// A device is here (and has `conversation` open, if given): its activity
+    /// clocks restart.
+    pub(crate) fn mls_seen(&mut self, session: u32, conversation: Option<Id>) {
+        let Some(mls) = self.mls.as_mut() else {
+            return;
+        };
+        let Some((account, device)) = mls.device_of(session) else {
+            return;
+        };
+        let now = mls.now_ms();
+        let mut records = Vec::new();
+        records.extend(MlsHandle::touch(
+            &mut mls.seen,
+            PREFIX_SEEN,
+            (account, device),
+            now,
+        ));
+        if let Some(conversation) = conversation {
+            records.extend(MlsHandle::touch(
+                &mut mls.opened,
+                PREFIX_OPENED,
+                (conversation, device),
+                now,
+            ));
+        }
+        if !records.is_empty() {
+            let _ = self.mls_submit(session, 0, Job::Touch(records));
+        }
+    }
+
+    /// Server-driven removals (docs/e2ee.md §6.2), for every group: devices whose
+    /// account can no longer read the channel, devices not seen for 90 days, and
+    /// channel members that did not open it for 30 days are proposed for removal,
+    /// and one online member is asked to commit (another after
+    /// [`TASK_TIMEOUT_MS`]). Runs after access changes, when a device connects or a
+    /// commit is stored, and every minute.
+    pub fn mls_sweep(&mut self) {
+        // Connected devices are seen now.
+        let connected: Vec<u32> = self
+            .mls
+            .as_ref()
+            .map(|mls| mls.listening.keys().copied().collect())
+            .unwrap_or_default();
+        for session in connected {
+            self.mls_seen(session, None);
+        }
+        let Some(mls) = self.mls.as_ref() else {
+            return;
+        };
+        let now = mls.now_ms();
+        let online = self.sessions_by_account();
+        let mut work = Vec::new();
+        for (conversation, cache) in &mls.groups {
+            if !cache.established || cache.committing || cache.members.is_empty() {
+                continue;
+            }
+            let kind = self.conversations.kind(conversation);
+            let mut remove = BTreeSet::new();
+            for (device, account) in &cache.members {
+                let lost = match kind {
+                    Some(Kind::Channel(channel)) => {
+                        !self.account_may_read(&online, account, channel)
+                    }
+                    Some(Kind::Direct(..)) => self.registry.by_account(account).is_none(),
+                    _ => false,
+                };
+                let idle = |map: &HashMap<(Id, Device), Touch>, key, days: u64| {
+                    map.get(&key)
+                        .is_some_and(|touch| now.saturating_sub(touch.at) > days * DAY_MS)
+                };
+                let inactive = idle(&mls.seen, (*account, *device), INACTIVE_DEVICE_DAYS);
+                let unopened = cache.channel
+                    && idle(&mls.opened, (*conversation, *device), UNOPENED_CHANNEL_DAYS);
+                if lost || inactive || unopened {
+                    remove.insert(*device);
+                }
+            }
+            work.push((*conversation, remove));
+        }
+        for (conversation, remove) in work {
+            self.mls_reconcile(conversation, remove, now);
+        }
+    }
+
+    /// One group's removals: propose them, or ask a member to commit them.
+    fn mls_reconcile(&mut self, conversation: Id, remove: BTreeSet<Device>, now: u64) {
+        let Some(mls) = self.mls.as_mut() else {
+            return;
+        };
+        let Some(cache) = mls.groups.get_mut(&conversation) else {
+            return;
+        };
+        if remove.is_empty() {
+            cache.proposed = None;
+            return;
+        }
+        // Proposed in this epoch already (or on their way): ask a committer.
+        if let Some(proposed) = &cache.proposed
+            && proposed.epoch == cache.epoch
+            && proposed.devices == remove
+        {
+            if proposed.stored < proposed.total {
+                return;
+            }
+            if proposed.total == 0 {
+                // The group takes no proposals from this server (made before 4c).
+                return;
+            }
+            if proposed
+                .task
+                .is_some_and(|(_, at)| now.saturating_sub(at) < TASK_TIMEOUT_MS)
+            {
+                return;
+            }
+            let members: BTreeSet<(Id, Device)> = cache
+                .members
+                .iter()
+                .filter(|(device, _)| !remove.contains(*device))
+                .map(|(device, account)| (*account, *device))
+                .collect();
+            let asked = proposed.asked.clone();
+            let candidate = mls
+                .listening
+                .iter()
+                .filter(|(session, devices)| {
+                    !asked.contains(session)
+                        && devices.first().is_some_and(|pair| members.contains(pair))
+                })
+                .map(|(session, _)| *session)
+                .min();
+            let epoch = cache.epoch;
+            let Some(session) = candidate.or_else(|| {
+                // Everyone was asked once: start over with whoever is here.
+                mls.listening
+                    .iter()
+                    .filter(|(_, devices)| {
+                        devices.first().is_some_and(|pair| members.contains(pair))
+                    })
+                    .map(|(session, _)| *session)
+                    .min()
+            }) else {
+                return;
+            };
+            if let Some(proposed) = mls
+                .groups
+                .get_mut(&conversation)
+                .and_then(|cache| cache.proposed.as_mut())
+            {
+                if proposed.asked.contains(&session) {
+                    proposed.asked.clear();
+                }
+                proposed.asked.insert(session);
+                proposed.task = Some((session, now));
+            }
+            if let Some(user) = self.users.get(&session) {
+                user.link.message(
+                    kind::MLS_TASK,
+                    &v1::MlsTask {
+                        conversation: conversation.to_vec(),
+                        epoch,
+                        commit: true,
+                        grant: false,
+                    },
+                );
+            }
+            return;
+        }
+        let epoch = cache.epoch;
+        cache.proposed = Some(Proposed {
+            epoch,
+            devices: remove.clone(),
+            stored: 0,
+            total: usize::MAX,
+            task: None,
+            asked: BTreeSet::new(),
+        });
+        let _ = self.mls_submit(
+            0,
+            0,
+            Job::Propose {
+                conversation,
+                devices: remove,
+            },
+        );
     }
 
     /// The service applied a commit: give it its seq and store it.
@@ -1788,6 +2385,9 @@ impl State {
             account,
             key,
             hash,
+            members,
+            added,
+            channel,
         } = accepted;
         let seq = self.conversations.next_seq(conversation);
         let Some(mls) = self.mls.as_mut() else {
@@ -1798,16 +2398,17 @@ impl State {
             .entry(conversation)
             .or_insert_with(|| GroupCache {
                 group_id: group_id.clone(),
-                epoch: 0,
-                commit_seq: 0,
-                established: false,
                 committing: true,
+                ..GroupCache::default()
             });
         let rollback = CommitRollback {
             group_id: group_id.clone(),
             created: !cache.established,
             epoch: cache.epoch,
             commit_seq: cache.commit_seq,
+            members,
+            added,
+            channel,
         };
         // From here on, application messages must be for the new epoch.
         cache.epoch = epoch;
@@ -1839,6 +2440,7 @@ impl State {
                 epoch,
                 message: wire,
                 commit: Some(rollback),
+                proposal: false,
             })),
         );
     }
@@ -1858,7 +2460,44 @@ impl State {
             epoch,
             message,
             commit,
+            proposal,
         } = stored;
+        if proposal {
+            if matches!(
+                response,
+                Some(Response::Appended {
+                    duplicate: false,
+                    ..
+                })
+            ) {
+                self.deliver(
+                    &conversation,
+                    Delivery::Message {
+                        message,
+                        stock: None,
+                    },
+                    0,
+                );
+                if let Some(proposed) = self
+                    .mls
+                    .as_mut()
+                    .and_then(|mls| mls.groups.get_mut(&conversation))
+                    .and_then(|cache| cache.proposed.as_mut())
+                    .filter(|proposed| proposed.epoch == epoch)
+                {
+                    proposed.stored += 1;
+                }
+            } else if let Some(cache) = self
+                .mls
+                .as_mut()
+                .and_then(|mls| mls.groups.get_mut(&conversation))
+            {
+                // Not in the stream: propose again later.
+                cache.proposed = None;
+            }
+            self.mls_sweep();
+            return;
+        }
         let outcome = match (&commit, response) {
             (
                 _,
@@ -1880,11 +2519,32 @@ impl State {
         if let Some(rollback) = &commit {
             let ok = outcome.is_ok();
             if let Some(mls) = self.mls.as_mut() {
+                let now = mls.now_ms();
                 if let Some(cache) = mls.groups.get_mut(&conversation) {
                     cache.committing = false;
-                    if !ok {
+                    if ok {
+                        cache.members = rollback.members.clone();
+                        cache.channel = rollback.channel;
+                        cache.proposed = None;
+                    } else {
                         cache.epoch = rollback.epoch;
                         cache.commit_seq = rollback.commit_seq;
+                    }
+                }
+                // A new member's clocks start now (it may not have connected
+                // through a mailbox fetch yet).
+                if ok {
+                    for device in &rollback.added {
+                        if let Some(account) = rollback.members.get(device) {
+                            mls.seen.entry((*account, *device)).or_insert(Touch {
+                                at: now,
+                                written: 0,
+                            });
+                            mls.opened.entry((conversation, *device)).or_insert(Touch {
+                                at: now,
+                                written: 0,
+                            });
+                        }
                     }
                 }
                 if !ok && rollback.created {
@@ -1922,6 +2582,11 @@ impl State {
                 }
             }
             Err(failure) => self.failed(session, request_id, failure),
+        }
+        if commit.is_some() {
+            // The epoch moved: proposals of the old one are void, and the
+            // members may have changed.
+            self.mls_sweep();
         }
     }
 
@@ -1997,6 +2662,20 @@ mod tests {
         // Fetches and acknowledgements are rate-limited per account.
         let limited = (0..200).any(|_| handle.limited(account, Bucket::Mailbox));
         assert!(limited);
+    }
+
+    #[test]
+    fn epoch_records_keep_the_members_and_old_ones_still_read() {
+        let members: BTreeMap<Device, Id> = [([1; 16], [2; 16]), ([3; 16], [4; 16])].into();
+        let value = encode_epoch(7, 9, &[5; 16], true, &members);
+        let (conversation, cache) = decode_epoch(&[6; 20], &value).unwrap();
+        assert_eq!(conversation, [5; 16]);
+        assert_eq!((cache.epoch, cache.commit_seq, cache.channel), (7, 9, true));
+        assert_eq!(cache.members, members);
+        // A record from before phase 4c: no flag, no members.
+        let (_, old) = decode_epoch(&[6; 20], &value[..32]).unwrap();
+        assert!(!old.channel && old.members.is_empty());
+        assert!(decode_epoch(&[6; 20], &value[..40]).is_none());
     }
 
     #[test]

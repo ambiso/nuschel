@@ -30,7 +30,9 @@ pub mod prevalidate;
 
 mod provider;
 
-pub use binding::{BINDING_EXTENSION, ConversationBinding, ConversationKind};
+pub use binding::{
+    BINDING_EXTENSION, ConversationBinding, ConversationKind, HistoryPolicy, Membership,
+};
 
 use openmls::prelude::Ciphersuite;
 
@@ -73,8 +75,10 @@ pub enum Error {
     Malformed(#[from] prevalidate::Malformed),
     #[error("MLS refused it: {0}")]
     Mls(String),
-    #[error("the MLS library failed on this input")]
-    Panicked,
+    /// With the panic's message, for logs (it names a place in OpenMLS or
+    /// libcrux, never a secret).
+    #[error("the MLS library failed on this input ({0})")]
+    Panicked(String),
     #[error("{0}")]
     Invalid(&'static str),
     #[error("no such group")]
@@ -89,7 +93,26 @@ fn mls(error: impl std::fmt::Debug) -> Error {
     Error::Mls(text)
 }
 
+/// Sizes the thread pool OpenMLS parallelises TreeKEM on (rayon's global pool), at
+/// most `threads`. Call it before anything else: by default rayon starts a thread
+/// per CPU on first use, whose stacks a sandboxed process with an address-space
+/// limit cannot always map, and a pool that fails to start panics in the middle of
+/// a commit. The first call wins.
+pub fn limit_threads(threads: usize) {
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads.max(1))
+        .build_global();
+}
+
 /// Runs `f`, turning a panic inside OpenMLS or libcrux into [`Error::Panicked`].
 pub fn guard<T>(f: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(Err(Error::Panicked))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|payload| {
+        let mut text = payload
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        text.truncate(200);
+        Err(Error::Panicked(text))
+    })
 }

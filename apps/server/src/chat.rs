@@ -326,7 +326,8 @@ impl State {
             | kind::MLS_SEND
             | kind::MLS_WELCOME_FETCH
             | kind::MLS_WELCOME_ACK
-            | kind::MLS_JOIN_INFO_REQUEST => self.mls_frame(session, frame),
+            | kind::MLS_JOIN_INFO_REQUEST
+            | kind::MLS_OPENED => self.mls_frame(session, frame),
             kind::SHARE_LINK_CREATE | kind::SHARE_LINK_REVOKE | kind::SHARE_LINK_RESOLVE => {
                 self.share_frame(session, frame)
             }

@@ -352,6 +352,14 @@ impl Context {
         }
     }
 
+    /// Sends a message that has no answer.
+    pub(crate) async fn tell(&self, kind: u16, payload: Vec<u8>) -> Result<(), Error> {
+        self.frames
+            .send((kind, payload))
+            .await
+            .map_err(|_| Error::Protocol("the connection is closed".into()))
+    }
+
     async fn head_at(&mut self, epoch: u64) -> Result<Vec<u8>, Error> {
         match self
             .ask(kind::KT_HEAD, |request_id| {

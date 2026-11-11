@@ -646,8 +646,10 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     state.history = queues;
     // Key transparency on its own storage worker: a lookup never waits behind
     // a history write.
+    let mut mls_seed = None;
     let kt_service = if settings.config.kt.enabled {
         let keys = kt::Keys::load(&settings.config.kt, &settings.config.state_directory)?;
+        mls_seed = Some(keys.signing_seed());
         let (handle, service) =
             kt::open(&settings.config.kt, keys, storage::start(backend.clone())).await?;
         state.kt = Some(handle);
@@ -660,12 +662,23 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     // (credentials are checked against it; the settings require it), on its own
     // storage worker.
     let e2ee = settings.config.security == crate::config::Security::E2ee;
-    let mls_service = match (&state.kt, e2ee) {
-        (Some(kt), true) => {
+    let mls_service = match (&state.kt, e2ee, mls_seed) {
+        (Some(kt), true, Some(seed)) => {
+            // The groups' external sender: the log's head-signing key, which every
+            // client pins with the log descriptor.
+            let public: [u8; 32] = nuschel_kt::LogDescriptor::decode(&kt.descriptor)
+                .map_err(|error| StartError::Storage(format!("mls: the log descriptor: {error}")))?
+                .signing_key()
+                .to_bytes()
+                .try_into()
+                .map_err(|_| StartError::Storage("mls: the log key is not Ed25519".into()))?;
+            let signer = nuschel_e2ee::ds::ServerSigner::new(&seed, public)
+                .map_err(|error| StartError::Storage(format!("mls: {error}")))?;
             let (handle, service) = mls::open(
                 &settings.config.mls,
                 storage::start(backend.clone()),
                 kt.log_id.0,
+                signer,
             )
             .await?;
             state.mls = Some(handle);

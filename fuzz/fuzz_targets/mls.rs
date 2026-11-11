@@ -31,14 +31,22 @@ fn fixture() -> &'static Mutex<ds::DeliveryGroup> {
         .expect("identity");
         let device = client::Client::new().expect("client");
         let binding = nuschel_e2ee::ConversationBinding::direct([7; 32], [1; 16]);
+        let signer = ds::ServerSigner::generate().expect("server key");
         let created = device
-            .create(&identity.device, &identity.device_credential, &binding, &[])
+            .create(
+                &identity.device,
+                &identity.device_credential,
+                &binding,
+                signer.public_key(),
+                &[],
+            )
             .expect("group");
         let (group, _) = ds::DeliveryGroup::create(
             &created.init_group_info,
             &created.init_tree,
             &[7; 32],
             &[1; 16],
+            signer.public_key(),
         )
         .expect("delivery group");
         Mutex::new(group)

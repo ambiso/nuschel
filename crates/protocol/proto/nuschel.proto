@@ -667,6 +667,39 @@ message MlsJoinInfo {
   bytes tree = 5;
   // The seq of the newest commit.
   uint64 commit_seq = 6;
+  // The accounts of the group's member devices, as the server knows them (it
+  // admitted each by its key-transparency record); look them up before joining,
+  // so their credentials can be checked. At most 4096.
+  repeated bytes accounts = 7;
+}
+
+// ---- MLS channels (phase 4c, docs/e2ee.md §6.2) ----
+// A channel's group holds the devices that opened the channel: a device joins by
+// external commit (`MlsCommit` without `create`, after `MlsJoinInfoRequest`) when
+// it first opens the channel, and the server proposes removals (lost `can_read`,
+// a device inactive for 90 days, a channel not opened for 30 days) as external
+// proposals in the stream, which one member commits when asked. Every device that
+// may read the channel still gets its rows (ciphertext) and heads, so it knows
+// where conversations happen without being a member.
+
+// 0x4E2D, pushed to one member device at a time (never a storm of committers).
+message MlsTask {
+  bytes conversation = 1;
+  // The epoch the task is for; a device whose group is past it ignores it.
+  uint64 epoch = 2;
+  // Commit the server's pending removals (`MlsCommit`), after reading the stream
+  // up to them.
+  bool commit = 3;
+  // Send the history keys to the group (a device joined; `members` history,
+  // docs/e2ee.md §6.6).
+  bool grant = 4;
+}
+
+// 0x4E2E, fire and forget: this connection's device (the one whose Welcome
+// mailbox it fetched) has the conversation open. A channel member that opens it
+// within 30 days stays in its group.
+message MlsOpened {
+  bytes conversation = 1;
 }
 
 // ---- share/1: share links (docs/web.md, "Share links"), 0x4E90-0x4E97 ----

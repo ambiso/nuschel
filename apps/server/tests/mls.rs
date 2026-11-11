@@ -214,6 +214,8 @@ struct Connection {
     backlog: VecDeque<ControlFrame>,
     session: u32,
     log_id: [u8; 32],
+    /// The log's head-signing key: the groups' external sender.
+    server_key: [u8; 32],
     capabilities: Vec<String>,
 }
 
@@ -251,6 +253,7 @@ impl Connection {
             backlog: VecDeque::new(),
             session: 0,
             log_id: [0; 32],
+            server_key: [0; 32],
             capabilities: Vec::new(),
         }
     }
@@ -284,10 +287,9 @@ impl Connection {
         let hello = nuschel::hello(&version.payload).unwrap().unwrap();
         connection.capabilities = hello.capabilities.clone();
         if !hello.kt_log.is_empty() {
-            connection.log_id = nuschel_kt::LogDescriptor::decode(&hello.kt_log)
-                .unwrap()
-                .log_id()
-                .0;
+            let descriptor = nuschel_kt::LogDescriptor::decode(&hello.kt_log).unwrap();
+            connection.log_id = descriptor.log_id().0;
+            connection.server_key = descriptor.signing_key().to_bytes().try_into().unwrap();
         }
         connection
             .send(
@@ -600,6 +602,7 @@ async fn join(fixture: &Fixture, user: &mut User) -> Connection {
 fn create_commit(
     creator: &User,
     log_id: [u8; 32],
+    server_key: [u8; 32],
     conversation: [u8; 16],
     packages: &[Vec<u8>],
 ) -> (Vec<u8>, v1::MlsCommit) {
@@ -613,6 +616,7 @@ fn create_commit(
             &creator.identity.device,
             &creator.identity.device_credential,
             &ConversationBinding::direct(log_id, conversation),
+            &server_key,
             &valid,
         )
         .unwrap();
@@ -695,7 +699,7 @@ async fn pair(fixture: &Fixture) -> Pair {
         .unwrap()
         .key_packages;
     assert_eq!(packages.len(), 1);
-    let (group, create) = create_commit(&alice, a.log_id, conversation, &packages);
+    let (group, create) = create_commit(&alice, a.log_id, a.server_key, conversation, &packages);
     let acked = ack(&a.commit(create.clone()).await);
     assert_eq!(acked.epoch, 1);
     alice.mls.merge_pending(&group).unwrap();
