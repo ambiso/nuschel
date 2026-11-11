@@ -59,6 +59,16 @@ fn knocking_requires_both_moderator_permissions_and_rechecks_decisions() {
             .allowed(member, Action::ModerateKnock { channel: PRIVATE })
     );
     let id = f.state.knock_request(requester, PRIVATE).unwrap();
+    assert!(
+        f.received(moderator)
+            .iter()
+            .any(|(k, _)| *k == nuschl::kind::KNOCK_NOTICE)
+    );
+    assert!(
+        !f.received(member)
+            .iter()
+            .any(|(k, _)| *k == nuschl::kind::KNOCK_NOTICE)
+    );
     assert_eq!(f.state.knock_request(requester, PRIVATE), Ok(id));
     assert!(f.state.knock_decide(member, id, false).is_err());
     // Retain Move while removing Write (which itself implies Enter) and Enter.
@@ -83,6 +93,13 @@ fn knocking_requires_both_moderator_permissions_and_rechecks_decisions() {
     assert!(f.state.knock_decide(moderator, id, true).is_err());
     assert!(f.state.knock_decide(moderator, id, false).is_err());
     assert_eq!(f.state.users[&requester].channel, LOBBY);
+    let anonymous = f.actor("anonymous");
+    f.state.knock_request(anonymous, PRIVATE).unwrap();
+    assert!(
+        !f.received(moderator)
+            .iter()
+            .any(|(k, _)| *k == nuschl::kind::KNOCK_NOTICE)
+    );
 }
 
 #[test]
@@ -91,12 +108,25 @@ fn admission_has_exact_channel_permissions_history_floor_and_lifetime() {
     let requester = f.actor("registered");
     let moderator = f.actor("admin");
     let conversation = f.conversation(PRIVATE);
+    let child = Channel::new(4, Some(PRIVATE), "Child".into());
+    f.state.channels.0.insert(4, child);
+    f.state.channels.get_mut(PRIVATE).unwrap().children.push(4);
     f.state.conversations.set_head(conversation, 20);
     let id = f.state.knock_request(requester, PRIVATE).unwrap();
     f.state.knock_decide(moderator, id, true).unwrap();
     f.state.finish();
     assert_eq!(f.state.users[&requester].channel, PRIVATE);
     assert!(!f.state.users[&requester].suppress);
+    for action in [
+        Action::Enter { channel: 4 },
+        Action::Speak { channel: 4 },
+        Action::TextChannel { channel: 4 },
+    ] {
+        assert!(
+            !f.state.allowed(requester, action),
+            "grant leaked to child: {action:?}"
+        );
+    }
     for action in [
         Action::Enter { channel: PRIVATE },
         Action::Speak { channel: PRIVATE },
@@ -279,6 +309,72 @@ fn admission_fences_pending_pages_and_live_edits_of_old_messages() {
             expected
         );
     }
+    // A stock recipient must not get an earlier message whose storage write
+    // completed after admission, on either the successful or failed path.
+    let extension = f.state.users.get_mut(&requester).unwrap().extension.take();
+    let old = v1::Message {
+        seq: 9,
+        content: "secret".into(),
+        ..Default::default()
+    };
+    f.state.deliver(
+        &conversation,
+        crate::history::Delivery::Message {
+            message: old.clone(),
+            stock: Some(crate::history::Stock {
+                actor: moderator,
+                html: "secret".into(),
+            }),
+        },
+        moderator,
+    );
+    assert!(
+        !f.received(requester)
+            .iter()
+            .any(|(k, _)| *k == kind::TEXT_MESSAGE)
+    );
+    f.state.deliver(
+        &conversation,
+        crate::history::Delivery::Message {
+            message: v1::Message {
+                seq: 11,
+                ..old.clone()
+            },
+            stock: Some(crate::history::Stock {
+                actor: moderator,
+                html: "new".into(),
+            }),
+        },
+        moderator,
+    );
+    assert!(
+        f.received(requester)
+            .iter()
+            .any(|(k, _)| *k == kind::TEXT_MESSAGE)
+    );
+    // Failed stock writes fall back to stock frames for HISTORY clients.
+    f.state.users.get_mut(&requester).unwrap().extension = extension;
+    f.state.stored(
+        crate::history::Done::Stock {
+            source: moderator,
+            conversation,
+            message: old,
+            fallback: nuschl_protocol::encode_control(
+                kind::TEXT_MESSAGE,
+                &proto::TextMessage {
+                    message: "secret".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        },
+        None,
+    );
+    assert!(
+        !f.received(requester)
+            .iter()
+            .any(|(k, _)| *k == kind::TEXT_MESSAGE)
+    );
 }
 
 #[test]
