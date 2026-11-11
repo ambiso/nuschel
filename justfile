@@ -34,6 +34,11 @@ licenses:
 audit:
     cargo deny check advisories
 
+# Regenerate the per-crate Nix build after changing dependencies (Cargo.lock).
+crate2nix:
+    nix run --inputs-from . nixpkgs#crate2nix -- generate -f Cargo.toml -o nix/crate2nix/Cargo.nix -h nix/crate2nix/crate-hashes.json
+    nix eval --raw .#legacyPackages.x86_64-linux.crate2nixInputs > nix/crate2nix/inputs.sha256
+
 fmt:
     cargo fmt --all
     nixfmt flake.nix nix/*.nix

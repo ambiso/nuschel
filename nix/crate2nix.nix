@@ -31,6 +31,9 @@ let
   overrides = pkgs.defaultCrateOverrides // {
     pipewire-sys = bindgen;
     libspa-sys = bindgen;
+    # Their build scripts probe the PipeWire version with pkg-config.
+    pipewire = bindgen;
+    libspa = bindgen;
     yeslogic-fontconfig-sys = withLibraries;
     freetype-sys = withLibraries;
     wayland-sys = withLibraries;

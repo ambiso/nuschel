@@ -184,6 +184,31 @@
         # The desktop package from per-crate derivations (crate2nix): a change
         # rebuilds only the crates that depend on it.
         crates = import ./nix/crate2nix.nix { inherit pkgs toolchain; };
+        # What nix/crate2nix/Cargo.nix was generated from: Cargo.lock and every
+        # manifest. `just crate2nix` records it; a check compares.
+        crate2nixInputs =
+          let
+            manifests =
+              dir:
+              map (name: ./. + "/${dir}/${name}/Cargo.toml") (
+                builtins.attrNames (
+                  lib.filterAttrs (
+                    name: type: type == "directory" && builtins.pathExists (./. + "/${dir}/${name}/Cargo.toml")
+                  ) (builtins.readDir (./. + "/${dir}"))
+                )
+              );
+          in
+          builtins.hashString "sha256" (
+            lib.concatMapStrings builtins.readFile (
+              [
+                ./Cargo.lock
+                ./Cargo.toml
+              ]
+              ++ manifests "apps"
+              ++ manifests "crates"
+              ++ manifests "vendor"
+            )
+          );
         package =
           pkgs.runCommand "nuschel-0.1.0"
             {
@@ -339,6 +364,7 @@
       in
       {
         packages.default = package;
+        legacyPackages.crate2nixInputs = crate2nixInputs;
         packages.default-crane = cranePackage;
         packages.server = serverPackage;
         packages.windows = windowsPackage;
@@ -381,6 +407,20 @@
               cargoDenyChecks = "bans licenses sources";
             }
           );
+          # nix/crate2nix/Cargo.nix must follow Cargo.lock and the manifests.
+          crate2nix-current =
+            let
+              recorded = lib.removeSuffix "\n" (builtins.readFile ./nix/crate2nix/inputs.sha256);
+            in
+            pkgs.runCommand "crate2nix-current" { } (
+              if recorded == crate2nixInputs then
+                "touch $out"
+              else
+                ''
+                  echo "nix/crate2nix/Cargo.nix is out of date: run 'just crate2nix'" >&2
+                  exit 1
+                ''
+            );
           audit = craneLib.cargoAudit {
             inherit src advisory-db;
             # RUSTSEC-2023-0071: rsa only generates the local Mumble key; RUSTSEC-2026-0459:

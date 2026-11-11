@@ -129,7 +129,8 @@ ServerConfig.
       Decided: an explicit notice; text chat keeps working.
 - [x] Admin features: `UserList` (18), `BanList` (10), `ACL` (13), `QueryUsers` (14),
       channel editing and moving users.
-- [ ] Lower priority: positional audio, `PluginDataTransmission` (26).
+- [ ] `PluginDataTransmission` (26), lower priority.
+- Positional audio: skipped for now (nobody we know uses it).
 
 ### 6. Desktop UI for these features
 

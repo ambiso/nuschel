@@ -104,6 +104,11 @@ just vm
 ```
 
 `cargo add` is built into the pinned Cargo. `Cargo.lock` and `flake.lock` are tracked.
+The Linux package (`nix build .#default`, also used by the VM tests) is built per
+crate with crate2nix, so a change rebuilds only the crates that depend on it; after
+changing dependencies run `just crate2nix` (a flake check fails while
+`nix/crate2nix/Cargo.nix` is out of date). Clippy, tests and the Windows/macOS cross
+builds use crane (`.#default-crane` builds the package the same way).
 The Nix environment uses Rust's latest stable release from the locked rust-overlay
 revision; `nix flake update rust-overlay` advances it. Outside Nix, rustup follows
 the `stable` channel independently of `flake.lock`.
