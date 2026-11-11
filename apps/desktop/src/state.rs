@@ -324,6 +324,8 @@ pub struct ServerView {
     /// A server recommendation the user can act on (e.g. push-to-talk).
     pub suggestion: Option<String>,
     pub stats: BTreeMap<u32, UserStats>,
+    /// Users heard speaking with CELT/Speex, which Nuschel cannot play.
+    pub legacy_voice: BTreeSet<u32>,
     pub registered_users: Option<Vec<RegisteredUser>>,
     pub bans: Option<Vec<Ban>>,
     pub acl: Option<Acl>,
@@ -390,6 +392,7 @@ impl ServerView {
             context_actions: Vec::new(),
             suggestion: None,
             stats: BTreeMap::new(),
+            legacy_voice: BTreeSet::new(),
             registered_users: None,
             bans: None,
             acl: None,
@@ -1396,10 +1399,13 @@ impl Desktop {
         if let Some(preview) = &mut self.preview {
             preview.capture = capture;
             preview.loopback = loopback && capture;
+            preview.test_opened_capture = false;
             if !capture {
-                preview.level_db = -100.;
-                preview.voice = 0.;
-                preview.transmitting = false;
+                preview.close_capture();
+                // Stopping the microphone ends an echo test that needs it.
+                if preview.echo_test == crate::preview::EchoTestState::Running {
+                    preview.echo_test = crate::preview::EchoTestState::Idle;
+                }
             }
             self.backend.preview(crate::preview::Command::Set {
                 capture,
@@ -1415,9 +1421,19 @@ impl Desktop {
     }
     pub fn start_echo_test(&mut self) {
         if let Some(preview) = &mut self.preview {
+            preview.test_opened_capture = !preview.capture;
             preview.capture = true;
             preview.echo_test = crate::preview::EchoTestState::Running;
             self.backend.preview(crate::preview::Command::EchoTest);
+        }
+    }
+    pub fn stop_echo_test(&mut self) {
+        if let Some(preview) = &mut self.preview {
+            preview.echo_test = crate::preview::EchoTestState::Idle;
+            if std::mem::take(&mut preview.test_opened_capture) {
+                preview.close_capture();
+            }
+            self.backend.preview(crate::preview::Command::StopEchoTest);
         }
     }
     pub fn update_settings(&mut self, change: impl FnOnce(&mut ClientSettings)) {
@@ -2654,6 +2670,7 @@ impl Desktop {
             }
             SessionEvent::UserNames(names) => server.user_names.extend(names),
             SessionEvent::UnsupportedCodec { session } => {
+                server.legacy_voice.insert(session);
                 if let Some(user) = server.users.get(&session).cloned()
                     && let Some(channel) = server.channel_view(user.channel)
                 {
@@ -2720,6 +2737,7 @@ impl Desktop {
             SessionEvent::UserRemoved(session) => {
                 server.users.remove(&session);
                 server.talking.remove(&session);
+                server.legacy_voice.remove(&session);
             }
             SessionEvent::Notice(message) | SessionEvent::PermissionDenied(message) => {
                 server.notice = Some(message);

@@ -299,10 +299,12 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
             ))
             .child(styled_button(
                 "echo-test",
-                if running { "Testing…" } else { "Test echo" },
+                if running { "Stop" } else { "Test echo" },
                 Tone::Secondary,
                 move |this, _, cx| {
-                    if !running {
+                    if running {
+                        this.stop_echo_test();
+                    } else {
                         this.start_echo_test();
                     }
                     cx.notify();
@@ -811,15 +813,17 @@ pub fn dialog(
                 Some(status) => status.clone(),
                 None => "Looking for audio devices…".into(),
             };
-            vec![div()
-                .id("devices-unavailable-row")
-                .text_sm()
-                .text_color(color(TEXT_MUTED))
-                .when_some(status, |row, status| {
-                    row.tooltip(move |_, cx| cx.new(|_| Tooltip(status.clone().into())).into())
-                })
-                .child(text!(line).with_id("devices-unavailable"))
-                .into_any_element()]
+            vec![
+                div()
+                    .id("devices-unavailable-row")
+                    .text_sm()
+                    .text_color(color(TEXT_MUTED))
+                    .when_some(status, |row, status| {
+                        row.tooltip(move |_, cx| cx.new(|_| Tooltip(status.clone().into())).into())
+                    })
+                    .child(text!(line).with_id("devices-unavailable"))
+                    .into_any_element(),
+            ]
         }
     };
 

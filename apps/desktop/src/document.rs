@@ -42,7 +42,9 @@ pub fn render_image(width: u32, height: u32, rgba: &str) -> Option<Arc<RenderIma
         pixel.swap(0, 2);
     }
     let buffer = image::RgbaImage::from_raw(width, height, pixels)?;
-    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
+    Some(crate::images::track(Arc::new(RenderImage::new(vec![
+        image::Frame::new(buffer),
+    ]))))
 }
 
 impl From<MessageDocument> for Document {

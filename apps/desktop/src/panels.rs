@@ -211,7 +211,10 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 if let Some(address) = &stats.address {
                     rows.push(row("Address", address.clone(), 11));
                 }
-                // 1.5 servers omit the Opus flag: every client since 1.2.4 supports Opus.
+                // What the user's voice is sent with, as far as known: Nuschel
+                // sends only Opus; others are judged by what was heard from
+                // them, then by the extended statistics (a client version from
+                // 1.2.4 on supports Opus). Without either, no guess.
                 let modern = stats.version.as_deref().is_some_and(|version| {
                     let parts: Vec<u32> = version
                         .split('.')
@@ -219,15 +222,20 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                         .collect();
                     parts >= vec![1, 2, 4]
                 });
-                rows.push(row(
-                    "Codec",
-                    if stats.opus || modern {
-                        "Opus".into()
-                    } else {
-                        "Legacy (CELT/Speex)".into()
-                    },
-                    12,
-                ));
+                let codec = if server_view.own_session == Some(*session) {
+                    Some("Opus")
+                } else if server_view.legacy_voice.contains(session) {
+                    Some("Legacy (CELT/Speex)")
+                } else if stats.opus == Some(true) || modern {
+                    Some("Opus")
+                } else if stats.opus == Some(false) {
+                    Some("Legacy (CELT/Speex)")
+                } else {
+                    None
+                };
+                if let Some(codec) = codec {
+                    rows.push(row("Codec", codec.into(), 12));
+                }
             } else {
                 rows.push(row("Statistics", "Loading…".into(), 13));
             }

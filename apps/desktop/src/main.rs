@@ -10,6 +10,7 @@ mod chrome;
 mod dialogs;
 mod document;
 mod global_ptt;
+mod images;
 mod menus;
 mod notify;
 mod panels;

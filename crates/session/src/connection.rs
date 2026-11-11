@@ -1461,7 +1461,7 @@ impl State {
                         tcp_packets: stats.tcp_packets,
                         from_client: packet(stats.from_client),
                         from_server: packet(stats.from_server),
-                        opus: stats.opus.unwrap_or(false),
+                        opus: stats.opus,
                         strong_certificate: stats.strong_certificate.unwrap_or(false),
                         certificate_count: stats.certificates.len(),
                     }),

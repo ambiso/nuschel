@@ -23,6 +23,7 @@ pub enum Command {
         loopback: bool,
     },
     EchoTest,
+    StopEchoTest,
 }
 
 #[derive(Debug)]
@@ -79,6 +80,8 @@ pub struct PreviewView {
     pub reference: Option<String>,
     pub status: Option<String>,
     pub echo_test: EchoTestState,
+    /// The echo test opened the microphone and closes it when it ends.
+    pub test_opened_capture: bool,
 }
 
 impl Default for PreviewView {
@@ -99,6 +102,7 @@ impl Default for PreviewView {
             reference: None,
             status: None,
             echo_test: EchoTestState::Idle,
+            test_opened_capture: false,
         }
     }
 }
@@ -133,9 +137,28 @@ impl PreviewView {
                 self.noise = noise;
             }
             Event::Status(message) => self.status = Some(message),
-            Event::EchoTest(Ok(report)) => self.echo_test = EchoTestState::Done(report),
-            Event::EchoTest(Err(message)) => self.echo_test = EchoTestState::Failed(message),
+            Event::EchoTest(result) => {
+                // A stopped test's late result is not shown.
+                if self.echo_test == EchoTestState::Running {
+                    self.echo_test = match result {
+                        Ok(report) => EchoTestState::Done(report),
+                        Err(message) => EchoTestState::Failed(message),
+                    };
+                }
+                if std::mem::take(&mut self.test_opened_capture) {
+                    self.close_capture();
+                }
+            }
         }
+    }
+
+    /// The microphone is off: no level, no playback of it.
+    pub fn close_capture(&mut self) {
+        self.capture = false;
+        self.loopback = false;
+        self.level_db = -100.;
+        self.voice = 0.;
+        self.transmitting = false;
     }
 }
 
@@ -181,12 +204,21 @@ pub async fn run(
     // An echo test waiting for the microphone to open, and its deadline.
     let mut test_pending = false;
     let mut test_deadline: Option<Instant> = None;
+    // The echo test opened the microphone: close it again when the test ends
+    // (PreviewView tracks the same).
+    let mut test_opened_capture = false;
     loop {
         tokio::select! {
             command = commands.recv() => match command {
                 None => break,
                 Some(Command::Set { capture: wanted, loopback: play_back }) => {
                     loopback = play_back;
+                    test_opened_capture = false;
+                    if !wanted {
+                        // Without the microphone there is no echo test.
+                        test_deadline = None;
+                        test_pending = false;
+                    }
                     if wanted != capture {
                         // The microphone opens and closes with a new process.
                         capture = wanted;
@@ -200,6 +232,7 @@ pub async fn run(
                     test_deadline = Some(Instant::now() + TEST_DEADLINE);
                     if !capture {
                         capture = true;
+                        test_opened_capture = true;
                         media.take();
                         retry = Instant::now();
                         test_pending = true;
@@ -208,6 +241,14 @@ pub async fn run(
                     } else {
                         test_pending = true;
                     }
+                }
+                Some(Command::StopEchoTest) => {
+                    test_deadline = None;
+                    test_pending = false;
+                    // A new worker ends the test sound at once.
+                    capture &= !std::mem::take(&mut test_opened_capture);
+                    media.take();
+                    retry = Instant::now();
                 }
             },
             changed = settings.changed() => {
@@ -238,6 +279,11 @@ pub async fn run(
             _ = async { tokio::time::sleep_until(test_deadline.unwrap_or_else(Instant::now)).await }, if test_deadline.is_some() => {
                 test_deadline = None;
                 test_pending = false;
+                if std::mem::take(&mut test_opened_capture) {
+                    capture = false;
+                    media.take();
+                    retry = Instant::now();
+                }
                 send(Event::EchoTest(Err("The echo test needs a working microphone and speakers.".into())));
             },
             event = async { media.as_mut().unwrap().events.recv().await }, if media.is_some() => match event {
@@ -247,6 +293,11 @@ pub async fn run(
                 }
                 Some(LiveMediaEvent::EchoTest { echo_db, reduction_db, transmitted }) => {
                     test_deadline = None;
+                    if std::mem::take(&mut test_opened_capture) {
+                        capture = false;
+                        media.take();
+                        retry = Instant::now();
+                    }
                     send(Event::EchoTest(Ok(EchoReport { echo_db, reduction_db, transmitted })));
                 }
                 Some(LiveMediaEvent::Status { ready, message }) => {
@@ -258,6 +309,12 @@ pub async fn run(
                     } else {
                         media.take();
                         retry = Instant::now() + Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 });
+                        if test_deadline.take().is_some() {
+                            // No sound system: say so now rather than at the deadline.
+                            test_pending = false;
+                            capture &= !std::mem::take(&mut test_opened_capture);
+                            send(Event::EchoTest(Err("The echo test needs a working microphone and speakers.".into())));
+                        }
                     }
                     send(Event::Status(message));
                 }

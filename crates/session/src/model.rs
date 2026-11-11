@@ -204,7 +204,9 @@ pub struct UserStats {
     pub tcp_packets: Option<u32>,
     pub from_client: Option<PacketStats>,
     pub from_server: Option<PacketStats>,
-    pub opus: bool,
+    /// Whether the client supports Opus; servers send it only with the
+    /// extended statistics (the user themselves, or with Register permission).
+    pub opus: Option<bool>,
     pub strong_certificate: bool,
     /// SHA-1 of the leaf certificate, as Mumble shows it.
     pub certificate_count: usize,
