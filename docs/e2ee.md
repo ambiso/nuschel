@@ -980,6 +980,16 @@ Consequences:
 
 ### 6.8 Files
 
+**The design is [docs/files.md](files.md)** (2026-11-11), which supersedes this section
+where they differ. What changes: the "hash of the ciphertext" is a Merkle root over the
+encrypted chunks (SHA-256, RFC 9162 shape), so every chunk is verified on arrival, by
+recipients and by the server, which needs no key for it; objects are padded to Padmé
+length; attachments travel as a list of `FileRef`s in the `chat` envelope and its
+archive record instead of a separate `file` envelope; `upload_id` becomes `object_id`;
+the same format serves *live* files, relayed from the sender's device and never stored,
+which the sender can later keep on the server without re-encrypting. The rest below
+stands.
+
 As extension.md §8 requires: each file gets a fresh random 256-bit key (never
 convergent encryption). The client encrypts in 64 KiB chunks (ChaCha20-Poly1305 STREAM
 construction: chunk index and last-chunk flag in the nonce or AAD), uploads to the blob

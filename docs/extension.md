@@ -301,8 +301,20 @@ stock client would silently erase (or, for a deny, open) it.
 
 ## 8. Files
 
-On a Nuschel server, files are not wormhole codes in text: `files/1` is a chunked,
-resumable upload to the server's blob store.
+On a Nuschel server, files are not wormhole codes in text: `files/1` either keeps a
+file in the server's blob store or relays it live from the sender's device.
+
+**The design is [docs/files.md](files.md)** (2026-11-11), which supersedes the details
+below where they differ. What changes: two classes, *kept* (stored, for images and small
+files, as below) and *live* (large files stay on the sender's disk; the server relays and
+caches a few chunks in memory, nothing is stored), sharing one encrypted format so a live
+file can be kept later; `upload_id` becomes a server-assigned `object_id` with the same
+ownership rule; the server pulls chunks from the sender on a second TLS connection (ALPN
+`nuschel-bulk/1`) and verifies each against a Merkle root, instead of verifying a hash at
+completion; the relay-only mode below is the live class, with per-account budgets that
+slow transfers rather than fail them. What stays: downloads authorised by a referencing
+message, no cross-user deduplication or convergent encryption, quota reserved at start,
+reference counting with deletion and retention, no trusted MIME types.
 
 - An upload has an `upload_id` owned by the uploading account; `ChatSend` may only
   reference the sender's own uploads. A content hash is never a capability: downloads
