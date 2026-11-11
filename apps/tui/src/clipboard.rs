@@ -500,4 +500,40 @@ mod tests {
         assert_eq!(result, Err(ReadError::Timeout));
         assert_eq!(attempts, 2);
     }
+
+    #[tokio::test]
+    async fn discard_aborts_the_owned_clipboard_task() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let dropped = Arc::new(AtomicBool::new(false));
+        let proof = dropped.clone();
+        let (entered, started) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _guard = Dropped(proof);
+            let _ = entered.send(());
+            std::future::pending::<()>().await;
+        });
+        let mut clipboard = Clipboard {
+            task: Some(task),
+            ..Default::default()
+        };
+        started.await.unwrap();
+        clipboard.discard();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !dropped.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!clipboard.attached());
+    }
 }
