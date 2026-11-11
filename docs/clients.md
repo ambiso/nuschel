@@ -230,6 +230,8 @@ first (Status, step 7). Decisions:
 - **Voice over SSH.** Over SSH (or with `--no-audio`) every connection stays muted
   and deafened, so no media worker opens audio devices on the remote machine; voice
   elsewhere goes through the same media worker as the desktop (`--audio` over SSH).
+  Unmuting on a second server asks first; `/speak both` confirms sharing the
+  microphone and `/speak here` moves it. Both commands respect `--no-audio`.
   Most terminals report no key releases, so there is no push-to-talk yet (the kitty
   keyboard protocol would allow it where a terminal speaks it).
 - **Keys.** Tab moves between the panes; Ctrl+K, Ctrl+F, F1 (and `?` outside the

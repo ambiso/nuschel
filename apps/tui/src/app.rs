@@ -649,7 +649,19 @@ impl App {
             return self
                 .warn("Voice is off (--no-audio): this session neither speaks nor listens.");
         }
-        self.client.set_mute(index, deafen);
+        if let Some(ask) = self.client.set_mute(index, deafen) {
+            // Your voice goes to another server already (docs/clients.md,
+            // "Voice on several servers").
+            let elsewhere: Vec<&str> = ask
+                .talking
+                .iter()
+                .map(|other| self.client.servers[*other].name.as_str())
+                .collect();
+            return self.say(format!(
+                "You are talking on {}. Speak on both with /speak both, or only here with /speak here.",
+                elsewhere.join(" and ")
+            ));
+        }
         let server = &self.client.servers[index];
         self.say(match (server.muted, server.deafened) {
             (_, true) => "Deafened (and muted).",
@@ -1556,6 +1568,22 @@ impl App {
             "channels" | "list" => self.list_channels(),
             "mute" => self.set_mute(false),
             "deafen" | "deaf" => self.set_mute(true),
+            "speak" => match (self.current_server(), argument) {
+                (Some(_), "both" | "here") if !self.options.audio => {
+                    self.warn(
+                        "Voice is off (--no-audio): this session neither speaks nor listens.",
+                    );
+                }
+                (Some(index), "both" | "here") => {
+                    self.client.speak_here(index, argument == "both");
+                    self.say(if argument == "both" {
+                        "Unmuted: this server also receives your voice."
+                    } else {
+                        "Unmuted: you speak only here now."
+                    });
+                }
+                _ => self.warn("Speak where? /speak both, or /speak here"),
+            },
             "edit" => {
                 if self.start_edit(None) && !argument.is_empty() {
                     self.composer.set(argument);

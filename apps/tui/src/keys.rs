@@ -58,6 +58,7 @@ pub const COMMANDS: &[&str] = &[
     "  /dm NAME                 direct messages with someone",
     "  /who, /channels, /status who is here, the channel tree, your state",
     "  /mute, /deafen           toggle",
+    "  /speak both|here         when unmuting asks: speak on both servers, or only here",
     "  /edit [TEXT]             edit your last message (with TEXT: replace it)",
     "  /delete                  delete your last message",
     "  /search WORDS            search this conversation (/searchserver, /searchall)",

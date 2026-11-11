@@ -432,6 +432,7 @@ fn without_audio_voice_stays_off() {
     let (mut app, recorder, _) = connected();
     app.options.audio = false;
     let before = recorder.requests.lock().unwrap().len();
+    let voice_state = (app.client.servers[0].muted, app.client.servers[0].deafened);
     app.set_mute(true);
     assert_eq!(
         recorder.requests.lock().unwrap().len(),
@@ -443,6 +444,23 @@ fn without_audio_voice_stays_off() {
             .back()
             .is_some_and(|note| note.text.contains("--no-audio"))
     );
+    for command in ["mute", "deafen", "speak both", "speak here"] {
+        app.command(command);
+        assert_eq!(
+            recorder.requests.lock().unwrap().len(),
+            before,
+            "{command} must not enable audio in a --no-audio or SSH session"
+        );
+        assert_eq!(
+            (app.client.servers[0].muted, app.client.servers[0].deafened),
+            voice_state
+        );
+        assert!(
+            app.notes
+                .back()
+                .is_some_and(|note| note.text.contains("--no-audio"))
+        );
+    }
     app.connect(0);
     assert_eq!(
         recorder
@@ -453,6 +471,51 @@ fn without_audio_voice_stays_off() {
             .map(|connect| connect.1),
         Some(true)
     );
+}
+
+#[test]
+fn speaking_on_another_server_waits_for_the_terminal_confirmation() {
+    let (mut app, recorder, first) = connected();
+    app.command("mute");
+    assert!(!app.client.servers[0].muted);
+
+    let bookmark = ServerBookmark::new("Other", "localhost", 64739, "Ada").unwrap();
+    let second = bookmark.id.clone();
+    let index = app.client.add_server(bookmark);
+    app.client.connect(index, None, false);
+    for event in [
+        ServerEvent::Channel(Channel {
+            id: 0,
+            name: "Root".into(),
+            ..Default::default()
+        }),
+        ServerEvent::Connected { session: 3 },
+    ] {
+        app.client.handle(Input::Server {
+            server: second.clone(),
+            generation: 2,
+            event,
+        });
+    }
+    app.browse(index, 0);
+    let before = recorder.requests.lock().unwrap().len();
+    app.command("mute");
+    assert_eq!(recorder.requests.lock().unwrap().len(), before);
+    assert!(app.client.servers[index].muted);
+    assert!(!app.client.servers[0].muted);
+    assert!(app.notes.back().unwrap().text.contains("/speak both"));
+
+    app.command("speak both");
+    assert!(!app.client.servers[index].muted);
+    assert!(!app.client.servers[0].muted);
+    assert!(app.client.voice.is_talk(&first));
+    assert!(app.client.voice.is_talk(&second));
+
+    app.command("speak here");
+    assert!(app.client.servers[0].muted);
+    assert!(!app.client.servers[index].muted);
+    assert!(!app.client.voice.is_talk(&first));
+    assert!(app.client.voice.is_talk(&second));
 }
 
 #[test]
