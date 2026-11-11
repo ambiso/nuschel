@@ -10,7 +10,8 @@
 //! struct {
 //!   uint8  kind = 0x20; uint8 version = 1;
 //!   uint8  purpose;            // 1 device keystore, 2 recovery blob,
-//!                              // 3 export secrets, 4 synced data
+//!                              // 3 export secrets, 4 synced data,
+//!                              // 5 the crypto worker's own state
 //!   opaque salt[32];           // fresh for every seal
 //!   opaque ciphertext<16..2^24-1>;
 //! } Sealed;
@@ -96,6 +97,7 @@ pub(crate) enum Purpose {
     RecoveryBlob = 2,
     ExportSecrets = 3,
     SyncedData = 4,
+    WorkerState = 5,
 }
 
 impl Purpose {
@@ -105,6 +107,7 @@ impl Purpose {
             2 => Ok(Self::RecoveryBlob),
             3 => Ok(Self::ExportSecrets),
             4 => Ok(Self::SyncedData),
+            5 => Ok(Self::WorkerState),
             _ => Err(Error::Malformed("unknown sealed purpose")),
         }
     }
@@ -208,6 +211,16 @@ impl StoreKey {
     /// The raw key, to hand to the OS credential store.
     pub fn to_bytes(&self) -> Zeroizing<[u8; 32]> {
         Zeroizing::new(*self.0.expose())
+    }
+
+    /// Encrypts the crypto worker's own state (pins, verified contacts, key-transparency
+    /// heads) under the store key (purpose 5). The plaintext format is the caller's.
+    pub fn seal_state(&self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+        Ok(Sealed::seal(self.0.expose(), Purpose::WorkerState, plaintext)?.encode())
+    }
+
+    pub fn open_state(&self, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
+        Sealed::decode(sealed)?.open(self.0.expose(), Purpose::WorkerState)
     }
 }
 

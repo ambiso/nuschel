@@ -8,7 +8,8 @@
 //!         ├─ DeviceCertificate (hybrid): device id, key epoch, validity, MLS leaf key
 //!         │                              (Ed25519), X-Wing key, display name
 //!         ├─ DeviceCredential (Ed25519, 172 bytes): the same device in MLS leaves
-//!         └─ DeviceRevocation (hybrid): key epochs of a device, or all of it
+//!         ├─ DeviceRevocation (hybrid): key epochs of a device, or all of it
+//!         └─ AccountStatement (hybrid): an account on a server belongs to the identity
 //! ```
 //!
 //! - [`keys`]: algorithms, public keys, the root, device-signing and device key pairs.
@@ -47,8 +48,8 @@ mod tests;
 pub mod fuzzing;
 
 pub use certificate::{
-    DeviceCertificate, DeviceCredential, DeviceRevocation, DeviceSigningAuthority,
-    DeviceSigningCertificate, Validity, WHOLE_DEVICE,
+    AccountStatement, DeviceCertificate, DeviceCredential, DeviceRevocation,
+    DeviceSigningAuthority, DeviceSigningCertificate, Validity, WHOLE_DEVICE,
 };
 pub use error::Error;
 pub use hpke::SealedToDevice;

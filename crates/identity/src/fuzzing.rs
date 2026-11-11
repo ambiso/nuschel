@@ -9,9 +9,9 @@ use crate::keys::{HybridSecret, HybridSignature};
 use crate::keystore::Sealed;
 use crate::link::ProvisioningBundle;
 use crate::{
-    DeviceCertificate, DeviceCredential, DeviceRevocation, DeviceSigningCertificate,
-    HybridPublicKey, IdentityExport, IdentityRoot, LinkBundle, LinkCode, LinkDeviceKeys, LinkPake,
-    RecoveryBlob, RecoveryKey, SafetyNumber, SafetyQr, SealedToDevice,
+    AccountStatement, DeviceCertificate, DeviceCredential, DeviceRevocation,
+    DeviceSigningCertificate, HybridPublicKey, IdentityExport, IdentityRoot, LinkBundle, LinkCode,
+    LinkDeviceKeys, LinkPake, RecoveryBlob, RecoveryKey, SafetyNumber, SafetyQr, SealedToDevice,
 };
 
 /// A fixed key to run the verification code on whatever decodes.
@@ -56,6 +56,7 @@ pub fn decode_everything(data: &[u8]) {
         DeviceCertificate,
         DeviceCredential,
         DeviceRevocation,
+        AccountStatement,
         SealedToDevice,
         LinkPake,
         LinkDeviceKeys,
@@ -74,6 +75,7 @@ pub fn decode_everything(data: &[u8]) {
     if DeviceSigningCertificate::decode(data).is_ok()
         || DeviceCertificate::decode(data).is_ok()
         || DeviceRevocation::decode(data).is_ok()
+        || AccountStatement::decode(data).is_ok()
     {
         verify_hybrid_tail(data);
     }

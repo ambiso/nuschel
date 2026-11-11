@@ -208,6 +208,50 @@ fn device_revocation_format() {
     device_revocation(false);
 }
 
+fn account_statement(exhaustive: bool) {
+    let f = fixture();
+    let statement =
+        f.id.device_signing
+            .sign_account([0x5e; 32], [0xac; 16], super::NOW)
+            .unwrap();
+    let bytes = statement.encode();
+    assert_eq!(bytes.len(), crate::AccountStatement::LEN);
+    assert_eq!(bytes.len(), 3467);
+    let decoded = crate::AccountStatement::decode(&bytes).unwrap();
+    assert_eq!(decoded, statement);
+    assert_eq!(decoded.encode(), bytes);
+    decoded.verify(&f.identity).unwrap();
+    assert_eq!(
+        (decoded.server(), decoded.account()),
+        (&[0x5e; 32], &[0xac; 16])
+    );
+    assert_eq!(decoded.identity(), f.identity.fingerprint());
+    assert_ne!(decoded.hash(), [0; 32]);
+
+    assert_prefixes_rejected(
+        &bytes,
+        &positions(bytes.len(), exhaustive),
+        crate::AccountStatement::decode,
+    );
+    assert_trailing_rejected(&bytes, crate::AccountStatement::decode);
+    assert_header_checked(&bytes, crate::AccountStatement::decode);
+    assert_flips_rejected(&bytes, &positions(bytes.len(), exhaustive), |b| {
+        crate::AccountStatement::decode(b)?.verify(&f.identity)
+    });
+    // Another identity's device-signing key does not vouch for it.
+    let other = fixture();
+    assert!(decoded.verify(&other.identity).is_err());
+    assert!(matches!(
+        crate::AccountStatement::decode(&patch(&bytes, 34, &[0, 0, 0, 0])),
+        Err(Error::Malformed(_))
+    ));
+}
+
+#[test]
+fn account_statement_format() {
+    account_statement(false);
+}
+
 #[test]
 fn hybrid_public_key_flips() {
     let root = IdentityRoot::generate().unwrap();
@@ -230,4 +274,5 @@ fn exhaustive_flips() {
     device_signing_certificate(true);
     device_certificate(true);
     device_revocation(true);
+    account_statement(true);
 }

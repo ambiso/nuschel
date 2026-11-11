@@ -57,6 +57,16 @@
 //!   uint64 revoked_at;                      // Unix seconds, informational
 //!   opaque signature[3373];                 // device-signing key, ctx "nuschel/device-revocation/v1"
 //! } DeviceRevocation;                       // 3439 bytes
+//!
+//! struct {
+//!   uint8  kind = 0x06; uint8 version = 1;
+//!   opaque identity[32];
+//!   uint32 signing_generation;
+//!   opaque server[32];                      // the server's key-transparency log id
+//!   opaque account[16];                     // the immutable account id on that server
+//!   uint64 created_at;                      // Unix seconds, informational
+//!   opaque signature[3373];                 // device-signing key, ctx "nuschel/account-statement/v1"
+//! } AccountStatement;                       // 3467 bytes
 //! ```
 
 use std::fmt;
@@ -75,6 +85,7 @@ pub(crate) const DEVICE_SIGNING_CERTIFICATE_CTX: &str = "nuschel/device-signing-
 pub(crate) const DEVICE_CERTIFICATE_CTX: &str = "nuschel/device-certificate/v1";
 pub(crate) const DEVICE_CREDENTIAL_CTX: &str = "nuschel/device-credential/v1";
 pub(crate) const DEVICE_REVOCATION_CTX: &str = "nuschel/device-revocation/v1";
+pub(crate) const ACCOUNT_STATEMENT_CTX: &str = "nuschel/account-statement/v1";
 
 /// `through_key_epoch` of a revocation that retires the device itself.
 pub const WHOLE_DEVICE: u32 = u32::MAX;
@@ -762,6 +773,123 @@ impl fmt::Debug for DeviceRevocation {
 }
 
 // ---------------------------------------------------------------------------------
+// Device-signing key -> account statement
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AccountBody {
+    identity: IdentityFingerprint,
+    signing_generation: u32,
+    server: [u8; 32],
+    account: [u8; 16],
+    created_at: u64,
+}
+
+impl AccountBody {
+    fn write(&self, writer: &mut Writer) {
+        writer.header(kind::ACCOUNT_STATEMENT);
+        writer.bytes(self.identity.as_bytes());
+        writer.u32(self.signing_generation);
+        writer.bytes(&self.server);
+        writer.bytes(&self.account);
+        writer.u64(self.created_at);
+    }
+
+    fn read(reader: &mut Reader<'_>) -> Result<Self, Error> {
+        reader.header(kind::ACCOUNT_STATEMENT)?;
+        Ok(Self {
+            identity: IdentityFingerprint::from_bytes(reader.array()?),
+            signing_generation: read_positive(reader, "generation 0")?,
+            server: reader.array()?,
+            account: reader.array()?,
+            created_at: reader.u64()?,
+        })
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let mut writer = Writer::new();
+        self.write(&mut writer);
+        writer.into_vec()
+    }
+}
+
+/// "Account `account` on server `server` is mine", signed by the identity's
+/// device-signing key (docs/e2ee.md §3.8). A server publishes it in its key-transparency
+/// log beside the account binding, so it can claim an account for an identity only with
+/// that identity's consent: a server cannot present someone else's identity as one of
+/// its accounts. `server` is the server's log id, which names its signing key.
+///
+/// Like device certificates it is valid only under the generation that signed it; after
+/// a rotation of the device-signing key the account is bound again.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AccountStatement {
+    body: AccountBody,
+    signature: HybridSignature,
+}
+
+impl AccountStatement {
+    pub const LEN: usize = 2 + 32 + 4 + 32 + 16 + 8 + HybridSignature::LEN;
+
+    pub fn identity(&self) -> IdentityFingerprint {
+        self.body.identity
+    }
+
+    pub fn signing_generation(&self) -> u32 {
+        self.body.signing_generation
+    }
+
+    pub fn server(&self) -> &[u8; 32] {
+        &self.body.server
+    }
+
+    pub fn account(&self) -> &[u8; 16] {
+        &self.body.account
+    }
+
+    pub fn created_at(&self) -> u64 {
+        self.body.created_at
+    }
+
+    /// Checks the signature under the identity's current device-signing key.
+    pub fn verify(&self, identity: &VerifiedIdentity) -> Result<(), Error> {
+        check_issuer(identity, self.body.identity, self.body.signing_generation)?;
+        identity
+            .device_signing_certificate()
+            .device_signing_key()
+            .verify(ACCOUNT_STATEMENT_CTX, &self.body.encode(), &self.signature)
+    }
+
+    /// SHA-256 of the encoding: what an account binding commits to.
+    pub fn hash(&self) -> [u8; 32] {
+        crypto::sha256(&[&self.encode()])
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut writer = Writer::new();
+        self.body.write(&mut writer);
+        writer.bytes(self.signature.as_bytes());
+        writer.into_vec()
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader::new(bytes, Self::LEN)?;
+        let body = AccountBody::read(&mut reader)?;
+        let signature = HybridSignature::read(&mut reader)?;
+        reader.finish()?;
+        Ok(Self { body, signature })
+    }
+}
+
+impl fmt::Debug for AccountStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AccountStatement")
+            .field("identity", &self.body.identity)
+            .field("signing_generation", &self.body.signing_generation)
+            .field("created_at", &self.body.created_at)
+            .finish_non_exhaustive()
+    }
+}
+
+// ---------------------------------------------------------------------------------
 // The device-signing key at work
 
 /// A device-signing key with its certificate: what a device that may link other devices
@@ -906,6 +1034,38 @@ impl DeviceSigningAuthority {
                 .secret
                 .sign_with(DEVICE_REVOCATION_CTX, &body.encode(), randomness)?;
         Ok(DeviceRevocation { body, signature })
+    }
+
+    /// Signs "account `account` on the server with log id `server` belongs to this
+    /// identity" (docs/e2ee.md §3.8).
+    pub fn sign_account(
+        &self,
+        server: [u8; 32],
+        account: [u8; 16],
+        created_at: u64,
+    ) -> Result<AccountStatement, Error> {
+        self.sign_account_with(server, account, created_at, crypto::random_array()?)
+    }
+
+    pub(crate) fn sign_account_with(
+        &self,
+        server: [u8; 32],
+        account: [u8; 16],
+        created_at: u64,
+        randomness: [u8; 32],
+    ) -> Result<AccountStatement, Error> {
+        let body = AccountBody {
+            identity: self.identity(),
+            signing_generation: self.generation(),
+            server,
+            account,
+            created_at,
+        };
+        let signature =
+            self.key
+                .secret
+                .sign_with(ACCOUNT_STATEMENT_CTX, &body.encode(), randomness)?;
+        Ok(AccountStatement { body, signature })
     }
 }
 

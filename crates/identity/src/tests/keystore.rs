@@ -329,3 +329,19 @@ fn device_sync_key_blobs() {
     assert_eq!(next.open(&sealed).err(), Some(Error::DecryptionFailed));
     assert!(format!("{key:?}").contains("redacted"));
 }
+
+#[test]
+fn worker_state_is_sealed_under_the_store_key() {
+    let key = StoreKey::generate().unwrap();
+    let sealed = key.seal_state(b"pins and heads").unwrap();
+    assert_eq!(&key.open_state(&sealed).unwrap()[..], b"pins and heads");
+    // Another key, a keystore envelope, or a flipped byte fails.
+    assert!(StoreKey::generate().unwrap().open_state(&sealed).is_err());
+    let mut flipped = sealed.clone();
+    *flipped.last_mut().unwrap() ^= 1;
+    assert!(key.open_state(&flipped).is_err());
+    let f = super::fixture();
+    let keystore = f.id.keystore().unwrap().seal(&key).unwrap();
+    assert!(key.open_state(&keystore).is_err());
+    assert!(DeviceKeystore::open(&key, &sealed).is_err());
+}
