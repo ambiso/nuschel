@@ -94,6 +94,10 @@ pub struct User {
 }
 
 impl User {
+    /// Bytes of server-provided comment and avatar held for this user.
+    pub(crate) fn blob_bytes(&self) -> usize {
+        self.comment.as_ref().map_or(0, String::len) + self.texture.as_ref().map_or(0, Vec::len)
+    }
     pub(crate) fn set_comment_hash(&mut self, hash: &[u8]) {
         let hash = hex(hash);
         if self.comment_hash.as_ref() != Some(&hash) {

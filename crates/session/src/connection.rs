@@ -61,6 +61,20 @@ mod kind {
 
 const MAX_BLOB_REQUEST: usize = 64;
 
+/// Budgets against a hostile server. Stock Murmur defaults to 1,000 channels
+/// and 100 users, and caps comments and descriptions at 5,000 characters
+/// (128 KiB with images) and avatars at 128 KiB.
+const MAX_CHANNELS: usize = 4096;
+const MAX_USERS: usize = 16_384;
+const MAX_LISTENING: usize = 256;
+const MAX_AVATAR_BYTES: usize = 1024 * 1024;
+/// Comments, channel descriptions and avatars held for one connection.
+const MAX_BLOB_BYTES: usize = 64 * 1024 * 1024;
+const CHANNELS_NOTICE: &str = "This server has more than 4,096 channels; the rest are not shown.";
+const USERS_NOTICE: &str = "This server has more than 16,384 users; the rest are not shown.";
+const BLOBS_NOTICE: &str = "This server sent more than 64 MiB of comments, descriptions and \
+    avatars; further ones are not shown.";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum TextTarget {
@@ -389,6 +403,10 @@ struct State {
     permissions: BTreeMap<u32, u32>,
     context_actions: BTreeMap<String, ContextAction>,
     unsupported_codec: BTreeSet<u32>,
+    /// Bytes of comments, descriptions and avatars in `users` and `channels`.
+    blob_bytes: usize,
+    /// Budget notices already shown on this connection.
+    notices: BTreeSet<&'static str>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -412,6 +430,8 @@ impl Default for State {
             permissions: BTreeMap::new(),
             context_actions: BTreeMap::new(),
             unsupported_codec: BTreeSet::new(),
+            blob_bytes: 0,
+            notices: BTreeSet::new(),
         }
     }
 }
@@ -474,6 +494,18 @@ impl State {
         )
         .await
     }
+    /// Tell the user once per connection that a budget dropped server data.
+    async fn notice_once(
+        &mut self,
+        events: &mpsc::Sender<SessionEvent>,
+        notice: &'static str,
+    ) -> Result<(), Error> {
+        if self.notices.insert(notice) {
+            emit(events, SessionEvent::Notice(notice.into())).await?;
+        }
+        Ok(())
+    }
+
     fn logged_in(&self) -> bool {
         self.own_session.is_some()
     }
@@ -1113,7 +1145,9 @@ impl State {
             }
             kind::CHANNEL_REMOVE => {
                 let channel: proto::ChannelRemove = decode(&frame)?;
-                self.channels.remove(&channel.channel_id);
+                if let Some(removed) = self.channels.remove(&channel.channel_id) {
+                    self.blob_bytes -= removed.description.len();
+                }
                 self.permissions.remove(&channel.channel_id);
                 for other in self.channels.values_mut() {
                     other.links.remove(&channel.channel_id);
@@ -1125,8 +1159,8 @@ impl State {
                 let Some(id) = update.channel_id else {
                     return Ok(());
                 };
-                if !self.channels.contains_key(&id) && self.channels.len() >= 4096 {
-                    return Err(Error::Protocol("channel limit exceeded".into()));
+                if !self.channels.contains_key(&id) && self.channels.len() >= MAX_CHANNELS {
+                    return self.notice_once(events, CHANNELS_NOTICE).await;
                 }
                 let channel = self.channels.entry(id).or_insert_with(|| Channel {
                     id,
@@ -1135,6 +1169,8 @@ impl State {
                     can_enter: true,
                     ..Default::default()
                 });
+                let held = self.blob_bytes - channel.description.len();
+                let mut over_budget = false;
                 if let Some(parent) = update.parent
                     && id != 0
                 {
@@ -1147,8 +1183,15 @@ impl State {
                     channel.set_description_hash(hash);
                 }
                 if let Some(description) = update.description {
-                    channel.description = bounded(description, MAX_CONTENT_BYTES);
+                    let description = bounded(description, MAX_CONTENT_BYTES);
+                    over_budget = held + description.len() > MAX_BLOB_BYTES;
+                    channel.description = if over_budget {
+                        String::new()
+                    } else {
+                        description
+                    };
                 }
+                self.blob_bytes = held + channel.description.len();
                 if let Some(position) = update.position {
                     channel.position = position;
                 }
@@ -1166,13 +1209,14 @@ impl State {
                 }
                 // `links` replaces the set; add/remove adjust it incrementally.
                 if !update.links.is_empty() {
-                    channel.links = update.links.iter().copied().take(4096).collect();
+                    channel.links = update.links.iter().copied().collect();
                 }
-                channel
-                    .links
-                    .extend(update.links_add.iter().copied().take(4096));
+                channel.links.extend(update.links_add.iter().copied());
                 for removed in &update.links_remove {
                     channel.links.remove(removed);
+                }
+                while channel.links.len() > MAX_CHANNELS {
+                    channel.links.pop_last();
                 }
                 let snapshot = channel.clone();
                 // Links are symmetric; mirror them so either side shows the link.
@@ -1184,6 +1228,9 @@ impl State {
                     }
                 }
                 emit(events, SessionEvent::Channel(snapshot)).await?;
+                if over_budget {
+                    self.notice_once(events, BLOBS_NOTICE).await?;
+                }
             }
             kind::USER_REMOVE => {
                 let remove: proto::UserRemove = decode(&frame)?;
@@ -1196,6 +1243,7 @@ impl State {
                 let Some(user) = self.users.remove(&remove.session) else {
                     return Ok(());
                 };
+                self.blob_bytes -= user.blob_bytes();
                 let text = match (&actor, &reason) {
                     (Some(actor), Some(reason)) if !reason.is_empty() => {
                         format!(
@@ -1396,7 +1444,10 @@ impl State {
                 if flush {
                     self.permissions.clear();
                 }
-                if let (Some(channel), Some(permissions)) = (query.channel_id, query.permissions) {
+                // Only known channels: the map cannot grow past the channel budget.
+                if let (Some(channel), Some(permissions)) = (query.channel_id, query.permissions)
+                    && self.channels.contains_key(&channel)
+                {
                     self.permissions.insert(channel, permissions);
                     emit(
                         events,
@@ -1624,8 +1675,8 @@ impl State {
             return Ok(());
         };
         let known = self.users.contains_key(&session);
-        if !known && self.users.len() >= 16384 {
-            return Err(Error::Protocol("user limit exceeded".into()));
+        if !known && self.users.len() >= MAX_USERS {
+            return self.notice_once(events, USERS_NOTICE).await;
         }
         if !known {
             self.user_instance += 1;
@@ -1647,6 +1698,9 @@ impl State {
             ..Default::default()
         });
         let previous = user.clone();
+        // Blobs held for everyone else; this user's are counted again below.
+        let held = self.blob_bytes - previous.blob_bytes();
+        let mut over_budget = false;
         if let Some(name) = update.name {
             user.name = bounded(name, 512);
         }
@@ -1684,9 +1738,17 @@ impl State {
             user.set_comment_hash(hash);
         }
         if let Some(comment) = update.comment {
-            user.comment = (!comment.is_empty()).then(|| bounded(comment, MAX_CONTENT_BYTES));
-            if user.comment.is_none() {
+            user.comment = None;
+            if comment.is_empty() {
                 user.comment_hash = None;
+            } else {
+                let comment = bounded(comment, MAX_CONTENT_BYTES);
+                // Over budget, the hash stays: the comment exists but is not held.
+                if held + user.blob_bytes() + comment.len() > MAX_BLOB_BYTES {
+                    over_budget = true;
+                } else {
+                    user.comment = Some(comment);
+                }
             }
         }
         if let Some(hash) = &update.texture_hash {
@@ -1696,14 +1758,23 @@ impl State {
             if texture.is_empty() {
                 user.texture = None;
                 user.texture_hash = None;
-            } else if texture.len() <= 1024 * 1024 {
-                user.texture = Some(texture);
+            } else if texture.len() <= MAX_AVATAR_BYTES {
+                user.texture = None;
+                if held + user.blob_bytes() + texture.len() > MAX_BLOB_BYTES {
+                    over_budget = true;
+                } else {
+                    user.texture = Some(texture);
+                }
             }
         }
+        self.blob_bytes = held + user.blob_bytes();
         user.listening
-            .extend(update.listening_channel_add.iter().copied().take(256));
+            .extend(update.listening_channel_add.iter().copied());
         for channel in &update.listening_channel_remove {
             user.listening.remove(channel);
+        }
+        while user.listening.len() > MAX_LISTENING {
+            user.listening.pop_last();
         }
         let user = user.clone();
         if self.own_session.is_some() {
@@ -1785,6 +1856,9 @@ impl State {
         emit(events, SessionEvent::User(user)).await?;
         for (channels, text) in log {
             self.activity(events, channels, text).await?;
+        }
+        if over_budget {
+            self.notice_once(events, BLOBS_NOTICE).await?;
         }
         Ok(())
     }
@@ -2109,6 +2183,98 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn a_hostile_server_cannot_grow_the_session_without_bound() {
+        let mut state = State::default();
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut notices = Vec::new();
+        let mut send = async |state: &mut State, kind: u16, payload: Vec<u8>| {
+            let frame = ControlFrame {
+                kind,
+                payload: payload.into(),
+            };
+            state.handle(frame, &tx).await.unwrap();
+            for event in drain(&mut rx).await {
+                if let SessionEvent::Notice(text) = event {
+                    notices.push(text);
+                }
+            }
+        };
+        let channel = |id, description: Option<String>, links_add: Vec<u32>| {
+            proto::ChannelState {
+                channel_id: Some(id),
+                description,
+                links_add,
+                ..Default::default()
+            }
+            .encode_to_vec()
+        };
+        let user = |session, texture: Option<Vec<u8>>| {
+            proto::UserState {
+                session: Some(session),
+                texture,
+                ..Default::default()
+            }
+            .encode_to_vec()
+        };
+        for id in 0..MAX_CHANNELS as u32 + 2 {
+            send(&mut state, kind::CHANNEL_STATE, channel(id, None, vec![])).await;
+        }
+        assert_eq!(state.channels.len(), MAX_CHANNELS);
+        // Links arrive in many messages; the set stays bounded.
+        for _ in 0..2 {
+            let links = (0..MAX_CHANNELS as u32 + 100).collect();
+            send(&mut state, kind::CHANNEL_STATE, channel(1, None, links)).await;
+        }
+        assert_eq!(state.channels[&1].links.len(), MAX_CHANNELS);
+        for session in 0..MAX_USERS as u32 + 2 {
+            send(&mut state, kind::USER_STATE, user(session, None)).await;
+        }
+        assert_eq!(state.users.len(), MAX_USERS);
+        // Avatars up to the total budget; the next is dropped, its hash kept.
+        let avatar = vec![7; MAX_AVATAR_BYTES];
+        let fit = (MAX_BLOB_BYTES / MAX_AVATAR_BYTES) as u32;
+        for session in 0..=fit {
+            send(
+                &mut state,
+                kind::USER_STATE,
+                user(session, Some(avatar.clone())),
+            )
+            .await;
+        }
+        assert_eq!(state.blob_bytes, MAX_BLOB_BYTES);
+        assert!(state.users[&fit].texture.is_none());
+        let description = Some("d".repeat(100));
+        send(
+            &mut state,
+            kind::CHANNEL_STATE,
+            channel(2, description, vec![]),
+        )
+        .await;
+        assert!(state.channels[&2].description.is_empty());
+        // Leaving users free their share.
+        let remove = proto::UserRemove {
+            session: 0,
+            ..Default::default()
+        };
+        send(&mut state, kind::USER_REMOVE, remove.encode_to_vec()).await;
+        send(
+            &mut state,
+            kind::USER_STATE,
+            user(fit, Some(avatar.clone())),
+        )
+        .await;
+        assert!(state.users[&fit].texture.is_some());
+        let held: usize = state.users.values().map(User::blob_bytes).sum::<usize>()
+            + state
+                .channels
+                .values()
+                .map(|c| c.description.len())
+                .sum::<usize>();
+        assert_eq!(state.blob_bytes, held);
+        assert_eq!(notices, [CHANNELS_NOTICE, USERS_NOTICE, BLOBS_NOTICE]);
     }
 
     #[tokio::test]
