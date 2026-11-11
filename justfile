@@ -40,6 +40,13 @@ rtc:
 vm:
     nix build --cores 2 .#checks.x86_64-linux.vm-smoke --no-link -L
 
+# Host checks only; a working macOS/SwiftUI/Simulator guest is a separate gate.
+ios-preflight:
+    python3 tests/ios_vm.py preflight
+
+ios-vm-check:
+    python3 -m unittest discover -s tests -p ios_vm_test.py
+
 build:
     cargo build --workspace
 

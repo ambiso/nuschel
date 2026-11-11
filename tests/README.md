@@ -9,6 +9,12 @@ The test runs the actual GPUI client under Xvfb against a stock Mumble server,
 with synthetic audio on a private PulseAudio daemon. It never opens the host microphone.
 Screenshots are copied into the test result.
 
+The iOS environment experiment is documented in [ios-vm.md](../docs/ios-vm.md).
+`just ios-preflight` checks this Linux host without downloading VM media;
+`just ios-vm-check` runs the host-side tooling tests. Guest inspection is bounded
+and uses a dedicated loopback SSH identity. Host KVM access and installed SDK/runtime
+metadata do not establish Simulator rendering or a passing SwiftUI/XCTest app.
+
 `mumble_client.py` uses the production session CLI to test certificate rejection/pinning,
 login, channel trees and joining, permission denial, multiline chat and Opus tunneling.
 It checks both codec directions against the reference libopus implementation.

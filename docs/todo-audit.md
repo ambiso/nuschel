@@ -52,6 +52,18 @@ not close that TODO. Separately, sealed crypto files can currently be written ab
 their 16 MiB read cap; the restart-availability risk is recorded as an open store
 design task, not silently folded into the small ownership-lock fix.
 
+## Completed work from this pass
+
+- Release helper tools follow the repository's pinned nixpkgs even after changing
+  directory; Nix release invocations use two cores. `actionlint` passed. No signing
+  secret was inspected or release published.
+- The iOS tooling has 14 passing host regression tests. Host and confined cached
+  container KVM creation, disk/RAM preflight and immutable registry metadata checks
+  passed. The [guest evidence gates](ios-vm.md) remain open: no Apple media, macOS
+  boot, SwiftUI rendering, XCTest or Rust library linkage was demonstrated.
+- SDK, Windows migration, fuzzing and architecture prose now describe the existing
+  implementation and its limits. Nix option formatting and whitespace checks passed.
+
 ## Next dependency path
 
 1. Linux KVM/container preflight → supplied macOS guest and pinned Xcode → graphics,

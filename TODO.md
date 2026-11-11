@@ -24,6 +24,12 @@ are complete; package, cross-build and all four VM checks have passed.
          builds, boots in Simulator, renders and runs an automated UI test before
          committing to this environment. Check graphics support explicitly; a booted
          macOS guest alone is insufficient. Keep CI as an optional alternative.
+   - [x] **Host feasibility tooling** (`tests/ios_vm.py`, `docs/ios-vm.md`): host and
+         confined cached-container KVM creation, disk/RAM budgets and immutable
+         registry metadata checks passed; 14 host-side regression tests passed.
+         `just ios-preflight` and `just ios-vm-check` expose the checks. No macOS/Xcode
+         media was acquired or guest booted. Guest graphics, SwiftUI rendering,
+         XCTest and Rust-library linking remain unproven in the milestone above.
    - [ ] Swift bindings for connect/disconnect, bookmarks, channel/user snapshots,
          text/history and mute/deafen/join-voice commands; an iOS Rust build and a
          minimal simulator/device app that exercises the bindings.

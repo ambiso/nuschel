@@ -371,7 +371,7 @@ High-quality video without transcoding, so servers stay cheap:
 2. The terminal client (done: `apps/tui`).
 3. Finish and push the verified Nuschel → Nuschl rename.
 4. **iOS first** (user priority, 2026-11-11): SwiftUI over UniFFI. Start with the
-   Linux-hosted macOS VM feasibility check (Docker-OSX/QEMU-KVM), bindings and iOS
+   [Linux-hosted macOS VM feasibility check](ios-vm.md) (Docker-OSX/QEMU-KVM), bindings and iOS
    build/app foundation; implement the server/channel/chat view
    and the iOS audio adapter in parallel. The first usable milestone is text and
    voice against private Mumble and compatible Nuschl servers in iOS Simulator,
