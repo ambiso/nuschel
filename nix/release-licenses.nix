@@ -120,6 +120,10 @@ let
             if supplement.get('status') != 'resolved' or not re.fullmatch(r'[0-9a-f]{40}', revision):
                 issue(identity, 'unresolved or unpinned upstream supplement')
                 continue
+            vcs = root / '.cargo_vcs_info.json'
+            if vcs.is_file() and json.loads(vcs.read_text()).get('git', {}).get('sha1') != revision:
+                issue(identity, 'supplement revision differs from published crate VCS metadata')
+                continue
             if supplement.get('declared_license') != package.get('license'):
                 issue(identity, 'supplement license does not match the locked package')
                 continue
@@ -180,6 +184,7 @@ let
     pname = "nuschl-license-inventory";
     version = "1";
     src = source;
+    cargoArtifacts = null;
     cargoVendorDir = craneLib.vendorCargoDeps { src = source; };
     nativeBuildInputs = [ pkgs.python3 ];
     doCheck = false;
