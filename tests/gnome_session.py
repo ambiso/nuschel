@@ -134,6 +134,66 @@ class GnomeSession:
                   f" if (w.is_maximized()) w.unmaximize(); w.move_resize_frame(true, {x}, {y}, {width}, {height});"
                   " w.activate(global.get_current_time()); 'ok'")
 
+    # Runs inside GNOME Shell: every `interval` ms, sample the window's frame rect
+    # (what the client has committed) and then take the next step. Steps are
+    # [width, height] for move_resize_frame, or [x, y] for the pointer while it
+    # holds a resize edge. The log rows are [monotonic µs, step index, width, height].
+    _TICKS = """
+    (() => {
+    const GLib = imports.gi.GLib, C = imports.gi.Clutter;
+    const w = global.get_window_actors().map(a => a.meta_window)
+        .find(w => (w.get_title() || '').startsWith(%(title)s));
+    const steps = %(steps)s, pointer = %(pointer)s, origin = w.get_frame_rect();
+    const run = global._nuschelTicks = {done: false, log: []};
+    let index = 0;
+    GLib.timeout_add(GLib.PRIORITY_HIGH, %(interval)d, () => {
+        const now = GLib.get_monotonic_time(), rect = w.get_frame_rect();
+        run.log.push([now, index, rect.width, rect.height]);
+        if (index < steps.length) {
+            const [a, b] = steps[index];
+            if (pointer) global._nuschelPointer.notify_absolute_motion(now, a, b);
+            else w.move_resize_frame(true, origin.x, origin.y, a, b);
+        } else if (index == steps.length && pointer) {
+            global._nuschelPointer.notify_button(now, 1, C.ButtonState.RELEASED);
+        }
+        index++;
+        if (index < steps.length + %(settle)d) return GLib.SOURCE_CONTINUE;
+        run.done = true;
+        return GLib.SOURCE_REMOVE;
+    });
+    return 'ok';
+    })()
+    """
+
+    def _ticks(self, title_prefix, steps, pointer, interval, settle=30):
+        self.eval(self._TICKS % {"title": json.dumps(title_prefix), "steps": json.dumps(steps),
+                                 "pointer": "true" if pointer else "false", "interval": interval,
+                                 "settle": settle})
+        deadline = time.monotonic() + 30 + len(steps) * interval / 1000
+        while self.eval("global._nuschelTicks.done ? 'yes' : 'no'") != "yes":
+            if time.monotonic() > deadline:
+                raise RuntimeError("resize ticks did not finish")
+            time.sleep(0.2)
+        return json.loads(self.eval("JSON.stringify(global._nuschelTicks.log)"))
+
+    def resize_sweep(self, title_prefix, sizes, interval=16):
+        """Resize the window to each [width, height] in turn, one per tick, as a
+        script would; returns the tick log (see _TICKS)."""
+        return self._ticks(title_prefix, sizes, False, interval)
+
+    def drag_resize(self, title_prefix, corner, path, interval=8):
+        """Press the pointer on a resize edge at `corner` and move it along `path`
+        ([x, y] per tick, as a mouse reports motion), then release: the
+        compositor's own interactive resize. Returns the tick log."""
+        self._pointer()
+        self.move(*corner)
+        time.sleep(0.1)
+        self.eval("global._nuschelPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1,"
+                  " imports.gi.Clutter.ButtonState.PRESSED); 'ok'")
+        # The client answers the press by asking the compositor to start the resize.
+        time.sleep(0.3)
+        return self._ticks(title_prefix, path, True, interval)
+
     def screenshot(self, path, crop=None):
         path = Path(path)
         subprocess.run(["gdbus", "call", "--session", "--dest", "org.gnome.Shell.Screenshot", "--object-path",

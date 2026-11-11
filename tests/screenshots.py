@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -27,6 +28,7 @@ from gnome_session import GnomeSession  # noqa: E402
 from local_murmur import Murmur, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
 from transfer import Wormhole, Worker  # noqa: E402
+import frame_timing  # noqa: E402
 
 def SEARCH_BUTTON(width):
     """The conversation header's search button, in window screenshot pixels."""
@@ -175,13 +177,15 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; resize (not in all) measures resizing")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
     parser.add_argument("--theme", choices=["system", "light", "dark"], default="dark")
     parser.add_argument("--zoom", type=float, default=1.0, help="scenes' coordinates assume 1.0")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
+    parser.add_argument("--resize-messages", type=int, default=1000,
+                        help="messages the resize scene sends before measuring a busy channel (0: only the empty one)")
     parser.add_argument("--wormhole-python", type=Path,
                         help="a python with magic-wormhole-mailbox-server and -transit-relay (transfer scene)")
     parser.add_argument("--portals", type=Path, nargs="+", default=[],
@@ -196,13 +200,20 @@ def main():
         port = free_port()
         murmur = Murmur(args.murmur, root, port)
         bot_options = []
-        if {"all", "scroll", "search"} & set(args.scenes.split(",")):
+        resizing = "resize" in args.scenes.split(",")
+        if resizing or {"all", "scroll", "search"} & set(args.scenes.split(",")):
             # The scroll scene fills several pages of history quickly; the
             # stock server otherwise drops text beyond one message a second.
             # The bots need not wait for it either (Nuschel itself still does).
             murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
             bot_options = ["--message-limit", "1000", "--message-burst", "1000"]
         murmur.seed()
+        if resizing:
+            # A busy server's tree: forty more channels under Music, below the rows the scenes click.
+            with sqlite3.connect(murmur.database) as database:
+                database.executemany(
+                    "INSERT OR IGNORE INTO channels (server_id, channel_id, parent_id, name, inheritacl)"
+                    " VALUES (1, ?, 6, ?, 1)", [(100 + n, f"Room {n:02}") for n in range(40)])
         murmur.start()
         bots = []
         app = None
@@ -240,7 +251,10 @@ def main():
                                          start_new_session=True)
                 eventually(lambda: (socket_dir / "native").exists(), "private PulseAudio did not start")
             pin = certificate_pin(args.binaries, "127.0.0.1", port, root / "probe")
-            for index, (name, channel) in enumerate([("Ada Lovelace", 2), ("Grace", 2), ("Linus", 5), ("Margaret", 7)]):
+            people = [("Ada Lovelace", 2), ("Grace", 2), ("Linus", 5), ("Margaret", 7)]
+            if resizing:
+                people += [(f"Guest {n}", 100 + n * 3) for n in range(12)]
+            for index, (name, channel) in enumerate(people):
                 bot = Client(args.binaries, "127.0.0.1", port, pin, name, root / f"bot{index}", bot_options)
                 bot.send(kind="join", channel=channel)
                 bots.append(bot)
@@ -262,8 +276,13 @@ def main():
             env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHEL_SCREENSHOT_LOG", "nuschel=info")}
             if wormhole:
                 env |= wormhole.environment()
+            if resizing:
+                # Read by a build with --features frame-timing; others ignore it.
+                env["NUSCHEL_FRAME_TIMING"] = str(args.output / "frames.log")
             log = (args.output / "desktop.log").open("w")
-            app = subprocess.Popen([str(args.binaries / "nuschel"), "--profile-dir", str(profile),
+            # For profiling, e.g. NUSCHEL_SCREENSHOT_WRAPPER="perf record -o nuschel.perf --".
+            wrapper = os.environ.get("NUSCHEL_SCREENSHOT_WRAPPER", "").split()
+            app = subprocess.Popen([*wrapper, str(args.binaries / "nuschel"), "--profile-dir", str(profile),
                                     f"mumble://Andi@127.0.0.1:{port}/Lobby/Development"]
                                    + (["--offer", str(offered)] if offered else []),
                                    env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -1072,6 +1091,100 @@ def main():
                 shot("39-light")
                 shell.key("BackSpace")
                 shell.key("BackSpace")
+            if resizing:
+                measured = {}
+
+                def measure(name):
+                    """Sweep the size as a script would, then drag the corner as a person would."""
+                    window = shell.window("Nuschel")
+                    w, h = window["width"], window["height"]
+                    # Two round trips down to 900x620 and back, one size per tick.
+                    sweep = []
+                    for _ in range(2):
+                        for i in range(121):
+                            t = 1 - abs(i - 60) / 60
+                            sweep.append([round(w - (w - 900) * t), round(h - (h - 620) * t)])
+                    ticks = shell.resize_sweep("Nuschel", sweep)
+                    measured[f"{name} sweep"] = {"ticks": frame_timing.lag(ticks, sweep), "span": frame_timing.moving(ticks, sweep),
+                                                 "log": ticks, "steps": sweep}
+                    time.sleep(0.5)
+                    shell.place("Nuschel", 40, 40, w, h)
+                    time.sleep(1.0)
+                    # The bottom right corner, in the shadow where the resize edge is, at
+                    # 125 Hz like a mouse: in by 380x180 over a second, half way out
+                    # again, and held still for a moment before letting go.
+                    window = shell.window("Nuschel")
+                    corner = (window["x"] + window["width"] + 4, window["y"] + window["height"] + 4)
+                    path, expected = [], []
+                    for i in range(251):
+                        t = i / 125 if i <= 125 else max(0.5, 1 - (i - 125) / 126)
+                        dx, dy = round(-380 * t), round(-180 * t)
+                        path.append([corner[0] + dx, corner[1] + dy])
+                        expected.append([window["width"] + dx, window["height"] + dy])
+                    ticks = shell.drag_resize("Nuschel", corner, path)
+                    measured[f"{name} drag"] = {"ticks": frame_timing.lag(ticks, expected), "span": frame_timing.moving(ticks, expected),
+                                                "log": ticks, "steps": expected}
+                    time.sleep(0.5)
+                    shell.place("Nuschel", 40, 40, w, h)
+                    time.sleep(1.0)
+
+                def zoomed(name):
+                    """Measure again at 125 % (two zoom steps), which changes the window's scale."""
+                    shell.chord("Control_L", "equal")
+                    shell.chord("Control_L", "equal")
+                    time.sleep(1.0)
+                    shot(f"{name}-125")
+                    measure(f"{name} 125%")
+                    shell.chord("Control_L", "0")
+                    time.sleep(1.0)
+
+                def report():
+                    log = args.output / "frames.log"
+                    events = frame_timing.read_log(log) if log.exists() else []
+                    for name, entry in measured.items():
+                        entry["frames"] = frame_timing.summarize(events, *entry["span"])
+                        print(f"{name}: {entry['ticks']}\n{frame_timing.format_summary(entry['frames'])}", flush=True)
+                    (args.output / "resize.json").write_text(json.dumps(measured, indent=1))
+
+                click(*LOBBY_ROW)  # an empty conversation
+                time.sleep(1.5)
+                shot("40-resize-empty")
+                measure("empty")
+                zoomed("40-resize-empty")
+                if not args.resize_messages:
+                    report()
+                    return
+                click(228, 268)  # #Development
+                time.sleep(1.0)
+                # A thousand messages, as a long day in a busy channel leaves them:
+                # code, pictures, long paragraphs and formatting among short lines.
+                encoded_image = mumble_image
+                for n in range(1, args.resize_messages + 1):
+                    bot = bots[n % 2]
+                    if n % 50 == 0:
+                        bot.send(kind="html", channel=2, html=f"Screenshot {n}:<br/><img src=\"data:image/PNG;base64,{encoded_image}\" />")
+                    elif n % 10 == 0:
+                        bot.send(kind="text", channel=2, body=f"Patch {n}:\n\n```rust\nfn handle_{n}(event: &Event) -> Result<()> {{\n"
+                                 "    let state = self.state.lock();\n    state.apply(event)?;\n    Ok(())\n}\n```")
+                    elif n % 7 == 0:
+                        bot.send(kind="text", channel=2, body=" ".join(f"word{n}-{k}" for k in range(70)))
+                    elif n % 13 == 0:
+                        bot.send(kind="html", channel=2, html=f"<b>Release {n}</b>: <i>notes</i><ul><li>First</li><li>Second</li></ul>")
+                    else:
+                        bot.send(kind="text", channel=2, body=f"Message {n}: sounds good, let's do that")
+                    time.sleep(0.05)
+                time.sleep(6.0)
+                shot("41-resize-busy")
+                measure("busy")
+                shot("42-resize-busy-after")
+                zoomed("42-resize-busy")
+                # Scrolled up into the middle: the anchor holds what is read in place.
+                wheel(width // 2 + 160, height // 2, -6 * SCROLL_CLICKS)
+                time.sleep(1.5)
+                shot("43-resize-scrolled")
+                measure("scrolled")
+                shot("44-resize-scrolled-after")
+                report()
             if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)

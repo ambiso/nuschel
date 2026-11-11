@@ -13,6 +13,8 @@ mod dialogs;
 mod document;
 mod emoji;
 mod finder;
+#[cfg(feature = "frame-timing")]
+mod frame_timing;
 mod global_shortcuts;
 mod icons;
 mod images;
@@ -159,6 +161,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .run(move |cx| {
             gpui_kit::init(cx);
             appearance::bind_keys(cx);
+            #[cfg(feature = "frame-timing")]
+            frame_timing::init();
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

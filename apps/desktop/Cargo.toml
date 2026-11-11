@@ -12,6 +12,8 @@ base64 = "0.22"
 clap = { version = "4.6.7", features = ["derive"] }
 futures-util = "0.3"
 gpui-kit = { version = "0.9.0", default-features = false }
+# Only for `frame-timing`: gpui-kit's own `profiler` feature would lock gpui-fast too.
+gpui-profiler = { package = "gpui-pre", version = "=0.3.11", optional = true, features = ["profiler"] }
 image = { version = "0.25", default-features = false }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 nuschel-client.workspace = true
@@ -33,6 +35,10 @@ tokio = { version = "1.54.1", features = [
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[features]
+# Log GPUI's frame phases for measuring (see src/frame_timing.rs).
+frame-timing = ["dep:gpui-profiler"]
 
 [lints]
 workspace = true

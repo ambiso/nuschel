@@ -23,6 +23,8 @@ const GROUP_MS: i64 = 5 * 60 * 1000;
 
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(feature = "frame-timing")]
+        let started = std::time::Instant::now();
         crate::images::collect(window);
         self.ease_voice_toggles(window, cx);
         // Which dialog the last frame showed (see dialogs::modal).
@@ -149,7 +151,10 @@ impl Render for Desktop {
                 view.child(badge)
             })
             .into_any_element();
-        chrome::frame(window, content)
+        let frame = chrome::frame(window, content);
+        #[cfg(feature = "frame-timing")]
+        crate::frame_timing::rendered(started);
+        frame
     }
 }
 
