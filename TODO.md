@@ -73,6 +73,11 @@ Later (reported):
       `image` crate; AVIF and video decoders are C or heavily `unsafe` and belong in a
       separate capability-limited worker.
 - [x] Server icons from the server's website favicon (Settings → Server icons).
+- [x] Mute and deafen animate (a slash draws across the icon as it turns red),
+      reversing smoothly under rapid clicks.
+- [ ] Proper Windows sandboxing for the workers (AppContainer or a restricted
+      token with a low integrity level, no network for content and storage);
+      today they only run in a kill-on-close job object.
 
 Limits review (user, 2026-11-11): hard limits are themselves an availability risk
 when chosen too low or handled badly (cf. sshd skipping work for long passwords).
