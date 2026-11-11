@@ -75,9 +75,16 @@ without breaking the connection, provided the server is authenticated. Rules:
 The ALPN offer itself is visible to network observers (it reveals Nuschel); hiding
 it would need Encrypted Client Hello and is not a goal now.
 
-**Minimum versions** (Signal-like): the hello carries `minimum_client` and
-`recommended_client`; below `recommended` the client shows an update notice, below
-`minimum` the server rejects after the announced grace date. These are self-reported
+**Minimum versions** (Signal-like): the client's hello carries its own version
+(`client_version`, semver); the server's policy carries `minimum_client`,
+`recommended_client` and the grace date `minimum_client_from`. Below `recommended`
+the client shows an update notice the user can dismiss; below `minimum` it shows a
+warning with the date, which cannot be dismissed, and from that date on the server
+rejects it at `Authenticate` with a `Reject` (`WrongVersion`, "This server requires
+Nuschel X or newer"). Without a date the minimum applies at once. The client shows
+the refusal as an error naming the version to update to and never retries it, and
+never falls back to plain Mumble (rules 1 and 2 above). Versions compare by semver precedence; a
+missing or unparsable client version is below every minimum. These are self-reported
 and advisory, not a security control. A server must never use them to lock out stock
 clients in compatible mode.
 
@@ -404,6 +411,16 @@ the wire definition):
   connections only. `ChannelSettings` changes only what it carries: an optional
   visibility and an optional `Retention` (server default, forever, 1–36,500 days or
   live-only), with `confirm_expiry` for a shortening.
+- **Minimum versions**: `Hello.client_version` (field 5, at most 64 bytes, only
+  from clients); `Policy.minimum_client` and `recommended_client` in the 1.5 version
+  format (`major << 48 | minor << 32 | patch << 16`, 0 for none) and
+  `minimum_client_from` (field 9, Unix seconds, 0 for "now"). A pre-release client
+  is below its release; build metadata is ignored. The server's settings are
+  `history.minimum_client`, `recommended_client` and `minimum_client_from` (a date,
+  docs/server.md); the session's `Error::Outdated` is the refusal: a `WrongVersion`
+  reject while below the hello's minimum, or any failure before login once the
+  hello's date has passed by the client's clock (the server may close before its
+  `Reject` is read).
 - **Capabilities**: `history/1` covers sending, history, edits, deletions, read
   markers, direct conversations and channel settings; `subscribe/1` and `typing/1` are
   separate. The client's sticky record keeps `nuschel/1` and every negotiated

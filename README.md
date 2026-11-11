@@ -238,7 +238,9 @@ under the composer (**Settings → Privacy** stops showing that you type), and d
 messages between registered users are stored by the server, so they reach someone who
 is offline and come back with their history. Server history you read is also kept on
 your device for offline reading and search. Nuschel never falls back to plain Mumble with a server that
-once offered the extension. Invite links can carry the server's certificate
+once offered the extension. Like Signal, a server can require a current client:
+older Nuschel versions are told to update and, after an announced date, refused
+(`minimum_client`, docs/server.md); stock Mumble clients are not affected. Invite links can carry the server's certificate
 fingerprint and policy (`mumble://…?fp=sha256:…&policy=nuschel`).
 
 Nuschel users also have an identity of their own, independent of any server and of

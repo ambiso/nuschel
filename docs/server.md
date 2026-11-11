@@ -92,7 +92,20 @@ Every configuration key is optional; names and defaults follow murmur.ini
   messages are not stored (`archive_stock_direct_messages`); `edit_limit`,
   `moderators_delete`, page limits per connection and per network
   (`network_pages_per_minute`, `network_page_bytes_per_minute`,
-  `unlimited_networks`) and advisory client versions.
+  `unlimited_networks`) and the client versions below.
+- **Client versions** (`[history]`, docs/extension.md "Minimum versions"), as Signal
+  keeps its clients current. `recommended_client = "0.2.0"`: older Nuschel clients
+  suggest an update (users can dismiss it). `minimum_client = "0.2.0"`: older Nuschel
+  clients are refused at `Authenticate` with `Reject` `WrongVersion` ("This server
+  requires Nuschel 0.2.0 or newer. Update Nuschel to connect."). With
+  `minimum_client_from = 2026-12-01` (a date, midnight UTC; quoted or not) they are
+  admitted until that date and see it in a warning they cannot dismiss; without it
+  the minimum applies at once. A client that reports no version counts as older than
+  any minimum. Versions are self-reported (the hello's `client_version`) and compared
+  by semver; this keeps the ecosystem current and is not a security control. Stock
+  Mumble clients are never refused for their version (the security mode decides
+  about them). `recommended_client` below `minimum_client`, or a date without a
+  minimum, is a configuration error.
 
 The NixOS module (`services.nuschel`, nix/module.nix) generates the TOML file
 from `settings` (never secrets), runs a database preflight under the operator lock
@@ -459,7 +472,10 @@ descriptor exhaustion.
   connection's `Negotiation` (extension.rs) accepts the client's hello once before
   `Authenticate` and freezes the capabilities; ALPN without a hello closes the
   connection before the credentials are decoded, a hello without ALPN is ignored.
-  `nuschel/1` connections get a `Version` with the server's hello and policy.
+  `nuschel/1` connections get a `Version` with the server's hello and policy. The
+  client's hello carries its version; `Negotiation::refusal` turns away a Nuschel
+  client below `minimum_client` from `minimum_client_from` on, before the
+  credentials are decoded.
 - **Dispatch.** `State::handle` passes frames in 0x4E00–0x4EFF to
   `State::extension_frame` (chat.rs), which processes them only for connections that
   negotiated the needed capability; caps per type come from the header
@@ -519,7 +535,7 @@ descriptor exhaustion.
 | --- | --- |
 | `cargo test -p nuscheld` | authorisation (authz.rs: every action against seven kinds of actor, the three decisions that were made two ways, and a guard that no permission check lives elsewhere), strong certificates (chains to a configured authority, through intermediates, expired, other authorities, self-signed; and over loopback with `UserStats`), ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames; the Murmur import (tests/fixtures/murmur-1.5.json: both password formats over loopback, the upgrade to argon2id, malformed rows reported, a non-empty server refused, `--replace-existing`, the ACLs in effect), listeners kept across reconnects and restarts, certificate reload (a broken one keeps the old) and `minimum_tls_version`, the temporary-channel cap and the whisper budget, clients before 1.2.2, the statistics counters; tests/obfuscation.rs: no client address in the log with `obfuscate` |
 | `cargo test -p nuscheld --test admin` | `nuscheld admin` on a stopped server's state: users (list, show, rename, set a password, remove with its ACL entries), channel retention (refused without `--yes` when it removes messages), bans, exporting a channel (0600, nothing past the retention), erasing a user |
-| `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends |
+| `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends, the minimum-version policy (an old session refused with `Outdated` and never retried, a hello without a version refused, stock clients admitted, admitted and told the date before it, a recommendation) |
 | `cargo test -p nuschel-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |
 | `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase, retention batches and live-only heads; the key-transparency table; channel listeners and their cascades |
 | `cargo test -p nuschel-storage murmur` | the Murmur reader on Murmur 1.5's own schema (tests/fixtures/murmur-1.5.sql, which also produces the import test's input) and 1.6's layout, malformed rows as notes, other virtual servers, files that are not Murmur databases or are damaged |

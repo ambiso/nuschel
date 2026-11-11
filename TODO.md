@@ -625,11 +625,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          hello in `Version` (field 7200), frozen at `Authenticate`, fail-closed
          (extension.rs, the session's sticky policy), with the protocol version in
          the hello.
-   - [ ] Minimum-version policy: the hello announces `minimum_client` and
-         `recommended_client` (docs/extension.md §1), but the client shows no update
-         notice below `recommended`, and the server never refuses below `minimum`
-         after an announced grace date (nor may it for stock clients in compatible
-         mode).
+   - [x] Minimum-version policy (docs/extension.md "Minimum versions"): the client
+         reports its version in the hello; below `recommended_client` the desktop
+         shows a dismissible update notice, below `minimum_client` a warning with
+         the date (`minimum_client_from`), from which `nuscheld` refuses it with
+         "This server requires Nuschel X or newer"; stock clients are never
+         refused for their version. The notices offer the in-app updater on
+         Windows and macOS.
    - [x] Persistent history: per-conversation seq, pages checked with `can_read` and
          again when sent, idempotency keys on the message row, edits and deletions
          as tombstones, subscriptions, per-channel retention (docs/extension.md

@@ -147,7 +147,12 @@ network_pages_per_minute = 600
 network_page_bytes_per_minute = 67108864
 # Networks exempt from the per-network limits, such as ["10.0.0.0/8"].
 unlimited_networks = []
+# Nuschel client versions (self-reported; stock Mumble clients are never refused
+# for theirs). Older clients than recommended_client suggest an update; older
+# than minimum_client are refused, from minimum_client_from (a date, midnight
+# UTC) on if set, until then warned with the date.
 # minimum_client = "0.1.0"
+# minimum_client_from = 2026-12-01
 # recommended_client = "0.1.0"
 
 [kt]
