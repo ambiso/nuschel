@@ -1,0 +1,1129 @@
+{
+  "format": 1,
+  "method": "Actual upstream repository root notices at the package VCS revision. No generic license text substituted.",
+  "packages": [
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "accesskit/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969/LICENSE-APACHE"
+        },
+        {
+          "local": "accesskit/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969/LICENSE-MIT"
+        },
+        {
+          "local": "accesskit/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969/LICENSE.chromium",
+          "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+          "upstream_path": "LICENSE.chromium",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969/LICENSE.chromium"
+        }
+      ],
+      "name": "accesskit",
+      "path_in_vcs": "common",
+      "repository": "https://github.com/AccessKit/accesskit",
+      "revision": "a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969",
+      "status": "resolved",
+      "version": "0.24.1"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium",
+          "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+          "upstream_path": "LICENSE.chromium",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium"
+        }
+      ],
+      "name": "accesskit_atspi_common",
+      "path_in_vcs": "platforms/atspi-common",
+      "repository": "https://github.com/AccessKit/accesskit",
+      "revision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "status": "resolved",
+      "version": "0.19.1"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium",
+          "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+          "upstream_path": "LICENSE.chromium",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium"
+        }
+      ],
+      "name": "accesskit_consumer",
+      "path_in_vcs": "consumer",
+      "repository": "https://github.com/AccessKit/accesskit",
+      "revision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "status": "resolved",
+      "version": "0.38.0"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium",
+          "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+          "upstream_path": "LICENSE.chromium",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium"
+        }
+      ],
+      "name": "accesskit_macos",
+      "path_in_vcs": "platforms/macos",
+      "repository": "https://github.com/AccessKit/accesskit",
+      "revision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "status": "resolved",
+      "version": "0.26.3"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium",
+          "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+          "upstream_path": "LICENSE.chromium",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium"
+        }
+      ],
+      "name": "accesskit_unix",
+      "path_in_vcs": "platforms/unix",
+      "repository": "https://github.com/AccessKit/accesskit",
+      "revision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "status": "resolved",
+      "version": "0.22.1"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-APACHE"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE-MIT"
+        },
+        {
+          "local": "accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium",
+          "sha256": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308",
+          "upstream_path": "LICENSE.chromium",
+          "url": "https://raw.githubusercontent.com/AccessKit/accesskit/c88605b96d04431f9c3c792464a0f2f253480e94/LICENSE.chromium"
+        }
+      ],
+      "name": "accesskit_windows",
+      "path_in_vcs": "platforms/windows",
+      "repository": "https://github.com/AccessKit/accesskit",
+      "revision": "c88605b96d04431f9c3c792464a0f2f253480e94",
+      "status": "resolved",
+      "version": "0.34.0"
+    },
+    {
+      "declared_license": "MIT",
+      "files": [
+        {
+          "local": "cookie-factory/d36b805dbd7dd65f2df947235c5bcc573afe2c76/LICENSES/MIT.txt",
+          "sha256": "d09216dc1ea5f273997667935a8d6514d80f00b89fb6954ecc3a43e0a6e360de",
+          "upstream_path": "LICENSES/MIT.txt",
+          "url": "https://raw.githubusercontent.com/rust-bakery/cookie-factory/d36b805dbd7dd65f2df947235c5bcc573afe2c76/LICENSES/MIT.txt"
+        }
+      ],
+      "name": "cookie-factory",
+      "repository": "https://github.com/rust-bakery/cookie-factory",
+      "revision": "d36b805dbd7dd65f2df947235c5bcc573afe2c76",
+      "status": "resolved",
+      "version": "0.3.3"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "sample/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-APACHE",
+          "sha256": "756c8d2ab2dc24f256e1455b5f03937f4933d83d7bc9f2d55009fc962377d512",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/rustaudio/sample/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-APACHE"
+        },
+        {
+          "local": "sample/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-MIT",
+          "sha256": "b1d6df41ed3aa96806e74c729444d7c121d90e6660a6aed01d298e03fde475a0",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/rustaudio/sample/97c3bb9b2363c0b46ac1633858bf1054fd02a980/LICENSE-MIT"
+        }
+      ],
+      "name": "dasp_sample",
+      "path_in_vcs": null,
+      "repository": "https://github.com/rustaudio/sample",
+      "revision": "97c3bb9b2363c0b46ac1633858bf1054fd02a980",
+      "status": "resolved",
+      "version": "0.11.0"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "glidesort/c4df9518ec23a424a867b3d50967f0aaafe3c0fd/README.md",
+          "sha256": "08961b3f37120e88e205e2def4af6da46f9eba8700fa80553fd0b8d8bb3d208a",
+          "upstream_path": "README.md",
+          "url": "https://raw.githubusercontent.com/orlp/glidesort/c4df9518ec23a424a867b3d50967f0aaafe3c0fd/README.md"
+        },
+        {
+          "local": "standard-terms/Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "upstream_path": "LICENSE-2.0.txt",
+          "url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license_selection": "Apache-2.0 alternative expressly granted by pinned upstream README; full versioned Apache terms included. No copyright holder invented.",
+      "name": "glidesort",
+      "repository": "https://github.com/orlp/glidesort",
+      "revision": "c4df9518ec23a424a867b3d50967f0aaafe3c0fd",
+      "status": "resolved",
+      "version": "0.1.2"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "gpui-kit/7591a35eced761e3613c01e71ff04c10129dae1a/LICENSE-APACHE",
+          "sha256": "d1b0449e5478c574ba4f686c2656df7fe77d66821a61f8b6ed3378a58ed9a811",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/longbridge/gpui-kit/7591a35eced761e3613c01e71ff04c10129dae1a/LICENSE-APACHE"
+        },
+        {
+          "local": "gpui-kit/7591a35eced761e3613c01e71ff04c10129dae1a/LICENSE-DOCS.md",
+          "sha256": "8a9ccf144b2d5bf5aae56abdc6e723e17e1ba4de1f5d515b3b644288fd4fc16f",
+          "upstream_path": "LICENSE-DOCS.md",
+          "url": "https://raw.githubusercontent.com/longbridge/gpui-kit/7591a35eced761e3613c01e71ff04c10129dae1a/LICENSE-DOCS.md"
+        }
+      ],
+      "name": "gpui-kit",
+      "path_in_vcs": "crates/kit",
+      "repository": "https://github.com/longbridge/gpui-kit",
+      "revision": "7591a35eced761e3613c01e71ff04c10129dae1a",
+      "status": "resolved",
+      "version": "0.9.0"
+    },
+    {
+      "declared_license": "MIT",
+      "files": [
+        {
+          "local": "harfrust/efdae3142ab76a2f1524d72cff9e3dfdc5afd7ca/LICENSE",
+          "sha256": "3a7c3f0b887abb7c638faf022d29257418458614c6724b120ceeffb279f9c7d2",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/harfbuzz/harfrust/efdae3142ab76a2f1524d72cff9e3dfdc5afd7ca/LICENSE"
+        }
+      ],
+      "name": "harfrust",
+      "path_in_vcs": "harfrust",
+      "repository": "https://github.com/harfbuzz/harfrust",
+      "revision": "efdae3142ab76a2f1524d72cff9e3dfdc5afd7ca",
+      "status": "resolved",
+      "version": "0.5.2"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-APACHE",
+          "sha256": "216486f29671a4262efe32af6d84a75bef398127f8c5f369b5c8305983887a06",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/nical/lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-APACHE"
+        },
+        {
+          "local": "lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/nical/lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-MIT"
+        }
+      ],
+      "name": "lyon",
+      "path_in_vcs": "crates/lyon",
+      "repository": "https://github.com/nical/lyon",
+      "revision": "56219c95c658d4f39de7b190d98e57d5773ba241",
+      "status": "resolved",
+      "version": "1.0.19"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-APACHE",
+          "sha256": "216486f29671a4262efe32af6d84a75bef398127f8c5f369b5c8305983887a06",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-APACHE"
+        },
+        {
+          "local": "lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT"
+        }
+      ],
+      "name": "lyon_algorithms",
+      "path_in_vcs": "crates/algorithms",
+      "repository": "https://github.com/nical/lyon",
+      "revision": "db98d26a1a90076a7a894262dcb51117eef643c8",
+      "status": "resolved",
+      "version": "1.0.22"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-APACHE",
+          "sha256": "216486f29671a4262efe32af6d84a75bef398127f8c5f369b5c8305983887a06",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-APACHE"
+        },
+        {
+          "local": "lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT"
+        }
+      ],
+      "name": "lyon_geom",
+      "path_in_vcs": "crates/geom",
+      "repository": "https://github.com/nical/lyon",
+      "revision": "db98d26a1a90076a7a894262dcb51117eef643c8",
+      "status": "resolved",
+      "version": "1.0.20"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-APACHE",
+          "sha256": "216486f29671a4262efe32af6d84a75bef398127f8c5f369b5c8305983887a06",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/nical/lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-APACHE"
+        },
+        {
+          "local": "lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/nical/lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-MIT"
+        }
+      ],
+      "name": "lyon_path",
+      "path_in_vcs": "crates/path",
+      "repository": "https://github.com/nical/lyon",
+      "revision": "56219c95c658d4f39de7b190d98e57d5773ba241",
+      "status": "resolved",
+      "version": "1.0.19"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-APACHE",
+          "sha256": "216486f29671a4262efe32af6d84a75bef398127f8c5f369b5c8305983887a06",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-APACHE"
+        },
+        {
+          "local": "lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT",
+          "sha256": "80f275e90d799911ed3830a7f242a2ef5a4ade2092fe0aa07bfb2d2cf2f2b95e",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT"
+        }
+      ],
+      "name": "lyon_tessellation",
+      "path_in_vcs": "crates/tessellation",
+      "repository": "https://github.com/nical/lyon",
+      "revision": "db98d26a1a90076a7a894262dcb51117eef643c8",
+      "status": "resolved",
+      "version": "1.0.23"
+    },
+    {
+      "declared_license": "MIT/Apache-2.0",
+      "files": [
+        {
+          "local": "mac/66afc663b68a65633ea165c742b5a9c6734581c2/README.md",
+          "sha256": "8edb7a912d295acf1e1cfeafdd19a6813a63b301c7bbfda3c67f65509bd8d8cc",
+          "upstream_path": "README.md",
+          "url": "https://raw.githubusercontent.com/reem/rust-mac/66afc663b68a65633ea165c742b5a9c6734581c2/README.md"
+        },
+        {
+          "local": "standard-terms/Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "upstream_path": "LICENSE-2.0.txt",
+          "url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license_selection": "Apache-2.0 alternative expressly granted by pinned upstream README; full versioned Apache terms included. No copyright holder invented.",
+      "name": "mac",
+      "repository": "https://github.com/reem/rust-mac",
+      "revision": "66afc663b68a65633ea165c742b5a9c6734581c2",
+      "revision_evidence": {
+        "published_rust_source_matches": [
+          {
+            "path": "src/cfg.rs",
+            "sha256": "63e9c4da8b0f588c6af1e157e626044fc1fb52757348aa466d08d69795335f33"
+          },
+          {
+            "path": "src/format.rs",
+            "sha256": "3c528949cdde598d3ddc5abea31b136ca256c7bb3932e053c5ff6e49775579a3"
+          },
+          {
+            "path": "src/inspect.rs",
+            "sha256": "cf039cc721daa177b13d6b432589ceef3bdfa6078af3f71c34c28d2eca68d0c3"
+          },
+          {
+            "path": "src/lib.rs",
+            "sha256": "f9c7705196f71dcabb4cfe1636f1b71b6362abb7eac70ddaa6e05cf9a0683dee"
+          },
+          {
+            "path": "src/matches.rs",
+            "sha256": "1ef2b80946cc5e3cd15e20a22f62b832066d2e2445881191741a83abe80e7566"
+          },
+          {
+            "path": "src/mem.rs",
+            "sha256": "f74d9172bb136b370c33fa524aae3543cf37815eeacf1d862b29b3c8c32a6aee"
+          },
+          {
+            "path": "src/syntax_ext.rs",
+            "sha256": "5c938b44d7aaa0f47eef495f4a42f1f91cd11fb0d1b20915786085b77e1db284"
+          },
+          {
+            "path": "src/test.rs",
+            "sha256": "895fc0aed7f5f3863025b85de4d01c2551bed51778ca8846920be7febff837ac"
+          }
+        ],
+        "tag": "0.1.1"
+      },
+      "status": "resolved",
+      "version": "0.1.1"
+    },
+    {
+      "declared_license": "Unlicense",
+      "files": [
+        {
+          "local": "noise-rust/050ec78f8341849b4884d326f74e7933cb4a446c/LICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/sopium/noise-rust/050ec78f8341849b4884d326f74e7933cb4a446c/LICENSE"
+        }
+      ],
+      "name": "noise-protocol",
+      "path_in_vcs": "noise-protocol",
+      "repository": "https://github.com/sopium/noise-rust",
+      "revision": "050ec78f8341849b4884d326f74e7933cb4a446c",
+      "status": "resolved",
+      "version": "0.2.1"
+    },
+    {
+      "declared_license": "Unlicense",
+      "files": [
+        {
+          "local": "noise-rust/36bc85bd05db04b0d469843275ccafd848cddb99/LICENSE",
+          "sha256": "7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/sopium/noise-rust/36bc85bd05db04b0d469843275ccafd848cddb99/LICENSE"
+        }
+      ],
+      "name": "noise-rust-crypto",
+      "path_in_vcs": "noise-rust-crypto",
+      "repository": "https://github.com/sopium/noise-rust",
+      "revision": "36bc85bd05db04b0d469843275ccafd848cddb99",
+      "status": "resolved",
+      "version": "0.6.2"
+    },
+    {
+      "declared_license": "MIT/Apache-2.0",
+      "files": [
+        {
+          "local": "p12-keystore/21a427cacf79b10186aa1fc6f953516d95e0379d/README.md",
+          "sha256": "f4bb3bcb69849fa1283bffe5a6f39c8c15f72ab985a6e44e2c6279fb7332ac56",
+          "upstream_path": "README.md",
+          "url": "https://raw.githubusercontent.com/ancwrd1/p12-keystore/21a427cacf79b10186aa1fc6f953516d95e0379d/README.md"
+        },
+        {
+          "local": "standard-terms/Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "upstream_path": "LICENSE-2.0.txt",
+          "url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license_selection": "Apache-2.0 alternative expressly granted by pinned upstream README; full versioned Apache terms included. No copyright holder invented.",
+      "name": "p12-keystore",
+      "repository": "https://github.com/ancwrd1/p12-keystore",
+      "revision": "21a427cacf79b10186aa1fc6f953516d95e0379d",
+      "status": "resolved",
+      "version": "0.4.1"
+    },
+    {
+      "declared_license": "MIT/Apache-2.0",
+      "files": [
+        {
+          "local": "pathfinder/a5e98fac00f433fe2ff4b2135383d82491b8bfc5/published-src-lib.rs",
+          "sha256": "cedfb2d85e682e9b9e327a169347bf0cebecd52668e1ed91a3af05ec91b42090",
+          "upstream_path": "src/lib.rs",
+          "url": "https://docs.rs/crate/pathfinder_geometry/0.5.1/source/src/lib.rs"
+        },
+        {
+          "local": "standard-terms/Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "upstream_path": "LICENSE-2.0.txt",
+          "url": "https://www.apache.org/licenses/LICENSE-2.0.txt"
+        }
+      ],
+      "license_selection": "Apache-2.0 expressly granted by the published source header, including its actual copyright notice; full versioned Apache terms included.",
+      "name": "pathfinder_geometry",
+      "repository": "https://github.com/servo/pathfinder",
+      "revision": "a5e98fac00f433fe2ff4b2135383d82491b8bfc5",
+      "revision_evidence": "Published crate .cargo_vcs_info records this revision, but upstream GitHub no longer serves it. The licensing grant is preserved byte-for-byte from the checksummed published source, not inferred from a newer revision.",
+      "status": "resolved",
+      "version": "0.5.1"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "pathfinder/6c3c0466f451c5bd2007087728cd168798cd64e8/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/servo/pathfinder/6c3c0466f451c5bd2007087728cd168798cd64e8/LICENSE-APACHE"
+        },
+        {
+          "local": "pathfinder/6c3c0466f451c5bd2007087728cd168798cd64e8/LICENSE-MIT",
+          "sha256": "0621878e61f0d0fda054bcbe02df75192c28bde1ecc8289cbd86aeba2dd72720",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/servo/pathfinder/6c3c0466f451c5bd2007087728cd168798cd64e8/LICENSE-MIT"
+        }
+      ],
+      "name": "pathfinder_simd",
+      "path_in_vcs": "simd",
+      "repository": "https://github.com/servo/pathfinder",
+      "revision": "6c3c0466f451c5bd2007087728cd168798cd64e8",
+      "status": "resolved",
+      "version": "0.5.6"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "local": "profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+          "sha256": "10d30a673cd5e9349bdc02aeb48f14b3386d27d0da32df8f0a555d4aa16aa551",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE"
+        },
+        {
+          "local": "profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+          "sha256": "c8167fdeeed46d3f244d3f85c5bf998ce889343691c32be2c61a8bc4b5c08333",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT"
+        }
+      ],
+      "name": "profiling",
+      "path_in_vcs": "profiling",
+      "repository": "https://github.com/aclysma/profiling",
+      "revision": "8271551172eb6fa4cba47369aedd93790c623df9",
+      "status": "resolved",
+      "version": "1.0.18"
+    },
+    {
+      "declared_license": "MIT",
+      "files": [
+        {
+          "local": "pulp/5eb07fd7b68edf0a5e19f71737d315f72a510295/LICENSE",
+          "sha256": "d64f878c89bd5f1e5ada7e4aad57690b122727cf5229b7b87ea1980c188da1d9",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/sarah-quinones/pulp/5eb07fd7b68edf0a5e19f71737d315f72a510295/LICENSE"
+        }
+      ],
+      "name": "pulp-wasm-simd-flag",
+      "path_in_vcs": "pulp-wasm-simd-flag",
+      "repository": "https://github.com/sarah-quinones/pulp",
+      "revision": "5eb07fd7b68edf0a5e19f71737d315f72a510295",
+      "status": "resolved",
+      "version": "0.1.1"
+    },
+    {
+      "declared_license": "0BSD OR CC0-1.0",
+      "files": [
+        {
+          "local": "roman-numerals/ec81337f99d8b557a6fce10f674c054050551444/LICENCE.rst",
+          "sha256": "c744ffc7e120b22e6620b613298dc003a2613c0ae489ee414fb1d473f24f916f",
+          "upstream_path": "LICENCE.rst",
+          "url": "https://raw.githubusercontent.com/AA-Turner/roman-numerals/ec81337f99d8b557a6fce10f674c054050551444/LICENCE.rst"
+        }
+      ],
+      "name": "roman-numerals-rs",
+      "path_in_vcs": "rust",
+      "repository": "https://github.com/AA-Turner/roman-numerals",
+      "revision": "ec81337f99d8b557a6fce10f674c054050551444",
+      "status": "resolved",
+      "version": "3.1.0"
+    },
+    {
+      "declared_license": "BSD-3-Clause",
+      "files": [
+        {
+          "local": "sonora/1632d47c1e77d0857f9145bd175134b348541e11/LICENSE",
+          "sha256": "d130affc26760004865ad4fb009f8daf7f6d4b1b738f01fb7623e99c1a275a4a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/dignifiedquire/sonora/1632d47c1e77d0857f9145bd175134b348541e11/LICENSE"
+        }
+      ],
+      "name": "sonora-aec3",
+      "path_in_vcs": "crates/sonora-aec3",
+      "repository": "https://github.com/dignifiedquire/sonora",
+      "revision": "1632d47c1e77d0857f9145bd175134b348541e11",
+      "status": "resolved",
+      "version": "0.3.0"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/LICENSE",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/gfx-rs/rspirv/8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4/LICENSE"
+        }
+      ],
+      "name": "spirv",
+      "path_in_vcs": "spirv",
+      "repository": "https://github.com/gfx-rs/rspirv",
+      "revision": "8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4",
+      "status": "resolved",
+      "version": "0.4.0+sdk-1.4.341.0"
+    },
+    {
+      "declared_license": "MIT/Apache-2.0",
+      "files": [
+        {
+          "local": "rust_debug/93f414cd572b5c2781df93dbdc068ed13443d05a/LICENSE",
+          "sha256": "7e98bed7f100747aaae7d82ab94fbe6b76fd6b84b09a3aaa413bff8196d0fbb1",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/nical/rust_debug/93f414cd572b5c2781df93dbdc068ed13443d05a/LICENSE"
+        }
+      ],
+      "name": "svg_fmt",
+      "path_in_vcs": "svg_fmt",
+      "repository": "https://github.com/nical/rust_debug",
+      "revision": "93f414cd572b5c2781df93dbdc068ed13443d05a",
+      "status": "resolved",
+      "version": "0.4.5"
+    },
+    {
+      "declared_license": "MIT",
+      "files": [
+        {
+          "local": "taffy/0064bd54cbe38bf1d8bcd6ec6ab0704d45fb048a/LICENSE",
+          "sha256": "f97daf1a0124413dccf399a4e6626b4b74acd05282f80b6d64ac82225650b77a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/DioxusLabs/taffy/0064bd54cbe38bf1d8bcd6ec6ab0704d45fb048a/LICENSE"
+        }
+      ],
+      "name": "taffy",
+      "path_in_vcs": "",
+      "repository": "https://github.com/DioxusLabs/taffy",
+      "revision": "0064bd54cbe38bf1d8bcd6ec6ab0704d45fb048a",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst",
+      "path_in_vcs": "crates/typst",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-eval",
+      "path_in_vcs": "crates/typst-eval",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-html",
+      "path_in_vcs": "crates/typst-html",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-layout",
+      "path_in_vcs": "crates/typst-layout",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-library",
+      "path_in_vcs": "crates/typst-library",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-realize",
+      "path_in_vcs": "crates/typst-realize",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-render",
+      "path_in_vcs": "crates/typst-render",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-svg",
+      "path_in_vcs": "crates/typst-svg",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-syntax",
+      "path_in_vcs": "crates/typst-syntax",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-timing",
+      "path_in_vcs": "crates/typst-timing",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "Apache-2.0",
+      "files": [
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE",
+          "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/LICENSE"
+        },
+        {
+          "local": "typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE",
+          "sha256": "1778244777547c281b6f5fa9fc0c18ab21f8d4491c803f64e09046800f5fcb26",
+          "upstream_path": "NOTICE",
+          "url": "https://raw.githubusercontent.com/typst/typst/9dfd3a08500b7896045f907433cf7b4b02434fad/NOTICE"
+        }
+      ],
+      "name": "typst-utils",
+      "path_in_vcs": "crates/typst-utils",
+      "repository": "https://github.com/typst/typst",
+      "revision": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "status": "resolved",
+      "version": "0.15.1"
+    },
+    {
+      "declared_license": "MIT/Apache-2.0",
+      "files": [
+        {
+          "local": "wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-APACHE",
+          "sha256": "f031c1608e4a19e8cbcc3394cdba838067e79189610227459e8ffcd669e6f52d",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-APACHE"
+        },
+        {
+          "local": "wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-MIT",
+          "sha256": "172bc1497507c1c363496bc23b0f16de8fa8e94befa85db6c8d9fa790e0a8657",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-MIT"
+        }
+      ],
+      "name": "wasmi",
+      "path_in_vcs": "crates/wasmi",
+      "repository": "https://github.com/wasmi-labs/wasmi",
+      "revision": "8273dfb09d493971b7bb12fe614d740cdc857175",
+      "status": "resolved",
+      "version": "1.1.0"
+    },
+    {
+      "declared_license": "MIT/Apache-2.0",
+      "files": [
+        {
+          "local": "wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-APACHE",
+          "sha256": "f031c1608e4a19e8cbcc3394cdba838067e79189610227459e8ffcd669e6f52d",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-APACHE"
+        },
+        {
+          "local": "wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-MIT",
+          "sha256": "172bc1497507c1c363496bc23b0f16de8fa8e94befa85db6c8d9fa790e0a8657",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-MIT"
+        }
+      ],
+      "name": "wasmi_collections",
+      "path_in_vcs": "crates/collections",
+      "repository": "https://github.com/wasmi-labs/wasmi",
+      "revision": "8273dfb09d493971b7bb12fe614d740cdc857175",
+      "status": "resolved",
+      "version": "1.1.0"
+    },
+    {
+      "declared_license": "MIT/Apache-2.0",
+      "files": [
+        {
+          "local": "wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-APACHE",
+          "sha256": "f031c1608e4a19e8cbcc3394cdba838067e79189610227459e8ffcd669e6f52d",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-APACHE"
+        },
+        {
+          "local": "wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-MIT",
+          "sha256": "172bc1497507c1c363496bc23b0f16de8fa8e94befa85db6c8d9fa790e0a8657",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-MIT"
+        }
+      ],
+      "name": "wasmi_core",
+      "path_in_vcs": "crates/core",
+      "repository": "https://github.com/wasmi-labs/wasmi",
+      "revision": "8273dfb09d493971b7bb12fe614d740cdc857175",
+      "status": "resolved",
+      "version": "1.1.0"
+    },
+    {
+      "declared_license": "MIT/Apache-2.0",
+      "files": [
+        {
+          "local": "wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-APACHE",
+          "sha256": "f031c1608e4a19e8cbcc3394cdba838067e79189610227459e8ffcd669e6f52d",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-APACHE"
+        },
+        {
+          "local": "wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-MIT",
+          "sha256": "172bc1497507c1c363496bc23b0f16de8fa8e94befa85db6c8d9fa790e0a8657",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/wasmi-labs/wasmi/8273dfb09d493971b7bb12fe614d740cdc857175/LICENSE-MIT"
+        }
+      ],
+      "name": "wasmi_ir",
+      "path_in_vcs": "crates/ir",
+      "repository": "https://github.com/wasmi-labs/wasmi",
+      "revision": "8273dfb09d493971b7bb12fe614d740cdc857175",
+      "status": "resolved",
+      "version": "1.1.0"
+    },
+    {
+      "declared_license": "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT",
+      "files": [
+        {
+          "local": "wasm-tools/35f8671bce74190ef0b00ce36c399b053b490374/LICENSE-APACHE",
+          "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+          "upstream_path": "LICENSE-APACHE",
+          "url": "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/35f8671bce74190ef0b00ce36c399b053b490374/LICENSE-APACHE"
+        },
+        {
+          "local": "wasm-tools/35f8671bce74190ef0b00ce36c399b053b490374/LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+          "upstream_path": "LICENSE-Apache-2.0_WITH_LLVM-exception",
+          "url": "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/35f8671bce74190ef0b00ce36c399b053b490374/LICENSE-Apache-2.0_WITH_LLVM-exception"
+        },
+        {
+          "local": "wasm-tools/35f8671bce74190ef0b00ce36c399b053b490374/LICENSE-MIT",
+          "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+          "upstream_path": "LICENSE-MIT",
+          "url": "https://raw.githubusercontent.com/bytecodealliance/wasm-tools/35f8671bce74190ef0b00ce36c399b053b490374/LICENSE-MIT"
+        }
+      ],
+      "name": "wasmparser",
+      "path_in_vcs": "crates/wasmparser",
+      "repository": "https://github.com/bytecodealliance/wasm-tools",
+      "revision": "35f8671bce74190ef0b00ce36c399b053b490374",
+      "status": "resolved",
+      "version": "0.239.0"
+    },
+    {
+      "declared_license": "MIT",
+      "files": [
+        {
+          "local": "xim-rs/65f77e44524ba487285a63aac4080faf2c05b4ed/LICENSE",
+          "sha256": "efa1224931b98468f5005f77285457f8d2eab0a77a15941aa10abbab1ae9a74e",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/Riey/xim-rs/65f77e44524ba487285a63aac4080faf2c05b4ed/LICENSE"
+        }
+      ],
+      "name": "xim-ctext",
+      "path_in_vcs": "xim-ctext",
+      "repository": "https://github.com/Riey/xim-rs",
+      "revision": "65f77e44524ba487285a63aac4080faf2c05b4ed",
+      "status": "resolved",
+      "version": "0.3.0"
+    },
+    {
+      "declared_license": "MIT",
+      "files": [
+        {
+          "local": "xim-rs/7300de35a111de2df1a694bf70454532a8419685/LICENSE",
+          "sha256": "efa1224931b98468f5005f77285457f8d2eab0a77a15941aa10abbab1ae9a74e",
+          "upstream_path": "LICENSE",
+          "url": "https://raw.githubusercontent.com/Riey/xim-rs/7300de35a111de2df1a694bf70454532a8419685/LICENSE"
+        }
+      ],
+      "name": "xim-parser",
+      "path_in_vcs": "xim-parser",
+      "repository": "https://github.com/Riey/xim-rs",
+      "revision": "7300de35a111de2df1a694bf70454532a8419685",
+      "status": "resolved",
+      "version": "0.2.2"
+    },
+    {
+      "declared_license": "MIT OR Apache-2.0 OR Zlib",
+      "files": [
+        {
+          "local": "zune-image/69502ce83fdfecdd0beefd677e2abb3781b29d98/LICENSE-ZLIB",
+          "sha256": "7fa429541e55b1509909e058f2d21a37467e4958ec713b357f6e0cf9dc4ee352",
+          "upstream_path": "LICENSE-ZLIB",
+          "url": "https://raw.githubusercontent.com/etemesi254/zune-image/69502ce83fdfecdd0beefd677e2abb3781b29d98/LICENSE-ZLIB"
+        },
+        {
+          "local": "zune-image/69502ce83fdfecdd0beefd677e2abb3781b29d98/LICENSE.md",
+          "sha256": "e870d7fd7819a9f0453c62798cb52ae95d148a8c91dc2de1d983f997143c72de",
+          "upstream_path": "LICENSE.md",
+          "url": "https://raw.githubusercontent.com/etemesi254/zune-image/69502ce83fdfecdd0beefd677e2abb3781b29d98/LICENSE.md"
+        }
+      ],
+      "name": "zune-inflate",
+      "path_in_vcs": "zune-inflate",
+      "repository": "https://github.com/etemesi254/zune-image",
+      "revision": "69502ce83fdfecdd0beefd677e2abb3781b29d98",
+      "status": "resolved",
+      "version": "0.2.54"
+    }
+  ],
+  "unresolved": [
+    {
+      "declared_license": "MIT",
+      "files": [],
+      "name": "seahash",
+      "path_in_vcs": null,
+      "repository": "https://gitlab.redox-os.org/redox-os/seahash",
+      "revision": "94b632aeac099031c373599313d5b5f0acbbaec0",
+      "status": "unresolved",
+      "version": "4.1.0"
+    }
+  ]
+}
