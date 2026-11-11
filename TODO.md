@@ -123,8 +123,9 @@ Later (reported):
       quits, retry automatically when a newer code arrives, test on macOS/Windows,
       drop `--offer` if unwanted.
 - [x] Nuschel-only servers and a current client (user, 2026-11-11). Decided: end-to-end
-      mode, the default, turns stock clients away at the connection stage (today
-      `security = "e2ee"` refuses to start until MLS ships). Done: `minimum_client`
+      mode turns stock clients away at the connection stage. Experimental
+      `security = "e2ee"` now starts; compatible mode remains the default while
+      encrypted history/media work is unfinished. Done: `minimum_client`
       with a grace date refuses older Nuschel versions, `recommended_client` shows an
       update notice.
 - [ ] Guests on a server with `history.guests = none` see a red "Server history: No
@@ -614,10 +615,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Chat in the stock-client VM check (2026-11-11): xdotool types into the stock
          window's chat bar and the Nuschel peer receives it from StockUser; the peer's
          message is read back from the stock client's log (F6, copy, xclip).
-   - [ ] `vm-smoke` final full rerun pending (2026-11-11), red since the content
-         worker's answers changed shape; the rebased desktop and recovery suites
-         have passed, and the accessibility suite still needs its final proof.
-         One product bug: on a slow machine a burst of
+   - [x] Fresh full `vm-smoke` passed on integrated `761565c0` (2026-11-11,
+         452.24 seconds), including the new private-recipient checks, audio,
+         PipeWire recovery, accessibility and stock 1.4/1.3 interoperability.
+         The earlier red run exposed one product bug: on a slow machine a burst of
          received messages outran the content worker (one sandbox start per
          message) and what overflowed its queue was dropped; they are now prepared
          in batches (fix(client), see "Chat processing is overloaded" above). The
@@ -637,8 +638,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          client VM lacked the xclip and xwd that stock_client.py uses (2296781). The
          desktop suites now find controls over AT-SPI (`accessibility.py`'s helpers
          on a private session bus); OCR reads only the long-name tooltip.
-   - [ ] Run every VM check (vm-smoke, vm-server, vm-home-manager) before merging,
-         so none rots unnoticed as vm-smoke did.
+   - [x] Run every VM check on integrated changes before publishing: `vm-smoke`,
+         `vm-server` (315.06 seconds), `vm-home-manager` (48.87 seconds), and
+         `vm-web` (21.86 seconds) all passed on `761565c0` (2026-11-11).
+         VM disks and artifacts were kept on disk, outside RAM-backed `/tmp`.
    - [x] `stock_client.py` under heavy host load (2026-11-11): the "0 packets" came
          from counting in a slice of a deque capped at 1000 events, which stays empty
          once full; packets now come from the event queue, the tone plays until the
@@ -803,12 +806,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    membership, history grants, size cap, voice groups, inactive devices, auditors,
    release timing, ciphersuite, guests); question 1 (recovery key) became a
    setting, offered by default.
-4. **End-to-end encryption (MLS)** — 4a (delivery service) and 4b (direct
-   conversations, multi-device linking) are in (2026-11-11) on OpenMLS 0.9.2 with the
+4. **End-to-end encryption (MLS)** — 4a (delivery service), 4b (direct
+   conversations, multi-device linking), and 4c (channel/SDK text and experimental
+   history) are in (2026-11-11) on OpenMLS 0.9.2 with the
    provisional suite 0x004F and a patch for its vulnerable libcrux pins; see
    docs/e2ee.md "Phase 4 prototype". End-to-end is a server-level switch
    (`security = "e2ee"`, capability `e2ee/1`; docs/e2ee.md "Phase 4c and the answers
    as implemented"); compatible servers offer no `mls/1`.
+   Complete authenticated historical ordering/membership proofs and encrypted media
+   remain open. Independent review found and fixed five archive/grant/replay/
+   plaintext/attribution bugs, with 20 independently rerun regressions.
    - [ ] **Remove the libcrux patch and move to the official OpenMLS release** that
          carries the fixed libcrux crates (hpke-rs-libcrux 0.8, libcrux-kem ≥ 0.0.10,
          libcrux-hmac-drbg ≥ 0.0.2) and the draft's ciphersuite code points, when
@@ -886,9 +893,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [ ] 4d: authenticated historical roster/membership evidence (revoked or
          unconfirmed historical signers currently fail closed), periodic key
          rotation/self-updates, own-device self blobs, and files.
-   - [ ] Strict mode: no legacy clients in end-to-end channels, no downgrades; a
-         green lock only after authenticated MLS establishment (pins, plaintext
-         refusal and the lock exist for direct conversations).
+   - [x] Strict text mode: no legacy clients or plaintext chat on encrypted servers,
+         no downgrades; a green conversation lock only after authenticated MLS
+         establishment. Plain voice, attachments and edits are refused until their
+         encrypted implementations exist.
    - [ ] Media later: SFrame with MLS-exported keys (with the WebRTC work below).
 5. **Moderation and operations**
    - [ ] Moderation tools on top of E2EE (reports, membership removal), metrics.
