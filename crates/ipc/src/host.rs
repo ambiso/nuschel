@@ -43,6 +43,28 @@ pub fn content_sandbox_command(
     content_sandbox(executable, arguments, 5)
 }
 
+/// The math worker (`crate::math`): confined like the content worker, with
+/// no network, no files beyond the runtime libraries and itself, and an empty
+/// environment. It is long-lived, so its CPU limit covers its whole life;
+/// each formula has its own deadline.
+#[cfg(target_os = "linux")]
+pub fn math_sandbox_command(executable: &Path) -> Result<Command, Error> {
+    let limits = [CONTENT_MEMORY.into(), "--cpu=120".into()];
+    Ok(Sandbox::new(executable, &limits)?.run(std::iter::empty::<&str>()))
+}
+
+/// The math worker under the content worker's Seatbelt profile.
+#[cfg(target_os = "macos")]
+pub fn math_sandbox_command(executable: &Path) -> Result<Command, Error> {
+    sandbox_exec(seatbelt::CONTENT, executable, &[])
+}
+
+/// The math worker as the content worker runs on Windows.
+#[cfg(windows)]
+pub fn math_sandbox_command(executable: &Path) -> Result<Command, Error> {
+    Ok(windows_worker(executable))
+}
+
 /// Seconds of wall-clock time, and on Linux of CPU time, a request may take.
 fn budget(request: &ContentRequest) -> u64 {
     match request {

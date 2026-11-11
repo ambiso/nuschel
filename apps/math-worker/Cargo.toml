@@ -1,0 +1,19 @@
+[package]
+name = "nuschel-math-worker"
+description = "Isolated LaTeX math rendering process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "0.22"
+nuschel-ipc.workspace = true
+nuschel-math.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt"] }
+
+[lints]
+workspace = true

@@ -4,6 +4,7 @@
 pub mod crypto;
 #[cfg(not(target_family = "wasm"))]
 pub mod host;
+pub mod math;
 pub mod murmur;
 pub mod server;
 
