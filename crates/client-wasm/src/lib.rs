@@ -1,0 +1,16 @@
+// SPDX-License-Identifier: EUPL-1.2
+//! The client SDK in the browser (docs/web.md): wasm-bindgen bindings over
+//! `nuschel-client`, and connections to Mumble and Nuschel servers through the
+//! web relay's tunnel with TLS in WebAssembly. Built with `just wasm-client`;
+//! the Svelte client in web/app loads it.
+//!
+//! [`session`] and [`snapshot`] are plain Rust and tested natively; the
+//! browser glue is only built for `wasm32-unknown-unknown`.
+
+pub mod session;
+pub mod snapshot;
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod browser;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub use browser::WebClient;

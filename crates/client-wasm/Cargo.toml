@@ -1,0 +1,61 @@
+[package]
+name = "nuschel-client-wasm"
+description = "The client SDK for browsers: wasm-bindgen bindings, and TLS to Mumble and Nuschel servers through the web relay's tunnel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+nuschel-client = { workspace = true, default-features = false }
+nuschel-core.workspace = true
+nuschel-protocol.workspace = true
+bytes = "1.12.1"
+prost = "0.14.4"
+# TLS runs here, in the browser: the relay only forwards ciphertext.
+rustls = { version = "0.23.46", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
+] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+webpki-roots = "1.0.11"
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3.107"
+# ring's random numbers and clock from the browser (crypto.getRandomValues).
+ring = { version = "0.17.14", features = ["wasm32_unknown_unknown_js"] }
+rustls-pki-types = { version = "1", features = ["web"] }
+# The wasm-bindgen CLI must be this exact version (`just wasm-client`).
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4.80"
+web-sys = { version = "0.3.107", features = [
+  "BinaryType",
+  "CloseEvent",
+  "ErrorEvent",
+  "Event",
+  "MessageEvent",
+  "WebSocket",
+  "Window",
+  "console",
+] }
+
+# The session through the real relay to a TLS Mumble server on loopback (and to
+# Murmur with NUSCHEL_TEST_MURMUR), natively.
+[dev-dependencies]
+nuschel-web-relay = { path = "../../apps/web-relay", version = "0.1.0" }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "process"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+tokio-tungstenite = "0.29"

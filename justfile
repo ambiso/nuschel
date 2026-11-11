@@ -13,6 +13,22 @@ check:
 wasm:
     cargo clippy -p nuschel-core -p nuschel-client --target wasm32-unknown-unknown --no-default-features -- -D warnings
 
+# The SDK for browsers (crates/client-wasm, docs/web.md), for the Svelte client
+# in web/app (src/sdk). ring's C needs an unwrapped clang for wasm32, and the
+# wasm-bindgen CLI must be the crate's exact version.
+wasm-client profile="release":
+    nix shell --inputs-from . nixpkgs#llvmPackages.clang-unwrapped nixpkgs#llvmPackages.bintools-unwrapped nixpkgs#wasm-bindgen-cli_0_2_130 --command sh -euc '\
+        export CC_wasm32_unknown_unknown="$(command -v clang)" AR_wasm32_unknown_unknown="$(command -v llvm-ar)"; \
+        cargo clippy -p nuschel-client-wasm --target wasm32-unknown-unknown -- -D warnings; \
+        cargo build -p nuschel-client-wasm --target wasm32-unknown-unknown --profile {{profile}}; \
+        directory={{ if profile == "dev" { "debug" } else { profile } }}; \
+        wasm-bindgen --target web --out-dir web/app/src/sdk \
+            "${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$directory/nuschel_client_wasm.wasm"'
+
+# The Svelte client (web/app) with the SDK, into web/app/dist.
+web: wasm-client
+    cd web/app && npm ci --no-audit --no-fund && npm run build
+
 workers:
     cargo build --workspace
     python3 tests/workers.py

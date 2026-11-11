@@ -1,0 +1,35 @@
+/* SPDX-License-Identifier: EUPL-1.2 */
+:root {
+  color-scheme: light dark;
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1b1d22;
+  --muted: #4f5561;
+  --accent: #2357c6;
+  --accent-text: #ffffff;
+  --border: #d5d9e0;
+  --good: #1a7f37;
+  --bad: #b42318;
+  --focus: #f0a400;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #15171b;
+    --surface: #1f2228;
+    --text: #eceef2;
+    --muted: #b3b9c4;
+    --accent: #7aa2f7;
+    --accent-text: #0e1220;
+    --border: #353a44;
+    --good: #57d38c;
+    --bad: #ff8a80;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Cantarell, sans-serif;
+}
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }

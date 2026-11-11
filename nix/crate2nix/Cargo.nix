@@ -73,6 +73,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschel-client-wasm" = rec {
+      packageId = "nuschel-client-wasm";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschel-client-wasm";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschel-content" = rec {
       packageId = "nuschel-content";
       build = internal.buildRustCrateWithFeatures {
@@ -22712,6 +22722,130 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "native" ];
       };
+      "nuschel-client-wasm" = rec {
+        crateName = "nuschel-client-wasm";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/client-wasm; };
+        libName = "nuschel_client_wasm";type = [ "cdylib" "rlib" ];
+        dependencies = [
+          {
+            name = "bytes";
+            packageId = "bytes";
+          }
+          {
+            name = "js-sys";
+            packageId = "js-sys";
+            target = { target, features }: (("wasm32" == target."arch" or null) && ("unknown" == target."os" or null));
+          }
+          {
+            name = "nuschel-client";
+            packageId = "nuschel-client";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nuschel-core";
+            packageId = "nuschel-core";
+          }
+          {
+            name = "nuschel-protocol";
+            packageId = "nuschel-protocol";
+          }
+          {
+            name = "prost";
+            packageId = "prost";
+          }
+          {
+            name = "ring";
+            packageId = "ring";
+            target = { target, features }: (("wasm32" == target."arch" or null) && ("unknown" == target."os" or null));
+            features = [ "wasm32_unknown_unknown_js" ];
+          }
+          {
+            name = "rustls";
+            packageId = "rustls";
+            usesDefaultFeatures = false;
+            features = [ "ring" "std" "tls12" ];
+          }
+          {
+            name = "rustls-pki-types";
+            packageId = "rustls-pki-types";
+            target = { target, features }: (("wasm32" == target."arch" or null) && ("unknown" == target."os" or null));
+            features = [ "web" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.11.1";
+          }
+          {
+            name = "wasm-bindgen";
+            packageId = "wasm-bindgen";
+            target = { target, features }: (("wasm32" == target."arch" or null) && ("unknown" == target."os" or null));
+          }
+          {
+            name = "wasm-bindgen-futures";
+            packageId = "wasm-bindgen-futures";
+            target = { target, features }: (("wasm32" == target."arch" or null) && ("unknown" == target."os" or null));
+          }
+          {
+            name = "web-sys";
+            packageId = "web-sys";
+            target = { target, features }: (("wasm32" == target."arch" or null) && ("unknown" == target."os" or null));
+            features = [ "BinaryType" "CloseEvent" "ErrorEvent" "Event" "MessageEvent" "WebSocket" "Window" "console" ];
+          }
+          {
+            name = "webpki-roots";
+            packageId = "webpki-roots";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "futures-util";
+            packageId = "futures-util";
+            usesDefaultFeatures = false;
+            features = [ "sink" "std" ];
+          }
+          {
+            name = "nuschel-web-relay";
+            packageId = "nuschel-web-relay";
+          }
+          {
+            name = "rcgen";
+            packageId = "rcgen";
+            usesDefaultFeatures = false;
+            features = [ "ring" "pem" ];
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "macros" "rt-multi-thread" "net" "io-util" "time" "process" ];
+          }
+          {
+            name = "tokio-rustls";
+            packageId = "tokio-rustls";
+            usesDefaultFeatures = false;
+            features = [ "ring" "tls12" ];
+          }
+          {
+            name = "tokio-tungstenite";
+            packageId = "tokio-tungstenite";
+          }
+        ];
+
+      };
       "nuschel-content" = rec {
         crateName = "nuschel-content";
         version = "0.1.0";
@@ -33482,7 +33616,7 @@ rec {
           "std" = [ "alloc" ];
           "wasm32_unknown_unknown_js" = [ "getrandom/js" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "dev_urandom_fallback" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "dev_urandom_fallback" "wasm32_unknown_unknown_js" ];
       };
       "rmp" = rec {
         crateName = "rmp";
@@ -34338,6 +34472,12 @@ rec {
         libName = "rustls_pki_types";
         dependencies = [
           {
+            name = "web-time";
+            packageId = "web-time";
+            optional = true;
+            target = { target, features }: ((builtins.elem "wasm" target."family") && ("unknown" == target."os" or null));
+          }
+          {
             name = "zeroize";
             packageId = "zeroize";
             optional = true;
@@ -34350,7 +34490,7 @@ rec {
           "web" = [ "web-time" ];
           "web-time" = [ "dep:web-time" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "std" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "std" "web" "web-time" ];
       };
       "rustls-webpki" = rec {
         crateName = "rustls-webpki";
@@ -44461,7 +44601,7 @@ rec {
           "default" = [ "std" ];
           "std" = [ "wasm-bindgen/std" "js-sys/std" ];
         };
-        resolvedDefaultFeatures = [ "AngleInstancedArrays" "AudioBuffer" "AudioBufferSourceNode" "AudioContext" "AudioContextOptions" "AudioContextState" "AudioDestinationNode" "AudioNode" "AudioScheduledSourceNode" "BaseAudioContext" "BinaryType" "Blob" "Clipboard" "ClipboardEvent" "ClipboardItem" "CloseEvent" "CompositionEvent" "CssStyleDeclaration" "DataTransfer" "DataTransferItem" "DataTransferItemList" "DedicatedWorkerGlobalScope" "Document" "DomException" "DomRect" "DomRectReadOnly" "DragEvent" "Element" "Event" "EventTarget" "ExtBlendMinmax" "ExtColorBufferFloat" "ExtColorBufferHalfFloat" "ExtDisjointTimerQuery" "ExtFragDepth" "ExtSRgb" "ExtShaderTextureLod" "ExtTextureFilterAnisotropic" "File" "FocusOptions" "Headers" "HtmlCanvasElement" "HtmlElement" "HtmlImageElement" "HtmlMediaElement" "HtmlTextAreaElement" "HtmlVideoElement" "IdleDeadline" "IdleRequestOptions" "ImageBitmap" "ImageData" "InputEvent" "KeyboardEvent" "Location" "MediaQueryList" "MessageEvent" "MouseEvent" "Navigator" "Node" "NodeList" "OesElementIndexUint" "OesStandardDerivatives" "OesTextureFloat" "OesTextureFloatLinear" "OesTextureHalfFloat" "OesTextureHalfFloatLinear" "OesVertexArrayObject" "OffscreenCanvas" "OffscreenCanvasRenderingContext2d" "OvrMultiview2" "Performance" "PerformanceTiming" "PointerEvent" "ReadableStream" "ReadableStreamDefaultReader" "ReadableStreamReadResult" "Request" "RequestCredentials" "RequestInit" "RequestRedirect" "ResizeObserver" "ResizeObserverBoxOptions" "ResizeObserverEntry" "ResizeObserverOptions" "ResizeObserverSize" "Response" "Screen" "Storage" "TextMetrics" "UiEvent" "Url" "VideoFrame" "VisualViewport" "WebGl2RenderingContext" "WebGlActiveInfo" "WebGlBuffer" "WebGlFramebuffer" "WebGlProgram" "WebGlQuery" "WebGlRenderbuffer" "WebGlRenderingContext" "WebGlSampler" "WebGlShader" "WebGlShaderPrecisionFormat" "WebGlSync" "WebGlTexture" "WebGlTransformFeedback" "WebGlUniformLocation" "WebGlVertexArrayObject" "WebSocket" "WebglColorBufferFloat" "WebglCompressedTextureAstc" "WebglCompressedTextureEtc" "WebglCompressedTextureEtc1" "WebglCompressedTexturePvrtc" "WebglCompressedTextureS3tc" "WebglCompressedTextureS3tcSrgb" "WebglDebugRendererInfo" "WebglDebugShaders" "WebglDepthTexture" "WebglDrawBuffers" "WebglLoseContext" "WheelEvent" "Window" "Worker" "WorkerGlobalScope" "WorkerNavigator" "WorkerOptions" "WorkerType" "console" "default" "std" ];
+        resolvedDefaultFeatures = [ "AngleInstancedArrays" "AudioBuffer" "AudioBufferSourceNode" "AudioContext" "AudioContextOptions" "AudioContextState" "AudioDestinationNode" "AudioNode" "AudioScheduledSourceNode" "BaseAudioContext" "BinaryType" "Blob" "Clipboard" "ClipboardEvent" "ClipboardItem" "CloseEvent" "CompositionEvent" "CssStyleDeclaration" "DataTransfer" "DataTransferItem" "DataTransferItemList" "DedicatedWorkerGlobalScope" "Document" "DomException" "DomRect" "DomRectReadOnly" "DragEvent" "Element" "ErrorEvent" "Event" "EventTarget" "ExtBlendMinmax" "ExtColorBufferFloat" "ExtColorBufferHalfFloat" "ExtDisjointTimerQuery" "ExtFragDepth" "ExtSRgb" "ExtShaderTextureLod" "ExtTextureFilterAnisotropic" "File" "FocusOptions" "Headers" "HtmlCanvasElement" "HtmlElement" "HtmlImageElement" "HtmlMediaElement" "HtmlTextAreaElement" "HtmlVideoElement" "IdleDeadline" "IdleRequestOptions" "ImageBitmap" "ImageData" "InputEvent" "KeyboardEvent" "Location" "MediaQueryList" "MessageEvent" "MouseEvent" "Navigator" "Node" "NodeList" "OesElementIndexUint" "OesStandardDerivatives" "OesTextureFloat" "OesTextureFloatLinear" "OesTextureHalfFloat" "OesTextureHalfFloatLinear" "OesVertexArrayObject" "OffscreenCanvas" "OffscreenCanvasRenderingContext2d" "OvrMultiview2" "Performance" "PerformanceTiming" "PointerEvent" "ReadableStream" "ReadableStreamDefaultReader" "ReadableStreamReadResult" "Request" "RequestCredentials" "RequestInit" "RequestRedirect" "ResizeObserver" "ResizeObserverBoxOptions" "ResizeObserverEntry" "ResizeObserverOptions" "ResizeObserverSize" "Response" "Screen" "Storage" "TextMetrics" "UiEvent" "Url" "VideoFrame" "VisualViewport" "WebGl2RenderingContext" "WebGlActiveInfo" "WebGlBuffer" "WebGlFramebuffer" "WebGlProgram" "WebGlQuery" "WebGlRenderbuffer" "WebGlRenderingContext" "WebGlSampler" "WebGlShader" "WebGlShaderPrecisionFormat" "WebGlSync" "WebGlTexture" "WebGlTransformFeedback" "WebGlUniformLocation" "WebGlVertexArrayObject" "WebSocket" "WebglColorBufferFloat" "WebglCompressedTextureAstc" "WebglCompressedTextureEtc" "WebglCompressedTextureEtc1" "WebglCompressedTexturePvrtc" "WebglCompressedTextureS3tc" "WebglCompressedTextureS3tcSrgb" "WebglDebugRendererInfo" "WebglDebugShaders" "WebglDepthTexture" "WebglDrawBuffers" "WebglLoseContext" "WheelEvent" "Window" "Worker" "WorkerGlobalScope" "WorkerNavigator" "WorkerOptions" "WorkerType" "console" "default" "std" ];
       };
       "web-time" = rec {
         crateName = "web-time";
