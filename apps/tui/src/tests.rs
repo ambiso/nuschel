@@ -107,6 +107,103 @@ fn options() -> Options {
     }
 }
 
+#[test]
+fn clipboard_images_use_html_and_freeze_the_destination() {
+    let (mut app, recorder, _) = connected();
+    app.clipboard = crate::clipboard::Clipboard::with_test_image(&app);
+    app.composer.insert("a caption");
+    app.submit();
+    let requests = recorder.requests.lock().unwrap();
+    let (target, body) = requests
+        .iter()
+        .find_map(|request| match request {
+            Request::SendHtml {
+                html,
+                target,
+                expected_peer: None,
+            } if html.len() == 1 && html[0].contains("a caption") && html[0].contains("<img ") => {
+                Some((target.clone(), html[0].clone()))
+            }
+            _ => None,
+        })
+        .unwrap();
+    drop(requests);
+    assert!(app.clipboard.attached());
+    assert_eq!(app.composer.text(), "a caption");
+    app.clipboard_input(&Input::Sent {
+        server: app.client.servers[0].id.clone(),
+        generation: 999,
+        target: target.clone(),
+        body: body.clone(),
+    });
+    assert!(app.clipboard.attached());
+    app.clipboard_input(&Input::Sent {
+        server: app.client.servers[0].id.clone(),
+        generation: 1,
+        target,
+        body,
+    });
+    assert!(!app.clipboard.attached());
+    assert!(app.composer.is_empty());
+}
+
+#[test]
+fn prepared_images_do_not_follow_navigation_reconnects_or_certificate_changes() {
+    for change in ["navigation", "generation", "certificate", "mls", "policy"] {
+        let (mut app, recorder, _) = connected();
+        app.clipboard = crate::clipboard::Clipboard::with_test_image(&app);
+        app.composer.insert("keep this draft");
+        match change {
+            "navigation" => app.browse(0, 2),
+            "generation" => app.client.servers[0].generation += 1,
+            "certificate" => app.client.servers[0].peer_sha256 = Some("cd".repeat(32)),
+            "mls" => app.client.servers[0].mls = true,
+            "policy" => {
+                // A changed image limit must be checked when sending too.
+                app.client.servers[0].limits = Some(nuschl_core::model::ServerLimits {
+                    allow_html: true,
+                    message_length: 5000,
+                    image_message_length: 1,
+                    max_users: None,
+                    recording_allowed: false,
+                    max_bandwidth: None,
+                });
+            }
+            _ => unreachable!(),
+        }
+        recorder.requests.lock().unwrap().clear();
+        app.submit();
+        assert!(
+            !recorder
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| matches!(request, Request::SendHtml { .. })),
+            "{change}"
+        );
+        assert!(app.clipboard.attached(), "{change}");
+        assert_eq!(app.composer.text(), "keep this draft", "{change}");
+    }
+}
+
+#[test]
+fn ssh_clipboard_action_never_starts_a_host_clipboard_read() {
+    let (mut app, _, _) = connected();
+    app.options.ssh = true;
+    // No runtime or clipboard exists in this test. The SSH guard must happen
+    // before starting either the helper or worker.
+    app.command("paste-image");
+    assert!(!app.clipboard.attached());
+    assert!(
+        app.notes
+            .back()
+            .unwrap()
+            .text
+            .contains("remote machine's OS clipboard is not read")
+    );
+}
+
 /// An app connected to "Test" as Ada (session 1) with Bob (2) beside
 /// her in Lobby, and Lobby open.
 fn connected() -> (App, Arc<Recorder>, String) {

@@ -65,7 +65,7 @@ pub const COMMANDS: &[&str] = &[
     "  /search WORDS            search this conversation (/searchserver, /searchall)",
     "  /result N, /more         open result N, more results",
     "  /older                   load older messages",
-    "  /paste-image, /discard-image   attach local clipboard PNG, remove it",
+    "  /paste-image, /send-image, /discard-image   attach local PNG, send, remove",
     "  /links, /open N          the newest messages' links, open link N",
     "  /quit",
 ];

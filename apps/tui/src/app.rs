@@ -304,7 +304,10 @@ impl App {
         self.client.set_time(monotonic_ms());
         for event in events {
             match event.into_input() {
-                Ok(input) => self.client.handle(input),
+                Ok(input) => {
+                    self.clipboard_input(&input);
+                    self.client.handle(input);
+                }
                 Err(nuschl_client::native::Native::Identity { event, .. }) => self.identity(*event),
                 // End-to-end conversations are not shown here yet.
                 Err(_) => {}
@@ -463,16 +466,7 @@ impl App {
                     }
                 }
                 Update::Sent { conversation, body } => {
-                    if self.client.navigation.selection() == Some(&conversation)
-                        && self.editing.is_none()
-                        && self.composer.text() == body
-                    {
-                        self.composer.take();
-                    }
-                    let key = (conversation.server, conversation.channel);
-                    if self.drafts.get(&key).is_some_and(|draft| *draft == body) {
-                        self.drafts.remove(&key);
-                    }
+                    self.acknowledge_composer(&conversation, &body);
                 }
                 Update::PageShown { page, used } => match page {
                     Page::Before(None) => self.timeline.scroll = 0,
@@ -818,6 +812,19 @@ impl App {
                     .and_then(|(server, _)| self.client.servers[server].notice.clone());
                 self.warn(notice.unwrap_or_else(|| "The message was not sent.".into()));
             }
+        }
+    }
+
+    pub fn acknowledge_composer(&mut self, conversation: &Conversation, body: &str) {
+        if self.client.navigation.selection() == Some(conversation)
+            && self.editing.is_none()
+            && self.composer.text() == body
+        {
+            self.composer.take();
+        }
+        let key = (conversation.server.clone(), conversation.channel);
+        if self.drafts.get(&key).is_some_and(|draft| draft == body) {
+            self.drafts.remove(&key);
         }
     }
 
@@ -1479,6 +1486,10 @@ impl App {
         let server = self.current_server();
         match name.to_ascii_lowercase().as_str() {
             "paste-image" => self.paste_image(),
+            "send-image" => {
+                let caption = self.composer.text().to_string();
+                self.send_image(&caption);
+            }
             "discard-image" => {
                 self.clipboard.discard();
                 self.say("Image attachment discarded.");

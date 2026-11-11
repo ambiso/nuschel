@@ -262,12 +262,25 @@ fn rgba(width: u32, height: u32, encoded: &str) -> Option<image::RgbaImage> {
     image::RgbaImage::from_raw(width, height, bytes)
 }
 
-fn formula(image: MathImage) -> Option<image::RgbaImage> {
+fn formula(image: MathImage, background: [u8; 3]) -> Option<image::RgbaImage> {
     valid_size(image.width, image.height, 4)?;
     let coverage = image.decode()?;
+    let foreground = if background.iter().map(|&c| u16::from(c)).sum::<u16>() > 384 {
+        24_u16
+    } else {
+        230_u16
+    };
+    // Sixel has binary alpha. Composite the antialiased mask against the
+    // queried terminal background before encoding, keeping every grey edge.
     let pixels = coverage
         .into_iter()
-        .flat_map(|alpha| [230, 230, 230, alpha])
+        .flat_map(|alpha| {
+            let alpha = u16::from(alpha);
+            let [r, g, b] = background.map(|channel| {
+                ((foreground * alpha + u16::from(channel) * (255 - alpha)) / 255) as u8
+            });
+            [r, g, b, 255]
+        })
         .collect();
     image::RgbaImage::from_raw(image.width, image.height, pixels)
 }
@@ -301,7 +314,20 @@ async fn serve(mut jobs: mpsc::Receiver<Job>, replies: mpsc::Sender<Reply>) {
                     })
                     .await
                     .ok()
-                    .and_then(formula),
+                    .and_then(|image| {
+                        let background = job
+                            .picker
+                            .capabilities()
+                            .iter()
+                            .find_map(|capability| match capability {
+                                ratatui_image::picker::Capability::Background(r, g, b) => {
+                                    Some([*r, *g, *b])
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or([0, 0, 0]);
+                        formula(image, background)
+                    }),
                 None => None,
             },
         };

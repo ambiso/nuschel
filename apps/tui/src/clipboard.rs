@@ -2,7 +2,9 @@
 //! Explicit local clipboard MIME reads. Encoded PNG goes straight to the
 //! existing sandboxed content worker; this process never decodes it.
 use crate::app::App;
-use nuschl_client::{Conversation, platform::Request, server::Status};
+use nuschl_client::{
+    Conversation, input::Input, model::TextTarget, platform::Request, server::Status,
+};
 use nuschl_ipc::EncodedImage;
 use std::{process::Stdio, time::Duration};
 use tokio::{io::AsyncReadExt, process::Command, sync::oneshot};
@@ -17,6 +19,7 @@ struct Destination {
     identity: Option<String>,
     storage: String,
     peer: Option<u64>,
+    peer_certificate: Option<String>,
 }
 
 impl Destination {
@@ -36,7 +39,24 @@ impl Destination {
             identity: server.history_identity(),
             storage: channel.storage_key.clone(),
             peer: channel.direct_peer.as_ref().map(|peer| peer.instance),
+            peer_certificate: channel
+                .direct_peer
+                .as_ref()
+                .and_then(|peer| peer.certificate_hash.clone())
+                .filter(|value| !value.is_empty()),
         })
+    }
+
+    fn matches(&self, current: &Self) -> bool {
+        if self.conversation != current.conversation || self.identity != current.identity {
+            return false;
+        }
+        if self.peer_certificate.is_some() && self.identity.is_some() {
+            return self.peer_certificate == current.peer_certificate;
+        }
+        self.generation == current.generation
+            && self.storage == current.storage
+            && self.peer == current.peer
     }
 }
 
@@ -65,11 +85,44 @@ fn image_limit(server: &nuschl_client::server::ServerState) -> Result<usize, &'s
 pub struct Clipboard {
     pending: Option<(Destination, oneshot::Receiver<Result<EncodedImage, String>>)>,
     ready: Option<(Destination, EncodedImage)>,
+    task: Option<tokio::task::JoinHandle<()>>,
+    flight: Option<Flight>,
+}
+
+struct Flight {
+    server: String,
+    generation: u64,
+    target: TextTarget,
+    body: String,
+    caption: String,
+    at: std::time::Instant,
 }
 
 impl Clipboard {
+    #[cfg(test)]
+    pub fn with_test_image(app: &App) -> Self {
+        Self {
+            pending: None,
+            ready: Some((
+                Destination::capture(app).unwrap(),
+                EncodedImage {
+                    html: "<img src=\"data:image/png;base64,dGVzdA==\" />".into(),
+                    thumbnail: nuschl_core::ContentBlock::Image {
+                        width: 1,
+                        height: 1,
+                        rgba: "AAAAAA==".into(),
+                        source: None,
+                    },
+                },
+            )),
+            task: None,
+            flight: None,
+        }
+    }
     pub fn label(&self) -> Option<&'static str> {
-        if self.pending.is_some() {
+        if self.flight.is_some() {
+            Some("Image sending…; retained until the connection acknowledges")
+        } else if self.pending.is_some() {
             Some("Reading clipboard image…")
         } else if self.ready.is_some() {
             Some("1 image attached; Enter sends, /discard-image removes")
@@ -81,8 +134,20 @@ impl Clipboard {
         self.pending.is_some() || self.ready.is_some()
     }
     pub fn discard(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
         self.pending = None;
         self.ready = None;
+        self.flight = None;
+    }
+}
+
+impl Drop for Clipboard {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
     }
 }
 
@@ -115,7 +180,7 @@ impl App {
         let budget = limit.saturating_sub(1024).max(limit / 2);
         let (reply, answer) = oneshot::channel();
         self.clipboard.pending = Some((destination, answer));
-        tokio::spawn(async move {
+        self.clipboard.task = Some(tokio::spawn(async move {
             let result = async {
                 let worker = nuschl_client::native::content_worker()
                     .ok_or("The content worker is missing; the image was not attached.")?;
@@ -126,11 +191,25 @@ impl App {
             }
             .await;
             let _ = reply.send(result);
-        });
+        }));
         self.say("Reading a PNG image from the local clipboard…");
     }
 
     pub fn poll_clipboard(&mut self) {
+        if self.clipboard.flight.as_ref().is_some_and(|flight| {
+            flight.at.elapsed() > Duration::from_secs(15)
+                || self
+                    .client
+                    .servers
+                    .iter()
+                    .find(|server| server.id == flight.server)
+                    .is_none_or(|server| {
+                        server.generation != flight.generation || server.status != Status::Connected
+                    })
+        }) {
+            self.clipboard.flight = None;
+            self.warn("Image send was not acknowledged; image and caption are retained. Check the conversation before retrying (a retry may duplicate it).");
+        }
         let result =
             self.clipboard
                 .pending
@@ -145,6 +224,7 @@ impl App {
         if let Some(result) = result
             && let Some((destination, _)) = self.clipboard.pending.take()
         {
+            self.clipboard.task = None;
             match result {
                 Ok(image) => {
                     self.clipboard.ready = Some((destination, image));
@@ -160,11 +240,14 @@ impl App {
     /// One image per explicit paste. The destination is frozen at attach,
     /// not inferred from the currently open conversation after an await.
     pub fn send_image(&mut self, caption: &str) {
+        if self.clipboard.flight.is_some() {
+            return self.warn("The image is still awaiting the connection's send acknowledgment.");
+        }
         let Some((destination, image)) = self.clipboard.ready.as_ref() else {
             return self.warn("The clipboard image is still being prepared.");
         };
         let destination = destination.clone();
-        if Destination::capture(self).as_ref() != Ok(&destination) {
+        if !Destination::capture(self).is_ok_and(|current| destination.matches(&current)) {
             return self.warn("The image's conversation or connection changed. Return to it or /discard-image and paste again.");
         }
         let Some((server_index, channel_index)) = self.selected() else {
@@ -181,19 +264,20 @@ impl App {
         };
         // Resolving a direct recipient can refresh its presence. Never let it
         // retarget the image while preparing it or changing conversations.
-        if server.channels[channel_index]
-            .direct_peer
-            .as_ref()
-            .map(|peer| peer.instance)
-            != destination.peer
-        {
+        let peer = server.channels[channel_index].direct_peer.as_ref();
+        let same_peer = if let Some(certificate) = &destination.peer_certificate {
+            peer.and_then(|peer| peer.certificate_hash.as_ref()) == Some(certificate)
+        } else {
+            peer.map(|peer| peer.instance) == destination.peer
+        };
+        if !same_peer {
             return self.warn("The image's recipient changed. Discard it and paste again.");
         }
         if image.html.len() > limit {
             return self
                 .warn("The server's image limit changed; discard the image and paste again.");
         }
-        let mut html = Vec::new();
+        let mut body = String::new();
         if !caption.trim().is_empty() {
             let caption = nuschl_session::connection::legacy_body(caption, true);
             let message_limit = server
@@ -203,24 +287,64 @@ impl App {
             if caption.len() > message_limit {
                 return self.warn("The caption exceeds the server's text limit.");
             }
-            html.push(caption);
+            body.push_str(&caption);
+            body.push_str("<br/>");
         }
-        html.push(image.html.clone());
+        body.push_str(&image.html);
+        if body.len() > limit {
+            return self.warn("The caption and image exceed the server's image limit; shorten the caption or send it separately.");
+        }
+        let flight = Flight {
+            server: server.id.clone(),
+            generation: server.generation,
+            target: target.clone(),
+            body: body.clone(),
+            caption: caption.to_string(),
+            at: std::time::Instant::now(),
+        };
         match self.client.request(
             server_index,
             Request::SendHtml {
                 target,
-                html,
+                html: vec![body],
                 expected_peer,
             },
         ) {
             Ok(()) => {
-                self.clipboard.ready = None;
-                self.composer.take();
-                self.composer_changed();
-                self.say("Image queued for this conversation.");
+                self.clipboard.flight = Some(flight);
+                self.say("Image queued; attachment and caption remain until the connection acknowledges the send.");
             }
             Err(reason) => self.warn(format!("Image was not sent: {reason}")),
+        }
+    }
+
+    pub fn clipboard_input(&mut self, input: &Input) {
+        let Some(flight) = &self.clipboard.flight else {
+            return;
+        };
+        if let Input::Sent {
+            server,
+            generation,
+            target,
+            body,
+        } = input
+            && *server == flight.server
+            && *generation == flight.generation
+            && *target == flight.target
+            && *body == flight.body
+        {
+            let caption = flight.caption.clone();
+            let destination = self
+                .clipboard
+                .ready
+                .as_ref()
+                .map(|(destination, _)| destination.conversation.clone());
+            self.clipboard.flight = None;
+            self.clipboard.ready = None;
+            if let Some(destination) = destination {
+                self.acknowledge_composer(&destination, &caption);
+            }
+            self.say("Image sent to the server.");
         }
     }
 }
