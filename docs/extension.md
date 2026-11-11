@@ -40,6 +40,31 @@ strict server would learn too late to reject cleanly); a separate port or protoc
 (two implementations, splits the ecosystem); encoding capabilities in `release` or
 `os` strings (fragile, user-visible).
 
+**Downgrade protection.** The ALPN offer is covered by the TLS handshake transcript
+(authenticated by the Finished messages in TLS 1.2 and 1.3), and `Version` travels
+inside the authenticated channel, so a network attacker cannot strip `nuschel/1` or
+capabilities without breaking the connection, provided the server is authenticated
+(CA-validated certificate, pin, or later the key-transparency log). Three rules
+close the remaining gaps:
+
+1. *No fallback.* The client offers `nuschel/1` and `mumble` together in one
+   handshake and lets the server choose. It never reconnects with fewer options after
+   a failure (that is how POODLE-style downgrades worked).
+2. *Sticky policy.* A server that negotiated `nuschel/1` (or a capability such as
+   `mls/1`) is remembered with its pin, like HSTS. If it later answers as plain
+   Mumble or drops a capability, the client warns loudly and does not silently
+   continue in the weaker mode. An end-to-end encrypted conversation is never sent
+   plaintext, whatever the server announces: the client's own MLS state decides,
+   not the server's advertisement, and MLS groups declare required capabilities in
+   their group context.
+3. *First contact.* Trust on first use cannot stop a man in the middle on the very
+   first connection (he can impersonate the whole server, not just downgrade it).
+   CA-validated server certificates, out-of-band fingerprints and the server key in
+   the transparency log (phase 3) address that.
+
+The ALPN offer is visible to network observers (it reveals that the client is
+Nuschel); hiding it would need Encrypted Client Hello and is not a goal now.
+
 **Minimum versions** (user request, Signal-like): the hello carries
 `minimum_client` and `recommended_client`. A client below `recommended` shows an
 update notice; below `minimum` the server rejects after the announced grace date.
