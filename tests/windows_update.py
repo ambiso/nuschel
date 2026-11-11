@@ -12,7 +12,6 @@ marker file), starts Nuschl with NUSCHL_UPDATE_URL pointing at it, clicks
 the marker arrived, a new process runs and the old files are cleaned up.
 """
 import argparse
-import os
 import shutil
 import subprocess
 import sys
@@ -25,6 +24,68 @@ VM = [sys.executable, str(HERE / "windows_vm.py")]
 REPO = HERE.parent
 # The update bar's button in a 1280x800 guest with Nuschl maximised.
 UPDATE_BUTTON = (1200, 52)
+UPDATE_PORT = 18765
+
+# The production updater has no harness credential. Serve only prefetched,
+# synthetic signed update artifacts on the disposable guest's own loopback.
+# Host files remain authenticated, and no credential enters updater URLs.
+FILE_SERVER = r'''
+if ($global:NuschlUpdateFixture) {
+  Stop-Job $global:NuschlUpdateFixture -ErrorAction SilentlyContinue
+  Remove-Job $global:NuschlUpdateFixture -Force -ErrorAction SilentlyContinue
+}
+$fixture = "$env:TEMP\nuschl-signed-update-fixture"
+Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $fixture | Out-Null
+foreach ($name in __FILES__) { Get-NuschlTestFile -Name $name -OutFile "$fixture\$name" }
+$global:NuschlUpdateFixture = Start-Job -ArgumentList $fixture,__PORT__ -ScriptBlock {
+  param($root, $port)
+  $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $port)
+  $listener.Start()
+  try {
+    while ($true) {
+      $client = $listener.AcceptTcpClient()
+      $client.ReceiveTimeout = 5000
+      $client.SendTimeout = 5000
+      try {
+        $stream = $client.GetStream()
+        # Read at most 8 KiB of ASCII HTTP headers without an unbounded ReadLine.
+        $header = New-Object Text.StringBuilder
+        while ($header.Length -lt 8192) {
+          $b = $stream.ReadByte()
+          if ($b -lt 0 -or $b -gt 127) { break }
+          [void]$header.Append([char]$b)
+          if ($header.ToString().EndsWith("`r`n`r`n")) { break }
+        }
+        $text = $header.ToString()
+        $first = ($text -split "`r`n")[0]
+        if (-not $text.EndsWith("`r`n`r`n") -or $first -cnotmatch '^GET /([A-Za-z0-9][A-Za-z0-9_.-]{0,127}) HTTP/1\.[01]$') {
+          $bytes = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 400 Bad Request`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
+          $stream.Write($bytes,0,$bytes.Length)
+          continue
+        }
+        $file = Join-Path $root $Matches[1]
+        if (-not [IO.File]::Exists($file)) {
+          $bytes = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 404 Not Found`r`nContent-Length: 0`r`nConnection: close`r`n`r`n")
+          $stream.Write($bytes,0,$bytes.Length)
+          continue
+        }
+        $source = [IO.File]::OpenRead($file)
+        try {
+          $bytes = [Text.Encoding]::ASCII.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/octet-stream`r`nContent-Length: $($source.Length)`r`nConnection: close`r`n`r`n")
+          $stream.Write($bytes,0,$bytes.Length)
+          $source.CopyTo($stream)
+        } finally { $source.Dispose() }
+      } catch { } finally { $client.Dispose() }
+    }
+  } finally { $listener.Stop() }
+}
+Start-Sleep -Seconds 2
+# Fail before starting Nuschl if the fixture did not bind or publish its files.
+$probe = New-Object Net.WebClient
+$probe.Proxy = $null
+try { [void]$probe.DownloadData('http://127.0.0.1:__PORT__/update.json') } finally { $probe.Dispose() }
+'''
 
 
 def vm(*arguments, timeout=600):
@@ -41,8 +102,17 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rsign", default=shutil.which("rsign") or "rsign")
     args = parser.parse_args()
+    try:
+        exercise_update(args)
+    finally:
+        try:
+            guest("if ($global:NuschlUpdateFixture) { Stop-Job $global:NuschlUpdateFixture; Remove-Job $global:NuschlUpdateFixture -Force; $global:NuschlUpdateFixture = $null }", timeout=30)
+        except (subprocess.SubprocessError, OSError):
+            pass
+
+
+def exercise_update(args):
     args.output.mkdir(parents=True, exist_ok=True)
-    files = Path(os.environ.get("NUSCHL_WINDOWS_VM_DIR", Path.home() / "vms" / "nuschl-windows")) / "files"
     with tempfile.TemporaryDirectory(prefix="nuschl-update-") as temporary:
         root = Path(temporary)
         subprocess.run([args.rsign, "generate", "-W", "-p", str(root / "test.pub"), "-s", str(root / "test.secret"),
@@ -53,21 +123,28 @@ def main():
             shutil.copyfile(program, staging / program.name)
             vm("push", str(program), f"install--{program.name}")
         (staging / "licenses" / "UPDATE-TEST").write_text("delivered by the update test\n")
+        published = root / "published"
         subprocess.run([sys.executable, str(REPO / "release" / "make-update.py"), "--version", "9.9.9",
-                        "--base-url", "http://10.0.2.100/files/", "--platform", f"windows-x86_64={staging}",
-                        "--output", str(files), "--sign-key", str(root / "test.secret"), "--rsign", args.rsign],
+                        "--base-url", f"http://127.0.0.1:{UPDATE_PORT}/", "--platform", f"windows-x86_64={staging}",
+                        "--output", str(published), "--sign-key", str(root / "test.secret"), "--rsign", args.rsign],
                        check=True, capture_output=True)
+        artifact_names = []
+        for artifact in sorted(published.iterdir()):
+            artifact_names.append(artifact.name)
+            vm("push", str(artifact), artifact.name)
         vm("push", str(root / "test.pub"), "update-key.pub")
+    names = "@(" + ",".join("'" + name + "'" for name in artifact_names) + ")"
+    print(guest(FILE_SERVER.replace("__FILES__", names).replace("__PORT__", str(UPDATE_PORT))), flush=True)
     print(guest(r'''
 $dir = "$env:LOCALAPPDATA\Programs\NuschlUpdateTest"
 Get-Process nuschl -ErrorAction SilentlyContinue | Stop-Process -Force
 Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 foreach ($f in "nuschl.exe","nuschl-content-worker.exe","nuschl-media-worker.exe","nuschl-storage-worker.exe") {
-  Invoke-WebRequest -UseBasicParsing "http://10.0.2.100/files/install--$f" -OutFile "$dir\$f"
+  Get-NuschlTestFile -Name "install--$f" -OutFile "$dir\$f"
 }
-Invoke-WebRequest -UseBasicParsing "http://10.0.2.100/files/update-key.pub" -OutFile "$dir\update-key.pub"
-$env:NUSCHL_UPDATE_URL = "http://10.0.2.100/files/"
+Get-NuschlTestFile -Name "update-key.pub" -OutFile "$dir\update-key.pub"
+$env:NUSCHL_UPDATE_URL = "http://127.0.0.1:18765/"
 $p = Start-Process "$dir\nuschl.exe" -ArgumentList "--profile-dir","C:\nuschl-update-profile" -PassThru
 "started $($p.Id)"
 '''), flush=True)
