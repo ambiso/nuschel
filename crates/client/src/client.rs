@@ -170,7 +170,7 @@ struct PendingSend {
 /// it gets its mute state back when it returns.
 fn seat(server: &ServerState) -> Seat {
     Seat {
-        connected: server.status != Status::Disconnected,
+        connected: server.status != Status::Disconnected && server.has_mumble_voice(),
         muted: server.muted,
         deafened: server.deafened,
     }
@@ -417,6 +417,11 @@ impl Client {
     /// voice does not go yet while it goes elsewhere changes nothing and
     /// returns the question to ask ([`SecondServer`]).
     pub fn set_mute(&mut self, index: usize, deafen: bool) -> Option<SecondServer> {
+        if !self.servers[index].has_mumble_voice() {
+            self.servers[index].notice =
+                Some("End-to-end voice is not available yet on this server.".into());
+            return None;
+        }
         let server = &self.servers[index];
         let (id, muted, deafened) = (server.id.clone(), server.muted, server.deafened);
         let changes = if deafen {
@@ -460,6 +465,11 @@ impl Client {
     /// The answer to "Speak on two servers?" for server `index`: there as
     /// well (`both`), or only there.
     pub fn speak_here(&mut self, index: usize, both: bool) {
+        if !self.servers[index].has_mumble_voice() {
+            self.servers[index].notice =
+                Some("End-to-end voice is not available yet on this server.".into());
+            return;
+        }
         let id = self.servers[index].id.clone();
         let changes = self.voice.speak_here(&id, both, &seats(&self.servers));
         self.apply_voice(changes);
@@ -468,6 +478,11 @@ impl Client {
     /// "Use voice here": server `index` becomes the talk server, undeafened;
     /// a live microphone moves along.
     pub fn use_voice_here(&mut self, index: usize) {
+        if !self.servers[index].has_mumble_voice() {
+            self.servers[index].notice =
+                Some("End-to-end voice is not available yet on this server.".into());
+            return;
+        }
         let id = self.servers[index].id.clone();
         let mut changes = self.voice.move_here(&id, &seats(&self.servers));
         let server = &self.servers[index];
@@ -1589,6 +1604,10 @@ impl Client {
                     .any(|capability| capability == "history/1");
                 server.mls = capabilities.iter().any(|capability| capability == "mls/1");
                 server.capabilities = capabilities;
+                if !server.has_mumble_voice() {
+                    server.audio_status =
+                        "End-to-end voice is not available yet on this server.".into();
+                }
                 server.policy = policy;
                 if history && server.history_source != HistorySource::ServerArchive {
                     server.history_source = HistorySource::ServerArchive;
@@ -2391,6 +2410,29 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn e2ee_only_sessions_cannot_enable_unprotected_voice_through_the_sdk() {
+        let (mut client, recorder, id) = connected();
+        client.handle(Input::Server {
+            server: id,
+            generation: 1,
+            event: ServerEvent::Negotiated {
+                capabilities: vec!["e2ee/1".into(), "mls/1".into()],
+                policy: None,
+            },
+        });
+        self_states(&recorder);
+        client.set_mute(0, false);
+        client.set_mute(0, true);
+        client.speak_here(0, true);
+        client.use_voice_here(0);
+        client.toggle_voice(false);
+        assert!(self_states(&recorder).is_empty());
+        assert!(client.servers[0].muted);
+        assert_eq!(client.voice_role(0), voice::Role::Offline);
+        assert!(client.servers[0].audio_status.contains("not available yet"));
     }
 
     #[test]

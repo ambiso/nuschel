@@ -985,6 +985,7 @@ async fn connect_once(
     let mut muted = restore.muted;
     let mut deafened = restore.deafened;
     let mut voice_revision = 0_u64;
+    let mut voice_allowed = true;
     let mut sequence = 0;
     let mut content_gap = false;
     let mut bitrate = 48_000;
@@ -1053,7 +1054,7 @@ async fn connect_once(
                     }
                     // The worker closes the microphone (a new process) once no
                     // server gets it, and stops once every server is deafened.
-                    let link = media::Link { revision: voice_revision, muted, deafened, bitrate, loss_percent };
+                    let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                     if voice.is_some() {
                         hub.send(media::Control::Update { server: id.clone(), generation, link, cue });
                     } else if let Some(sound) = cue {
@@ -1066,7 +1067,7 @@ async fn connect_once(
                 let Some(media::Outgoing { revision, opus, end }) = outgoing else { voice = None; continue };
                 // Only unmuted, as the worker's supervisor routes it; nothing
                 // captured before a mute leaves.
-                if revision != voice_revision || muted || deafened || voice_keys.borrow().mute { continue; }
+                if !voice_allowed || revision != voice_revision || muted || deafened || voice_keys.borrow().mute { continue; }
                 let packet = nuschel_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                 sequence += 2;
                 transmitting = !end;
@@ -1151,6 +1152,16 @@ async fn connect_once(
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::ChannelInfo { channel, info } }).await;
                 },
                 SessionEvent::Negotiated(negotiated) => {
+                    voice_allowed = !negotiated.capabilities.iter().any(|capability| capability == "e2ee/1");
+                    if !voice_allowed {
+                        voice_revision = voice_revision.wrapping_add(1);
+                        if voice.is_some() {
+                            hub.send(media::Control::Update { server: id.clone(), generation,
+                                link: media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent }, cue: None });
+                        }
+                        let _ = events.send(Event::AudioStatus { server: id.clone(), generation,
+                            message: "End-to-end voice is not available yet on this server.".into() }).await;
+                    }
                     server_history = negotiated.capabilities.iter().any(|capability| capability == "history/1");
                     // Remember what this server offers: a weaker answer later fails.
                     let raised = profile.policy()
@@ -1168,13 +1179,14 @@ async fn connect_once(
                     let own_session = connected_session;
                     bitrate = max_bandwidth.saturating_sub(24_000).clamp(6000, 48_000);
                     let (sender, receiver) = mpsc::channel(64);
-                    let link = media::Link { revision: voice_revision, muted, deafened, bitrate, loss_percent };
+                    let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                     hub.send(media::Control::Attach { server: id.clone(), generation, link, voice: sender });
                     voice = Some((receiver, media::Attached { hub: hub.clone(), server: id.clone(), generation }));
                     if !deafened { hub.send(media::Control::Sound(Sound::Connected)); }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Connected { session: own_session, max_bandwidth } }).await;
                 },
                 SessionEvent::Audio(packet) => {
+                    if !voice_allowed { continue; }
                     let hash = hashes.get(&packet.sender).cloned().flatten();
                     let (muted_locally, volume) = {
                         let current = settings.borrow();
@@ -1203,7 +1215,7 @@ async fn connect_once(
                     if measured.abs_diff(loss_percent) >= 3 {
                         loss_percent = measured;
                         if voice.is_some() {
-                            let link = media::Link { revision: voice_revision, muted, deafened, bitrate, loss_percent };
+                            let link = media::Link { revision: voice_revision, voice_allowed, muted, deafened, bitrate, loss_percent };
                             hub.send(media::Control::Update { server: id.clone(), generation, link, cue: None });
                         }
                     }

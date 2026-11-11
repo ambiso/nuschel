@@ -34,6 +34,8 @@ pub struct Link {
     /// This connection's local mute/deafen revision. Buffered packets from
     /// an earlier routing decision must not survive a mute/unmute round trip.
     pub revision: u64,
+    /// Plain Mumble voice is forbidden on an E2EE-only server until SFrame.
+    pub voice_allowed: bool,
     pub muted: bool,
     pub deafened: bool,
     pub bitrate: u32,
@@ -140,7 +142,7 @@ fn plan<'a>(links: impl Iterator<Item = &'a Link>) -> Plan {
     };
     let mut speaking = Vec::new();
     for link in links {
-        plan.listen |= !link.deafened;
+        plan.listen |= link.voice_allowed && !link.deafened;
         if speaking_to(link) {
             speaking.push(link);
         }
@@ -163,7 +165,7 @@ fn plan<'a>(links: impl Iterator<Item = &'a Link>) -> Plan {
 
 /// The microphone goes to this server.
 fn speaking_to(link: &Link) -> bool {
-    !link.muted && !link.deafened
+    link.voice_allowed && !link.muted && !link.deafened
 }
 
 /// A destination started/stopped receiving the microphone, or changed its
@@ -282,6 +284,7 @@ pub async fn run(
             Some(voice) = playback.recv() => {
                 if let (Some(media), Some(stream)) = (&media, streams.get(&voice.server))
                     && stream.generation == voice.generation
+                    && stream.link.voice_allowed
                     && !stream.link.deafened
                 {
                     let _ = media.commands.try_send(LiveMediaRequest::Playback {
@@ -420,7 +423,10 @@ async fn broadcast(
     events: &mpsc::Sender<Event>,
     event: impl Fn(String, u64) -> Event,
 ) {
-    for (server, stream) in streams {
+    for (server, stream) in streams
+        .iter()
+        .filter(|(_, stream)| stream.link.voice_allowed)
+    {
         let _ = events.send(event(server.clone(), stream.generation)).await;
     }
 }
@@ -452,6 +458,7 @@ mod tests {
     fn link(muted: bool, deafened: bool, bitrate: u32, loss_percent: u8) -> Link {
         Link {
             revision: 0,
+            voice_allowed: true,
             muted,
             deafened,
             bitrate,
@@ -492,6 +499,28 @@ mod tests {
             ..listening
         };
         assert!(!capture_route_changed(&listening, &deafened));
+    }
+
+    #[test]
+    fn an_e2ee_only_server_never_gets_plain_capture_or_playback() {
+        let protected = Link {
+            voice_allowed: false,
+            ..link(false, false, 40_000, 3)
+        };
+        assert!(!speaking_to(&protected));
+        let alone = plan([protected].iter());
+        assert!(!alone.listen && !alone.capture);
+        let compatible = link(false, false, 24_000, 5);
+        let mixed = plan([protected, compatible].iter());
+        assert!(mixed.listen && mixed.capture);
+        assert_eq!((mixed.bitrate, mixed.loss_percent), (24_000, 5));
+        assert!(capture_route_changed(
+            &compatible,
+            &Link {
+                voice_allowed: false,
+                ..compatible
+            }
+        ));
     }
 
     #[test]

@@ -246,6 +246,12 @@ command line.
 
 ## Voice on several servers
 
+Voice is currently available on compatible servers only. An `e2ee/1` server needs
+SFrame before media can be enabled; its chat encryption does not protect Mumble Opus.
+The SDK refuses voice controls there, the desktop says "Voice unavailable", and the
+shared worker neither sends microphone packets to it nor plays raw audio from it.
+Compatible servers can still use the one microphone and playback mix independently.
+
 Decided with the user on 2026-11-11: they often listen to several voice channels at
 once and very rarely speak in more than one. So: **listen anywhere, speak in one place
 by default.**

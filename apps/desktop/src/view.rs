@@ -480,7 +480,10 @@ fn sidebar(
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let server = &this.client.servers[server_index];
-    let voice_channel = server.voice_channel();
+    let voice_channel = server
+        .has_mumble_voice()
+        .then(|| server.voice_channel())
+        .flatten();
     let unread_channels = unread::channels(server);
     let folded: HashMap<_, _> = unread_channels
         .iter()
@@ -1172,6 +1175,8 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
     });
     let status = if !connected {
         server.status_label().to_string()
+    } else if !server.has_mumble_voice() {
+        "Voice unavailable".into()
     } else if server.deafened {
         "Deafened".into()
     } else if listening {
@@ -1685,6 +1690,8 @@ fn conversation(
             });
     let topic = if !is_channel {
         "Private conversation".to_string()
+    } else if !server.has_mumble_voice() {
+        "End-to-end voice is not available yet on this server.".into()
     } else if in_this_voice {
         "You are talking here".to_string()
     } else if connected {
@@ -1744,6 +1751,7 @@ fn conversation(
                 )
                 .when(
                     connected
+                        && server.has_mumble_voice()
                         && is_channel
                         && !in_this_voice
                         && server.may_try(channel.id, nuschel_session::model::permission::ENTER),

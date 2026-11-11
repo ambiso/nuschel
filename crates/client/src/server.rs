@@ -174,6 +174,15 @@ pub struct ServerState {
 }
 
 impl ServerState {
+    /// E2EE-only sessions need SFrame before voice can be enabled. They must
+    /// never fall back to ordinary Mumble Opus because chat negotiated MLS.
+    pub fn has_mumble_voice(&self) -> bool {
+        !self
+            .capabilities
+            .iter()
+            .any(|capability| capability == "e2ee/1")
+    }
+
     /// A saved server, offline, with its cached channels to browse.
     pub fn new(bookmark: ServerBookmark) -> Self {
         let mut channels = bookmark

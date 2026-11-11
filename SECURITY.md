@@ -151,6 +151,13 @@ replaces the media process when capture or its destinations change: native strea
 teardown can block, so dropping a stream alone is insufficient to close capture.
 With another explicitly selected talk server still unmuted, global capture may
 continue, but the deafened server receives and plays no voice.
+
+An `e2ee/1` server is excluded from ordinary Mumble capture and playback until
+encrypted voice/SFrame is implemented. It cannot receive shared microphone packets,
+even while compatible servers keep global capture active. The SDK refuses voice
+enablement and the desktop says voice is unavailable; an MLS chat lock is not a
+claim that ordinary Opus is end-to-end encrypted. The session must also reject raw
+voice commands for this mode, independently of the shared media supervisor.
 The NixOS server's storage preflight inherits its hardened systemd unit.
 
 ### macOS (implemented, not yet validated on macOS)
