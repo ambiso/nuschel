@@ -269,7 +269,15 @@ def notice_zoom(args, root, shell, registry, bots, profile, port, pin, shot):
             assert entry["button_inside_toast"], f"Dismiss escaped Connection notice: {entry}"
             assert entry["button_inside_window"], f"Dismiss escaped the visible window: {entry}"
             assert entry["toast_inside_window"], f"Connection notice escaped the visible window: {entry}"
-            dismiss.press()
+            # Exercise actual pointer hit testing at the zooms where the
+            # reported bug appeared, as well as the screen-reader action.
+            if percent in (125, 200):
+                bx, by = dismiss.centre()
+                shell.click(window["x"] + bx, window["y"] + by)
+                entry["activation"] = "pointer"
+            else:
+                dismiss.press()
+                entry["activation"] = "AT-SPI"
             eventually(lambda: named(None, "Connection notice") is None
                        and named("push button", "Dismiss notice") is None,
                        f"Dismiss did not close the actual notice at {percent}%")
