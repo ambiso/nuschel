@@ -655,9 +655,17 @@ impl Worker {
                 conversation,
                 seq,
                 archive,
+                author,
             } => {
                 let conversation = array16(&conversation, "a conversation id")?;
-                CryptoResponse::MlsReceived(self.archive(&server, &conversation, seq, &archive)?)
+                let author = array16(&author, "an archive author account")?;
+                CryptoResponse::MlsReceived(self.archive(
+                    &server,
+                    &conversation,
+                    seq,
+                    &archive,
+                    &author,
+                )?)
             }
             _ => return Err("unsupported request".into()),
         };
@@ -1046,6 +1054,9 @@ impl Worker {
         peer: &[u8; 16],
         packages: &[Vec<u8>],
     ) -> Result<MlsOutgoing, String> {
+        if let Some(reason) = self.new_devices_blocked(server) {
+            return Err(reason);
+        }
         if let Some(entry) = self.conversation(server, conversation)
             && entry.pinned
             && entry.active
@@ -1254,6 +1265,9 @@ impl Worker {
         server: &str,
         conversation: &[u8; 16],
     ) -> Result<MlsOutgoing, String> {
+        if let Some(reason) = self.new_devices_blocked(server) {
+            return Err(reason);
+        }
         if let Some(entry) = self.conversation(server, conversation)
             && entry.pinned
             && entry.active
@@ -1322,6 +1336,9 @@ impl Worker {
         group_info: &[u8],
         tree: &[u8],
     ) -> Result<MlsOutgoing, String> {
+        if let Some(reason) = self.new_devices_blocked(server) {
+            return Err(reason);
+        }
         let existing = self
             .conversation(server, conversation)
             .cloned()
@@ -1756,7 +1773,7 @@ impl Worker {
             }
         }
         if envelope.kind == Kind::HistoryGrant {
-            let (keys, _, more) =
+            let (keys, current, more) =
                 history::decode_grant(&envelope.body).map_err(|e| e.to_string())?;
             let group_id = entry.group_id.clone();
             let epoch = self
@@ -1777,19 +1794,26 @@ impl Worker {
                     "the history grant violates this conversation's policy",
                 ));
             }
+            let own_current = self.current_history_key(server, conversation)?;
+            if current != own_current.index || !keys.iter().any(|key| key == &own_current) {
+                return Ok(undecryptable(
+                    "the grant's current key differs from this epoch's exporter",
+                ));
+            }
             let stored = self.conversation_mut(server, conversation)?;
-            stored.history_pending = more;
-            for key in keys {
-                if stored
+            if keys.iter().any(|key| {
+                stored
                     .history
                     .keys
                     .get(&key.index)
                     .is_some_and(|known| known != &key.key)
-                {
-                    return Ok(undecryptable(
-                        "a history key conflicts with an earlier grant",
-                    ));
-                }
+            }) {
+                return Ok(undecryptable(
+                    "a history key conflicts with an earlier grant",
+                ));
+            }
+            stored.history_pending = more;
+            for key in keys {
                 stored.history.keys.insert(key.index, key.key.to_vec());
             }
         }
@@ -1986,6 +2010,7 @@ impl Worker {
         conversation: &[u8; 16],
         seq: u64,
         bytes: &[u8],
+        author: &[u8; 16],
     ) -> Result<Received, String> {
         let view = self.conversation_view(server, conversation)?;
         if !view.pinned || !view.active {
@@ -2013,6 +2038,21 @@ impl Worker {
             .ok_or("history key has not been granted yet")?;
         let opened = history::open_archive(&key, conversation, bytes).map_err(|e| e.to_string())?;
         let credential = DeviceCredential::decode(&opened.credential).map_err(|e| e.to_string())?;
+        let expected = if self.server(server)?.account == author {
+            self.keystore
+                .as_ref()
+                .ok_or("no identity yet")?
+                .identity()
+                .fingerprint()
+                .to_hex()
+        } else {
+            self.peer_contact(server, author)
+                .and_then(|contact| contact.pinned.clone())
+                .ok_or("the archive author has no pinned identity")?
+        };
+        if credential.identity().to_hex() != expected {
+            return Err("the archive signer differs from its attributed account".into());
+        }
         let entry = self
             .conversation(server, conversation)
             .cloned()
@@ -2026,7 +2066,8 @@ impl Worker {
         let sender = assess(&rosters, &[sender], self.now() / 1000)
             .members
             .pop()
-            .ok_or("the archive sender does not verify")?;
+            .filter(|sender| sender.verified)
+            .ok_or("the archive sender does not verify against its pinned roster")?;
         let envelope = Envelope::decode(&opened.envelope).map_err(|e| e.to_string())?;
         if !envelope.archive_hash.is_empty()
             || envelope.device_id != *credential.device_id().as_bytes()

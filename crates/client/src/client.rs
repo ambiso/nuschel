@@ -1635,6 +1635,19 @@ impl Client {
     fn server_event(&mut self, index: usize, event: ServerEvent) {
         let server = &mut self.servers[index];
         match event {
+            ServerEvent::EncryptionGap {
+                conversation,
+                reason,
+                at_ms,
+            } => {
+                if let Some(channel) = server
+                    .channels
+                    .iter_mut()
+                    .find(|channel| channel.conversation == Some(conversation))
+                {
+                    channel.log(reason, at_ms, true);
+                }
+            }
             ServerEvent::Encryption {
                 conversation,
                 state,

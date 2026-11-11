@@ -504,3 +504,41 @@ fn a_channel_with_external_joins_and_the_servers_removals() {
     let forger = ServerSigner::generate().unwrap();
     assert!(ds.propose_removal(0, &forger).is_err());
 }
+
+#[test]
+fn archive_exporters_are_shared_only_in_the_same_conversation_and_epoch() {
+    let (alice, bob, mut ds, group) = pair();
+    let before = alice.client.history_key(&group).unwrap();
+    assert_eq!(before, bob.client.history_key(&group).unwrap());
+    let other = ConversationBinding::channel(SERVER, [9; 16]);
+    let created = alice
+        .client
+        .create(
+            &alice.identity.device,
+            &alice.identity.device_credential,
+            &other,
+            &server_key(),
+            &[],
+        )
+        .unwrap();
+    assert_ne!(
+        before.key,
+        alice.client.history_key(&created.group_id).unwrap().key
+    );
+    let update = bob
+        .client
+        .self_update(&bob.identity.device, &group)
+        .unwrap();
+    ds.commit(&update.commit, &update.group_info, None).unwrap();
+    bob.client.merge_pending(&group).unwrap();
+    match alice.client.process(&group, &update.commit).unwrap() {
+        Incoming::Commit(commit) => {
+            alice.client.merge(&group, commit).unwrap();
+        }
+        _ => panic!("expected a commit"),
+    }
+    let after = alice.client.history_key(&group).unwrap();
+    assert_eq!(after, bob.client.history_key(&group).unwrap());
+    assert_ne!(before.key, after.key);
+    assert_eq!(after.index, before.index + 1);
+}

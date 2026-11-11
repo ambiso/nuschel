@@ -1838,4 +1838,17 @@ periodic archive-key/self-update rotation independent of membership changes, own
 self blobs (including historical keys for `since_join` conversations), files, and the
 log-structured encrypted worker store. Encrypted edits, deletes, typing/read markers
 and SFrame media remain separate work. A new reader waits while every possible
-granting member is offline; the server cannot recover keys itself.
+granting member is offline; the server cannot recover keys itself. Missing grants
+are retried with bounded per-round work and backoff to one minute; the server
+coalesces one donor task per conversation/epoch and rotates donors after a timeout
+or disconnection. A member still waiting for history never claims a complete grant.
+
+Historical signer validation is deliberately fail closed: archive attribution must
+match the pinned identity of the row's author account, and that device must verify
+against the available KT roster. Unconfirmed/unlisted devices and revoked historical
+signers produce explicit gaps, including messages claimed to predate revocation.
+The native session fetches an archive author's account evidence when needed. Fully
+authenticated historical roster/membership evidence is remaining 4d work; the current
+archive implementation is not complete production E2EE history. Sender/server
+timestamps cannot replace that evidence. Verified local plaintext already retained
+by a device is kept when a remote archive cannot authenticate.

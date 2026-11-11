@@ -1014,6 +1014,8 @@ pub async fn drive(driver: Driver) {
     tokio::pin!(recheck);
     let mut daily = tokio::time::interval(Duration::from_secs(3600));
     daily.tick().await;
+    let mut history_retry = tokio::time::interval(Duration::from_secs(5));
+    history_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             command = commands.recv() => {
@@ -1071,6 +1073,11 @@ pub async fn drive(driver: Driver) {
                 rechecks += 1;
                 recheck.as_mut().reset(recheck_at(rechecks));
                 if let Err(error) = context.monitor().await {
+                    context.emit(IdentityEvent::Failed(error.to_string())).await;
+                }
+            }
+            _ = history_retry.tick(), if mls_commands.is_some() => {
+                if let Err(error) = context.mls_history_retry().await {
                     context.emit(IdentityEvent::Failed(error.to_string())).await;
                 }
             }

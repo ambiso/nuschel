@@ -76,6 +76,7 @@ fn author_name(author: &v1::Author) -> String {
 async fn render_server_page(
     page: v1::HistoryPage,
     cache: Option<&CacheKey>,
+    unauthenticated: &[u64],
 ) -> (
     Vec<IncomingMessage>,
     (Option<i64>, Option<i64>),
@@ -118,7 +119,7 @@ async fn render_server_page(
             .await
         };
         let edited_ms = (message.edited_ms != 0).then_some(message.edited_ms);
-        if let Some(cache) = cache {
+        if let Some(cache) = cache.filter(|_| !unauthenticated.contains(&message.seq)) {
             records.push(nuschel_core::ServerRecord {
                 message: ChatMessage {
                     server: cache.identity.clone(),
@@ -1098,9 +1099,12 @@ async fn connect_once(
                     restore.unacked.retain(|pending| pending.key != key);
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::ChatFailed { key, reason } }).await;
                 },
-                SessionEvent::Nuschel(page_event @ (NuschelEvent::Page(_) | NuschelEvent::DecryptedPage(_))) => {
-                    let decrypted = matches!(&page_event, NuschelEvent::DecryptedPage(_));
-                    let page = match page_event { NuschelEvent::Page(page) | NuschelEvent::DecryptedPage(page) => page, _ => unreachable!() };
+                SessionEvent::Nuschel(page_event @ (NuschelEvent::Page(_) | NuschelEvent::DecryptedPage { .. })) => {
+                    let (page, decrypted, unauthenticated) = match page_event {
+                        NuschelEvent::Page(page) => (page, false, Vec::new()),
+                        NuschelEvent::DecryptedPage { page, unauthenticated } => (page, true, unauthenticated),
+                        _ => unreachable!(),
+                    };
                     if encrypted_server && !decrypted {
                         let _ = session_commands.send(Command::Mls(nuschel_session::mls::MlsCommand::DecryptPage { page })).await;
                         continue;
@@ -1109,7 +1113,7 @@ async fn connect_once(
                     if let Some((server, ticket, asked, cache)) = asked {
                         let (events, storage) = (events.clone(), storage.clone());
                         tokio::spawn(async move {
-                            let (messages, (next_before, next_after), records) = render_server_page(page, cache.as_ref()).await;
+                            let (messages, (next_before, next_after), records) = render_server_page(page, cache.as_ref(), &unauthenticated).await;
                             // Kept for offline reading and search.
                             if !records.is_empty() { let _ = storage.send(StorageCommand::StoreServer { records }).await; }
                             let event = match asked {
@@ -1263,6 +1267,9 @@ async fn connect_once(
                                 let _ = events.send(Event::Input(Input::Server { server: id.clone(), generation, event: ServerEvent::Encryption { conversation, state } })).await;
                             }
                         }
+                        MlsEvent::PlaintextRefused { conversation, .. } => {
+                            let _ = events.send(Event::Input(Input::Server { server: id.clone(), generation, event: ServerEvent::EncryptionGap { conversation: *conversation, reason: "The server supplied unencrypted content in an encrypted conversation; it was refused.".into(), at_ms: connection::now_ms() } })).await;
+                        }
                         MlsEvent::Sent { conversation, seq, key, text } => {
                             let target = conversation_keys.get(conversation).and_then(|key| key.parse().ok()).map(TextTarget::Channel).unwrap_or(TextTarget::DirectConversation(*conversation));
                             let _ = storage.send(StorageCommand::Acked { key: *key, seq: *seq }).await;
@@ -1275,7 +1282,10 @@ async fn connect_once(
                             let visible = match received {
                                 Received::Message { seq, text, sent_at, .. } => Some((*seq, text.clone(), (*sent_at).min(i64::MAX as u64) as i64, false)),
                                 Received::Own { seq, text, .. } => Some((*seq, text.clone(), connection::now_ms(), true)),
-                                Received::Undecryptable { seq, reason } | Received::Refused { seq, reason, .. } => Some((*seq, format!("Unable to decrypt this message: {reason}"), connection::now_ms(), false)),
+                                Received::Undecryptable { reason, .. } | Received::Refused { reason, .. } => {
+                                    let _ = events.send(Event::Input(Input::Server { server: id.clone(), generation, event: ServerEvent::EncryptionGap { conversation: *conversation, reason: format!("Unable to decrypt a message: {reason}"), at_ms: connection::now_ms() } })).await;
+                                    None
+                                },
                                 _ => None,
                             };
                             if let (Some((seq, body, observed_at_ms, outgoing)), Some(peer)) = (visible, peer.as_ref()) {
@@ -2634,5 +2644,31 @@ mod tests {
         newer[0].edited_ms = Some(25);
         recent.patch(&mut newer);
         assert_eq!(newer[0].message.body, "newest");
+    }
+}
+
+#[cfg(test)]
+mod encrypted_history_tests {
+    use super::*;
+    #[tokio::test]
+    async fn unauthenticated_remote_gaps_never_replace_stored_plaintext() {
+        let page = v1::HistoryPage {
+            messages: vec![v1::Message {
+                seq: 7,
+                content: "Unable to decrypt this archived message.".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let cache = CacheKey {
+            identity: "server".into(),
+            channel: "channel".into(),
+        };
+        let (messages, _, records) = render_server_page(page, Some(&cache), &[7]).await;
+        assert_eq!(messages.len(), 1, "the gap remains visible");
+        assert!(
+            records.is_empty(),
+            "local verified plaintext must not be overwritten by a remote failure"
+        );
     }
 }

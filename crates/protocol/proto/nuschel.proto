@@ -706,6 +706,8 @@ message MlsTask {
 // within 30 days stays in its group.
 message MlsOpened {
   bytes conversation = 1;
+  // This reader still needs retained application keys; retry a history donor.
+  bool history = 2;
 }
 
 // ---- share/1: share links (docs/web.md, "Share links"), 0x4E90-0x4E97 ----

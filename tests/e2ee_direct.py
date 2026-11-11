@@ -102,9 +102,15 @@ def first_phase(args, pin, root, token):
     alice.send(kind="e2ee_open_channel", conversation=channel)
     established(alice, channel)
     send(alice, channel, "channel before bob joined")
+    # No donor is online when Bob joins. His page must recover automatically
+    # when Alice returns, without reopening the conversation or losing keys.
+    leave(alice)
     bob.send(kind="e2ee_open_channel", conversation=channel)
     established(bob, channel)
     bob.send(kind="e2ee_history", conversation=channel)
+    alice = connect(args, pin, alice_name, root / "alice", root / "alice-identity")
+    alice.send(kind="e2ee_open_channel", conversation=channel)
+    established(alice, channel)
     page = bob.wait(lambda event: event["kind"] == "history_page"
                     and event["conversation"] == channel, timeout=60)
     assert any(message["content"] == "channel before bob joined"

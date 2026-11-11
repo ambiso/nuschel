@@ -200,6 +200,12 @@ pub enum Input {
 /// What a server said (the session's events the client models).
 #[derive(Clone, Debug)]
 pub enum ServerEvent {
+    /// An authenticated encryption failure is an activity gap, never stored text.
+    EncryptionGap {
+        conversation: [u8; 16],
+        reason: String,
+        at_ms: i64,
+    },
     Encryption {
         conversation: [u8; 16],
         state: crate::conversation::EncryptionState,

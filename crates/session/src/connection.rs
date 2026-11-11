@@ -400,7 +400,10 @@ pub enum NuschelEvent {
     Chat(v1::ChatEvent),
     Page(v1::HistoryPage),
     /// Local crypto-worker output, never decoded from a server frame.
-    DecryptedPage(v1::HistoryPage),
+    DecryptedPage {
+        page: v1::HistoryPage,
+        unauthenticated: Vec<u64>,
+    },
     Subscribed(v1::Subscribed),
     Unsubscribed(v1::Unsubscribed),
     ReadMarker(v1::ReadMarker),

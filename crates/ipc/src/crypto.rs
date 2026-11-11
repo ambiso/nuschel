@@ -556,6 +556,9 @@ pub enum CryptoRequest {
         #[serde(with = "base64_bytes")]
         conversation: Vec<u8>,
         seq: u64,
+        /// Server attribution must match this pinned account's signer.
+        #[serde(with = "base64_bytes")]
+        author: Vec<u8>,
         #[serde(with = "base64_bytes")]
         archive: Vec<u8>,
     },
@@ -911,10 +914,12 @@ impl CryptoRequest {
                 server: s,
                 conversation: c,
                 archive,
+                author,
                 ..
             } => {
                 server(s)?;
                 conversation(c)?;
+                account(author)?;
                 at_most(archive.len(), MAX_MLS_BYTES, "archive")
             }
             Self::MlsJoinChannel {

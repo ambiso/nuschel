@@ -235,6 +235,12 @@ struct Touch {
     written: u64,
 }
 
+#[derive(Default)]
+struct GrantTurn {
+    next: usize,
+    leader: Option<(u32, u64, u64)>,
+}
+
 /// The handlers' end: the queue, each group's epoch and the Welcome listeners.
 pub struct MlsHandle {
     tasks: mpsc::Sender<Task>,
@@ -253,6 +259,7 @@ pub struct MlsHandle {
     seen: HashMap<(Id, Device), Touch>,
     /// (conversation, device) → last opened.
     opened: HashMap<(Id, Device), Touch>,
+    grant_cursor: HashMap<Id, GrantTurn>,
     /// Added to the system clock (tests move time with it).
     clock_offset: Arc<AtomicI64>,
 }
@@ -372,6 +379,7 @@ impl MlsHandle {
             config,
             seen: HashMap::new(),
             opened: HashMap::new(),
+            grant_cursor: HashMap::new(),
             clock_offset: Arc::new(AtomicI64::new(0)),
         }
     }
@@ -635,6 +643,7 @@ pub async fn open(
             config: config.clone(),
             seen,
             opened,
+            grant_cursor: HashMap::new(),
             clock_offset: Arc::new(AtomicI64::new(0)),
         },
         Service {
@@ -1865,6 +1874,9 @@ impl State {
                     && self.allowed(session, Action::MlsJoinInfo(&conversation))
                 {
                     self.mls_seen(session, Some(conversation));
+                    if message.history && self.text_limited(session).is_ok() {
+                        self.mls_history_granter(session, conversation);
+                    }
                 }
             }
             kind::MLS_WELCOME_ACK => {
@@ -2595,43 +2607,71 @@ impl State {
             }
             Err(failure) => self.failed(session, request_id, failure),
         }
-        if let Some(rollback) = &commit
-            && rollback.channel
-            && !rollback.added.is_empty()
-            && let Some(mls) = self.mls.as_ref()
-            && let Some(cache) = mls.groups.get(&conversation)
-            && cache.epoch == epoch
+        if commit
+            .as_ref()
+            .is_some_and(|rollback| rollback.channel && !rollback.added.is_empty())
         {
-            // Someone joined a channel: one connected member grants it the
-            // history keys (docs/e2ee.md §6.6; the member checks the policy).
-            let members: BTreeSet<(Id, Device)> = cache
-                .members
-                .iter()
-                .filter(|(device, _)| !rollback.added.contains(*device))
-                .map(|(device, account)| (*account, *device))
-                .collect();
-            let granter = mls
-                .listening
-                .iter()
-                .filter(|(_, devices)| devices.first().is_some_and(|pair| members.contains(pair)))
-                .map(|(session, _)| *session)
-                .min();
-            if let Some(user) = granter.and_then(|session| self.users.get(&session)) {
-                user.link.message(
-                    kind::MLS_TASK,
-                    &v1::MlsTask {
-                        conversation: conversation.to_vec(),
-                        epoch,
-                        commit: false,
-                        grant: true,
-                    },
-                );
-            }
+            self.mls_history_granter(session, conversation);
         }
         if commit.is_some() {
             // The epoch moved: proposals of the old one are void, and the
             // members may have changed.
             self.mls_sweep();
+        }
+    }
+
+    /// Rotate through connected members, excluding the requester. A donor that
+    /// is itself still waiting for history does not grant an incomplete archive.
+    fn mls_history_granter(&mut self, requester: u32, conversation: Id) {
+        let Some(mls) = self.mls.as_mut() else { return };
+        let now = mls.now_ms();
+        let Some((_, device)) = mls.device_of(requester) else {
+            return;
+        };
+        let Some(cache) = mls.groups.get(&conversation) else {
+            return;
+        };
+        if !cache.channel || !cache.members.contains_key(&device) {
+            return;
+        }
+        let epoch = cache.epoch;
+        let mut donors: Vec<_> = mls
+            .listening
+            .iter()
+            .filter_map(|(session, devices)| {
+                devices
+                    .first()
+                    .filter(|(account, donor)| {
+                        *donor != device && cache.members.get(donor) == Some(account)
+                    })
+                    .map(|_| *session)
+            })
+            .collect();
+        donors.sort_unstable();
+        if donors.is_empty() {
+            return;
+        }
+        let turn = mls.grant_cursor.entry(conversation).or_default();
+        if turn.leader.is_some_and(|(donor, task_epoch, started)| {
+            task_epoch == epoch
+                && donors.contains(&donor)
+                && now.saturating_sub(started) < TASK_TIMEOUT_MS
+        }) {
+            return;
+        }
+        let donor = donors[turn.next % donors.len()];
+        turn.next = turn.next.wrapping_add(1);
+        turn.leader = Some((donor, epoch, now));
+        if let Some(user) = self.users.get(&donor) {
+            user.link.message(
+                kind::MLS_TASK,
+                &v1::MlsTask {
+                    conversation: conversation.to_vec(),
+                    epoch,
+                    commit: false,
+                    grant: true,
+                },
+            );
         }
     }
 

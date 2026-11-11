@@ -330,7 +330,7 @@ fn nuschel_json(event: &NuschelEvent) -> serde_json::Value {
         NuschelEvent::Chat(event) => {
             json!({"kind":"chat", "conversation":hex(&event.conversation), "message":event.message.as_ref().map(message_json)})
         }
-        NuschelEvent::Page(page) | NuschelEvent::DecryptedPage(page) => {
+        NuschelEvent::Page(page) | NuschelEvent::DecryptedPage { page, .. } => {
             json!({"kind":"history_page", "request_id":page.request_id, "conversation":hex(&page.conversation),
             "messages":page.messages.iter().map(message_json).collect::<Vec<_>>(), "more_before":page.more_before,
             "more_after":page.more_after, "restricted":page.restricted, "head":page.head})

@@ -150,6 +150,7 @@ pub enum MlsEvent {
 pub(crate) struct MlsState {
     /// UI pages waiting for this device's first history grant.
     pages: Vec<v1::HistoryPage>,
+    history_waiting: BTreeMap<[u8; 16], (Instant, u32)>,
     /// Our device id (16 bytes), once the worker made key packages.
     device: Vec<u8>,
     /// When to try uploading key packages again (`None`: not needed now).
@@ -200,6 +201,16 @@ impl Context {
 
     /// Emits a conversation's view with its peer.
     async fn mls_view(&mut self, view: ConversationView) {
+        if let Some(conversation) = id16(&view.conversation) {
+            if view.channel && view.pinned && view.active && view.history_pending {
+                self.mls()
+                    .history_waiting
+                    .entry(conversation)
+                    .or_insert((Instant::now(), 0));
+            } else {
+                self.mls().history_waiting.remove(&conversation);
+            }
+        }
         let peer = id16(&view.conversation)
             .and_then(|conversation| self.mls().directs.get(&conversation).copied())
             .and_then(|(_, user)| user);
@@ -212,6 +223,42 @@ impl Context {
 
     async fn mls_worker(&self, request: CryptoRequest) -> Result<CryptoResponse, crate::Error> {
         self.crypto.request(request).await
+    }
+
+    /// A grant task or its donor may disappear. Keep asking while the worker
+    /// still needs history; the server rotates donors and messages stay bounded.
+    pub(crate) async fn mls_history_retry(&mut self) -> Result<(), crate::Error> {
+        let now = Instant::now();
+        // Bound work per round; deadlines/backoff rotate all waiting conversations
+        // without capping their count or the amount of retained history.
+        let waiting: Vec<_> = self
+            .mls()
+            .history_waiting
+            .iter()
+            .filter(|(_, (at, _))| *at <= now)
+            .map(|(id, _)| *id)
+            .take(4)
+            .collect();
+        for conversation in waiting {
+            if let Some((at, backoff)) = self.mls().history_waiting.get_mut(&conversation) {
+                *backoff = backoff.saturating_add(1);
+                *at = now + Duration::from_secs((5_u64 << (*backoff).min(4)).min(60));
+            }
+            let view = self.mls_status(conversation).await?;
+            if view.pinned && view.active && view.history_pending {
+                self.tell(
+                    kind::MLS_OPENED,
+                    v1::MlsOpened {
+                        conversation: conversation.to_vec(),
+                        history: true,
+                    }
+                    .encode_to_vec(),
+                )
+                .await?;
+            }
+            self.mls_view(view).await;
+        }
+        Ok(())
     }
 
     /// On connect: identity, key packages, Welcomes, and catching up every pinned
@@ -765,6 +812,11 @@ impl Context {
                         server: self.server.key.clone(),
                         conversation: conversation.to_vec(),
                         seq: message.seq,
+                        author: message
+                            .author
+                            .as_ref()
+                            .map(|author| author.account.clone())
+                            .unwrap_or_default(),
                         archive: message.archive,
                     })
                     .await;
@@ -802,7 +854,7 @@ impl Context {
             && id16(&self.account) != Some(account)
             && self.mls().looked_up.insert(account)
         {
-            self.check_contact(None, Some(account), false).await?;
+            self.check_contact(None, Some(account), false, None).await?;
         }
         // The worker answers every message it could not use with `Undecryptable`
         // (an explicit gap); an error here means the worker itself failed, so the
@@ -1036,11 +1088,18 @@ impl Context {
             }
             MlsCommand::DecryptPage { page } => {
                 if self.mls().pages.len() >= 8 {
-                    return Err(crate::Error::Worker(
-                        "too many encrypted history pages are waiting".into(),
-                    ));
+                    let mut error = nuschel::error(page.request_id, Code::Busy, 1000);
+                    error.detail =
+                        "Encrypted history is waiting for keys; retry this page shortly.".into();
+                    let _ = self
+                        .events
+                        .send(crate::connection::SessionEvent::Nuschel(
+                            crate::connection::NuschelEvent::Error(error),
+                        ))
+                        .await;
+                } else {
+                    self.mls().pages.push(page);
                 }
-                self.mls().pages.push(page);
                 Ok(())
             }
         };
@@ -1067,6 +1126,7 @@ impl Context {
                 kind::MLS_OPENED,
                 v1::MlsOpened {
                     conversation: conversation.to_vec(),
+                    history: view.history_pending,
                 }
                 .encode_to_vec(),
             )
@@ -1082,7 +1142,7 @@ impl Context {
         if let Some(own) = id16(&self.account)
             && !self.mls().own_checked
         {
-            self.check_contact(None, Some(own), false).await?;
+            self.check_contact(None, Some(own), false, None).await?;
             self.mls().own_checked = true;
         }
         let mut reason = String::from("the channel's group kept changing");
@@ -1113,7 +1173,7 @@ impl Context {
                         .take(MAX_JOIN_LOOKUPS)
                     {
                         if self.mls().looked_up.insert(account) {
-                            self.check_contact(None, Some(account), false).await?;
+                            self.check_contact(None, Some(account), false, None).await?;
                         }
                     }
                     match self
@@ -1157,7 +1217,7 @@ impl Context {
         if task.grant {
             self.mls_rows(conversation, u64::MAX).await?;
             let view = self.mls_status(conversation).await?;
-            if view.pinned && view.active && view.epoch == task.epoch {
+            if view.pinned && view.active && !view.history_pending && view.epoch == task.epoch {
                 self.mls_grant(conversation).await?;
             }
         }
@@ -1295,8 +1355,10 @@ impl Context {
                 self.mls().pages.push(page);
                 continue;
             }
+            let mut unauthenticated = Vec::new();
             for message in &mut page.messages {
                 if !nuschel::is_mls_format(message.format) {
+                    unauthenticated.push(message.seq);
                     message.content = "The server supplied unencrypted content in an encrypted conversation; it was refused.".into();
                     self.mls_emit(MlsEvent::PlaintextRefused {
                         conversation,
@@ -1309,11 +1371,24 @@ impl Context {
                 {
                     message.kind = v1::message::Kind::Void as i32;
                 } else {
+                    if let Some(author) = message.author.as_ref()
+                        && let Some(account) = id16(&author.account)
+                        && id16(&self.account) != Some(account)
+                        && self.mls().looked_up.insert(account)
+                    {
+                        self.check_contact(None, Some(account), false, Some(author.name.clone()))
+                            .await?;
+                    }
                     let response = self
                         .mls_worker(CryptoRequest::MlsArchive {
                             server: self.server.key.clone(),
                             conversation: conversation.to_vec(),
                             seq: message.seq,
+                            author: message
+                                .author
+                                .as_ref()
+                                .map(|author| author.account.clone())
+                                .unwrap_or_default(),
                             archive: message.archive.clone(),
                         })
                         .await;
@@ -1330,9 +1405,11 @@ impl Context {
                             message.kind = v1::message::Kind::Void as i32;
                         }
                         Ok(_) => {
+                            unauthenticated.push(message.seq);
                             message.content = "Unable to decrypt this archived message.".into();
                         }
                         Err(error) => {
+                            unauthenticated.push(message.seq);
                             message.content =
                                 format!("Unable to decrypt this archived message: {error}");
                         }
@@ -1344,7 +1421,10 @@ impl Context {
             }
             self.events
                 .send(crate::connection::SessionEvent::Nuschel(
-                    crate::connection::NuschelEvent::DecryptedPage(page),
+                    crate::connection::NuschelEvent::DecryptedPage {
+                        page,
+                        unauthenticated,
+                    },
                 ))
                 .await
                 .ok();

@@ -371,6 +371,7 @@ async fn archives_are_context_bound_authenticated_and_not_reassigned_to_other_ro
             conversation,
             seq,
             archive,
+            author: alice_person.account.to_vec(),
         })
     };
     assert!(
@@ -983,4 +984,135 @@ fn short_init_key_package(device: &RawDevice) -> Vec<u8> {
     package.extend_from_slice(&[0x40, 0x40]);
     package.extend_from_slice(&signature);
     package
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_grant_must_match_the_independently_derived_current_key() {
+    use nuschel_e2ee::history::{HistoryKey, encode_grant_page};
+    let dir = directory([0x11; 32]).await;
+    let (mut alice, _) = worker(&dir, 1, T0 + 10).await;
+    let bob = RawDevice::new("bob");
+    let bob_person = bob.person(&dir, 2, &[]);
+    bob_person.publish(&dir, T0 + 20).await;
+    alice.sync(&dir).await;
+    alice.contact(&dir, &bob_person).await;
+    let mut ds = Ds::new(&dir);
+    let commit = outgoing(alice.create(bob_person.account, vec![bob.key_package()]));
+    let seq = ds.commit(&commit).unwrap();
+    alice.done(true, seq);
+    let group = bob.join(&commit.welcome, &ds.tree());
+    let current = bob.client.history_key(&group).unwrap();
+    let mut wrong = current.clone();
+    wrong.key[0] ^= 1;
+    let fake_old = HistoryKey {
+        index: 0,
+        key: [99; 32],
+    };
+    let mut envelope = bob.envelope(1, [0; 32], "", [1; 16]);
+    envelope.kind = Kind::HistoryGrant;
+    envelope.body = encode_grant_page(&[fake_old, wrong], current.index, false).unwrap();
+    let message = bob
+        .client
+        .encrypt(bob.device(), &group, &envelope.encode())
+        .unwrap();
+    let seq = ds.send(&message).unwrap();
+    assert!(
+        matches!(alice.receive(&ds, seq), Received::Undecryptable { reason, .. } if reason.contains("exporter"))
+    );
+    assert_eq!(
+        alice.status().history_keys,
+        1,
+        "invalid grants change no retained keys"
+    );
+    envelope.body =
+        encode_grant_page(std::slice::from_ref(&current), current.index, false).unwrap();
+    let message = bob
+        .client
+        .encrypt(bob.device(), &group, &envelope.encode())
+        .unwrap();
+    let seq = ds.send(&message).unwrap();
+    assert!(matches!(alice.receive(&ds, seq), Received::Nothing { .. }));
+    assert_eq!(alice.status().history_keys, 1);
+
+    // An archive holder cannot substitute an unlisted device credential or
+    // attribute a genuine signer to somebody else's account.
+    let unlisted = bob.second_device("not published");
+    let record = nuschel_e2ee::history::seal_archive(
+        &current,
+        &CONVERSATION,
+        &unlisted
+            .envelope(1, [0; 32], "unconfirmed", [2; 16])
+            .encode(),
+        unlisted.device(),
+        unlisted.credential(),
+    )
+    .unwrap();
+    let read = |alice: &mut Client, archive, author: Vec<u8>| {
+        alice.ask(CryptoRequest::MlsArchive {
+            server: SERVER.into(),
+            conversation: conversation(),
+            seq: 100,
+            archive,
+            author,
+        })
+    };
+    assert!(
+        matches!(read(&mut alice, record, bob_person.account.to_vec()), CryptoResponse::Rejected(reason) if reason.contains("pinned roster"))
+    );
+    let record = nuschel_e2ee::history::seal_archive(
+        &current,
+        &CONVERSATION,
+        &bob.envelope(1, [0; 32], "before revocation", [3; 16])
+            .encode(),
+        bob.device(),
+        bob.credential(),
+    )
+    .unwrap();
+    let wrong_account = alice.account.to_vec();
+    assert!(
+        matches!(read(&mut alice, record.clone(), wrong_account), CryptoResponse::Rejected(reason) if reason.contains("attributed account"))
+    );
+    assert!(
+        matches!(read(&mut alice, record.clone(), bob_person.account.to_vec()), CryptoResponse::MlsReceived(Received::Message { text, .. }) if text == "before revocation")
+    );
+
+    // Current revocation is deliberately fail closed, even for an old archive.
+    // Accepting historical rosters needs authenticated evidence in later 4d.
+    let identity = bob.identity();
+    let revocation = identity
+        .device_signing
+        .revoke_device(bob.device().device_id(), u32::MAX, now_s())
+        .unwrap();
+    let signing = identity.device_signing.certificate().clone();
+    let statement = identity
+        .device_signing
+        .sign_account(dir.descriptor().log_id().0, bob_person.account, now_s())
+        .unwrap();
+    let roster = RosterCommitment::compute(
+        &signing,
+        std::slice::from_ref(&bob.certificate),
+        std::slice::from_ref(&revocation),
+    )
+    .unwrap();
+    let revoked = Person {
+        account: bob_person.account,
+        value: AccountBinding::with_statement(
+            identity.root.public_key().clone(),
+            roster,
+            &statement,
+        )
+        .to_value(),
+        record: KtRecordBytes {
+            device_signing_certificate: signing.encode(),
+            devices: vec![bob.certificate.encode()],
+            revocations: vec![revocation.encode()],
+            statement: statement.encode(),
+        },
+    };
+    revoked.publish(&dir, T0 + 30).await;
+    alice.sync(&dir).await;
+    alice.contact(&dir, &revoked).await;
+    assert!(
+        matches!(read(&mut alice, record, revoked.account.to_vec()), CryptoResponse::Rejected(reason) if reason.contains("pinned roster"))
+    );
 }
