@@ -4901,6 +4901,7 @@ dependencies = [
  "nuschel-content",
  "nuschel-core",
  "nuschel-ipc",
+ "tokio",
 ]
 
 [[package]]

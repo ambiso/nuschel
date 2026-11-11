@@ -208,7 +208,8 @@ def check_session(binaries, host, port, reference):
             body = "First line\n\n```rust\nfn main() {}\n```\n<literal>&"
             alice.send(kind="text", channel=channel, body=body)
             incoming = bob.wait(lambda event: event["kind"] == "text" and event["author"] == "NuschelAlice")
-            prepared, = exchange(Path(binaries) / "nuschel-content-worker", [{"text": incoming["body"], "legacy_html": incoming["html"]}])
+            assert incoming["html"], "stock servers allow HTML"
+            prepared, = exchange(Path(binaries) / "nuschel-content-worker", [{"kind": "legacy_html", "html": incoming["body"]}])
             assert prepared["status"] == "prepared"
             assert prepared["value"]["source"] == body
             assert any(block["kind"] == "code" for block in prepared["value"]["document"]["blocks"])

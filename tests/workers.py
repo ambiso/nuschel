@@ -2,6 +2,7 @@
 """Exercise real worker executables; this is not a Mumble interoperability test."""
 
 import argparse
+import base64
 import io
 import json
 import math
@@ -12,6 +13,17 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zlib
+
+
+def png(width, height):
+    """A small gradient PNG, standard library only."""
+    rows = b"".join(b"\x00" + bytes(c for x in range(width) for c in (x * 4 % 256, y * 5 % 256, 90))
+                    for y in range(height))
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
 def frame(request_id, payload):
@@ -75,7 +87,14 @@ def check_history_pages(binaries, arguments):
 
 def check_workers(binaries):
     source = "first\n\nsecond\n```rust\nfn main() {}\n```\nlast"
-    rendered, = exchange(binaries / "nuschel-content-worker", [{"text": source}])
+    rendered, image, legacy = exchange(binaries / "nuschel-content-worker", [
+        {"kind": "render", "text": source},
+        {"kind": "encode_image", "image": base64.b64encode(png(64, 48)).decode(), "limit": 131072},
+        {"kind": "legacy_html", "html": "<b>bold</b><br/>&amp; more"},
+    ])
+    assert image["status"] == "encoded" and image["value"].startswith('<img src="data:image/'), image
+    assert legacy == {"status": "prepared", "value": {
+        "source": "bold\n& more", "document": {"blocks": [{"kind": "text", "text": "bold\n& more"}]}}}, legacy
     assert rendered["status"] == "rendered"
     blocks = rendered["value"]["blocks"]
     assert blocks[0]["text"] == "first\n\nsecond\n"

@@ -33,18 +33,21 @@ impl<T> Envelope<T> {
     }
 }
 
+/// One untrusted input for the content worker, and what to make of it.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ContentRequest {
-    pub text: String,
-    #[serde(default)]
-    pub legacy_html: bool,
-    /// `text` is a base64-encoded avatar image to decode into a small thumbnail.
-    #[serde(default)]
-    pub avatar: bool,
-    /// `text` is an inline `data:` image to decode at the viewer's size.
-    #[serde(default)]
-    pub view: bool,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ContentRequest {
+    /// Literal message text with fenced code; answered with `Rendered`.
+    Render { text: String },
+    /// Mumble rich text, made inert; answered with `Prepared`.
+    LegacyHtml { html: String },
+    /// A base64-encoded avatar image; answered with a small `Rendered` thumbnail.
+    Avatar { image: String },
+    /// An inline `data:` image; answered with a `Rendered` image at the viewer's size.
+    View { uri: String },
+    /// A base64-encoded pasted image, re-encoded as a Mumble `<img>` element
+    /// of at most `limit` bytes; answered with `Encoded`.
+    EncodeImage { image: String, limit: u32 },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -64,6 +67,8 @@ pub struct PreparedContent {
 pub enum ContentResponse {
     Rendered(MessageDocument),
     Prepared(PreparedContent),
+    /// Mumble rich text to send as it is.
+    Encoded(String),
     Rejected(String),
 }
 

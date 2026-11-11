@@ -13,5 +13,8 @@ nuschel-content.workspace = true
 nuschel-core.workspace = true
 nuschel-ipc.workspace = true
 
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["macros", "rt"] }
+
 [lints]
 workspace = true

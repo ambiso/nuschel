@@ -7,7 +7,8 @@ use nuschel_core::MessageDocument;
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    process::Command,
+    process::{Child, Command},
+    time::timeout,
 };
 
 use crate::{
@@ -33,150 +34,225 @@ pub enum Error {
     MissingSandboxHelper(&'static str),
 }
 
-/// Build a Linux content sandbox. Only trusted supervisors choose `executable` and `arguments`.
+/// Build the content sandbox. Only trusted supervisors choose `executable` and `arguments`.
 /// This is public so the VM confinement test exercises the same command as the application.
-#[cfg(target_os = "linux")]
 pub fn content_sandbox_command(
     executable: &Path,
     arguments: &[OsString],
 ) -> Result<Command, Error> {
-    fn helper(name: &'static str) -> Result<std::path::PathBuf, Error> {
-        std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-            .map(|directory| directory.join(name))
-            .find(|path| path.is_file())
-            .ok_or(Error::MissingSandboxHelper(name))
-    }
-
-    let mut command = Command::new(helper("prlimit")?);
-    command.args(["--as=536870912", "--cpu=5", "--"]);
-    command.arg(helper("bwrap")?);
-    command.args(["--die-with-parent", "--new-session", "--unshare-all"]);
-    for directory in ["/nix/store", "/usr/lib", "/usr/lib64", "/lib", "/lib64"] {
-        if Path::new(directory).exists() {
-            command.args(["--ro-bind", directory, directory]);
-        }
-    }
-    command.args(["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]);
-    command
-        .arg("--ro-bind")
-        .arg(executable.canonicalize()?)
-        .arg("/worker");
-    command.args(["--chdir", "/tmp", "--clearenv", "--", "/worker"]);
-    command.args(arguments);
-    command.env_clear();
-    Ok(command)
+    content_sandbox(executable, arguments, 5)
 }
 
-/// A one-request harness with bounded output, a deadline, and kill/reap on failure.
-/// The live client should retain a bounded worker pool rather than spawn once per message.
+/// Seconds of wall-clock time, and on Linux of CPU time, a request may take.
+fn budget(request: &ContentRequest) -> u64 {
+    match request {
+        // Several encodes of a large picture; the user waits for it.
+        ContentRequest::EncodeImage { .. } => 15,
+        _ => 5,
+    }
+}
+
+/// Render literal message text.
 pub async fn render_content(executable: &Path, text: &str) -> Result<MessageDocument, Error> {
-    Ok(prepare_content(executable, text, false).await?.document)
+    rendered(
+        one(
+            executable,
+            ContentRequest::Render {
+                text: text.to_owned(),
+            },
+        )
+        .await?,
+    )
+}
+
+/// Render many messages (a history page) in one worker; `None` where one failed.
+pub async fn render_many(executable: &Path, texts: &[String]) -> Vec<Option<MessageDocument>> {
+    let requests: Vec<_> = texts
+        .iter()
+        .map(|text| ContentRequest::Render { text: text.clone() })
+        .collect();
+    match exchange(executable, &requests).await {
+        Ok(results) => results
+            .into_iter()
+            .map(|result| result.and_then(rendered).ok())
+            .collect(),
+        Err(_) => vec![None; texts.len()],
+    }
 }
 
 /// Decode an avatar in the sandboxed content worker; returns an Image document.
 pub async fn decode_avatar(executable: &Path, encoded: &[u8]) -> Result<MessageDocument, Error> {
     use base64::Engine as _;
-    let text = base64::engine::general_purpose::STANDARD.encode(encoded);
-    Ok(exchange(
-        executable,
-        ContentRequest {
-            text,
-            legacy_html: false,
-            avatar: true,
-            view: false,
-        },
-    )
-    .await?
-    .document)
+    let image = base64::engine::general_purpose::STANDARD.encode(encoded);
+    rendered(one(executable, ContentRequest::Avatar { image }).await?)
 }
 
 /// Decode an inline image at the viewer's size in the sandboxed content worker.
 pub async fn decode_view(executable: &Path, uri: &str) -> Result<MessageDocument, Error> {
-    Ok(exchange(
-        executable,
-        ContentRequest {
-            text: uri.to_owned(),
-            legacy_html: false,
-            avatar: false,
-            view: true,
-        },
-    )
-    .await?
-    .document)
+    let uri = uri.to_owned();
+    rendered(one(executable, ContentRequest::View { uri }).await?)
 }
 
+/// Re-encode a pasted image as a Mumble `<img>` element of at most `limit` bytes.
+pub async fn encode_image(executable: &Path, image: &[u8], limit: u32) -> Result<String, Error> {
+    use base64::Engine as _;
+    let image = base64::engine::general_purpose::STANDARD.encode(image);
+    match one(executable, ContentRequest::EncodeImage { image, limit }).await? {
+        ContentResponse::Encoded(html) => Ok(html),
+        _ => Err(Error::InvalidResponse),
+    }
+}
+
+/// Literal text, or (`legacy_html`) Mumble rich text made inert, with its plain source.
 pub async fn prepare_content(
     executable: &Path,
     text: &str,
     legacy_html: bool,
 ) -> Result<PreparedContent, Error> {
-    exchange(
-        executable,
-        ContentRequest {
-            text: text.to_owned(),
-            legacy_html,
-            avatar: false,
-            view: false,
-        },
-    )
-    .await
+    if !legacy_html {
+        let document = render_content(executable, text).await?;
+        return Ok(PreparedContent {
+            source: text.to_owned(),
+            document,
+        });
+    }
+    let html = text.to_owned();
+    match one(executable, ContentRequest::LegacyHtml { html }).await? {
+        ContentResponse::Prepared(prepared) => Ok(prepared),
+        _ => Err(Error::InvalidResponse),
+    }
 }
 
-async fn exchange(executable: &Path, content: ContentRequest) -> Result<PreparedContent, Error> {
-    let text = content.text.clone();
-    let mut command = content_sandbox_command(executable, &[])?;
-    let mut child = command
+fn rendered(response: ContentResponse) -> Result<MessageDocument, Error> {
+    match response {
+        ContentResponse::Rendered(document) => Ok(document),
+        _ => Err(Error::InvalidResponse),
+    }
+}
+
+async fn one(executable: &Path, request: ContentRequest) -> Result<ContentResponse, Error> {
+    exchange(executable, std::slice::from_ref(&request))
+        .await?
+        .pop()
+        .unwrap_or(Err(Error::InvalidResponse))
+}
+
+/// Answer `requests` in order, all in one sandboxed worker unless one fails.
+/// Every request has its own budget: its reply must arrive within that many
+/// seconds of the previous one, and on Linux the worker's CPU limit is the sum.
+/// A worker that misses a deadline, exits early or answers out of turn is
+/// killed and reaped; the request it was working on fails and the rest go to
+/// a fresh worker. `Err` means no worker could be started at all.
+pub async fn exchange(
+    executable: &Path,
+    requests: &[ContentRequest],
+) -> Result<Vec<Result<ContentResponse, Error>>, Error> {
+    let mut frames = Vec::with_capacity(requests.len());
+    for (index, request) in requests.iter().enumerate() {
+        let mut frame = Vec::new();
+        write_frame(&mut frame, &Envelope::new(index as u64 + 1, request))?;
+        frames.push(frame);
+    }
+    let budgets: Vec<u64> = requests.iter().map(budget).collect();
+    let mut results = Vec::with_capacity(requests.len());
+    while results.len() < requests.len() {
+        let first = results.len();
+        let outcome = match spawn(executable, &budgets[first..]) {
+            Ok(child) => converse(child, &frames[first..], &budgets[first..], &mut results).await,
+            Err(error) if first == 0 => return Err(error),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = outcome {
+            results.push(Err(error));
+        }
+    }
+    Ok(results)
+}
+
+fn spawn(executable: &Path, budgets: &[u64]) -> Result<Child, Error> {
+    Ok(content_sandbox(executable, &[], budgets.iter().sum())?
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
-        .spawn()?;
-    let _containment = contain(&child)?;
-    let request_id = 1;
-    let mut request = Vec::new();
-    write_frame(&mut request, &Envelope::new(request_id, content))?;
+        .spawn()?)
+}
 
-    let exchange = async {
-        let mut input = child.stdin.take().ok_or(Error::InvalidResponse)?;
-        let mut output = child.stdout.take().ok_or(Error::InvalidResponse)?;
-        input.write_all(&request).await?;
-        input.shutdown().await?;
-        drop(input);
-        let size = output.read_u32().await? as usize;
-        if size > MAX_FRAME_BYTES {
-            return Err(Error::Frame(crate::Error::TooLarge));
-        }
-        let mut bytes = vec![0; size];
-        output.read_exact(&mut bytes).await?;
-        let response: Envelope<ContentResponse> = serde_json::from_slice(&bytes)?;
-        if response.version != PROTOCOL_VERSION || response.request_id != request_id {
-            return Err(Error::InvalidResponse);
-        }
-        if !child.wait().await?.success() {
-            return Err(Error::InvalidResponse);
-        }
-        match response.payload {
-            ContentResponse::Rendered(document) => Ok(PreparedContent {
-                source: text.clone(),
-                document,
-            }),
-            ContentResponse::Prepared(prepared) => Ok(prepared),
-            ContentResponse::Rejected(reason) => Err(Error::Rejected(reason)),
+/// Send `frames` to one worker and collect its replies into `results`, whose
+/// length is the request id of the first frame minus one.
+async fn converse(
+    mut child: Child,
+    frames: &[Vec<u8>],
+    budgets: &[u64],
+    results: &mut Vec<Result<ContentResponse, Error>>,
+) -> Result<(), Error> {
+    let _containment = contain(&child)?;
+    let (Some(mut input), Some(mut output)) = (child.stdin.take(), child.stdout.take()) else {
+        return Err(Error::InvalidResponse);
+    };
+    let outcome = {
+        // Written alongside reading, so neither pipe can fill up and stall
+        // the worker. Closing stdin afterwards tells it to exit.
+        let write = async move {
+            for frame in frames {
+                input.write_all(frame).await?;
+            }
+            io::Result::Ok(())
+        };
+        let read = async {
+            for budget in budgets {
+                let reply = timeout(Duration::from_secs(*budget), read_reply(&mut output))
+                    .await
+                    .map_err(|_| Error::Timeout)??;
+                if reply.request_id != results.len() as u64 + 1 {
+                    return Err(Error::InvalidResponse);
+                }
+                results.push(match reply.payload {
+                    ContentResponse::Rejected(reason) => Err(Error::Rejected(reason)),
+                    response => Ok(response),
+                });
+            }
+            // A worker that does not then exit cleanly: its last reply is not trusted.
+            match timeout(Duration::from_secs(2), child.wait()).await {
+                Ok(Ok(status)) if status.success() => Ok(()),
+                exited => {
+                    results.pop();
+                    Err(match exited {
+                        Err(_) => Error::Timeout,
+                        Ok(Err(error)) => error.into(),
+                        Ok(Ok(_)) => Error::InvalidResponse,
+                    })
+                }
+            }
+        };
+        tokio::pin!(read);
+        tokio::select! {
+            outcome = &mut read => outcome,
+            // A worker that died early fails the read at the request it was on.
+            _ = write => read.await,
         }
     };
-    match tokio::time::timeout(Duration::from_secs(5), exchange).await {
-        Ok(Ok(document)) => Ok(document),
-        result => {
-            // kill_on_drop is a fallback; explicitly reap while the runtime still exists.
-            child.kill().await.ok();
-            match result {
-                Ok(Err(error)) => Err(error),
-                _ => Err(Error::Timeout),
-            }
-        }
+    if outcome.is_err() {
+        // kill_on_drop is a fallback; explicitly reap while the runtime still exists.
+        child.kill().await.ok();
     }
+    outcome
+}
+
+async fn read_reply(
+    output: &mut tokio::process::ChildStdout,
+) -> Result<Envelope<ContentResponse>, Error> {
+    let size = output.read_u32().await? as usize;
+    if size > MAX_FRAME_BYTES {
+        return Err(Error::Frame(crate::Error::TooLarge));
+    }
+    let mut bytes = vec![0; size];
+    output.read_exact(&mut bytes).await?;
+    let reply: Envelope<ContentResponse> = serde_json::from_slice(&bytes)?;
+    if reply.version != PROTOCOL_VERSION {
+        return Err(Error::InvalidResponse);
+    }
+    Ok(reply)
 }
 
 /// OS containment applied to a worker after it starts, held for its lifetime.
@@ -209,20 +285,21 @@ pub fn contain(_: &tokio::process::Child) -> Result<Containment, Error> {
 /// rest of the home directory are absent. The trusted supervisor chooses the path.
 #[cfg(target_os = "linux")]
 pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Command, Error> {
-    let mut command = persistent_sandbox(executable)?;
-    command
+    let mut sandbox = Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?;
+    sandbox
+        .0
         .arg("--bind")
         .arg(directory.canonicalize()?)
         .arg("/data");
-    command.args(["--", "/worker", "--database", "/data/history.sqlite3"]);
-    Ok(command)
+    Ok(sandbox.run(["--database", "/data/history.sqlite3"]))
 }
 
 /// Audio service sockets and ALSA devices only. No session credentials, home,
 /// D-Bus socket, or network namespace are granted to native audio/codec processing.
 #[cfg(target_os = "linux")]
 pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
-    let mut command = persistent_sandbox(executable)?;
+    let mut sandbox = Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?;
+    let command = &mut sandbox.0;
     command.args(["--dir", "/run/audio", "--dir", "/run/audio/pulse"]);
     // PulseAudio's directory is bound rather than its socket, so a restarted
     // server's new socket shows up inside. PipeWire's socket sits directly in
@@ -264,28 +341,68 @@ pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
             command.arg("--setenv").arg(name).arg(value);
         }
     }
-    command.args(["--", "/worker", "--live"]);
-    Ok(command)
+    Ok(sandbox.run(["--live"]))
 }
 
 #[cfg(target_os = "linux")]
-fn persistent_sandbox(executable: &Path) -> Result<Command, Error> {
-    // Reuse the exact helper discovery/runtime mounts of the content sandbox,
-    // but give long-lived workers no five-second lifetime CPU limit.
-    let template = content_sandbox_command(executable, &[])?;
-    let arguments = template
-        .as_std()
-        .get_args()
-        .map(OsString::from)
-        .collect::<Vec<_>>();
-    // content_sandbox_command: prlimit --as=... --cpu=5 -- bwrap ... -- /worker.
-    let bwrap = arguments.get(3).ok_or(Error::InvalidResponse)?;
-    let mut command = Command::new(template.as_std().get_program());
-    command.arg("--as=1073741824").arg("--").arg(bwrap);
-    let tail = &arguments[4..];
-    command.args(&tail[..tail.len().saturating_sub(2)]);
-    command.env_clear();
-    Ok(command)
+fn content_sandbox(
+    executable: &Path,
+    arguments: &[OsString],
+    cpu_seconds: u64,
+) -> Result<Command, Error> {
+    let limits = [CONTENT_MEMORY.into(), format!("--cpu={cpu_seconds}")];
+    Ok(Sandbox::new(executable, &limits)?.run(arguments))
+}
+
+/// Address-space limits (prlimit) for one-shot content workers and for the
+/// long-lived storage and media workers, which get no CPU-time limit.
+#[cfg(target_os = "linux")]
+const CONTENT_MEMORY: &str = "--as=536870912";
+#[cfg(target_os = "linux")]
+const PERSISTENT_MEMORY: &str = "--as=1073741824";
+
+/// The bubblewrap sandbox every Linux worker starts from, under prlimit: all
+/// namespaces unshared (no network), read-only system libraries, private
+/// /proc, /dev and /tmp, the worker at `/worker`, and an empty environment.
+/// Callers add their own bwrap options to `.0`; [`Sandbox::run`] ends them.
+#[cfg(target_os = "linux")]
+struct Sandbox(Command);
+
+#[cfg(target_os = "linux")]
+impl Sandbox {
+    fn new(executable: &Path, limits: &[String]) -> Result<Self, Error> {
+        fn helper(name: &'static str) -> Result<std::path::PathBuf, Error> {
+            std::env::var_os("PATH")
+                .into_iter()
+                .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+                .map(|directory| directory.join(name))
+                .find(|path| path.is_file())
+                .ok_or(Error::MissingSandboxHelper(name))
+        }
+
+        let mut command = Command::new(helper("prlimit")?);
+        command.args(limits).arg("--").arg(helper("bwrap")?);
+        command.args(["--die-with-parent", "--new-session", "--unshare-all"]);
+        for directory in ["/nix/store", "/usr/lib", "/usr/lib64", "/lib", "/lib64"] {
+            if Path::new(directory).exists() {
+                command.args(["--ro-bind", directory, directory]);
+            }
+        }
+        command.args(["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"]);
+        command
+            .arg("--ro-bind")
+            .arg(executable.canonicalize()?)
+            .arg("/worker");
+        command.args(["--chdir", "/tmp", "--clearenv"]);
+        command.env_clear();
+        Ok(Self(command))
+    }
+
+    /// The worker command line, after every bwrap option.
+    fn run(mut self, arguments: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> Command {
+        self.0.args(["--", "/worker"]).args(arguments);
+        self.0
+    }
 }
 
 /// macOS: Seatbelt profiles applied with `sandbox-exec`. Content and storage
@@ -343,11 +460,9 @@ fn sandbox_exec(
     Ok(command)
 }
 
+/// No CPU-time limit here: the per-request deadline bounds the worker.
 #[cfg(target_os = "macos")]
-pub fn content_sandbox_command(
-    executable: &Path,
-    arguments: &[OsString],
-) -> Result<Command, Error> {
+fn content_sandbox(executable: &Path, arguments: &[OsString], _: u64) -> Result<Command, Error> {
     let mut command = sandbox_exec(seatbelt::CONTENT, executable, &[])?;
     command.args(arguments);
     Ok(command)
@@ -400,11 +515,9 @@ fn windows_worker(executable: &Path) -> Command {
     command
 }
 
+/// No CPU-time limit here: the per-request deadline bounds the worker.
 #[cfg(windows)]
-pub fn content_sandbox_command(
-    executable: &Path,
-    arguments: &[OsString],
-) -> Result<Command, Error> {
+fn content_sandbox(executable: &Path, arguments: &[OsString], _: u64) -> Result<Command, Error> {
     let mut command = windows_worker(executable);
     command.args(arguments);
     Ok(command)
@@ -461,6 +574,41 @@ mod tests {
         }
         assert!(seatbelt::MEDIA.contains("(deny network*)"));
         assert!(seatbelt::MEDIA.contains("(deny file-write*)"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_workers_share_one_bwrap_setup() {
+        let executable = std::env::current_exe().unwrap();
+        let arguments = |command: tokio::process::Command| -> Vec<String> {
+            let arguments = command.as_std().get_args();
+            arguments.map(|a| a.to_string_lossy().into()).collect()
+        };
+        let content = arguments(super::content_sandbox(&executable, &["x".into()], 7).unwrap());
+        let storage = super::storage_sandbox_command(&executable, &std::env::temp_dir());
+        let storage = arguments(storage.unwrap());
+        let media = arguments(super::media_sandbox_command(&executable).unwrap());
+        assert_eq!(content[..3], ["--as=536870912", "--cpu=7", "--"]);
+        assert_eq!(storage[..2], ["--as=1073741824", "--"]);
+        assert_eq!(media[..2], ["--as=1073741824", "--"]);
+        for (command, worker) in [
+            (&content, &["/worker", "x"][..]),
+            (
+                &storage,
+                &["/worker", "--database", "/data/history.sqlite3"],
+            ),
+            (&media, &["/worker", "--live"]),
+        ] {
+            let end = command.iter().rposition(|a| a == "--").unwrap();
+            assert_eq!(&command[end + 1..], worker);
+            let options = &command[..end];
+            let position = |option: &str| options.iter().position(|a| a == option);
+            for option in ["--die-with-parent", "--unshare-all", "--clearenv"] {
+                assert!(position(option).is_some(), "{option} in {options:?}");
+            }
+            // Variables are set after the environment is cleared.
+            assert!(position("--setenv").is_none_or(|set| set > position("--clearenv").unwrap()));
+        }
     }
 
     /// Runs only on macOS: the profiles must actually load and confine.
