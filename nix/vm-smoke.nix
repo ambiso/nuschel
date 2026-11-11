@@ -55,6 +55,10 @@ pkgs.testers.runNixOSTest {
           pkgs.util-linux
           pkgs.xvfb-run
           pkgs.xdotool
+          # stock_client.py reads the stock window's chat from the clipboard;
+          # xwd keeps the screen of a failed run.
+          pkgs.xclip
+          pkgs.xwd
           pkgs.imagemagick
           pkgs.tesseract
           pkgs.pulseaudio
