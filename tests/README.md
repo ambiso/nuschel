@@ -47,6 +47,9 @@ local cache it leaves, in a private headless GNOME Shell). The client SDK withou
 UI: `with_local_nuscheld.py <binaries> sdk_headless.py <binaries> --port PORT` runs
 `crates/client/examples/headless.rs` (three people connect, register, meet in a
 channel, send, receive, edit, and load the server's history through the SDK alone).
+`readme_screenshot.py` (`just readme-screenshot`) makes the picture at the top of
+README.md the same way: a loopback `nuscheld`, scripted people, and the desktop in a
+private headless GNOME Shell, cropped to the window; check it before committing.
 
 `windows_vm.py` installs Windows 11 Enterprise (evaluation ISO from Microsoft)
 unattended into a KVM guest with two vCPUs and drives it through a PowerShell agent
