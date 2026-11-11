@@ -62,6 +62,17 @@ Later (reported):
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
       relays (perhaps a small chunk cache, content-defined chunking); resumable
       across restarts and lost connections; clearly shown while still uploading.
+      On Mumble servers (compatibility mode): send a magic-wormhole (wormhole-rs)
+      receive code in the message, refreshed after each pickup so the next person
+      can fetch a copy. Nuschel servers get their own, end-to-end encrypted design.
+- [ ] Decide whether Nuschel servers accept only Nuschel clients (legacy Mumble
+      clients cannot take part in MLS/E2EE features such as encrypted file sharing),
+      and whether servers require a current client like Signal does (a minimum
+      protocol version with a grace period), to avoid ecosystem fragmentation.
+- [ ] WebP and AVIF images, and video. WebP has a memory-safe decoder in the
+      `image` crate; AVIF and video decoders are C or heavily `unsafe` and belong in a
+      separate capability-limited worker.
+- [x] Server icons from the server's website favicon (Settings → Server icons).
 
 Limits review (user, 2026-11-11): hard limits are themselves an availability risk
 when chosen too low or handled badly (cf. sshd skipping work for long passwords).
