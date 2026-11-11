@@ -237,7 +237,7 @@ export class BrowserAudio {
     }
   }
   sendPacket(sequence,opus,end) {
-    if(!this.voice||sequence<0n||sequence>=(1n<<64n))return;
+    if(!this.voice||this.txJobs.size>=2||sequence<0n||sequence>=(1n<<64n))return;
     this.sequence=sequence+2n;
     const job=++this.job,epoch=this.epoch;
     const pending={epoch};this.txJobs.set(job,pending);
@@ -249,6 +249,11 @@ export class BrowserAudio {
       this.status("transport-error","The voice connection stopped accepting audio. Unmute to retry.");
     },250);
     let result;try{result=this.onPacket(packet);}catch(error){result=Promise.reject(error);}
+    if(!result||typeof result.then!=="function") {
+      clearTimeout(timeout);this.txJobs.delete(job);this.transportStalled=true;
+      this.stopCapture(true);this.resetMedia();this.applyPolicy();
+      this.status("transport-error","The voice bridge must acknowledge queued audio packets.");return;
+    }
     Promise.resolve(result).catch(()=>{
       if(this.epoch===epoch)this.status("transport-error","Voice could not be sent.");
     }).finally(()=>{
