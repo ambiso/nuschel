@@ -43,7 +43,7 @@ fn the_recovery_key_is_offered_once_and_skipping_deletes_the_root() {
     assert!(!again.created);
     assert_eq!(again.fingerprint, view.fingerprint);
     // The pending key survives a restart, until it is saved.
-    saved.restart();
+    saved = saved.restart();
     assert!(
         matches!(saved.ask(CryptoRequest::ShowRecoveryKey), CryptoResponse::RecoveryKey(k) if k == key)
     );
@@ -64,7 +64,7 @@ fn the_recovery_key_is_offered_once_and_skipping_deletes_the_root() {
     create(&mut skipped, RecoveryPolicy::Offer);
     let view = identity(&mut skipped, CryptoRequest::SkipRecoveryKey);
     assert!(!view.recovery_pending && !view.recoverable);
-    skipped.restart();
+    skipped = skipped.restart();
     let view = identity(&mut skipped, CryptoRequest::Identity);
     assert!(!view.recoverable && view.fingerprint.is_some());
 
@@ -147,7 +147,7 @@ async fn verification_holds_on_every_server_that_binds_the_same_identity() {
         server: bob.server.into(),
         account: on_x.account.to_vec(),
     });
-    bob.restart();
+    bob = bob.restart();
     let CryptoResponse::Contact(view) = bob.ask(CryptoRequest::ContactStatus {
         server: "y.example:64738".into(),
         account: on_y.account.to_vec(),

@@ -88,7 +88,7 @@ fn a_linked_device_holds_the_same_identity() {
     assert_eq!(linked.device_name, "phone");
     assert!(linked.created && linked.can_link);
     // Persisted: the phone reopens with the identity.
-    phone.restart();
+    phone = phone.restart();
     let reopened = view(phone.ask(CryptoRequest::Identity));
     assert_eq!(reopened.fingerprint, own.fingerprint);
     // A device with an identity cannot join another.

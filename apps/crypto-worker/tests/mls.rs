@@ -402,7 +402,7 @@ async fn archives_are_context_bound_authenticated_and_not_reassigned_to_other_ro
     );
     // Re-reading the same history row is idempotent. Assigning its signed record
     // to a different row is a replay, even after a worker restart.
-    bob.restart();
+    bob = bob.restart();
     assert!(matches!(
         read(&mut bob, seq + 10, archive.clone(), conversation()),
         CryptoResponse::MlsReceived(Received::Duplicate { .. })
@@ -426,8 +426,8 @@ async fn state_survives_a_worker_restart() {
     establish(&mut ds, &mut alice, alice_person.account, &mut bob);
     let seq = bob.say(&mut ds, 1, "before");
     assert_eq!(text_of(&alice.receive(&ds, seq)).0, "before");
-    alice.restart();
-    bob.restart();
+    alice = alice.restart();
+    bob = bob.restart();
     let view = alice.status();
     assert!(view.pinned);
     assert_eq!(view.cursor, seq);
@@ -835,6 +835,7 @@ fn worker_with(keystore: DeviceKeystore) -> Client {
     )
     .unwrap();
     store.save_keystore(&keystore).unwrap();
+    drop(store);
     let clock = Arc::new(AtomicU64::new(T0 + 1000));
     Client {
         worker: open_worker(directory.path(), clock.clone()),
@@ -1192,7 +1193,7 @@ async fn own_ciphertext_and_archives_keep_their_first_sequence_before_and_after_
         Received::Duplicate { .. }
     ));
     alice.sent([5; 16], seq);
-    alice.restart();
+    alice = alice.restart();
     assert!(matches!(
         alice.receive_bytes(seq + 10, ciphertext),
         Received::Duplicate { .. }
@@ -1204,7 +1205,7 @@ async fn own_ciphertext_and_archives_keep_their_first_sequence_before_and_after_
         alice.receive_bytes(seq + 10, ciphertext.clone()),
         Received::Duplicate { .. }
     ));
-    alice.restart();
+    alice = alice.restart();
     assert!(matches!(
         alice.receive_bytes(seq + 10, ciphertext),
         Received::Duplicate { .. }
@@ -1226,7 +1227,7 @@ async fn own_ciphertext_and_archives_keep_their_first_sequence_before_and_after_
     let seq = ds.send(&message).unwrap();
     alice.sent([9; 16], seq);
     assert!(matches!(alice.receive(&ds, seq), Received::Nothing { .. }));
-    alice.restart();
+    alice = alice.restart();
     assert!(matches!(
         alice.receive_bytes(seq + 10, message),
         Received::Duplicate { .. }

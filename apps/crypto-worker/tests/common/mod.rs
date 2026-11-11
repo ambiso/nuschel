@@ -66,8 +66,23 @@ impl Client {
     }
 
     /// The same device after a restart: the worker reopens its directory.
-    pub fn restart(&mut self) {
-        self.worker = open_worker(self.directory.path(), self.clock.clone());
+    pub fn restart(self) -> Self {
+        let Self {
+            worker,
+            clock,
+            account,
+            server,
+            directory,
+        } = self;
+        drop(worker);
+        let worker = open_worker(directory.path(), clock.clone());
+        Self {
+            worker,
+            clock,
+            account,
+            server,
+            directory,
+        }
     }
 
     pub fn at(&self, ms: u64) {

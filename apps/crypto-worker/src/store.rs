@@ -10,6 +10,8 @@
 //!
 //! Every write goes to a temporary file that is synced and renamed over the old one,
 //! so a crash leaves the old or the new version. Files are created 0600.
+//! An exclusive OS lock is held before any key or sealed file is opened, until
+//! the Store drops. Its persistent inode must never be removed on unlock.
 //!
 //! **Where the store key lives.** For now in `store.key` beside the sealed files. The
 //! OS credential store (Secret Service, Keychain, DPAPI) is the follow-up: the
@@ -38,6 +40,7 @@ pub enum KeySource {
 pub struct Store {
     directory: PathBuf,
     key: StoreKey,
+    _lock: fs::File,
 }
 
 fn read_bounded(path: &Path) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
@@ -81,6 +84,23 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
 impl Store {
     pub fn open(directory: &Path, source: KeySource) -> io::Result<Self> {
+        // Both key sources need a single owner: concurrent MLS/identity state
+        // writes can lose ratchet updates even if each rename is atomic.
+        let lock = private_options()
+            .read(true)
+            .create(true)
+            .truncate(false)
+            .open(directory.join("store.lock"))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "this crypto store is already in use by another worker",
+                ));
+            }
+            Err(fs::TryLockError::Error(error)) => return Err(error),
+        }
         let key = match source {
             KeySource::Supplied(key) => key,
             KeySource::File(path) => match read_bounded(&path)? {
@@ -104,6 +124,7 @@ impl Store {
         Ok(Self {
             directory: directory.to_owned(),
             key,
+            _lock: lock,
         })
     }
 
@@ -167,11 +188,13 @@ mod tests {
         let store = open();
         assert!(store.load("state").unwrap().is_none());
         store.save("state", b"{}").unwrap();
-        assert_eq!(&open().load("state").unwrap().unwrap()[..], b"{}");
+        drop(store);
+        let store = open();
+        assert_eq!(&store.load("state").unwrap().unwrap()[..], b"{}");
         let raw = fs::read(directory.path().join("state")).unwrap();
         assert!(!raw.windows(2).any(|w| w == b"{}"));
         #[cfg(unix)]
-        for name in ["store.key", "state"] {
+        for name in ["store.key", "store.lock", "state"] {
             use std::os::unix::fs::PermissionsExt as _;
             let mode = fs::metadata(directory.path().join(name))
                 .unwrap()
@@ -180,9 +203,131 @@ mod tests {
             assert_eq!(mode & 0o777, 0o600, "{name}");
         }
         // Another key cannot read it.
+        drop(store);
         fs::write(directory.path().join("store.key"), [9; 32]).unwrap();
-        assert!(open().load("state").is_err());
+        let store = open();
+        assert!(store.load("state").is_err());
         store.remove("state").unwrap();
         store.remove("state").unwrap();
+    }
+
+    #[test]
+    fn exclusive_ownership_precedes_key_access_and_reopen_keeps_the_lock_inode() {
+        let directory = tempfile::tempdir().unwrap();
+        let supplied = || KeySource::Supplied(StoreKey::from_bytes(&[7; 32]));
+        let store = Store::open(directory.path(), supplied()).unwrap();
+        store.save("state", b"original").unwrap();
+        let key_path = directory.path().join("store.key");
+        fs::write(&key_path, b"invalid key length").unwrap();
+        // Lock refusal must precede even an invalid key read, not just writes.
+        let error = Store::open(directory.path(), KeySource::File(key_path.clone()))
+            .err()
+            .expect("the live owner excludes a second reader/writer");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        let error = Store::open(directory.path(), supplied())
+            .err()
+            .expect("a supplied key cannot bypass ownership");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(fs::read(&key_path).unwrap(), b"invalid key length");
+        let lock_path = directory.path().join("store.lock");
+        #[cfg(unix)]
+        let inode = {
+            use std::os::unix::fs::MetadataExt;
+            fs::metadata(&lock_path).unwrap().ino()
+        };
+        let other = tempfile::tempdir().unwrap();
+        let _other_store = Store::open(other.path(), supplied()).unwrap();
+        drop(store);
+        assert!(lock_path.exists(), "unlock must not replace the lock inode");
+        let reopened = Store::open(directory.path(), supplied()).unwrap();
+        assert_eq!(&reopened.load("state").unwrap().unwrap()[..], b"original");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(fs::metadata(&lock_path).unwrap().ino(), inode);
+        }
+    }
+
+    #[test]
+    fn failed_key_loading_releases_ownership() {
+        let directory = tempfile::tempdir().unwrap();
+        let key_path = directory.path().join("store.key");
+        fs::write(&key_path, b"invalid").unwrap();
+        assert!(Store::open(directory.path(), KeySource::File(key_path)).is_err());
+        Store::open(
+            directory.path(),
+            KeySource::Supplied(StoreKey::from_bytes(&[8; 32])),
+        )
+        .expect("a failed startup must release its lock");
+    }
+
+    #[test]
+    fn exclusive_store_lock_child() {
+        let Some(path) = std::env::var_os("NUSCHL_STORE_LOCK_TEST_DIRECTORY") else {
+            return;
+        };
+        let directory = PathBuf::from(path);
+        let store = Store::open(&directory, KeySource::File(directory.join("store.key"))).unwrap();
+        store.save("state", b"child-owned state").unwrap();
+        fs::write(directory.join("ready"), b"ready").unwrap();
+        // The parent holds stdin open and kills us, exercising OS cleanup rather
+        // than Rust Drop. Never use a real profile or user identity in this test.
+        let mut byte = [0];
+        let _ = io::stdin().read(&mut byte);
+        drop(store);
+    }
+
+    #[test]
+    fn another_process_is_excluded_and_crash_releases_ownership() {
+        use std::{
+            process::{Child, Command, Stdio},
+            time::{Duration, Instant},
+        };
+        struct Owner(Child);
+        impl Drop for Owner {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let mut child = Owner(
+            Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "store::tests::exclusive_store_lock_child",
+                    "--nocapture",
+                ])
+                .env("NUSCHL_STORE_LOCK_TEST_DIRECTORY", directory.path())
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !directory.path().join("ready").exists() {
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "lock owner exited early"
+            );
+            assert!(Instant::now() < deadline, "lock owner did not become ready");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let key_path = directory.path().join("store.key");
+        let key_before = fs::read(&key_path).unwrap();
+        let error = Store::open(directory.path(), KeySource::File(key_path.clone()))
+            .err()
+            .expect("another process owns this store");
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        let reopened = Store::open(directory.path(), KeySource::File(key_path.clone()))
+            .expect("the OS releases the lock after process death");
+        assert_eq!(fs::read(&key_path).unwrap(), key_before);
+        assert_eq!(
+            &reopened.load("state").unwrap().unwrap()[..],
+            b"child-owned state"
+        );
     }
 }
