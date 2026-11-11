@@ -105,6 +105,9 @@ impl Render for Desktop {
             .when_some(crate::menus::prompt(self, cx), |view, prompt| {
                 view.child(prompt)
             })
+            .when_some(crate::viewer::overlay(self, window, cx), |view, viewer| {
+                view.child(viewer)
+            })
             .when_some(crate::menus::menu(self, cx), |view, menu| view.child(menu))
             .into_any_element();
         chrome::frame(window, content)
@@ -1465,7 +1468,7 @@ fn conversation(
                                                     .flex_col()
                                                     .gap_2()
                                                     .text_sm()
-                                                    .children(document_blocks(description)),
+                                                    .children(document_blocks(description, cx)),
                                             )
                                         },
                                     )
@@ -1906,7 +1909,7 @@ fn message_row(
                                 .flex_col()
                                 .flex_shrink_0()
                                 .gap_2()
-                                .children(document_blocks(&message.document)),
+                                .children(document_blocks(&message.document, cx)),
                         )
                         .when(clamped && message.has_more(), |content| {
                             // Fade the cut-off edge into the row background
@@ -2154,7 +2157,7 @@ fn security_icon(security: SessionSecurity, id: usize, size: f32) -> AnyElement 
         .into_any_element()
 }
 
-pub fn document_blocks(document: &Document) -> Vec<AnyElement> {
+pub fn document_blocks(document: &Document, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
     let count = document.blocks.len();
     document
         .blocks
@@ -2180,16 +2183,43 @@ pub fn document_blocks(document: &Document) -> Vec<AnyElement> {
                 image,
                 width,
                 height,
-            } => div()
-                .id(("image", index))
-                .w(px(*width as f32))
-                .h(px(*height as f32))
-                .rounded(px(8.))
-                .overflow_hidden()
-                .border_1()
-                .border_color(color(BORDER))
-                .child(img(image.clone()).size_full())
-                .into_any_element(),
+                source,
+            } => {
+                let shown = crate::viewer::ViewerImage {
+                    image: image.clone(),
+                    width: *width,
+                    height: *height,
+                    source: source.clone(),
+                };
+                let menu = shown.clone();
+                div()
+                    .id(("image", index))
+                    .role(Role::Image)
+                    .aria_label("Image (click to enlarge)")
+                    .tab_index(0)
+                    .w(px(*width as f32))
+                    .h(px(*height as f32))
+                    .rounded(px(8.))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(color(BORDER))
+                    .cursor_pointer()
+                    .hover(|style| style.border_color(color(ACCENT)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_viewer(shown.clone());
+                        cx.notify();
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            this.open_image_menu(menu.clone(), event.position);
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    )
+                    .child(img(image.clone()).size_full())
+                    .into_any_element()
+            }
             Block::Code { language, runs } => {
                 let mut source = String::new();
                 let mut highlights = Vec::new();

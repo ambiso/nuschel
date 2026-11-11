@@ -494,6 +494,13 @@ pub struct Desktop {
     /// Whether Nuschel starts at login, read from the system when Settings opens.
     pub autostart: Option<bool>,
     pub update: crate::update::UpdateState,
+    /// Desktop notifications, and whether the window has focus.
+    notes: tokio::sync::mpsc::Sender<crate::notify::Note>,
+    window_active: bool,
+    /// The image viewer, its request counter, and the image a context menu is for.
+    pub viewer: Option<crate::viewer::Viewer>,
+    pub viewer_requests: u64,
+    pub menu_image: Option<crate::viewer::ViewerImage>,
     pub menu: Option<crate::menus::Menu>,
     pub prompt: Option<crate::menus::Prompt>,
     pub panel: Option<Panel>,
@@ -556,6 +563,9 @@ impl Desktop {
                 },
             );
         let settings = profile.load_settings().unwrap_or_default();
+        let activation = cx.observe_window_activation(window, |this: &mut Self, window, _| {
+            this.window_active = window.is_window_active();
+        });
         let poll = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -578,6 +588,7 @@ impl Desktop {
             navigation: Navigation::default(),
             expansion: BTreeMap::new(),
             history_enabled: true,
+            notes: crate::notify::start(&handle),
             backend: Backend::new(handle, profile.clone(), settings.clone()),
             profile,
             form: None,
@@ -595,6 +606,10 @@ impl Desktop {
             preview: None,
             autostart: None,
             update: Default::default(),
+            window_active: true,
+            viewer: None,
+            viewer_requests: 0,
+            menu_image: None,
             menu: None,
             prompt: None,
             panel: None,
@@ -611,7 +626,7 @@ impl Desktop {
             acknowledged: Vec::new(),
             passwords: BTreeMap::new(),
             drafts: BTreeMap::new(),
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, activation],
             _poll: poll,
         };
         if !desktop.servers.is_empty() {
@@ -1396,6 +1411,10 @@ impl Desktop {
     }
     /// Returns true when the key was consumed by push-to-talk or key recording.
     pub fn key_down(&mut self, keystroke: &Keystroke) -> bool {
+        if keystroke.key == "escape" && self.viewer.is_some() && self.menu.is_none() {
+            self.viewer = None;
+            return true;
+        }
         if keystroke.key == "escape"
             && !self.recording_ptt
             && (self.form.is_some()
@@ -2044,6 +2063,21 @@ impl Desktop {
                         server.audio.noise = noise;
                     }
                 }
+                Event::Viewed { request, document } => {
+                    let image = document.and_then(|document| {
+                        document.blocks.into_iter().find_map(|block| match block {
+                            nuschel_core::ContentBlock::Image {
+                                width,
+                                height,
+                                rgba,
+                                ..
+                            } => crate::document::render_image(width, height, &rgba)
+                                .map(|image| (image, width, height)),
+                            _ => None,
+                        })
+                    });
+                    self.viewed(request, image);
+                }
                 Event::Update(event) => {
                     use crate::update::{UpdateEvent, UpdateState};
                     match event {
@@ -2171,6 +2205,71 @@ impl Desktop {
                     } else {
                         continue;
                     };
+                    // A desktop notification for what arrives out of sight.
+                    if !message.outgoing && self.settings.notifications {
+                        let voice = server.voice_channel();
+                        let channel = &server.channels[index];
+                        let shown = self.window_active
+                            && self.navigation.selection().is_some_and(|selected| {
+                                selected.server == server.id && selected.channel == channel.id
+                            });
+                        let direct = matches!(target, TextTarget::Direct(_));
+                        let in_voice =
+                            matches!(channel.target, TextTarget::Channel(id) if Some(id) == voice);
+                        let mut text = String::new();
+                        let mut image = None;
+                        for block in &message.document.blocks {
+                            match block {
+                                nuschel_core::ContentBlock::Text { text: part } => {
+                                    text.push_str(part)
+                                }
+                                nuschel_core::ContentBlock::Code { runs, .. } => {
+                                    runs.iter().for_each(|run| text.push_str(&run.text))
+                                }
+                                nuschel_core::ContentBlock::Image {
+                                    width,
+                                    height,
+                                    rgba,
+                                    ..
+                                } if image.is_none() => {
+                                    use base64::Engine as _;
+                                    image = base64::engine::general_purpose::STANDARD
+                                        .decode(rgba)
+                                        .ok()
+                                        .filter(|pixels| {
+                                            pixels.len() == (*width * *height * 4) as usize
+                                        })
+                                        .map(|pixels| (*width, *height, pixels));
+                                }
+                                _ => {}
+                            }
+                        }
+                        let mentioned = crate::notify::mentions(&text, &server.bookmark.username);
+                        tracing::debug!(
+                            shown,
+                            direct,
+                            in_voice,
+                            mentioned,
+                            "message notification check"
+                        );
+                        if !shown && (direct || in_voice || mentioned) {
+                            let author = message.message.author.clone();
+                            let preview = crate::notify::preview(&text);
+                            let _ = self.notes.try_send(crate::notify::Note {
+                                key: format!("{}:{}", server.id, channel.id),
+                                summary: if direct {
+                                    author
+                                } else {
+                                    format!("{author} in {}", channel.name)
+                                },
+                                body: match (preview.is_empty(), image.is_some()) {
+                                    (true, true) => "Sent an image".into(),
+                                    _ => preview,
+                                },
+                                image,
+                            });
+                        }
+                    }
                     let channel = &mut server.channels[index];
                     if matches!(target, TextTarget::Direct(_)) {
                         channel.target = target;

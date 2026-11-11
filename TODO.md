@@ -82,6 +82,9 @@ are not concealed (`apps/media-worker/src/live.rs`).
 - [ ] Nuschel records nothing from PulseAudio's `module-sine-source`, and its own
       playback is silent while it records the monitor of the sink it plays into.
       Both found in test rigs; check the PulseAudio client's stream setup.
+- [ ] Desktop notifications on Windows (toasts need an AppUserModelID) and macOS
+      (UNUserNotificationCenter); Linux uses the freedesktop service. Clicking a
+      notification does not open the conversation yet.
 - [ ] Decide whether mute/deafen can avoid replacing the media worker (it currently
       restarts it so a blocked native stream teardown cannot keep the microphone open).
       Keep the restart as fallback; measure the audible gap.

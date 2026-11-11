@@ -26,6 +26,9 @@ pub enum Error {
 /// the IPC frame limit, so the total decoded size per document is capped.
 pub const MAX_IMAGE_WIDTH: u32 = 360;
 pub const MAX_IMAGE_HEIGHT: u32 = 270;
+/// The image viewer's size limit (its RGBA reply must fit one worker frame).
+pub const VIEW_WIDTH: u32 = 1600;
+pub const VIEW_HEIGHT: u32 = 1000;
 const MAX_IMAGES: usize = 8;
 const MAX_DOCUMENT_PIXELS_BYTES: usize = 640 * 1024;
 const MAX_SOURCE_DIMENSION: u32 = 4096;
@@ -49,14 +52,24 @@ pub fn decode_image(bytes: &[u8], max_width: u32, max_height: u32) -> Option<Con
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
     let image = reader.decode().ok()?;
-    let thumbnail = image
-        .thumbnail(max_width.max(1), max_height.max(1))
-        .to_rgba8();
+    // Shrink only: `thumbnail` would also enlarge a small image.
+    let thumbnail = if image.width() > max_width || image.height() > max_height {
+        image.thumbnail(max_width.max(1), max_height.max(1))
+    } else {
+        image
+    }
+    .to_rgba8();
     Some(ContentBlock::Image {
         width: thumbnail.width(),
         height: thumbnail.height(),
         rgba: base64::engine::general_purpose::STANDARD.encode(thumbnail.as_raw()),
+        source: None,
     })
+}
+
+/// Decode an inline `data:` image for the viewer, up to `VIEW_WIDTH` × `VIEW_HEIGHT`.
+pub fn decode_view(uri: &str) -> Option<ContentBlock> {
+    decode_image(&data_uri(uri)?, VIEW_WIDTH, VIEW_HEIGHT)
 }
 
 /// Parse `data:image/<type>;base64,<payload>`; nothing else is accepted.
@@ -292,9 +305,16 @@ fn expand_embeds(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
                     _ => false,
                 });
             match decoded {
-                Some(image) => {
-                    if let ContentBlock::Image { width, height, .. } = &image {
+                Some(mut image) => {
+                    if let ContentBlock::Image {
+                        width,
+                        height,
+                        source,
+                        ..
+                    } = &mut image
+                    {
                         budget -= (*width * *height * 4) as usize;
+                        *source = Some(embed.chars().filter(|c| !c.is_whitespace()).collect());
                     }
                     images += 1;
                     if !pending.is_empty() {

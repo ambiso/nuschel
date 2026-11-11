@@ -64,6 +64,10 @@ pub enum ContentBlock {
         width: u32,
         height: u32,
         rgba: String,
+        /// The `data:` URI the image came from, for a larger view (decoded again
+        /// by the worker) and for saving the original file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
 }
 

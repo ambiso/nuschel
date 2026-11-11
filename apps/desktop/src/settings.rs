@@ -832,6 +832,22 @@ pub fn dialog(
         ),
     ];
     let mut general = general;
+    let notifications = settings.notifications;
+    general.push(toggle(
+        "notifications",
+        "Desktop notifications",
+        if cfg!(target_os = "linux") {
+            "Direct messages, your voice channel and mentions of your name, while Nuschel is not in front."
+        } else {
+            "Not available on this system yet."
+        }
+        .into(),
+        notifications,
+        Rc::new(move |this, _, _| {
+            this.update_settings(|settings| settings.notifications = !notifications)
+        }),
+        cx,
+    ));
     if crate::update::supported() {
         use crate::update::UpdateState;
         let check = settings.check_updates;

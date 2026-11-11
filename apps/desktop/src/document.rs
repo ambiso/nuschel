@@ -17,6 +17,8 @@ pub enum Block {
         image: Arc<RenderImage>,
         width: u32,
         height: u32,
+        /// The original `data:` URI (viewer and Save as), when known.
+        source: Option<Arc<str>>,
     },
 }
 
@@ -56,11 +58,13 @@ impl From<MessageDocument> for Document {
                         width,
                         height,
                         rgba,
+                        source,
                     } => match render_image(width, height, &rgba) {
                         Some(image) => Block::Image {
                             image,
                             width,
                             height,
+                            source: source.map(Arc::from),
                         },
                         None => Block::Text("[image]".into()),
                     },
@@ -68,6 +72,34 @@ impl From<MessageDocument> for Document {
                 .collect(),
         }
     }
+}
+
+/// The file inside an inline `data:image/...;base64,` URI: its bytes and the
+/// extension for its type. Only base64 (with Mumble's percent-encoding) is
+/// decoded here; the image format itself is never parsed in this process.
+pub fn data_uri_file(uri: &str) -> Option<(Vec<u8>, &'static str)> {
+    let rest = uri.trim().strip_prefix("data:image/")?;
+    let (kind, payload) = rest.split_once(";base64,")?;
+    let extension = match kind.to_ascii_lowercase().as_str() {
+        "png" => "png",
+        "jpeg" | "jpg" => "jpg",
+        "gif" => "gif",
+        _ => return None,
+    };
+    let mut text = String::with_capacity(payload.len());
+    let mut chars = payload.chars().filter(|c| !c.is_whitespace());
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            text.push(u8::from_str_radix(&hex, 16).ok()? as char);
+        } else {
+            text.push(c);
+        }
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .ok()?;
+    Some((bytes, extension))
 }
 
 impl Document {
@@ -86,6 +118,16 @@ mod tests {
     use nuschel_core::{ContentBlock, MessageDocument};
 
     #[test]
+    fn saved_images_keep_their_bytes_and_type() {
+        // Mumble percent-encodes the base64 text: [0xfb, 0xff, 0x00] is "+/8A".
+        let (bytes, extension) = super::data_uri_file("data:image/PNG;base64,%2B%2F8A").unwrap();
+        assert_eq!(extension, "png");
+        assert_eq!(bytes, [0xfb, 0xff, 0x00]);
+        assert!(super::data_uri_file("data:image/svg+xml;base64,PHN2Zz4=").is_none());
+        assert!(super::data_uri_file("https://example.invalid/a.png").is_none());
+    }
+
+    #[test]
     fn converts_worker_images_and_rejects_inconsistent_sizes() {
         let rgba = base64::engine::general_purpose::STANDARD.encode([1, 2, 3, 4, 5, 6, 7, 8]);
         assert!(render_image(2, 1, &rgba).is_some());
@@ -96,6 +138,7 @@ mod tests {
                 width: 9,
                 height: 9,
                 rgba,
+                source: None,
             }],
         });
         assert!(matches!(document.blocks[0], Block::Text(ref text) if text == "[image]"));

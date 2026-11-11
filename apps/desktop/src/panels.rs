@@ -234,7 +234,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             let comment = server_view
                 .comments
                 .get(session)
-                .map(|(_, document)| document_blocks(document));
+                .map(|(_, document)| document_blocks(document, cx));
             let body = div()
                 .px_6()
                 .pb_6()

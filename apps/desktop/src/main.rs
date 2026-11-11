@@ -11,6 +11,7 @@ mod dialogs;
 mod document;
 mod global_ptt;
 mod menus;
+mod notify;
 mod panels;
 mod preview;
 mod scrolling;
@@ -19,6 +20,7 @@ mod state;
 mod theme;
 mod update;
 mod view;
+mod viewer;
 
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 

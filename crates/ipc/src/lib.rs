@@ -12,7 +12,8 @@ use thiserror::Error;
 
 pub const PROTOCOL_VERSION: u16 = 1;
 /// Large enough for a maximal message (256 KiB) after worst-case JSON escaping.
-pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+/// Large enough for the image viewer's RGBA reply (1600×1000, base64).
+pub const MAX_FRAME_BYTES: usize = 12 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +42,9 @@ pub struct ContentRequest {
     /// `text` is a base64-encoded avatar image to decode into a small thumbnail.
     #[serde(default)]
     pub avatar: bool,
+    /// `text` is an inline `data:` image to decode at the viewer's size.
+    #[serde(default)]
+    pub view: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

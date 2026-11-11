@@ -25,6 +25,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| {
                     ContentResponse::Rejected("unsupported or invalid avatar image".into())
                 }))
+        } else if request.payload.view {
+            Ok(nuschel_content::decode_view(&request.payload.text)
+                .map(|image| {
+                    ContentResponse::Rendered(nuschel_core::MessageDocument {
+                        blocks: vec![image],
+                    })
+                })
+                .unwrap_or_else(|| {
+                    ContentResponse::Rejected("unsupported or invalid image".into())
+                }))
         } else if request.payload.legacy_html {
             renderer
                 .legacy_plain_text(&request.payload.text)

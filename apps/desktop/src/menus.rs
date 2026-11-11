@@ -26,6 +26,8 @@ pub enum MenuTarget {
     User(u32),
     Channel(u32),
     Server,
+    /// An image in a message (`Desktop::menu_image`).
+    Image,
 }
 
 pub struct Menu {
@@ -107,7 +109,7 @@ impl Desktop {
             let channel = match target {
                 MenuTarget::Channel(channel) => Some(channel),
                 MenuTarget::User(session) => view.users.get(&session).map(|user| user.channel),
-                MenuTarget::Server => None,
+                MenuTarget::Server | MenuTarget::Image => None,
             };
             for channel in channel.into_iter().chain([0]) {
                 if !view.permissions.contains_key(&channel) {
@@ -338,6 +340,21 @@ impl Desktop {
         let my_channel = server.voice_channel();
         let mut entries = Vec::new();
         match menu.target {
+            MenuTarget::Image => {
+                if let Some(image) = self.menu_image.clone() {
+                    let viewed = image.clone();
+                    if self.viewer.is_none() {
+                        entries.push(item("Open image", "search", move |this, _, _| {
+                            this.open_viewer(viewed.clone())
+                        }));
+                    }
+                    if image.source.is_some() {
+                        entries.push(item("Save image as…", "record", move |this, _, cx| {
+                            this.save_image(&image, cx)
+                        }));
+                    }
+                }
+            }
             MenuTarget::User(session) => {
                 let Some(user) = server.users.get(&session).cloned() else {
                     return entries;

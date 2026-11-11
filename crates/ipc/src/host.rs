@@ -85,6 +85,22 @@ pub async fn decode_avatar(executable: &Path, encoded: &[u8]) -> Result<MessageD
             text,
             legacy_html: false,
             avatar: true,
+            view: false,
+        },
+    )
+    .await?
+    .document)
+}
+
+/// Decode an inline image at the viewer's size in the sandboxed content worker.
+pub async fn decode_view(executable: &Path, uri: &str) -> Result<MessageDocument, Error> {
+    Ok(exchange(
+        executable,
+        ContentRequest {
+            text: uri.to_owned(),
+            legacy_html: false,
+            avatar: false,
+            view: true,
         },
     )
     .await?
@@ -102,6 +118,7 @@ pub async fn prepare_content(
             text: text.to_owned(),
             legacy_html,
             avatar: false,
+            view: false,
         },
     )
     .await

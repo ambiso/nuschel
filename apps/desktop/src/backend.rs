@@ -112,6 +112,11 @@ pub enum Event {
     /// The local audio check in Settings.
     Preview(crate::preview::Event),
     Update(crate::update::UpdateEvent),
+    /// The image viewer's larger decode (`None` if the worker refused it).
+    Viewed {
+        request: u64,
+        document: Option<MessageDocument>,
+    },
     Echo {
         server: String,
         generation: u64,
@@ -250,6 +255,17 @@ impl Backend {
     /// Closing the sender lets the task shut its worker down cleanly.
     pub fn stop_preview(&mut self) {
         self.preview.take();
+    }
+    /// Decode an inline image at the viewer's size in the sandboxed content worker.
+    pub fn decode_view(&self, request: u64, uri: String) {
+        let events = self.sender.clone();
+        self.handle.spawn(async move {
+            let document = match workers::sibling("nuschel-content-worker") {
+                Ok(worker) => nuschel_ipc::host::decode_view(&worker, &uri).await.ok(),
+                Err(_) => None,
+            };
+            let _ = events.send(Event::Viewed { request, document }).await;
+        });
     }
     /// Ask the release server for a newer version now.
     pub fn check_update(&self) {

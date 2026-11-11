@@ -38,6 +38,18 @@ ECHO_TEST_BUTTON = (862, 225)
 SERVER_SETTINGS_BUTTON = (279, 86)
 LOBBY_CHEVRON = (129, 234)
 SIDEBAR_EDGE = (346, 400)
+# The screenshot sent into #Development, and the Lobby row.
+CHAT_IMAGE = (580, 670)
+LOBBY_ROW = (189, 233)
+
+
+# GNOME Shell exports its freedesktop notification daemon but, headless, never
+# claims the bus name: claim it, so Nuschel's notifications reach the real one.
+CLAIM_NOTIFICATIONS = """
+imports.gi.Gio.bus_own_name_on_connection(imports.gi.Gio.DBus.session,
+    'org.freedesktop.Notifications', 0, null, null);
+'ok'
+"""
 
 
 def make_png(path, width, seed, height=None):
@@ -67,7 +79,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,clipping,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,clipping,viewer,notify,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -117,7 +129,7 @@ def main():
             second = {"id": str(uuid.uuid4()), "name": "Friends", "host": "127.0.0.1",
                       "port": 1, "username": "Andi", "certificate_sha256": None, "cached_channels": []}
             (profile / "config/servers.json").write_text(json.dumps([bookmark, second]))
-            env = shell.app_environment() | {"RUST_LOG": "nuschel=info"}
+            env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHEL_SCREENSHOT_LOG", "nuschel=info")}
             log = (args.output / "desktop.log").open("w")
             app = subprocess.Popen([str(args.binaries / "nuschel"), "--profile-dir", str(profile),
                                     f"mumble://Andi@127.0.0.1:{port}/Lobby/Development"],
@@ -272,6 +284,44 @@ def main():
                     time.sleep(0.4)
                 finally:
                     os.killpg(player.pid, signal.SIGTERM)
+            if want("viewer"):
+                click(*CHAT_IMAGE)
+                time.sleep(2.0)
+                shot("17-viewer")
+                click(width // 2, height // 2 - 40, button=3)  # right-click the enlarged image
+                time.sleep(0.8)
+                shot("18-image-menu")
+                shell.key("Escape")
+                time.sleep(0.3)
+                shell.key("Escape")
+                time.sleep(0.5)
+            if want("notify"):
+                shell.eval(CLAIM_NOTIFICATIONS)
+                andi = next(e["user"]["session"] for e in reversed(bots[1].events)
+                            if e["kind"] == "user" and e["user"]["name"] == "Andi")
+                click(*LOBBY_ROW)  # look at another channel: Development is out of sight
+                time.sleep(0.8)
+                bots[1].send(kind="direct", session=andi, body="hey Andi, <b>got a minute</b>? & more")
+                time.sleep(2.0)
+                path = shell.screenshot(args.output / "19-notification-direct.png")
+                print(path, flush=True)
+                bots[0].send(kind="html", channel=2,
+                             html=f"<img src=\"data:image/PNG;base64,{mumble_image}\" />")
+                time.sleep(2.0)
+                path = shell.screenshot(args.output / "20-notification-image.png")
+                print(path, flush=True)
+                failures = [line for line in (args.output / "desktop.log").read_text().splitlines()
+                            if "notification failed" in line]
+                assert not failures, failures
+                received = json.loads(shell.eval(
+                    "JSON.stringify(Main.messageTray.getSources().flatMap(source => source.notifications"
+                    ".map(note => ({title: note.title, body: note.body, gicon: Boolean(note.gicon)}))))"))
+                print("GNOME received:", received, flush=True)
+                # GNOME keeps the body as markup: the message's own tags must arrive escaped.
+                assert any(note["title"] == "Grace"
+                           and "&lt;b&gt;got a minute&lt;/b&gt;? &amp; more" in note["body"]
+                           for note in received), received
+                assert any(note["title"].endswith("in Development") and note["gicon"] for note in received), received
             if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)
