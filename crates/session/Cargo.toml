@@ -11,6 +11,7 @@ publish.workspace = true
 nuschel-core.workspace = true
 nuschel-client.workspace = true
 nuschel-ipc.workspace = true
+nuschel-legacy-html.workspace = true
 nuschel-protocol.workspace = true
 bytes = "1.12.1"
 prost = "0.14.4"

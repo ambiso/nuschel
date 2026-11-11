@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 nuschel-protocol.workspace = true
 nuschel-ipc.workspace = true
+nuschel-legacy-html.workspace = true
 argon2 = { version = "0.5.3", default-features = false, features = [
   "alloc",
   "password-hash",
