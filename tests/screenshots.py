@@ -92,8 +92,10 @@ PATCH_WORD = (536, 254)
 PRINTLN_WORD = (478, 350)
 GOOD_WORD = (472, 450)
 SHIP_END = (464, 474)
-# In the math scene's second message (the Gaussian integral).
+# In the math scene's second message (the Gaussian integral), and the Render
+# math switch in Settings, scrolled five steps up from the end.
 MATH_MESSAGE = (520, 330)
+RENDER_MATH = (886, 143)
 # In the message the links scene sends: "the guide" and "come to the Lobby".
 GUIDE_LINK = (497, 684)
 LOBBY_LINK = (835, 684)
@@ -429,8 +431,30 @@ def main():
                 click(MATH_MESSAGE[0] + 60, MATH_MESSAGE[1] + 22)  # "Copy message"
                 time.sleep(0.4)
                 copied = clipboard()
-                assert copied == ("The Gaussian integral:\n$$\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = "
-                                  "\\sqrt{\\pi}$$\nwith a fraction $\\frac{a+b}{2}$ inline, between the lines."), copied
+                # Whichever message is under the pointer (at another zoom, another one).
+                typed = [
+                    "Euler: $e^{i\\pi} + 1 = 0$, and a circle's area is $A = \\pi r^2$. "
+                    "It costs $5 and $10; `$HOME` is code.",
+                    "The Gaussian integral:\n$$\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}$$\n"
+                    "with a fraction $\\frac{a+b}{2}$ inline, between the lines.",
+                    "Cases: $$f(x) = \\begin{cases} x^2 & x \\ge 0 \\\\ -x & \\text{otherwise} "
+                    "\\end{cases}$$ and a typo: $\\frac{1}$ next to $\\sum_{i=1}^n i$.",
+                ]
+                assert copied in typed, copied
+                print(f"Copy message gave the message as typed: {copied!r}", flush=True)
+                # Settings > Appearance > Render math.
+                click(239, 773)  # Settings
+                time.sleep(1.0)
+                wheel(640, 400, 40)
+                time.sleep(1.2)
+                wheel(640, 400, -5)
+                time.sleep(0.8)
+                shot("62-math-setting")
+                click(*RENDER_MATH)  # off: formulas show as typed
+                time.sleep(0.6)
+                shell.key("Escape")
+                time.sleep(1.0)
+                shot("63-math-off")
 
             if want("multiline"):
                 # A paragraph that wraps over three rows, and three lines in one message.
