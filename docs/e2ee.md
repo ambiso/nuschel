@@ -1179,6 +1179,8 @@ on flash become unreadable once the old key is gone from the OS credential store
    devices the user marks? Phones later?
 3. **Key transparency backend**: `akd` now (recommended), or wait for KEYTRANS and
    implement it ourselves?
+   *(Decided by the user, 2026-11-11: akd. Open follow-up: witnessing across
+   federated servers, see docs/reviews/2026-11-11-key-transparency.md once written.)*
 4. **Channel membership**: subscribers with lazy external joins (recommended), or every
    device with `can_read`?
 5. **History grants**: should `members` channels grant history to every admitted member
