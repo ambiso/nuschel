@@ -9,7 +9,7 @@ use crate::{
 };
 use nuschel_protocol::{
     control as proto,
-    nuschel::{self, Id, capability, v1},
+    nuschel::{self, Id, capability, v1, version},
 };
 use std::{
     collections::{BTreeSet, HashMap},
@@ -55,7 +55,7 @@ impl Capabilities {
 pub struct MissingHello;
 
 /// What a connection has negotiated before authenticating.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Negotiation {
     /// No `nuschel/1` ALPN: a stock connection; field 7200 is ignored.
     #[default]
@@ -63,7 +63,11 @@ pub enum Negotiation {
     /// ALPN selected `nuschel/1`, but the client's hello has not arrived.
     Offered,
     /// Both hellos are present; frozen.
-    Agreed(Capabilities),
+    Agreed {
+        capabilities: Capabilities,
+        /// The version the client reports (semver), if it is one.
+        client: Option<version::Version>,
+    },
 }
 
 impl Negotiation {
@@ -88,19 +92,37 @@ impl Negotiation {
         }
         if let Some(hello) = nuschel::hello(body)? {
             let theirs = Capabilities::from_names(hello.capabilities.iter().map(String::as_str));
-            *self = Self::Agreed(Capabilities(theirs.0 & server.0));
+            *self = Self::Agreed {
+                capabilities: Capabilities(theirs.0 & server.0),
+                client: version::parse(&hello.client_version),
+            };
         }
         Ok(())
     }
 
     /// At `Authenticate`: the extension's capabilities, `Ok(None)` for a stock
     /// connection, or `Err` when ALPN said `nuschel/1` but no hello came.
-    pub fn freeze(self) -> Result<Option<Capabilities>, MissingHello> {
+    pub fn freeze(&self) -> Result<Option<Capabilities>, MissingHello> {
         match self {
             Self::Stock => Ok(None),
             Self::Offered => Err(MissingHello),
-            Self::Agreed(capabilities) => Ok(Some(capabilities)),
+            Self::Agreed { capabilities, .. } => Ok(Some(*capabilities)),
         }
+    }
+
+    /// At `Authenticate`: why a Nuschel client is refused under the
+    /// minimum-version policy at `now` (Unix seconds), if it is. Stock
+    /// connections never are: the security mode decides about them.
+    pub fn refusal(&self, settings: &Settings, now: i64) -> Option<String> {
+        let Self::Agreed { client, .. } = self else {
+            return None;
+        };
+        let minimum = settings.minimum_client?;
+        (now >= settings.minimum_client_from.unwrap_or(0)
+            && version::below(client.as_ref(), minimum))
+        .then_some(minimum)
+        .and_then(version::from_wire)
+        .map(|minimum| version::refusal(&minimum))
     }
 }
 
@@ -192,6 +214,7 @@ pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>) -> v1::Hello {
         protocol: nuschel::PROTOCOL,
         capabilities: server_capabilities(kt_log.is_some()).names(),
         kt_log: kt_log.map(<[u8]>::to_vec).unwrap_or_default(),
+        client_version: String::new(),
         policy: Some(v1::Policy {
             mode: v1::policy::Mode::Compatible as i32,
             minimum_client: settings.minimum_client.unwrap_or(0),
@@ -204,6 +227,10 @@ pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>) -> v1::Hello {
             edit_limit: history.edit_limit,
             moderators_delete: history.moderators_delete,
             live_only,
+            minimum_client_from: settings
+                .minimum_client
+                .and(settings.minimum_client_from)
+                .unwrap_or(0),
         }),
     }
 }
@@ -219,11 +246,16 @@ mod tests {
     use nuschel_protocol::HEADER_BYTES;
 
     fn hello_body(capabilities: &[&str]) -> Vec<u8> {
+        hello_body_from(capabilities, "")
+    }
+
+    fn hello_body_from(capabilities: &[&str], client_version: &str) -> Vec<u8> {
         let hello = v1::Hello {
             protocol: nuschel::PROTOCOL,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
+            client_version: client_version.into(),
         };
         nuschel::version_frame(&proto::Version::default(), Some(&hello)).unwrap()[HEADER_BYTES..]
             .to_vec()
@@ -267,6 +299,61 @@ mod tests {
         // A malformed hello is an error.
         let mut bad = Negotiation::from_alpn(Some(nuschel::ALPN));
         assert!(bad.version(&hello_body(&["BAD"]), server).is_err());
+    }
+
+    #[test]
+    fn old_nuschel_clients_are_refused_from_the_date_and_stock_clients_never() {
+        let settings = |extra: &str| {
+            Config::from_toml(&format!("[history]\n{extra}"))
+                .unwrap()
+                .settings()
+                .unwrap()
+        };
+        let agreed = |client_version: &str| {
+            let mut negotiation = Negotiation::from_alpn(Some(nuschel::ALPN));
+            negotiation
+                .version(
+                    &hello_body_from(&["history/1"], client_version),
+                    server_capabilities(true),
+                )
+                .unwrap();
+            negotiation
+        };
+        let graced = settings("minimum_client = \"0.3.0\"\nminimum_client_from = \"1970-01-02\"");
+        let old = agreed("0.2.9");
+        assert_eq!(
+            old.refusal(&graced, 86_399),
+            None,
+            "admitted until the date"
+        );
+        assert_eq!(
+            old.refusal(&graced, 86_400).as_deref(),
+            Some("This server requires Nuschel 0.3.0 or newer. Update Nuschel to connect.")
+        );
+        assert_eq!(agreed("0.3.0").refusal(&graced, 86_400), None);
+        assert_eq!(agreed("0.10.0").refusal(&graced, 86_400), None);
+        assert!(agreed("0.3.0-rc.1").refusal(&graced, 86_400).is_some());
+        // A client that reports no version (or garbage) is older than any minimum.
+        assert!(agreed("").refusal(&graced, 86_400).is_some());
+        assert!(agreed("new").refusal(&graced, 86_400).is_some());
+        // Stock connections are never refused for their version.
+        let mut stock = Negotiation::from_alpn(None);
+        stock
+            .version(&hello_body_from(&[], "0.0.1"), server_capabilities(true))
+            .unwrap();
+        assert_eq!(stock.refusal(&graced, i64::MAX), None);
+        // Without a minimum nobody is refused; without a date, at once.
+        assert_eq!(old.refusal(&settings(""), i64::MAX), None);
+        assert!(
+            old.refusal(&settings("minimum_client = \"0.3.0\""), 0)
+                .is_some()
+        );
+        // The hello announces the date only with a minimum.
+        let hello = server_hello(&graced, None).policy.unwrap();
+        assert_eq!(
+            (hello.minimum_client, hello.minimum_client_from),
+            (0x0000_0003_0000_0000, 86_400)
+        );
     }
 
     #[test]

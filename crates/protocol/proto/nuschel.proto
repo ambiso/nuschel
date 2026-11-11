@@ -22,6 +22,10 @@ message Hello {
   // key-transparency log (nuschel-kt `LogDescriptor`, at most 512 bytes).
   // Clients pin it like the server (docs/e2ee.md §5.1).
   bytes kt_log = 4;
+  // Only from clients: the client's own version, semver ("0.3.0", at most 64
+  // bytes), compared with the server's `minimum_client`. Self-reported; a
+  // missing or unparsable version is below every minimum.
+  string client_version = 5;
 }
 
 message Policy {
@@ -35,8 +39,11 @@ message Policy {
     GUESTS_FULL = 1;
   }
   Mode mode = 1;
-  // In the 1.5 version format (`major << 48 | minor << 32 | patch << 16`);
-  // advisory, never a security control.
+  // Nuschel client versions in the 1.5 version format (`major << 48 |
+  // minor << 32 | patch << 16`), 0 for none; self-reported and advisory, never
+  // a security control (docs/extension.md, "Minimum versions"). Below
+  // `recommended_client` the client suggests an update; below
+  // `minimum_client` the server refuses it from `minimum_client_from` on.
   uint64 minimum_client = 2;
   uint64 recommended_client = 3;
   // The server's default retention: 0 keeps history forever (unless
@@ -50,6 +57,9 @@ message Policy {
   bool moderators_delete = 7;
   // The default is "none": not archived, live delivery only.
   bool live_only = 8;
+  // Unix time (seconds) from which clients below `minimum_client` are
+  // refused; until then they are admitted and shown the date. 0: refused now.
+  int64 minimum_client_from = 9;
 }
 
 // Decodes only the extension field of a `Version` frame (other fields are

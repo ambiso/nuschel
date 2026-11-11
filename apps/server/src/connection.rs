@@ -264,10 +264,26 @@ async fn serve(
                     tracing::info!(address = %server.settings.addresses.socket(address), "closed a nuschel/1 connection without a hello");
                     break None;
                 }
-                let Ok(message) = proto::Authenticate::decode(frame.payload) else {
-                    break None;
+                // A Nuschel client below the minimum version, from its date on
+                // (docs/extension.md, "Minimum versions"), is refused before its
+                // credentials are decoded; never a stock client.
+                let refusal = peer
+                    .negotiation
+                    .refusal(&server.settings, crate::state::now_unix())
+                    .map(|reason| auth::Rejection {
+                        kind: proto::reject::RejectType::WrongVersion,
+                        reason,
+                    });
+                let outcome = match refusal {
+                    Some(rejection) => Err(rejection),
+                    None => {
+                        let Ok(message) = proto::Authenticate::decode(frame.payload) else {
+                            break None;
+                        };
+                        auth::authenticate(&server, &peer, message).await
+                    }
                 };
-                match auth::authenticate(&server, &peer, message).await {
+                match outcome {
                     Ok(session) => {
                         server.counters.logins.fetch_add(1, Ordering::Relaxed);
                         break Some(session);

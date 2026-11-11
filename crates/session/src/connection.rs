@@ -13,7 +13,10 @@ use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_protocol::{
     ControlFrame, MAX_CONTROL_BYTES, control as proto,
     crypt::CryptState,
-    nuschel::{self, v1},
+    nuschel::{
+        self, v1,
+        version::{Standing, Version},
+    },
     voice::{self, UdpMessage, VoicePacket},
 };
 use prost::Message;
@@ -482,6 +485,70 @@ pub struct Negotiated {
     pub kt_log: Vec<u8>,
 }
 
+impl Negotiated {
+    /// Where this client stands with the server's minimum-version policy
+    /// (docs/extension.md, "Minimum versions") at `now_ms`.
+    pub fn standing(&self, now_ms: i64) -> Standing {
+        self.policy.as_ref().map_or(Standing::Current, |policy| {
+            Standing::of(policy, Some(&client_version()), now_ms.div_euclid(1000))
+        })
+    }
+}
+
+/// This client's version, as it reports it in the hello.
+pub fn client_version() -> Version {
+    Version::parse(env!("CARGO_PKG_VERSION")).unwrap_or_else(|_| Version::new(0, 0, 0))
+}
+
+/// The minimum-version policy as the server's hello stated it, when this
+/// client is below the minimum.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Below {
+    minimum: Version,
+    /// The hello's date has passed (by our clock): the server will refuse us.
+    refused: bool,
+}
+
+impl Below {
+    fn of(policy: &v1::Policy, now_ms: i64) -> Option<Self> {
+        match Standing::of(policy, Some(&client_version()), now_ms.div_euclid(1000)) {
+            Standing::Required { version, .. } => Some(Self {
+                minimum: version,
+                refused: false,
+            }),
+            Standing::Refused { version } => Some(Self {
+                minimum: version,
+                refused: true,
+            }),
+            Standing::Current | Standing::Recommended { .. } => None,
+        }
+    }
+}
+
+/// Before login, below the server's minimum: its `WrongVersion` rejection
+/// (whatever our clock says), or any failure once the hello said we are
+/// refused (the server may close before its `Reject` is read), is the
+/// minimum-version policy, said with the version to update to. Anything else
+/// stays as it is.
+fn outdated(error: Error, below: Option<&Below>) -> Error {
+    let Some(below) = below else {
+        return error;
+    };
+    let policy = match &error {
+        Error::Rejected { kind, .. } => *kind == RejectKind::WrongVersion,
+        Error::Io(_) | Error::Protocol(_) | Error::Timeout(_) => below.refused,
+        _ => false,
+    };
+    if policy {
+        Error::Outdated {
+            minimum: below.minimum.to_string(),
+            current: client_version().to_string(),
+        }
+    } else {
+        error
+    }
+}
+
 /// Murmur's per-user rate limit (murmur.ini `messageburst` and `messagelimit`):
 /// a leaky bucket shared by text, our own user state, channel state, ACL and
 /// version messages. The server drops what exceeds it without telling the
@@ -628,6 +695,9 @@ pub async fn run(
             }
         }
     });
+    // The server's minimum, until login, if this client is below it (see
+    // `outdated`).
+    let mut below = None;
     let result = async {
         let version = proto::Version {
             version_v1: Some(0x0001_0500),
@@ -641,6 +711,7 @@ pub async fn run(
             capabilities: nuschel::capability::ALL.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
+            client_version: client_version().to_string(),
         });
         let frame = nuschel::version_frame(&version, hello.as_ref())
             .ok_or_else(|| Error::Protocol("outgoing version too large".into()))?;
@@ -676,6 +747,10 @@ pub async fn run(
                 .map_err(Error::Downgrade)?;
             state.handle(frame, &events).await?;
             if negotiated.nuschel {
+                below = negotiated
+                    .policy
+                    .as_ref()
+                    .and_then(|policy| Below::of(policy, now_ms()));
                 state.extension = Some(negotiated.capabilities.clone());
                 if !negotiated.kt_log.is_empty() {
                     kt_descriptor = Some(negotiated.kt_log.clone());
@@ -720,6 +795,9 @@ pub async fn run(
             running: None,
         });
         loop {
+            if state.logged_in() {
+                below = None;
+            }
             if let Some(link) = kt.as_mut()
                 && link.running.is_none()
                 && state.logged_in()
@@ -828,7 +906,7 @@ pub async fn run(
     .await;
     read_task.abort();
     let _ = read_task.await;
-    result
+    result.map_err(|error| outdated(error, below.as_ref()))
 }
 
 /// The key-transparency driver of a `kt/1` connection with a crypto worker.
@@ -3212,6 +3290,7 @@ pub mod fuzzing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nuschel_protocol::nuschel::version;
 
     fn frame<M: Message>(kind: u16, message: M) -> ControlFrame {
         ControlFrame {
@@ -3226,6 +3305,120 @@ mod tests {
             out.push(event);
         }
         out
+    }
+
+    fn negotiated(policy: v1::Policy) -> Negotiated {
+        Negotiated {
+            nuschel: true,
+            capabilities: Vec::new(),
+            policy: Some(policy),
+            kt_log: Vec::new(),
+        }
+    }
+
+    fn above(version: &Version) -> u64 {
+        version::to_wire(&Version::new(
+            version.major,
+            version.minor,
+            version.patch + 1,
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_hello_reports_this_clients_version_and_the_policy_is_read_by_semver() {
+        let own = client_version();
+        assert_eq!(own.to_string(), env!("CARGO_PKG_VERSION"));
+        let ahead = above(&own);
+        let current = version::to_wire(&own).unwrap();
+        let recommended = negotiated(v1::Policy {
+            recommended_client: ahead,
+            ..Default::default()
+        });
+        assert!(matches!(
+            recommended.standing(0),
+            Standing::Recommended { .. }
+        ));
+        let met = negotiated(v1::Policy {
+            minimum_client: current,
+            recommended_client: current,
+            ..Default::default()
+        });
+        assert_eq!(met.standing(0), Standing::Current);
+        // Below the minimum: a warning until the date (milliseconds here,
+        // seconds on the wire), refused from it on.
+        let graced = negotiated(v1::Policy {
+            minimum_client: ahead,
+            minimum_client_from: 2_000,
+            ..Default::default()
+        });
+        assert!(matches!(
+            graced.standing(1_999_999),
+            Standing::Required { from: 2_000, .. }
+        ));
+        assert!(matches!(
+            graced.standing(2_000_000),
+            Standing::Refused { .. }
+        ));
+        // A stock server's (absent) policy asks nothing.
+        let stock = Negotiated {
+            policy: None,
+            ..negotiated(v1::Policy::default())
+        };
+        assert_eq!(stock.standing(0), Standing::Current);
+    }
+
+    #[test]
+    fn a_wrong_version_rejection_below_the_minimum_names_the_version() {
+        let rejected = |kind| Error::Rejected {
+            kind,
+            reason: "whatever the server says".into(),
+        };
+        let reset = || Error::Io(std::io::ErrorKind::ConnectionReset.into());
+        let policy = v1::Policy {
+            minimum_client: version::to_wire(&Version::new(9, 1, 0)).unwrap(),
+            minimum_client_from: 2_000,
+            ..Default::default()
+        };
+        let graced = Below::of(&policy, 1_999_999).unwrap();
+        let refused = Below::of(&policy, 2_000_000).unwrap();
+        assert!(!graced.refused && refused.refused);
+        for below in [&graced, &refused] {
+            match outdated(rejected(RejectKind::WrongVersion), Some(below)) {
+                Error::Outdated { minimum, current } => {
+                    assert_eq!(minimum, "9.1.0");
+                    assert_eq!(current, env!("CARGO_PKG_VERSION"));
+                }
+                other => panic!("{other:?}"),
+            }
+            // Another rejection stays the server's.
+            assert!(matches!(
+                outdated(rejected(RejectKind::ServerFull), Some(below)),
+                Error::Rejected { .. }
+            ));
+        }
+        // A connection closed before the Reject was read: the policy only once
+        // the hello said the date has passed.
+        assert!(matches!(
+            outdated(reset(), Some(&refused)),
+            Error::Outdated { .. }
+        ));
+        assert!(matches!(outdated(reset(), Some(&graced)), Error::Io(_)));
+        // A server whose minimum we meet (or stock Murmur's "update Mumble").
+        assert!(matches!(
+            outdated(rejected(RejectKind::WrongVersion), None),
+            Error::Rejected { .. }
+        ));
+        assert_eq!(
+            Below::of(
+                &v1::Policy {
+                    minimum_client: version::to_wire(&client_version()).unwrap(),
+                    ..Default::default()
+                },
+                0
+            ),
+            None
+        );
     }
 
     #[tokio::test]

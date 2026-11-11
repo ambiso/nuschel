@@ -47,6 +47,12 @@ pub enum Error {
     /// policy); only the user can accept that, by resetting the record.
     #[error("{0}")]
     Downgrade(String),
+    /// The server refuses this client's version (docs/extension.md, "Minimum
+    /// versions"). Never retried automatically, and never by plain Mumble.
+    #[error(
+        "This server requires Nuschel {minimum} or newer; this is Nuschel {current}. Update Nuschel to connect."
+    )]
+    Outdated { minimum: String, current: String },
 }
 
 fn removed_text(actor: Option<&str>, reason: Option<&str>, ban: bool) -> String {
@@ -86,5 +92,18 @@ mod tests {
             port: 64738,
         };
         assert!(refused.transient());
+    }
+
+    #[test]
+    fn an_outdated_client_is_told_the_version_and_not_retried() {
+        let outdated = Error::Outdated {
+            minimum: "0.3.0".into(),
+            current: "0.2.0".into(),
+        };
+        assert!(!outdated.transient());
+        assert_eq!(
+            outdated.to_string(),
+            "This server requires Nuschel 0.3.0 or newer; this is Nuschel 0.2.0. Update Nuschel to connect."
+        );
     }
 }

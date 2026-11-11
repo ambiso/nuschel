@@ -504,6 +504,7 @@ impl Raw {
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
+            client_version: String::new(),
         });
         let frame = nuschel::version_frame(
             &proto::Version {
@@ -630,6 +631,7 @@ fn hello_version(capabilities: &[&str]) -> bytes::Bytes {
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
+            client_version: String::new(),
         }),
     )
     .unwrap()
@@ -793,6 +795,99 @@ async fn extension_frames_before_authentication_close_the_connection() {
     raw.authenticate("Early").await;
     assert!(raw.closed().await);
     assert_eq!(fixture.users(), 0);
+}
+
+// ---- minimum client versions (§1, "Minimum versions") ----
+
+#[tokio::test]
+async fn an_outdated_nuschel_client_is_refused_with_the_version_and_stock_clients_are_not() {
+    let fixture = Fixture::start("[history]\nminimum_client = \"99.0.0\"").await;
+    // The real session: refused with the version to update to, never retried,
+    // and the server keeps nobody.
+    let error = Session::spawn(options(
+        fixture.address(),
+        &fixture.running.fingerprint,
+        "Alice",
+        0,
+    ))
+    .failure()
+    .await;
+    assert!(
+        matches!(&error, SessionError::Outdated { minimum, current }
+            if minimum == "99.0.0" && current == env!("CARGO_PKG_VERSION")),
+        "{error:?}"
+    );
+    assert!(!error.transient(), "no automatic retry, never a fallback");
+    assert!(
+        error
+            .to_string()
+            .contains("requires Nuschel 99.0.0 or newer")
+    );
+    assert_eq!(fixture.users(), 0);
+    // A Nuschel hello without a version is older than any minimum; the reject
+    // says why, as a Mumble `Reject` any client can show.
+    let mut raw = Raw::connect(fixture.address(), &[nuschel::ALPN]).await;
+    raw.version(Some(&["history/1"])).await;
+    raw.authenticate("Unversioned").await;
+    let reject = raw.until(kind::REJECT).await.expect("a reject");
+    let reject = proto::Reject::decode(reject.payload).unwrap();
+    assert_eq!(
+        reject.r#type,
+        Some(proto::reject::RejectType::WrongVersion as i32)
+    );
+    assert_eq!(
+        reject.reason.as_deref(),
+        Some("This server requires Nuschel 99.0.0 or newer. Update Nuschel to connect.")
+    );
+    // Stock Mumble clients are not affected by the minimum.
+    let mut stock = Raw::connect(fixture.address(), &[]).await;
+    stock.version(None).await;
+    stock.authenticate("Stock").await;
+    assert!(!stock.closed().await, "stock clients log in");
+    assert_eq!(fixture.users(), 1);
+}
+
+#[tokio::test]
+async fn before_the_date_an_outdated_client_is_admitted_and_told_when() {
+    let fixture =
+        Fixture::start("[history]\nminimum_client = \"99.0.0\"\nminimum_client_from = 2999-01-01")
+            .await;
+    let (session, negotiated) = Session::connect(options(
+        fixture.address(),
+        &fixture.running.fingerprint,
+        "Alice",
+        0,
+    ))
+    .await;
+    let negotiated = negotiated.expect("negotiated");
+    let policy = negotiated.policy.as_ref().unwrap();
+    assert_eq!(policy.minimum_client, 99 << 48);
+    // 2999-01-01T00:00:00Z.
+    assert_eq!(policy.minimum_client_from, 32_472_144_000);
+    assert_eq!(
+        negotiated.standing(connection::now_ms()),
+        nuschel::version::Standing::Required {
+            version: nuschel::version::Version::new(99, 0, 0),
+            from: 32_472_144_000,
+        }
+    );
+    assert!(session.session != 0, "logged in");
+    drop(session);
+    // A recommended version only suggests an update.
+    let fixture = Fixture::start("[history]\nrecommended_client = \"99.1.0\"").await;
+    let (_session, negotiated) = Session::connect(options(
+        fixture.address(),
+        &fixture.running.fingerprint,
+        "Bob",
+        1,
+    ))
+    .await;
+    assert_eq!(
+        negotiated.unwrap().standing(connection::now_ms()),
+        nuschel::version::Standing::Recommended {
+            version: nuschel::version::Version::new(99, 1, 0)
+        }
+    );
 }
 
 // ---- helpers for stages 2–5 ----

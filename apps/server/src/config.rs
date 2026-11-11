@@ -132,9 +132,70 @@ pub struct History {
     pub network_page_bytes_per_minute: u32,
     /// Networks (CIDR, such as `10.0.0.0/8`) exempt from the per-network limits.
     pub unlimited_networks: Vec<String>,
-    /// Advisory client versions announced to Nuschel clients ("1.0.0").
+    /// Nuschel client versions ("1.0.0"; docs/extension.md, "Minimum
+    /// versions"). Below `recommended_client` clients suggest an update; below
+    /// `minimum_client` they are refused, from `minimum_client_from` on if it
+    /// is set (until then admitted and shown the date). Self-reported and
+    /// advisory; stock Mumble clients are never affected.
     pub minimum_client: Option<String>,
     pub recommended_client: Option<String>,
+    /// A date (`2026-12-01`, quoted or not; midnight UTC).
+    pub minimum_client_from: Option<DateSetting>,
+}
+
+/// A calendar date in the configuration: a TOML local date or a string.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum DateSetting {
+    Text(String),
+    Toml(toml::value::Datetime),
+}
+
+impl DateSetting {
+    /// Midnight UTC of the date, in Unix seconds.
+    pub fn unix(&self) -> Option<i64> {
+        let text = match self {
+            Self::Text(text) => text.clone(),
+            Self::Toml(datetime) => datetime.to_string(),
+        };
+        let mut parts = text.trim().splitn(3, '-');
+        let mut part = |digits: usize| {
+            parts
+                .next()
+                .filter(|part| part.len() == digits && part.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|part| part.parse::<i64>().ok())
+        };
+        let (year, month, day) = (part(4)?, part(2)?, part(2)?);
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let days_in_month = [
+            31,
+            if leap { 29 } else { 28 },
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
+        ];
+        if !(1..=12).contains(&month) || day < 1 || day > days_in_month[month as usize - 1] {
+            return None;
+        }
+        // Days from the civil date (Howard Hinnant's algorithm).
+        let (y, m) = if month <= 2 {
+            (year - 1, month + 9)
+        } else {
+            (year, month - 3)
+        };
+        let era = y.div_euclid(400);
+        let year_of_era = y - era * 400;
+        let day_of_year = (153 * m + 2) / 5 + day - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        Some((era * 146_097 + day_of_era - 719_468) * 86_400)
+    }
 }
 
 impl Default for History {
@@ -155,6 +216,7 @@ impl Default for History {
             unlimited_networks: Vec::new(),
             minimum_client: None,
             recommended_client: None,
+            minimum_client_from: None,
         }
     }
 }
@@ -455,6 +517,9 @@ pub struct Settings {
     pub suggest_version: Option<u64>,
     pub minimum_client: Option<u64>,
     pub recommended_client: Option<u64>,
+    /// When clients below `minimum_client` start to be refused (Unix
+    /// seconds); `None` with a minimum: at once.
+    pub minimum_client_from: Option<i64>,
     /// How client addresses appear in logs (`obfuscate`).
     pub addresses: crate::obfuscate::Addresses,
     /// What makes a client certificate strong (`strong_certificate_authorities`).
@@ -590,6 +655,26 @@ impl Config {
             "history.recommended_client",
             &self.history.recommended_client,
         )?;
+        let minimum_client_from = match &self.history.minimum_client_from {
+            Some(date) => Some(date.unix().ok_or_else(|| {
+                ConfigError::Invalid(format!(
+                    "history.minimum_client_from {date:?} is not a date like 2026-12-01"
+                ))
+            })?),
+            None => None,
+        };
+        if minimum_client_from.is_some() && minimum_client.is_none() {
+            return Err(ConfigError::Invalid(
+                "history.minimum_client_from needs history.minimum_client".into(),
+            ));
+        }
+        if let (Some(minimum), Some(recommended)) = (minimum_client, recommended_client)
+            && recommended < minimum
+        {
+            return Err(ConfigError::Invalid(
+                "history.recommended_client is below history.minimum_client".into(),
+            ));
+        }
         let obfuscate = self.obfuscate;
         let authorities = crate::tls::Authorities::load(&self.strong_certificate_authorities)
             .map_err(|error| {
@@ -604,6 +689,7 @@ impl Config {
             suggest_version,
             minimum_client,
             recommended_client,
+            minimum_client_from,
             addresses: crate::obfuscate::Addresses::new(obfuscate),
             authorities,
         })
@@ -713,6 +799,39 @@ mod tests {
         assert!(retention("[history]\nretention = 0").is_err());
         assert!(retention("[history]\nretention = \"never\"").is_err());
         assert!(retention("[history]\nretention = 3\nretention_days = 3").is_err());
+    }
+
+    #[test]
+    fn minimum_client_dates() {
+        let settings = |extra: &str| {
+            Config::from_toml(&format!("[history]\n{extra}"))
+                .unwrap()
+                .settings()
+        };
+        let from = |extra: &str| settings(extra).unwrap().minimum_client_from;
+        assert_eq!(
+            from("minimum_client = \"0.3\"\nminimum_client_from = \"1970-01-02\""),
+            Some(86_400)
+        );
+        // A TOML date works unquoted; 2026-12-01 is day 20,788.
+        assert_eq!(
+            from("minimum_client = \"0.3\"\nminimum_client_from = 2026-12-01"),
+            Some(20_788 * 86_400)
+        );
+        assert_eq!(
+            from("minimum_client = \"0.3\"\nminimum_client_from = \"2000-02-29\""),
+            Some(951_782_400)
+        );
+        assert_eq!(from("minimum_client = \"0.3\""), None, "in force at once");
+        for bad in [
+            "minimum_client = \"0.3\"\nminimum_client_from = \"2026-02-29\"",
+            "minimum_client = \"0.3\"\nminimum_client_from = \"2026-12-01T10:00:00Z\"",
+            "minimum_client = \"0.3\"\nminimum_client_from = 2026-12-01T10:00:00Z",
+            "minimum_client_from = \"2026-12-01\"",
+            "minimum_client = \"0.3\"\nrecommended_client = \"0.2\"",
+        ] {
+            assert!(settings(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

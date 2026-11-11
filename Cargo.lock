@@ -5911,6 +5911,7 @@ dependencies = [
  "bytes",
  "prost",
  "prost-build",
+ "semver",
  "thiserror 2.0.21",
 ]
 

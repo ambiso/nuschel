@@ -19384,6 +19384,10 @@ rec {
             packageId = "prost";
           }
           {
+            name = "semver";
+            packageId = "semver";
+          }
+          {
             name = "thiserror";
             packageId = "thiserror 2.0.21";
           }

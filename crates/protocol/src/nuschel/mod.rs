@@ -12,6 +12,8 @@ pub mod v1 {
     mod redacted;
 }
 
+pub mod version;
+
 use v1::error::Code;
 
 /// TLS ALPN identifiers. A Nuschel client offers both in one handshake; stock
@@ -228,7 +230,7 @@ pub fn hello(version_body: &[u8]) -> Result<Option<v1::Hello>, HelloError> {
     if hello.protocol != PROTOCOL {
         return Err(HelloError::Protocol);
     }
-    if !valid_kt_log(&hello) {
+    if !valid_kt_log(&hello) || hello.client_version.len() > version::MAX_CLIENT_VERSION_BYTES {
         return Err(HelloError::Malformed);
     }
     Ok(Some(hello))
@@ -341,6 +343,7 @@ mod tests {
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
             kt_log: Vec::new(),
+            client_version: String::new(),
         }
     }
 

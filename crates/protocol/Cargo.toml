@@ -14,6 +14,7 @@ workspace = true
 aes = "0.8"
 bytes = "1.12.1"
 prost = "0.14.4"
+semver = "1.0.28"
 thiserror = "2.0.21"
 
 [build-dependencies]
