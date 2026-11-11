@@ -2,7 +2,7 @@
 //! Voice and audio settings. Changes apply immediately and are saved locally.
 use crate::{
     assets::icon,
-    dialogs::{Tone, modal, styled_button},
+    dialogs::{Tone, Tooltip, modal, styled_button},
     preview::{EchoTestState, PreviewView},
     state::{Desktop, ServerView},
     theme::*,
@@ -568,6 +568,11 @@ pub fn dialog(
         .map(|preview| preview.noise.clone())
         .or_else(|| server.map(|server| server.audio.noise.clone()))
         .flatten();
+    let reference = preview
+        .filter(|preview| preview.echo.is_some())
+        .map(|preview| preview.reference.clone())
+        .or_else(|| server.map(|server| server.audio.reference.clone()))
+        .flatten();
     let input = preview
         .and_then(|preview| preview.input.clone())
         .or_else(|| server.and_then(|server| server.audio.input.clone()));
@@ -577,10 +582,16 @@ pub fn dialog(
     let echo_status = route_echo.map(|echo| match echo {
         EchoSource::Upstream(name) => format!("Using system echo cancellation: {name}. Nuschel's canceller is off to avoid doubling it."),
         // ERLE is only meaningful once the far end has played something.
-        EchoSource::Nuschel => match erle {
-            Some(erle) => format!("Nuschel's echo canceller is active · {erle:.0} dB echo reduction"),
-            None => "Nuschel's echo canceller is active.".into(),
-        },
+        EchoSource::Nuschel => {
+            let heard = match &reference {
+                Some(output) => format!("It removes everything {output} plays."),
+                None => "It removes only Nuschel's own playback: other applications' sound cannot be recorded here.".into(),
+            };
+            match erle {
+                Some(erle) => format!("Nuschel's echo canceller is active · {erle:.0} dB echo reduction. {heard}"),
+                None => format!("Nuschel's echo canceller is active. {heard}"),
+            }
+        }
         EchoSource::None => "Echo cancellation is off for this microphone.".into(),
     });
     let mode = input
@@ -789,20 +800,27 @@ pub fn dialog(
                 cx,
             ),
         ],
-        None => vec![
-            div()
+        None => {
+            // The worker's detail (each sound system's error) stays in the
+            // tooltip; the line itself says what it means.
+            let status = preview.and_then(|preview| preview.status.clone());
+            let line = match &status {
+                Some(status) if status.starts_with("Audio reconnecting") => {
+                    "No sound system is reachable (PipeWire, PulseAudio or a sound card). Nuschel keeps trying.".to_string()
+                }
+                Some(status) => status.clone(),
+                None => "Looking for audio devices…".into(),
+            };
+            vec![div()
+                .id("devices-unavailable-row")
                 .text_sm()
                 .text_color(color(TEXT_MUTED))
-                .child(
-                    text!(
-                        preview
-                            .and_then(|preview| preview.status.clone())
-                            .unwrap_or_else(|| "Looking for audio devices…".into())
-                    )
-                    .with_id("devices-unavailable"),
-                )
-                .into_any_element(),
-        ],
+                .when_some(status, |row, status| {
+                    row.tooltip(move |_, cx| cx.new(|_| Tooltip(status.clone().into())).into())
+                })
+                .child(text!(line).with_id("devices-unavailable"))
+                .into_any_element()]
+        }
     };
 
     let autostart = this.autostart.unwrap_or(false);

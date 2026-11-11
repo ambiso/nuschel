@@ -332,6 +332,10 @@ pub enum LiveMediaEvent {
         /// filter-chain); Nuschel's own suppressor stays off while it is there.
         #[serde(default)]
         noise: Option<String>,
+        /// What Nuschel's echo canceller uses as its reference: the output it
+        /// records (all applications), or `None` for Nuschel's own playback only.
+        #[serde(default)]
+        reference: Option<String>,
     },
     /// Echo-canceller measurements for the adaptive controller and diagnostics.
     Echo {

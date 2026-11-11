@@ -156,6 +156,7 @@ pub fn probe_route() -> Result<(), Box<dyn std::error::Error>> {
         "output": route.output,
         "echo_cancellation": route.echo,
         "noise_suppression_upstream": route.noise,
+        "echo_reference": route.reference,
         "inputs": route.inputs,
         "outputs": route.outputs,
     });
@@ -267,6 +268,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             output: route.output,
                             echo: route.echo,
                             noise: route.noise,
+                            reference: route.reference,
                         },
                     )?;
                     emit(
@@ -689,6 +691,9 @@ struct Route {
     output: Option<String>,
     echo: EchoSource,
     noise: Option<String>,
+    /// The output recorded as the canceller's reference; `None` when Nuschel
+    /// cancels only its own playback (or does not cancel at all).
+    reference: Option<String>,
 }
 
 /// The processing Nuschel applies itself: a noise suppressor upstream of the
@@ -1021,6 +1026,7 @@ fn open_host(
     // the output device (all applications) where the system allows it, and
     // only while the microphone is open.
     let mut recording = None;
+    let mut reference_name = None;
     let reference = if input.is_some() && matches!(echo, EchoSource::Nuschel) {
         match record_output(
             host,
@@ -1030,8 +1036,9 @@ fn open_host(
             tx.clone(),
             clock,
         ) {
-            Ok((stream, reference)) => {
+            Ok((stream, reference, name)) => {
                 recording = Some(stream);
+                reference_name = Some(name);
                 Some(reference)
             }
             Err(error) => {
@@ -1067,6 +1074,7 @@ fn open_host(
             output: output_id,
             echo,
             noise: found.noise,
+            reference: reference_name,
         },
     ))
 }
@@ -1192,7 +1200,7 @@ fn record_output(
     output_id: Option<&str>,
     tx: SyncSender<Event>,
     clock: Clock,
-) -> Result<(cpal::Stream, Reference), String> {
+) -> Result<(cpal::Stream, Reference, String), String> {
     #[cfg(target_os = "linux")]
     if host.id() == cpal::HostId::Alsa {
         return Err("ALSA cannot record an output device".into());
@@ -1286,6 +1294,17 @@ fn record_output(
         _ => Err("unsupported output recording sample format".into()),
     }?;
     stream.play().map_err(|error| error.to_string())?;
+    // A readable name for what is recorded; the default sink's own name where
+    // cpal only offers a virtual "default" entry.
+    #[cfg(target_os = "linux")]
+    let name = (output_id
+        .map(backend_name)
+        .is_none_or(|name| name == "output_default"))
+    .then(|| resolve_pulse_default(false).map(|(_, name)| name))
+    .flatten()
+    .unwrap_or_else(|| device_name(output));
+    #[cfg(not(target_os = "linux"))]
+    let name = device_name(output);
     Ok((
         stream,
         Reference {
@@ -1294,6 +1313,7 @@ fn record_output(
             channels: outputs,
             index: 0,
         },
+        name,
     ))
 }
 

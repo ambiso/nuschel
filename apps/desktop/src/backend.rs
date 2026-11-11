@@ -108,6 +108,7 @@ pub enum Event {
         output: Option<String>,
         echo: EchoSource,
         noise: Option<String>,
+        reference: Option<String>,
     },
     /// The local audio check in Settings.
     Preview(crate::preview::Event),
@@ -799,11 +800,11 @@ async fn connect_once(
                 Some(LiveMediaEvent::Level { level_db, voice, transmitting }) => {
                     let _ = events.try_send(Event::AudioLevel { server: id.clone(), generation, level_db, voice, transmitting });
                 },
-                Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise }) => {
+                Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise, reference }) => {
                     if let Some((host, _)) = output.as_deref().and_then(|id| id.split_once(':')) {
                         audio_host.0 = Some(host.to_string());
                     }
-                    let _ = events.send(Event::AudioDevices { server: id.clone(), generation, inputs, outputs, input, output, echo, noise }).await;
+                    let _ = events.send(Event::AudioDevices { server: id.clone(), generation, inputs, outputs, input, output, echo, noise, reference }).await;
                 },
                 Some(LiveMediaEvent::Echo { erle_db, residual_likelihood, .. }) => {
                     let _ = events.try_send(Event::Echo { server: id.clone(), generation, erle_db, residual_likelihood });

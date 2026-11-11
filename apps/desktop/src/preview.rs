@@ -39,6 +39,7 @@ pub enum Event {
         output: Option<String>,
         echo: EchoSource,
         noise: Option<String>,
+        reference: Option<String>,
     },
     Status(String),
     EchoTest(Result<EchoReport, String>),
@@ -74,6 +75,8 @@ pub struct PreviewView {
     pub output: Option<String>,
     pub echo: Option<EchoSource>,
     pub noise: Option<String>,
+    /// The output Nuschel's canceller records (`None`: its own playback only).
+    pub reference: Option<String>,
     pub status: Option<String>,
     pub echo_test: EchoTestState,
 }
@@ -93,6 +96,7 @@ impl Default for PreviewView {
             output: None,
             echo: None,
             noise: None,
+            reference: None,
             status: None,
             echo_test: EchoTestState::Idle,
         }
@@ -118,7 +122,9 @@ impl PreviewView {
                 output,
                 echo,
                 noise,
+                reference,
             } => {
+                self.reference = reference;
                 self.inputs = inputs;
                 self.outputs = outputs;
                 self.input = input;
@@ -223,6 +229,7 @@ pub async fn run(
                         media = Some(worker);
                     }
                     Err(error) => {
+                        tracing::debug!(%error, "settings audio worker did not start");
                         retry = Instant::now() + Duration::from_secs(3);
                         send(Event::Status(error.to_string()));
                     }
@@ -235,14 +242,15 @@ pub async fn run(
             },
             event = async { media.as_mut().unwrap().events.recv().await }, if media.is_some() => match event {
                 Some(LiveMediaEvent::Level { level_db, voice, transmitting }) => send(Event::Level { level_db, voice, transmitting }),
-                Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise }) => {
-                    send(Event::Devices { inputs, outputs, input, output, echo, noise });
+                Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise, reference }) => {
+                    send(Event::Devices { inputs, outputs, input, output, echo, noise, reference });
                 }
                 Some(LiveMediaEvent::EchoTest { echo_db, reduction_db, transmitted }) => {
                     test_deadline = None;
                     send(Event::EchoTest(Ok(EchoReport { echo_db, reduction_db, transmitted })));
                 }
                 Some(LiveMediaEvent::Status { ready, message }) => {
+                    tracing::debug!(ready, %message, "settings audio check");
                     if ready {
                         if std::mem::take(&mut test_pending) && let Some(media) = &media {
                             let _ = media.commands.try_send(LiveMediaRequest::EchoTest);
@@ -255,8 +263,11 @@ pub async fn run(
                 }
                 Some(_) => {}
                 None => {
+                    // The worker exited without a word (it could not start, or crashed).
+                    tracing::debug!("settings audio worker exited");
                     media.take();
                     retry = Instant::now() + Duration::from_secs(1);
+                    send(Event::Status("The audio worker stopped; retrying…".into()));
                 }
             },
         }

@@ -2,12 +2,7 @@
 //! The image viewer: a click on an inline image shows it large over a
 //! gradient backdrop (decoded again, larger, by the sandboxed content worker),
 //! and a right click or the viewer's button saves the original file.
-use crate::{
-    assets::icon,
-    dialogs::{Tone, styled_button},
-    state::Desktop,
-    theme::*,
-};
+use crate::{state::Desktop, theme::*};
 use gpui_kit::{prelude::*, *};
 use std::sync::Arc;
 
@@ -110,20 +105,20 @@ impl Desktop {
     }
 }
 
-/// The open viewer, over everything else.
+/// The open viewer, over everything else: the image on a dark glow. A click
+/// anywhere but the image closes it (nothing behind receives it); a right
+/// click on the image offers Save image as.
 pub fn overlay(this: &Desktop, window: &Window, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     let viewer = this.viewer.as_ref()?;
     let shown = viewer.shown.clone();
     let viewport = window.viewport_size();
-    // Fit inside the window with room for the toolbar; enlarge small images
-    // up to twice their size.
+    // Fit inside the window; enlarge small images up to twice their size.
     let room_width = (f32::from(viewport.width) - 96.).max(64.);
-    let room_height = (f32::from(viewport.height) - 160.).max(64.);
+    let room_height = (f32::from(viewport.height) - 96.).max(64.);
     let scale = (room_width / shown.width.max(1) as f32)
         .min(room_height / shown.height.max(1) as f32)
         .min(2.);
     let (width, height) = (shown.width as f32 * scale, shown.height as f32 * scale);
-    let saving = shown.clone();
     let menu = shown.clone();
     Some(
         div()
@@ -132,16 +127,12 @@ pub fn overlay(this: &Desktop, window: &Window, cx: &mut Context<Desktop>) -> Op
             .aria_label("Image")
             .absolute()
             .inset_0()
+            .occlude()
             .flex()
-            .flex_col()
             .items_center()
             .justify_center()
-            .gap_4()
-            .bg(linear_gradient(
-                160.,
-                linear_color_stop(tint(0x0b0e14, 0xf2), 0.),
-                linear_color_stop(tint(0x1d2433, 0xe6), 1.),
-            ))
+            .bg(tint(0x07090e, 0xe0))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, _, cx| {
                 this.viewer = None;
                 cx.notify();
@@ -153,7 +144,14 @@ pub fn overlay(this: &Desktop, window: &Window, cx: &mut Context<Desktop>) -> Op
                     .h(px(height))
                     .rounded(px(10.))
                     .overflow_hidden()
-                    .shadow_lg()
+                    // A dark glow around the picture.
+                    .shadow(vec![BoxShadow {
+                        color: tint(0x000000, 0xd0).into(),
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(140.),
+                        spread_radius: px(36.),
+                        inset: false,
+                    }])
                     // Clicks on the picture itself do not close the viewer.
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .on_mouse_down(
@@ -165,49 +163,6 @@ pub fn overlay(this: &Desktop, window: &Window, cx: &mut Context<Desktop>) -> Op
                         }),
                     )
                     .child(img(shown.image.clone()).size_full()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .text_sm()
-                    .text_color(color(TEXT_MUTED))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        text!(if viewer.loading {
-                            "Loading the full image…".to_string()
-                        } else {
-                            format!("{} × {}", shown.width, shown.height)
-                        })
-                        .with_id("image-viewer-size"),
-                    )
-                    .when(shown.source.is_some(), |row| {
-                        row.child(styled_button(
-                            "image-viewer-save",
-                            "Save as…",
-                            Tone::Secondary,
-                            move |this, _, cx| {
-                                this.save_image(&saving, cx);
-                                cx.notify();
-                            },
-                            cx,
-                        ))
-                    })
-                    .child(styled_button(
-                        "image-viewer-close",
-                        "Close",
-                        Tone::Ghost,
-                        |this, _, cx| {
-                            this.viewer = None;
-                            cx.notify();
-                        },
-                        cx,
-                    ))
-                    .child(icon("info", 14., color(TEXT_FAINT)))
-                    .child(div().text_xs().text_color(color(TEXT_FAINT)).child(
-                        text!("Esc closes · right-click to save").with_id("image-viewer-hint"),
-                    )),
             )
             .into_any_element(),
     )

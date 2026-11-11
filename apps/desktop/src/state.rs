@@ -233,6 +233,8 @@ pub struct AudioInfo {
     pub echo: nuschel_core::audio::EchoSource,
     /// A noise suppressor upstream of the microphone (Nuschel's own is off).
     pub noise: Option<String>,
+    /// The output Nuschel's canceller records (`None`: its own playback only).
+    pub reference: Option<String>,
     pub erle_db: Option<f32>,
     pub residual_echo: Option<f32>,
     pub health: AudioHealth,
@@ -2049,6 +2051,7 @@ impl Desktop {
                     output,
                     echo,
                     noise,
+                    reference,
                 } => {
                     if let Some(server) = self
                         .servers
@@ -2061,6 +2064,7 @@ impl Desktop {
                         server.audio.output = output;
                         server.audio.echo = echo;
                         server.audio.noise = noise;
+                        server.audio.reference = reference;
                     }
                 }
                 Event::Viewed { request, document } => {
