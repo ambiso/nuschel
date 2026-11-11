@@ -415,8 +415,19 @@ class AccessibilityTest:
                 body += " see https://example.org/first and https://example.org/second"
             peer.send(kind="text", channel=2, body=body)
             time.sleep(0.01)
-        eventually(lambda: f"History message {HISTORY}" in timeline.children()[-1].name,
-                   "the long conversation did not arrive", timeout=60)
+        # A slow machine takes a while: wait as long as messages keep coming.
+        newest, deadline = None, time.monotonic() + 60
+        while f"History message {HISTORY}" not in (name := timeline.children()[-1].name):
+            if name != newest:
+                newest, deadline = name, time.monotonic() + 60
+            if time.monotonic() > deadline:
+                names = [name for _, _, _, name in snapshot(nuschel)]
+                arrived = {int(match[1]) for name in names
+                           if (match := re.match(r"Ada Lovelace: History message (\d+)\b", name))}
+                notices = [name for name in names if "overloaded" in name]
+                raise AssertionError(f"the long conversation stopped arriving: {len(arrived)} of {HISTORY} "
+                                     f"messages, the newest {newest!r}; notices: {notices}")
+            time.sleep(0.5)
         nodes = snapshot(nuschel)
         self.write_tree(nodes, "timeline-tree.txt")
         seen = sorted({int(match[1]) for _, _, _, name in nodes
