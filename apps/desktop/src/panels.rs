@@ -661,9 +661,15 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
         .child(heading(title, cx))
         .child(body)
         .into_any_element();
-    Some(modal("panel", "Details", width, content, cx, |this| {
-        this.panel = None
-    }))
+    Some(modal(
+        this,
+        "panel",
+        "Details",
+        width,
+        content,
+        cx,
+        |this| this.panel = None,
+    ))
 }
 
 fn channel_name(view: &ServerView, channel: u32) -> String {

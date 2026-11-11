@@ -199,6 +199,90 @@ fn meter(preview: &PreviewView) -> AnyElement {
         .into_any_element()
 }
 
+/// The dragged value of the sensitivity slider (GPUI drags carry a type).
+struct SensitivityDrag;
+
+/// Voice activity sensitivity, 0-100 % in 5 % steps (each step is saved).
+fn sensitivity_slider(sensitivity: f32, cx: &mut Context<Desktop>) -> AnyElement {
+    fn set(this: &mut Desktop, value: f32) {
+        let value = (value.clamp(0., 1.) * 20.).round() / 20.;
+        this.update_settings(|settings| settings.audio.vad_sensitivity = value);
+    }
+    fn at(bounds: Bounds<Pixels>, position: Point<Pixels>) -> f32 {
+        (position.x - bounds.left()) / bounds.size.width.max(px(1.))
+    }
+    // The track's bounds as last painted, for a click that is not a drag.
+    let track = Rc::new(std::cell::Cell::new(Bounds::default()));
+    let painted = track.clone();
+    div()
+        .id("sensitivity")
+        .role(Role::Slider)
+        .aria_label("Voice activity sensitivity")
+        .tab_index(0)
+        .relative()
+        .h(px(20.))
+        .flex()
+        .items_center()
+        .cursor_pointer()
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+            let value = match event.keystroke.key.as_str() {
+                "left" | "down" => sensitivity - 0.05,
+                "right" | "up" => sensitivity + 0.05,
+                "home" => 0.,
+                "end" => 1.,
+                _ => return,
+            };
+            set(this, value);
+            cx.notify();
+        }))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                set(this, at(track.get(), event.position));
+                cx.notify();
+            }),
+        )
+        .on_drag(SensitivityDrag, |_, _, _, cx| cx.new(|_| EmptyView))
+        .on_drag_move(
+            cx.listener(|this, event: &DragMoveEvent<SensitivityDrag>, _, cx| {
+                set(this, at(event.bounds, event.event.position));
+                cx.notify();
+            }),
+        )
+        .child(
+            canvas(move |bounds, _, _| painted.set(bounds), |_, _, _, _| {})
+                .absolute()
+                .size_full(),
+        )
+        .child(
+            div()
+                .w_full()
+                .h(px(6.))
+                .rounded_full()
+                .bg(color(BORDER_STRONG))
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(sensitivity))
+                        .rounded_full()
+                        .bg(color(ACCENT)),
+                ),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(relative(sensitivity))
+                .ml(px(-8.))
+                .size(px(16.))
+                .rounded_full()
+                .bg(color(0xffffff))
+                .border_2()
+                .border_color(color(ACCENT))
+                .shadow_sm(),
+        )
+        .into_any_element()
+}
+
 /// Microphone and echo checks that need neither a server nor unmuting.
 fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
     let Some(preview) = this.preview.as_ref() else {
@@ -460,45 +544,7 @@ pub fn dialog(
                             ),
                         ),
                 )
-                .child(
-                    div()
-                        .id("sensitivity")
-                        .role(Role::Slider)
-                        .aria_label("Voice activity sensitivity")
-                        .tab_index(0)
-                        .flex()
-                        .gap(px(3.))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                            let step = match event.keystroke.key.as_str() {
-                                "left" | "down" => -0.1,
-                                "right" | "up" => 0.1,
-                                _ => return,
-                            };
-                            this.update_settings(|settings| settings.audio.vad_sensitivity += step);
-                            cx.notify();
-                        }))
-                        .children((0..10_usize).map(|step| {
-                            let value = step as f32 / 9.;
-                            div()
-                                .id(("sensitivity-step", step))
-                                .flex_1()
-                                .h(px(10.))
-                                .rounded(px(3.))
-                                .cursor_pointer()
-                                .bg(color(if value <= sensitivity + 0.001 {
-                                    ACCENT
-                                } else {
-                                    BORDER_STRONG
-                                }))
-                                .hover(|style| style.opacity(0.85))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.update_settings(|settings| {
-                                        settings.audio.vad_sensitivity = value
-                                    });
-                                    cx.notify();
-                                }))
-                        })),
-                )
+                .child(sensitivity_slider(sensitivity, cx))
                 .into_any_element(),
         );
     }
@@ -1007,7 +1053,13 @@ pub fn dialog(
                 .child(section("IDENTITY", identity_section)),
         )
         .into_any_element();
-    modal("settings-dialog", "Settings", 560., content, cx, |this| {
-        this.close_settings()
-    })
+    modal(
+        this,
+        "settings-dialog",
+        "Settings",
+        560.,
+        content,
+        cx,
+        |this| this.close_settings(),
+    )
 }

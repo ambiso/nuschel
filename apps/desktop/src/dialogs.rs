@@ -154,6 +154,7 @@ fn field(id: &'static str, label: &'static str, state: &Entity<InputState>) -> A
 }
 
 pub fn modal(
+    this: &Desktop,
     id: &'static str,
     label: &'static str,
     width: f32,
@@ -161,6 +162,10 @@ pub fn modal(
     cx: &mut Context<Desktop>,
     close: impl Fn(&mut Desktop) + 'static,
 ) -> AnyElement {
+    this.modal_shown.set(Some(id));
+    if this.modal_seen.get() != Some(id) {
+        this.modal_scroll.set_offset(point(px(0.), px(0.)));
+    }
     div()
         .id(SharedString::from(format!("{id}-backdrop")))
         .absolute()
@@ -186,12 +191,22 @@ pub fn modal(
                 .w(px(width))
                 .max_h(relative(0.92))
                 .overflow_y_scroll()
+                .track_scroll(&this.modal_scroll)
                 .rounded(px(12.))
                 .bg(color(MAIN))
                 .border_1()
                 .border_color(color(BORDER_STRONG))
                 .shadow_lg()
-                .child(content),
+                .child(
+                    // Wheel steps ease like the timeline's (the content sees
+                    // them before the scroll container).
+                    div()
+                        .id(SharedString::from(format!("{id}-content")))
+                        .on_scroll(cx.listener(|this, event, window, cx| {
+                            this.smooth_scroll_modal(event, window, cx)
+                        }))
+                        .child(content),
+                ),
         )
         .into_any_element()
 }
@@ -296,6 +311,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
         )
         .into_any_element();
     modal(
+        this,
         "server-dialog",
         "Add or connect to a Mumble server",
         520.,

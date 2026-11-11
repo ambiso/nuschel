@@ -1305,9 +1305,15 @@ pub fn prompt(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 )),
         )
         .into_any_element();
-    Some(modal("prompt-dialog", "Input", 460., content, cx, |this| {
-        this.prompt = None
-    }))
+    Some(modal(
+        this,
+        "prompt-dialog",
+        "Input",
+        460.,
+        content,
+        cx,
+        |this| this.prompt = None,
+    ))
 }
 
 #[cfg(test)]

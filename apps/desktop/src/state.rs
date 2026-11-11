@@ -498,6 +498,12 @@ pub struct Desktop {
     pub channel_scroll: ScrollHandle,
     chat_motion: SmoothScroll,
     channel_motion: SmoothScroll,
+    /// The open dialog's scrolling (one dialog at a time), and which dialog
+    /// this and the previous frame showed, so a newly opened one starts at the top.
+    pub modal_scroll: ScrollHandle,
+    modal_motion: SmoothScroll,
+    pub modal_shown: std::cell::Cell<Option<&'static str>>,
+    pub modal_seen: std::cell::Cell<Option<&'static str>>,
     scroll_frame_pending: bool,
     /// Keeps the timeline still while history is prepended above.
     pub anchor: Anchor,
@@ -619,6 +625,10 @@ impl Desktop {
             channel_scroll: ScrollHandle::new(),
             chat_motion: SmoothScroll::default(),
             channel_motion: SmoothScroll::default(),
+            modal_scroll: ScrollHandle::new(),
+            modal_motion: SmoothScroll::default(),
+            modal_shown: Default::default(),
+            modal_seen: Default::default(),
             scroll_frame_pending: false,
             anchor: Anchor::default(),
             following: true,
@@ -1034,8 +1044,28 @@ impl Desktop {
             self.schedule_scroll_frame(window, cx);
         }
     }
+    pub fn smooth_scroll_modal(
+        &mut self,
+        event: &ScrollEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.modal_motion.wheel(
+            &self.modal_scroll,
+            event,
+            window.line_height(),
+            cx.reduce_motion(),
+        ) {
+            cx.stop_propagation();
+            cx.notify();
+            self.schedule_scroll_frame(window, cx);
+        }
+    }
     fn schedule_scroll_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.scroll_frame_pending || !(self.chat_motion.active() || self.channel_motion.active())
+        if self.scroll_frame_pending
+            || !(self.chat_motion.active()
+                || self.channel_motion.active()
+                || self.modal_motion.active())
         {
             return;
         }
@@ -1047,7 +1077,8 @@ impl Desktop {
                     this.scroll_frame_pending = false;
                     this.chat_motion.shift(this.anchor.take_shift());
                     let changed = this.chat_motion.advance(&this.scroll)
-                        | this.channel_motion.advance(&this.channel_scroll);
+                        | this.channel_motion.advance(&this.channel_scroll)
+                        | this.modal_motion.advance(&this.modal_scroll);
                     if changed {
                         cx.notify();
                     }

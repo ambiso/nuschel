@@ -22,6 +22,8 @@ const GROUP_MS: i64 = 5 * 60 * 1000;
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::images::collect(window);
+        // Which dialog the last frame showed (see dialogs::modal).
+        self.modal_seen.set(self.modal_shown.take());
         self.apply_composer_acks(window, cx);
         self.reconcile_selection(window, cx);
         self.settle_timeline();
