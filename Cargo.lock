@@ -6902,6 +6902,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschl-audio-wasm"
+version = "0.1.0"
+dependencies = [
+ "opus-pure",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "nuschl-cli"
 version = "0.1.0"
 dependencies = [

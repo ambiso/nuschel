@@ -89,7 +89,8 @@ deny = [
   ], reason = "Native audio APIs belong in the media worker" },
   { name = "opus-pure", wrappers = [
     "nuschl-media-worker",
-  ], reason = "Keep codec SIMD and packet processing in the media worker" },
+    "nuschl-audio-wasm",
+  ], reason = "Keep codec processing in the native media worker or separate browser audio worker WASM memory, outside the UI and TLS session" },
   { name = "sonora", wrappers = [
     "nuschl-media-worker",
   ], reason = "DSP runs outside the UI and network session" },

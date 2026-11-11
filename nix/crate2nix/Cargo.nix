@@ -53,6 +53,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-audio-wasm" = rec {
+      packageId = "nuschl-audio-wasm";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-audio-wasm";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-cli" = rec {
       packageId = "nuschl-cli";
       build = internal.buildRustCrateWithFeatures {
@@ -22535,6 +22545,25 @@ rec {
           "frame-timing" = [ "dep:gpui-profiler" ];
         };
         resolvedDefaultFeatures = [ "frame-timing" ];
+      };
+      "nuschl-audio-wasm" = rec {
+        crateName = "nuschl-audio-wasm";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/audio-wasm; };
+        libName = "nuschl_audio_wasm";type = [ "cdylib" "rlib" ];
+        dependencies = [
+          {
+            name = "opus-pure";
+            packageId = "opus-pure";
+          }
+          {
+            name = "wasm-bindgen";
+            packageId = "wasm-bindgen";
+            target = { target, features }: (("wasm32" == target."arch" or null) && ("unknown" == target."os" or null));
+          }
+        ];
+
       };
       "nuschl-cli" = rec {
         crateName = "nuschl-cli";

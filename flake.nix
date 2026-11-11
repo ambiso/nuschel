@@ -459,6 +459,7 @@
         packages.web-relay = crates.project.workspaceMembers."nuschl-web-relay".build;
         packages.web-client = webClient.app;
         packages.web-wasm = webClient.wasm;
+        packages.web-audio-wasm = webClient.audioWasm;
         # Keep share-link routes at the root; the Svelte client lives at /app/.
         packages.web-site = pkgs.runCommand "nuschl-web-site" { } ''
           cp -R ${./web/site} "$out"
