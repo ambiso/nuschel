@@ -7,6 +7,7 @@
 pub mod client;
 pub mod conversation;
 pub mod favicon;
+pub mod finder;
 pub mod input;
 pub mod names;
 #[cfg(feature = "native")]
