@@ -320,8 +320,8 @@ fn sidebar(
 ) -> AnyElement {
     let server = &this.servers[server_index];
     let voice_channel = server.voice_channel();
-    let rows = this
-        .tree_rows(server_index)
+    let rows = server
+        .tree_rows()
         .into_iter()
         .map(|row| match row {
             TreeRow::Channel {
@@ -571,7 +571,7 @@ fn channel_row(
     let server = &this.servers[server_index];
     let entry = &server.channels[index];
     let id = entry.id;
-    let collapsed = !this.channel_expanded(server_index, id);
+    let collapsed = !server.channel_expanded(id);
     let in_voice = voice_channel == Some(id);
     let full_name = entry.name.clone();
     div()
@@ -641,13 +641,13 @@ fn channel_row(
                         .aria_label(format!("Toggle {}", entry.name))
                         .hover(|style| style.bg(color(BORDER_STRONG)).text_color(color(TEXT)))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.toggle_channel(server_index, id);
+                            this.servers[server_index].toggle_channel(id);
                             cx.stop_propagation();
                             cx.notify();
                         }))
                         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                             if activation_key(event) {
-                                this.toggle_channel(server_index, id);
+                                this.servers[server_index].toggle_channel(id);
                                 cx.stop_propagation();
                                 cx.notify();
                             }

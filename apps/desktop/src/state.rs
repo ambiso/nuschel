@@ -340,6 +340,8 @@ pub struct ServerView {
     pub whisper: Option<String>,
     /// Channel path from a `mumble://` link, joined once the tree has loaded.
     pub pending_channel: Vec<String>,
+    /// Branches opened or closed by hand this session, by channel id.
+    pub expansion: BTreeMap<u32, bool>,
 }
 impl ServerView {
     fn new(bookmark: ServerBookmark) -> Self {
@@ -403,6 +405,7 @@ impl ServerView {
             avatar_requests: BTreeSet::new(),
             whisper: None,
             pending_channel: Vec::new(),
+            expansion: BTreeMap::new(),
         }
     }
     pub fn status_label(&self) -> String {
@@ -450,6 +453,179 @@ impl ServerView {
             .or(self.bookmark.certificate_sha256.as_ref())
             .map(|pin| self.bookmark.history_identity(pin))
     }
+    pub fn channel_rows(&self) -> Vec<(usize, usize, bool)> {
+        let server = self;
+        let mut pending = server
+            .channels
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, channel)| channel.parent.is_none())
+            .map(|(index, _)| (index, 0))
+            .collect::<Vec<_>>();
+        let mut visited = BTreeSet::new();
+        let mut rows = Vec::new();
+        while let Some((index, depth)) = pending.pop() {
+            let channel = &server.channels[index];
+            if !visited.insert(channel.id) {
+                continue;
+            }
+            let children = server
+                .channels
+                .iter()
+                .enumerate()
+                .filter(|(_, child)| child.parent == Some(channel.id))
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            rows.push((index, depth, !children.is_empty()));
+            if self.channel_expanded(channel.id) {
+                pending.extend(children.into_iter().rev().map(|index| (index, depth + 1)));
+            }
+        }
+        rows
+    }
+    /// Channels in tree order with each expanded channel's users beneath it.
+    pub fn tree_rows(&self) -> Vec<TreeRow> {
+        let server = self;
+        let mut users_by_channel = BTreeMap::<u32, Vec<&User>>::new();
+        for user in server.users.values() {
+            users_by_channel.entry(user.channel).or_default().push(user);
+        }
+        let mut rows = Vec::new();
+        for (index, depth, has_children) in self.channel_rows() {
+            let channel = &server.channels[index];
+            let TextTarget::Channel(id) = channel.target else {
+                continue;
+            };
+            let expanded = self.channel_expanded(id);
+            let hidden = if has_children && !expanded {
+                self.subtree(id)
+                    .into_iter()
+                    .filter(|child| *child != id)
+                    .flat_map(|child| users_by_channel.get(&child).cloned().unwrap_or_default())
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            rows.push(TreeRow::Channel {
+                index,
+                depth,
+                has_children,
+                hidden_users: hidden.len(),
+                hidden_talking: hidden
+                    .iter()
+                    .any(|user| server.talking.contains(&user.session)),
+            });
+            if let Some(users) = users_by_channel.get_mut(&id) {
+                users.sort_by(|a, b| {
+                    a.name
+                        .to_lowercase()
+                        .cmp(&b.name.to_lowercase())
+                        .then(a.session.cmp(&b.session))
+                });
+                rows.extend(users.iter().map(|user| TreeRow::User {
+                    session: user.session,
+                    depth: depth + 1,
+                }));
+            }
+            rows.extend(
+                server
+                    .users
+                    .values()
+                    .filter(|user| user.listening.contains(&id))
+                    .map(|user| TreeRow::Listener {
+                        session: user.session,
+                        depth: depth + 1,
+                    }),
+            );
+        }
+        rows
+    }
+    fn subtree(&self, root: u32) -> Vec<u32> {
+        let server = self;
+        let mut found = vec![root];
+        let mut index = 0;
+        while index < found.len() && found.len() <= server.channels.len() {
+            let parent = found[index];
+            found.extend(
+                server
+                    .channels
+                    .iter()
+                    .filter(|channel| channel.parent == Some(parent) && channel.id != parent)
+                    .filter_map(|channel| match channel.target {
+                        TextTarget::Channel(id) if !found.contains(&id) => Some(id),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            index += 1;
+        }
+        found
+    }
+    /// Roots and the branch holding our own voice channel start expanded;
+    /// explicit choices made during the session take precedence.
+    pub fn channel_expanded(&self, id: u32) -> bool {
+        let server = self;
+        self.expansion.get(&id).copied().unwrap_or_else(|| {
+            server
+                .channels
+                .iter()
+                .any(|channel| channel.id == id && channel.parent.is_none())
+                || self.holds_voice(id)
+        })
+    }
+    fn holds_voice(&self, id: u32) -> bool {
+        let server = self;
+        let Some(mut current) = server.voice_channel() else {
+            return false;
+        };
+        for _ in 0..server.channels.len() {
+            let Some(parent) = server
+                .channels
+                .iter()
+                .find(|channel| channel.target == TextTarget::Channel(current))
+                .and_then(|channel| channel.parent)
+            else {
+                return false;
+            };
+            if parent == id {
+                return true;
+            }
+            current = parent;
+        }
+        false
+    }
+    pub fn toggle_channel(&mut self, id: u32) {
+        let expanded = self.channel_expanded(id);
+        self.expansion.insert(id, !expanded);
+    }
+    /// Branches where people are open on every connect; anyone who arrives
+    /// later in a collapsed branch shows as a count on it.
+    fn expand_occupied(&mut self) {
+        for user in self.users.values() {
+            let mut current = user.channel;
+            for _ in 0..self.channels.len() {
+                let Some(parent) = self
+                    .channels
+                    .iter()
+                    .find(|channel| channel.target == TextTarget::Channel(current))
+                    .and_then(|channel| channel.parent)
+                else {
+                    break;
+                };
+                self.expansion.insert(parent, true);
+                current = parent;
+            }
+        }
+    }
+    /// Channels in display order: by position, then name.
+    fn sort_channels(&mut self) {
+        self.channels.sort_by(|a, b| {
+            a.position
+                .cmp(&b.position)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+    }
 }
 
 pub struct SearchView {
@@ -492,7 +668,6 @@ struct PendingSend {
 pub struct Desktop {
     pub servers: Vec<ServerView>,
     pub navigation: Navigation,
-    expansion: BTreeMap<(String, u32), bool>,
     pub history_enabled: bool,
     pub backend: Backend,
     pub profile: Profile,
@@ -622,7 +797,6 @@ impl Desktop {
         let mut desktop = Self {
             servers: bookmarks.into_iter().map(ServerView::new).collect(),
             navigation: Navigation::default(),
-            expansion: BTreeMap::new(),
             history_enabled: true,
             notes: crate::notify::start(&handle),
             backend: Backend::new(handle, profile.clone(), settings.clone()),
@@ -871,160 +1045,6 @@ impl Desktop {
         {
             message.expanded = !message.expanded;
         }
-    }
-    pub fn channel_rows(&self, server_index: usize) -> Vec<(usize, usize, bool)> {
-        let Some(server) = self.servers.get(server_index) else {
-            return Vec::new();
-        };
-        let mut pending = server
-            .channels
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(_, channel)| channel.parent.is_none())
-            .map(|(index, _)| (index, 0))
-            .collect::<Vec<_>>();
-        let mut visited = BTreeSet::new();
-        let mut rows = Vec::new();
-        while let Some((index, depth)) = pending.pop() {
-            let channel = &server.channels[index];
-            if !visited.insert(channel.id) {
-                continue;
-            }
-            let children = server
-                .channels
-                .iter()
-                .enumerate()
-                .filter(|(_, child)| child.parent == Some(channel.id))
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            rows.push((index, depth, !children.is_empty()));
-            if self.channel_expanded(server_index, channel.id) {
-                pending.extend(children.into_iter().rev().map(|index| (index, depth + 1)));
-            }
-        }
-        rows
-    }
-    /// Channels in tree order with each expanded channel's users beneath it.
-    pub fn tree_rows(&self, server_index: usize) -> Vec<TreeRow> {
-        let Some(server) = self.servers.get(server_index) else {
-            return Vec::new();
-        };
-        let mut users_by_channel = BTreeMap::<u32, Vec<&User>>::new();
-        for user in server.users.values() {
-            users_by_channel.entry(user.channel).or_default().push(user);
-        }
-        let mut rows = Vec::new();
-        for (index, depth, has_children) in self.channel_rows(server_index) {
-            let channel = &server.channels[index];
-            let TextTarget::Channel(id) = channel.target else {
-                continue;
-            };
-            let expanded = self.channel_expanded(server_index, id);
-            let hidden = if has_children && !expanded {
-                self.subtree(server_index, id)
-                    .into_iter()
-                    .filter(|child| *child != id)
-                    .flat_map(|child| users_by_channel.get(&child).cloned().unwrap_or_default())
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
-            rows.push(TreeRow::Channel {
-                index,
-                depth,
-                has_children,
-                hidden_users: hidden.len(),
-                hidden_talking: hidden
-                    .iter()
-                    .any(|user| server.talking.contains(&user.session)),
-            });
-            if let Some(users) = users_by_channel.get_mut(&id) {
-                users.sort_by(|a, b| {
-                    a.name
-                        .to_lowercase()
-                        .cmp(&b.name.to_lowercase())
-                        .then(a.session.cmp(&b.session))
-                });
-                rows.extend(users.iter().map(|user| TreeRow::User {
-                    session: user.session,
-                    depth: depth + 1,
-                }));
-            }
-            rows.extend(
-                server
-                    .users
-                    .values()
-                    .filter(|user| user.listening.contains(&id))
-                    .map(|user| TreeRow::Listener {
-                        session: user.session,
-                        depth: depth + 1,
-                    }),
-            );
-        }
-        rows
-    }
-    fn subtree(&self, server_index: usize, root: u32) -> Vec<u32> {
-        let server = &self.servers[server_index];
-        let mut found = vec![root];
-        let mut index = 0;
-        while index < found.len() && found.len() <= server.channels.len() {
-            let parent = found[index];
-            found.extend(
-                server
-                    .channels
-                    .iter()
-                    .filter(|channel| channel.parent == Some(parent) && channel.id != parent)
-                    .filter_map(|channel| match channel.target {
-                        TextTarget::Channel(id) if !found.contains(&id) => Some(id),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            index += 1;
-        }
-        found
-    }
-    /// Roots and the branch holding our own voice channel start expanded;
-    /// explicit choices made during the session take precedence.
-    pub fn channel_expanded(&self, server_index: usize, id: u32) -> bool {
-        let server = &self.servers[server_index];
-        self.expansion
-            .get(&(server.id.clone(), id))
-            .copied()
-            .unwrap_or_else(|| {
-                server
-                    .channels
-                    .iter()
-                    .any(|channel| channel.id == id && channel.parent.is_none())
-                    || self.holds_voice(server_index, id)
-            })
-    }
-    fn holds_voice(&self, server_index: usize, id: u32) -> bool {
-        let server = &self.servers[server_index];
-        let Some(mut current) = server.voice_channel() else {
-            return false;
-        };
-        for _ in 0..server.channels.len() {
-            let Some(parent) = server
-                .channels
-                .iter()
-                .find(|channel| channel.target == TextTarget::Channel(current))
-                .and_then(|channel| channel.parent)
-            else {
-                return false;
-            };
-            if parent == id {
-                return true;
-            }
-            current = parent;
-        }
-        false
-    }
-    pub fn toggle_channel(&mut self, server_index: usize, id: u32) {
-        let expanded = self.channel_expanded(server_index, id);
-        self.expansion
-            .insert((self.servers[server_index].id.clone(), id), !expanded);
     }
     pub fn smooth_scroll(
         &mut self,
@@ -2566,23 +2586,7 @@ impl Desktop {
                 server.status = Status::Connected;
                 server.reconnecting = None;
                 server.own_session = Some(session);
-                // Branches where people are open on every connect; anyone who
-                // arrives later in a collapsed branch shows as a count on it.
-                for user in server.users.values() {
-                    let mut current = user.channel;
-                    for _ in 0..server.channels.len() {
-                        let Some(parent) = server
-                            .channels
-                            .iter()
-                            .find(|channel| channel.target == TextTarget::Channel(current))
-                            .and_then(|channel| channel.parent)
-                        else {
-                            break;
-                        };
-                        self.expansion.insert((server.id.clone(), parent), true);
-                        current = parent;
-                    }
-                }
+                server.expand_occupied();
                 self.passwords.remove(&server.id);
                 let path = std::mem::take(&mut server.pending_channel);
                 if !path.is_empty() {
@@ -2681,11 +2685,7 @@ impl Desktop {
                         ..Default::default()
                     });
                 }
-                server.channels.sort_by(|a, b| {
-                    a.position
-                        .cmp(&b.position)
-                        .then_with(|| a.name.cmp(&b.name))
-                });
+                server.sort_channels();
             }
             SessionEvent::Permissions {
                 channel,
@@ -2772,7 +2772,7 @@ impl Desktop {
                 }
             }
             SessionEvent::ChannelRemoved(id) => {
-                self.expansion.remove(&(server.id.clone(), id));
+                server.expansion.remove(&id);
                 server
                     .bookmark
                     .cached_channels
@@ -2991,5 +2991,225 @@ mod tests {
         assert_eq!(channel.messages.len(), 30);
         assert_eq!(channel.next_before, Some(11));
         assert!(!channel.beginning);
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
+    use super::{ChannelView, ServerView, TreeRow};
+    use nuschel_session::{
+        config::ServerBookmark,
+        connection::{TextTarget, User},
+    };
+
+    fn channel(id: u32, parent: Option<u32>, name: &str, position: i32) -> ChannelView {
+        ChannelView {
+            id,
+            parent,
+            name: name.into(),
+            position,
+            target: TextTarget::Channel(id),
+            storage_key: id.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn user(session: u32, name: &str, channel: u32) -> User {
+        User {
+            session,
+            name: name.into(),
+            channel,
+            ..Default::default()
+        }
+    }
+
+    /// Root holds AFK, Lobby (Development; Gaming with Shooters and Strategy)
+    /// and Music (Listening party), which its position sorts first. We are in
+    /// Development; Margaret talks in Listening party; bob listens to
+    /// Development from AFK.
+    fn sample() -> ServerView {
+        let mut server =
+            ServerView::new(ServerBookmark::new("Test", "localhost", 64738, "andi").unwrap());
+        server.channels = vec![
+            channel(0, None, "Root", 0),
+            channel(1, Some(0), "AFK", 0),
+            channel(2, Some(0), "Lobby", 0),
+            channel(3, Some(2), "Development", 0),
+            channel(4, Some(2), "Gaming", 0),
+            channel(5, Some(4), "Shooters", 0),
+            channel(6, Some(4), "Strategy", 0),
+            channel(7, Some(0), "Music", -1),
+            channel(8, Some(7), "Listening party", 0),
+            // Its parent is unknown: never shown.
+            channel(9, Some(98), "Orphan", 0),
+        ];
+        server.sort_channels();
+        // A direct conversation shares the list but is not part of the tree.
+        server.channels.push(ChannelView {
+            id: u32::MAX,
+            name: "@ Zed".into(),
+            position: i32::MAX,
+            target: TextTarget::Direct(7),
+            ..Default::default()
+        });
+        let mut bob = user(6, "bob", 1);
+        bob.listening.insert(3);
+        for user in [
+            user(1, "andi", 3),
+            user(2, "Ada Lovelace", 3),
+            user(3, "grace", 3),
+            user(4, "Linus", 5),
+            user(5, "Margaret", 8),
+            bob,
+            user(7, "Zed", 0),
+            user(8, "Lost", 99),
+            user(9, "Orphaned", 9),
+            user(10, "ada lovelace", 3),
+        ] {
+            server.users.insert(user.session, user);
+        }
+        server.own_session = Some(1);
+        server.talking.insert(5);
+        server
+    }
+
+    /// One line per row: `v`/`>` for an open/closed branch, `@` a person,
+    /// `~` a listener, `[n]` people inside a closed branch.
+    fn describe(server: &ServerView) -> Vec<String> {
+        server
+            .tree_rows()
+            .into_iter()
+            .map(|row| match row {
+                TreeRow::Channel {
+                    index,
+                    depth,
+                    has_children,
+                    hidden_users,
+                    hidden_talking,
+                } => {
+                    let channel = &server.channels[index];
+                    let branch = match (has_children, server.channel_expanded(channel.id)) {
+                        (false, _) => " ",
+                        (true, true) => "v",
+                        (true, false) => ">",
+                    };
+                    let hidden = match hidden_users {
+                        0 => String::new(),
+                        count if hidden_talking => format!(" [{count} talking]"),
+                        count => format!(" [{count}]"),
+                    };
+                    format!("{}{branch} {}{hidden}", "  ".repeat(depth), channel.name)
+                }
+                TreeRow::User { session, depth } => {
+                    format!("{}@{}", "  ".repeat(depth), server.users[&session].name)
+                }
+                TreeRow::Listener { session, depth } => {
+                    format!("{}~{}", "  ".repeat(depth), server.users[&session].name)
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn roots_and_the_voice_branch_start_open() {
+        assert_eq!(
+            describe(&sample()),
+            [
+                "v Root",
+                "  @Zed",
+                "  > Music [1 talking]",
+                "    AFK",
+                "    @bob",
+                "  v Lobby",
+                "      Development",
+                "      @Ada Lovelace",
+                "      @ada lovelace",
+                "      @andi",
+                "      @grace",
+                "      ~bob",
+                "    > Gaming [1]",
+            ]
+        );
+    }
+
+    #[test]
+    fn closed_branches_count_who_is_inside_and_keep_their_own_people() {
+        let mut server = sample();
+        server.toggle_channel(4);
+        assert_eq!(
+            describe(&server)[12..],
+            [
+                "    v Gaming",
+                "        Shooters",
+                "        @Linus",
+                "        Strategy",
+            ]
+        );
+        server.talking.insert(4);
+        server.toggle_channel(2);
+        assert_eq!(describe(&server)[5..], ["  > Lobby [5 talking]"]);
+        server.toggle_channel(0);
+        assert_eq!(describe(&server), ["> Root [7 talking]", "  @Zed"]);
+    }
+
+    #[test]
+    fn the_branch_follows_our_voice_channel_unless_chosen_by_hand() {
+        let mut server = sample();
+        server.users.get_mut(&1).unwrap().channel = 6;
+        let rows = describe(&server);
+        assert!(rows.contains(&"    v Gaming".to_string()), "{rows:#?}");
+        assert!(rows.contains(&"        @andi".to_string()), "{rows:#?}");
+        server.toggle_channel(2);
+        assert_eq!(describe(&server)[5..], ["  > Lobby [5]"]);
+        server.own_session = None;
+        server.expansion.clear();
+        assert_eq!(describe(&server)[5..], ["  > Lobby [5]"]);
+    }
+
+    #[test]
+    fn connecting_opens_every_branch_with_people() {
+        let mut server = sample();
+        server.toggle_channel(2);
+        server.expand_occupied();
+        assert_eq!(
+            describe(&server),
+            [
+                "v Root",
+                "  @Zed",
+                "  v Music",
+                "      Listening party",
+                "      @Margaret",
+                "    AFK",
+                "    @bob",
+                "  v Lobby",
+                "      Development",
+                "      @Ada Lovelace",
+                "      @ada lovelace",
+                "      @andi",
+                "      @grace",
+                "      ~bob",
+                "    v Gaming",
+                "        Shooters",
+                "        @Linus",
+                "        Strategy",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_parent_cycle_or_duplicate_never_hangs() {
+        let mut server = sample();
+        server.channels.push(channel(20, Some(21), "Ping", 0));
+        server.channels.push(channel(21, Some(20), "Pong", 0));
+        server.channels.push(channel(22, Some(22), "Self", 0));
+        server.users.insert(11, user(11, "Loop", 20));
+        server.own_session = Some(11);
+        server.expand_occupied();
+        assert_eq!(describe(&server).len(), 18);
+        // A second Lobby beneath one of Lobby's own descendants.
+        server.channels.push(channel(2, Some(5), "Lobby again", 0));
+        server.expand_occupied();
+        describe(&server);
     }
 }
