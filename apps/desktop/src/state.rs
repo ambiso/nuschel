@@ -50,7 +50,9 @@ pub struct MessageView {
     pub pending: Option<[u8; 16]>,
     /// Sent from this device (or our account's other one).
     pub outgoing: bool,
-    /// Nuschel servers: the author's registration number.
+    /// Nuschel servers: its seq in the conversation (edits, deletions and
+    /// read markers name it), and the author's registration number.
+    pub seq: Option<u64>,
     pub author_id: Option<u32>,
     /// What was typed (the composer edits it).
     pub source: String,
@@ -122,6 +124,7 @@ impl From<RenderedMessage> for MessageView {
             offer,
             pending: message.pending,
             outgoing: message.outgoing,
+            seq: message.seq,
             author_id: message.author_id,
             source: message.message.body,
             edited_ms: message.edited_ms,
@@ -408,6 +411,9 @@ pub struct ServerView {
     pub policy: Option<nuschel_protocol::nuschel::v1::Policy>,
     /// Our direct conversations on a Nuschel server, by id.
     pub directs: BTreeMap<[u8; 16], nuschel_protocol::nuschel::v1::Direct>,
+    /// Edits and deletions of messages not in a timeline yet (editing.rs).
+    pub waiting_changes:
+        std::collections::VecDeque<([u8; 16], u64, crate::editing::Change, std::time::Instant)>,
     pub talking: BTreeSet<u32>,
     pub transport: Option<TransportStats>,
     pub audio: AudioInfo,
@@ -500,6 +506,7 @@ impl ServerView {
             capabilities: Vec::new(),
             policy: None,
             directs: BTreeMap::new(),
+            waiting_changes: Default::default(),
             talking: BTreeSet::new(),
             transport: None,
             audio: AudioInfo::default(),
@@ -3245,8 +3252,29 @@ impl Desktop {
                     {
                         message.pending = None;
                         message.id = seq.map(|seq| seq as i64);
+                        message.seq = seq;
                     }
-                    let index = if let Some(index) = server.channels.iter().position(|channel| {
+                    // A stock direct message from someone we have a durable
+                    // direct conversation with (an image, or from a stock
+                    // client) shows there; it is not in the server's history.
+                    let durable = match (&target, &peer) {
+                        (TextTarget::Direct(_), Some(peer))
+                            if peer.user_id.is_some_and(|id| id != 0) =>
+                        {
+                            server.channels.iter().position(|channel| {
+                                matches!(channel.target, TextTarget::DirectConversation(_))
+                                    && channel.direct_peer.as_ref().and_then(|known| known.user_id)
+                                        == peer.user_id
+                            })
+                        }
+                        _ => None,
+                    };
+                    if durable.is_some() {
+                        message.id = None;
+                    }
+                    let index = if let Some(index) = durable {
+                        index
+                    } else if let Some(index) = server.channels.iter().position(|channel| {
                         channel.storage_key == storage_key
                             || (channel.target == target
                                 && channel.storage_key.starts_with("direct:pending:")
@@ -3391,7 +3419,9 @@ impl Desktop {
                             .get(session)
                             .is_none_or(|user| user.name != message.message.author)
                     });
-                    if matches!(target, TextTarget::Direct(_)) {
+                    if matches!(target, TextTarget::Direct(_))
+                        && !matches!(channel.target, TextTarget::DirectConversation(_))
+                    {
                         channel.target = target;
                         channel.direct_peer = peer;
                         channel.storage_key = storage_key;
@@ -3451,6 +3481,12 @@ impl Desktop {
             self.save_servers_soon(cx);
         }
         self.expire_typing(cx);
+        // Edits and deletions that came before their message's page.
+        for server in 0..self.servers.len() {
+            if !self.servers[server].waiting_changes.is_empty() {
+                self.apply_waiting_changes(server);
+            }
+        }
     }
     /// Write `servers` now, for an action the user waits on; a delayed write
     /// of an older state never lands after it.
@@ -4014,6 +4050,7 @@ fn settle_pending(server: &mut ServerView, key: [u8; 16], seq: Option<u64>) -> b
             match seq {
                 Some(seq) => {
                     message.id = Some(seq as i64);
+                    message.seq = Some(seq);
                     message.status = Some("sent");
                 }
                 None => message.status = Some("not sent"),
@@ -4054,15 +4091,19 @@ impl ChannelView {
                 self.loaded = true;
                 self.next_after = None;
                 self.missed_live = false;
-                // In timeline order (time, then id): local history pages
-                // run by time, and rows stored later may hold older messages.
+                // What arrived since the page was asked for stays: newer by
+                // time (local pages run by time, and rows stored later may
+                // hold older messages) or by id (a server's seqs; our own
+                // message keeps this device's clock).
                 let newest = messages
                     .iter()
                     .filter_map(|message| Some((message.message.observed_at_ms, message.id?)))
                     .max();
+                let newest_id = messages.iter().filter_map(|message| message.id).max();
                 self.messages.retain(|message| {
                     message.id.is_none_or(|id| {
                         newest.is_none_or(|newest| (message.observed_at_ms, id) > newest)
+                            || newest_id.is_none_or(|newest| id > newest)
                     })
                 });
             }

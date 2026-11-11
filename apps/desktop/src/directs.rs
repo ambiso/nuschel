@@ -24,14 +24,16 @@ impl ServerView {
         self.history_source == nuschel_client::HistorySource::ServerArchive
             && self.has("history/1")
             && self.own_user_id().is_some()
-            && peer.user_id.is_some()
+            // 0 is SuperUser, and also what the server says for a deleted
+            // account: never matched to a conversation.
+            && peer.user_id.is_some_and(|id| id != 0)
     }
 
     /// The direct conversation with registered user `user_id`, if known.
     fn direct_with(&self, user_id: u32) -> Option<[u8; 16]> {
         self.directs
             .iter()
-            .find(|(_, direct)| direct.user_id == user_id)
+            .find(|(_, direct)| user_id != 0 && direct.user_id == user_id)
             .map(|(id, _)| *id)
     }
 

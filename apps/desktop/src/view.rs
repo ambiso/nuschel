@@ -1410,8 +1410,9 @@ impl Desktop {
             let newest = channel
                 .messages
                 .iter()
-                .filter_map(|message| message.id)
-                .max();
+                .filter_map(|message| message.seq)
+                .max()
+                .and_then(|seq| i64::try_from(seq).ok());
             if archive
                 && let Some(newest) = newest
                 && newest > channel.read_seq

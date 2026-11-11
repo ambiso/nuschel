@@ -29,6 +29,9 @@ pub struct RenderedMessage {
     pub outgoing: bool,
     /// Our message on a Nuschel server until it is acknowledged: its key.
     pub pending: Option<[u8; 16]>,
+    /// Nuschel servers: the message's seq in its conversation (on a server
+    /// history timeline also its id; never a local row id).
+    pub seq: Option<u64>,
     /// Nuschel servers: the author's registration number (who may edit it).
     pub author_id: Option<u32>,
     /// When it was last edited (Nuschel servers).
@@ -59,6 +62,7 @@ impl RenderedMessage {
             document,
             outgoing,
             pending: None,
+            seq: None,
             author_id: None,
             edited_ms: None,
             deleted: None,
@@ -103,6 +107,9 @@ pub struct ChangeRequest {
     /// The new text of an edit; `None` deletes.
     pub content: Option<String>,
     pub cache: Option<CacheKey>,
+    /// A deletion by someone who may moderate there: the server records it
+    /// as a moderator's (also for their own messages).
+    pub moderator: bool,
 }
 static CHANGES: std::sync::Mutex<BTreeMap<u64, ChangeRequest>> =
     std::sync::Mutex::new(BTreeMap::new());
@@ -198,6 +205,7 @@ async fn render_server_page(
             document,
             outgoing: false,
             pending: None,
+            seq: Some(message.seq),
             author_id: (author.user_id != 0).then_some(author.user_id),
             edited_ms,
             deleted,
@@ -411,7 +419,7 @@ pub struct Backend {
     crypto: nuschel_session::identity::CryptoHandle,
     sender: mpsc::Sender<Event>,
     storage: mpsc::Sender<StorageCommand>,
-    content: mpsc::Sender<ContentJob>,
+    content: mpsc::Sender<ContentWork>,
     connections: BTreeMap<String, Connection>,
     generation: u64,
     settings: watch::Sender<ClientSettings>,
@@ -431,6 +439,27 @@ struct ContentJob {
     identity: String,
     nonce: String,
     text: IncomingText,
+    /// The conversation's timeline is the server's history (its ids are
+    /// seqs): a message without a seq gets no id there.
+    archived: bool,
+}
+/// What the content worker prepares, in the order it arrived: messages, and
+/// edits and deletions of them (so a change never overtakes its message on
+/// the way to local history and the timeline).
+enum ContentWork {
+    Text(Box<ContentJob>),
+    Change(ChangeJob),
+}
+struct ChangeJob {
+    server: String,
+    conversation: [u8; 16],
+    seq: u64,
+    cache: Option<CacheKey>,
+    change: ChangeKind,
+}
+enum ChangeKind {
+    Edit { content: String, edited_ms: i64 },
+    Delete(Deletion),
 }
 enum StorageCommand {
     Append {
@@ -445,10 +474,13 @@ enum StorageCommand {
     },
     /// Our message (by its key) was stored by the server as `seq`.
     Acked { key: [u8; 16], seq: u64 },
-    /// A kept message was edited (`body` and when) or deleted.
+    /// A message was edited or deleted: kept so in local history, then
+    /// shown (`Event::Edited`, `Event::Deleted`).
     Change {
-        cache: CacheKey,
+        server: String,
+        conversation: [u8; 16],
         seq: u64,
+        cache: Option<CacheKey>,
         change: CacheChange,
     },
     Load {
@@ -466,8 +498,12 @@ enum StorageCommand {
     },
 }
 enum CacheChange {
-    Edit { body: String, edited_ms: i64 },
-    Delete { deleted_ms: i64 },
+    Edit {
+        source: String,
+        document: MessageDocument,
+        edited_ms: i64,
+    },
+    Delete(Deletion),
 }
 impl Backend {
     /// The backend, and the events it reports for the desktop to apply.
@@ -949,7 +985,7 @@ async fn connection_loop(
     generation: u64,
     (mut commands, mut sounds): (mpsc::Receiver<Command>, mpsc::Receiver<Sound>),
     events: mpsc::Sender<Event>,
-    (content, storage): (mpsc::Sender<ContentJob>, mpsc::Sender<StorageCommand>),
+    (content, storage): (mpsc::Sender<ContentWork>, mpsc::Sender<StorageCommand>),
     (mut settings, mut voice_keys): (watch::Receiver<ClientSettings>, watch::Receiver<VoiceKeys>),
 ) {
     let id = server.id.clone();
@@ -1098,7 +1134,7 @@ async fn connect_once(
     generation: u64,
     (commands, sounds): (&mut mpsc::Receiver<Command>, &mut mpsc::Receiver<Sound>),
     events: &mpsc::Sender<Event>,
-    (content, storage): (&mpsc::Sender<ContentJob>, &mpsc::Sender<StorageCommand>),
+    (content, storage): (&mpsc::Sender<ContentWork>, &mpsc::Sender<StorageCommand>),
     (settings, voice_keys): (
         &mut watch::Receiver<ClientSettings>,
         &mut watch::Receiver<VoiceKeys>,
@@ -1166,6 +1202,8 @@ async fn connect_once(
     let mut own_session = None;
     // Where each channel's conversation is kept in local history.
     let mut conversation_keys = BTreeMap::<[u8; 16], String>::new();
+    // Timelines here are the server's history (the extension's history/1).
+    let mut server_history = false;
     let mut hashes = BTreeMap::<u32, Option<String>>::new();
     let mut applied_audio = settings.borrow().audio.clone();
     let mut loss_percent = 5_u8;
@@ -1284,13 +1322,13 @@ async fn connect_once(
                     let change = changes().remove(&ack.request_id);
                     if let Some(change) = change {
                         // The server tells others, never us: apply it here.
-                        let (seq, at_ms) = (change.seq, ack.server_ms);
-                        let cache = change.cache.clone();
-                        let (conversation, server) = (change.conversation, change.server.clone());
-                        match change.content {
-                            Some(content) => apply_edit((events, storage), (server, conversation, seq), content, at_ms, cache),
-                            None => apply_delete((events, storage), (server, conversation, seq), Deletion { at_ms, moderator: false }, cache).await,
-                        }
+                        let at_ms = ack.server_ms;
+                        let kind = match change.content {
+                            Some(content) => ChangeKind::Edit { content, edited_ms: at_ms },
+                            None => ChangeKind::Delete(Deletion { at_ms, moderator: change.moderator }),
+                        };
+                        let job = ChangeJob { server: change.server, conversation: change.conversation, seq: change.seq, cache: change.cache, change: kind };
+                        queue_change(content, events, job).await;
                     }
                 },
                 SessionEvent::Nuschel(NuschelEvent::Error(error)) => {
@@ -1310,13 +1348,15 @@ async fn connect_once(
                         identity: server.history_identity(peer),
                         channel: conversation_keys.get(&conversation).cloned().unwrap_or_else(|| direct_conversation_key(&conversation)),
                     });
-                    let place = (id.clone(), conversation, message.target);
-                    if message.kind == v1::message::Kind::Edit as i32 {
-                        apply_edit((events, storage), place, message.content, message.edited_ms, cache);
+                    let kind = if message.kind == v1::message::Kind::Edit as i32 {
+                        ChangeKind::Edit { content: message.content, edited_ms: message.edited_ms }
                     } else if message.kind == v1::message::Kind::Delete as i32 {
-                        let deletion = Deletion { at_ms: message.deleted_ms, moderator: message.delete_reason == 1 };
-                        apply_delete((events, storage), place, deletion, cache).await;
-                    }
+                        ChangeKind::Delete(Deletion { at_ms: message.deleted_ms, moderator: message.delete_reason == 1 })
+                    } else {
+                        continue;
+                    };
+                    let job = ChangeJob { server: id.clone(), conversation, seq: message.target, cache, change: kind };
+                    queue_change(content, events, job).await;
                 },
                 SessionEvent::ChannelInfo { channel, info } => {
                     if let Some(conversation) = nuschel_protocol::nuschel::id(&info.conversation)
@@ -1327,6 +1367,7 @@ async fn connect_once(
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::ChannelInfo { channel, info } }).await;
                 },
                 SessionEvent::Negotiated(negotiated) => {
+                    server_history = negotiated.capabilities.iter().any(|capability| capability == "history/1");
                     // Remember what this server offers: a weaker answer later fails.
                     let raised = nuschel_session::sticky::PolicyStore::load(&profile.config_dir)
                         .and_then(|mut store| store.raise(&server.host, server.port, negotiated.nuschel, &negotiated.capabilities));
@@ -1383,8 +1424,9 @@ async fn connect_once(
                 },
                 SessionEvent::Text(text) => if let Some(peer) = &peer {
                     if text.outgoing { let _ = events.send(Event::Sent { server: id.clone(), generation, target: text.target.clone(), body: text.body.clone() }).await; }
-                    let job = ContentJob { server: id.clone(), generation, identity: server.history_identity(peer), nonce: nonce.clone(), text };
-                    if content.try_send(job).is_err() {
+                    let archived = server_history && matches!(text.target, TextTarget::Channel(_) | TextTarget::DirectConversation(_));
+                    let job = ContentJob { server: id.clone(), generation, identity: server.history_identity(peer), nonce: nonce.clone(), text, archived };
+                    if content.try_send(ContentWork::Text(Box::new(job))).is_err() {
                         if !content_gap { let _ = events.send(Event::HistoryError("Chat processing is overloaded; some received messages could not be saved.".into())).await; content_gap = true; }
                     } else { content_gap = false; }
                 },
@@ -1499,62 +1541,19 @@ async fn mark_talking(
     }
 }
 
-/// Show an edit (rendered like any message) and keep it in local history.
-fn apply_edit(
-    (events, storage): (&mpsc::Sender<Event>, &mpsc::Sender<StorageCommand>),
-    (server, conversation, seq): (String, [u8; 16], u64),
-    content: String,
-    edited_ms: i64,
-    cache: Option<CacheKey>,
+/// An edit or deletion joins the messages on their way to the timeline.
+async fn queue_change(
+    content: &mpsc::Sender<ContentWork>,
+    events: &mpsc::Sender<Event>,
+    job: ChangeJob,
 ) {
-    let (events, storage) = (events.clone(), storage.clone());
-    tokio::spawn(async move {
-        let (source, document) = prepare(&content, false).await;
-        if let Some(cache) = cache {
-            let change = CacheChange::Edit {
-                body: source.clone(),
-                edited_ms,
-            };
-            let _ = storage
-                .send(StorageCommand::Change { cache, seq, change })
-                .await;
-        }
+    if content.try_send(ContentWork::Change(job)).is_err() {
         let _ = events
-            .send(Event::Edited {
-                server,
-                conversation,
-                seq,
-                source,
-                document,
-                edited_ms,
-            })
-            .await;
-    });
-}
-
-/// Show a tombstone, and drop the text from local history too.
-async fn apply_delete(
-    (events, storage): (&mpsc::Sender<Event>, &mpsc::Sender<StorageCommand>),
-    (server, conversation, seq): (String, [u8; 16], u64),
-    deletion: Deletion,
-    cache: Option<CacheKey>,
-) {
-    if let Some(cache) = cache {
-        let change = CacheChange::Delete {
-            deleted_ms: deletion.at_ms,
-        };
-        let _ = storage
-            .send(StorageCommand::Change { cache, seq, change })
+            .send(Event::HistoryError(
+                "Chat processing is overloaded; an edit or deletion was not shown.".into(),
+            ))
             .await;
     }
-    let _ = events
-        .send(Event::Deleted {
-            server,
-            conversation,
-            seq,
-            deletion,
-        })
-        .await;
 }
 
 /// The content worker next to this executable, looked up once.
@@ -1584,27 +1583,108 @@ async fn prepare(source: &str, html: bool) -> (String, MessageDocument) {
     }
 }
 async fn content_loop(
-    mut jobs: mpsc::Receiver<ContentJob>,
+    mut jobs: mpsc::Receiver<ContentWork>,
     storage: mpsc::Sender<StorageCommand>,
     events: mpsc::Sender<Event>,
 ) {
-    while let Some(job) = jobs.recv().await {
-        let (source, document) = prepare(&job.text.body, job.text.html).await;
-        if storage
-            .send(StorageCommand::Append {
-                job: Box::new(job),
-                source,
-                document,
-            })
-            .await
-            .is_err()
-        {
+    while let Some(work) = jobs.recv().await {
+        let command = match work {
+            ContentWork::Text(job) => {
+                let (source, document) = prepare(&job.text.body, job.text.html).await;
+                StorageCommand::Append {
+                    job,
+                    source,
+                    document,
+                }
+            }
+            ContentWork::Change(job) => StorageCommand::Change {
+                server: job.server,
+                conversation: job.conversation,
+                seq: job.seq,
+                cache: job.cache,
+                change: match job.change {
+                    ChangeKind::Edit { content, edited_ms } => {
+                        let (source, document) = prepare(&content, false).await;
+                        CacheChange::Edit {
+                            source,
+                            document,
+                            edited_ms,
+                        }
+                    }
+                    ChangeKind::Delete(deletion) => CacheChange::Delete(deletion),
+                },
+            },
+        };
+        if storage.send(command).await.is_err() {
             let _ = events
                 .send(Event::HistoryError(
                     "Local history worker has stopped.".into(),
                 ))
                 .await;
             break;
+        }
+    }
+}
+/// Edits and deletions kept in local history recently, by where they are
+/// kept and seq: a history page rendered meanwhile still has the older text,
+/// and must not bring it (or a deleted message) back.
+#[derive(Default)]
+struct RecentChanges {
+    changes: BTreeMap<Kept, RecentChange>,
+    order: std::collections::VecDeque<Kept>,
+}
+/// Where a message is kept: server identity, storage key and seq.
+type Kept = (String, String, i64);
+/// The newest edit (text and time) and the deletion time, if any.
+#[derive(Default)]
+struct RecentChange {
+    edit: Option<(String, i64)>,
+    deleted: Option<i64>,
+}
+impl RecentChanges {
+    const KEEP: usize = 1024;
+    fn note(&mut self, cache: &CacheKey, seq: i64, change: &CacheChange) {
+        let key = (cache.identity.clone(), cache.channel.clone(), seq);
+        if !self.changes.contains_key(&key) {
+            self.order.push_back(key.clone());
+            while self.order.len() > Self::KEEP {
+                if let Some(old) = self.order.pop_front() {
+                    self.changes.remove(&old);
+                }
+            }
+        }
+        let entry = self.changes.entry(key).or_default();
+        match change {
+            CacheChange::Edit {
+                source, edited_ms, ..
+            } => {
+                if entry.edit.as_ref().is_none_or(|(_, at)| at <= edited_ms) {
+                    entry.edit = Some((source.clone(), *edited_ms));
+                }
+            }
+            CacheChange::Delete(deletion) => entry.deleted = Some(deletion.at_ms),
+        }
+    }
+    fn patch(&self, records: &mut [nuschel_core::ServerRecord]) {
+        for record in records {
+            let key = (
+                record.message.server.clone(),
+                record.message.channel.clone(),
+                record.seq,
+            );
+            let Some(RecentChange { edit, deleted }) = self.changes.get(&key) else {
+                continue;
+            };
+            if let Some((body, at)) = edit
+                && record.edited_ms.is_none_or(|stored| stored < *at)
+            {
+                record.message.body.clone_from(body);
+                record.edited_ms = Some(*at);
+            }
+            if deleted.is_some() && record.deleted_ms.is_none() {
+                record.deleted_ms = *deleted;
+                record.message.body.clear();
+            }
         }
     }
 }
@@ -1618,6 +1698,7 @@ async fn storage_loop(
     // them: their rows by key, and acknowledgements that came first.
     let mut unacked_rows = BTreeMap::<[u8; 16], i64>::new();
     let mut early_acks = BTreeMap::<[u8; 16], u64>::new();
+    let mut recent = RecentChanges::default();
     // Pages render in their own task, so appends of new messages never wait
     // for one; they arrive in the order they were loaded.
     let (pages, rendering) = mpsc::channel(16);
@@ -1683,19 +1764,20 @@ async fn storage_loop(
                     }
                     let Some(worker) = &mut storage else { break };
                     let saved = match seq {
-                        Some(seq) => worker
-                            .store_server(vec![nuschel_core::ServerRecord {
+                        Some(seq) => {
+                            let mut records = vec![nuschel_core::ServerRecord {
                                 message: message.clone(),
                                 seq,
                                 edited_ms: None,
                                 deleted_ms: None,
-                            }])
-                            .await
-                            .and_then(|ids| {
+                            }];
+                            recent.patch(&mut records);
+                            worker.store_server(records).await.and_then(|ids| {
                                 ids.first().copied().ok_or_else(|| {
                                     Error::Worker("unexpected storage response".into())
                                 })
-                            }),
+                            })
+                        }
                         None => worker.append(message.clone()).await,
                     };
                     match saved {
@@ -1726,6 +1808,9 @@ async fn storage_loop(
                 let id = match (job.text.seq, job.text.pending) {
                     (Some(seq), _) => Some(seq as i64),
                     (None, Some(_)) => None,
+                    // Not in the server's history (sent the stock way): no
+                    // id that could be taken for a seq.
+                    (None, None) if job.archived => None,
                     (None, None) => id,
                 };
                 let author_id = job
@@ -1747,6 +1832,7 @@ async fn storage_loop(
                             document,
                             outgoing: job.text.outgoing,
                             pending: job.text.pending,
+                            seq: job.text.seq,
                             author_id,
                             edited_ms: None,
                             deleted: None,
@@ -1754,7 +1840,8 @@ async fn storage_loop(
                     })
                     .await;
             }
-            StorageCommand::StoreServer { records } => {
+            StorageCommand::StoreServer { mut records } => {
+                recent.patch(&mut records);
                 let result = match &mut storage {
                     Some(worker) => worker.store_server(records).await.map(|_| ()),
                     None => Err(Error::Worker("Local history is unavailable.".into())),
@@ -1780,25 +1867,69 @@ async fn storage_loop(
                     early_acks.insert(key, seq);
                 }
             },
-            StorageCommand::Change { cache, seq, change } => {
-                if let Some(worker) = &mut storage {
-                    let seq = seq as i64;
-                    let result = match change {
-                        CacheChange::Edit { body, edited_ms } => {
-                            worker
-                                .edit(cache.identity, cache.channel, seq, body, edited_ms)
-                                .await
+            StorageCommand::Change {
+                server,
+                conversation,
+                seq,
+                cache,
+                change,
+            } => {
+                if let Some(cache) = cache {
+                    // Remembered for a page already on its way with the
+                    // older text, which is kept after this.
+                    recent.note(&cache, seq as i64, &change);
+                    if let Some(worker) = &mut storage {
+                        let result = match &change {
+                            CacheChange::Edit {
+                                source, edited_ms, ..
+                            } => {
+                                worker
+                                    .edit(
+                                        cache.identity,
+                                        cache.channel,
+                                        seq as i64,
+                                        source.clone(),
+                                        *edited_ms,
+                                    )
+                                    .await
+                            }
+                            CacheChange::Delete(deletion) => {
+                                worker
+                                    .delete(
+                                        cache.identity,
+                                        cache.channel,
+                                        seq as i64,
+                                        deletion.at_ms,
+                                    )
+                                    .await
+                            }
+                        };
+                        if result.is_err() {
+                            storage.take();
                         }
-                        CacheChange::Delete { deleted_ms } => {
-                            worker
-                                .delete(cache.identity, cache.channel, seq, deleted_ms)
-                                .await
-                        }
-                    };
-                    if result.is_err() {
-                        storage.take();
                     }
                 }
+                let event = match change {
+                    CacheChange::Edit {
+                        source,
+                        document,
+                        edited_ms,
+                    } => Event::Edited {
+                        server,
+                        conversation,
+                        seq,
+                        source,
+                        document,
+                        edited_ms,
+                    },
+                    CacheChange::Delete(deletion) => Event::Deleted {
+                        server,
+                        conversation,
+                        seq,
+                        deletion,
+                    },
+                };
+                let _ = events.send(event).await;
             }
             StorageCommand::Search {
                 request,
@@ -1877,6 +2008,7 @@ async fn history_loop(
                 message: entry.message,
                 outgoing: false,
                 pending: None,
+                seq: entry.seq.and_then(|seq| u64::try_from(seq).ok()),
                 author_id: None,
                 edited_ms: entry.edited_ms,
                 deleted: entry.deleted_ms.map(|at_ms| Deletion {
@@ -1986,4 +2118,69 @@ fn pinned_host(audio_host: &(Option<String>, tokio::time::Instant)) -> Option<St
         .0
         .clone()
         .filter(|_| tokio::time::Instant::now() < audio_host.1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CacheChange, CacheKey, Deletion, RecentChanges};
+    use nuschel_core::{ChatMessage, MessageDocument, ServerRecord};
+
+    fn record(seq: i64, body: &str) -> ServerRecord {
+        ServerRecord {
+            message: ChatMessage {
+                server: "server".into(),
+                channel: "3".into(),
+                author: "Ada".into(),
+                observed_at_ms: seq,
+                body: body.into(),
+            },
+            seq,
+            edited_ms: None,
+            deleted_ms: None,
+        }
+    }
+
+    #[test]
+    fn a_page_on_its_way_does_not_bring_back_what_changed_meanwhile() {
+        let cache = CacheKey {
+            identity: "server".into(),
+            channel: "3".into(),
+        };
+        let mut recent = RecentChanges::default();
+        let edit = |body: &str, edited_ms| CacheChange::Edit {
+            source: body.into(),
+            document: MessageDocument { blocks: Vec::new() },
+            edited_ms,
+        };
+        recent.note(&cache, 1, &edit("newer", 20));
+        recent.note(&cache, 1, &edit("older", 10));
+        let deletion = Deletion {
+            at_ms: 30,
+            moderator: false,
+        };
+        recent.note(&cache, 2, &CacheChange::Delete(deletion));
+        let mut page = vec![
+            record(1, "original"),
+            record(2, "secret"),
+            record(3, "other"),
+        ];
+        recent.patch(&mut page);
+        assert_eq!(
+            (page[0].message.body.as_str(), page[0].edited_ms),
+            ("newer", Some(20))
+        );
+        assert_eq!(
+            (page[1].message.body.as_str(), page[1].deleted_ms),
+            ("", Some(30))
+        );
+        assert_eq!(
+            (page[2].message.body.as_str(), page[2].edited_ms),
+            ("other", None)
+        );
+        // A page that already has a newer edit keeps it.
+        let mut newer = vec![record(1, "newest")];
+        newer[0].edited_ms = Some(25);
+        recent.patch(&mut newer);
+        assert_eq!(newer[0].message.body, "newest");
+    }
 }

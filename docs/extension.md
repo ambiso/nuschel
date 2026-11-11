@@ -454,7 +454,17 @@ How the desktop uses the extension, and the decisions taken while the user was a
   Escape restores what the composer held; emptying an edit asks whether to delete.
   Deletion asks first and says that stock Mumble users keep the message. The server
   sends edits and deletions to others only, so the client applies its own on
-  `ChatAck`, rendering the new text in the content worker like any message.
+  `ChatAck`, rendering the new text in the content worker like any message. Edits and
+  deletions go through the same ordered queue as new messages (content worker, then
+  local history, then the timeline), so one never overtakes its message; one for a
+  message on a history page still on its way waits for it (a minute at most), and a
+  page that was rendered before a change does not bring the old text back, neither
+  on screen nor in local history. An older edit never replaces a newer one.
+  Messages are named by their `seq`, never by a local row id: on a server-history
+  timeline a message without a seq (sent the stock way) has no id at all. The server
+  records a deletion by someone holding Write as a moderator's, also of their own
+  message, and the client shows it the same way. An edit typed while the connection
+  is down waits in the composer (Enter says to reconnect; Escape discards it).
 - **Tombstones** are one faint line ("Message deleted", "… by a moderator") in the
   message's place; they keep the author group they are in but never start one, so the
   next message shows its author again. An edited message shows "(edited)" with the
@@ -481,7 +491,12 @@ How the desktop uses the extension, and the decisions taken while the user was a
   those timelines load local history and say "Local history". A registered peer on a
   stock client still gets the server's stock copy of our messages; their replies come
   over the stock path into a separate local conversation and are stored by the server
-  only with `history.archive_stock_direct_messages`.
+  only with `history.archive_stock_direct_messages`; stock direct messages from
+  someone with a durable conversation (images, or from a stock client) show in that
+  conversation, marked "not saved". Images and messages over 64 KiB, which the
+  extension does not carry, go to the other account's session the stock way while it
+  is online. Registration number 0 (SuperUser, and what the server reports for a
+  deleted account) never maps to a direct conversation.
 - **Local cache**: server pages, live messages, edits and deletions are written to the
   local history by `(server identity, storage key, seq)`: a message seen live and again
   in a page is kept once, an edit overwrites the text and search index, a deletion

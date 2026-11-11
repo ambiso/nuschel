@@ -19,6 +19,7 @@ use nuschel_session::{connection::TextTarget, model::permission as perm};
 pub struct Editing {
     pub server: String,
     pub channel: u32,
+    pub channel_conversation: Option<[u8; 16]>,
     pub seq: u64,
     /// The message's serial, to mark it in the timeline.
     pub serial: u64,
@@ -45,7 +46,7 @@ impl ServerView {
             && !matches!(channel.target, TextTarget::Direct(_))
     }
     /// The conversation, if its messages can be changed now.
-    fn changeable(&self, channel: &ChannelView) -> Option<[u8; 16]> {
+    pub(crate) fn changeable(&self, channel: &ChannelView) -> Option<[u8; 16]> {
         (self.status == Status::Connected && self.archived(channel) && self.has("history/1"))
             .then_some(channel.conversation)
             .flatten()
@@ -58,7 +59,7 @@ impl ServerView {
             && message.ours(own)
             && message.deleted.is_none()
             && message.pending.is_none()
-            && message.id.is_some()
+            && message.seq.is_some()
             && message.offer.is_none()
     }
     /// Whether we may delete this message: our own (registered), or as a
@@ -67,7 +68,7 @@ impl ServerView {
         if self.changeable(channel).is_none()
             || message.deleted.is_some()
             || message.pending.is_some()
-            || message.id.is_none()
+            || message.seq.is_none()
         {
             return false;
         }
@@ -114,7 +115,7 @@ impl Desktop {
         if !view.may_edit(channel_view, message) {
             return;
         }
-        let Some(seq) = message.id.and_then(|id| u64::try_from(id).ok()) else {
+        let Some(seq) = message.seq else {
             return;
         };
         let source = message.source.clone();
@@ -126,6 +127,7 @@ impl Desktop {
         self.editing = Some(Editing {
             server: view.id.clone(),
             channel: channel_view.id,
+            channel_conversation: channel_view.conversation,
             seq,
             serial,
             draft,
@@ -178,7 +180,8 @@ impl Desktop {
     }
 
     /// Enter while editing: send the edit. Unchanged text just ends editing;
-    /// empty text asks whether to delete instead.
+    /// empty text asks whether to delete instead. Offline, the edit waits
+    /// (nothing typed is lost).
     pub fn submit_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editing) = self.editing.as_ref() else {
             return;
@@ -188,28 +191,49 @@ impl Desktop {
             self.servers[*server].id == editing.server
                 && self.servers[*server].channels[*channel].id == editing.channel
         }) else {
-            self.cancel_edit(window, cx);
             return;
         };
-        let serial = editing.serial;
         let seq = editing.seq;
         let view = &self.servers[server];
         let channel_view = &view.channels[channel];
-        let Some(message) = channel_view
+        // By seq: a reloaded timeline has new serials.
+        let message = channel_view
             .messages
             .iter()
-            .find(|message| message.serial == serial)
-        else {
-            self.cancel_edit(window, cx);
-            return;
+            .find(|message| message.seq == Some(seq));
+        if let Some(message) = message {
+            let serial = message.serial;
+            if let Some(editing) = self.editing.as_mut() {
+                editing.serial = serial;
+            }
+            if text.trim().is_empty() {
+                self.cancel_edit(window, cx);
+                self.confirm_delete(serial, window, cx);
+                return;
+            }
+            if text == message.source {
+                self.cancel_edit(window, cx);
+                return;
+            }
+        }
+        let view = &self.servers[server];
+        let channel_view = &view.channels[channel];
+        let editable = match message {
+            Some(message) => view.may_edit(channel_view, message),
+            // Out of the loaded timeline: the server checks it.
+            None => view.changeable(channel_view).is_some() && view.own_user_id().is_some(),
         };
-        if text.trim().is_empty() {
-            self.cancel_edit(window, cx);
-            self.confirm_delete(serial, window, cx);
+        if !editable {
+            self.servers[server].notice =
+                Some(if self.servers[server].status == Status::Connected {
+                    "This message can no longer be edited.".into()
+                } else {
+                    "Connect again to save your edit; Escape discards it.".into()
+                });
+            cx.notify();
             return;
         }
-        if text == message.source || !view.may_edit(channel_view, message) {
-            self.cancel_edit(window, cx);
+        if text.trim().is_empty() {
             return;
         }
         if text.len() > nuschel_protocol::nuschel::MAX_CONTENT_BYTES {
@@ -225,6 +249,7 @@ impl Desktop {
             seq,
             content: Some(text),
             cache: view.cache_key(channel_view),
+            moderator: false,
         };
         match self.backend.change_message(change) {
             Ok(()) => {
@@ -280,10 +305,7 @@ impl Desktop {
         if !view.may_delete(channel_view, message) {
             return;
         }
-        let (Some(conversation), Some(seq)) = (
-            channel_view.conversation,
-            message.id.and_then(|id| u64::try_from(id).ok()),
-        ) else {
+        let (Some(conversation), Some(seq)) = (channel_view.conversation, message.seq) else {
             return;
         };
         let change = ChangeRequest {
@@ -292,6 +314,7 @@ impl Desktop {
             seq,
             content: None,
             cache: view.cache_key(channel_view),
+            moderator: view.moderates(channel_view),
         };
         if let Err(error) = self.backend.change_message(change) {
             self.servers[server].notice = Some(error);
@@ -299,23 +322,83 @@ impl Desktop {
     }
 
     /// A message changed on the server: show its new text, or its tombstone.
+    /// A message not shown yet (a page still on its way) gets it when it is.
     pub fn apply_change(&mut self, server: &str, conversation: [u8; 16], seq: u64, change: Change) {
-        let Some(view) = self.servers.iter_mut().find(|view| view.id == server) else {
+        let Some(index) = self.servers.iter().position(|view| view.id == server) else {
             return;
         };
-        let Some(channel) = view
+        if let Err(change) = self.change_message(index, conversation, seq, change) {
+            let waiting = &mut self.servers[index].waiting_changes;
+            while waiting.len() >= MAX_WAITING_CHANGES {
+                waiting.pop_front();
+            }
+            waiting.push_back((conversation, seq, change, std::time::Instant::now()));
+        }
+    }
+
+    /// Changes that came before their message: apply those it now shows.
+    /// A page on its way takes seconds; older ones were for messages that
+    /// are not loaded, and go.
+    pub fn apply_waiting_changes(&mut self, server: usize) {
+        let waiting = std::mem::take(&mut self.servers[server].waiting_changes);
+        for (conversation, seq, change, since) in waiting {
+            if since.elapsed() > WAITING_CHANGE_FOR {
+                continue;
+            }
+            if let Err(change) = self.change_message(server, conversation, seq, change) {
+                self.servers[server]
+                    .waiting_changes
+                    .push_back((conversation, seq, change, since));
+            }
+        }
+    }
+
+    /// Apply `change` to message `seq` of `conversation`, or hand it back if
+    /// that message is not in the timeline.
+    fn change_message(
+        &mut self,
+        server: usize,
+        conversation: [u8; 16],
+        seq: u64,
+        change: Change,
+    ) -> Result<(), Change> {
+        let view = &mut self.servers[server];
+        if view.change_message(conversation, seq, change)? {
+            let id = &view.id;
+            if self.editing.as_ref().is_some_and(|editing| {
+                editing.server == *id
+                    && editing.seq == seq
+                    && editing.channel_conversation == Some(conversation)
+            }) {
+                // The composer keeps the text; there is nothing left to edit.
+                self.editing = None;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ServerView {
+    /// Apply `change` to message `seq` of `conversation`, or hand it back if
+    /// that message is not in a timeline. Returns whether it was deleted.
+    pub fn change_message(
+        &mut self,
+        conversation: [u8; 16],
+        seq: u64,
+        change: Change,
+    ) -> Result<bool, Change> {
+        let Some(message) = self
             .channels
             .iter_mut()
             .find(|channel| channel.conversation == Some(conversation))
+            .and_then(|channel| {
+                channel
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.seq == Some(seq))
+            })
         else {
-            return;
-        };
-        let Some(message) = channel
-            .messages
-            .iter_mut()
-            .find(|message| message.id == Some(seq as i64))
-        else {
-            return;
+            return Err(change);
         };
         match change {
             Change::Edited {
@@ -323,14 +406,17 @@ impl Desktop {
                 document,
                 edited_ms,
             } => {
-                // A late edit never undoes a deletion.
-                if message.deleted.is_some() {
-                    return;
+                // A late edit never undoes a deletion, nor a newer edit.
+                if message.deleted.is_some()
+                    || message.edited_ms.is_some_and(|shown| shown > edited_ms)
+                {
+                    return Ok(false);
                 }
                 message.source = source;
                 message.document = document.into();
                 message.edited_ms = Some(edited_ms);
                 message.offer = nuschel_core::transfer::parse_offer(&message.source);
+                Ok(false)
             }
             Change::Deleted(deletion) => {
                 message.deleted = Some(deletion);
@@ -339,21 +425,18 @@ impl Desktop {
                 message.offer = None;
                 message.status = None;
                 message.expanded = false;
-                let serial = message.serial;
-                if self
-                    .editing
-                    .as_ref()
-                    .is_some_and(|editing| editing.serial == serial)
-                {
-                    // The composer keeps the text; there is nothing left to edit.
-                    self.editing = None;
-                }
+                Ok(true)
             }
         }
     }
 }
 
+/// Changes kept for messages not shown yet, per server, and for how long.
+const MAX_WAITING_CHANGES: usize = 256;
+const WAITING_CHANGE_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// What changed about a message (see `Desktop::apply_change`).
+#[derive(Clone)]
 pub enum Change {
     Edited {
         source: String,
@@ -366,7 +449,9 @@ pub enum Change {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::{ChannelView, Deletion, HistorySource, MessageView, ServerView, Status, perm};
+    use super::{
+        Change, ChannelView, Deletion, HistorySource, MessageView, ServerView, Status, perm,
+    };
     use crate::backend::RenderedMessage;
     use nuschel_core::{ChatMessage, MessageDocument};
     use nuschel_session::connection::{TextTarget, User};
@@ -385,6 +470,7 @@ mod tests {
             outgoing,
         );
         rendered.author_id = author_id;
+        rendered.seq = Some(id as u64);
         rendered.into()
     }
 
@@ -448,6 +534,48 @@ mod tests {
                 "nobody edits others' messages"
             );
         }
+    }
+
+    #[test]
+    fn changes_apply_in_order_and_wait_for_their_message() {
+        let (mut server, mut channel) = server(true, false, false);
+        channel.messages.push(message(5, Some(8), false));
+        server.channels.push(channel);
+        let edit = |text: &str, at| Change::Edited {
+            source: text.into(),
+            document: MessageDocument { blocks: Vec::new() },
+            edited_ms: at,
+        };
+        let shown = |server: &ServerView| {
+            let message = &server.channels.last().unwrap().messages[0];
+            (
+                message.source.clone(),
+                message.edited_ms,
+                message.deleted.is_some(),
+            )
+        };
+        assert!(server.change_message([1; 16], 5, edit("newer", 20)).is_ok());
+        // An older edit that arrives late, and one for a message not shown.
+        assert!(server.change_message([1; 16], 5, edit("older", 10)).is_ok());
+        assert_eq!(shown(&server), ("newer".into(), Some(20), false));
+        assert!(
+            server
+                .change_message([1; 16], 6, edit("later", 30))
+                .is_err()
+        );
+        assert!(
+            server
+                .change_message([2; 16], 5, edit("elsewhere", 30))
+                .is_err()
+        );
+        let deleted = Change::Deleted(Deletion {
+            at_ms: 40,
+            moderator: true,
+        });
+        assert_eq!(server.change_message([1; 16], 5, deleted).ok(), Some(true));
+        // A tombstone stays one.
+        assert!(server.change_message([1; 16], 5, edit("again", 50)).is_ok());
+        assert_eq!(shown(&server), (String::new(), Some(20), true));
     }
 
     #[test]

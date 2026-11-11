@@ -589,7 +589,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          `archive_stock_direct_messages`; the edit limit is not shown before the
          server refuses; no reply UI yet (`reply_to`); typing has no "stopped" message
          (indicators expire after 6 s); cached server messages are keyed by channel
-         id and seq, and Mumble reuses channel ids (key by conversation id instead);
+         id and seq, and Mumble reuses channel ids: a recreated channel's messages
+         land on the deleted channel's cached rows (and stay tombstones where those
+         were deleted), so key them by conversation id; images in direct
+         conversations go the stock way and are not in the server's history;
          an AT-SPI check of the edit and delete menu entries and the typing status
          on a Nuschel server (tests/accessibility.py runs against Murmur).
    - [ ] Desktop: show each channel's retention (`ChannelInfo.retention_days`,
