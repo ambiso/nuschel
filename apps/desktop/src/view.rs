@@ -6,7 +6,7 @@ use crate::{
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
     menus::MenuTarget,
     names,
-    scrolling::Focus,
+    scrolling::{EntryAction, Focus, Key, Reveal, Unseen},
     selection::{self, BlockText, Caret, HoveredLink, SelectionArea, TextBox, Texts},
     state::{COLLAPSED_HEIGHT, ChannelRow, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
@@ -18,6 +18,7 @@ use gpui_kit::{
 };
 use nuschel_client::{HistorySource, SessionSecurity};
 use nuschel_session::connection::{TextTarget, User};
+use std::{collections::HashMap, rc::Rc};
 
 /// Consecutive messages by one author within this window share a header.
 const GROUP_MS: i64 = 5 * 60 * 1000;
@@ -1328,6 +1329,65 @@ impl Desktop {
         }
     }
 
+    /// A key in the focused timeline, whose keyboard is on entry `current` of
+    /// `keys` (`heights` tall): the arrows, Page Up and Down, Home and End
+    /// move it and bring the entry into view (at the newest, the timeline
+    /// follows new messages again); Enter or Space shows all of a long
+    /// message, or a run of activity lines.
+    fn timeline_key(
+        &mut self,
+        keys: &[Key],
+        heights: &[Pixels],
+        current: usize,
+        keystroke: &Keystroke,
+        viewport: Pixels,
+    ) -> bool {
+        if keystroke.modifiers.modified() {
+            return false;
+        }
+        if matches!(keystroke.key.as_str(), "enter" | "space") {
+            return self.activate_entry(keys[current]);
+        }
+        let Some(to) = crate::scrolling::step(heights, current, &keystroke.key, viewport) else {
+            return false;
+        };
+        self.anchor.set_cursor(keys[to]);
+        if to + 1 == keys.len() {
+            self.jump_to_latest();
+        } else {
+            self.following = false;
+            self.anchor.show(keys[to]);
+        }
+        true
+    }
+
+    fn activate_entry(&mut self, key: Key) -> bool {
+        let Some((server, index)) = self.selected_indices() else {
+            return false;
+        };
+        let channel = &self.servers[server].channels[index];
+        match key {
+            Key::Message(serial) => {
+                let Some(position) = channel
+                    .messages
+                    .iter()
+                    .position(|message| message.serial == serial && message.has_more())
+                else {
+                    return false;
+                };
+                self.toggle_message(position);
+            }
+            Key::Run(serial) => {
+                let Some(line) = channel.activity.iter().find(|line| line.serial == serial) else {
+                    return false;
+                };
+                self.toggle_run(server, index, line.observed_at_ms);
+            }
+            Key::Intro | Key::Activity(_) => return false,
+        }
+        true
+    }
+
     /// The conversation in sight is read: selected, the window in front and
     /// scrolled to the newest message.
     fn mark_read(&mut self) {
@@ -1501,41 +1561,86 @@ fn conversation(
         Entry::Run { first, .. } => &channel.activity[first].run_height,
         Entry::Message { position, .. } => &channel.messages[position].height,
     };
-    let heights: Vec<Pixels> = std::iter::once(this.anchor.intro())
+    let heights: Rc<[Pixels]> = std::iter::once(this.anchor.intro())
         .chain(entries.iter().map(height))
         .map(|height| height.get())
         .collect();
-    // A search result waiting to be revealed is laid out wherever it is;
-    // otherwise the newest, or below the timeline's top padding.
-    let revealing = this.anchor.revealing().and_then(|id| {
-        entries.iter().position(|entry| {
-            matches!(*entry, Entry::Message { position, .. } if channel.messages[position].id == Some(id))
-        })
+    let keys: Rc<[Key]> = std::iter::once(Key::Intro)
+        .chain(entries.iter().map(|entry| match *entry {
+            Entry::Activity(index) => Key::Activity(channel.activity[index].serial),
+            Entry::Run { first, .. } => Key::Run(channel.activity[first].serial),
+            Entry::Message { position, .. } => Key::Message(channel.messages[position].serial),
+        }))
+        .collect();
+    // What waits to be revealed is laid out wherever it is (a search result,
+    // or where the keyboard or a screen reader went); otherwise the newest,
+    // or below the timeline's top padding.
+    let revealing = this.anchor.revealing().and_then(|reveal| match reveal {
+        Reveal::Message(id) => entries
+            .iter()
+            .position(|entry| {
+                matches!(*entry, Entry::Message { position, .. } if channel.messages[position].id == Some(id))
+            })
+            .map(|entry| entry + 1),
+        Reveal::Entry(key) => keys.iter().position(|entry| *entry == key),
     });
+    let top = -this.scroll.offset().y - px(16.);
     let focus = match revealing {
-        Some(entry) => Focus::Entry(entry + 1),
+        Some(index) => Focus::Entry(index),
         None if this.following => Focus::Newest,
-        None => Focus::Offset(-this.scroll.offset().y - px(16.)),
+        None => Focus::Offset(top),
     };
-    let shown = crate::scrolling::shown(&heights, focus, window.viewport_size().height);
+    let viewport = window.viewport_size().height;
+    let shown = crate::scrolling::shown(&heights, focus, viewport);
+    // The keyboard's entry: where it moved, else the newest or the first in view.
+    let current = this
+        .anchor
+        .cursor()
+        .and_then(|key| keys.iter().position(|entry| *entry == key))
+        .unwrap_or_else(|| {
+            if this.following {
+                keys.len() - 1
+            } else {
+                crate::scrolling::at(&heights, top)
+            }
+        });
+    let ring = this.text.focus.is_focused(window) && window.last_input_was_keyboard();
+    // Screen readers get every entry by its label (see `Unseen` for those
+    // not laid out); authors are looked up once a frame.
+    let a11y = window.is_a11y_active();
+    let mut authors: HashMap<&str, &User> = HashMap::new();
+    if a11y {
+        let users = server.users.values().chain(&channel.direct_peer);
+        authors.extend(users.map(|user| (user.name.as_str(), user)));
+    }
+    let label = |index: usize| {
+        let entry = index.checked_sub(1).map(|entry| &entries[entry]);
+        entry_label(this, server, channel, &authors, entry)
+    };
+    let action = entry_action(cx);
+    let item = |index: usize| {
+        entry_item(keys[index], a11y.then(|| label(index)).flatten(), &action)
+            .when(index == current, |item| item.aria_active_descendant())
+    };
     let rows: Vec<AnyElement> = shown
         .range
         .clone()
         .map(|index| {
-            let Some(entry) = index.checked_sub(1).map(|entry| &entries[entry]) else {
-                let intro = timeline_intro(this, server, channel, cx);
-                return anchor.row(None, this.anchor.intro(), intro);
-            };
-            match *entry {
-                Entry::Activity(index) => {
+            let (row, id, height) = match index.checked_sub(1).map(|entry| &entries[entry]) {
+                None => (
+                    timeline_intro(this, server, channel, cx),
+                    None,
+                    this.anchor.intro(),
+                ),
+                Some(&Entry::Activity(index)) => {
                     let line = &channel.activity[index];
-                    anchor.row(None, &line.height, activity_row(line, index))
+                    (activity_row(line, index), None, &line.height)
                 }
-                Entry::Run {
+                Some(&Entry::Run {
                     first,
                     last,
                     expanded,
-                } => {
+                }) => {
                     let row = activity_run(
                         channel,
                         (server_index, channel_index),
@@ -1544,9 +1649,9 @@ fn conversation(
                         expanded,
                         cx,
                     );
-                    anchor.row(None, &channel.activity[first].run_height, row)
+                    (row, None, &channel.activity[first].run_height)
                 }
-                Entry::Message { position, grouped } => {
+                Some(&Entry::Message { position, grouped }) => {
                     let message = &channel.messages[position];
                     let author = names::author(
                         &message.author,
@@ -1555,11 +1660,54 @@ fn conversation(
                     );
                     let row = message_row(this, server, channel, position, author, grouped, cx);
                     let row = crate::search::mark_jumped(this, message.id, row);
-                    anchor.row(message.id, &message.height, row)
+                    (row, message.id, &message.height)
                 }
-            }
+            };
+            // Wrapped only for a screen reader or the focus ring: an element
+            // more per row costs every frame.
+            let ring = ring && index == current;
+            let row = if a11y || ring {
+                let item = item(index).relative().child(row);
+                let outline = div().absolute().inset_0().rounded(px(6.)).border_2();
+                item.when(ring, |item| item.child(outline.border_color(color(ACCENT))))
+                    .into_any_element()
+            } else {
+                row
+            };
+            anchor.row(keys[index], id, height, row)
         })
         .collect();
+    // The rest only for screen readers. The keyboard's entry stays an
+    // element that can be the focused one, should it be scrolled away.
+    let visible = this.scroll.bounds();
+    let scale = window.scale_factor();
+    let unseen = |range: std::ops::Range<usize>, y: Pixels| -> Vec<AnyElement> {
+        let at = Bounds::new(point(visible.left(), y), size(px(1.), px(1.)));
+        range
+            .filter(|_| a11y)
+            .filter_map(|index| {
+                if index == current {
+                    return Some(item(index).into_any_element());
+                }
+                let label = label(index)?.into();
+                let (key, action) = (keys[index], action.clone());
+                Some(
+                    Unseen {
+                        key,
+                        label,
+                        at,
+                        scale,
+                        action,
+                    }
+                    .into_any_element(),
+                )
+            })
+            .collect()
+    };
+    let (above, below) = (
+        unseen(0..shown.range.start, visible.top() - px(1.)),
+        unseen(shown.range.end..keys.len(), visible.bottom()),
+    );
     // Prepending happens while the reader looks up the timeline, with no
     // button or separate mode: the anchor keeper asks once the top is near.
     let older =
@@ -1815,15 +1963,26 @@ fn conversation(
                                 server.id, channel.id
                             )))
                             .track_scroll(&this.scroll)
-                            // Takes the keyboard while message text is selected.
+                            // A list for screen readers; a tab stop, whose
+                            // keyboard moves through the entries (and copies a
+                            // selection of their text).
+                            .role(Role::List)
+                            .aria_label(if is_channel {
+                                format!("Messages in #{}", channel.name)
+                            } else {
+                                format!("Messages with {}", channel.name)
+                            })
                             .track_focus(&this.text.focus)
-                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                                 let keystroke = &event.keystroke;
                                 if keystroke.key == "c"
                                     && keystroke.modifiers.secondary(cx)
                                     && this.copy_selection(cx)
+                                    || this
+                                        .timeline_key(&keys, &heights, current, keystroke, viewport)
                                 {
                                     cx.stop_propagation();
+                                    cx.notify();
                                 }
                             }))
                             .flex_1()
@@ -1841,9 +2000,9 @@ fn conversation(
                                     .on_scroll(cx.listener(|this, event, window, cx| {
                                         this.smooth_scroll(false, event, window, cx)
                                     }))
-                                    .child(div().flex_shrink_0().h(shown.above))
+                                    .child(div().flex_shrink_0().h(shown.above).children(above))
                                     .children(rows)
-                                    .child(div().flex_shrink_0().h(shown.below)),
+                                    .child(div().flex_shrink_0().h(shown.below).children(below)),
                             ),
                     )
                     .when_some(jump_pill(this, channel, cx), |view, pill| view.child(pill)),
@@ -2084,17 +2243,15 @@ fn jump_pill(
     )
 }
 
-/// A run of routine activity lines as one line ("Ada connected, Bob moved to
-/// Lobby and 3 more · 12:01–12:05"); a click expands it, and when expanded
-/// it is the header that collapses it again.
-fn activity_run(
+/// What a run of activity lines says ("Ada connected, Bob moved to Lobby and
+/// 3 more", or "5 updates" when expanded), and when ("Today at 05:27", or
+/// "Today at 05:27–05:31" within one day).
+fn run_summary(
     channel: &crate::state::ChannelView,
-    (server, channel_index): (usize, usize),
     first: usize,
     last: usize,
     expanded: bool,
-    cx: &mut Context<Desktop>,
-) -> AnyElement {
+) -> (String, String) {
     let lines = &channel.activity;
     let count = last - first + 1;
     let summary = if expanded {
@@ -2109,7 +2266,6 @@ fn activity_run(
             count - 2
         )
     };
-    // "Today at 05:27", or "Today at 05:27–05:31" within one day.
     let (start, end) = (
         crate::state::local_time(lines[first].observed_at_ms),
         crate::state::local_time(lines[last].observed_at_ms),
@@ -2119,7 +2275,127 @@ fn activity_run(
         (Some((day, _)), Some((same, clock))) if day == same => format!("{start}–{clock}"),
         _ => format!("{start} – {end}"),
     };
-    let key = lines[first].observed_at_ms;
+    (summary, times)
+}
+
+/// A screen reader asking to see a timeline entry, or to move the keyboard
+/// there: it comes into view as the keyboard would bring it.
+fn entry_action(cx: &mut Context<Desktop>) -> EntryAction {
+    let desktop = cx.weak_entity();
+    Rc::new(move |key, action, window, cx| {
+        let _ = desktop.update(cx, |this, cx| {
+            this.following = false;
+            this.anchor.show(key);
+            if action == AccessibleAction::Focus {
+                this.anchor.set_cursor(key);
+                window.focus(&this.text.focus, cx);
+            }
+            cx.notify();
+        });
+    })
+}
+
+/// A timeline entry as screen readers see it: a list item named `label`
+/// (none while no screen reader listens) that they can scroll into view and
+/// move the keyboard to.
+fn entry_item(key: Key, label: Option<String>, action: &EntryAction) -> Stateful<Div> {
+    let item = div().id(key.element_id());
+    let Some(label) = label else {
+        return item;
+    };
+    let on = |kind| {
+        let action = action.clone();
+        move |_: Option<&accesskit::ActionData>, window: &mut Window, cx: &mut App| {
+            action(key, kind, window, cx)
+        }
+    };
+    item.role(Role::ListItem)
+        .aria_label(label)
+        .on_a11y_action(
+            AccessibleAction::ScrollIntoView,
+            on(AccessibleAction::ScrollIntoView),
+        )
+        .on_a11y_action(AccessibleAction::Focus, on(AccessibleAction::Focus))
+}
+
+/// What a screen reader reads for a timeline entry, or for the welcome
+/// above them (`entry` none; nothing while the first page loads).
+fn entry_label(
+    this: &Desktop,
+    server: &ServerView,
+    channel: &crate::state::ChannelView,
+    authors: &HashMap<&str, &User>,
+    entry: Option<&Entry>,
+) -> Option<String> {
+    let time = crate::state::local_time;
+    let Some(entry) = entry else {
+        if channel.loading {
+            return channel.loaded.then(|| "Loading older messages…".into());
+        }
+        if channel.next_before.is_some() {
+            return Some("Older messages".into());
+        }
+        let source = match server.history_source {
+            HistorySource::LocalObserved => "Local history, messages seen on this device",
+            HistorySource::ServerArchive => "Server history",
+        };
+        let start = if channel.beginning {
+            ". Beginning of local history"
+        } else {
+            ""
+        };
+        return Some(format!("Welcome to {}. {source}{start}", channel.name));
+    };
+    Some(match *entry {
+        Entry::Activity(index) => {
+            let line = &channel.activity[index];
+            format!("{}, {}", line.text, time(line.observed_at_ms))
+        }
+        Entry::Run {
+            first,
+            last,
+            expanded,
+        } => {
+            let (summary, times) = run_summary(channel, first, last, expanded);
+            format!("{summary}, {times}")
+        }
+        Entry::Message { position, .. } => {
+            let message = &channel.messages[position];
+            let author = authors.get(message.author.as_str()).copied();
+            let name = names::author_name(&message.author, author, &this.settings);
+            let mut text = message.document.plain_text();
+            let images = message.document.blocks.iter();
+            let images = images.filter(|block| matches!(block, Block::Image { .. }));
+            match images.count() {
+                0 => {}
+                1 if text.is_empty() => text = "Image".into(),
+                1 => text.push_str(" (image)"),
+                count => text.push_str(&format!(" ({count} images)")),
+            }
+            let status = message.status.map(|status| format!(", {status}"));
+            format!(
+                "{name}: {text}, {}{}",
+                message.time,
+                status.unwrap_or_default()
+            )
+        }
+    })
+}
+
+/// A run of routine activity lines as one line ("Ada connected, Bob moved to
+/// Lobby and 3 more · 12:01–12:05"); a click expands it, and when expanded
+/// it is the header that collapses it again.
+fn activity_run(
+    channel: &crate::state::ChannelView,
+    (server, channel_index): (usize, usize),
+    first: usize,
+    last: usize,
+    expanded: bool,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let count = last - first + 1;
+    let (summary, times) = run_summary(channel, first, last, expanded);
+    let key = channel.activity[first].observed_at_ms;
     div()
         .id(("activity-run", first))
         .role(Role::Button)

@@ -218,6 +218,8 @@ pub struct ChannelView {
 }
 #[derive(Clone)]
 pub struct ActivityLine {
+    /// Identifies the line to the UI while it lives.
+    pub serial: u64,
     pub observed_at_ms: i64,
     pub text: String,
     pub warning: bool,
@@ -233,7 +235,9 @@ impl Default for ChannelView {
 }
 impl ChannelView {
     pub fn log(&mut self, text: String, observed_at_ms: i64, warning: bool) {
+        static SERIALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         self.activity.push_back(ActivityLine {
+            serial: SERIALS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             observed_at_ms,
             text,
             warning,

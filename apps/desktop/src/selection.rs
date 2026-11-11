@@ -166,7 +166,8 @@ impl TextState {
             hovered: None,
             menu: None,
             copied: None,
-            focus: cx.focus_handle(),
+            // The timeline's: a tab stop, so the keyboard reaches its entries.
+            focus: cx.focus_handle().tab_stop(true),
             candidate: Rc::default(),
             scrolling: None,
         }

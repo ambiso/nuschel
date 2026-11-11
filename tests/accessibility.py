@@ -16,7 +16,13 @@ Orca would and checks that:
   composer's tray as a named list item, and its "Remove" button works through
   the Action interface;
 - Settings' shortcut rows name each action's Record button, and recording is
-  announced as a status that a screen reader reads out.
+  announced as a status that a screen reader reads out;
+- after a long conversation, every loaded message is a list item a screen
+  reader can read, including the oldest, screens above the viewport (the
+  timeline lays out only what is near it); ScrollTo and GrabFocus through
+  AT-SPI bring such items into view; with --gnome-shell, Shift+Tab from the
+  composer lands on the newest message and the arrow keys and Home walk to
+  the oldest.
 
 Uses busctl for D-Bus calls, so no Python bindings are needed.
 """
@@ -25,6 +31,7 @@ from itertools import takewhile
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -43,6 +50,9 @@ ROLES = {23: "frame", 29: "label", 43: "push button", 54: "status bar", 61: "tex
          40: "password text", 16: "dialog", 33: "menu", 35: "menu item", 85: "section", 99: "grouping",
          31: "list", 32: "list item", 39: "panel", 98: "list box", 105: "page tab list", 37: "page tab"}
 INTERACTIVE = {"push button", "toggle button", "text", "entry", "password text", "tree item", "menu item"}
+FOCUSED = 1 << 12  # ATSPI_STATE_FOCUSED, in the first word of GetState
+# Messages in the long conversation: many screens of them.
+HISTORY = 150
 # A 2×2 RGB PNG.
 PNG = (b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x02\x08\x02\0\0\0\xfd\xd4\x9as\0\0\0\x12IDATx"
        b"\x9cc\xf8\xcf\xc0\xc0\0\xc2\x0c\xff\x81\0\0\x1f\xee\x05\xfb\x0b\xd9h\x8b\0\0\0\0IEND\xaeB`\x82")
@@ -79,6 +89,14 @@ class Node:
 
     def children(self):
         return [Node(self.bus, destination, path) for destination, path in self.call("Accessible", "GetChildren")[0]]
+
+    @property
+    def focused(self):
+        return bool(self.call("Accessible", "GetState")[0][0] & FOCUSED)
+
+    def extents(self):
+        """x, y, width and height in window coordinates."""
+        return self.call("Component", "GetExtents", "u", "1")[0]
 
 
 def snapshot(application):
@@ -150,12 +168,16 @@ class AccessibilityTest:
         port = free_port()
         (self.root / "murmur").mkdir()
         murmur = Murmur(self.args.murmur, self.root / "murmur", port)
+        # The long conversation arrives at once, past the stock server's limit
+        # of one message a second.
+        murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
         murmur.seed()
         murmur.start()
         peer = None
         try:
             pin = certificate_pin(self.args.binaries, "127.0.0.1", port, self.root / "probe")
-            peer = Client(self.args.binaries, "127.0.0.1", port, pin, "Ada Lovelace", self.root / "peer")
+            peer = Client(self.args.binaries, "127.0.0.1", port, pin, "Ada Lovelace", self.root / "peer",
+                          ["--message-limit", "1000", "--message-burst", "1000"])
             peer.send(kind="join", channel=2)
             profile = self.root / "profile"
             (profile / "config").mkdir(parents=True)
@@ -226,12 +248,13 @@ class AccessibilityTest:
                 nodes, field = eventually(switcher, "the switcher did not announce its results", timeout=10)
                 self.write_tree(nodes, "switcher-tree.txt")
                 assert "Development (channel) highlighted" in field, field
-                options = [name for _, _, role, name in nodes if role == "list item"]
+                results = self.find(nodes, "list box", "1 result")
+                options = [child.name for child in results.children() if child.role == "list item"]
                 assert options == ["Development, channel in Lobby, Accessible server"], options
-                self.find(nodes, "list box", "1 result")
                 self.find(nodes, "dialog", "Quick switcher")
                 self.shell.key("Escape")
                 print(f"Switcher announced through its field: {field!r}; options: {options}.", flush=True)
+            self.check_timeline(nuschel, peer)
         finally:
             if peer:
                 peer.close()
@@ -297,6 +320,83 @@ class AccessibilityTest:
         eventually(lambda: not any(name == "Done" for _, _, _, name in snapshot(nuschel)),
                    "Settings did not close", timeout=10)
         print("Settings: every shortcut row has a named Record button; recording is announced as a status.",
+              flush=True)
+
+    def check_timeline(self, nuschel, peer):
+        """A long conversation: every loaded message is a list item a screen
+        reader reads, the oldest screens above the viewport included, and
+        moving to it scrolls it into view."""
+        timeline = self.find(snapshot(nuschel), "list", "Messages in #Development")
+        for n in range(1, HISTORY + 1):
+            # Every fifth is two lines, so the rows differ in height.
+            peer.send(kind="text", channel=2, body=f"History message {n}" + ("\nwith a second line" * (n % 5 == 0)))
+            time.sleep(0.01)
+        eventually(lambda: f"History message {HISTORY}" in timeline.children()[-1].name,
+                   "the long conversation did not arrive", timeout=60)
+        nodes = snapshot(nuschel)
+        self.write_tree(nodes, "timeline-tree.txt")
+        seen = sorted({int(match[1]) for _, _, _, name in nodes
+                       if (match := re.search(r"\bHistory message (\d+)\b", name))})
+        print(f"Timeline: {len(seen)} of {HISTORY} messages in the tree"
+              + (f" (from {seen[0]} to {seen[-1]})." if seen else "."), flush=True)
+        items = [(item, item.role, item.name) for item in timeline.children()]
+        numbered = {int(match[1]): item for item, role, name in items
+                    if role == "list item" and (match := re.match(r"Ada Lovelace: History message (\d+)\b", name))}
+        missing = sorted(set(range(1, HISTORY + 1)) - set(numbered))
+        assert not missing, f"messages missing from the timeline: {missing}"
+        oldest, newest = numbered[1], numbered[HISTORY]
+        assert re.fullmatch(r"Ada Lovelace: History message 1, .+ at \d\d:\d\d", oldest.name), oldest.name
+        _, top, _, height = timeline.extents()
+
+        def in_view(item):
+            _, y, _, h = item.extents()
+            return h > 0 and top <= y and y + h <= top + height
+        # Far from the viewport, an entry is not laid out: a list item with
+        # its text as the name, no content and no bounds.
+        assert not oldest.children() and not in_view(oldest), "the oldest message is laid out"
+        print(f"All {HISTORY} messages are list items; the oldest, not laid out, reads {oldest.name!r}.", flush=True)
+
+        def focus_on(item, after):
+            eventually(lambda: item.focused, f"{item.name!r} was not focused after {after}", timeout=10)
+            eventually(lambda: in_view(item), f"{item.name!r} did not scroll into view after {after}", timeout=10)
+        if self.shell:
+            # One tab stop for the timeline, its newest message first; the
+            # arrow keys and Home walk from there.
+            self.find(nodes, "entry", "Message").call("Component", "GrabFocus")
+            time.sleep(0.5)
+            for _ in range(4):
+                self.shell.chord("Shift_L", "Tab")
+                time.sleep(0.5)
+                if newest.focused:
+                    break
+            assert newest.focused, "Shift+Tab from the composer did not reach the newest message"
+            self.shell.key("Up")
+            focus_on(numbered[HISTORY - 1], "Up")
+            intro = next(item for item, role, name in items if name.startswith("Welcome to Development"))
+            self.shell.key("Home")
+            focus_on(intro, "Home")
+            for _ in range(5):
+                self.shell.key("Down")
+                time.sleep(0.4)
+                if oldest.focused:
+                    break
+            focus_on(oldest, "Down from the top")
+            assert any(child.name == "History message 1" for child in oldest.children()), \
+                "the oldest message has no content once laid out"
+            self.shell.key("End")
+            focus_on(newest, "End")
+            print("Keyboard: Shift+Tab reached the newest message, Up the one before, Home the welcome, "
+                  "Down the oldest, each scrolled into view.", flush=True)
+        # A screen reader asking to see one (ScrollTo, as VoiceOver and
+        # Narrator do on other platforms) or moving its focus there
+        # (GrabFocus) brings it into view.
+        middle = numbered[HISTORY // 3]
+        assert not middle.children(), "a message far above the viewport is laid out"
+        middle.call("Component", "ScrollTo", "u", "0")
+        eventually(lambda: in_view(middle), f"{middle.name!r} did not scroll into view after ScrollTo", timeout=10)
+        oldest.call("Component", "GrabFocus")
+        focus_on(oldest, "GrabFocus")
+        print("ScrollTo brought a message into view; GrabFocus on the oldest focused it and scrolled it there.",
               flush=True)
 
     @staticmethod
@@ -365,6 +465,9 @@ def main():
             test.run()
         finally:
             test.close()
+            # The client's log, for a failure.
+            if (Path(temporary) / "desktop.log").exists():
+                shutil.copy(Path(temporary) / "desktop.log", args.output / "desktop.log")
 
 
 if __name__ == "__main__":

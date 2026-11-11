@@ -31,12 +31,13 @@ all protocol traffic.
 | `opus_eval.py` | opus-pure against reference libopus: decoder conformance in SILK, Hybrid and CELT, encoder interop both ways, 5,000 hostile packets |
 | `stock_client.py` | The real stock Mumble GUI with a certificate exported by Nuschel; voice in both directions |
 | `desktop_recovery.py` | Media and storage worker crashes keep the session and history; server restart reconnects with backoff, rejoins the channel muted and marks the gap |
-| `accessibility.py` | The AT-SPI tree as a screen reader sees it: named controls, channel tree, users and composer; Mute operated through the Action interface alone |
+| `accessibility.py` | The AT-SPI tree as a screen reader sees it: named controls, channel tree, users and composer; Mute operated through the Action interface alone; every message of a long conversation is a list item, the oldest (screens above the viewport) scrolled into view by AT-SPI ScrollTo and GrabFocus |
 | 1.4 / 1.3 loops | `mumble_client.py`, `udp_voice.py` and `protocol_features.py` against stock Mumble 1.4.287 and 1.3.4 (legacy UDP format) |
 
 Development aids outside the VM: `screenshots.py` (scenes under a private headless
 GNOME Shell on the real GPU; it never touches the user's session) and
-`accessibility.py --gnome-shell` (the same check with Nuschel's own window controls).
+`accessibility.py --gnome-shell` (the same check with Nuschel's own window controls,
+and the timeline walked with the keyboard: Shift+Tab, arrows, Home and End).
 
 `windows_vm.py` installs Windows 11 Enterprise (evaluation ISO from Microsoft)
 unattended into a KVM guest with two vCPUs and drives it through a PowerShell agent

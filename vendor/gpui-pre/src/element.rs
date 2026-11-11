@@ -250,7 +250,10 @@ impl GlobalElementId {
         }
     }
 
-    pub(crate) fn accesskit_node_id(&self) -> accesskit::NodeId {
+    /// The id of this element's node in the accessibility tree, for a custom
+    /// element to register its [`crate::Window::on_a11y_action`] listeners.
+    // Nuschel patch: public (was `pub(crate)`); see NUSCHEL-PATCH.md.
+    pub fn accesskit_node_id(&self) -> accesskit::NodeId {
         accesskit::NodeId(self.hash)
     }
 }

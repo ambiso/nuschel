@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Ease discrete wheel steps; leave precise touchpad motion to the platform.
-//! Keep a timeline's messages still while history grows above them, and lay
-//! out only the part of it near the viewport.
+//! Keep a timeline's messages still while history grows above them, lay out
+//! only the part of it near the viewport, and move the keyboard through it.
 use gpui_kit::{
-    AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
-    LayoutId, Pixels, ScrollDelta, ScrollEvent, ScrollHandle, Styled, Window, canvas, px,
+    AccessibleAction, AnyElement, App, Bounds, Element, ElementId, GlobalElementId,
+    InspectorElementId, IntoElement, LayoutId, Pixels, Role, ScrollDelta, ScrollEvent,
+    ScrollHandle, SharedString, Style, Styled, Window, accesskit, canvas, px,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -132,6 +133,147 @@ pub fn near_top(offset: Pixels, viewport: Pixels) -> bool {
 /// A timeline entry's height as last laid out; zero until it has been.
 pub type Height = Rc<Cell<Pixels>>;
 
+/// A timeline entry from frame to frame, laid out or not: where the keyboard
+/// is, and what a screen reader asks to see.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Key {
+    /// The conversation's welcome, or older history on its way.
+    Intro,
+    /// A message, by its serial.
+    Message(u64),
+    /// An activity line, by its serial.
+    Activity(u64),
+    /// A run of activity lines, by its first line's serial.
+    Run(u64),
+}
+
+impl Key {
+    /// The same whether the entry is laid out or stands in for itself off
+    /// screen, so screen readers keep their place as it comes into view.
+    pub fn element_id(self) -> ElementId {
+        match self {
+            Key::Intro => "entry-intro".into(),
+            Key::Message(serial) => ("entry-message", serial).into(),
+            Key::Activity(serial) => ("entry-activity", serial).into(),
+            Key::Run(serial) => ("entry-run", serial).into(),
+        }
+    }
+}
+
+/// What a screen reader asks of a timeline entry: to scroll it into view,
+/// or to move the keyboard to it.
+pub type EntryAction = Rc<dyn Fn(Key, AccessibleAction, &mut Window, &mut App)>;
+
+/// A timeline entry that is not laid out, as screen readers still find it: a
+/// list item named `label`, with the element id the laid-out entry has, and
+/// an empty box for its layout. Its bounds are a pixel `at` the viewport's
+/// edge it lies beyond (in window coordinates; `scale` is the window's), not
+/// where it would be: that would move every one of them on each frame of a
+/// scroll or resize, and each changed node costs the platform's
+/// accessibility bridge time and an event. (Without bounds, AT-SPI would
+/// offer no way to scroll to or focus it.)
+pub struct Unseen {
+    pub key: Key,
+    pub label: SharedString,
+    pub at: Bounds<Pixels>,
+    pub scale: f32,
+    pub action: EntryAction,
+}
+
+impl IntoElement for Unseen {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for Unseen {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        Some(self.key.element_id())
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn a11y_role(&self) -> Option<Role> {
+        Some(Role::ListItem)
+    }
+
+    fn write_a11y_info(&self, node: &mut accesskit::Node) {
+        node.set_label(self.label.to_string());
+        let scaled = |pixels: Pixels| f64::from(f32::from(pixels) * self.scale);
+        node.set_bounds(accesskit::Rect {
+            x0: scaled(self.at.left()),
+            y0: scaled(self.at.top()),
+            x1: scaled(self.at.right()),
+            y1: scaled(self.at.bottom()),
+        });
+        node.add_action(AccessibleAction::ScrollIntoView);
+        node.add_action(AccessibleAction::Focus);
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (window.request_layout(Style::default(), None, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut Window,
+        _: &mut App,
+    ) {
+        let Some(id) = id.filter(|_| window.is_a11y_active()) else {
+            return;
+        };
+        for action in [AccessibleAction::ScrollIntoView, AccessibleAction::Focus] {
+            let (key, handler) = (self.key, self.action.clone());
+            window.on_a11y_action(id.accesskit_node_id(), action, move |_, window, cx| {
+                handler(key, action, window, cx)
+            });
+        }
+    }
+}
+
+/// Heights, with those never laid out counted as tall as the average of
+/// those that were.
+pub fn filled(heights: &[Pixels]) -> Vec<Pixels> {
+    let known = heights.iter().filter(|height| **height > px(0.));
+    let (sum, count) = known.fold((px(0.), 0.), |(sum, count), height| {
+        (sum + *height, count + 1.)
+    });
+    let estimate = if count > 0. { sum / count } else { px(48.) };
+    heights
+        .iter()
+        .map(|height| if *height > px(0.) { *height } else { estimate })
+        .collect()
+}
+
 /// The entries of a timeline to lay out: those within a margin of the
 /// viewport. The rest keep their room, by the heights they last had.
 #[derive(Debug, PartialEq)]
@@ -156,16 +298,7 @@ pub enum Focus {
 /// frame would cost each frame (and each step of a window resize, which
 /// wraps them all again) time in proportion to history.
 pub fn shown(heights: &[Pixels], focus: Focus, viewport: Pixels) -> Shown {
-    // Those never laid out count as tall as the average of those that were.
-    let known = heights.iter().filter(|height| **height > px(0.));
-    let (sum, count) = known.fold((px(0.), 0.), |(sum, count), height| {
-        (sum + *height, count + 1.)
-    });
-    let estimate = if count > 0. { sum / count } else { px(48.) };
-    let heights: Vec<Pixels> = heights
-        .iter()
-        .map(|height| if *height > px(0.) { *height } else { estimate })
-        .collect();
+    let heights = filled(heights);
     // A screen either side: corrections by the anchor stay within what is laid out.
     let margin = viewport.max(px(400.));
     let total: Pixels = heights.iter().sum();
@@ -198,6 +331,59 @@ pub fn shown(heights: &[Pixels], focus: Focus, viewport: Pixels) -> Shown {
     }
 }
 
+/// The entry at `top`, of entries `heights` tall: the first whose bottom is
+/// below it.
+pub fn at(heights: &[Pixels], top: Pixels) -> usize {
+    let mut bottom = px(0.);
+    for (index, height) in filled(heights).into_iter().enumerate() {
+        bottom += height;
+        if bottom > top {
+            return index;
+        }
+    }
+    heights.len().saturating_sub(1)
+}
+
+/// Where the keyboard goes from entry `from` on `key` (up, down, page up and
+/// down, home, end), among entries `heights` tall; a page is most of a
+/// viewport `viewport` tall. `None` for other keys.
+pub fn step(heights: &[Pixels], from: usize, key: &str, viewport: Pixels) -> Option<usize> {
+    let last = heights.len().checked_sub(1)?;
+    let from = from.min(last);
+    let heights = filled(heights);
+    let page = |forward: bool| {
+        let (mut to, mut moved) = (from, px(0.));
+        while moved < viewport * 0.8 && if forward { to < last } else { to > 0 } {
+            to = if forward { to + 1 } else { to - 1 };
+            moved += heights[to];
+        }
+        to
+    };
+    Some(match key {
+        "up" => from.saturating_sub(1),
+        "down" => (from + 1).min(last),
+        "pageup" => page(false),
+        "pagedown" => page(true),
+        "home" => 0,
+        "end" => last,
+        _ => return None,
+    })
+}
+
+/// The offset at which content from `top` to `bottom` shows whole in a
+/// viewport `height` tall, scrolling as little as possible from `offset`;
+/// at its top if it is taller than the viewport.
+pub fn nearest(offset: Pixels, top: Pixels, bottom: Pixels, height: Pixels) -> Pixels {
+    if top + offset < px(0.) || bottom - top > height {
+        -top
+    } else if bottom + offset > height {
+        height - bottom
+    } else {
+        offset
+    }
+    .min(px(0.))
+}
+
 /// Scroll anchoring, as browsers do it: the first message in view keeps its
 /// place on screen while pages are prepended, or rows above it change height.
 /// Positions come from the finished layout before the timeline scrolls, so
@@ -215,12 +401,23 @@ struct AnchorState {
     painted: Cell<Option<(Pixels, Pixels)>>,
     /// Corrections made since the smooth scroller last looked.
     shifted: Cell<Pixels>,
-    /// A message to bring into view, until a frame shows it there, and the
-    /// offset this frame set for it.
-    reveal: Cell<Option<i64>>,
+    /// What to bring into view, until a frame shows it there, and the offset
+    /// this frame set for it.
+    reveal: Cell<Option<Reveal>>,
     revealed: Cell<Option<Pixels>>,
+    /// The entry the keyboard moved to.
+    cursor: Cell<Option<Key>>,
     /// The height of what precedes the entries: the conversation's welcome.
     intro: Height,
+}
+
+/// What [`Anchor`] brings into view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Reveal {
+    /// A stored message, a third of the way down (a search result opening it).
+    Message(i64),
+    /// An entry, scrolling no further than needed to show it whole.
+    Entry(Key),
 }
 
 impl Anchor {
@@ -230,18 +427,34 @@ impl Anchor {
         self.0.painted.set(None);
         self.0.shifted.set(px(0.));
         self.0.reveal.set(None);
+        self.0.cursor.set(None);
         self.0.intro.set(px(0.));
     }
 
     /// Scroll message `id` a third of the way down the viewport once it is
     /// laid out (a search result opening it).
     pub fn reveal(&self, id: i64) {
-        self.0.reveal.set(Some(id));
+        self.0.reveal.set(Some(Reveal::Message(id)));
     }
 
-    /// The message waiting to be brought into view, which has to be laid out.
-    pub fn revealing(&self) -> Option<i64> {
+    /// Scroll entry `key` just into view once it is laid out (the keyboard
+    /// or a screen reader going there).
+    pub fn show(&self, key: Key) {
+        self.0.reveal.set(Some(Reveal::Entry(key)));
+    }
+
+    /// What waits to be brought into view, which has to be laid out.
+    pub fn revealing(&self) -> Option<Reveal> {
         self.0.reveal.get()
+    }
+
+    /// The entry the keyboard moved to, if it did.
+    pub fn cursor(&self) -> Option<Key> {
+        self.0.cursor.get()
+    }
+
+    pub fn set_cursor(&self, key: Key) {
+        self.0.cursor.set(Some(key));
     }
 
     pub fn intro(&self) -> &Height {
@@ -265,16 +478,21 @@ impl Anchor {
     }
 }
 
+/// A laid-out entry: its key, the id of a stored message (which can serve as
+/// the anchor) and its layout.
+type Rows = Rc<RefCell<Vec<(Key, Option<i64>, LayoutId)>>>;
+
 pub struct AnchorFrame {
     state: Rc<AnchorState>,
-    rows: Rc<RefCell<Vec<(i64, LayoutId)>>>,
+    rows: Rows,
 }
 
 impl AnchorFrame {
     /// A timeline entry, in order, whose laid-out height goes into `height`;
     /// with the `id` of a stored message it can serve as the anchor.
-    pub fn row(&self, id: Option<i64>, height: &Height, child: AnyElement) -> AnyElement {
+    pub fn row(&self, key: Key, id: Option<i64>, height: &Height, child: AnyElement) -> AnyElement {
         Row {
+            key,
             id,
             height: height.clone(),
             rows: self.rows.clone(),
@@ -303,7 +521,7 @@ impl AnchorFrame {
                 let mut offset = handle.offset();
                 if hold
                     && let Some((id, before)) = state.message.get()
-                    && let Some(&(_, layout)) = rows.iter().find(|(row, _)| *row == id)
+                    && let Some(&(_, _, layout)) = rows.iter().find(|row| row.1 == Some(id))
                 {
                     let moved = top(window, layout) - before;
                     if moved != px(0.) {
@@ -313,19 +531,29 @@ impl AnchorFrame {
                         state.shifted.set(state.shifted.get() - moved);
                     }
                 }
-                if let Some(id) = state.reveal.get()
-                    && let Some(&(_, layout)) = rows.iter().find(|(row, _)| *row == id)
+                if let Some(reveal) = state.reveal.get()
+                    && let Some(&(_, _, layout)) = rows.iter().find(|(key, id, _)| match reveal {
+                        Reveal::Message(wanted) => *id == Some(wanted),
+                        Reveal::Entry(wanted) => *key == wanted,
+                    })
                 {
-                    offset.y = (handle.bounds().size.height / 3. - top(window, layout)).min(px(0.));
+                    let height = handle.bounds().size.height;
+                    let start = top(window, layout);
+                    let end = start + window.layout_bounds(layout).size.height;
+                    offset.y = match reveal {
+                        Reveal::Message(_) => (height / 3. - start).min(px(0.)),
+                        Reveal::Entry(_) => nearest(offset.y, start, end, height),
+                    };
                     handle.set_offset(offset);
                     state.revealed.set(Some(offset.y));
                 }
-                let first = rows.partition_point(|&(_, layout)| {
+                let first = rows.partition_point(|&(_, _, layout)| {
                     window.layout_bounds(layout).bottom() - bounds.top() + offset.y <= px(0.)
                 });
                 state.message.set(
-                    rows.get(first)
-                        .map(|&(id, layout)| (id, top(window, layout))),
+                    rows[first..]
+                        .iter()
+                        .find_map(|&(_, id, layout)| Some((id?, top(window, layout)))),
                 );
             },
             move |_, _, window, _| {
@@ -358,9 +586,10 @@ impl AnchorFrame {
 /// Lays its child out unchanged and notes where, for [`AnchorFrame::keeper`],
 /// and how tall, for [`shown`].
 struct Row {
+    key: Key,
     id: Option<i64>,
     height: Height,
-    rows: Rc<RefCell<Vec<(i64, LayoutId)>>>,
+    rows: Rows,
     child: AnyElement,
 }
 
@@ -392,9 +621,7 @@ impl Element for Row {
         cx: &mut App,
     ) -> (LayoutId, ()) {
         let layout = self.child.request_layout(window, cx);
-        if let Some(id) = self.id {
-            self.rows.borrow_mut().push((id, layout));
-        }
+        self.rows.borrow_mut().push((self.key, self.id, layout));
         (layout, ())
     }
 
@@ -427,7 +654,7 @@ impl Element for Row {
 
 #[cfg(test)]
 mod tests {
-    use super::{Focus, Shown, follows, near_top, shown};
+    use super::{Focus, Shown, at, follows, near_top, nearest, shown, step};
     use gpui_kit::px;
 
     #[test]
@@ -472,6 +699,43 @@ mod tests {
         prepended.extend([px(100.), px(20.)]);
         let below = shown(&prepended, Focus::Offset(px(0.)), px(400.));
         assert_eq!((below.range, below.below), (0..14, px(480.)));
+    }
+
+    #[test]
+    fn the_keyboard_moves_by_entries_and_pages() {
+        // A hundred entries 50 tall, in a viewport of 400: a page is 320.
+        let heights = vec![px(50.); 100];
+        let go = |from, key| step(&heights, from, key, px(400.));
+        assert_eq!((go(10, "up"), go(10, "down")), (Some(9), Some(11)));
+        // Seven entries make a page; the ends stop it.
+        assert_eq!((go(10, "pagedown"), go(17, "pageup")), (Some(17), Some(10)));
+        assert_eq!((go(3, "pageup"), go(97, "pagedown")), (Some(0), Some(99)));
+        assert_eq!((go(0, "up"), go(99, "down")), (Some(0), Some(99)));
+        assert_eq!((go(50, "home"), go(50, "end")), (Some(0), Some(99)));
+        assert_eq!(go(10, "left"), None);
+        assert_eq!(step(&[], 0, "down", px(400.)), None);
+        // One entry taller than a page is a page.
+        let tall = [px(50.), px(900.), px(50.)];
+        assert_eq!(step(&tall, 2, "pageup", px(400.)), Some(1));
+        // Where the viewport's top is: entries never laid out count as the average.
+        assert_eq!((at(&heights, px(0.)), at(&heights, px(125.))), (0, 2));
+        assert_eq!(at(&[px(0.), px(0.), px(100.)], px(150.)), 1);
+        assert_eq!(at(&heights, px(9000.)), 99);
+    }
+
+    #[test]
+    fn revealing_an_entry_scrolls_no_further_than_needed() {
+        // A viewport 400 tall, scrolled 1000 down.
+        let offset = px(-1000.);
+        // In view: stays.
+        assert_eq!(nearest(offset, px(1100.), px(1200.), px(400.)), offset);
+        // Above: its top at the top; below: its bottom at the bottom.
+        assert_eq!(nearest(offset, px(900.), px(950.), px(400.)), px(-900.));
+        assert_eq!(nearest(offset, px(1380.), px(1450.), px(400.)), px(-1050.));
+        // Taller than the viewport: its top.
+        assert_eq!(nearest(offset, px(1200.), px(1900.), px(400.)), px(-1200.));
+        // Never past the top of the timeline.
+        assert_eq!(nearest(px(-10.), px(-5.), px(20.), px(400.)), px(0.));
     }
 
     #[test]
