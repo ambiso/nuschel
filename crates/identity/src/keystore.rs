@@ -556,6 +556,30 @@ impl DeviceKeystore {
         self
     }
 
+    /// Drops the recovery blob: the user declined a recovery key, so the root is gone
+    /// once this keystore replaces the old one.
+    pub fn without_recovery_blob(mut self) -> Self {
+        self.recovery_blob = None;
+        self
+    }
+
+    /// Certifies this device's keys again with a new validity (the device-signing key
+    /// is needed); the certificate and credential are replaced, the keys stay.
+    pub fn renew_device(&mut self, validity: crate::Validity) -> Result<(), Error> {
+        let authority = self
+            .device_signing
+            .as_ref()
+            .ok_or(Error::Malformed("no device-signing key on this device"))?;
+        let (certificate, credential) = authority.certify_device(
+            &self.device.public_keys(),
+            self.device_certificate.display_name(),
+            validity,
+        )?;
+        self.device_certificate = certificate;
+        self.device_credential = credential;
+        Ok(())
+    }
+
     pub fn identity(&self) -> &VerifiedIdentity {
         &self.identity
     }

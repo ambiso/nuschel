@@ -345,3 +345,42 @@ fn worker_state_is_sealed_under_the_store_key() {
     assert!(key.open_state(&keystore).is_err());
     assert!(DeviceKeystore::open(&key, &sealed).is_err());
 }
+
+#[test]
+fn a_keystore_renews_its_device_and_can_drop_the_recovery_blob() {
+    let f = super::fixture();
+    let recovery_key = RecoveryKey::generate().unwrap();
+    let mut store = full_keystore(&f, &recovery_key);
+    let later = crate::Validity::new(NOW, NOW + 10_000).unwrap();
+    store.renew_device(later).unwrap();
+    assert_eq!(store.device_certificate().validity(), later);
+    assert_eq!(store.device_credential().validity(), later);
+    assert_eq!(
+        store.device_certificate().public_keys(),
+        store.device().public_keys()
+    );
+    let key = StoreKey::generate().unwrap();
+    let reopened = DeviceKeystore::open(&key, &store.seal(&key).unwrap()).unwrap();
+    assert_eq!(reopened.device_certificate().validity(), later);
+    let dropped = reopened.without_recovery_blob();
+    assert!(dropped.recovery_blob().is_none());
+    // Without the device-signing key nothing can be renewed.
+    let mut plain = DeviceKeystore::open(&key, &dropped.seal(&key).unwrap()).unwrap();
+    assert!(plain.device_signing().is_some());
+    let f2 = super::fixture();
+    let mut without = DeviceKeystore::new(
+        f2.identity.clone(),
+        DeviceKeys::from_seeds(
+            f2.id.device.device_id(),
+            f2.id.device.key_epoch(),
+            f2.id.device.leaf_seed.duplicate(),
+            f2.id.device.kem_seed.duplicate(),
+        )
+        .unwrap(),
+        f2.id.device_certificate.clone(),
+        f2.id.device_credential.clone(),
+    )
+    .unwrap();
+    assert!(without.renew_device(later).is_err());
+    plain.renew_device(later).unwrap();
+}
