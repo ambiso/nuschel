@@ -150,6 +150,11 @@ Reported while testing (2026-11-10/11):
 - [x] Image menu: Copy image to the clipboard. Linux backend offers real image MIME
       data; private GNOME test compared externally pasted PNG pixels to the fixture.
       Separate native Windows/macOS runtime checks remain open.
+- [x] Server rail mute badge: larger microphone glyph and fixed square sizing.
+      Connection notices wrap at zoom, bound long text in a scroll area and keep
+      a compact accessible Dismiss control inside the banner. Real GNOME tests
+      passed at 100/125/150/200% zoom and 1280/900px widths, with pointer and AT-SPI
+      dismissal; Linux-only runtime evidence (2026-11-11).
 - [x] Clickable links and a safe supported subset of Mumble HTML formatting (bold,
       italic, lists, headings, colour; tables normalized to text rows): no remote resources, link
       scheme allowlist, deceptive-anchor tooltip, libFuzzer targets.
