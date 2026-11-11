@@ -183,6 +183,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-link-preview" = rec {
+      packageId = "nuschl-link-preview";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-link-preview";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-math" = rec {
       packageId = "nuschl-math";
       build = internal.buildRustCrateWithFeatures {
@@ -22840,6 +22850,10 @@ rec {
         libName = "nuschl_core";
         dependencies = [
           {
+            name = "base64";
+            packageId = "base64 0.22.1";
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -22847,6 +22861,10 @@ rec {
           {
             name = "sha2";
             packageId = "sha2 0.11.1";
+          }
+          {
+            name = "url";
+            packageId = "url";
           }
           {
             name = "uuid";
@@ -23219,6 +23237,43 @@ rec {
         edition = "2024";
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/legacy-html; };
         libName = "nuschl_legacy_html";
+
+      };
+      "nuschl-link-preview" = rec {
+        crateName = "nuschl-link-preview";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/link-preview; };
+        libName = "nuschl_link_preview";
+        dependencies = [
+          {
+            name = "ipnet";
+            packageId = "ipnet";
+          }
+          {
+            name = "nuschl-core";
+            packageId = "nuschl-core";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "url";
+            packageId = "url";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+        ];
 
       };
       "nuschl-math" = rec {

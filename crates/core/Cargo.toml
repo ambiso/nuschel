@@ -11,8 +11,10 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+base64 = "0.22"
 serde = { version = "1.0.229", features = ["derive"] }
 sha2 = "0.11.1"
+url = "2.5.8"
 # Random ids for new saved servers, on platforms with a system random source.
 uuid = { version = "1.29.1", features = ["v4"], optional = true }
 

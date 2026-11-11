@@ -6985,9 +6985,11 @@ dependencies = [
 name = "nuschl-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "sha2 0.11.1",
+ "url",
  "uuid",
 ]
 
@@ -7092,6 +7094,18 @@ dependencies = [
 [[package]]
 name = "nuschl-legacy-html"
 version = "0.1.0"
+
+[[package]]
+name = "nuschl-link-preview"
+version = "0.1.0"
+dependencies = [
+ "ipnet",
+ "nuschl-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "url",
+]
 
 [[package]]
 name = "nuschl-math"

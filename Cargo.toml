@@ -25,6 +25,7 @@ nuschl-math = { path = "crates/math", version = "0.1.0" }
 nuschl-protocol = { path = "crates/protocol", version = "0.1.0" }
 nuschl-storage = { path = "crates/storage", version = "0.1.0" }
 nuschl-update = { path = "crates/update", version = "0.1.0" }
+nuschl-link-preview = { path = "crates/link-preview", version = "0.1.0" }
 nuschl-identity = { path = "crates/identity", version = "0.1.0" }
 nuschl-kt = { path = "crates/kt", version = "0.1.0" }
 nuschl-e2ee = { path = "crates/e2ee", version = "0.1.0" }
