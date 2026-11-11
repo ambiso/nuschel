@@ -477,7 +477,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 1. **Server for stock Mumble clients** (the base everything else extends) — done
    (2026-11-11): see docs/server.md; the `vm-server` check runs the protocol suites
    and the stock GUI against it. Open phase-1 items:
-   - [x] Import of a Murmur database (2026-11-11): `nuscheld --import-murmur`
+   - [x] Import of a Murmur database (2026-11-11): `nuscheld admin import-murmur`
          (docs/server.md), both layouts (`ServerDB.cpp` of 1.2.4–1.5 and 1.6's),
          read-only by the storage worker and validated by the server's rules;
          PBKDF2-SHA384 and SHA-1 passwords become argon2id at the next login;

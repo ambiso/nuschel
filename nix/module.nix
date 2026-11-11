@@ -127,8 +127,9 @@ let
   importMurmur = pkgs.writeShellScript "nuschel-import-murmur" ''
     set -eu
     if [ -e ${murmurCopy} ] && [ ! -e ${murmurMarker} ]; then
+      # Takes the operator lock, as every admin command does.
       ${cfg.package}/bin/nuscheld --config ${configFile} --state-directory ${stateDirectory} "$@" \
-        --import-murmur ${murmurCopy} --murmur-server-id ${toString cfg.importMurmur.serverId} \
+        admin import-murmur ${murmurCopy} --murmur-server-id ${toString cfg.importMurmur.serverId} \
         ${lib.optionalString cfg.importMurmur.replaceExisting "--replace-existing"}
       ${pkgs.coreutils}/bin/touch ${murmurMarker}
       ${pkgs.coreutils}/bin/rm -f ${murmurCopy}
@@ -363,12 +364,15 @@ in
           ) "superuser-password:${cfg.superUserPasswordFile}"
           ++ lib.optional (cfg.kt.signingKeyFile != null) "kt-signing-key:${cfg.kt.signingKeyFile}"
           ++ lib.optional (cfg.kt.vrfSecretFile != null) "kt-vrf-secret:${cfg.kt.vrfSecretFile}";
-        # Migrations and a connection check before the server takes traffic.
+        # Migrations and a connection check before the server takes traffic,
+        # under the operator lock: never while `nuscheld admin` (or an import)
+        # uses the database.
         ExecStartPre = lib.escapeShellArgs (
           [
             "${cfg.package}/bin/nuschel-storage-worker"
             "--server"
             "--check-database"
+            "--operator-lock"
           ]
           ++ databaseArguments
         );

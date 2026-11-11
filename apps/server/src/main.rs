@@ -54,10 +54,7 @@ struct Arguments {
     /// and exit: they become tombstones without content (GDPR requests).
     #[arg(long, value_name = "USER")]
     erase_user: Option<String>,
-    /// Import a Murmur (mumble-server) SQLite database, opened read-only:
-    /// registered users with their passwords, channels, ACLs, groups, links,
-    /// listeners and bans (docs/server.md). Refuses a server that already has
-    /// channels, users or bans unless --replace-existing is given.
+    /// The same as `admin import-murmur PATH` (kept as a flag for scripts).
     #[arg(long, value_name = "PATH")]
     import_murmur: Option<PathBuf>,
     /// The Murmur virtual server to import.

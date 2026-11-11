@@ -46,6 +46,11 @@ pub enum Admin {
     History(HistoryCommand),
     /// Check the configuration, and that the database opens (or is in use).
     CheckConfig,
+    /// Import a Murmur (mumble-server) SQLite database: registered users with
+    /// their passwords, channels, ACLs, groups, links, listeners and bans
+    /// (docs/server.md, "Importing a Murmur server"). Refuses a server that
+    /// has channels, users or bans unless `--replace-existing` is given.
+    ImportMurmur(crate::murmur::ImportArguments),
 }
 
 #[derive(Subcommand, Debug)]
@@ -245,13 +250,19 @@ pub async fn run(settings: Settings, backend: Backend, command: Admin) -> Result
     if let Admin::CheckConfig = command {
         return check(&settings, backend).await;
     }
+    // The import takes the operator lock and loads the state itself.
+    if let Admin::ImportMurmur(arguments) = command {
+        let report = crate::murmur::import(&settings, backend, &arguments.into()).await?;
+        print!("{}", report.render());
+        return Ok(());
+    }
     let mut opened = open(&settings, backend).await?;
     let outcome = match command {
         Admin::Users(command) => users(&mut opened, &settings, command).await,
         Admin::Channels(command) => channels(&mut opened, command).await,
         Admin::Bans(command) => bans(&mut opened.state, command),
         Admin::History(command) => history_command(&mut opened, command).await,
-        Admin::CheckConfig => Ok(()),
+        Admin::CheckConfig | Admin::ImportMurmur(_) => Ok(()),
     };
     opened.close().await;
     outcome

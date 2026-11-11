@@ -65,6 +65,30 @@ pub struct Options {
     pub replace_existing: bool,
 }
 
+/// `nuscheld admin import-murmur` (and the older `--import-murmur`).
+#[derive(clap::Args, Clone, Debug)]
+pub struct ImportArguments {
+    /// The Murmur database (`murmur.sqlite`, `mumble-server.sqlite`); opened
+    /// read-only. Stop Murmur first.
+    pub path: PathBuf,
+    /// The Murmur virtual server to import.
+    #[arg(long, default_value_t = 1)]
+    pub murmur_server_id: i64,
+    /// Delete this server's channels, registered users and bans first.
+    #[arg(long)]
+    pub replace_existing: bool,
+}
+
+impl From<ImportArguments> for Options {
+    fn from(arguments: ImportArguments) -> Self {
+        Self {
+            path: arguments.path,
+            server_id: arguments.murmur_server_id,
+            replace_existing: arguments.replace_existing,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
     #[error("reading the Murmur database failed: {0}")]
@@ -1214,12 +1238,15 @@ pub async fn import(
             ));
         }
     };
-    let dump = read_dump(&worker, options).await?;
     let mut settings = settings.clone();
     settings.config.bind.clear();
     // The state directory 0700 and a new SQLite database 0600, as at startup.
     server::prepare_files(&settings, &backend)?;
-    let storage = storage::start(backend);
+    // The operator lock first, as `nuscheld admin` takes it: an import never
+    // runs against a database a live server (or another admin command) holds.
+    let storage = storage::start_locked(backend);
+    server::hold_operator_lock(&storage).await?;
+    let dump = read_dump(&worker, options).await?;
     let counters = Default::default();
     let mut state = server::load_state_for_admin(&settings, &storage, &counters).await?;
     let config = dump.config.clone();

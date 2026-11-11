@@ -12,7 +12,7 @@ history, edits and deletions, subscriptions, read markers and direct conversatio
 nuscheld --config nuscheld.toml          # see apps/server/nuscheld.example.toml
 nuscheld --config nuscheld.toml --check-config
 nuscheld --config nuscheld.toml admin users list     # operator commands, see Administration
-nuscheld --config nuscheld.toml --import-murmur /var/lib/mumble-server/mumble-server.sqlite
+nuscheld --config nuscheld.toml admin import-murmur /var/lib/mumble-server/mumble-server.sqlite
 ```
 
 Every configuration key is optional; names and defaults follow murmur.ini
@@ -73,19 +73,23 @@ Every configuration key is optional; names and defaults follow murmur.ini
   `unlimited_networks`) and advisory client versions.
 
 The NixOS module (`services.nuschel`, nix/module.nix) generates the TOML file
-from `settings` (never secrets), runs a database preflight, and hardens the unit
+from `settings` (never secrets), runs a database preflight under the operator lock
+(so the service does not start while `nuscheld admin` uses the database), and
+hardens the unit
 (DynamicUser, a private state directory, no capabilities, system call filter,
 `SocketBindAllow` for the server port only).
 
 ## Importing a Murmur server
 
-`nuscheld --import-murmur PATH` moves a Murmur (mumble-server) server into this
-one: registered users with their passwords, certificate hashes, last channels,
+`nuscheld admin import-murmur PATH` (or the flag `--import-murmur PATH`) moves a
+Murmur (mumble-server) server into this one: registered users with their passwords, certificate hashes, last channels,
 comments and avatars; the channel tree with descriptions, positions, user limits and
 ACL inheritance; ACL entries, groups and members (inherit and inheritable flags);
 links; channel listeners; and bans. Stop Murmur first (the file is read as it is on
 disk) and run the import with the configuration the server will use, as the user it
-runs as. It prints a report and exits.
+runs as. Like every admin command it takes the operator lock before it opens the
+database, so it refuses to run while a server (or another admin command) uses it.
+It prints a report and exits.
 
 - **Which Murmur.** Both database layouts: `ServerDB.cpp` (Murmur 1.2.4 to 1.5,
   schema versions 6 to 9, `murmur.sqlite`/`mumble-server.sqlite`) and Murmur 1.6's
@@ -176,6 +180,7 @@ nuscheld --config nuscheld.toml admin bans add --address 192.0.2.0/24 --reason s
 nuscheld --config nuscheld.toml admin bans remove 0
 nuscheld --config nuscheld.toml admin history export Lobby --output lobby.json
 nuscheld --config nuscheld.toml admin history erase-user Alice --yes   # GDPR requests
+nuscheld --config nuscheld.toml admin import-murmur murmur.sqlite   # see Importing a Murmur server
 ```
 
 - **Subcommands, not a second binary**: one executable to deploy and keep at
