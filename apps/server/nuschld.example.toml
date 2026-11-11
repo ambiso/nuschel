@@ -187,7 +187,7 @@ witness_interval = 60
 witness_refresh_interval = 3600
 # More witnesses (`nuschl-witness vkey` gives the key):
 # [[kt.witnesses]]
-# key = "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…"
+# key = "witness.example.org/nuschl-kt+122b83c3+BuajLAZT…"
 # url = "https://witness.example.org"
 
 [share_links]

@@ -335,7 +335,7 @@ in
                   options = {
                     key = mkOption {
                       type = types.strMatching "[^+[:space:]]{1,255}\\+[0-9a-f]{8}\\+[A-Za-z0-9+/=]+";
-                      example = "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…";
+                      example = "witness.example.org/nuschl-kt+122b83c3+BuajLAZT…";
                       description = "The witness's verifier key (`nuschl-witness vkey`).";
                     };
                     enabled = mkOption {
@@ -378,7 +378,7 @@ in
       default = null;
       example = lib.literalExpression ''
         {
-          witnesses = [ { key = "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…"; } ];
+          witnesses = [ { key = "witness.example.org/nuschl-kt+122b83c3+BuajLAZT…"; } ];
           maxAgeHours = 24;
         }
       '';

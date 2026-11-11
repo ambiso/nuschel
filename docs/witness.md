@@ -97,7 +97,7 @@ has not confirmed; both are settings.
 ```json
 "key_transparency": {
   "default_witnesses": true,
-  "witnesses": [ { "key": "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…", "enabled": true } ],
+  "witnesses": [ { "key": "witness.example.org/nuschl-kt+122b83c3+BuajLAZT…", "enabled": true } ],
   "required": null,
   "max_age_hours": 24,
   "block_new_devices": true
@@ -118,7 +118,7 @@ turns the requirement off.
 
 ```nix
 programs.nuschl.keyTransparency = {
-  witnesses = [ { key = "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…"; } ];
+  witnesses = [ { key = "witness.example.org/nuschl-kt+122b83c3+BuajLAZT…"; } ];
   maxAgeHours = 24;
 };
 ```
@@ -133,7 +133,7 @@ witness_interval = 60                 # seconds between submissions of new epoch
 witness_refresh_interval = 3600       # resubmit an unchanged checkpoint
 
 [[kt.witnesses]]                      # more witnesses
-key = "witness.example.org/nuschl-kt+5d32ee69+BuajLAZT…"
+key = "witness.example.org/nuschl-kt+122b83c3+BuajLAZT…"
 url = "https://witness.example.org"
 ```
 
