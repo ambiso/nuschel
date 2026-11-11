@@ -1195,7 +1195,10 @@ on flash become unreadable once the old key is gone from the OS credential store
    End-to-end is a **server-level switch**: a server is either legacy/Mumble-compatible
    or a Nuschel server where everything is end-to-end encrypted and every Nuschel
    feature is available (WebRTC, video, files, several images per message, typing,
-   …). Shouts and whispers are therefore encrypted too: a device joins a target
+   …). On a compatible (legacy) server, Nuschel clients keep the extension's
+   unencrypted extras (server history, edits, typing, durable direct messages),
+   clearly labelled "not end-to-end encrypted" (user, 2026-11-11). Shouts and
+   whispers on an end-to-end server are therefore encrypted too: a device joins a target
    channel's voice group as a sender when it sets up the voice target. Voice: one MLS
    group per voice channel of exactly the devices present or listening (confirmed).
 8. **Inactive devices:** removed after 90 days.

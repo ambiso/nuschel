@@ -739,6 +739,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
            whispers: the sender joins the target's voice group when it sets up the
            voice target); no unencrypted channels, and every Nuschel feature
            (WebRTC, video, files, several images, typing) is available.
+         - On compatible servers Nuschel clients keep the unencrypted extras
+           (history, edits, typing, durable DMs), labelled "not end-to-end
+           encrypted" wherever they appear.
          - Registration required on end-to-end servers; ACLs apply in every case.
          - The device-signing key on every linked device, phones included.
          - Remove devices inactive for 90 days.
