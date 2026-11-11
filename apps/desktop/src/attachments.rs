@@ -90,17 +90,19 @@ pub fn check(path: &Path) -> Result<Kind, Refusal> {
         return Err(Refusal::Folder);
     }
     let size = metadata.len();
-    let mut head = Vec::with_capacity(8);
-    file.take(8).read_to_end(&mut head).map_err(unreadable)?;
-    let image = [
-        &b"\x89PNG\r\n\x1a\n"[..],
-        b"\xff\xd8\xff",
-        b"GIF87a",
-        b"GIF89a",
-        b"BM",
-    ]
-    .iter()
-    .any(|magic| head.starts_with(magic));
+    let mut head = Vec::with_capacity(12);
+    file.take(12).read_to_end(&mut head).map_err(unreadable)?;
+    let webp = head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP");
+    let image = webp
+        || [
+            &b"\x89PNG\r\n\x1a\n"[..],
+            b"\xff\xd8\xff",
+            b"GIF87a",
+            b"GIF89a",
+            b"BM",
+        ]
+        .iter()
+        .any(|magic| head.starts_with(magic));
     Ok(if image && size <= MAX_IMAGE_BYTES {
         Kind::Image { size }
     } else {
@@ -271,7 +273,7 @@ mod tests {
         assert_eq!(check(&pdf), Ok(Kind::File { size: 8 }));
         assert_eq!(check(&write("empty.txt", b"")), Ok(Kind::File { size: 0 }));
         let webp = write("photo.webp", b"RIFF\0\0\0\0WEBP");
-        assert_eq!(check(&webp), Ok(Kind::File { size: 12 }));
+        assert_eq!(check(&webp), Ok(Kind::Image { size: 12 }));
         assert_eq!(check(&directory), Err(Refusal::Folder));
         assert!(matches!(
             check(&directory.join("missing.png")),

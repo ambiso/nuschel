@@ -321,6 +321,7 @@ pub fn data_uri_file(uri: &str) -> Option<(Vec<u8>, &'static str)> {
         "png" => "png",
         "jpeg" | "jpg" => "jpg",
         "gif" => "gif",
+        "webp" => "webp",
         _ => return None,
     };
     let mut text = String::with_capacity(payload.len());

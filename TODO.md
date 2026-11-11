@@ -81,9 +81,10 @@ Later (reported):
       clients cannot take part in MLS/E2EE features such as encrypted file sharing),
       and whether servers require a current client like Signal does (a minimum
       protocol version with a grace period), to avoid ecosystem fragmentation.
-- [ ] WebP and AVIF images, and video. WebP has a memory-safe decoder in the
-      `image` crate; AVIF and video decoders are C or heavily `unsafe` and belong in a
-      separate capability-limited worker.
+- [x] WebP images: decoded (inline, viewer, server icons) with the `image` crate's
+      pure-Rust decoder; pasted or attached WebP is sent re-encoded as JPEG/PNG.
+- [ ] AVIF images and video: their decoders are C or heavily `unsafe` and belong in
+      a separate capability-limited worker.
 - [x] Server icons from the server's website favicon (Settings → Server icons).
 - [x] Mute and deafen animate (a slash draws across the icon as it turns red),
       reversing smoothly under rapid clicks.

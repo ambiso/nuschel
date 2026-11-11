@@ -48,7 +48,12 @@ const MAX_SOURCE_DIMENSION: u32 = 4096;
 pub fn decode_image(bytes: &[u8], max_width: u32, max_height: u32) -> Option<ContentBlock> {
     let image = decode(
         bytes,
-        &[ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Gif],
+        &[
+            ImageFormat::Png,
+            ImageFormat::Jpeg,
+            ImageFormat::Gif,
+            ImageFormat::WebP,
+        ],
         MAX_SOURCE_DIMENSION,
         64 * 1024 * 1024,
     )?;
@@ -69,6 +74,7 @@ pub fn decode_icon(bytes: &[u8]) -> Option<ContentBlock> {
         ImageFormat::Gif,
         ImageFormat::Ico,
         ImageFormat::Bmp,
+        ImageFormat::WebP,
     ];
     let image = decode(bytes, &formats, 1024, 16 * 1024 * 1024)?;
     let icon = shrink(image, 64, 64).to_rgba8();
@@ -131,6 +137,8 @@ pub fn encode_image_message(bytes: &[u8], limit: usize) -> Result<(String, Conte
         ImageFormat::Gif,
         // Windows hands screenshots over as device-independent bitmaps.
         ImageFormat::Bmp,
+        // Sent re-encoded as JPEG or PNG, which every Mumble client shows.
+        ImageFormat::WebP,
     ];
     let mut image = decode(bytes, &formats, MAX_PASTE_DIMENSION, 256 * 1024 * 1024)
         .ok_or(Error::InvalidImage)?;
@@ -264,7 +272,7 @@ fn data_uri(uri: &str) -> Option<Vec<u8>> {
     let (kind, payload) = rest.split_once(";base64,")?;
     if !matches!(
         kind.to_ascii_lowercase().as_str(),
-        "png" | "jpeg" | "jpg" | "gif"
+        "png" | "jpeg" | "jpg" | "gif" | "webp"
     ) {
         return None;
     }
@@ -415,6 +423,26 @@ impl ContentRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webp_images_decode_and_are_sent_as_jpeg_or_png() {
+        let mut webp = Vec::new();
+        let pixels =
+            image::RgbaImage::from_fn(40, 30, |x, y| image::Rgba([x as u8, y as u8, 90, 255]));
+        image::DynamicImage::ImageRgba8(pixels)
+            .write_to(&mut std::io::Cursor::new(&mut webp), ImageFormat::WebP)
+            .unwrap();
+        let Some(ContentBlock::Image { width, height, .. }) = decode_image(&webp, 640, 480) else {
+            panic!("the WebP image did not decode");
+        };
+        assert_eq!((width, height), (40, 30));
+        let (html, _) = encode_image_message(&webp, 128 * 1024).unwrap();
+        assert!(
+            html.contains("data:image/jpeg") || html.contains("data:image/png"),
+            "{}",
+            &html[..html.len().min(80)]
+        );
+    }
     use nuschel_core::EMBED;
 
     #[test]

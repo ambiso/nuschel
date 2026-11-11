@@ -18877,7 +18877,7 @@ rec {
             name = "image";
             packageId = "image";
             usesDefaultFeatures = false;
-            features = [ "png" "jpeg" "gif" "bmp" "ico" ];
+            features = [ "png" "jpeg" "gif" "bmp" "ico" "webp" ];
           }
           {
             name = "markup5ever_rcdom";
