@@ -410,6 +410,9 @@ out-of-band verification; key transparency, as in Signal's automatic key
 verification (https://signal.org/blog/automatic-key-verification/); possibly
 Nuschel-only servers and a minimum client version.
 
+Security review of the server plan and first code: docs/reviews/2026-11-11-server-security.md
+(P0 requirements must be met before the server listens beyond loopback).
+
 1. **Server for stock Mumble clients** (the base everything else extends)
    - [ ] TLS listener (rustls), certificate and password authentication, user
          registration, server and channel passwords, ban list.
