@@ -61,15 +61,20 @@ fn knocking_requires_both_moderator_permissions_and_rechecks_decisions() {
     let id = f.state.knock_request(requester, PRIVATE).unwrap();
     assert_eq!(f.state.knock_request(requester, PRIVATE), Ok(id));
     assert!(f.state.knock_decide(member, id, false).is_err());
-    // Write grants implicit Move, but an explicit Enter denial still excludes
-    // this moderator. Changes after the notice affect BOTH Admit and Decline.
+    // Retain Move while removing Write (which itself implies Enter) and Enter.
+    // Changes after the notice affect BOTH Admit and Decline.
     f.state
         .channels
         .get_mut(PRIVATE)
         .unwrap()
         .node
         .acls
-        .push(entry("", Some(ADMIN), 0, perm::ENTER));
+        .push(entry(
+            "",
+            Some(ADMIN),
+            perm::MOVE,
+            perm::WRITE | perm::ENTER,
+        ));
     f.state.invalidate();
     assert!(
         !f.state
