@@ -268,6 +268,9 @@ impl Walk {
         let mut close = Close::default();
         match tag {
             "br" => self.visible(['\n']),
+            #[cfg(not(feature = "images"))]
+            "img" => self.visible("[image]".chars()),
+            #[cfg(feature = "images")]
             "img" => match attr("src").filter(|source| data_uri(source).is_some()) {
                 // Only inline data: images are kept; remote URLs are never fetched.
                 Some(source) => {
