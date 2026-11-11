@@ -32,7 +32,17 @@ Every configuration key is optional; names and defaults follow murmur.ini
   paths.
 - **Certificate.** Without `certificate`/`private_key`, a self-signed ECDSA
   certificate is generated once in `state_directory` (key file 0600). Clients pin
-  the server certificate, so keep that directory.
+  the server certificate, so keep that directory. SIGHUP loads the certificate and
+  key again (a renewed ACME certificate, say): new handshakes use them, connected
+  clients keep their session, and if they do not load (unreadable, malformed, a key
+  that does not belong to the certificate) the current one stays and the error is
+  logged. A generated certificate is re-read, never generated again. Under the
+  NixOS module, `tls.certificateFile` and `keyFile` are credentials copied at
+  start, so a renewal there needs a restart.
+- **TLS versions.** 1.2 and 1.3 by default; `minimum_tls_version = "1.3"` refuses
+  TLS 1.2, which keeps client certificates (stable identities) off the wire in the
+  clear. Stock clients built against OpenSSL 1.1.1 or later (Mumble 1.3.1 and later
+  on current systems) speak 1.3; older builds cannot connect then.
 - **SuperUser** (user 0) has no password until one is set; without one it cannot
   log in.
 
@@ -295,7 +305,8 @@ compared as digests in constant time. Password guesses are limited per account:
 after ten failures (one more allowed per second) logins to that account are
 answered with `AuthenticatorFail` ("try again later"). The TLS verifier accepts any client
 certificate but rustls still checks the handshake signature, so presenting
-someone else's certificate fails (tested). TLS session resumption is off. Debug
+someone else's certificate fails (tested). TLS session resumption is off, TLS 1.2
+can be refused (`minimum_tls_version`). Debug
 output of protocol messages redacts passwords, tokens, keys, comments and
 message bodies; logs contain user names, session ids and addresses, never
 contents. The database file is created 0600 in a 0700 directory. Handshake (TLS

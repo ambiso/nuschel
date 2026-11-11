@@ -77,6 +77,8 @@ pub struct Server {
     pub counters: Arc<Counters>,
     pub udp: Vec<Arc<UdpSocket>>,
     pub acceptor: TlsAcceptor,
+    /// The certificate new handshakes get; replaced on SIGHUP.
+    pub certificates: Arc<tls::Certificates>,
     pub admission: Mutex<Admission>,
     /// Connections that have not authenticated yet (TLS included).
     pub pending: Arc<Semaphore>,
@@ -92,6 +94,22 @@ pub struct Server {
 }
 
 impl Server {
+    /// Load the certificate and key again (SIGHUP): new handshakes use them,
+    /// established connections keep their session. If they do not load, the
+    /// current certificate stays. A generated certificate is re-read, never
+    /// generated again. Returns the new SHA-256 fingerprint.
+    pub fn reload_certificate(&self) -> Result<String, tls::TlsError> {
+        let config = &self.settings.config;
+        let identity = tls::Identity::reload(
+            config
+                .certificate
+                .as_deref()
+                .zip(config.private_key.as_deref()),
+            &config.state_directory,
+        )?;
+        self.certificates.replace(identity)
+    }
+
     /// Take the state lock. A panic while it was held must not take the whole
     /// server down, so poisoning is ignored (the handlers keep it consistent).
     pub fn lock(&self) -> MutexGuard<'_, State> {
@@ -653,7 +671,11 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     )?;
     let fingerprint = identity.fingerprint();
     tracing::info!(sha256 = %fingerprint, "server certificate");
-    let acceptor = TlsAcceptor::from(tls::server_config(identity)?);
+    let (tls_config, certificates) = tls::server_config(
+        identity,
+        config.minimum_tls_version == crate::config::TlsVersion::Tls13,
+    )?;
+    let acceptor = TlsAcceptor::from(tls_config);
 
     // Bind everything first; with port 0 (tests) UDP takes the port TCP got.
     let mut listeners = Vec::new();
@@ -687,6 +709,7 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         counters,
         udp: sockets.clone(),
         acceptor,
+        certificates,
         admission: Mutex::new(Admission::default()),
         pending: Arc::new(Semaphore::new(config.max_pending_connections as usize)),
         version_frame: extension::version_frame(&server_version(&settings), None),

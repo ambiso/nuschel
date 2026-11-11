@@ -487,7 +487,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Persist channel listeners for registered users (2026-11-11): stored with
          their volume, restored after `ServerSync` with Listen and the limits checked
          again (Murmur does not check), removed with the user or channel.
-   - [ ] TLS reload on SIGHUP; a minimum TLS 1.3 option.
+   - [x] TLS reload on SIGHUP and `minimum_tls_version = "1.3"` (2026-11-11): new
+         handshakes get the new certificate, a broken one keeps the old one. The
+         NixOS module copies certificate credentials at start, so there a renewal
+         still needs a restart.
    - [ ] IP obfuscation in logs.
    - [ ] CA-verified ("strong") certificates.
    - [ ] A per-user cap on temporary channels and a global budget for shout fan-out;

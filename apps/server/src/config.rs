@@ -10,6 +10,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The oldest TLS version the server accepts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+pub enum TlsVersion {
+    #[default]
+    #[serde(rename = "1.2")]
+    Tls12,
+    #[serde(rename = "1.3")]
+    Tls13,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Security {
@@ -318,6 +328,10 @@ pub struct Config {
     pub max_pending_connections: u32,
     /// Bytes queued for one client before it is disconnected as too slow.
     pub max_queued_bytes: usize,
+    /// "1.2" (the default; Mumble clients built against OpenSSL before
+    /// 1.1.1 speak nothing newer) or "1.3", which keeps client certificates
+    /// off the wire in the clear.
+    pub minimum_tls_version: TlsVersion,
     pub autoban: Autoban,
     pub password_hashing: PasswordHashing,
     pub history: History,
@@ -378,6 +392,7 @@ impl Default for Config {
             connections_per_address: 16,
             max_pending_connections: 256,
             max_queued_bytes: 8 * 1024 * 1024,
+            minimum_tls_version: TlsVersion::Tls12,
             autoban: Autoban::default(),
             password_hashing: PasswordHashing::default(),
             history: History::default(),

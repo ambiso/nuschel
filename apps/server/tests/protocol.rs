@@ -1581,3 +1581,140 @@ async fn registered_users_keep_their_listeners() {
     alice.sync().await;
     assert!(restored(&alice).is_none());
 }
+
+/// A TLS handshake with the given versions; the server's leaf certificate and
+/// the negotiated version, or `None` if it fails.
+async fn handshake(
+    address: SocketAddr,
+    versions: &[&'static rustls::SupportedProtocolVersion],
+) -> Option<(Vec<u8>, rustls::ProtocolVersion)> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_protocol_versions(versions)
+        .unwrap()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AnyServer(provider)))
+        .with_no_client_auth();
+    let stream = TcpStream::connect(address).await.ok()?;
+    let tls = timeout(
+        WAIT,
+        TlsConnector::from(Arc::new(config))
+            .connect(ServerName::try_from("localhost").unwrap(), stream),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let connection = tls.get_ref().1;
+    Some((
+        connection.peer_certificates()?.first()?.to_vec(),
+        connection.protocol_version()?,
+    ))
+}
+
+fn write_certificate(directory: &std::path::Path, name: &str) -> Vec<u8> {
+    let generated = rcgen::generate_simple_self_signed(vec![name.into()]).unwrap();
+    std::fs::write(directory.join("tls.pem"), generated.cert.pem()).unwrap();
+    std::fs::write(
+        directory.join("tls.key"),
+        generated.signing_key.serialize_pem(),
+    )
+    .unwrap();
+    generated.cert.der().to_vec()
+}
+
+/// SIGHUP's reload: new handshakes get the new certificate, connections keep
+/// theirs, and a certificate that does not load keeps the current one.
+#[tokio::test]
+async fn the_certificate_reloads_and_a_broken_one_is_refused() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = write_certificate(directory.path(), "first");
+    let extra = format!(
+        "certificate = {:?}\nprivate_key = {:?}",
+        directory.path().join("tls.pem"),
+        directory.path().join("tls.key")
+    );
+    let fixture = Fixture::start_in(directory, MemoryStore::shared(), &extra).await;
+    let versions = rustls::DEFAULT_VERSIONS;
+    assert_eq!(
+        handshake(fixture.address(), versions).await.unwrap().0,
+        first
+    );
+    let admin_id = identity();
+    let mut admin = superuser(fixture.address(), &admin_id).await;
+
+    let second = write_certificate(fixture.directory.path(), "second");
+    let fingerprint = fixture.running.server.reload_certificate().unwrap();
+    assert_eq!(fingerprint, nuscheld::tls::sha256_hex(&second));
+    assert_eq!(
+        handshake(fixture.address(), versions).await.unwrap().0,
+        second
+    );
+    // The connection from before keeps working.
+    admin.sync().await;
+
+    // A key that does not belong to the certificate, then garbage: refused,
+    // and the second certificate stays.
+    let other = rcgen::generate_simple_self_signed(vec!["other".into()]).unwrap();
+    std::fs::write(
+        fixture.directory.path().join("tls.key"),
+        other.signing_key.serialize_pem(),
+    )
+    .unwrap();
+    assert!(fixture.running.server.reload_certificate().is_err());
+    std::fs::write(
+        fixture.directory.path().join("tls.pem"),
+        "not a certificate",
+    )
+    .unwrap();
+    assert!(fixture.running.server.reload_certificate().is_err());
+    assert_eq!(
+        handshake(fixture.address(), versions).await.unwrap().0,
+        second
+    );
+    admin.sync().await;
+}
+
+/// A generated certificate is re-read on reload, never generated again.
+#[tokio::test]
+async fn a_generated_certificate_is_not_regenerated_on_reload() {
+    let fixture = Fixture::start("").await;
+    let (leaf, _) = handshake(fixture.address(), rustls::DEFAULT_VERSIONS)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.running.server.reload_certificate().unwrap(),
+        nuscheld::tls::sha256_hex(&leaf)
+    );
+    std::fs::remove_file(fixture.directory.path().join("certificate.pem")).unwrap();
+    assert!(fixture.running.server.reload_certificate().is_err());
+    assert!(!fixture.directory.path().join("certificate.pem").exists());
+    assert_eq!(
+        handshake(fixture.address(), rustls::DEFAULT_VERSIONS)
+            .await
+            .unwrap()
+            .0,
+        leaf
+    );
+}
+
+#[tokio::test]
+async fn tls_13_can_be_required() {
+    let tls12 = &[&rustls::version::TLS12][..];
+    let fixture = Fixture::start("").await;
+    assert_eq!(
+        handshake(fixture.address(), tls12).await.unwrap().1,
+        rustls::ProtocolVersion::TLSv1_2
+    );
+    let fixture = Fixture::start("minimum_tls_version = \"1.3\"").await;
+    assert!(handshake(fixture.address(), tls12).await.is_none());
+    assert_eq!(
+        handshake(fixture.address(), rustls::DEFAULT_VERSIONS)
+            .await
+            .unwrap()
+            .1,
+        rustls::ProtocolVersion::TLSv1_3
+    );
+    // Logins work as before.
+    superuser(fixture.address(), &identity()).await;
+    assert!(Config::from_toml("minimum_tls_version = \"1.1\"").is_err());
+}

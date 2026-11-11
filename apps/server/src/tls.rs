@@ -5,18 +5,25 @@
 //! client must prove possession of its key in the handshake. Without a
 //! configured certificate, a self-signed one is generated once and kept, since
 //! clients pin the server certificate.
+//!
+//! The certificate can be replaced while the server runs ([`Certificates`],
+//! SIGHUP): new handshakes use the new one, established connections keep
+//! their session, and a certificate that does not load keeps the old one.
 use rustls::{
     DigitallySignedStruct, DistinguishedName, SignatureScheme,
     client::danger::HandshakeSignatureValid,
     crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature},
     pki_types::{CertificateDer, PrivateKeyDer, UnixTime, pem::PemObject},
-    server::danger::{ClientCertVerified, ClientCertVerifier},
+    server::{
+        ClientHello, ResolvesServerCert,
+        danger::{ClientCertVerified, ClientCertVerifier},
+    },
     sign::CertifiedKey,
 };
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 /// ALPN for the Nuschel extension (docs/extension.md); `mumble` is accepted too,
@@ -142,6 +149,18 @@ impl Identity {
         Self::load(&certificate, &key)
     }
 
+    /// What a SIGHUP reloads: the configured files, or the generated ones,
+    /// which are never generated again here (a missing file is an error).
+    pub fn reload(configured: Option<(&Path, &Path)>, directory: &Path) -> Result<Self, TlsError> {
+        match configured {
+            Some((certificate, key)) => Self::load(certificate, key),
+            None => Self::load(
+                &directory.join("certificate.pem"),
+                &directory.join("private-key.pem"),
+            ),
+        }
+    }
+
     pub fn fingerprint(&self) -> String {
         sha256_hex(self.chain[0].as_ref())
     }
@@ -150,6 +169,54 @@ impl Identity {
 /// Whether a certificate and key can serve TLS.
 pub fn check_identity(identity: Identity) -> Result<(), TlsError> {
     identity.certified().map(|_| ())
+}
+
+/// The server certificate, replaceable while running.
+#[derive(Debug)]
+pub struct Certificates {
+    current: RwLock<Arc<CertifiedKey>>,
+}
+
+impl Certificates {
+    pub fn new(identity: Identity) -> Result<Self, TlsError> {
+        Ok(Self {
+            current: RwLock::new(identity.certified()?),
+        })
+    }
+
+    fn current(&self) -> Arc<CertifiedKey> {
+        self.current
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Use `identity` for new handshakes; on error the current one stays.
+    pub fn replace(&self, identity: Identity) -> Result<String, TlsError> {
+        let certified = identity.certified()?;
+        let fingerprint = certified
+            .end_entity_cert()
+            .map(|leaf| sha256_hex(leaf.as_ref()))?;
+        *self
+            .current
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = certified;
+        Ok(fingerprint)
+    }
+
+    /// SHA-256 of the current leaf certificate, lowercase hex.
+    pub fn fingerprint(&self) -> String {
+        self.current()
+            .end_entity_cert()
+            .map(|leaf| sha256_hex(leaf.as_ref()))
+            .unwrap_or_default()
+    }
+}
+
+impl ResolvesServerCert for Certificates {
+    fn resolve(&self, _: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        Some(self.current())
+    }
 }
 
 fn write_atomically(path: &Path, contents: &[u8], mode: u32) -> Result<(), TlsError> {
@@ -230,15 +297,28 @@ impl ClientCertVerifier for AnyClientCertificate {
     }
 }
 
-pub fn server_config(identity: Identity) -> Result<Arc<rustls::ServerConfig>, TlsError> {
+/// The TLS configuration and its replaceable certificate. With
+/// `tls13_only`, TLS 1.2 handshakes are refused (in 1.2 the client
+/// certificate, a stable identity, crosses the network in the clear; stock
+/// clients from 1.2.x on speak 1.3 when built against OpenSSL 1.1.1 or later).
+pub fn server_config(
+    identity: Identity,
+    tls13_only: bool,
+) -> Result<(Arc<rustls::ServerConfig>, Arc<Certificates>), TlsError> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let mut config = rustls::ServerConfig::builder_with_provider(provider.clone())
-        .with_safe_default_protocol_versions()?
+    let certificates = Arc::new(Certificates::new(identity)?);
+    let builder = rustls::ServerConfig::builder_with_provider(provider.clone());
+    let builder = if tls13_only {
+        builder.with_protocol_versions(&[&rustls::version::TLS13])?
+    } else {
+        builder.with_safe_default_protocol_versions()?
+    };
+    let mut config = builder
         .with_client_cert_verifier(Arc::new(AnyClientCertificate(provider)))
-        .with_single_cert(identity.chain, identity.key)?;
+        .with_cert_resolver(certificates.clone());
     config.alpn_protocols = vec![ALPN_NUSCHEL.to_vec(), ALPN_MUMBLE.to_vec()];
     // Session resumption would let a client skip presenting its certificate.
     config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
     config.send_tls13_tickets = 0;
-    Ok(Arc::new(config))
+    Ok((Arc::new(config), certificates))
 }

@@ -174,10 +174,23 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let running = server::start(settings, backend).await?;
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        _ = terminate.recv() => {}
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut hangup = signal(SignalKind::hangup())?;
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = terminate.recv() => break,
+            _ = hangup.recv() => match running.server.reload_certificate() {
+                Ok(fingerprint) => {
+                    tracing::info!(sha256 = %fingerprint, "reloaded the server certificate");
+                }
+                Err(error) => tracing::error!(
+                    %error,
+                    "could not reload the server certificate; keeping the current one"
+                ),
+            },
+        }
     }
     tracing::info!("shutting down");
     running.shutdown().await;

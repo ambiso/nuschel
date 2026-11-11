@@ -155,6 +155,11 @@ pkgs.testers.runNixOSTest {
     # Key transparency on PostgreSQL, with keys the server generated (0600).
     as_tester(f"python3 {tests}/key_transparency.py {bins} --host postgres")
     postgres.succeed("test \"$(stat -c %a /var/lib/private/nuschel/kt-vrf.key)\" = 600")
+    # SIGHUP reloads the (generated) certificate; the server keeps running.
+    server.succeed("systemctl kill -s HUP nuschel.service")
+    server.wait_until_succeeds("journalctl -u nuschel.service --no-pager | grep -q 'reloaded the server certificate'", timeout=30)
+    server.succeed("systemctl is-active nuschel.service")
+
     # A Murmur database (Murmur's own schema, tests/fixtures/murmur-1.5.sql)
     # imported by the module into a fresh SQLite database, then logged in to.
     server.succeed(f"sqlite3 /tmp/murmur.sqlite < {tests}/fixtures/murmur-1.5.sql && chmod 0600 /tmp/murmur.sqlite")

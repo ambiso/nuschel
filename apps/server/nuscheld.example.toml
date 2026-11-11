@@ -21,6 +21,10 @@ database = "nuscheld.sqlite3"
 # once and kept in state_directory (clients pin it, so keep it across restarts).
 # certificate = "/etc/nuscheld/certificate.pem"
 # private_key = "/etc/nuscheld/private-key.pem"
+# SIGHUP loads both again (a renewed certificate); if they do not load, the current
+# one stays. "1.3" refuses TLS 1.2, where client certificates travel in the clear;
+# Mumble clients built against OpenSSL before 1.1.1 cannot connect then.
+minimum_tls_version = "1.2"
 
 # The root channel's name; empty shows "Root".
 registered_name = ""
