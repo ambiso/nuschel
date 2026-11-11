@@ -18,7 +18,6 @@ publish = false
 nuschl-core = { path = "crates/core", version = "0.1.0" }
 nuschl-client = { path = "crates/client", version = "0.1.0" }
 nuschl-content = { path = "crates/content", version = "0.1.0" }
-nuschl-files = { path = "crates/files", version = "0.1.0" }
 nuschl-ipc = { path = "crates/ipc", version = "0.1.0" }
 nuschl-sandbox-windows = { path = "crates/sandbox-windows", version = "0.1.0" }
 nuschl-legacy-html = { path = "crates/legacy-html", version = "0.1.0" }
@@ -44,10 +43,6 @@ undocumented_unsafe_blocks = "deny"
 # `cargo build --config 'profile.dev.package."<crate>".debug=true'`.
 [profile.dev.package."*"]
 debug = "line-tables-only"
-
-# RSA key generation is unusably slow unoptimised; tests and debug builds create identities.
-[profile.dev.package.num-bigint-dig]
-opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
 # Key transparency (nuschl-kt): the VRF and tree hashing are ~100x slower unoptimised.

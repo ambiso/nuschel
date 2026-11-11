@@ -7226,7 +7226,6 @@ dependencies = [
  "nuschl-ipc",
  "nuschl-legacy-html",
  "nuschl-protocol",
- "nuschl-sandbox-windows",
  "p12-keystore",
  "prost",
  "rcgen",

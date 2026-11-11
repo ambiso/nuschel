@@ -528,6 +528,27 @@
             };
           in
           {
+            rename-options =
+              let
+                legacy = nixpkgs.lib.nixosSystem {
+                  inherit system;
+                  modules = [
+                    self.nixosModules.default
+                    self.nixosModules.witness
+                    self.nixosModules.web
+                    {
+                      system.stateVersion = "26.05";
+                      services.nuschel.settings.welcome_text = "legacy alias";
+                      services.nuschel-witness.name = "legacy-alias";
+                      services.nuschel-web.hostName = "legacy.example.invalid";
+                    }
+                  ];
+                };
+              in
+              assert legacy.config.services.nuschl.settings.welcome_text == "legacy alias";
+              assert legacy.config.services.nuschl-witness.name == "legacy-alias";
+              assert legacy.config.services.nuschl-web.hostName == "legacy.example.invalid";
+              pkgs.runCommand "nuschl-rename-options" { } "touch $out";
             home-manager = homeManagerChecks.files;
             vm-home-manager = homeManagerChecks.vm;
             # nuschld under the module with stock clients (`nix build .#checks.x86_64-linux.vm-server`).

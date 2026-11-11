@@ -29,6 +29,37 @@ use crate::{
 /// If this process was started as a worker's launch stage, start the worker
 /// confined and exit with its exit code; otherwise return at once.
 pub fn launch_if_requested() {
+    let mut arguments = env::args_os().skip(1);
+    if arguments
+        .next()
+        .is_some_and(|argument| argument == "--retire-nuschel-profile")
+    {
+        let result = (|| {
+            let name = arguments
+                .next()
+                .ok_or_else(|| invalid("missing legacy profile name"))?;
+            let name = name
+                .to_str()
+                .ok_or_else(|| invalid("invalid profile name"))?;
+            let mut directories = Vec::new();
+            while let Some(flag) = arguments.next() {
+                if flag != "--writable" {
+                    return Err(invalid("unexpected retirement argument"));
+                }
+                directories.push(
+                    arguments
+                        .next()
+                        .ok_or_else(|| invalid("missing legacy folder"))?
+                        .into(),
+                );
+            }
+            retire_legacy_profile(name, &directories)
+        })();
+        match result {
+            Ok(()) => std::process::exit(0),
+            Err(error) => fail(&error.to_string()),
+        }
+    }
     let (policy, arguments) = match Policy::parse(env::args_os().skip(1)) {
         Ok(None) => return,
         Ok(Some(parsed)) => parsed,

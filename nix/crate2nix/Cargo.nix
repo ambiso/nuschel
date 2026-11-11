@@ -23646,11 +23646,6 @@ rec {
             packageId = "nuschl-protocol";
           }
           {
-            name = "nuschl-sandbox-windows";
-            packageId = "nuschl-sandbox-windows";
-            target = { target, features }: (target."windows" or false);
-          }
-          {
             name = "p12-keystore";
             packageId = "p12-keystore";
           }

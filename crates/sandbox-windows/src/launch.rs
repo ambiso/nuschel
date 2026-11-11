@@ -312,6 +312,35 @@ mod tests {
     }
 
     #[test]
+    fn legacy_worker_retirement_preserves_other_grants_and_checks_failures() {
+        let mock = new_mock();
+        let name = WideCString::from_str("nuschel.storage.0123456789abcdef").unwrap();
+        let retired = os::existing_container_sid(&mock, &name).unwrap();
+        let retained = allowed_ace(3, MODIFY, &sid(9, 9));
+        mock.set_dacl(
+            HISTORY,
+            acl(&[allowed_ace(3, MODIFY, &retired.bytes()), retained.clone()]),
+        );
+        let path = WideCString::from_str(HISTORY).unwrap();
+        os::revoke(&mock, &path, &retired, true).unwrap();
+        assert_eq!(mock.dacl(HISTORY).unwrap(), acl(&[retained]));
+        let writes = mock.acl_writes();
+        os::revoke(&mock, &path, &retired, true).unwrap();
+        assert_eq!(mock.acl_writes(), writes);
+        os::delete_container(&mock, &name).unwrap();
+        os::delete_container(&mock, &name).unwrap();
+        let failing = new_mock();
+        failing.fail_at("derive_app_container_sid_from_app_container_name", 0);
+        assert!(os::existing_container_sid(&failing, &name).is_err());
+        failing.fail_at("delete_app_container_profile", 0);
+        assert!(os::delete_container(&failing, &name).is_err());
+        let denied = new_mock();
+        denied.set_dacl(HISTORY, acl(&[allowed_ace(3, MODIFY, &retired.bytes())]));
+        denied.fail_at("set_security_info", 0);
+        assert!(os::revoke(&denied, &path, &retired, true).is_err());
+    }
+
+    #[test]
     fn existing_profiles_and_grants_are_reused() {
         let mock = new_mock();
         launch(&mock, &policy(), inputs()).unwrap();

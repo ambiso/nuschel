@@ -194,6 +194,28 @@ relative variables fall back to the defaults):
 `~/Library/Application Support/org.Nuschl.Nuschl` (state in its `state` folder) and
 `~/Library/Caches/org.Nuschl.Nuschl`; Windows `%APPDATA%\Nuschl\Nuschl\config`,
 `%LOCALAPPDATA%\Nuschl\Nuschl\data` (and `data\state`) and `…\cache`.
+The first start after the Nuschel → Nuschl rename moves the old `nuschel`
+folders to `nuschl` (including the corresponding macOS and Windows folders).
+Quit older clients first. Mumble certificates and private keys, accepted server
+certificates, bookmarks, settings, history and saved security requirements are
+preserved. Different files at both destinations stop startup with both copies
+retained; resolve the conflict before retrying. Old managed configuration under
+`nuschel/managed.json` remains readable, with the new name taking precedence.
+
+Experimental end-to-end stores use different cryptographic domain labels after
+this rename. Their entire old store is retained in `data/keys.nuschel-v1` or
+`data/keys.nuschel-config-v1`, outside the workers' writable directories. A reset
+notice appears on migration, and a new end-to-end identity is created when needed.
+Old encrypted messages, recovery blobs, MLS state and transparency proofs belong
+to the old namespace. No deployed Nuschl server compatibility is promised across
+this development transition. `config/nuschl-namespace-v1` records that the move
+finished, including for explicit profiles, so new keys are never archived again.
+On Windows, old worker grants are revoked before the old AppContainer profiles
+are removed. The desktop also transfers its existing login-start preference.
+NixOS and Home Manager accept the old `services.nuschel`,
+`services.nuschel-witness`, `services.nuschel-web` and `programs.nuschel`
+options through warning aliases; switch configurations to the new names.
+
 `--profile-dir DIR` puts the four under `DIR/config`, `data`, `state` and `cache`.
 Folders are created owner-only (0700) when first needed. Which worker can reach what:
 [SECURITY.md](../SECURITY.md#where-secrets-live).

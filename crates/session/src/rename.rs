@@ -25,7 +25,7 @@ pub(crate) fn migrate(old: Option<&Layout>, new: &Layout) -> io::Result<Migratio
                 locks.push(layout::take_lock(&directory.join(layout::IDENTITY_LOCK))?);
             }
         }
-        #[cfg(windows)]
+        #[cfg(all(windows, not(test)))]
         if !new.config.join(MARKER).try_exists()? {
             retire_windows(Some(old), new)?;
         }
@@ -50,7 +50,7 @@ pub(crate) fn migrate(old: Option<&Layout>, new: &Layout) -> io::Result<Migratio
     // If interrupted before it is written, the archives are already outside
     // keys/, and repeating the move is safe.
     if !new.config.join(MARKER).try_exists()? {
-        #[cfg(windows)]
+        #[cfg(all(windows, not(test)))]
         if old.is_none() {
             retire_windows(None, new)?;
         }
@@ -220,6 +220,51 @@ mod tests {
     }
 
     #[test]
+    fn a_real_mumble_identity_and_bookmarks_load_after_the_move() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = Layout::under(&temp.path().join("nuschel"));
+        let root = temp.path().join("nuschl");
+        let new = Layout::under(&root);
+        let identity = crate::config::ClientIdentity::generate().unwrap();
+        let mut bookmark =
+            crate::config::ServerBookmark::new("Team", "127.0.0.1", 64738, "Ada").unwrap();
+        bookmark.certificate_sha256 = Some("ab".repeat(32));
+        write(
+            &old.identity().join("identity.json"),
+            &serde_json::to_vec(&identity).unwrap(),
+        );
+        write(
+            &old.config.join("settings.json"),
+            br#"{"enter_sends":false}"#,
+        );
+        write(
+            &old.config.join("servers.json"),
+            &serde_json::to_vec(&vec![bookmark.clone()]).unwrap(),
+        );
+        write(
+            &old.data.join(OLD_POLICY),
+            br#"{"127.0.0.1:64738":{"nuschel":true}}"#,
+        );
+        migrate(Some(&old), &new).unwrap();
+        let profile = crate::config::Profile::open(Some(root)).unwrap();
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert!(!loaded.settings.enter_sends);
+        assert_eq!(loaded.servers[0].id, bookmark.id);
+        assert_eq!(
+            loaded.servers[0].certificate_sha256,
+            bookmark.certificate_sha256
+        );
+        let migrated = profile.identity().unwrap();
+        assert_eq!(migrated.certificate, identity.certificate);
+        assert_eq!(migrated.private_key, identity.private_key);
+        assert!(migrated.is_rsa());
+        assert!(migrated.to_pkcs12("migration test").is_ok());
+        let policy = profile.policy().unwrap();
+        assert!(policy.get("127.0.0.1", 64738).check(false, &[]).is_err());
+    }
+
+    #[test]
     fn conflicting_identity_stops_startup_and_retains_both() {
         let temp = tempfile::tempdir().unwrap();
         let old = Layout::under(&temp.path().join("nuschel"));
@@ -270,12 +315,49 @@ mod tests {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, not(test)))]
 fn retire_windows(old: Option<&Layout>, new: &Layout) -> io::Result<()> {
     use nuschl_ipc::windows_sandbox::scoped_profile;
-    use nuschl_sandbox_windows::retire_legacy_profile;
-    for kind in ["content", "math", "media", "transfer"] {
-        retire_legacy_profile(&format!("nuschel.{kind}"), &[])?;
+    fn retire_legacy_profile(name: &str, directories: &[std::path::PathBuf]) -> io::Result<()> {
+        use std::{
+            os::windows::process::CommandExt,
+            process::{Command, Stdio},
+        };
+        // The unsafe Win32 adapter remains in a short-lived launch-stage process,
+        // just as it does when starting a sandbox. No unsafe dependency enters
+        // the session library or desktop. These arguments are local paths/names.
+        let worker = crate::workers::sibling("nuschl-storage-worker")?;
+        let mut command = Command::new(worker);
+        command
+            .arg("--retire-nuschel-profile")
+            .arg(name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .creation_flags(0x0800_0000);
+        for directory in directories {
+            command.arg("--writable").arg(directory);
+        }
+        let output = command.output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "could not retire {name}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        Ok(())
+    }
+    let existing =
+        |layout: &Layout| layout.data.exists() || layout.config.join("nuschel-identity").exists();
+    if !old.is_some_and(existing)
+        && !new.keys().exists()
+        && !new.config.join("nuschel-identity").exists()
+    {
+        return Ok(());
+    }
+    if old.is_some() {
+        for kind in ["content", "math", "media", "transfer"] {
+            retire_legacy_profile(&format!("nuschel.{kind}"), &[])?;
+        }
     }
     for layout in old.into_iter().chain(std::iter::once(new)) {
         for (kind, directory) in [
