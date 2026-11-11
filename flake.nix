@@ -97,6 +97,8 @@
             || lib.hasSuffix ".otf" path
             # The emoji picker's table.
             || lib.hasSuffix "emoji.txt" path
+            # Frozen identity vectors are compiled into the all-target tests.
+            || lib.hasInfix "/test-vectors/" path
             # The release signing key the updater trusts.
             || lib.hasSuffix "update-key.pub" path
             # Vendored GPUI crates keep their shaders, headers and README.
