@@ -14,8 +14,11 @@ let
   json = pkgs.formats.json { };
   inherit (pkgs.stdenv.hostPlatform) isLinux isDarwin system;
 
-  # Nuschel's configuration folder: ProjectDirs::from("org", "Nuschel",
-  # "Nuschel") in crates/session/src/config.rs.
+  # Nuschel's configuration folder (`Layout::system` in
+  # crates/session/src/layout.rs): $XDG_CONFIG_HOME/nuschel, which holds only
+  # settings.json, servers.json (bookmarks) and managed.json. The identity,
+  # keys and history are in $XDG_DATA_HOME/nuschel, so a dotfiles repository
+  # of ~/.config never sees them.
   configDir =
     if isDarwin then
       "${config.home.homeDirectory}/Library/Application Support/org.Nuschel.Nuschel"

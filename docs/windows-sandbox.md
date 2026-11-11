@@ -56,7 +56,7 @@ command-line quoting and the per-worker policies are unit-tested on every platfo
 | content | `nuschel.content` | less privileged | none | none | 512 MiB, plus the request's CPU seconds |
 | math | `nuschel.math` | less privileged | none | none | 512 MiB, and 120 CPU seconds over its life (it is restarted), as on Linux |
 | storage | `nuschel.storage.<hash of the directory>` | less privileged | none | the history directory's contents (the directory itself: list, add, delete entries) | 1 GiB |
-| crypto | `nuschel.crypto.<hash of the directory>` | less privileged | none | its `nuschel-identity` directory's contents (likewise) | 1 GiB |
+| crypto | `nuschel.crypto.<hash of the directory>` | less privileged | none | its `keys` directory's contents (likewise) | 1 GiB |
 | media | `nuschel.media` | full | `microphone` | none | 1 GiB |
 | transfer | `nuschel.transfer` | full | `internetClient`, `privateNetworkClientServer` | the offered file, as a read-only handle | 1 GiB |
 
@@ -65,6 +65,15 @@ which is its working directory and `TEMP`, and read the system files every
 AppContainer may read (the Windows directory, Program Files). A full AppContainer
 also gets everything granted to "ALL APPLICATION PACKAGES"; a less privileged one
 (LPAC) only what is granted to "ALL RESTRICTED APPLICATION PACKAGES" or to itself.
+
+The history and keys directories are siblings in `%LOCALAPPDATA%\Nuschel\Nuschel\data`
+(`Profile::history_dir`, `Profile::keys_dir`; crates/session/src/layout.rs), next to
+the Mumble identity, which no worker is granted. Versions before that layout kept the
+history directly in `data` and the keys in `%APPDATA%\Nuschel\Nuschel\config\nuschel-identity`;
+the first start moves them, and the new directories get containers of their own
+(their names hash the path). The grant an earlier version gave its storage container
+on `data` itself stays, inherited by what is created there since; no current worker
+runs in that container (SECURITY.md, "Where secrets live").
 
 Decisions:
 

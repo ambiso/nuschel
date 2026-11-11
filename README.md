@@ -67,6 +67,35 @@ and echo tests, in-place updates, and the workers' AppContainer sandboxes
 (docs/windows-sandbox.md). macOS has not been run. The macOS build needs
 macOS 14.2 or later because the audio library links Core Audio's process-tap API.
 
+## Where Nuschel keeps its files
+
+On Linux Nuschel follows the XDG Base Directory specification (unset, empty or
+relative variables fall back to the defaults):
+
+| Folder | Holds |
+| --- | --- |
+| `$XDG_CONFIG_HOME/nuschel` (`~/.config/nuschel`) | `settings.json`, `servers.json` (bookmarks and accepted certificates), `managed.json`: safe to keep with your dotfiles |
+| `$XDG_DATA_HOME/nuschel` (`~/.local/share/nuschel`) | `identity/` (your Mumble certificate and its private key), `keys/` (end-to-end keys), `history/` (local history), `nuschel-policy.json` (servers' security records): back this up, keep it private |
+| `$XDG_STATE_HOME/nuschel` (`~/.local/state/nuschel`) | last channel per server, the update check |
+| `$XDG_CACHE_HOME/nuschel` (`~/.cache/nuschel`) | channel trees and server icons: safe to delete |
+
+`nuschel/managed.json` in `$XDG_CONFIG_DIRS` (`/etc/xdg`) is read as well. macOS uses
+`~/Library/Application Support/org.Nuschel.Nuschel` (state in its `state` folder) and
+`~/Library/Caches/org.Nuschel.Nuschel`; Windows `%APPDATA%\Nuschel\Nuschel\config`,
+`%LOCALAPPDATA%\Nuschel\Nuschel\data` (and `data\state`) and `…\cache`.
+`--profile-dir DIR` puts the four under `DIR/config`, `data`, `state` and `cache`.
+Folders are created owner-only (0700) when first needed.
+
+Earlier versions kept the identity, keys, security records and caches in the
+configuration folder. The first start moves each file to its new place (renamed, or
+copied, synced and only then removed), never over a newer one, and logs what moved;
+an interrupted move finishes on the next start, and anything that cannot be moved is
+used where it is and reported. Quit older Nuschel instances first: one still running
+would create a fresh identity in the old place, which Nuschel then reports and leaves
+alone. A downgrade does not find the moved identity; copy
+`~/.local/share/nuschel/identity/identity.json` back to `~/.config/nuschel` for it.
+See [SECURITY.md](SECURITY.md#where-secrets-live) for which worker can reach what.
+
 ## Releases and updates
 
 Tagging `vX.Y.Z` runs `.github/workflows/release.yml` on one Linux runner: the
@@ -181,9 +210,10 @@ Nuschel never writes it. On every start its settings are merged key by key over
 `settings.json` and win; Settings shows those controls dimmed with "Set by your
 system configuration", and `settings.json` keeps only your own values, which
 return once a key is no longer managed. Its bookmarks cannot be removed and only
-take a password in their form; `servers.json` keeps what Nuschel learns about them
-(an accepted certificate, the channel tree, the last channel), and a bookmark
-removed from `servers` disappears on the next start. A `nuschel/managed.json` in
+take a password in their form; Nuschel keeps what it learns about them (an
+accepted certificate in `servers.json`, the channel tree in the cache, the last
+channel in the state folder), and a bookmark removed from `servers` disappears on
+the next start. A `nuschel/managed.json` in
 `$XDG_CONFIG_DIRS` (such as `/etc/xdg`) sets system-wide defaults under the user's
 own (profiles opened with `--profile-dir` skip it).
 

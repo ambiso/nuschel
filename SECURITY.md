@@ -80,9 +80,9 @@ Against a hostile server the session keeps budgets: 4,096 channels, 16,384 users
 64 MiB of comments, descriptions and avatars per connection, 256 listened channels per
 user; past them new items are dropped with one visible notice. (These counts are under
 review: limits that drop data are an availability risk of their own; see TODO.md.)
-Exported PKCS#12 identities are written owner-only (0600) and atomically. On macOS,
-where data and config share a folder, the storage worker's writable folder is a
-dedicated `history/` subfolder. The updater refuses a signed manifest whose release
+Exported PKCS#12 identities are written owner-only (0600) and atomically. On every
+platform the storage worker's writable folder is a dedicated `history/` folder (see
+"Where secrets live"). The updater refuses a signed manifest whose release
 time or version is older than the newest it has accepted; a client that never saw a
 newer manifest can still be offered an older one, and withheld releases go unnoticed.
 
@@ -115,7 +115,7 @@ that once negotiated the extension or a capability; only an explicit reset clear
 The crypto worker owns the identity secrets (docs/e2ee.md, "Phase 3 as
 implemented"): one per profile, sandboxed like the content worker, without network.
 Its keystore and state are sealed under a store key kept in a 0600 file in its own
-directory, a stopgap until the OS keychain. It never logs secrets; the desktop and
+folder (`keys/` in the data folder), a stopgap until the OS keychain. It never logs secrets; the desktop and
 the session see only public keys, statements and verification results. On the
 server, key transparency needs `kt.signing_key_file` and `kt.vrf_secret_file`
 (module: `services.nuschel.kt.*`, through `LoadCredential`, or generated once in the
@@ -194,6 +194,43 @@ AppContainers because COM and Winsock refuse less privileged ones, can read the
 user's environment variables (`HKCU\Environment`), and what AppContainers may read in
 general was not audited; media can use what the audio service offers, subject to
 Windows' microphone privacy setting; no physical hardware has been tested.
+
+## Where secrets live
+
+Nuschel's folders (`crates/session/src/layout.rs`; on Linux the XDG Base Directory
+ones, see the README) keep secrets out of the configuration folder, which people keep
+in dotfiles repositories, and give each persistent worker one folder with nothing
+else in it. Folders are created 0700, files 0600.
+
+| What | Where (Linux) | Reached by |
+| --- | --- | --- |
+| Mumble certificate and private key, with lock and import backups | `$XDG_DATA_HOME/nuschel/identity/` | the main process only (TLS client authentication is in-process) |
+| End-to-end keys: sealed keystore, state, store key | `$XDG_DATA_HOME/nuschel/keys/` | the crypto worker only; the main process starts it on that folder and sees public keys only |
+| Local history (SQLite) | `$XDG_DATA_HOME/nuschel/history/` | the storage worker only |
+| Servers' security records (`nuschel-policy.json`) | `$XDG_DATA_HOME/nuschel/` | the main process only |
+| Settings, bookmarks with accepted certificate pins and access tokens, `managed.json` | `$XDG_CONFIG_HOME/nuschel/` | the main process only |
+| Last channels, update check state | `$XDG_STATE_HOME/nuschel/` | the main process only |
+| Channel trees and server icons (server-controlled, bounded when read) | `$XDG_CACHE_HOME/nuschel/` | the main process only |
+
+The content, math, media and transfer workers get none of these folders. The storage
+and crypto workers' folders are siblings, so neither reaches the other's, the
+identity, the records or any configuration: bwrap binds the one folder at `/data`,
+Seatbelt allows reads and writes below it only, and on Windows the folder's own
+AppContainer is granted it. A profile whose XDG variables would put any other folder
+inside a worker's is refused. Server passwords are never saved. Access tokens stay in
+`servers.json` with their bookmarks: they are shared channel passwords, not
+credentials of your identity, but leave them out of a public dotfiles repository.
+
+Moving an earlier version's profile keeps these boundaries: the storage worker gets
+the data folder as a whole only while an earlier version's history in it could not
+be moved, and then nothing else moves into it and everything is used where it was;
+once the folder holds more than that history, the storage worker gets a new
+`history/` folder instead. Remaining: on Windows, earlier versions granted their
+storage container (named after the whole data folder) Modify on that folder,
+inherited by what has been created in it since, including the identity and keys
+folders' contents. No current worker runs in that container, only an earlier
+version's storage worker would (after a downgrade); revoking the old grant is in
+TODO.md.
 
 ## Fuzzing
 

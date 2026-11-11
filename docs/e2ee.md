@@ -424,7 +424,8 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
 - The crypto worker owns an encrypted store (§8.3). Its store key is in the OS
   credential store: Secret Service on Linux, Keychain on macOS, DPAPI on Windows;
   never in the history database, never on a server. **For now** the key is a 0600
-  file in the worker's own directory (`store.key`); moving it to the credential store
+  file in the worker's own directory (`store.key` in `$XDG_DATA_HOME/nuschel/keys`,
+  never in the configuration folder); moving it to the credential store
   changes only where the worker gets it (`KeySource`: the supervisor hands it over),
   not the sealed files.
 - A **device-sync key** (symmetric, shared by the user's devices at linking, rotated on

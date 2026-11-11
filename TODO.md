@@ -117,6 +117,19 @@ Later (reported):
 - [ ] Managed config follow-ups: a NixOS option for `/etc/xdg/nuschel/managed.json`;
       system-wide managed config on Windows/macOS; evaluation-time checks for nested
       settings; a way to dismiss the startup error notice.
+- [x] XDG Base Directory layout (crates/session/src/layout.rs, README "Where Nuschel
+      keeps its files"): configuration only in `$XDG_CONFIG_HOME/nuschel` (settings,
+      bookmarks, managed.json); identity, end-to-end keys, history and security records
+      in `$XDG_DATA_HOME/nuschel`, each worker's folder apart; last channels and the
+      update state in `$XDG_STATE_HOME`; channel trees and icons in `$XDG_CACHE_HOME`.
+      The first start moves an earlier profile file by file (never over a newer one,
+      interruptible, reported); servers.json is split. The Home Manager VM test checks
+      that `~/.config/nuschel` holds no identity after a session.
+- [ ] XDG follow-ups: revoke the Modify grant earlier versions gave their Windows
+      storage container on the whole data folder (needs a revoke step in
+      nuschel-sandbox-windows; see SECURITY.md, "Where secrets live"); a lock of the
+      crypto worker's own, so two instances on one profile cannot both run one on
+      `keys/` (true before the move too).
 - [x] Unread indicators (channel and DM counts, red for mentions; a pill and a red
       count on the server rail). Remember the last channel and rejoin it on start.
 - [x] Runs of routine activity lines (joins, moves, connects, disconnects) collapse into
