@@ -905,7 +905,10 @@ impl State {
     }
 
     pub fn valid_username(&self, name: &str) -> bool {
-        name.chars().count() <= 512 && name.trim() == name && self.settings.username.is_match(name)
+        name.chars().count() <= 512
+            && name.len() <= MAX_STORED_NAME
+            && name.trim() == name
+            && self.settings.username.is_match(name)
     }
 
     fn user_remove(&mut self, source: u32, mut message: proto::UserRemove) {
@@ -1433,6 +1436,8 @@ impl State {
             let clip = |text: Option<String>| {
                 let mut text = text.unwrap_or_default();
                 truncate_chars(&mut text, 1000);
+                // The storage refuses texts over 1024 bytes, and with them every ban.
+                truncate_bytes(&mut text, 1000);
                 text
             };
             let ban = Ban {
@@ -1711,7 +1716,9 @@ impl State {
     }
 
     fn valid_channel_name(&self, name: &str) -> bool {
-        name.chars().count() <= 512 && self.settings.channel_name.is_match(name)
+        name.chars().count() <= 512
+            && name.len() <= MAX_STORED_NAME
+            && self.settings.channel_name.is_match(name)
     }
 
     fn can_nest(&self, parent: u32, channel: Option<u32>) -> bool {
@@ -2305,6 +2312,22 @@ pub fn truncate_chars(text: &mut String, limit: usize) {
         text.truncate(index);
     }
 }
+
+/// At most `limit` bytes, cut at a character boundary.
+pub fn truncate_bytes(text: &mut String, limit: usize) {
+    if text.len() > limit {
+        let mut end = limit;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+}
+
+/// The storage keeps names (users, channels, groups) of at most this many
+/// bytes (crates/storage `MAX_NAME`); Murmur's limit of 512 characters can be
+/// more in other scripts.
+pub const MAX_STORED_NAME: usize = 1024;
 
 /// Most access tokens one client may hold, and their length. Tokens are channel
 /// passwords; thousands per message would let a client test them in bulk
