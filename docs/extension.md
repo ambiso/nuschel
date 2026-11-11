@@ -152,13 +152,14 @@ the conversations shown in its sidebar, bounded per connection.
 - The read permission is checked on every page, against current ACLs. Being able to
   read a channel now does not imply having been able to read it then; the default
   policy is "members can read the retained history of conversations they can read",
-  and servers may choose "only since joining" per channel (a per-channel setting;
-  in MLS conversations this follows from the cryptography anyway).
+  and a per-channel setting can restrict it to "only since joining". End-to-end
+  encrypted channels need a history-sharing mechanism for the default (docs/e2ee.md).
 - Edits and deletions are events with their own `seq` that refer to the target
   (`edits`, `deletes`). Pages return the current state of each message plus a
   tombstone for deleted ones, so clients converge without replaying everything.
   Stock clients see neither (they never see history).
-- Retention: a per-server and per-channel policy (keep forever, N days, or none).
+- Retention: a per-server and per-channel policy (keep forever, N days, or none);
+  the default is forever.
   Expired messages become tombstones without content so that `seq` ranges stay
   explicit. Moderators' deletions are tombstones with a reason code.
 - History queries run off the control path with bounded concurrency per
@@ -170,8 +171,9 @@ the conversations shown in its sidebar, bounded per connection.
 
 ## 7. Read state, typing, presence
 
-- `ReadMarker { conversation, seq }`: per user, synced across the user's devices,
-  never shown to others unless the user enables read receipts (off by default).
+- `ReadMarker { conversation, seq }`: per user, synced across the user's devices by
+  default, never shown to others unless the user enables read receipts (off by
+  default).
 - `Typing { conversation }`: ephemeral, rate-limited (one per 3 s), forwarded only to
   subscribers, never stored. In end-to-end conversations typing indicators are sent
   as MLS application messages instead (the server would otherwise learn who types
@@ -194,13 +196,17 @@ the history it stores. In MLS conversations: membership, sizes, timing, `seq`,
 sender user id, and read markers if synced; not content, not typing, not file
 contents. The lock indicator rules in docs/architecture.md apply unchanged.
 
-## Open questions for review
+## Decisions (user, 2026-11-11)
 
-1. **Default history policy for channels.** The design defaults to "members read
-   the retained history". The alternative is "only since joining". Which should be
-   the default for plaintext channels?
-2. **Read markers synced server-side.** On by default for multi-device convenience,
-   off for privacy?
-3. **Strict servers.** Should strict servers reject stock clients at the TLS/ALPN
-   stage (cleanest) or accept them read-only into non-E2EE channels?
-4. **Retention defaults** for a fresh server: keep forever, or 90 days?
+1. **History for new members:** yes by default; a per-channel setting can restrict
+   it to "only since joining". In end-to-end encrypted channels this needs a history
+   sharing mechanism on top of MLS (MLS alone gives access only from the join epoch);
+   see docs/e2ee.md.
+2. **Read markers:** synced across the user's devices by default (never shown to
+   others unless read receipts are enabled, which stay off by default).
+3. **Strict servers:** a server in end-to-end mode rejects stock clients at the
+   connection stage (ALPN, with a `Reject` they can display). End-to-end mode is
+   the default for new Nuschel servers; "compatible" mode, which admits stock
+   clients and has no end-to-end encryption, is an explicit choice.
+4. **Retention:** keep forever by default, so that nobody loses data to a default
+   that was too low; shorter retention is an explicit server or channel setting.

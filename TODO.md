@@ -389,6 +389,10 @@ ServerConfig.
 ### Nuschel server (`nuscheld`) — queued (2026-11-11), in dependency order
 
 `apps/server/src/main.rs` refuses to start a listener. Decisions so far (user):
+end-to-end mode is the default for new Nuschel servers and turns stock clients
+away at the connection stage ("compatible" mode admits them, without E2EE); new
+members see earlier history by default (per-channel setting); read markers sync
+across devices; retention defaults to forever (docs/extension.md, "Decisions");
 OpenMLS with the libcrux provider (pure Rust; hybrid post-quantum X-Wing key exchange,
 Ed25519 signatures until ML-DSA suites exist); trust on first use with optional
 out-of-band verification; key transparency, as in Signal's automatic key
