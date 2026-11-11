@@ -1,18 +1,18 @@
 # Nuschl TODO
 
-Current focus: **finish rename verification, then prioritize the iOS app**
+Current focus: **iOS, starting with a Linux-hosted macOS/Xcode/Simulator proof**
 (user, 2026-11-11).
 The desktop and server support stock Mumble interoperability; shared multi-server
 audio, key-transparency witnesses, the browser foundation and experimental MLS
 text/history are implemented. Live WebRTC/video, SFrame and the remaining encrypted
-history proofs are later work. The source rename and profile migration are committed;
-final package and VM verification is running before the push.
+history proofs are later work. The rename, profile migration and build-cache cleanup
+are complete; package, cross-build and all four VM checks have passed.
 
 ## Execution order
 
-1. **Finish the rename checkpoint:** remaining Nix checks, server VM and universal
-   macOS app packaging; retain the passing native, migration, accessibility, browser,
-   cross-build and other VM results. Push the verified rename before new feature work.
+1. **Rename checkpoint — verified:** native, migration, accessibility, browser,
+   Windows, universal macOS app, all eight Nix checks and all four VM suites passed.
+   Build-cache cleanup is complete. Push this checkpoint before new feature work.
 2. **iOS is the first implementation track after that checkpoint**, ahead of Android,
    completing the browser UI, video/SFrame and additional encrypted-history features.
    Swift + SwiftUI over the shared Rust SDK through UniFFI remains the chosen approach.
@@ -63,6 +63,9 @@ Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 - Memory-safe implementation first; otherwise an isolated, capability-limited worker.
   No C++ or Go WebRTC stacks.
 - `nix build/flake check --cores 2`; commit incrementally with `jj`.
+- Remove inactive per-agent Cargo targets after integration. Keep source snapshots,
+  profiling data and verification logs apart from disposable build caches; preserve
+  current runnable binaries when pruning a shared target directory.
 
 ---
 
@@ -1117,10 +1120,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Home Manager evaluation, server-only package/tests and Nix Clippy passed.
       All four VM suites passed (details above). Independent E2EE and server
       address-privacy reviews are clear; encrypted history remains experimental
-      with its explicit 4d/4e limitations. No rename has been performed.
-- [ ] **Rename Nuschel → nuschl** (user, 2026-11-11; "nuschl is mumbled nuschel"),
-      queued as a sync point: start no new agents, merge the running ones, rename on
-      a quiet tree, verify, push, then start the next wave. Checklist:
+      with its explicit 4d/4e limitations. This was the checkpoint before the rename.
+- [x] **Rename Nuschel → nuschl** (user, 2026-11-11; "nuschl is mumbled nuschel"),
+      completed on a quiet tree. Native workspace: 821 passed, zero failures,
+      11 baseline ignored, then all 113 affected-crate tests passed after the final
+      three regressions were added (824 unique native tests covered). All eight Nix
+      package/tooling checks and all four private VM suites passed; Windows and both
+      Darwin architectures cross-built, including the universal Nuschl.app bundle.
+      WASM/browser, real loopback relay, screenshot and accessibility passed; Windows
+      sandbox tests passed under Miri for Linux and Windows (20 each). Vendor files
+      retain their original hashes. Checklist carried out:
       - text: `nuschl`, `Nuschl`, `NUSCHL` (env vars) in text files only (no PNGs,
         fonts or other binaries; never inside `vendor/`); German prose about
         *nuscheln* stays;
@@ -1133,12 +1142,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       - user data: migrate `$XDG_*/nuschel` (and the macOS/Windows folders) to
         `nuschl` on first start, extending the XDG move; Windows AppContainer
         profiles get new names (remove the old ones);
+        preserve Mumble identity, bookmarks, history and security requirements;
+        archive old experimental crypto stores and start the approved new namespace.
+        Client SQL migration bytes stay unchanged, including old-name comments:
+        a pre-rename database opens through the real renamed storage worker;
       - Nix: `services.nuschel` / `programs.nuschel` keep working through
         `mkRenamedOptionModule` aliases with a warning;
       - wire: ALPN `nuschel/1` → `nuschl/1`, `nuschel.v1` → `nuschl.v1` (old and new
         builds stop interoperating; acceptable in early development);
-      - repository: the user renames `ambiso/nuschl` on GitHub (redirects), then the
-        jj remote is updated; README, docs and the screenshot regenerate;
+      - repository: GitHub is `ambiso/nuschl`, the jj remote is updated, and README,
+        docs and the screenshot use the new name;
       - domain: **nuschl.eu** is the project domain (user, 2026-11-11): passkey
         relying party, app links, share links, the web client's origin and the
         default witness and backup service. Changing it later breaks passkeys and
@@ -1148,6 +1161,12 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       - verify: workspace build, clippy, tests, fmt, deny, crate2nix check, every VM
         check, screenshots, the accessibility test, and a migration test from an
         existing Nuschel profile.
+- [x] **Build-cache cleanup** (user, 2026-11-11): removed the five idle agent
+      targets, pruned 220 Cargo profiles including stranded incremental/build-script
+      caches, and removed the temporary Miri target. Recovered about 479 GiB of
+      filesystem space. Source snapshots, profiling data, verification logs and all
+      14 current runnable Nuschl binaries were retained; binary inode/size/mtime
+      checks and executable startup checks passed. No active build was interrupted.
 - [ ] **Passkey-backed identity backup** (user, 2026-11-11): skip writing down a
       recovery key by tying the identity to a passkey. WebAuthn's PRF extension
       (CTAP2 `hmac-secret`) yields a stable secret per passkey and salt; encrypt the
