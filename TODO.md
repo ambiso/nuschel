@@ -928,6 +928,20 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       (and so a complete fallback echo reference). Rail: green microphone ring on the talk server,
       a headphone badge on listening servers, pulsing while someone talks; the footer
       says "Talking on X · listening to Y, Z". Awaiting the user's go.
+- [ ] **Passkey-backed identity backup** (user, 2026-11-11): skip writing down a
+      recovery key by tying the identity to a passkey. WebAuthn's PRF extension
+      (CTAP2 `hmac-secret`) yields a stable secret per passkey and salt; encrypt the
+      identity root under `HKDF(PRF(passkey, "nuschel identity backup v1"))` and keep
+      the blob on an identity backup service (untrusted storage suffices: the PRF
+      output cannot be guessed). A new device signs in with the synced passkey,
+      derives the key, decrypts the root and issues a new device-signing key; the
+      identity and its verifications survive. Relying party: the project domain
+      (assetlinks.json / apple-app-site-association for the apps); desktop via the
+      browser with a loopback redirect (RFC 8252 style), since Linux has no platform
+      passkey API and macOS's needs a signed app. The recovery key stays as an
+      optional fallback; the identity's safety becomes the passkey provider
+      account's. Questions for the user: the passkey domain, where blobs live, the
+      browser round trip on the desktop.
 - [ ] Knocking (user, 2026-11-11): someone who may not enter a voice or chat channel
       knocks; online users with **Move and Enter** in that channel get a notice with
       Admit / Decline (knocks rate-limited). Admitting grants temporary Enter, Speak,
