@@ -84,6 +84,17 @@ Later (reported):
 - [ ] An invalid `servers.json` stops the app from starting and an invalid
       `settings.json` is silently replaced by defaults: show an error, keep the
       file as `*.invalid`, continue.
+- [x] Unread indicators (channel and DM counts, red for mentions; a pill and a red
+      count on the server rail). Remember the last channel and rejoin it on start.
+- [ ] Collapse runs of join/leave/connect/disconnect lines into one line that expands
+      on click (after the timeline virtualisation lands).
+- [ ] A direct-messages home above the servers, as in Discord. Mumble identities are
+      certificate hashes (Nuschel, like stock Mumble, uses one identity for every
+      server), but each server only claims a user's hash, so a hostile server can
+      present someone else's: group by server, never merge by name; linking by hash
+      must say which servers vouch for it. Nuschel servers with end-to-end
+      identities can do better.
+- [ ] Wire Ctrl+K (finder) and Ctrl+F (search) into the configurable shortcuts.
 - [ ] Proper Windows sandboxing for the workers (AppContainer or a restricted
       token with a low integrity level, no network for content and storage);
       today they only run in a kill-on-close job object.
