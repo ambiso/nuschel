@@ -1,0 +1,23 @@
+[package]
+name = "nuschel-tui"
+description = "Nuschel in a terminal: a view over the headless client SDK"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
+nuschel-client.workspace = true
+nuschel-core.workspace = true
+nuschel-session.workspace = true
+# The full-screen view on crossterm (re-exported by ratatui), without the
+# calendar widget and macros.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+unicode-width = "0.2.3"
+
+[lints]
+workspace = true

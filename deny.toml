@@ -71,6 +71,12 @@ deny = [
   { name = "gpui-kit", wrappers = [
     "nuschel",
   ], reason = "GPUI is an explicit desktop rendering exception" },
+  { name = "ratatui", wrappers = [
+    "nuschel-tui",
+  ], reason = "Terminal drawing belongs to the terminal client; the SDK stays UI-independent" },
+  { name = "crossterm", wrappers = [
+    "ratatui-crossterm",
+  ], reason = "The terminal client reaches the terminal only through ratatui" },
   { name = "cpal", wrappers = [
     "nuschel-media-worker",
   ], reason = "Native audio APIs belong in the media worker" },
