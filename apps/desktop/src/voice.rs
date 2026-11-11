@@ -7,6 +7,7 @@
 use crate::{
     assets::icon,
     dialogs::{Tone, mix, modal, styled_button},
+    layout,
     motion::Ease,
     state::{Desktop, ServerView, Status},
     theme::*,
@@ -262,8 +263,17 @@ fn place_link(
         .role(Role_::Button)
         .tab_index(0)
         .aria_label(format!("Go to {}", place.label))
+        .tooltip({
+            let full = place.label.clone();
+            move |_, cx| {
+                cx.new(|_| crate::dialogs::Tooltip(full.clone().into()))
+                    .into()
+            }
+        })
+        .w_full()
         .min_w_0()
-        .flex_shrink(1.)
+        .flex_1()
+        .flex_basis(px(0.))
         .truncate()
         .cursor_pointer()
         .rounded(px(4.))
@@ -276,65 +286,50 @@ fn place_link(
                 cx.stop_propagation();
             }
         }))
-        .child(place.label.clone())
+        .child(text!(place.label.clone()).with_id(("voice-place-label", id.1)))
         .into_any_element()
 }
 
 /// The voice card above the user panel: where your voice goes, on every
 /// server; each place takes you there. `selected` is the server in front,
 /// which the hang-up button disconnects.
-pub fn card(this: &Desktop, selected: usize, cx: &mut Context<Desktop>) -> Option<AnyElement> {
+pub fn card(
+    this: &Desktop,
+    selected: usize,
+    window: &mut Window,
+    cx: &mut Context<Desktop>,
+) -> Option<AnyElement> {
     let (talk, listen) = places(this);
     if talk.is_empty() && listen.is_empty() {
         return None;
     }
     let text = summary(&talk, &listen);
-    // A verb, then the places, wrapping between places when they do not fit.
-    let line = |label: &'static str,
-                places: &[Place],
-                (first, joiner): (usize, &'static str),
-                accent: Token,
-                cx: &mut Context<Desktop>| {
-        div()
-            .min_w_0()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_1()
-            .child(div().flex_shrink_0().child(label))
-            .children(places.iter().enumerate().map(|(index, place)| {
-                div()
-                    .min_w_0()
-                    .max_w_full()
-                    .flex()
-                    .gap_1()
-                    .when(index > 0, |entry| {
-                        entry.child(div().flex_shrink_0().child(joiner))
-                    })
-                    .child(place_link(
-                        ("voice-place", first + index),
-                        place,
-                        accent,
-                        cx,
-                    ))
-            }))
-    };
-    // The talk servers by what they get of you: one line each, live first.
-    let mut groups: Vec<(&'static str, Vec<Place>)> = vec![
-        ("Talking on", Vec::new()),
-        ("Muted on", Vec::new()),
-        ("Deafened on", Vec::new()),
-    ];
-    for place in talk {
-        let group = match place.role {
-            Role::Talking => 0,
-            Role::Muted => 1,
-            _ => 2,
+    let mut rows = Vec::new();
+    for (index, place) in talk.iter().chain(listen.iter()).enumerate() {
+        let (verb, accent) = match place.role {
+            Role::Talking => ("Talking on", SUCCESS),
+            Role::Muted => ("Muted on", TEXT),
+            Role::Deafened => ("Deafened on", TEXT_MUTED),
+            _ => ("Listening to", TEXT_MUTED),
         };
-        groups[group].1.push(place);
+        rows.push(
+            div()
+                .w_full()
+                .min_w_0()
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .child(
+                    div()
+                        .text_color(color(TEXT_FAINT))
+                        .text_xs()
+                        .child(text!(verb).with_id(("voice-route-role", index))),
+                )
+                .child(layout::row().child(place_link(("voice-place", index), place, accent, cx)))
+                .into_any_element(),
+        );
     }
-    groups.retain(|(_, places)| !places.is_empty());
-    let mut first = 0;
     let issue = this
         .client
         .servers
@@ -351,79 +346,83 @@ pub fn card(this: &Desktop, selected: usize, cx: &mut Context<Desktop>) -> Optio
             .id("voice-card")
             .role(Role_::Group)
             .aria_label(text)
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
             .px_3()
             .py_2()
             .border_t_1()
             .border_color(color(BORDER))
             .bg(color(SIDEBAR_FOOTER))
             .flex()
-            .items_center()
+            .flex_col()
             .gap_2()
             .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .text_xs()
-                    .children(groups.iter().map(|(verb, places)| {
-                        let accent = if *verb == "Talking on" { SUCCESS } else { TEXT };
-                        let shown = line(verb, places, (first, "and"), accent, cx)
-                            .text_sm()
+                layout::row()
+                    .items_center()
+                    .child(layout::fixed().child(icon("signal", 18., color(SUCCESS))))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .flex_basis(px(0.))
                             .font_weight(FontWeight::BOLD)
-                            .text_color(color(accent));
-                        first += places.len();
-                        shown
-                    }))
-                    .when(!listen.is_empty(), |column| {
-                        let label = if groups.is_empty() {
-                            "Listening to"
-                        } else {
-                            "· listening to"
-                        };
-                        column.child(
-                            line(label, &listen, (first, "and"), TEXT, cx)
-                                .text_color(color(TEXT_MUTED)),
-                        )
-                    })
-                    .when_some(issue, |column, issue| {
-                        // Details and advice are in Settings.
-                        column.child(
-                            div()
-                                .id("audio-issue")
-                                .role(Role_::Status)
-                                .cursor_pointer()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .text_color(color(WARNING))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.open_settings();
-                                    cx.notify();
-                                }))
-                                .child(icon("alert", 12., color(WARNING)))
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .child(text!(issue).with_id("audio-issue-label")),
-                                ),
-                        )
+                            .text_sm()
+                            .child(layout::label("voice-connection-status", "Voice connected")),
+                    )
+                    .when(connected, |row| {
+                        row.child(layout::fixed().child(crate::dialogs::icon_button(
+                            "disconnect",
+                            "hang-up",
+                            "Disconnect",
+                            TEXT_MUTED,
+                            None,
+                            move |this, _, cx| {
+                                this.disconnect(selected);
+                                cx.notify();
+                            },
+                            cx,
+                        )))
                     }),
             )
-            .when(connected, |card| {
-                card.child(crate::dialogs::icon_button(
-                    "disconnect",
-                    "hang-up",
-                    "Disconnect",
-                    TEXT_MUTED,
-                    None,
-                    move |this, _, cx| {
-                        this.disconnect(selected);
-                        cx.notify();
-                    },
+            .child(
+                layout::scroll_region(
+                    "voice-destinations",
+                    "Voice destinations",
+                    window.viewport_size().height * 0.20,
+                    window,
                     cx,
-                ))
+                )
+                .flex()
+                .flex_col()
+                .gap_2()
+                .text_sm()
+                .children(rows),
+            )
+            .when_some(issue, |card, issue| {
+                card.child(
+                    layout::row()
+                        .id("audio-issue")
+                        .role(Role_::Button)
+                        .aria_label(format!("{issue}; open audio settings"))
+                        .tab_index(0)
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(color(WARNING))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_settings();
+                            cx.notify();
+                        }))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                this.open_settings();
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }))
+                        .child(layout::fixed().child(icon("alert", 12., color(WARNING))))
+                        .child(layout::label("audio-issue-label", issue)),
+                )
             })
             .into_any_element(),
     )

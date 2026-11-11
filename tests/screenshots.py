@@ -315,7 +315,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too), devices (wheel over Settings' device lists, checked over AT-SPI; needs --pulse-bin and --at-spi), notice-zoom (real Mumble failures and Dismiss bounds at 100–200%%, needs --at-spi)")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: layout (long migration paths/voice names and zoom matrix, needs --at-spi), resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too), devices (wheel over Settings' device lists, checked over AT-SPI; needs --pulse-bin and --at-spi), notice-zoom (real Mumble failures and Dismiss bounds at 100–200%%, needs --at-spi)")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
@@ -348,6 +348,11 @@ def main():
             murmur.ini.write_text(murmur.ini.read_text() + "messagelimit=1000\nmessageburst=1000\n")
             bot_options = ["--message-limit", "1000", "--message-burst", "1000"]
         murmur.seed()
+        layout_scene = "layout" in args.scenes.split(",")
+        if layout_scene:
+            from layout_regression import CHANNEL_NAME
+            with sqlite3.connect(murmur.database) as database:
+                database.execute("UPDATE channels SET name=? WHERE server_id=1 AND channel_id=2", (CHANNEL_NAME,))
         if resizing:
             # A busy server's tree: forty more channels under Music, below the rows the scenes click.
             with sqlite3.connect(murmur.database) as database:
@@ -410,9 +415,19 @@ def main():
                 bots.append(bot)
             time.sleep(1.2)
             profile = root / "profile"
+            if layout_scene:
+                # Produce the actual rename warning with a long absolute path;
+                # no widget state, secrets or key parsing is injected.
+                for _ in range(4):
+                    profile /= "unbroken-profile-segment-" + "a" * 140
+                (profile / "data/keys").mkdir(parents=True)
+                (profile / "data/keys/layout-evidence").write_text("synthetic, not a key\n")
             (profile / "config").mkdir(parents=True)
             bookmark = {"id": str(uuid.uuid4()), "name": "Screenshot server", "host": "127.0.0.1",
                         "port": port, "username": "Andi", "certificate_sha256": pin}
+            if layout_scene:
+                from layout_regression import SERVER_NAME
+                bookmark["name"] = SERVER_NAME
             second = {"id": str(uuid.uuid4()), "name": "Friends", "host": "127.0.0.1",
                       "port": 1, "username": "Andi", "certificate_sha256": None}
             (profile / "config/servers.json").write_text(json.dumps([bookmark, second]))
@@ -436,14 +451,14 @@ def main():
             env.pop("NO_AT_BRIDGE", None)
             if wormhole:
                 env |= wormhole.environment()
-            if resizing:
+            if resizing or layout_scene:
                 # Read by a build with --features frame-timing; others ignore it.
                 env["NUSCHL_FRAME_TIMING"] = str(args.output / "frames.log")
             log = (args.output / "desktop.log").open("w")
             # For profiling, e.g. NUSCHL_SCREENSHOT_WRAPPER="perf record -o nuschl.perf --".
             wrapper = os.environ.get("NUSCHL_SCREENSHOT_WRAPPER", "").split()
             app = subprocess.Popen([*wrapper, str(args.binaries / "nuschl"), "--profile-dir", str(profile),
-                                    f"mumble://Andi@127.0.0.1:{port}/Lobby/Development"]
+                                    f"mumble://Andi@127.0.0.1:{port}/Lobby/{urllib.parse.quote(CHANNEL_NAME) if layout_scene else 'Development'}"]
                                    + (["--offer", str(offered)] if offered else []),
                                    env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             eventually(lambda: app.poll() is None and shell.window("Nuschl"), "Nuschl window did not appear")
@@ -515,6 +530,10 @@ def main():
                            f" k.notify_keyval(t + 20000, {keyval}c, {state}RELEASED);"
                            f" k.notify_keyval(t + 30000, {keyval}Control_L, {state}RELEASED); 'ok'")
                 time.sleep(0.4)
+
+            if layout_scene:
+                from layout_regression import run as run_layout
+                run_layout(args, root, shell, registry, bots, profile, port, pin, shot)
 
             if "notice-zoom" in scenes:
                 notice_zoom(args, root, shell, registry, bots, profile, port, pin, shot)

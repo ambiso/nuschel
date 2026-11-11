@@ -4,6 +4,7 @@ use crate::{
     assets::icon,
     chrome,
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
+    layout,
     menus::MenuTarget,
     names,
     presentation::COLLAPSED_HEIGHT,
@@ -48,13 +49,14 @@ impl Render for Desktop {
             .unwrap_or_default();
         let finder = crate::finder::overlay(self, window, cx);
         let body = div()
+            .min_w_0()
             .flex_1()
             .min_h_0()
             .flex()
             .child(server_rail(self, selected.map(|(server, _)| server), cx))
             .map(|body| match selected {
                 Some((server, channel)) => body
-                    .child(sidebar(self, server, channel, cx))
+                    .child(sidebar(self, server, channel, window, cx))
                     .child(sidebar_handle(self, cx))
                     .child(conversation(self, server, channel, window, cx)),
                 None => body.child(dialogs::empty(self, cx)),
@@ -478,6 +480,7 @@ fn sidebar(
     this: &Desktop,
     server_index: usize,
     selected_channel: usize,
+    window: &mut Window,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let server = &this.client.servers[server_index];
@@ -630,7 +633,7 @@ fn sidebar(
                                         .rounded_full()
                                         .bg(color(status_color(server.status))),
                                 )
-                                .child(text!(server.status_label()).with_id("connection")),
+                                .child(layout::label("connection", server.status_label())),
                         ),
                 )
                 .child(icon_button(
@@ -722,7 +725,7 @@ fn sidebar(
                 )),
         )
         .when_some(
-            crate::voice::card(this, server_index, cx),
+            crate::voice::card(this, server_index, window, cx),
             |sidebar, card| sidebar.child(card),
         )
         .child(user_panel(this, server, cx))
@@ -1205,86 +1208,110 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
             .to_string()
     };
     div()
-        .h(px(56.))
+        .min_h(px(56.))
+        .py_2()
+        .w_full()
+        .min_w_0()
         .flex_shrink_0()
         .px_2()
         .bg(color(SIDEBAR_FOOTER))
         .border_t_1()
         .border_color(color(BORDER))
         .flex()
+        .flex_wrap()
         .items_center()
         .gap_2()
-        .child(avatar(
-            &name,
-            34.,
-            talking,
-            ("own-avatar", 0),
-            avatar_image(this, server, own),
-        ))
         .child(
             div()
                 .min_w_0()
                 .flex_1()
+                .flex_basis(px(96.))
                 .flex()
-                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(avatar(
+                    &name,
+                    34.,
+                    talking,
+                    ("own-avatar", 0),
+                    avatar_image(this, server, own),
+                ))
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .truncate()
-                        .child(text!(name).with_id("own-name")),
-                )
-                .child(
-                    div()
-                        .id("audio-status-line")
-                        .text_xs()
-                        .truncate()
-                        .text_color(color(TEXT_MUTED))
-                        .tooltip(move |_, cx| cx.new(|_| Tooltip(detail.clone().into())).into())
-                        .child(text!(status).with_id("audio-status")),
+                        .min_w_0()
+                        .flex_1()
+                        .flex_basis(px(0.))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .truncate()
+                                .child(text!(name).with_id("own-name")),
+                        )
+                        .child(
+                            div()
+                                .id("audio-status-line")
+                                .text_xs()
+                                .truncate()
+                                .text_color(color(TEXT_MUTED))
+                                .tooltip(move |_, cx| {
+                                    cx.new(|_| Tooltip(detail.clone().into())).into()
+                                })
+                                .child(text!(status).with_id("audio-status")),
+                        ),
                 ),
         )
-        .child(icon_button(
-            "open-settings",
-            "settings",
-            "Settings",
-            TEXT_MUTED,
-            None,
-            |this, _, cx| {
-                this.open_settings();
-                cx.notify();
-            },
-            cx,
-        ))
-        .when(connected, |panel| {
-            panel
-                .child(dialogs::toggle_button(
-                    "mute",
-                    "mic",
-                    if server.muted { "Unmute" } else { "Mute" },
-                    eased(&this.mute_ease, server.muted),
+        .child(
+            div()
+                .min_w_0()
+                .max_w_full()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .child(icon_button(
+                    "open-settings",
+                    "settings",
+                    "Settings",
+                    TEXT_MUTED,
+                    None,
                     |this, _, cx| {
-                        this.set_mute(false);
+                        this.open_settings();
                         cx.notify();
                     },
                     cx,
                 ))
-                .child(dialogs::toggle_button(
-                    "deafen",
-                    "headphones",
-                    if server.deafened {
-                        "Undeafen"
-                    } else {
-                        "Deafen"
-                    },
-                    eased(&this.deafen_ease, server.deafened),
-                    |this, _, cx| {
-                        this.set_mute(true);
-                        cx.notify();
-                    },
-                    cx,
-                ))
-        })
+                .when(connected, |panel| {
+                    panel
+                        .child(dialogs::toggle_button(
+                            "mute",
+                            "mic",
+                            if server.muted { "Unmute" } else { "Mute" },
+                            eased(&this.mute_ease, server.muted),
+                            |this, _, cx| {
+                                this.set_mute(false);
+                                cx.notify();
+                            },
+                            cx,
+                        ))
+                        .child(dialogs::toggle_button(
+                            "deafen",
+                            "headphones",
+                            if server.deafened {
+                                "Undeafen"
+                            } else {
+                                "Deafen"
+                            },
+                            eased(&this.deafen_ease, server.deafened),
+                            |this, _, cx| {
+                                this.set_mute(true);
+                                cx.notify();
+                            },
+                            cx,
+                        ))
+                }),
+        )
         .into_any_element()
 }
 
@@ -1480,6 +1507,139 @@ impl Desktop {
             window.request_animation_frame();
         }
     }
+}
+
+/// Context and controls wrap as complete lanes when their fixed slots exceed
+/// the available pane width. Toolbar actions never live outside the viewport.
+fn conversation_header(
+    this: &Desktop,
+    index: usize,
+    channel: &crate::state::ChannelView,
+    topic: &str,
+    is_channel: bool,
+    in_this_voice: bool,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let server = &this.client.servers[index];
+    let connected = server.status == Status::Connected;
+    let context = div()
+        .min_w_0()
+        .flex_1()
+        .flex_basis(px(120.))
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(layout::fixed().child(icon(
+            if is_channel { "hash" } else { "message" },
+            20.,
+            color(TEXT_FAINT),
+        )))
+        .child(
+            layout::flexible()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .child(layout::label("channel-heading", channel.name.clone())),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(color(TEXT_MUTED))
+                        .child(layout::label("channel-topic", topic.to_owned())),
+                ),
+        );
+    let controls = div()
+        .min_w_0()
+        .max_w_full()
+        .flex_shrink_0()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_1()
+        .when(
+            connected
+                && server.has_mumble_voice()
+                && is_channel
+                && !in_this_voice
+                && server.may_try(channel.id, nuschl_session::model::permission::ENTER),
+            |controls| {
+                controls.child(styled_button(
+                    "join-voice",
+                    "Join voice",
+                    Tone::Primary,
+                    |this, _, cx| {
+                        this.join_selected();
+                        cx.notify();
+                    },
+                    cx,
+                ))
+            },
+        )
+        .when(!connected, |controls| {
+            controls.child(styled_button(
+                "connect-server",
+                if server.status == Status::Connecting {
+                    "Connecting…"
+                } else {
+                    "Connect"
+                },
+                Tone::Primary,
+                move |this, _, cx| {
+                    if this.client.servers[index].status == Status::Disconnected {
+                        this.connect(index, None);
+                    }
+                    cx.notify();
+                },
+                cx,
+            ))
+        })
+        .child(icon_button(
+            "open-search",
+            "search",
+            "Search messages",
+            TEXT_MUTED,
+            crate::search::panel_open(this).then_some(ACCENT),
+            |this, window, cx| {
+                this.toggle_search(window, cx);
+                cx.notify();
+            },
+            cx,
+        ))
+        .child({
+            let (security, label) = this.conversation_lock(index);
+            div()
+                .id("conversation-security")
+                .flex_shrink_0()
+                .px_2()
+                .tooltip({
+                    let label = label.clone();
+                    move |_, cx| cx.new(|_| Tooltip(label.clone().into())).into()
+                })
+                .child(security_icon_labelled(
+                    security,
+                    label,
+                    this.client.servers.len() + index,
+                    18.,
+                ))
+        });
+    div()
+        .w_full()
+        .min_w_0()
+        .min_h(px(52.))
+        .flex_shrink_0()
+        .px_4()
+        .py_2()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_2()
+        .border_b_1()
+        .border_color(color(BORDER))
+        .child(context)
+        .child(controls)
+        .into_any_element()
 }
 
 fn conversation(
@@ -1717,239 +1877,16 @@ fn conversation(
             true
         })
         .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(color(HOVER)))
-        .child(
-            div()
-                .h(px(52.))
-                .flex_shrink_0()
-                .px_4()
-                .flex()
-                .items_center()
-                .gap_3()
-                .border_b_1()
-                .border_color(color(BORDER))
-                .child(div().text_color(color(TEXT_FAINT)).child(icon(
-                    if is_channel { "hash" } else { "message" },
-                    20.,
-                    color(TEXT_FAINT),
-                )))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .max_w(px(280.))
-                        .truncate()
-                        .font_weight(FontWeight::BOLD)
-                        .child(text!(channel.name.clone()).with_id("channel-heading")),
-                )
-                .child(div().w(px(1.)).h(px(20.)).bg(color(BORDER_STRONG)))
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .truncate()
-                        .text_sm()
-                        .text_color(color(TEXT_MUTED))
-                        .child(text!(topic).with_id("channel-topic")),
-                )
-                .when(
-                    connected
-                        && server.has_mumble_voice()
-                        && is_channel
-                        && !in_this_voice
-                        && server.may_try(channel.id, nuschl_session::model::permission::ENTER),
-                    |header| {
-                        header.child(styled_button(
-                            "join-voice",
-                            "Join voice",
-                            Tone::Primary,
-                            |this, _, cx| {
-                                this.join_selected();
-                                cx.notify();
-                            },
-                            cx,
-                        ))
-                    },
-                )
-                .when(!connected, |header| {
-                    header.child(styled_button(
-                        "connect-server",
-                        if server.status == Status::Connecting {
-                            "Connecting…"
-                        } else {
-                            "Connect"
-                        },
-                        Tone::Primary,
-                        move |this, _, cx| {
-                            if this.client.servers[index].status == Status::Disconnected {
-                                this.connect(index, None);
-                            }
-                            cx.notify();
-                        },
-                        cx,
-                    ))
-                })
-                .child(icon_button(
-                    "open-search",
-                    "search",
-                    "Search messages",
-                    TEXT_MUTED,
-                    crate::search::panel_open(this).then_some(ACCENT),
-                    |this, window, cx| {
-                        this.toggle_search(window, cx);
-                        cx.notify();
-                    },
-                    cx,
-                ))
-                .child({
-                    // Direct conversations show their end-to-end lock (§7.4).
-                    let (security, label) = this.conversation_lock(index);
-                    div()
-                        .id("conversation-security")
-                        .px_2()
-                        .tooltip({
-                            let label = label.clone();
-                            move |_, cx| cx.new(|_| Tooltip(label.clone().into())).into()
-                        })
-                        .child(security_icon_labelled(
-                            security,
-                            label,
-                            this.client.servers.len() + index,
-                            18.,
-                        ))
-                }),
-        )
-        .when_some(crate::panels::reconnect_banner(server), |view, text| {
-            view.child(banner("reconnect-banner", WARNING, "signal", text, None))
-        })
-        .when_some(
-            crate::version_notice::banner(this, index, cx),
-            |view, banner| view.child(banner),
-        )
-        .when_some(server.whisper.clone(), |view, text| {
-            view.child(banner(
-                "whisper-banner",
-                ACCENT,
-                "whisper",
-                format!("{text} · your voice goes only there"),
-                Some(styled_button(
-                    "stop-whisper",
-                    "Stop",
-                    Tone::Secondary,
-                    move |this, _, cx| {
-                        this.stop_whisper(index);
-                        cx.notify();
-                    },
-                    cx,
-                )),
-            ))
-        })
-        .when_some(server.suggestion.clone(), |view, text| {
-            let ptt = text.contains("push-to-talk");
-            view.child(banner(
-                "suggest-banner",
-                ACCENT,
-                "info",
-                text,
-                Some(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .when(ptt, |row| {
-                            row.child(styled_button(
-                                "use-ptt",
-                                "Use push-to-talk",
-                                Tone::Primary,
-                                move |this, _, cx| {
-                                    this.update_settings(|settings| {
-                                        settings.audio.transmit =
-                                            nuschl_core::audio::TransmitMode::PushToTalk
-                                    });
-                                    this.client.servers[index].suggestion = None;
-                                    if !this.settings.shortcuts.contains_key(
-                                        &nuschl_session::config::ShortcutAction::PushToTalk,
-                                    ) {
-                                        this.open_settings();
-                                    }
-                                    cx.notify();
-                                },
-                                cx,
-                            ))
-                        })
-                        .child(styled_button(
-                            "dismiss-suggest",
-                            "Dismiss",
-                            Tone::Ghost,
-                            move |this, _, cx| {
-                                this.client.servers[index].suggestion = None;
-                                cx.notify();
-                            },
-                            cx,
-                        ))
-                        .into_any_element(),
-                ),
-            ))
-        })
-        .when_some(
-            server.notice.clone().or_else(|| this.error.clone()),
-            |view, notice| {
-                let from_server = server.notice.is_some();
-                view.child(
-                    div()
-                        .id("connection-notice-banner")
-                        .role(Role::Status)
-                        .aria_label("Connection notice")
-                        .flex_shrink_0()
-                        .mx_4()
-                        .mt_3()
-                        .px_3()
-                        .py_2()
-                        .rounded(px(8.))
-                        .bg(tint(DANGER, 0x26))
-                        .border_1()
-                        .border_color(tint(DANGER, 0x60))
-                        .flex()
-                        .flex_wrap()
-                        .items_center()
-                        .gap_2()
-                        .text_sm()
-                        .text_color(color(DANGER_TEXT))
-                        .child(icon("alert", 16., color(DANGER_HOVER)))
-                        .child(
-                            div()
-                                .id("connection-notice-details")
-                                .flex_1()
-                                .flex_basis(px(240.))
-                                .min_w_0()
-                                // Long reasons must not push dismissal below the
-                                // viewport when zoom leaves a narrow chat pane.
-                                .max_h(px(f32::from(window.viewport_size().height) / 3.))
-                                .overflow_y_scroll()
-                                .child(text!(notice).with_id("connection-notice")),
-                        )
-                        .child(icon_button(
-                            "dismiss-connection-notice",
-                            "window-close",
-                            "Dismiss notice",
-                            DANGER_TEXT,
-                            None,
-                            move |this, _, cx| {
-                                if from_server {
-                                    this.client.servers[index].dismiss_notice();
-                                } else {
-                                    this.error = None;
-                                }
-                                cx.notify();
-                            },
-                            cx,
-                        )),
-                )
-            },
-        )
-        .when_some(server.certificate.as_ref(), |view, certificate| {
-            view.child(certificate_card(certificate, index, cx))
-        })
-        .when_some(server.downgrade.as_ref(), |view, reason| {
-            view.child(downgrade_card(reason, index, cx))
-        })
+        .child(conversation_header(
+            this,
+            index,
+            channel,
+            &topic,
+            is_channel,
+            in_this_voice,
+            cx,
+        ))
+        .child(conversation_notices(this, index, window, cx))
         .map(|view| match crate::search::panel(this, cx) {
             Some(panel) => view.child(panel),
             None => view.child(
@@ -2617,30 +2554,138 @@ pub(crate) fn banner(
     text: String,
     action: Option<AnyElement>,
 ) -> AnyElement {
-    div()
-        .id(id)
-        .role(Role::Status)
-        .mx_4()
-        .mt_3()
-        .px_3()
-        .py_2()
-        .rounded(px(8.))
-        .bg(tint(tone, 0x22))
-        .border_1()
-        .border_color(tint(tone, 0x60))
+    let body = div()
+        .w_full()
+        .min_w_0()
         .flex()
-        .items_center()
+        .flex_col()
         .gap_2()
-        .text_sm()
-        .child(icon(icon_name, 16., color(tone)))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(text!(text).with_id((id, 1_usize))),
-        )
-        .when_some(action, |row, action| row.child(action))
-        .into_any_element()
+        .child(layout::text((id, 1_usize), text))
+        .when_some(action, |body, action| {
+            body.child(layout::actions().child(action))
+        })
+        .into_any_element();
+    layout::notice(id, tone, icon_name, body, None).into_any_element()
+}
+
+/// Every conversation warning shares one scroll budget. A long path in one
+/// notice cannot allocate another viewport or move its close action offscreen.
+fn conversation_notices(
+    this: &Desktop,
+    index: usize,
+    window: &mut Window,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let server = &this.client.servers[index];
+    let mut notices = Vec::new();
+    // Security decisions come first; a verbose informational notice must not
+    // bury a certificate or downgrade prompt below itself.
+    if let Some(certificate) = &server.certificate {
+        notices.push(certificate_card(certificate, index, cx));
+    }
+    if let Some(reason) = &server.downgrade {
+        notices.push(downgrade_card(reason, index, cx));
+    }
+    if let Some(text) = crate::panels::reconnect_banner(server) {
+        notices.push(banner("reconnect-banner", WARNING, "signal", text, None));
+    }
+    if let Some(version) = crate::version_notice::banner(this, index, cx) {
+        notices.push(version);
+    }
+    if let Some(text) = &server.whisper {
+        notices.push(banner(
+            "whisper-banner",
+            ACCENT,
+            "whisper",
+            format!("{text} · your voice goes only there"),
+            Some(styled_button(
+                "stop-whisper",
+                "Stop",
+                Tone::Secondary,
+                move |this, _, cx| {
+                    this.stop_whisper(index);
+                    cx.notify();
+                },
+                cx,
+            )),
+        ));
+    }
+    if let Some(text) = &server.suggestion {
+        let ptt = text.contains("push-to-talk");
+        let actions = layout::actions()
+            .when(ptt, |actions| {
+                actions.child(styled_button(
+                    "use-ptt",
+                    "Use push-to-talk",
+                    Tone::Primary,
+                    move |this, _, cx| {
+                        this.update_settings(|settings| {
+                            settings.audio.transmit = nuschl_core::audio::TransmitMode::PushToTalk
+                        });
+                        this.client.servers[index].suggestion = None;
+                        if !this
+                            .settings
+                            .shortcuts
+                            .contains_key(&nuschl_session::config::ShortcutAction::PushToTalk)
+                        {
+                            this.open_settings();
+                        }
+                        cx.notify();
+                    },
+                    cx,
+                ))
+            })
+            .child(styled_button(
+                "dismiss-suggest",
+                "Dismiss",
+                Tone::Ghost,
+                move |this, _, cx| {
+                    this.client.servers[index].suggestion = None;
+                    cx.notify();
+                },
+                cx,
+            ))
+            .into_any_element();
+        notices.push(banner(
+            "suggest-banner",
+            ACCENT,
+            "info",
+            text.clone(),
+            Some(actions),
+        ));
+    }
+    if let Some(notice) = server.notice.clone().or_else(|| this.error.clone()) {
+        let from_server = server.notice.is_some();
+        let dismiss = icon_button(
+            "dismiss-connection-notice",
+            "window-close",
+            "Dismiss notice",
+            DANGER_TEXT,
+            None,
+            move |this, _, cx| {
+                if from_server {
+                    this.client.servers[index].dismiss_notice();
+                } else {
+                    this.error = None;
+                }
+                cx.notify();
+            },
+            cx,
+        );
+        notices.push(
+            layout::notice(
+                "connection-notice-banner",
+                DANGER,
+                "alert",
+                layout::text("connection-notice", notice),
+                Some(dismiss),
+            )
+            .aria_label("Connection notice")
+            .text_color(color(DANGER_TEXT))
+            .into_any_element(),
+        );
+    }
+    layout::notices(window, cx, notices)
 }
 
 fn message_row(
@@ -3296,105 +3341,53 @@ fn certificate_card(
     index: usize,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
-    div()
-        .mx_4()
-        .mt_3()
-        .p_4()
-        .rounded(px(10.))
-        .bg(tint(WARNING, 0x1c))
-        .border_1()
-        .border_color(tint(WARNING, 0x60))
-        .flex()
-        .gap_3()
-        .child(div().text_color(color(WARNING)).child(icon("certificate", 24., color(WARNING))))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .font_weight(FontWeight::BOLD)
-                        .child(text!(if certificate.changed { "Server certificate changed" } else { "Confirm server certificate" }).with_id("certificate-heading")),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(color(TEXT_MUTED))
-                        .child(text!("Verify this SHA-256 fingerprint with the server owner before trusting it. No password has been sent.").with_id("certificate-explanation")),
-                )
-                .child(
-                    div()
-                        .p_2()
-                        .rounded(px(6.))
-                        .bg(color(APP))
-                        .font_family(theme::mono_font())
-                        .text_sm()
-                        .child(text!(certificate.sha256.as_bytes().chunks(8).map(|chunk| std::str::from_utf8(chunk).unwrap_or("?")).collect::<Vec<_>>().join(" ")).with_id("certificate-fingerprint")),
-                )
-                .child(div().text_xs().text_color(color(TEXT_FAINT)).child(text!(certificate.reason.clone()).with_id("certificate-reason")))
-                .child(
-                    div().flex().child(styled_button(
-                        "trust-certificate",
-                        if certificate.changed { "Trust changed certificate and connect" } else { "Trust certificate and connect" },
-                        if certificate.changed { Tone::Danger } else { Tone::Primary },
-                        move |this, _, cx| {
-                            this.trust_certificate(index);
-                            cx.notify();
-                        },
-                        cx,
-                    )),
-                ),
-        )
-        .into_any_element()
+    let heading = if certificate.changed {
+        "Server certificate changed"
+    } else {
+        "Confirm server certificate"
+    };
+    let body = div().w_full().min_w_0().flex().flex_col().gap_2()
+        .child(div().font_weight(FontWeight::BOLD).child(layout::text("certificate-heading", heading)))
+        .child(div().text_sm().text_color(color(TEXT_MUTED)).child(layout::text("certificate-explanation", "Verify this SHA-256 fingerprint with the server owner before trusting it. No password has been sent.")))
+        .child(div().w_full().min_w_0().p_2().rounded(px(6.)).bg(color(APP)).font_family(theme::mono_font()).text_sm().child(layout::text("certificate-fingerprint", certificate.sha256.clone())))
+        .child(div().text_xs().text_color(color(TEXT_FAINT)).child(layout::text("certificate-reason", certificate.reason.clone())))
+        .child(layout::actions().child(styled_button("trust-certificate", if certificate.changed { "Trust changed certificate and connect" } else { "Trust certificate and connect" }, if certificate.changed { Tone::Danger } else { Tone::Primary }, move |this, _, cx| { this.trust_certificate(index); cx.notify(); }, cx)))
+        .into_any_element();
+    layout::notice("certificate-banner", WARNING, "certificate", body, None).into_any_element()
 }
 
-/// The server answered weaker than it did before (docs/extension.md §1): the
-/// error, and the explicit reset only the user can make.
+/// A downgrade remains an explicit decision; wrapping its full reason must
+/// never make the security-reset action unreachable.
 fn downgrade_card(reason: &str, index: usize, cx: &mut Context<Desktop>) -> AnyElement {
-    div()
-        .mx_4()
-        .mt_3()
-        .p_4()
-        .rounded(px(10.))
-        .bg(tint(DANGER, 0x1c))
-        .border_1()
-        .border_color(tint(DANGER, 0x60))
+    let body = div()
+        .w_full()
+        .min_w_0()
         .flex()
-        .gap_3()
-        .child(icon("shield", 24., color(DANGER)))
+        .flex_col()
+        .gap_2()
         .child(
             div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .font_weight(FontWeight::BOLD)
-                        .child(text!("Server security changed").with_id("downgrade-heading")),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(color(TEXT_MUTED))
-                        .child(text!(reason.to_owned()).with_id("downgrade-reason")),
-                )
-                .child(div().flex().child(styled_button(
-                    "reset-security-record",
-                    "Reset this server's security record and connect",
-                    Tone::Danger,
-                    move |this, _, cx| {
-                        this.reset_security_record(index);
-                        cx.notify();
-                    },
-                    cx,
-                ))),
+                .font_weight(FontWeight::BOLD)
+                .child(layout::text("downgrade-heading", "Server security changed")),
         )
-        .into_any_element()
+        .child(
+            div()
+                .text_sm()
+                .text_color(color(TEXT_MUTED))
+                .child(layout::text("downgrade-reason", reason.to_owned())),
+        )
+        .child(layout::actions().child(styled_button(
+            "reset-security-record",
+            "Reset this server's security record and connect",
+            Tone::Danger,
+            move |this, _, cx| {
+                this.reset_security_record(index);
+                cx.notify();
+            },
+            cx,
+        )))
+        .into_any_element();
+    layout::notice("downgrade-banner", DANGER, "shield", body, None).into_any_element()
 }
 
 fn status_color(status: Status) -> Token {

@@ -61,6 +61,8 @@ pub fn named_button(
         .tab_index(0)
         .cursor_pointer()
         .flex_shrink_0()
+        .max_w_full()
+        .min_w_0()
         .px_3()
         .py(px(6.))
         .rounded(px(6.))
@@ -76,7 +78,12 @@ pub fn named_button(
                 cx.stop_propagation();
             }
         }))
-        .child(text!(label).with_id("button-label"))
+        .child(
+            div()
+                .min_w_0()
+                .whitespace_normal()
+                .child(text!(label).with_id("button-label")),
+        )
         .into_any_element()
 }
 
