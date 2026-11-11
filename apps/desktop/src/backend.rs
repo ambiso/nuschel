@@ -721,6 +721,8 @@ async fn connect_once(
     let mut hashes = BTreeMap::<u32, Option<String>>::new();
     let mut applied_audio = settings.borrow().audio.clone();
     let mut loss_percent = 5_u8;
+    // Our own voice is on the air (no terminator sent yet).
+    let mut transmitting = false;
     let mut speaking = BTreeMap::<u32, tokio::time::Instant>::new();
     let mut talk_tick = tokio::time::interval(std::time::Duration::from_millis(100));
     talk_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -762,6 +764,14 @@ async fn connect_once(
             Some(command) = commands.recv() => {
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
                     muted = *mute || *deaf; deafened = *deaf; capture_epoch += 1;
+                    if muted && std::mem::take(&mut transmitting) {
+                        // Receivers stop at once, as with stock Mumble, but the terminator is
+                        // silence: nothing the microphone captured after muting leaves.
+                        let packet = nuschel_protocol::voice::VoicePacket { sender: 0, sequence, opus: nuschel_core::audio::SILENT_OPUS.to_vec(), end: true, volume: 1. };
+                        sequence += 2;
+                        let _ = session_commands.try_send(Command::Voice { target: 0, packet });
+                        if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, false).await; }
+                    }
                     // Native stream teardown can block inside a backend (including Pulse).
                     // Replacing the isolated worker closes its audio capability even then;
                     // no old callback or queued capture can survive a mute transition.
@@ -836,17 +846,20 @@ async fn connect_once(
                         let _ = worker.commands.try_send(LiveMediaRequest::SetState { epoch: capture_epoch, muted, deafened });
                         let _ = worker.commands.try_send(LiveMediaRequest::PushToTalk { active: *push_to_talk.borrow() });
                         media = Some(worker);
+                        transmitting = false;
                     },
                     Err(error) => { retry_audio = tokio::time::Instant::now() + std::time::Duration::from_secs(3); let _ = events.send(Event::AudioStatus { server: id.clone(), generation, message: error.to_string() }).await; },
                 }
             },
             event = async { media.as_mut().unwrap().events.recv().await }, if media.is_some() => match event {
                 Some(LiveMediaEvent::Packet { epoch, opus, end, .. }) => {
-                    if epoch != capture_epoch { continue; }
+                    // A muted worker never encodes, and nothing from an older one leaves.
+                    if epoch != capture_epoch || muted { continue; }
                     let packet = nuschel_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                     sequence += 2;
-                    if !muted || end { let _ = session_commands.try_send(Command::Voice { target: 0, packet }); }
-                    if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, !end && !muted).await; }
+                    transmitting = !end;
+                    let _ = session_commands.try_send(Command::Voice { target: 0, packet });
+                    if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, !end).await; }
                 },
                 Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise, reference }) => {
                     if let Some((host, _)) = output.as_deref().and_then(|id| id.split_once(':')) {

@@ -332,8 +332,7 @@ pub async fn run(
                     match command {
                         Command::Disconnect => break,
                         Command::SelectVoiceTarget(id) => state.voice_target = id.min(30),
-                        Command::Voice { target, packet } => if state.own_session.is_some() && state.opus
-                            && ((!state.local_muted && !state.local_deafened && state.may_speak()) || packet.end)
+                        Command::Voice { target, packet } => if let Some(packet) = state.outgoing_voice(packet)
                             && let Ok(payload) = voice::encode_voice(state.version, if target == 0 { state.voice_target } else { target }, &packet) {
                             let sent = match state.udp.as_mut() { Some(udp) => udp.send_voice(&payload).await, None => false };
                             if !sent { write_control(&mut writer, kind::UDP_TUNNEL, &payload).await?; }
@@ -452,6 +451,20 @@ impl State {
     }
     fn queue<M: Message>(&mut self, kind: u16, message: &M) {
         self.outbound.push((kind, message.encode_to_vec()));
+    }
+    /// What may be sent of a voice packet. While the user may not speak, only
+    /// a terminator leaves, and it carries silence instead of captured audio.
+    fn outgoing_voice(&self, mut packet: VoicePacket) -> Option<VoicePacket> {
+        if self.own_session.is_none() || !self.opus {
+            return None;
+        }
+        if !self.local_muted && !self.local_deafened && self.may_speak() {
+            return Some(packet);
+        }
+        packet.end.then(|| {
+            packet.opus = nuschel_core::audio::SILENT_OPUS.to_vec();
+            packet
+        })
     }
     fn may_speak(&self) -> bool {
         self.own_session
@@ -2511,6 +2524,43 @@ mod tests {
     fn identifies_legacy_codec_senders() {
         assert_eq!(legacy_sender(&[0x40, 0x05, 0x00]), Some(5));
         assert_eq!(legacy_sender(&[0x80, 0x05]), None, "Opus is not legacy");
+    }
+
+    #[test]
+    fn nothing_captured_leaves_while_muted() {
+        let packet = |end| VoicePacket {
+            sender: 0,
+            sequence: 8,
+            opus: vec![1, 2, 3, 4],
+            end,
+            volume: 1.,
+        };
+        let mut state = State {
+            own_session: Some(7),
+            local_muted: false,
+            ..State::default()
+        };
+        state.users.insert(
+            7,
+            User {
+                session: 7,
+                ..User::default()
+            },
+        );
+        assert_eq!(state.outgoing_voice(packet(false)), Some(packet(false)));
+        assert_eq!(state.outgoing_voice(packet(true)), Some(packet(true)));
+        let silent = VoicePacket {
+            opus: nuschel_core::audio::SILENT_OPUS.to_vec(),
+            ..packet(true)
+        };
+        state.local_muted = true;
+        assert_eq!(state.outgoing_voice(packet(false)), None);
+        assert_eq!(state.outgoing_voice(packet(true)), Some(silent.clone()));
+        // Muted or suppressed by the server: the same.
+        state.local_muted = false;
+        state.users.get_mut(&7).unwrap().suppressed = true;
+        assert_eq!(state.outgoing_voice(packet(false)), None);
+        assert_eq!(state.outgoing_voice(packet(true)), Some(silent));
     }
 
     #[tokio::test]

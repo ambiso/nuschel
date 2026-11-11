@@ -37,6 +37,11 @@ pub enum EchoSource {
 
 pub const MAX_DEVICE_OVERRIDES: usize = 64;
 
+/// 20 ms of digital silence as one Opus packet (CELT, fullband, mono). It
+/// ends a transmission when the user mutes: a terminator must carry nothing
+/// the microphone captured.
+pub const SILENT_OPUS: [u8; 3] = [0xf8, 0xff, 0xfe];
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AudioSettings {

@@ -357,6 +357,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     speakers.clear();
                 }
                 if was_transmitting && muted {
+                    // Audio captured before this request arrived may already
+                    // be after the user muted: the terminator is silence.
+                    transmit.pending.clear();
                     finish(&mut output, &mut transmit, epoch)?;
                 }
                 if capture_changed && devices.is_some() {
@@ -1572,6 +1575,26 @@ mod tests {
         );
         assert!(dry > 0, "the test should also cover the underrun path");
         assert!(output.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn the_terminator_sent_on_mute_is_silence() {
+        let mut decoder = OpusDecoder::new(48_000, 1).unwrap();
+        let mut pcm = [1_f32; MAX_PACKET_SAMPLES];
+        let count = decoder
+            .decode(
+                &nuschel_core::audio::SILENT_OPUS,
+                MAX_PACKET_SAMPLES,
+                &mut pcm,
+            )
+            .unwrap();
+        assert_eq!(count, 2 * FRAME, "20 ms");
+        // Far below one 24-bit step; CELT's float decoder adds a tiny offset
+        // against denormals instead of returning exact zeros.
+        let peak = pcm[..count]
+            .iter()
+            .fold(0_f32, |peak, sample| peak.max(sample.abs()));
+        assert!(peak < 1e-20, "peak {peak}");
     }
 
     #[test]
