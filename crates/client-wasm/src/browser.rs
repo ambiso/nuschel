@@ -413,8 +413,17 @@ impl WebClient {
         username: String,
         pin: Option<String>,
     ) -> Result<usize, String> {
-        let bookmark = snapshot::bookmark(&name, &host, port, &username, pin)?;
+        let mut bookmark = snapshot::bookmark(&name, &host, port, &username, pin)?;
         if let Some(index) = self.client.server_index(&bookmark.id) {
+            let saved = &self.client.servers[index].bookmark;
+            if bookmark.certificate_sha256.is_none() {
+                bookmark
+                    .certificate_sha256
+                    .clone_from(&saved.certificate_sha256);
+            }
+            if bookmark.certificate_sha256 == saved.certificate_sha256 {
+                bookmark.cached_channels.clone_from(&saved.cached_channels);
+            }
             self.client.replace_server(index, bookmark);
             return Ok(index);
         }

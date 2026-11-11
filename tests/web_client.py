@@ -24,6 +24,8 @@ def main():
     parser.add_argument("--murmur", type=Path, required=True)
     parser.add_argument("--sdk", type=Path, default=ROOT / "web/app/src/sdk")
     parser.add_argument("--node", default="node")
+    parser.add_argument("--site", type=Path, help="also exercise the built Svelte UI in disposable Chromium")
+    parser.add_argument("--screenshot", type=Path, help="optional UI screenshot (requires --site)")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="nuschl-web-client-") as temporary:
         root = Path(temporary)
@@ -55,6 +57,13 @@ def main():
             # The relay logs no payloads: nothing of the login is in its log.
             assert "web-sdk" not in (root / "relay.log").read_text()
             print("web client: connected through the relay with TLS in WebAssembly")
+            if args.site:
+                command = [args.node, str(ROOT / "tests/web_browser.mjs"), str(args.site),
+                           f"ws://127.0.0.1:{relay_port}/relay", "127.0.0.1", str(murmur.port)]
+                if args.screenshot:
+                    args.screenshot.parent.mkdir(parents=True, exist_ok=True)
+                    command.append(str(args.screenshot))
+                subprocess.run(command, check=True, timeout=150)
         finally:
             relay.terminate()
             relay.wait(timeout=10)
