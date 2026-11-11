@@ -65,6 +65,7 @@ in
     "nuschel"
     "nuschel-cli"
     "nuschel-content-worker"
+    "nuschel-crypto-worker"
     "nuschel-media-worker"
     "nuschel-storage-worker"
     "nuschel-transfer-worker"

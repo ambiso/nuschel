@@ -24,7 +24,7 @@ zeroize = "1.9.1"
 
 [dev-dependencies]
 # Loopback tests: nuscheld, the real client session and this worker in its sandbox.
-nuscheld = { path = "../server" }
+nuscheld = { path = "../server", version = "0.1.0" }
 nuschel-session.workspace = true
 nuschel-protocol.workspace = true
 tempfile = "3.27.0"

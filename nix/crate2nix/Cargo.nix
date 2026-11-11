@@ -103,6 +103,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschel-crypto-worker" = rec {
+      packageId = "nuschel-crypto-worker";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschel-crypto-worker";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschel-identity" = rec {
       packageId = "nuschel-identity";
       build = internal.buildRustCrateWithFeatures {
@@ -18975,6 +18985,71 @@ rec {
         ];
 
       };
+      "nuschel-crypto-worker" = rec {
+        crateName = "nuschel-crypto-worker";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "nuschel-crypto-worker";
+            path = "src/main.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/crypto-worker; };
+        libName = "nuschel_crypto_worker";
+        dependencies = [
+          {
+            name = "nuschel-identity";
+            packageId = "nuschel-identity";
+          }
+          {
+            name = "nuschel-ipc";
+            packageId = "nuschel-ipc";
+          }
+          {
+            name = "nuschel-kt";
+            packageId = "nuschel-kt";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "nuschel-protocol";
+            packageId = "nuschel-protocol";
+          }
+          {
+            name = "nuschel-session";
+            packageId = "nuschel-session";
+          }
+          {
+            name = "nuscheld";
+            packageId = "nuscheld";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "macros" "rt-multi-thread" "time" "sync" ];
+          }
+        ];
+
+      };
       "nuschel-identity" = rec {
         crateName = "nuschel-identity";
         version = "0.1.0";
@@ -19428,6 +19503,10 @@ rec {
         libName = "nuschel_storage";
         dependencies = [
           {
+            name = "base64";
+            packageId = "base64 0.22.1";
+          }
+          {
             name = "nuschel-core";
             packageId = "nuschel-core";
           }
@@ -19615,6 +19694,10 @@ rec {
             features = [ "alloc" "password-hash" "std" ];
           }
           {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
             name = "base64";
             packageId = "base64 0.22.1";
           }
@@ -19628,8 +19711,16 @@ rec {
             features = [ "derive" ];
           }
           {
+            name = "nuschel-identity";
+            packageId = "nuschel-identity";
+          }
+          {
             name = "nuschel-ipc";
             packageId = "nuschel-ipc";
+          }
+          {
+            name = "nuschel-kt";
+            packageId = "nuschel-kt";
           }
           {
             name = "nuschel-legacy-html";
@@ -19705,6 +19796,10 @@ rec {
             name = "tracing-subscriber";
             packageId = "tracing-subscriber";
             features = [ "env-filter" ];
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
           }
         ];
         devDependencies = [

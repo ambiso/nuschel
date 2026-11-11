@@ -101,6 +101,15 @@ deny = [
     "akd",
     "nuschel-kt",
   ], reason = "akd's verifiers are used only through nuschel-kt" },
+  { name = "nuschel-kt", wrappers = [
+    "nuscheld",
+    "nuschel-crypto-worker",
+  ], reason = "Key-transparency decisions belong to the crypto worker (and the server's log); akd_core makes ed25519-dalek accept malleable signatures in any binary that links it (docs/e2ee.md §5.2)" },
+  { name = "nuschel-identity", wrappers = [
+    "nuschel-kt",
+    "nuscheld",
+    "nuschel-crypto-worker",
+  ], reason = "Identity secrets live in the crypto worker; the server only verifies what clients publish" },
 ]
 
 [sources]
