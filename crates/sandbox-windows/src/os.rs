@@ -14,18 +14,22 @@ use std::{ffi::c_void, io, marker::PhantomData, ptr};
 use windows_sys::{
     Win32::{
         Foundation::{
-            ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0,
+            ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, HANDLE_FLAG_INHERIT,
+            INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
         },
         Security::{
             ACL,
             Authorization::{
-                EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, TRUSTEE_IS_SID,
-                TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+                ACCESS_MODE, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, REVOKE_ACCESS,
+                TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
             },
             NO_INHERITANCE, PSECURITY_DESCRIPTOR, PSID, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
-            SUB_CONTAINERS_AND_OBJECTS_INHERIT,
         },
-        Storage::FileSystem::FILE_TYPE_DISK,
+        Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TYPE_DISK, READ_CONTROL, WRITE_DAC,
+        },
         System::{
             JobObjects::{JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION},
             SystemServices::SE_GROUP_ENABLED,
@@ -34,7 +38,7 @@ use windows_sys::{
                 EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST,
                 PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY,
                 PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
                 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION,
                 STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
             },
@@ -46,8 +50,8 @@ use windows_sys::{
 use crate::{
     api::Api,
     plan::{
-        WideCString, acl_size, check_sid, grants, hresult_error, hresult_from_win32, invalid,
-        parse_handle, win32_error,
+        Grant, State, WideCString, acl_size, check_sid, grant_state, hresult_error,
+        hresult_from_win32, invalid, parse_handle, win32_error,
     },
     raw,
 };
@@ -129,6 +133,14 @@ impl<'a, A: Api> Handle<'a, A> {
 
     pub(crate) fn raw(&self) -> HANDLE {
         self.raw
+    }
+
+    /// Gives up ownership without closing; the caller takes it over.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub(crate) fn into_raw(self) -> HANDLE {
+        let raw = self.raw;
+        std::mem::forget(self);
+        raw
     }
 }
 
@@ -361,54 +373,137 @@ pub(crate) fn container_folder<A: Api>(api: &A, sid: &Sid) -> io::Result<Vec<u16
     Ok(unsafe { raw::copy_wide_until_nul(path.as_ptr().cast_const().cast::<u16>()) })
 }
 
-/// Lets `sid` access `path` (and, with `inherit`, everything below it) with
-/// `access`, keeping every other entry; nothing is written if an effective
-/// entry already allows it. Returns whether the DACL changed.
-pub(crate) fn grant<A: Api>(
-    api: &A,
+/// An ACL in memory this crate owns, 4-byte aligned as ACLs require.
+pub(crate) struct AclBuffer {
+    words: Vec<u32>,
+    length: usize,
+}
+
+impl AclBuffer {
+    /// A copy of an ACL Windows returned.
+    ///
+    /// # Safety
+    /// `acl` is non-null and points to a valid ACL that stays allocated and
+    /// unchanged for the whole call (its owner outlives the call).
+    unsafe fn copy_from(acl: *const ACL) -> io::Result<Self> {
+        // SAFETY: a valid ACL begins with its 8-byte header (caller).
+        let header = unsafe { raw::copy_bytes(acl.cast::<c_void>(), 8) };
+        let length = header
+            .first_chunk::<8>()
+            .and_then(acl_size)
+            .ok_or_else(|| invalid("malformed ACL"))?;
+        // SAFETY: a valid ACL is `AclSize` bytes long, header, entries and
+        // unused space included (winnt.h ACL; ReactOS copies exactly that
+        // much into a descriptor), all readable (caller).
+        let bytes = unsafe { raw::copy_bytes(acl.cast::<c_void>(), length) };
+        Ok(Self::from_bytes(&bytes))
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let words = bytes
+            .chunks(4)
+            .map(|chunk| {
+                let mut word = [0; 4];
+                word[..chunk.len()].copy_from_slice(chunk);
+                u32::from_ne_bytes(word)
+            })
+            .collect();
+        Self {
+            words,
+            length: bytes.len(),
+        }
+    }
+
+    pub(crate) fn bytes(&self) -> Vec<u8> {
+        let mut bytes: Vec<u8> = self
+            .words
+            .iter()
+            .flat_map(|word| word.to_ne_bytes())
+            .collect();
+        bytes.truncate(self.length);
+        bytes
+    }
+
+    /// For functions that read an ACL: `self.length` initialised, 4-aligned
+    /// bytes, valid while `self` is borrowed.
+    fn as_ptr(&self) -> *const ACL {
+        self.words.as_ptr().cast::<ACL>()
+    }
+}
+
+/// Opens `path` itself, never what a junction or symbolic link points to,
+/// for reading and changing its DACL, and checks it is what `grant` expects
+/// (a directory or a file) and not a reparse point. All later steps use this
+/// handle, so the path is looked up once: a worker that replaced its
+/// directory with a junction makes the launch fail instead of redirecting
+/// the grant.
+fn open_itself<'a, A: Api>(
+    api: &'a A,
     path: &WideCString,
-    sid: &Sid,
-    access: u32,
-    inherit: bool,
-) -> io::Result<bool> {
+    grant: Grant,
+) -> io::Result<Handle<'a, A>> {
+    // SAFETY: `path` is NUL-terminated and borrowed across the call; the
+    // rest are values.
+    let raw = unsafe {
+        api.create_file(
+            path.as_ptr(),
+            READ_CONTROL | WRITE_DAC,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        )
+    };
+    if raw == INVALID_HANDLE_VALUE {
+        return Err(last_error(api));
+    }
+    // SAFETY: CreateFileW returned a new handle for us to close; this guard
+    // is its only owner.
+    let file = unsafe { Handle::new(api, raw) }.ok_or_else(|| invalid("no file handle"))?;
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    if api.get_file_information_by_handle(file.raw(), &mut information) == 0 {
+        return Err(last_error(api));
+    }
+    let attributes = information.dwFileAttributes;
+    if attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(invalid("a junction or link, which is not followed"));
+    }
+    let directory = attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+    if directory != (grant == Grant::Directory) {
+        return Err(invalid("not the kind of file expected"));
+    }
+    Ok(file)
+}
+
+/// The DACL of an open file, copied; `None` for a NULL DACL.
+fn read_dacl<A: Api>(api: &A, file: &Handle<'_, A>) -> io::Result<Option<AclBuffer>> {
     let mut dacl: *mut ACL = ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
-    // SAFETY: `path` is NUL-terminated and borrowed across the call; `dacl`
-    // and `descriptor` are distinct locals, each valid for one write.
-    let error =
-        unsafe { api.get_named_security_info(path.as_ptr(), &raw mut dacl, &raw mut descriptor) };
+    // SAFETY: `file` is open with READ_CONTROL (`open_itself`); `dacl` and
+    // `descriptor` are distinct locals, each valid for one write.
+    let error = unsafe { api.get_security_info(file.raw(), &raw mut dacl, &raw mut descriptor) };
     if error != ERROR_SUCCESS {
         return Err(win32_error(error));
     }
     // SAFETY: on success the descriptor is LocalAlloc'd for us (the
     // function's documentation); this guard is its only owner. `dacl`
-    // points into it and is valid exactly as long as this guard lives.
+    // points into it and is valid as long as this guard lives.
     let descriptor = unsafe { OsMemory::new(api, descriptor, Free::Local) };
     if dacl.is_null() {
-        // A NULL DACL grants everyone everything.
-        return Ok(false);
+        return Ok(None);
     }
-    // SAFETY: a valid ACL begins with its 8-byte header, inside the
-    // descriptor `descriptor` keeps alive; nothing writes it meanwhile.
-    let header = unsafe { raw::copy_bytes(dacl.cast_const().cast::<c_void>(), 8) };
-    let size = header
-        .first_chunk::<8>()
-        .and_then(acl_size)
-        .ok_or_else(|| invalid("malformed ACL"))?;
-    // SAFETY: a valid ACL is `AclSize` bytes long, header, entries and
-    // unused space included (winnt.h, ACL), all inside the live descriptor.
-    let current = unsafe { raw::copy_bytes(dacl.cast_const().cast::<c_void>(), size) };
-    if grants(&current, &sid.bytes(), access, inherit) {
-        return Ok(false);
-    }
-    let entry = EXPLICIT_ACCESS_W {
+    // SAFETY: a valid ACL inside the descriptor, which `descriptor` keeps
+    // alive until after the copy; nothing writes it meanwhile.
+    let copy = unsafe { AclBuffer::copy_from(dacl) };
+    drop(descriptor);
+    copy.map(Some)
+}
+
+/// An EXPLICIT_ACCESS_W for `sid`. The SID is referenced, not copied: the
+/// entry must not be used after the borrow of `sid` it was made from ends.
+fn entry(sid: &Sid, mode: ACCESS_MODE, access: u32, flags: u32) -> EXPLICIT_ACCESS_W {
+    EXPLICIT_ACCESS_W {
         grfAccessPermissions: access,
-        grfAccessMode: GRANT_ACCESS,
-        grfInheritance: if inherit {
-            SUB_CONTAINERS_AND_OBJECTS_INHERIT
-        } else {
-            NO_INHERITANCE
-        },
+        grfAccessMode: mode,
+        grfInheritance: flags,
         Trustee: TRUSTEE_W {
             pMultipleTrustee: ptr::null_mut(),
             MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
@@ -417,31 +512,78 @@ pub(crate) fn grant<A: Api>(
             // With TRUSTEE_IS_SID this is the SID, cast (TRUSTEE_W docs).
             ptstrName: sid.as_psid().cast::<u16>(),
         },
-    };
-    let mut updated: *mut ACL = ptr::null_mut();
-    // SAFETY: `entry` is an initialised local whose trustee SID `sid` owns
-    // and keeps borrowed across the call; `dacl` is the valid ACL inside the
-    // live `descriptor`, only read; `updated` is a local for one write.
-    let error = unsafe { api.set_entries_in_acl(&raw const entry, dacl, &raw mut updated) };
+    }
+}
+
+/// `old` with `entries` merged in, as SetEntriesInAclW makes it.
+fn set_entries<A: Api>(
+    api: &A,
+    entries: &[EXPLICIT_ACCESS_W],
+    old: &AclBuffer,
+) -> io::Result<AclBuffer> {
+    let count = u32::try_from(entries.len()).map_err(|_| invalid("too many entries"))?;
+    let mut new: *mut ACL = ptr::null_mut();
+    // SAFETY: `entries` holds `count` initialised entries, borrowed across
+    // the call, whose trustee SIDs the caller keeps borrowed for at least as
+    // long (`entry`); `old` is a valid, 4-aligned ACL this crate owns; both
+    // are only read. `new` is a local valid for one write.
+    let error =
+        unsafe { api.set_entries_in_acl(count, entries.as_ptr(), old.as_ptr(), &raw mut new) };
     if error != ERROR_SUCCESS {
         return Err(win32_error(error));
     }
-    // SAFETY: on success the new ACL is LocalAlloc'd for us (the function's
+    // SAFETY: on success the ACL is LocalAlloc'd for us (the function's
     // documentation); this guard is its only owner.
-    let updated = unsafe { OsMemory::new(api, updated.cast::<c_void>(), Free::Local) };
-    if updated.is_null() {
+    let new = unsafe { OsMemory::new(api, new.cast::<c_void>(), Free::Local) };
+    if new.is_null() {
         return Err(invalid("no ACL"));
     }
-    // SAFETY: `path` is NUL-terminated; `updated` is the valid ACL just
-    // built, alive until this function returns; both are only read.
-    let error = unsafe {
-        api.set_named_security_info(path.as_ptr(), updated.as_ptr().cast_const().cast::<ACL>())
+    // SAFETY: the valid ACL just built, kept alive by `new` until after the copy.
+    unsafe { AclBuffer::copy_from(new.as_ptr().cast_const().cast::<ACL>()) }
+}
+
+/// Gives `sid` what `grant` says on `path`, keeping every other entry. The
+/// path is opened once, without following links (`open_itself`). Nothing
+/// is written if the DACL already gives exactly that; an explicit entry for
+/// `sid` that gives more (on the object, or to its contents) is revoked
+/// first. The result is read back and checked. Returns whether the DACL
+/// changed.
+pub(crate) fn grant<A: Api>(
+    api: &A,
+    path: &WideCString,
+    sid: &Sid,
+    grant: Grant,
+) -> io::Result<bool> {
+    let file = open_itself(api, path, grant)?;
+    let Some(current) = read_dacl(api, &file)? else {
+        // A NULL DACL grants everyone everything.
+        return Ok(false);
     };
+    let bytes = sid.bytes();
+    let base = match grant_state(&current.bytes(), &bytes, grant) {
+        State::Granted => return Ok(false),
+        State::Missing => current,
+        State::Excessive => {
+            let revoke = entry(sid, REVOKE_ACCESS, 0, NO_INHERITANCE);
+            set_entries(api, &[revoke], &current)?
+        }
+    };
+    let entries: Vec<EXPLICIT_ACCESS_W> = grant
+        .entries()
+        .iter()
+        .map(|wanted| entry(sid, GRANT_ACCESS, wanted.access, wanted.flags))
+        .collect();
+    let updated = set_entries(api, &entries, &base)?;
+    // SAFETY: `file` is open with WRITE_DAC (`open_itself`); `updated` is a
+    // valid, 4-aligned ACL this crate owns, only read.
+    let error = unsafe { api.set_security_info(file.raw(), updated.as_ptr()) };
     if error != ERROR_SUCCESS {
         return Err(win32_error(error));
     }
-    drop(updated);
-    drop(descriptor);
+    let written = read_dacl(api, &file)?.ok_or_else(|| invalid("the DACL went away"))?;
+    if grant_state(&written.bytes(), &bytes, grant) != State::Granted {
+        return Err(invalid("the DACL does not hold the grant after writing it"));
+    }
     Ok(true)
 }
 
@@ -471,7 +613,26 @@ pub(crate) fn inherited_handle<A: Api>(
     if api.get_file_type(handle) != FILE_TYPE_DISK {
         return Err(invalid("--file-handle is not a file"));
     }
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    if api.get_file_information_by_handle(handle, &mut information) == 0 {
+        return Err(last_error(api));
+    }
+    if information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        return Err(invalid("--file-handle is a directory"));
+    }
     Ok(handle)
+}
+
+/// A new, non-inheritable handle to the object `handle` names, owned by the
+/// returned guard. `handle` itself is left open and untouched.
+pub(crate) fn duplicate<A: Api>(api: &A, handle: HANDLE) -> io::Result<Handle<'_, A>> {
+    let raw = api.duplicate_handle(handle);
+    if raw.is_null() {
+        return Err(last_error(api));
+    }
+    // SAFETY: DuplicateHandle just returned this new handle to us; nothing
+    // else knows its value, so this guard is its only owner.
+    unsafe { Handle::new(api, raw) }.ok_or_else(|| invalid("no handle"))
 }
 
 /// The worker's job; closing it ends the worker (kill on close).
@@ -499,16 +660,8 @@ impl<'a, A: Api> Job<'a, A> {
         Ok(Self(job))
     }
 
-    pub(crate) fn assign(&self, child: &Child<'_, A>) -> io::Result<()> {
-        if self
-            .0
-            .api
-            .assign_process_to_job_object(self.0.raw(), child.process.raw())
-            == 0
-        {
-            return Err(last_error(self.0.api));
-        }
-        Ok(())
+    pub(crate) fn raw(&self) -> HANDLE {
+        self.0.raw()
     }
 }
 
@@ -664,6 +817,19 @@ impl<'v, A: Api> AttributeList<'v, A> {
         }
     }
 
+    /// The jobs the process is created in, in order (Windows 10 and later):
+    /// it never exists, not even suspended, outside them.
+    pub(crate) fn job_list(&mut self, jobs: &'v [HANDLE]) -> io::Result<()> {
+        // SAFETY: an array of job handles, its size in bytes, borrowed for 'v.
+        unsafe {
+            self.update(
+                PROC_THREAD_ATTRIBUTE_JOB_LIST,
+                jobs.as_ptr().cast::<c_void>(),
+                size_of_val(jobs),
+            )
+        }
+    }
+
     pub(crate) fn child_process_policy(&mut self, value: &'v u32) -> io::Result<()> {
         // SAFETY: a DWORD (the attribute's type), borrowed for 'v.
         unsafe {
@@ -723,9 +889,9 @@ impl<A: Api> Child<'_, A> {
         Ok(())
     }
 
-    /// Ends a child that must not run (it is still suspended).
+    /// Ends a child that must not run (it is still suspended). It was
+    /// created in its job, so the job's kill-on-close stops it too.
     pub(crate) fn terminate(&self) {
-        // A failure leaves the job's kill-on-close as the remaining stop.
         self.process.api.terminate_process(self.process.raw(), 1);
     }
 
@@ -790,7 +956,11 @@ pub(crate) fn create_process<'a, A: Api>(
         lpAttributeList: attributes.as_ptr(),
     };
     // No console at all: a hidden one (CREATE_NO_WINDOW) needs a conhost.exe
-    // child, which the child-process policy refuses.
+    // child, which the child-process policy refuses. STARTF_USESTDHANDLES
+    // stays set even when nothing is inherited (all three handles null):
+    // with DETACHED_PROCESS it keeps CreateProcessW from handing the child
+    // copies of this process's standard handles (ReactOS proc.c does that
+    // for a console child without it).
     let flags = EXTENDED_STARTUPINFO_PRESENT
         | CREATE_SUSPENDED
         | DETACHED_PROCESS

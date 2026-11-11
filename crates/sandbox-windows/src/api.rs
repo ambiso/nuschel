@@ -11,10 +11,16 @@
 //! AppContainer functions anywhere in its tree, process attribute lists only
 //! as stubs, and a CreateProcessW that ignores `lpAttributeList`. (Since the
 //! worker executables import the AppContainer functions, they do not even
-//! load where those are missing, so a missing sandbox cannot go unnoticed.) Methods that take only handles, plain values
-//! and Rust references are safe: Windows checks every handle value against
-//! the process's handle table and fails with ERROR_INVALID_HANDLE, so no
-//! value can make them touch memory they should not.
+//! load where those are missing, so a missing sandbox cannot go unnoticed.)
+//!
+//! Methods that take only handles, plain values and Rust references are safe
+//! in the memory sense: Windows checks every handle value against the
+//! process's handle table, so no value makes them touch memory they should
+//! not. They are not proof against I/O mistakes: `-1` (INVALID_HANDLE_VALUE)
+//! is also the current-process pseudo handle, and they act on whatever object
+//! a value names. Callers pass only handles they got from these functions or
+//! the standard handles, never -1 (`plan::standard_handle` and
+//! `plan::parse_handle` drop it).
 //!
 //! Return values are passed through unchanged; callers check them (`BOOL` 0,
 //! negative `HRESULT`, nonzero `WIN32_ERROR`) and read [`Api::last_error`]
@@ -27,6 +33,7 @@ use windows_sys::{
     Win32::{
         Foundation::{HANDLE, HLOCAL, WAIT_EVENT, WIN32_ERROR},
         Security::{ACL, Authorization::EXPLICIT_ACCESS_W, PSECURITY_DESCRIPTOR, PSID},
+        Storage::FileSystem::BY_HANDLE_FILE_INFORMATION,
         System::{
             JobObjects::{JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION},
             Threading::{
@@ -175,61 +182,81 @@ pub(crate) trait Api {
 
     // --------------------------------------------------------------- ACLs
 
-    /// [GetNamedSecurityInfoW](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getnamedsecurityinfow)
-    /// for a file or directory's DACL (`SE_FILE_OBJECT`,
-    /// `DACL_SECURITY_INFORMATION`, owner, group and SACL not requested).
-    /// Returns `ERROR_SUCCESS` or a Win32 error code (not via
-    /// `GetLastError`). ReactOS (ntmarta) sets the requested out-pointers to
-    /// null first, allocates a self-relative descriptor with
-    /// `LocalAlloc(LMEM_FIXED)`, points `*dacl` inside it, and frees it again
-    /// on failure.
+    /// [CreateFileW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
+    /// opening an existing file or directory (`OPEN_EXISTING`, no security
+    /// attributes, no template). With `FILE_FLAG_BACKUP_SEMANTICS` a
+    /// directory can be opened, and with `FILE_FLAG_OPEN_REPARSE_POINT` a
+    /// junction or symbolic link is opened itself, not followed. Returns a
+    /// handle the caller owns and must close, or `INVALID_HANDLE_VALUE`
+    /// (`GetLastError`).
     ///
     /// # Safety
-    /// `name` points to a NUL-terminated path. `dacl` and `descriptor` are
-    /// each valid for one write. On success `*descriptor` is a security
-    /// descriptor the caller must release with `LocalFree` exactly once, and
-    /// `*dacl` points into it (or is null for a NULL DACL): it is valid only
-    /// until the descriptor is released, and is not freed on its own.
-    unsafe fn get_named_security_info(
+    /// `name` points to a NUL-terminated path, read during the call only.
+    unsafe fn create_file(&self, name: PCWSTR, access: u32, share: u32, flags: u32) -> HANDLE;
+
+    /// [GetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle):
+    /// attributes and identity of an open file. Nonzero on success.
+    fn get_file_information_by_handle(
         &self,
-        name: PCWSTR,
+        file: HANDLE,
+        information: &mut BY_HANDLE_FILE_INFORMATION,
+    ) -> BOOL;
+
+    /// [GetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getsecurityinfo)
+    /// for an open file's DACL (`SE_FILE_OBJECT`, `DACL_SECURITY_INFORMATION`;
+    /// the handle needs READ_CONTROL). Returns `ERROR_SUCCESS` or a Win32
+    /// error code (not via `GetLastError`). ReactOS (ntmarta) sets the
+    /// requested out-pointers to null first, allocates a self-relative
+    /// descriptor with `LocalAlloc(LMEM_FIXED)` and points `*dacl` inside it.
+    ///
+    /// # Safety
+    /// `dacl` and `descriptor` are each valid for one write. On success
+    /// `*descriptor` is a security descriptor the caller must release with
+    /// `LocalFree` exactly once, and `*dacl` points into it (or is null for a
+    /// NULL DACL): valid only until the descriptor is released, never freed
+    /// on its own.
+    unsafe fn get_security_info(
+        &self,
+        file: HANDLE,
         dacl: *mut *mut ACL,
         descriptor: *mut PSECURITY_DESCRIPTOR,
     ) -> WIN32_ERROR;
 
     /// [SetEntriesInAclW](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setentriesinaclw)
-    /// with one entry: a new ACL that merges `entry` into `old` (GRANT_ACCESS
-    /// combines with the trustee's existing rights). Returns `ERROR_SUCCESS`
+    /// a new ACL that merges `entries` into `old` (GRANT_ACCESS combines with
+    /// the trustee's existing rights; REVOKE_ACCESS removes its
+    /// access-allowed entries). Returns `ERROR_SUCCESS`
     /// or a Win32 error code. ReactOS sets `*new` to null first, reads the
     /// trustee SID during the call only (GetLengthSid, then a copy), and
     /// allocates the result with `LocalAlloc`; unlike Windows it drops the old
     /// entries and the inheritance flags, which matters only on ReactOS.
     ///
     /// # Safety
-    /// `entry` points to one initialised `EXPLICIT_ACCESS_W` whose trustee,
-    /// with `TRUSTEE_IS_SID`, has `ptstrName` pointing to a valid SID; both
-    /// are read during the call only. `old` is null or a valid ACL, read
-    /// only. `new` is valid for one write and on success receives an ACL the
-    /// caller must release with `LocalFree` exactly once.
+    /// `entries` points to `count` initialised `EXPLICIT_ACCESS_W`s whose
+    /// trustees, with `TRUSTEE_IS_SID`, have `ptstrName` pointing to a valid
+    /// SID; all are read during the call only. `old` is null or a valid,
+    /// DWORD-aligned ACL, read only. `new` is valid for one write and on
+    /// success receives an ACL the caller must release with `LocalFree`
+    /// exactly once.
     unsafe fn set_entries_in_acl(
         &self,
-        entry: *const EXPLICIT_ACCESS_W,
+        count: u32,
+        entries: *const EXPLICIT_ACCESS_W,
         old: *const ACL,
         new: *mut *mut ACL,
     ) -> WIN32_ERROR;
 
-    /// [SetNamedSecurityInfoW](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow)
-    /// replacing a file or directory's DACL (`SE_FILE_OBJECT`,
-    /// `DACL_SECURITY_INFORMATION`); entries inherited from the parent are
-    /// recomputed, and inheritable entries propagate to existing children.
-    /// Returns `ERROR_SUCCESS` or a Win32 error code. ReactOS builds a
-    /// descriptor on its stack that points at the caller's ACL for the call
-    /// only (and does not propagate).
+    /// [SetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-setsecurityinfo)
+    /// replacing an open file's or directory's DACL (`SE_FILE_OBJECT`,
+    /// `DACL_SECURITY_INFORMATION`; the handle needs WRITE_DAC). Inherited
+    /// entries are recomputed and inheritable ones propagate to existing
+    /// children (if they can be opened with shared access). Returns
+    /// `ERROR_SUCCESS` or a Win32 error code. ReactOS builds a descriptor on
+    /// its stack that points at the caller's ACL for the call only.
     ///
     /// # Safety
-    /// `name` points to a NUL-terminated path and `dacl` to a valid ACL; both
-    /// are read during the call only.
-    unsafe fn set_named_security_info(&self, name: PCWSTR, dacl: *const ACL) -> WIN32_ERROR;
+    /// `dacl` points to a valid, DWORD-aligned ACL, read during the call only.
+    unsafe fn set_security_info(&self, file: HANDLE, dacl: *const ACL) -> WIN32_ERROR;
 
     // -------------------------------------------------------------- files
 
@@ -258,15 +285,6 @@ pub(crate) trait Api {
         job: HANDLE,
         restrictions: &JOBOBJECT_BASIC_UI_RESTRICTIONS,
     ) -> BOOL;
-
-    /// [AssignProcessToJobObject](https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject):
-    /// nonzero on success, else `GetLastError`. Since Windows 8 a process
-    /// already in a job can be assigned to another (nested jobs); the page
-    /// says a job with UI limits cannot be nested, yet the VM check found the
-    /// worker in this job with all its limits while its launch stage was in
-    /// the supervisor's job (docs/windows-sandbox.md). ReactOS supports no
-    /// nesting (STATUS_ACCESS_DENIED).
-    fn assign_process_to_job_object(&self, job: HANDLE, process: HANDLE) -> BOOL;
 
     // ---------------------------------------------------- process creation
 
@@ -387,6 +405,16 @@ pub(crate) trait Api {
     /// writes the flags on success only (ReactOS).
     fn get_handle_information(&self, handle: HANDLE, flags: &mut u32) -> BOOL;
 
+    /// [DuplicateHandle](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-duplicatehandle)
+    /// within this process (`DUPLICATE_SAME_ACCESS`, not inheritable): a new
+    /// handle to the same object that the caller owns and must close, or null
+    /// on failure. The source handle is left open.
+    fn duplicate_handle(&self, source: HANDLE) -> HANDLE;
+
+    /// [GetConsoleMode](https://learn.microsoft.com/en-us/windows/console/getconsolemode)
+    /// succeeds only for a console input or output handle.
+    fn is_console(&self, handle: HANDLE) -> bool;
+
     /// [GetFileType](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfiletype):
     /// `FILE_TYPE_DISK` for a file; `FILE_TYPE_UNKNOWN` both for an unknown
     /// type and on failure, so only `FILE_TYPE_DISK` is trusted here.
@@ -403,14 +431,15 @@ mod win32 {
     use windows_sys::{
         Win32::{
             Foundation::{
-                CloseHandle, GetHandleInformation, GetLastError, HANDLE, HLOCAL, LocalFree,
-                SetHandleInformation, WAIT_EVENT, WIN32_ERROR,
+                CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, GetHandleInformation,
+                GetLastError, HANDLE, HLOCAL, LocalFree, SetHandleInformation, WAIT_EVENT,
+                WIN32_ERROR,
             },
             Security::{
                 ACL,
                 Authorization::{
-                    ConvertSidToStringSidW, EXPLICIT_ACCESS_W, GetNamedSecurityInfoW,
-                    SE_FILE_OBJECT, SetEntriesInAclW, SetNamedSecurityInfoW,
+                    ConvertSidToStringSidW, EXPLICIT_ACCESS_W, GetSecurityInfo, SE_FILE_OBJECT,
+                    SetEntriesInAclW, SetSecurityInfo,
                 },
                 DACL_SECURITY_INFORMATION, DeriveCapabilitySidsFromName, FreeSid, GetLengthSid,
                 IsValidSid,
@@ -420,19 +449,24 @@ mod win32 {
                 },
                 PSECURITY_DESCRIPTOR, PSID,
             },
-            Storage::FileSystem::GetFileType,
+            Storage::FileSystem::{
+                BY_HANDLE_FILE_INFORMATION, CreateFileW, GetFileInformationByHandle, GetFileType,
+                OPEN_EXISTING,
+            },
             System::{
                 Com::CoTaskMemFree,
+                Console::{CONSOLE_MODE, GetConsoleMode},
                 JobObjects::{
-                    AssignProcessToJobObject, CreateJobObjectW, JOBOBJECT_BASIC_UI_RESTRICTIONS,
+                    CreateJobObjectW, JOBOBJECT_BASIC_UI_RESTRICTIONS,
                     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicUIRestrictions,
                     JobObjectExtendedLimitInformation, SetInformationJobObject,
                 },
                 Threading::{
-                    CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
-                    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-                    PROCESS_CREATION_FLAGS, PROCESS_INFORMATION, ResumeThread, STARTUPINFOW,
-                    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+                    CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess,
+                    GetExitCodeProcess, InitializeProcThreadAttributeList,
+                    LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_CREATION_FLAGS, PROCESS_INFORMATION,
+                    ResumeThread, STARTUPINFOW, TerminateProcess, UpdateProcThreadAttribute,
+                    WaitForSingleObject,
                 },
             },
         },
@@ -528,17 +562,43 @@ mod win32 {
             unsafe { LocalFree(memory) }
         }
 
-        unsafe fn get_named_security_info(
+        unsafe fn create_file(&self, name: PCWSTR, access: u32, share: u32, flags: u32) -> HANDLE {
+            // SAFETY: the caller upholds the trait contract for `name`; no
+            // security attributes and no template file (both may be null).
+            unsafe {
+                CreateFileW(
+                    name,
+                    access,
+                    share,
+                    ptr::null(),
+                    OPEN_EXISTING,
+                    flags,
+                    ptr::null_mut(),
+                )
+            }
+        }
+
+        fn get_file_information_by_handle(
             &self,
-            name: PCWSTR,
+            file: HANDLE,
+            information: &mut BY_HANDLE_FILE_INFORMATION,
+        ) -> BOOL {
+            // SAFETY: `information` is a live, exclusive reference to the
+            // structure the function fills.
+            unsafe { GetFileInformationByHandle(file, information) }
+        }
+
+        unsafe fn get_security_info(
+            &self,
+            file: HANDLE,
             dacl: *mut *mut ACL,
             descriptor: *mut PSECURITY_DESCRIPTOR,
         ) -> WIN32_ERROR {
             // SAFETY: the caller upholds the trait contract; owner, group
             // and SACL are not requested, so their out-pointers may be null.
             unsafe {
-                GetNamedSecurityInfoW(
-                    name,
+                GetSecurityInfo(
+                    file,
                     SE_FILE_OBJECT,
                     DACL_SECURITY_INFORMATION,
                     ptr::null_mut(),
@@ -552,20 +612,21 @@ mod win32 {
 
         unsafe fn set_entries_in_acl(
             &self,
-            entry: *const EXPLICIT_ACCESS_W,
+            count: u32,
+            entries: *const EXPLICIT_ACCESS_W,
             old: *const ACL,
             new: *mut *mut ACL,
         ) -> WIN32_ERROR {
-            // SAFETY: the caller upholds the trait contract; one entry.
-            unsafe { SetEntriesInAclW(1, entry, old, new) }
+            // SAFETY: the caller upholds the trait contract.
+            unsafe { SetEntriesInAclW(count, entries, old, new) }
         }
 
-        unsafe fn set_named_security_info(&self, name: PCWSTR, dacl: *const ACL) -> WIN32_ERROR {
+        unsafe fn set_security_info(&self, file: HANDLE, dacl: *const ACL) -> WIN32_ERROR {
             // SAFETY: the caller upholds the trait contract; only the DACL
             // is set, so the owner, group and SACL arguments are null.
             unsafe {
-                SetNamedSecurityInfoW(
-                    name,
+                SetSecurityInfo(
+                    file,
                     SE_FILE_OBJECT,
                     DACL_SECURITY_INFORMATION,
                     ptr::null_mut(),
@@ -622,11 +683,6 @@ mod win32 {
                     size,
                 )
             }
-        }
-
-        fn assign_process_to_job_object(&self, job: HANDLE, process: HANDLE) -> BOOL {
-            // SAFETY: handles only; Windows validates them.
-            unsafe { AssignProcessToJobObject(job, process) }
         }
 
         unsafe fn initialize_proc_thread_attribute_list(
@@ -732,6 +788,36 @@ mod win32 {
         fn get_handle_information(&self, handle: HANDLE, flags: &mut u32) -> BOOL {
             // SAFETY: `flags` is a live, exclusive reference for one u32.
             unsafe { GetHandleInformation(handle, flags) }
+        }
+
+        fn duplicate_handle(&self, source: HANDLE) -> HANDLE {
+            // SAFETY: no arguments; the current-process pseudo handle, which
+            // needs no closing.
+            let process = unsafe { GetCurrentProcess() };
+            let mut target: HANDLE = ptr::null_mut();
+            // SAFETY: handles and values, and `target`, a local valid for one
+            // write. Without DUPLICATE_CLOSE_SOURCE the source stays open.
+            let duplicated = unsafe {
+                DuplicateHandle(
+                    process,
+                    source,
+                    process,
+                    &raw mut target,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            };
+            if duplicated == 0 {
+                return ptr::null_mut();
+            }
+            target
+        }
+
+        fn is_console(&self, handle: HANDLE) -> bool {
+            let mut mode: CONSOLE_MODE = 0;
+            // SAFETY: a handle and `mode`, a local valid for one write.
+            unsafe { GetConsoleMode(handle, &raw mut mode) != 0 }
         }
 
         fn get_file_type(&self, handle: HANDLE) -> u32 {

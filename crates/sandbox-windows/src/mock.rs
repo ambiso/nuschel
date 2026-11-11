@@ -27,21 +27,26 @@ use windows_sys::{
     Win32::{
         Foundation::{
             ERROR_ACCESS_DENIED, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, HLOCAL,
-            WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0, WIN32_ERROR,
+            INVALID_HANDLE_VALUE, WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0, WIN32_ERROR,
         },
         Security::{
             ACL,
-            Authorization::{EXPLICIT_ACCESS_W, TRUSTEE_IS_SID},
+            Authorization::{EXPLICIT_ACCESS_W, GRANT_ACCESS, REVOKE_ACCESS, TRUSTEE_IS_SID},
             PSECURITY_DESCRIPTOR, PSID, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES,
         },
-        Storage::FileSystem::FILE_TYPE_DISK,
+        Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY,
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TYPE_DISK, READ_CONTROL,
+            WRITE_DAC,
+        },
         System::{
             JobObjects::{JOBOBJECT_BASIC_UI_RESTRICTIONS, JOBOBJECT_EXTENDED_LIMIT_INFORMATION},
             Threading::{
                 EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
                 PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY,
                 PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST, PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY,
                 PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_CREATION_FLAGS,
                 PROCESS_INFORMATION, STARTUPINFOEXW, STARTUPINFOW,
             },
@@ -64,7 +69,14 @@ enum Kind {
     Job,
     Process,
     Thread,
+    File,
 }
+
+/// What a successful call leaves as the last error: reading it after
+/// anything but a failure shows up as this odd code.
+const SENTINEL: u32 = 0x5e5e;
+/// ERROR_INVALID_HANDLE.
+const INVALID_HANDLE: u32 = 6;
 
 /// What CreateProcessW was given, decoded.
 #[derive(Debug, Default)]
@@ -82,6 +94,7 @@ pub(crate) struct Created {
     pub(crate) child_policy: Option<u32>,
     pub(crate) mitigations: Option<u64>,
     pub(crate) packages: Option<u32>,
+    pub(crate) jobs: usize,
 }
 
 /// A live attribute list: its attribute count, its buffer size, and the
@@ -99,6 +112,12 @@ struct State {
     profiles: HashSet<String>,
     dacls: HashMap<String, Vec<u8>>,
     null_dacls: HashSet<String>,
+    reparse_points: HashSet<String>,
+    /// Paths of open file handles.
+    opened: HashMap<usize, String>,
+    /// Handles the test hands in (standard handles, the offered file).
+    external: HashSet<usize>,
+    consoles: HashSet<usize>,
     acl_writes: usize,
     directories: Vec<String>,
     /// Live attribute lists: capacity and the (attribute, value, size)
@@ -132,10 +151,8 @@ impl Mock {
     }
 
     /// Fails the `index`-th call (from 0) of the function `name`.
-    pub(crate) fn failing(name: &'static str, index: usize) -> Self {
-        let mock = Self::new();
-        mock.state.borrow_mut().fail = Some((name, index));
-        mock
+    pub(crate) fn fail_at(&self, name: &'static str, index: usize) {
+        self.state.borrow_mut().fail = Some((name, index));
     }
 
     pub(crate) fn calls(&self) -> HashMap<&'static str, usize> {
@@ -158,8 +175,25 @@ impl Mock {
         self.state.borrow().acl_writes
     }
 
+    /// A handle of the caller's that is an open disk file.
     pub(crate) fn add_file(&self, handle: HANDLE) {
-        self.state.borrow_mut().files.insert(handle.addr());
+        let mut state = self.state.borrow_mut();
+        state.files.insert(handle.addr());
+        state.external.insert(handle.addr());
+    }
+
+    /// A handle of the caller's (a pipe, or with `console` a console).
+    pub(crate) fn add_handle(&self, handle: HANDLE, console: bool) {
+        let mut state = self.state.borrow_mut();
+        state.external.insert(handle.addr());
+        if console {
+            state.consoles.insert(handle.addr());
+        }
+    }
+
+    /// Makes `path` a junction.
+    pub(crate) fn set_reparse_point(&self, path: &str) {
+        self.state.borrow_mut().reparse_points.insert(path.into());
     }
 
     pub(crate) fn created(&self) -> Option<Created> {
@@ -192,9 +226,7 @@ impl Mock {
         let index = *count;
         *count += 1;
         let fail = state.fail == Some((name, index));
-        if fail {
-            state.last_error = ERROR_ACCESS_DENIED;
-        }
+        state.last_error = if fail { ERROR_ACCESS_DENIED } else { SENTINEL };
         fail
     }
 
@@ -475,18 +507,73 @@ impl Api for Mock {
         ptr::null_mut()
     }
 
-    unsafe fn get_named_security_info(
+    unsafe fn create_file(&self, name: PCWSTR, access: u32, share: u32, flags: u32) -> HANDLE {
+        // SAFETY: NUL-terminated (contract).
+        let path = unsafe { read_wide(name) };
+        if self.fails("create_file") {
+            return INVALID_HANDLE_VALUE;
+        }
+        assert_eq!(access, READ_CONTROL | WRITE_DAC);
+        assert_eq!(
+            share,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        );
+        assert_eq!(
+            flags,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT
+        );
+        let file = self.open(Kind::File);
+        self.state.borrow_mut().opened.insert(file.addr(), path);
+        file
+    }
+
+    fn get_file_information_by_handle(
         &self,
-        name: PCWSTR,
+        file: HANDLE,
+        information: &mut BY_HANDLE_FILE_INFORMATION,
+    ) -> BOOL {
+        let state = self.state.borrow();
+        let attributes = if let Some(path) = state.opened.get(&file.addr()) {
+            let kind = if path.ends_with(".exe") {
+                FILE_ATTRIBUTE_ARCHIVE
+            } else {
+                FILE_ATTRIBUTE_DIRECTORY
+            };
+            if state.reparse_points.contains(path) {
+                kind | FILE_ATTRIBUTE_REPARSE_POINT
+            } else {
+                kind
+            }
+        } else if state.files.contains(&file.addr()) {
+            FILE_ATTRIBUTE_ARCHIVE
+        } else {
+            drop(state);
+            self.state.borrow_mut().last_error = INVALID_HANDLE;
+            return 0;
+        };
+        drop(state);
+        if self.fails("get_file_information_by_handle") {
+            return 0;
+        }
+        information.dwFileAttributes = attributes;
+        1
+    }
+
+    unsafe fn get_security_info(
+        &self,
+        file: HANDLE,
         dacl: *mut *mut ACL,
         descriptor: *mut PSECURITY_DESCRIPTOR,
     ) -> WIN32_ERROR {
-        // SAFETY: NUL-terminated (contract).
-        let path = unsafe { read_wide(name) };
-        if self.fails("get_named_security_info") {
+        assert!(
+            self.is_open(file, Kind::File),
+            "GetSecurityInfo on a handle not opened"
+        );
+        if self.fails("get_security_info") {
             return ERROR_ACCESS_DENIED;
         }
         let state = self.state.borrow();
+        let path = state.opened[&file.addr()].clone();
         let null = state.null_dacls.contains(&path);
         let acl = state.dacls.get(&path).cloned().unwrap_or_else(|| {
             let owner = crate::plan::tests::sid(500, 1);
@@ -512,44 +599,69 @@ impl Api for Mock {
 
     unsafe fn set_entries_in_acl(
         &self,
-        entry: *const EXPLICIT_ACCESS_W,
+        count: u32,
+        entries: *const EXPLICIT_ACCESS_W,
         old: *const ACL,
         new: *mut *mut ACL,
     ) -> WIN32_ERROR {
-        assert!(entry.is_aligned());
-        // SAFETY: one initialised entry (contract).
-        let entry = unsafe { entry.read() };
-        assert_eq!(entry.Trustee.TrusteeForm, TRUSTEE_IS_SID);
-        assert!(entry.Trustee.pMultipleTrustee.is_null());
-        // SAFETY: with TRUSTEE_IS_SID the name is a valid SID (contract).
-        let sid = unsafe { read_sid(entry.Trustee.ptstrName.cast()) };
+        assert!(entries.is_aligned());
+        let count = usize::try_from(count).unwrap();
+        // SAFETY: `count` initialised entries (contract).
+        let entries: Vec<EXPLICIT_ACCESS_W> = unsafe { raw::copy_array(entries, count) };
+        let mut trustees = Vec::new();
+        for entry in &entries {
+            assert_eq!(entry.Trustee.TrusteeForm, TRUSTEE_IS_SID);
+            assert!(entry.Trustee.pMultipleTrustee.is_null());
+            // SAFETY: with TRUSTEE_IS_SID the name is a valid SID (contract).
+            trustees.push(unsafe { read_sid(entry.Trustee.ptstrName.cast()) });
+        }
         // SAFETY: a valid ACL (contract).
         let old = unsafe { read_acl(old) };
         if self.fails("set_entries_in_acl") {
             return ERROR_ACCESS_DENIED;
         }
-        let flags = u8::try_from(entry.grfInheritance).unwrap();
-        let ace = crate::plan::tests::allowed_ace(flags, entry.grfAccessPermissions, &sid);
-        let count = u16::from_le_bytes([old[4], old[5]]);
-        let mut aces = vec![old[8..].to_vec()];
-        aces.push(ace);
-        let mut acl = crate::plan::tests::acl(&aces);
-        acl[4..6].copy_from_slice(&(count + 1).to_le_bytes());
+        // Walk the old ACEs; REVOKE_ACCESS drops the trustee's allowed ones,
+        // GRANT_ACCESS appends a new one (enough for what is tested here).
+        let mut aces = Vec::new();
+        let mut offset = 8;
+        for _ in 0..u16::from_le_bytes([old[4], old[5]]) {
+            let size = usize::from(u16::from_le_bytes([old[offset + 2], old[offset + 3]]));
+            aces.push(old[offset..offset + size].to_vec());
+            offset += size;
+        }
+        for (entry, sid) in entries.iter().zip(&trustees) {
+            match entry.grfAccessMode {
+                REVOKE_ACCESS => aces.retain(|ace| ace[0] != 0 || &ace[8..] != sid.as_slice()),
+                GRANT_ACCESS => {
+                    let flags = u8::try_from(entry.grfInheritance).unwrap();
+                    aces.push(crate::plan::tests::allowed_ace(
+                        flags,
+                        entry.grfAccessPermissions,
+                        sid,
+                    ));
+                }
+                mode => panic!("unexpected access mode {mode}"),
+            }
+        }
+        let acl = crate::plan::tests::acl(&aces);
         let allocated = self.allocate(Free::Local, &acl).cast::<ACL>();
         // SAFETY: valid for one write (contract).
         unsafe { new.write(allocated) };
         ERROR_SUCCESS
     }
 
-    unsafe fn set_named_security_info(&self, name: PCWSTR, dacl: *const ACL) -> WIN32_ERROR {
-        // SAFETY: NUL-terminated (contract).
-        let path = unsafe { read_wide(name) };
+    unsafe fn set_security_info(&self, file: HANDLE, dacl: *const ACL) -> WIN32_ERROR {
+        assert!(
+            self.is_open(file, Kind::File),
+            "SetSecurityInfo on a handle not opened"
+        );
         // SAFETY: a valid ACL (contract).
         let acl = unsafe { read_acl(dacl) };
-        if self.fails("set_named_security_info") {
+        if self.fails("set_security_info") {
             return ERROR_ACCESS_DENIED;
         }
         let mut state = self.state.borrow_mut();
+        let path = state.opened[&file.addr()].clone();
         state.acl_writes += 1;
         state.dacls.insert(path, acl);
         ERROR_SUCCESS
@@ -590,15 +702,6 @@ impl Api for Mock {
             return 0;
         }
         self.state.borrow_mut().interface = Some(restrictions.UIRestrictionsClass);
-        1
-    }
-
-    fn assign_process_to_job_object(&self, job: HANDLE, process: HANDLE) -> BOOL {
-        assert!(self.is_open(job, Kind::Job) && self.is_open(process, Kind::Process));
-        if self.fails("assign_process_to_job_object") {
-            return 0;
-        }
-        self.state.borrow_mut().assigned = true;
         1
     }
 
@@ -697,6 +800,10 @@ impl Api for Mock {
         created.directory = unsafe { read_wide(directory) };
         // SAFETY: as above.
         created.command_line = unsafe { read_wide(command_line) };
+        assert!(
+            created.command_line.encode_utf16().count() < 32_767,
+            "command line too long for CreateProcessW"
+        );
         // Writable (contract): like ReactOS, put a NUL at the first unit and
         // restore it.
         // SAFETY: the buffer holds at least its NUL, so the first unit exists.
@@ -718,6 +825,12 @@ impl Api for Mock {
                 .environment
                 .push(String::from_utf16(&variable).unwrap());
         }
+        let names: Vec<String> = created
+            .environment
+            .iter()
+            .map(|variable| variable.split('=').next().unwrap().to_uppercase())
+            .collect();
+        assert!(names.is_sorted(), "environment block not sorted: {names:?}");
         assert_ne!(flags & EXTENDED_STARTUPINFO_PRESENT, 0);
         assert!(startup.is_aligned());
         // SAFETY: with EXTENDED_STARTUPINFO_PRESENT, a whole STARTUPINFOEXW
@@ -779,11 +892,26 @@ impl Api for Mock {
                     // SAFETY: a DWORD (contract).
                     created.packages = Some(unsafe { value.cast::<u32>().read() });
                 }
+                PROC_THREAD_ATTRIBUTE_JOB_LIST => {
+                    // SAFETY: `size` bytes of handles (contract).
+                    let jobs: Vec<HANDLE> = unsafe {
+                        raw::copy_array(value.cast::<HANDLE>(), size / size_of::<HANDLE>())
+                    };
+                    assert!(jobs.iter().all(|&job| self.is_open(job, Kind::Job)));
+                    created.jobs = jobs.len();
+                }
                 other => panic!("unexpected attribute {other:#x}"),
             }
         }
         {
             let state = self.state.borrow();
+            // A TRUE bInheritHandles without a handle list would hand the
+            // child every inheritable handle of the caller.
+            assert_eq!(
+                created.inherit,
+                !created.handles.is_empty(),
+                "inheritance without a list"
+            );
             let unique: HashSet<_> = created.handles.iter().collect();
             assert_eq!(unique.len(), created.handles.len(), "a handle listed twice");
             for handle in &created.handles {
@@ -804,6 +932,11 @@ impl Api for Mock {
         }
         let process = self.open(Kind::Process);
         let thread = self.open(Kind::Thread);
+        let mut state = self.state.borrow_mut();
+        // The outcome is that of this process, not of an earlier launch.
+        (state.resumed, state.terminated) = (false, false);
+        drop(state);
+        self.state.borrow_mut().assigned = created.jobs > 0;
         self.state.borrow_mut().created = Some(created);
         // SAFETY: valid for one write (contract).
         unsafe {
@@ -859,6 +992,10 @@ impl Api for Mock {
     }
 
     fn set_handle_information(&self, handle: HANDLE, mask: u32, flags: u32) -> BOOL {
+        if !self.state.borrow().external.contains(&handle.addr()) {
+            self.state.borrow_mut().last_error = INVALID_HANDLE;
+            return 0;
+        }
         if self.fails("set_handle_information") {
             return 0;
         }
@@ -869,12 +1006,24 @@ impl Api for Mock {
     }
 
     fn get_handle_information(&self, handle: HANDLE, flags: &mut u32) -> BOOL {
-        if !self.state.borrow().files.contains(&handle.addr()) {
-            self.state.borrow_mut().last_error = 6;
+        if !self.state.borrow().external.contains(&handle.addr()) {
+            self.state.borrow_mut().last_error = INVALID_HANDLE;
             return 0;
         }
         *flags = 1;
         1
+    }
+
+    fn duplicate_handle(&self, source: HANDLE) -> HANDLE {
+        if !self.state.borrow().external.contains(&source.addr()) || self.fails("duplicate_handle")
+        {
+            return ptr::null_mut();
+        }
+        self.open(Kind::File)
+    }
+
+    fn is_console(&self, handle: HANDLE) -> bool {
+        self.state.borrow().consoles.contains(&handle.addr())
     }
 
     fn get_file_type(&self, handle: HANDLE) -> u32 {

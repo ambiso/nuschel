@@ -88,6 +88,7 @@ impl Policy {
         }
         let mut policy = Self::default();
         let mut profile = None;
+        let mut memory = false;
         loop {
             let Some(option) = arguments.next() else {
                 return Err("the sandbox policy does not end with --".into());
@@ -96,7 +97,7 @@ impl Policy {
                 break;
             }
             let option = option.to_string_lossy().into_owned();
-            if option == "--less-privileged" {
+            if option == "--less-privileged" && !policy.less_privileged {
                 policy.less_privileged = true;
                 continue;
             }
@@ -110,12 +111,17 @@ impl Policy {
                     .ok_or_else(|| format!("{option} needs a number"))
             };
             match option.as_str() {
-                "--profile" => profile = Some(text(value)?),
+                "--profile" if profile.is_none() => profile = Some(text(value)?),
                 "--capability" => policy.capabilities.push(text(value)?),
                 "--writable" => policy.writable.push(value.into()),
                 "--read-file" if policy.file.is_none() => policy.file = Some(value.into()),
-                "--memory" => policy.memory = number(value)?,
-                "--cpu" => policy.cpu_seconds = Some(number(value)?),
+                "--memory" if !memory => {
+                    memory = true;
+                    policy.memory = number(value)?;
+                }
+                "--cpu" if policy.cpu_seconds.is_none() => {
+                    policy.cpu_seconds = Some(number(value)?)
+                }
                 _ => return Err(format!("unknown or repeated sandbox option {option}")),
             }
         }
@@ -233,6 +239,16 @@ mod tests {
         assert!(parse(&[LAUNCH_FLAG, "--profile", "a", "--unknown", "1", "--"]).is_err());
         let two_files = [LAUNCH_FLAG, "--profile", "a", "--read-file", "x"];
         assert!(parse(&[&two_files[..], &["--read-file", "y", "--"]].concat()).is_err());
+        // Every single-valued option at most once.
+        for repeated in [
+            &["--profile", "b"][..],
+            &["--memory", "1", "--memory", "2"],
+            &["--cpu", "1", "--cpu", "2"],
+            &["--less-privileged", "--less-privileged"],
+        ] {
+            let arguments = [&[LAUNCH_FLAG, "--profile", "a"][..], repeated, &["--"]].concat();
+            assert!(parse(&arguments).is_err(), "{repeated:?}");
+        }
         assert!(parse(&[LAUNCH_FLAG, "--profile", &"a".repeat(65), "--"]).is_err());
         assert!(parse(&[LAUNCH_FLAG, "--profile", "nuschel.content", "--"]).is_ok());
     }

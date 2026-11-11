@@ -14,7 +14,6 @@ use std::{
         fs::OpenOptionsExt as _,
         io::{AsRawHandle as _, FromRawHandle as _},
     },
-    sync::atomic::{AtomicBool, Ordering},
 };
 
 use nuschel_ipc::windows_sandbox::Policy;
@@ -90,11 +89,15 @@ fn run(policy: &Policy, arguments: &[std::ffi::OsString]) -> io::Result<u32> {
 }
 
 /// The file the launch stage opened for this worker (`--file-handle N`).
-/// Only the first call can succeed, and only for an inherited disk file that
-/// is not one of the standard handles, so nothing else in this process owns
-/// it.
+///
+/// The value comes from the command line, so nothing proves that this
+/// process does not already own the handle it names (it could be the
+/// current directory's handle, or a file opened earlier). It is therefore
+/// never closed or wrapped: after checking that it names an open disk file
+/// that is not a directory or a standard handle, this takes a duplicate, a
+/// new non-inheritable handle that only the returned File owns. The
+/// inherited handle stays open for the life of the worker.
 pub fn inherited_file(value: &OsStr) -> io::Result<File> {
-    static TAKEN: AtomicBool = AtomicBool::new(false);
     let value = value
         .to_str()
         .ok_or_else(|| invalid("--file-handle needs a handle"))?;
@@ -104,14 +107,9 @@ pub fn inherited_file(value: &OsStr) -> io::Result<File> {
         io::stderr().as_raw_handle(),
     ];
     let handle = os::inherited_handle(&Win32, value, standard)?;
-    if TAKEN.swap(true, Ordering::SeqCst) {
-        return Err(invalid("the inherited file was already taken"));
-    }
-    // SAFETY: `handle` is open (GetHandleInformation succeeded) and refers to
-    // a disk file; the launch stage opened it for this process, inherited it
-    // through the handle list and named it on our command line, and nothing
-    // else in this process knows it: it is not a standard handle, and `TAKEN`
-    // makes this the only place that ever takes ownership, once. From here
-    // the File owns and eventually closes it.
-    Ok(unsafe { File::from_raw_handle(handle) })
+    let duplicate = os::duplicate(&Win32, handle)?.into_raw();
+    // SAFETY: DuplicateHandle has just created `duplicate` for this call
+    // and its guard has handed over ownership: nothing else in the process
+    // knows the value, so the File becomes its only owner and closes it once.
+    Ok(unsafe { File::from_raw_handle(duplicate) })
 }

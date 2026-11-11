@@ -11,7 +11,12 @@ use nuschel_ipc::windows_sandbox::{Policy, append_argument};
 use windows_sys::{
     Win32::{
         Foundation::{HANDLE, INVALID_HANDLE_VALUE},
-        Security::{CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, OBJECT_INHERIT_ACE},
+        Security::{CONTAINER_INHERIT_ACE, INHERIT_ONLY_ACE, INHERITED_ACE, OBJECT_INHERIT_ACE},
+        Storage::FileSystem::{
+            DELETE, FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
+            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES,
+            FILE_READ_EA, FILE_TRAVERSE, READ_CONTROL, SYNCHRONIZE,
+        },
         System::JobObjects::{
             JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION,
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
@@ -39,9 +44,9 @@ pub(crate) const MITIGATIONS: u64 = (1 << 32) | (1 << 48) | (1 << 52) | (1 << 56
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 /// `ACL_REVISION` and `ACL_REVISION_DS` (winnt.h).
 const ACL_REVISIONS: [u8; 2] = [2, 4];
-/// The longest command line CreateProcessW accepts, in UTF-16 units with the
-/// terminating NUL (learn.microsoft.com, CreateProcessW, lpCommandLine).
-const MAX_COMMAND_LINE: usize = 32_768;
+/// The longest command line CreateProcessW accepts: "32,767 characters,
+/// including the Unicode terminating null character" (lpCommandLine).
+const MAX_COMMAND_LINE: usize = 32_767;
 
 /// The UI restrictions of every worker's job.
 pub(crate) const UI_RESTRICTIONS: JOBOBJECT_BASIC_UI_RESTRICTIONS =
@@ -266,45 +271,157 @@ pub(crate) fn acl_size(header: &[u8; 8]) -> Option<usize> {
     (ACL_REVISIONS.contains(&header[0]) && size >= 8).then_some(size)
 }
 
-/// Whether `acl` (a whole ACL, header included) already allows `sid` at
-/// least `access`, and, with `inherit`, passes that on to files and
-/// directories inside. Only effective ACCESS_ALLOWED entries count; a
-/// malformed ACL counts as not granting, so the grant is written again.
-pub(crate) fn grants(acl: &[u8], sid: &[u8], access: u32, inherit: bool) -> bool {
-    let Some(header) = acl.first_chunk::<8>() else {
-        return false;
+/// Read and run a file: what a container needs on its own executable.
+pub(crate) const READ_EXECUTE: u32 = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+/// Read, write, create and delete ("Modify"): what a container gets on
+/// everything inside its directory.
+pub(crate) const MODIFY: u32 =
+    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
+/// What a container gets on its directory itself: list it, traverse it,
+/// create files and subdirectories and delete entries in it, read its
+/// attributes. Not DELETE (it cannot remove or move the directory), not its
+/// attributes or extended attributes, not WRITE_DAC or WRITE_OWNER.
+pub(crate) const DIRECTORY: u32 = FILE_LIST_DIRECTORY
+    | FILE_ADD_FILE
+    | FILE_ADD_SUBDIRECTORY
+    | FILE_READ_EA
+    | FILE_TRAVERSE
+    | FILE_DELETE_CHILD
+    | FILE_READ_ATTRIBUTES
+    | READ_CONTROL
+    | SYNCHRONIZE;
+
+/// Object and container inheritance: an ACE that reaches the contents.
+const CONTENTS: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+
+/// What an AppContainer is granted on a path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Grant {
+    /// Its own executable: [`READ_EXECUTE`] on the file.
+    Executable,
+    /// A directory it works in: [`DIRECTORY`] on the directory itself and
+    /// [`MODIFY`] (inherit-only) on everything in it.
+    Directory,
+}
+
+/// One access-allowed entry to add for the container: rights and ACE flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Entry {
+    pub(crate) access: u32,
+    pub(crate) flags: u32,
+}
+
+impl Grant {
+    pub(crate) fn entries(self) -> &'static [Entry] {
+        match self {
+            Self::Executable => &[Entry {
+                access: READ_EXECUTE,
+                flags: 0,
+            }],
+            Self::Directory => &[
+                Entry {
+                    access: DIRECTORY,
+                    flags: 0,
+                },
+                Entry {
+                    access: MODIFY,
+                    flags: CONTENTS | INHERIT_ONLY_ACE,
+                },
+            ],
+        }
+    }
+
+    fn on_object(self) -> u32 {
+        match self {
+            Self::Executable => READ_EXECUTE,
+            Self::Directory => DIRECTORY,
+        }
+    }
+
+    fn on_contents(self) -> u32 {
+        match self {
+            Self::Executable => 0,
+            Self::Directory => MODIFY,
+        }
+    }
+}
+
+/// How a DACL stands to a [`Grant`] for one SID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum State {
+    /// Its entries give exactly what the grant gives (perhaps in more ACEs).
+    Granted,
+    /// Something is missing; adding the grant's entries fixes it.
+    Missing,
+    /// An explicit entry for the SID gives more than the grant (such as an
+    /// earlier version's Modify on the directory itself): revoke the SID's
+    /// entries, then add the grant's.
+    Excessive,
+}
+
+/// Where `acl` (a whole ACL, header included) stands for `sid` and `grant`.
+/// Only ACCESS_ALLOWED entries count, inherited ones only towards what is
+/// granted (an entry inherited from the parent cannot be revoked here). A
+/// malformed ACL counts as [`State::Missing`], so the grant is written again.
+pub(crate) fn grant_state(acl: &[u8], sid: &[u8], grant: Grant) -> State {
+    let Some(entries) = allowed_entries(acl) else {
+        return State::Missing;
     };
-    if acl_size(header) != Some(acl.len()) {
-        return false;
+    let (mut object, mut contents) = (0, 0);
+    for (flags, mask, _) in entries
+        .into_iter()
+        .filter(|&(_, _, ace_sid)| ace_sid == sid)
+    {
+        let explicit = flags & INHERITED_ACE == 0;
+        if flags & INHERIT_ONLY_ACE == 0 {
+            object |= mask;
+            if explicit && mask & !grant.on_object() != 0 {
+                return State::Excessive;
+            }
+        }
+        if flags & CONTENTS != 0 {
+            if flags & CONTENTS == CONTENTS {
+                contents |= mask;
+            }
+            if explicit && mask & !grant.on_contents() != 0 {
+                return State::Excessive;
+            }
+        }
+    }
+    if object & grant.on_object() == grant.on_object()
+        && contents & grant.on_contents() == grant.on_contents()
+    {
+        State::Granted
+    } else {
+        State::Missing
+    }
+}
+
+/// The ACCESS_ALLOWED entries of a whole ACL as (flags, mask, SID), or
+/// `None` if it is malformed.
+fn allowed_entries(acl: &[u8]) -> Option<Vec<(u32, u32, &[u8])>> {
+    let header = acl.first_chunk::<8>()?;
+    if acl_size(header)? != acl.len() {
+        return None;
     }
     let count = usize::from(u16::from_le_bytes([acl[4], acl[5]]));
+    let mut entries = Vec::new();
     let mut offset = 8;
     for _ in 0..count {
         // ACE_HEADER: type, flags, size (u16); then the mask and the SID.
-        let Some(ace) = acl.get(offset..).and_then(|rest| rest.first_chunk::<4>()) else {
-            return false;
-        };
+        let ace = acl.get(offset..)?.first_chunk::<4>()?;
         let size = usize::from(u16::from_le_bytes([ace[2], ace[3]]));
-        let Some(body) = acl.get(offset..offset.saturating_add(size)) else {
-            return false;
-        };
         if size < 8 {
-            return false;
+            return None;
         }
+        let body = acl.get(offset..offset.checked_add(size)?)?;
         offset += size;
-        let flags = u32::from(ace[1]);
-        let needed = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
-        let applies = flags & INHERIT_ONLY_ACE == 0 && (!inherit || flags & needed == needed);
-        let mask = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
-        if ace[0] == ACCESS_ALLOWED_ACE_TYPE
-            && applies
-            && mask & access == access
-            && body.get(8..) == Some(sid)
-        {
-            return true;
+        if ace[0] == ACCESS_ALLOWED_ACE_TYPE {
+            let mask = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+            entries.push((u32::from(ace[1]), mask, &body[8..]));
         }
     }
-    false
+    Some(entries)
 }
 
 #[cfg(test)]
@@ -470,52 +587,94 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn grants_are_found_only_when_effective() {
+    fn grant_states_tell_missing_from_excessive() {
         let me = sid(1, 2);
         let other = sid(3, 4);
-        let inherit = u8::try_from(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE).unwrap();
-        let only = u8::try_from(INHERIT_ONLY_ACE).unwrap() | inherit;
-        let read = 0x0012_00a9;
-        let modify = 0x0013_01bf;
-        let granted = acl(&[
+        let flags = |flags: u32| u8::try_from(flags).unwrap();
+        let contents = flags(CONTENTS | INHERIT_ONLY_ACE);
+        let directory = acl(&[
             allowed_ace(0, 0x001f_01ff, &other),
-            allowed_ace(inherit, modify, &me),
+            allowed_ace(0, DIRECTORY, &me),
+            allowed_ace(contents, MODIFY, &me),
         ]);
-        assert!(grants(&granted, &me, modify, true));
-        assert!(grants(&granted, &me, read, false));
-        assert!(!grants(&granted, &sid(1, 3), read, false));
-        assert!(!grants(
-            &acl(&[allowed_ace(0, modify, &me)]),
-            &me,
-            modify,
-            true
-        ));
-        assert!(!grants(
-            &acl(&[allowed_ace(only, modify, &me)]),
-            &me,
-            read,
-            false
-        ));
-        assert!(!grants(
-            &acl(&[allowed_ace(inherit, read, &me)]),
-            &me,
-            modify,
-            true
-        ));
-        // Denials and malformed ACLs never count as a grant.
-        let mut denied = allowed_ace(inherit, modify, &me);
+        assert_eq!(
+            grant_state(&directory, &me, Grant::Directory),
+            State::Granted
+        );
+        assert_eq!(
+            grant_state(&directory, &sid(1, 3), Grant::Directory),
+            State::Missing
+        );
+        // The directory alone, or only its contents, is not enough.
+        let only_contents = acl(&[allowed_ace(contents, MODIFY, &me)]);
+        assert_eq!(
+            grant_state(&only_contents, &me, Grant::Directory),
+            State::Missing
+        );
+        let only_itself = acl(&[allowed_ace(0, DIRECTORY, &me)]);
+        assert_eq!(
+            grant_state(&only_itself, &me, Grant::Directory),
+            State::Missing
+        );
+        // Modify on the directory itself (DELETE, attributes) is too much.
+        let broad = acl(&[allowed_ace(flags(CONTENTS), MODIFY, &me)]);
+        assert_eq!(grant_state(&broad, &me, Grant::Directory), State::Excessive);
+        // ...unless it was inherited from the parent, which only adds.
+        let inherited = acl(&[
+            allowed_ace(flags(CONTENTS | INHERITED_ACE), MODIFY, &me),
+            allowed_ace(0, DIRECTORY, &me),
+        ]);
+        assert_eq!(
+            grant_state(&inherited, &me, Grant::Directory),
+            State::Granted
+        );
+        // The executable: read and execute, nothing more.
+        let executable = acl(&[allowed_ace(0, READ_EXECUTE, &me)]);
+        assert_eq!(
+            grant_state(&executable, &me, Grant::Executable),
+            State::Granted
+        );
+        let writable = acl(&[allowed_ace(0, MODIFY, &me)]);
+        assert_eq!(
+            grant_state(&writable, &me, Grant::Executable),
+            State::Excessive
+        );
+        assert_eq!(
+            grant_state(&acl(&[]), &me, Grant::Executable),
+            State::Missing
+        );
+        // Denials never count as a grant; malformed ACLs read as missing.
+        let mut denied = allowed_ace(0, READ_EXECUTE, &me);
         denied[0] = 1;
-        assert!(!grants(&acl(&[denied]), &me, read, false));
-        let mut truncated = granted.clone();
+        assert_eq!(
+            grant_state(&acl(&[denied]), &me, Grant::Executable),
+            State::Missing
+        );
+        let mut truncated = executable.clone();
         truncated.pop();
-        assert!(!grants(&truncated, &me, read, false));
-        // A count beyond the ACEs present stops the walk at the end.
-        let mut lying = acl(&[allowed_ace(0, read, &other)]);
+        assert_eq!(
+            grant_state(&truncated, &me, Grant::Executable),
+            State::Missing
+        );
+        let mut lying = acl(&[allowed_ace(0, READ_EXECUTE, &other)]);
         lying[4] = 9;
-        assert!(!grants(&lying, &me, read, false));
-        let mut short_ace = acl(&[allowed_ace(inherit, modify, &me)]);
+        assert_eq!(grant_state(&lying, &me, Grant::Executable), State::Missing);
+        let mut short_ace = executable.clone();
         short_ace[10] = 4;
-        assert!(!grants(&short_ace, &me, read, false));
-        assert!(!grants(&[], &me, read, false));
+        assert_eq!(
+            grant_state(&short_ace, &me, Grant::Executable),
+            State::Missing
+        );
+        assert_eq!(grant_state(&[], &me, Grant::Executable), State::Missing);
+        // The grant's own entries produce the granted state.
+        let entries: Vec<Vec<u8>> = Grant::Directory
+            .entries()
+            .iter()
+            .map(|entry| allowed_ace(flags(entry.flags), entry.access, &me))
+            .collect();
+        assert_eq!(
+            grant_state(&acl(&entries), &me, Grant::Directory),
+            State::Granted
+        );
     }
 }
