@@ -172,8 +172,9 @@ unavailable. Monitoring is local and does not save microphone audio by default.
 Device changes and audio-server restarts invalidate device handles, link IDs, reference
 timing, and DSP state. Increment the route generation; stop old callbacks; discard old
 queued PCM; re-enumerate; recreate Nuschel-owned resources; re-evaluate effects; resume.
-Keep network/chat state alive. Mute/deafen transitions replace the media worker so
-blocked native stream destructors cannot retain microphone access. Automatic recovery must not repeatedly undo an explicit
+Keep network/chat state alive. One media worker serves every server (clients.md,
+"Voice on several servers"); opening or closing the microphone replaces it, so blocked
+native stream destructors cannot retain microphone access. Automatic recovery must not repeatedly undo an explicit
 user routing change.
 
 ## Protocol and server compatibility

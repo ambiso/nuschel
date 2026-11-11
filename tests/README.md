@@ -45,7 +45,11 @@ Development aids outside the VM: `screenshots.py` (scenes under a private headle
 GNOME Shell on the real GPU; it never touches the user's session) and
 `accessibility.py --gnome-shell` (the same check with Nuschel's own window controls,
 and the timeline walked with the keyboard: Shift+Tab, arrows, Home and End, Tab through
-a message's links, a letter typed into the composer). Against a loopback `nuscheld`:
+a message's links, a letter typed into the composer). `voice_servers.py` (voice on two
+loopback Murmurs at once, operated over AT-SPI in the private GNOME Shell with a private
+PulseAudio: one media worker, both servers heard, push-to-talk only to the talk server,
+"Speak on two servers?", the mute shortcut, a crashed worker coming back; screenshots of
+the rail and the voice card in each state). Against a loopback `nuscheld`:
 `with_local_nuscheld.py <binaries> nuschel_conversations.py <binaries> --port PORT`
 (edits, deletions and their authorisation, typing, direct conversations, with
 `nuschel-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,

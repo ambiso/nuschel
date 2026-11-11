@@ -10,8 +10,11 @@ Orca would and checks that:
   search and the message composer are exposed with roles and names;
 - every interactive control has a name (no unlabeled buttons or fields);
 - a control can be operated through AT-SPI alone: "Unmute" is invoked via the
-  Action interface, the server sees the user unmuted, and the button becomes
-  "Mute";
+  Action interface, the server sees the user unmuted, the button becomes
+  "Mute" and the voice card "Talking on …";
+- where your voice goes is named: the rail button ("voice here, muted"), the
+  voice card ("Muted on Accessible server #Development") and its place, a
+  button that goes there;
 - with --gnome-shell (which has a clipboard): a pasted image shows in the
   composer's tray as a named list item, and its "Remove" button works through
   the Action interface;
@@ -272,6 +275,8 @@ class AccessibilityTest:
             eventually(lambda: any(role == "push button" and name == "Mute"
                                    for _, _, role, name in snapshot(nuschel)),
                        "the button did not change to Mute", timeout=10)
+            eventually(lambda: "Talking on Accessible server #Development" in
+                       {name for _, _, _, name in snapshot(nuschel)}, "the voice card did not say Talking", timeout=10)
             print("Unmuted through the AT-SPI Action interface; the server saw it and the button became Mute.",
                   flush=True)
             self.check_shortcuts(nuschel)
@@ -555,6 +560,13 @@ class AccessibilityTest:
         assert "Message" in composer, f"the message composer is not exposed (text fields: {composer})"
         unnamed = [role for _, _, role, name in nodes if role in INTERACTIVE and not name.strip()]
         assert not unnamed, f"interactive elements without a name: {unnamed}"
+        # Where your voice goes: the rail button and the voice card say it, and
+        # the card's place is a button that goes there.
+        rail = [name for _, _, role, name in nodes if role == "push button" and name.startswith("Accessible server;")]
+        assert rail and rail[0].endswith("; voice here, muted"), f"the rail does not say where the voice is: {rail}"
+        assert "Muted on Accessible server #Development" in {name for _, _, _, name in nodes}, \
+            "the voice card is not named"
+        self.find(nodes, "push button", "Go to Accessible server #Development")
 
     def close(self):
         for process in reversed(self.processes):

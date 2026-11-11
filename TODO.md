@@ -994,22 +994,23 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         subdomain; static files, the landing page, app-link files, the relay over a
         Unix socket with `IPAddressDeny`; `vm-web`).
   - [ ] Push for mobile: content-free pushes (Signal-style), UnifiedPush on Android.
-- [ ] **Voice on several servers at once** (user, 2026-11-11): every connected server
-      that is not deafened starts its own media worker, so unmuted on two servers you
-      speak into both and push-to-talk transmits on every one; the footer names only
-      one. (Echo is fine on Linux: the canceller's reference records the output
-      device itself, so other servers' audio is cancelled; only where it falls back to
-      its own playback, as on macOS and Windows today, would another server's audio
-      leak.) The user listens to several
-      voice channels at once and very rarely speaks in more than one. Plan: **listen
-      anywhere** (each server's audio mixed, per-server volume, deafen per server);
-      **speak in one place by default**: one talk server owns the microphone, and
-      push-to-talk and mute shortcuts act on it; unmuting on a second server asks
-      once ("Speak on two servers?"). **One media worker for the app**: one capture
-      encoded once and sent to the talk server(s), all playback mixed into one output
-      (and so a complete fallback echo reference). Rail: green microphone ring on the talk server,
-      a headphone badge on listening servers, pulsing while someone talks; the footer
-      says "Talking on X · listening to Y, Z". Awaiting the user's go.
+- [x] **Voice on several servers at once** (user, 2026-11-11): listen anywhere, speak
+      in one place by default (docs/clients.md, "Voice on several servers"). One media
+      worker for the app (`native/media.rs`): every server that is not deafened mixed
+      into one output (so the fallback echo reference is complete too), per-server
+      volume (the server's menu), one capture encoded once for the talk servers. One
+      talk server by default (the server whose channel you last joined, or "Use voice
+      here"); unmuting on a second asks once, "Speak on two servers?"; push-to-talk and
+      the mute shortcuts act on the talk servers; a listening server sees you muted.
+      Rail: green microphone ring, headphone badges that breathe while someone talks;
+      the voice card says "Talking on X #c · listening to Y #d" and takes you there.
+      `tests/voice_servers.py` checks it end to end against two loopback Murmurs.
+      Open: a breathing badge redraws the window 25 times a second while someone
+      talks there (GPUI redraws whole windows); per-server volume has only the menu's
+      ±10 % steps; on the tests' private PulseAudio a worker that records takes ~2 s
+      to open (the PulseAudio client waits ~1.8 s per recording stream; not yet
+      investigated), so unmuting is heard late there; the terminal client (apps/tui)
+      still needs the talk-server controls.
 - [ ] **Rename Nuschel → nuschl** (user, 2026-11-11; "nuschl is mumbled nuschel"),
       queued as a sync point: start no new agents, merge the running ones, rename on
       a quiet tree, verify, push, then start the next wave. Checklist:

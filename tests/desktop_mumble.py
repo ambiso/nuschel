@@ -49,6 +49,30 @@ def terminate(process):
             process.wait(timeout=5)
 
 
+def media_workers(root):
+    """Live media workers among the descendants of process `root` (inside
+    their sandbox they run as `/worker --live`)."""
+    children = {}
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            try:
+                parent = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            except (OSError, IndexError, ValueError):
+                continue
+            children.setdefault(parent, []).append(int(entry.name))
+    found, pending = [], [root]
+    while pending:
+        for child in children.get(pending.pop(), []):
+            pending.append(child)
+            try:
+                arguments = Path(f"/proc/{child}/cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if b"--live" in arguments and arguments[0].endswith((b"/worker", b"nuschel-media-worker")):
+                found.append(child)
+    return found
+
+
 class DesktopTest:
     def __init__(self, args, root, output):
         self.args, self.root, self.output = args, root, output

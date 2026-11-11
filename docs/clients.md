@@ -44,7 +44,7 @@ the desktop on 2026-11-11; "Status" says what moved and what is left.
 |---|---|---|---|
 | Plain data | `nuschel-core` (`model`, `bookmark`) | everything, `wasm32-unknown-unknown` | what a session reports (channels, users, text targets, activity, administration, limits, transport statistics) and saved servers |
 | SDK core | `nuschel-client` without features | everything, `wasm32-unknown-unknown` | the `Client`; timelines, conversations, servers, the channel tree; unread, mentions, read markers, typing, direct conversations; the rules for editing, deleting, typing and sounds; the `Platform` trait with its requests and inputs |
-| Native platform | `nuschel-client`, feature `native` (default) | Linux, Windows, macOS; later Android and iOS | `native::Driver`, the `Platform` on tokio: one supervised connection per server over `nuschel-session` with reconnects and backoff, its media worker, the content and storage workers, server history pages, edits and deletions kept in order |
+| Native platform | `nuschel-client`, feature `native` (default) | Linux, Windows, macOS; later Android and iOS | `native::Driver`, the `Platform` on tokio: one supervised connection per server over `nuschel-session` with reconnects and backoff, the one media worker they share, the content and storage workers, server history pages, edits and deletions kept in order |
 | The app's own services | the app | per platform | Desktop: notifications, updates, the Settings audio check, website icons, the image viewer, attached images (`apps/desktop/src/services.rs`) |
 
 `just wasm` (part of `just check`) lints `nuschel-core` and `nuschel-client` without
@@ -81,10 +81,12 @@ features for `wasm32-unknown-unknown`. The core depends on `nuschel-core`,
   (`Hit`: place, author, snippet), and where a result's message is now (`Located`,
   `Client::show_message`).
 - `sounds` — when a sound effect plays.
+- `voice` — where your voice goes on several servers: the talk servers, each
+  server's `Role`, and the question before a second one ("Voice on several servers").
 - `navigation` — the open conversation, voice, and tickets that drop late pages.
 - `native` (feature) — `Driver`, its `Event`s and their conversion to `Input`;
   `Client::open_url` for `mumble://` links (their parser and the servers' security
-  records are `nuschel-session`'s).
+  records are `nuschel-session`'s); `native::media`, the one media worker's supervisor.
 
 ### API
 
@@ -108,8 +110,10 @@ while let Some(event) = events.recv().await {
 - **Commands** are methods: `connect`, `disconnect`, `trust_certificate`,
   `open_url`, `add_server`, `replace_server`, `remove_server`, `open` (browse a
   conversation; loads its latest page), `load_history`, `load_page`, `send_text`,
-  `edit`, `delete`, `change_message`, `composing` (typing), `mark_read`, `set_mute`,
-  `join`, `open_direct`, `search` (with `search_scope`, `search_hits`, `locate`,
+  `edit`, `delete`, `change_message`, `composing` (typing), `mark_read`, `set_mute`
+  (which may return the question "Speak on two servers?", answered with
+  `speak_here`), `toggle_voice` (the mute shortcuts), `use_voice_here`, `join`,
+  `open_direct`, `search` (with `search_scope`, `search_hits`, `locate`,
   `show_message`), `request` (to a server, for what is not modelled yet), `log_gap`. None blocks: slow work is a `Platform` call answered later as an
   `Input`. Failures to show at once (not connected, too long, a full queue) come back
   as `Result`s; the rest as the server's `notice` or an `Update`.
@@ -188,8 +192,8 @@ Left, in the order they should move:
   service and SDK state each.
 - **Search**: requests, scopes, results and jumps go through the client; the
   highlight of a jumped-to message is each UI's.
-- **The driver** is one file (`native.rs`); split it into connection, content and
-  storage before the mobile work.
+- **The driver** is `native.rs` and its media supervisor (`native/media.rs`); split
+  the rest into connection, content and storage before the mobile work.
 - **Bindings**: wasm-bindgen in `crates/client-wasm` (docs/web.md): `WebClient`
   wraps `Client`, servers and updates come out as JSON, and a browser `Platform`
   connects through the web relay with TLS in WebAssembly (login, channels and users
@@ -237,6 +241,58 @@ identity's recovery key and the worker's failures, which show as warnings (the
 driver's other `Native` events are dropped), end-to-end direct conversations, file
 transfers (an offer shows as text), administration, whisper, and settings beyond the
 command line.
+
+## Voice on several servers
+
+Decided with the user on 2026-11-11: they often listen to several voice channels at
+once and very rarely speak in more than one. So: **listen anywhere, speak in one place
+by default.**
+
+- **One media worker for the app**, owned by the native driver (`native/media.rs`),
+  not one per connection. Each connected server attaches to it as a *stream*; the
+  worker keys its speakers by (stream, session), since session numbers are per server,
+  and mixes every server that is not deafened into one output ("Voice chat" in volume
+  mixers, as before). One output also makes the canceller's fallback reference (its
+  own playback, where the output device cannot be recorded, as on macOS and Windows
+  today) complete. Each server has a playback volume (`server_volumes` in the
+  settings; the server's menu), applied with the per-user volume to each packet.
+- **One capture, encoded once**, handed to every server you are unmuted on. The
+  encoder takes the lowest bitrate and the highest measured loss among those servers.
+  The microphone still opens and closes with a new worker process (a native stream's
+  teardown can block); the worker is replaced only when the microphone's state
+  changes, not when the talk servers change while it stays open; until a new one
+  has its devices open, every server's status says "Starting audio…". Changes settle
+  for 30 ms first, so moving your voice (one server muted, another unmuted) is one
+  change, and it sounds like what the microphone did, not like a mute and an unmute.
+  With every server deafened no worker runs; sounds then play through a worker that
+  opens only the output, as before.
+- **Talk servers** (`voice::Voice` in the SDK) own the microphone. There is one by
+  default: the server whose channel you last joined, or the one you chose with "Use
+  voice here" (its menu); a new connection becomes it unless your voice is live
+  somewhere. Joining a channel elsewhere moves a live microphone along (the other
+  server then sees you muted) and keeps a muted one muted. Unmuting on another server
+  while your voice is live asks once, "Speak on two servers?": *Speak on both* adds it
+  to the talk servers (later unmutes there do not ask again), *Only on …* moves the
+  voice, *Cancel* changes nothing.
+- **Push-to-talk and the mute shortcuts act on the talk servers only.** Push-to-talk
+  gates the one capture, which reaches only them; the mute shortcut toggles them
+  together (a talk server you deafened is left alone). The footer's buttons stay per
+  server.
+- **What each server sees stays true**: one you only listen to sees you self-muted, a
+  deafened one sees you deafened, and only the talk servers ever receive your voice
+  (the driver routes by what each server was told, and each connection checks again).
+- **Where it shows** (desktop): the talk server has a green microphone ring in the
+  server rail, servers you listen to a small headphone badge that breathes while
+  someone talks there (eased, `motion::Ease`, drawn 25 times a second rather than at
+  the display's rate, since GPUI redraws the whole window; lit without motion when
+  motion is reduced). The voice
+  card reads "Talking on Beta #Lobby · listening to Alpha #Lobby", each place a
+  button that takes you there; the user panel says "Listening" for a server that
+  only plays. Rail buttons and the card are named for screen readers.
+
+Tested by `voice::tests` and `client::tests` (the policy), `native::media::tests`
+(routing), the media worker's `mixer::tests`, and `tests/voice_servers.py`: the real
+desktop over AT-SPI against two loopback Murmurs with a private PulseAudio.
 
 ## Reuse by layer
 
