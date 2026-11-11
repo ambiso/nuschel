@@ -16,7 +16,8 @@ Orca would and checks that:
   composer's tray as a named list item, and its "Remove" button works through
   the Action interface;
 - Settings' shortcut rows name each action's Record button, and recording is
-  announced as a status that a screen reader reads out;
+  announced as a status that a screen reader reads out; the privacy switch
+  "Show when you are typing" is a named control;
 - after a long conversation, every loaded message is a list item a screen
   reader can read, including the oldest, screens above the viewport (the
   timeline lays out only what is near it); ScrollTo and GrabFocus through
@@ -300,6 +301,10 @@ class AccessibilityTest:
         self.write_tree(nodes, "settings-tree.txt")
         for action in actions:
             assert any(name == f"{action} shortcut" for _, _, _, name in nodes), f"no group for {action}"
+        # Settings → Privacy: whether others see that you type (Nuschel servers).
+        typing = [role for _, _, role, name in nodes if name == "Show when you are typing"]
+        assert typing and typing[0] in INTERACTIVE | {"check box", "switch"}, \
+            f"the typing setting is not a named control: {typing}"
         self.find(nodes, "push button", "Record Toggle mute shortcut").call("Action", "DoAction", "i", "0")
 
         def recording():

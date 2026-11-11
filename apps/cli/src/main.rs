@@ -208,6 +208,11 @@ enum Input {
     ListDirect {
         request_id: u64,
     },
+    /// Nuschel servers: we read a conversation up to `seq`.
+    ReadMarker {
+        conversation: String,
+        seq: u64,
+    },
     /// Nuschel servers: text to a direct conversation (32 hex digits), sent
     /// like the desktop's (paced, idempotent, acknowledged).
     DirectText {
@@ -616,6 +621,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     request_id,
                     user_id,
                 })),
+                Ok(Input::ReadMarker { conversation, seq }) => {
+                    Command::Nuschel(NuschelRequest::ReadMarker(v1::ReadMarker {
+                        conversation: unhex(&conversation),
+                        seq,
+                    }))
+                }
                 Ok(Input::ListDirect { request_id }) => {
                     Command::Nuschel(NuschelRequest::ListDirect(v1::ListDirect { request_id }))
                 }
@@ -659,7 +670,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             },
             Some(event) = events.recv() => output(match event {
                 SessionEvent::PeerCertificate(sha256) => json!({"kind":"peer_certificate", "sha256":sha256}),
-                SessionEvent::Negotiated(negotiated) => json!({"kind":"negotiated", "nuschel":negotiated.nuschel, "capabilities":negotiated.capabilities}),
+                SessionEvent::Negotiated(negotiated) => json!({"kind":"negotiated", "nuschel":negotiated.nuschel, "capabilities":negotiated.capabilities,
+                    "policy":negotiated.policy.map(|policy| json!({"moderators_delete":policy.moderators_delete, "edit_limit":policy.edit_limit}))}),
                 SessionEvent::Channel(channel) => json!({"kind":"channel", "channel":channel}),
                 SessionEvent::ChannelRemoved(id) => json!({"kind":"channel_removed", "channel":id}),
                 SessionEvent::User(user) => json!({"kind":"user", "user":user}),
