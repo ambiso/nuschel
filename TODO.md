@@ -940,6 +940,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 
 ### WebRTC and video (follow-ups to the str0m trial)
 
+- [ ] Evaluate enriching legacy Mumble servers (user proposal, 2026-11-11):
+      bounded, authenticated WebRTC signaling over `PluginDataTransmission` for
+      direct Nuschel-to-Nuschel calls; an optional companion SFU on nuschl.eu or a
+      self-hosted endpoint for group video and browser watch links. Mumble signaling
+      does not replace STUN/TURN; relay-only skips peer discovery and candidate
+      disclosure. Define independent call authorization: plugin forwarding or a
+      copied link does not prove Mumble channel membership/ACLs. A browser may also
+      participate in P2P through web-accessible signaling/the Mumble web tunnel;
+      stock Mumble itself cannot render video. Queued after the rename, not built.
+
 - [ ] High-quality video without transcoding (user, 2026-11-11), docs/clients.md
       "Video": the sender encodes once with scalable layers (AV1/VP9 SVC, e.g. L3T3;
       simulcast as fallback); the SFU forwards per receiver only the layers its
