@@ -23,6 +23,12 @@ Reported while testing (2026-11-10/11):
       before sending. Private-send failures clear on recovery; temporary notices
       expire after ten seconds and have an accessible Dismiss button (2026-11-11).
 
+- [x] Rapidly pressing Deafen could leave SDK/visible state deafened but unmuted:
+      sparse Mumble snapshots now infer mute from deafness, and delayed server
+      echoes cannot overwrite newer local privacy choices. Routing revisions and
+      capture replacement discard buffered speech when talk destinations change;
+      tests cover rapid toggles, sparse/out-of-order echoes and multiple servers.
+
 - [ ] Code blocks: a copy-to-clipboard button. (In progress.)
 - [ ] Message text is selectable; right-click a message for Copy message (and Copy
       image / Save image as for images). (In progress.)

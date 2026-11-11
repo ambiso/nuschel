@@ -261,8 +261,10 @@ by default.**
 - **One capture, encoded once**, handed to every server you are unmuted on. The
   encoder takes the lowest bitrate and the highest measured loss among those servers.
   The microphone still opens and closes with a new worker process (a native stream's
-  teardown can block); the worker is replaced only when the microphone's state
-  changes, not when the talk servers change while it stays open; until a new one
+  teardown can block); the worker is replaced when the microphone's state or its
+  speaking destinations change, discarding speech buffered for the previous
+  listeners. Per-connection routing revisions reject packets queued before a
+  mute/unmute round trip, even while another server keeps speaking. Until a new one
   has its devices open, every server's status says "Starting audio…". Changes settle
   for 30 ms first, so moving your voice (one server muted, another unmuted) is one
   change, and it sounds like what the microphone did, not like a mute and an unmute.

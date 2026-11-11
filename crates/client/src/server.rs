@@ -116,7 +116,10 @@ pub struct ServerState {
     pub users: BTreeMap<u32, User>,
     /// Channels this connection has seen (cached ones not among them go).
     pub seen_channels: BTreeSet<u32>,
+    /// Our latest local microphone/privacy choice, initialized on connect.
+    /// Server observations stay in `users` and cannot undo a newer choice.
     pub muted: bool,
+    /// Our latest local playback choice. Always implies `muted`.
     pub deafened: bool,
     pub notice: Option<String>,
     pub(crate) notice_expires: Option<(String, u64)>,

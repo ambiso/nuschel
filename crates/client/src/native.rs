@@ -984,6 +984,7 @@ async fn connect_once(
     let nonce = format!("{}:{generation}:{}", id, connection::now_ms());
     let mut muted = restore.muted;
     let mut deafened = restore.deafened;
+    let mut voice_revision = 0_u64;
     let mut sequence = 0;
     let mut content_gap = false;
     let mut bitrate = 48_000;
@@ -1043,6 +1044,7 @@ async fn connect_once(
             },
             Some(command) = commands.recv() => {
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
+                    voice_revision = voice_revision.wrapping_add(1);
                     let cue = crate::sounds::self_state((muted, deafened), (*mute || *deaf, *deaf));
                     muted = *mute || *deaf; deafened = *deaf;
                     if muted && std::mem::take(&mut transmitting) {
@@ -1051,7 +1053,7 @@ async fn connect_once(
                     }
                     // The worker closes the microphone (a new process) once no
                     // server gets it, and stops once every server is deafened.
-                    let link = media::Link { muted, deafened, bitrate, loss_percent };
+                    let link = media::Link { revision: voice_revision, muted, deafened, bitrate, loss_percent };
                     if voice.is_some() {
                         hub.send(media::Control::Update { server: id.clone(), generation, link, cue });
                     } else if let Some(sound) = cue {
@@ -1061,10 +1063,10 @@ async fn connect_once(
                 if session_commands.send(command).await.is_err() { break; }
             },
             outgoing = async { voice.as_mut().unwrap().0.recv().await }, if voice.is_some() => {
-                let Some(media::Outgoing { opus, end }) = outgoing else { voice = None; continue };
+                let Some(media::Outgoing { revision, opus, end }) = outgoing else { voice = None; continue };
                 // Only unmuted, as the worker's supervisor routes it; nothing
                 // captured before a mute leaves.
-                if muted || deafened || voice_keys.borrow().mute { continue; }
+                if revision != voice_revision || muted || deafened || voice_keys.borrow().mute { continue; }
                 let packet = nuschel_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                 sequence += 2;
                 transmitting = !end;
@@ -1166,7 +1168,7 @@ async fn connect_once(
                     let own_session = connected_session;
                     bitrate = max_bandwidth.saturating_sub(24_000).clamp(6000, 48_000);
                     let (sender, receiver) = mpsc::channel(64);
-                    let link = media::Link { muted, deafened, bitrate, loss_percent };
+                    let link = media::Link { revision: voice_revision, muted, deafened, bitrate, loss_percent };
                     hub.send(media::Control::Attach { server: id.clone(), generation, link, voice: sender });
                     voice = Some((receiver, media::Attached { hub: hub.clone(), server: id.clone(), generation }));
                     if !deafened { hub.send(media::Control::Sound(Sound::Connected)); }
@@ -1201,7 +1203,7 @@ async fn connect_once(
                     if measured.abs_diff(loss_percent) >= 3 {
                         loss_percent = measured;
                         if voice.is_some() {
-                            let link = media::Link { muted, deafened, bitrate, loss_percent };
+                            let link = media::Link { revision: voice_revision, muted, deafened, bitrate, loss_percent };
                             hub.send(media::Control::Update { server: id.clone(), generation, link, cue: None });
                         }
                     }

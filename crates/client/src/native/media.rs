@@ -9,8 +9,8 @@
 //! The microphone opens and closes with a new worker process, as before
 //! (native stream teardown can block inside a backend; replacing the
 //! isolated process closes its audio capability even then): the worker is
-//! replaced only when the microphone's state changes, not when the talk
-//! servers change while it stays open.
+//! replaced when the microphone's state or its destinations change. Speech
+//! buffered for one set of listeners must not reach a newly added listener.
 use super::{Event, HOST_PIN, MAX_SOUND_DELAY, VoiceKeys, chime, configure, pinned_host, play};
 use nuschel_core::audio::{Sound, TransmitMode};
 use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
@@ -23,6 +23,7 @@ use tokio::{
 
 /// Encoded microphone audio for one server's session.
 pub struct Outgoing {
+    pub revision: u64,
     pub opus: Vec<u8>,
     pub end: bool,
 }
@@ -30,6 +31,9 @@ pub struct Outgoing {
 /// A server's state as it sees it, and the link the encoder plans for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Link {
+    /// This connection's local mute/deafen revision. Buffered packets from
+    /// an earlier routing decision must not survive a mute/unmute round trip.
+    pub revision: u64,
     pub muted: bool,
     pub deafened: bool,
     pub bitrate: u32,
@@ -162,6 +166,12 @@ fn speaking_to(link: &Link) -> bool {
     !link.muted && !link.deafened
 }
 
+/// A destination started/stopped receiving the microphone, or changed its
+/// privacy state and returned to speaking before the worker could settle.
+fn capture_route_changed(old: &Link, next: &Link) -> bool {
+    speaking_to(old) != speaking_to(next) || (speaking_to(next) && old.revision != next.revision)
+}
+
 /// Supervise the worker until the driver goes away.
 pub async fn run(
     (mut control, mut playback): (mpsc::UnboundedReceiver<Control>, mpsc::Receiver<Playback>),
@@ -190,6 +200,24 @@ pub async fn run(
         tokio::select! {
             message = control.recv() => {
                 let Some(message) = message else { break };
+                let capture_changed = match &message {
+                    Control::Attach { server, link, .. } => speaking_to(link)
+                        || streams.get(server).is_some_and(|old| speaking_to(&old.link)),
+                    Control::Update { server, generation, link, .. } => streams.get(server)
+                        .filter(|old| old.generation == *generation)
+                        .is_some_and(|old| capture_route_changed(&old.link, link)),
+                    Control::Detach { server, generation } => streams.get(server)
+                        .is_some_and(|old| old.generation == *generation && speaking_to(&old.link)),
+                    Control::Sound(_) | Control::Chime(_) => false,
+                };
+                if capture_changed {
+                    // Invalidate even a packet already in the worker's IPC
+                    // queue before admitting another speaking destination.
+                    // Replacing the process also discards its queued PCM.
+                    media.take();
+                    epoch += 1;
+                    retry = Instant::now();
+                }
                 match message {
                     Control::Attach { server, generation, link, voice } => {
                         numbers = numbers.wrapping_add(1);
@@ -291,7 +319,7 @@ pub async fn run(
                     }
                 }
             },
-            _ = tokio::time::sleep_until(retry), if planned.listen && media.is_none() => {
+            _ = tokio::time::sleep_until(retry), if settle.is_none() && planned.listen && media.is_none() => {
                 epoch += 1;
                 // Until the devices are open, nobody hears you yet.
                 broadcast(&streams, &events, |server, generation| Event::AudioStatus { server, generation, message: "Starting audio…".into() }).await;
@@ -316,7 +344,7 @@ pub async fn run(
                     // Only servers that are unmuted get it (each connection checks again).
                     if sent != epoch || voice_keys.borrow().mute { continue; }
                     for stream in streams.values().filter(|stream| speaking_to(&stream.link)) {
-                        let _ = stream.voice.try_send(Outgoing { opus: opus.clone(), end });
+                        let _ = stream.voice.try_send(Outgoing { revision: stream.link.revision, opus: opus.clone(), end });
                     }
                 },
                 Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise, reference }) => {
@@ -423,11 +451,47 @@ mod tests {
 
     fn link(muted: bool, deafened: bool, bitrate: u32, loss_percent: u8) -> Link {
         Link {
+            revision: 0,
             muted,
             deafened,
             bitrate,
             loss_percent,
         }
+    }
+
+    #[test]
+    fn routing_revisions_invalidate_buffered_capture_even_after_rapid_toggles() {
+        let initial = link(false, false, 40_000, 3);
+        let muted = Link {
+            revision: 1,
+            muted: true,
+            ..initial
+        };
+        let unmuted = Link {
+            revision: 2,
+            ..initial
+        };
+        assert!(capture_route_changed(&initial, &muted));
+        assert!(capture_route_changed(&muted, &unmuted));
+        // Coalescing may see only the initial and final state: flags alone
+        // cannot distinguish this privacy transition from no change.
+        assert!(capture_route_changed(&initial, &unmuted));
+        let adapted = Link {
+            bitrate: 24_000,
+            loss_percent: 12,
+            ..initial
+        };
+        assert!(!capture_route_changed(&initial, &adapted));
+        let listening = Link {
+            muted: true,
+            ..initial
+        };
+        let deafened = Link {
+            deafened: true,
+            revision: 1,
+            ..listening
+        };
+        assert!(!capture_route_changed(&listening, &deafened));
     }
 
     #[test]

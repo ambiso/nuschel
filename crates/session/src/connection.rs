@@ -2976,6 +2976,10 @@ impl State {
         if let Some(value) = update.self_deaf {
             user.self_deafened = value;
         }
+        // A UserState is sparse. Both Murmur and Nuschel can announce
+        // deafness without a separate mute bit; deafness always implies mute.
+        user.muted |= user.deafened;
+        user.self_muted |= user.self_deafened;
         if let Some(value) = update.suppress {
             user.suppressed = value;
         }
@@ -3609,6 +3613,41 @@ mod tests {
         );
         assert_eq!(current, first.users[&4].instance);
         assert!(drain(&mut rx).await.iter().any(|event| matches!(event, SessionEvent::Notice(note) if note == nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE)));
+    }
+
+    #[tokio::test]
+    async fn sparse_deafness_updates_always_imply_mute() {
+        let mut state = State::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        for update in [
+            proto::UserState {
+                session: Some(42),
+                self_deaf: Some(true),
+                ..Default::default()
+            },
+            proto::UserState {
+                session: Some(42),
+                // A contradictory partial echo must not expose an
+                // unmuted/deafened aggregate to the SDK.
+                self_mute: Some(false),
+                ..Default::default()
+            },
+            proto::UserState {
+                session: Some(42),
+                deaf: Some(true),
+                ..Default::default()
+            },
+        ] {
+            state
+                .handle(frame(kind::USER_STATE, update), &tx)
+                .await
+                .unwrap();
+            let Some(SessionEvent::User(user)) = rx.recv().await else {
+                panic!("expected a user update")
+            };
+            assert!(user.self_deafened && user.self_muted);
+            assert!(!user.deafened || user.muted);
+        }
     }
 
     #[tokio::test]

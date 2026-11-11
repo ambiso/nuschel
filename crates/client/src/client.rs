@@ -517,13 +517,14 @@ impl Client {
             else {
                 continue;
             };
-            if (server.muted, server.deafened) == (change.muted, change.deafened) {
+            let muted = change.muted || change.deafened;
+            if (server.muted, server.deafened) == (muted, change.deafened) {
                 continue;
             }
-            server.muted = change.muted;
+            server.muted = muted;
             server.deafened = change.deafened;
             let request = Request::SetSelf {
-                muted: change.muted,
+                muted,
                 deafened: change.deafened,
             };
             if let Err(error) = self.platform.request(&server.id, request) {
@@ -1897,7 +1898,9 @@ impl Client {
                     server.channels.push(ConversationState::root());
                 }
             }
-            ServerEvent::User(user) => {
+            ServerEvent::User(mut user) => {
+                user.muted |= user.deafened;
+                user.self_muted |= user.self_deafened;
                 if let Some(hash) = user.texture_hash.clone()
                     && !server.avatars.contains(&hash)
                 {
@@ -1932,8 +1935,11 @@ impl Client {
                     }
                 }
                 if Some(user.session) == server.own_session {
-                    server.muted = user.self_muted;
-                    server.deafened = user.self_deafened;
+                    // These controls are local privacy intent, also used by
+                    // the native capture gate. Mumble has no request IDs on
+                    // self-state echoes: an old echo must not undo a newer
+                    // mute/deafen or drive the next rapid toggle from stale
+                    // state. Keep the server's observation in `users` below.
                     // Remembered for the next start (the root channel is
                     // where a server puts you anyway).
                     let last = (user.channel != 0).then_some(user.channel);
@@ -2385,6 +2391,50 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn rapid_deafen_toggles_ignore_delayed_and_out_of_order_server_echoes() {
+        let (mut client, recorder, id) = connected();
+        client.set_mute(0, false);
+        assert!(!client.servers[0].muted && !client.servers[0].deafened);
+        self_states(&recorder);
+        for i in 0..101 {
+            client.set_mute(0, true);
+            let expected = (true, i % 2 == 0);
+            assert_eq!(
+                (client.servers[0].muted, client.servers[0].deafened),
+                expected
+            );
+            // Mumble has no acknowledgement request number on these echoes:
+            // none may overwrite this client's latest privacy intent.
+            for (muted, deafened) in [(false, false), (false, true), (true, false)] {
+                client.handle(Input::Server {
+                    server: id.clone(),
+                    generation: 1,
+                    event: ServerEvent::User(User {
+                        session: 1,
+                        name: "andi".into(),
+                        channel: 2,
+                        self_muted: muted,
+                        self_deafened: deafened,
+                        ..Default::default()
+                    }),
+                });
+                assert_eq!(
+                    (client.servers[0].muted, client.servers[0].deafened),
+                    expected
+                );
+                let observed = &client.servers[0].users[&1];
+                assert!(!observed.self_deafened || observed.self_muted);
+            }
+        }
+        assert_eq!(client.voice_role(0), voice::Role::Deafened);
+        assert!(
+            self_states(&recorder)
+                .iter()
+                .all(|(_, muted, deafened)| !deafened || *muted)
+        );
     }
 
     #[test]

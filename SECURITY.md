@@ -141,11 +141,16 @@ suggestion) and never more than announced. magic-wormhole's own code denies
 `unsafe` apart from a few marked constructors; its Noise crates are compiled in but
 never negotiated by protocol 0.8.
 
-Muted clients do not open microphone streams. A mute mid-sentence ends the
-transmission with a constant packet of Opus silence, never captured audio. Capture generations invalidate queued
-PCM and encoded packets across mute/deafen changes and audio-worker restarts. The
-desktop replaces the media process on mute/deafen transitions: native stream teardown
-can block, so dropping a stream alone is insufficient to guarantee capture closes.
+When no talk server is unmuted, the client does not open a microphone stream. A mute
+mid-sentence ends that server's transmission with a constant packet of Opus silence,
+never captured audio. Deafness always implies mute; sparse server snapshots are
+normalized, and stale self-state echoes cannot overwrite newer local privacy choices.
+Capture epochs and per-connection routing revisions invalidate queued PCM/Opus across
+mute/deafen changes, new speaking destinations and audio-worker restarts. The desktop
+replaces the media process when capture or its destinations change: native stream
+teardown can block, so dropping a stream alone is insufficient to close capture.
+With another explicitly selected talk server still unmuted, global capture may
+continue, but the deafened server receives and plays no voice.
 The NixOS server's storage preflight inherits its hardened systemd unit.
 
 ### macOS (implemented, not yet validated on macOS)
