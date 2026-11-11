@@ -1,0 +1,5 @@
+example.org
+<html><head><LINK rel="stylesheet" href="a.css">
+<link rel="shortcut icon" href="/static/fav.png?v=1&amp;x=2">
+<link href='https://cdn.example.org/touch.png' rel='apple-touch-icon'>
+<link rel=icon href=/logo.svg></head>

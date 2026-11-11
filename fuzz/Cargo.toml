@@ -25,6 +25,11 @@ nuschel-identity = { path = "../crates/identity" }
 nuschel-ipc = { path = "../crates/ipc" }
 nuschel-kt = { path = "../crates/kt" }
 serde_json = "1.0.154"
+base64 = "0.22"
+image = { version = "0.25", default-features = false }
+nuschel-client = { path = "../crates/client" }
+nuschel-legacy-html = { path = "../crates/legacy-html" }
+nuschel-session = { path = "../crates/session" }
 
 [[bin]]
 name = "html"
@@ -85,6 +90,55 @@ bench = false
 [[bin]]
 name = "kt_messages"
 path = "fuzz_targets/kt_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "images"
+path = "fuzz_targets/images.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "favicon"
+path = "fuzz_targets/favicon.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "legacy_html"
+path = "fuzz_targets/legacy_html.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "transfer_offer"
+path = "fuzz_targets/transfer_offer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mumble_url"
+path = "fuzz_targets/mumble_url.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "voice"
+path = "fuzz_targets/voice.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "policy_file"
+path = "fuzz_targets/policy_file.rs"
 test = false
 doc = false
 bench = false
