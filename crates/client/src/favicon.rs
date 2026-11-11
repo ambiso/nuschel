@@ -3,8 +3,8 @@
 //! or the icon the home page links to; the parent domain is tried after a
 //! subdomain (voice.example.org → example.org). Only HTTPS. The desktop
 //! fetches (with short timeouts and a size cap); the pages and bytes are the
-//! website's, so everything here takes hostile input. The sandboxed content
-//! worker decodes the icon.
+//! website's, so everything here takes hostile input, in time linear in it.
+//! The sandboxed content worker decodes the icon.
 
 /// The host, then its parent domain unless that looks like a public suffix
 /// (`co.uk`, `com.au`: a first label of three letters or fewer).
@@ -41,10 +41,17 @@ pub fn is_image(bytes: &[u8]) -> bool {
 pub fn icon_link(page: &str) -> Option<String> {
     let lower = page.to_ascii_lowercase();
     let mut best: Option<(bool, String)> = None;
+    // Where the last tag ended: a `<link` inside it is not a tag. Without
+    // this, every one of many unclosed `<link`s was searched to the end.
+    let mut after = 0;
     for (start, _) in lower.match_indices("<link") {
+        if start < after {
+            continue;
+        }
         let end = lower[start..]
             .find('>')
             .map_or(lower.len(), |end| start + end);
+        after = end;
         let (tag, original) = (&lower[start..end], &page[start..end]);
         let (Some(rel), Some(href)) =
             (attribute(tag, tag, "rel"), attribute(tag, original, "href"))
@@ -128,6 +135,25 @@ mod tests {
         );
         assert_eq!(icon_link(r#"<link rel="icon" href="/logo.svg">"#), None);
         assert_eq!(icon_link("<link"), None);
+    }
+
+    #[test]
+    fn many_unclosed_links_take_linear_time() {
+        // Half a megabyte (the fetch limit) of them took three seconds
+        // (optimised): each was searched to the end of the page for its `>`,
+        // then for attributes.
+        for page in [
+            "<link rel=icon ".repeat(512 * 1024 / 15),
+            format!("{}>", "<link href=a ".repeat(512 * 1024 / 13)),
+        ] {
+            let started = std::time::Instant::now();
+            assert_eq!(icon_link(&page), None);
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "{:?}",
+                started.elapsed()
+            );
+        }
     }
 
     #[test]
