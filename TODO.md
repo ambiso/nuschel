@@ -75,8 +75,9 @@ Later (reported):
       Nuschel shows offers as file cards. Nuschel servers get their own, end-to-end
       encrypted design (chunked, resumable; magic-wormhole cannot resume).
 - [ ] Files on Nuschel servers: designed in docs/files.md (2026-11-11): *kept* files
-      on the server, *live* files relayed from the sender's device, one encrypted
-      format with per-chunk Merkle proofs (prototyped in `crates/files`). Decisions
+      on the server, *live* files sent from the sender's device magic-wormhole style
+      (direct first, the server as relay with a piece cache), one encrypted format
+      with per-chunk Merkle proofs (prototyped in `crates/files`). Decisions
       needed from the user: docs/files.md §11 (default size boundary and quota, live
       share lifetime, direct connections, wormhole codes for stock users, recipients
       as sources).

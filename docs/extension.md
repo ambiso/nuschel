@@ -302,19 +302,22 @@ stock client would silently erase (or, for a deny, open) it.
 ## 8. Files
 
 On a Nuschel server, files are not wormhole codes in text: `files/1` either keeps a
-file in the server's blob store or relays it live from the sender's device.
+file in the server's blob store or sends it live from the sender's device.
 
 **The design is [docs/files.md](files.md)** (2026-11-11), which supersedes the details
 below where they differ. What changes: two classes, *kept* (stored, for images and small
-files, as below) and *live* (large files stay on the sender's disk; the server relays and
-caches a few chunks in memory, nothing is stored), sharing one encrypted format so a live
-file can be kept later; `upload_id` becomes a server-assigned `object_id` with the same
-ownership rule; the server pulls chunks from the sender on a second TLS connection (ALPN
-`nuschel-bulk/1`) and verifies each against a Merkle root, instead of verifying a hash at
-completion; the relay-only mode below is the live class, with per-account budgets that
-slow transfers rather than fail them. What stays: downloads authorised by a referencing
-message, no cross-user deduplication or convergent encryption, quota reserved at start,
-reference counting with deletion and retention, no trusted MIME types.
+files, as below) and *live* (large files stay on the sender's disk and go magic-wormhole
+style: a direct connection between the two clients first, the server as relay when none
+works, with a bounded, short-lived piece cache on the relay; nothing is stored), sharing
+one encrypted format so a live file can be kept later; `upload_id` becomes a
+server-assigned `object_id` with the same ownership rule; the server pulls pieces from
+the sender on a second TLS connection (ALPN `nuschel-bulk/1`) and verifies each against a
+Merkle root that also commits to the key, instead of verifying a hash at completion; the
+relay-only mode below becomes the live class, with per-account budgets that slow
+transfers rather than fail them; the global quota is `files.global_quota`, off by default
+behind a free-disk reserve. What stays: downloads authorised by a referencing message, no
+cross-user deduplication or convergent encryption, quota reserved at start, reference
+counting with deletion and retention, no trusted MIME types.
 
 - An upload has an `upload_id` owned by the uploading account; `ChatSend` may only
   reference the sender's own uploads. A content hash is never a capability: downloads
