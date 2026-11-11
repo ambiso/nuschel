@@ -12,7 +12,7 @@ are complete; package, cross-build and all four VM checks have passed.
 
 1. **Rename checkpoint — verified:** native, migration, accessibility, browser,
    Windows, universal macOS app, all eight Nix checks and all four VM suites passed.
-   Build-cache cleanup is complete. Push this checkpoint before new feature work.
+   Build-cache cleanup is complete. The checkpoint is pushed as `f0116b77`.
 2. **iOS is the first implementation track after that checkpoint**, ahead of Android,
    completing the browser UI, video/SFrame and additional encrypted-history features.
    Swift + SwiftUI over the shared Rust SDK through UniFFI remains the chosen approach.
@@ -52,10 +52,15 @@ are complete; package, cross-build and all four VM checks have passed.
    MLS history proofs, Android, full browser UI, and video/SFrame. Their safety
    requirements remain, but they do not gate the first iOS client.
 
-Dependency path: rename → shared bindings/build foundation → SwiftUI and iOS audio
-in parallel → on-device voice/chat → mobile reliability. Per-device server sessions
+Dependency path: Linux-hosted macOS/graphics/Simulator proof → shared bindings/build
+foundation → SwiftUI and iOS audio in parallel → Simulator voice/chat → mobile
+reliability and physical-device validation. Per-device server sessions
 join that path before linked desktop/phone use; recovery/sync and production MLS
 history remain separate dependencies for their own features.
+
+Full source/test audit (2026-11-11): [findings, evidence and conflict ownership](docs/todo-audit.md).
+Checked implementation and checked runtime coverage are separate claims; untested
+native-platform and failure scenarios remain open below.
 
 Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 
@@ -95,19 +100,24 @@ Reported while testing (2026-11-10/11):
       capture replacement discard buffered speech when talk destinations change;
       tests cover rapid toggles, sparse/out-of-order echoes and multiple servers.
 
-- [ ] Code blocks: a copy-to-clipboard button. (In progress.)
-- [ ] Message text is selectable; right-click a message for Copy message (and Copy
-      image / Save image as for images). (In progress.)
-- [ ] Clickable links, and Mumble's HTML formatting on par with stock Mumble (bold,
-      italic, lists, headings, colour, tables), safely: no remote resources, link
-      scheme allowlist, deceptive-anchor tooltip, libFuzzer targets. (In progress.)
+- [x] Code blocks: an accessible copy-to-clipboard button (`view.rs`, `selection.rs`;
+      clipboard assertions in `screenshots.py`).
+- [x] Message text is selectable; right-click for Copy message. Image menus offer
+      Open image and Save image as (`selection.rs`, `menus.rs`).
+- [ ] Image menu: Copy image to the clipboard.
+- [x] Clickable links and a safe supported subset of Mumble HTML formatting (bold,
+      italic, lists, headings, colour; tables normalized to text rows): no remote resources, link
+      scheme allowlist, deceptive-anchor tooltip, libFuzzer targets.
 - [x] Paste images into the composer (Ctrl+V): re-encoded in the sandboxed content
       worker to fit the server's image limit, sent like stock Mumble.
 - [x] Attachment tray: paste, paperclip or drop images and files; Enter sends text and
       images (one image per message, paced under the server's rate limit: Murmur
       drops excess messages silently) and hands files to the transfer.
-- [ ] Text is held silently while that server's images are still being prepared;
-      say so. A per-bookmark rate-limit override. WebP/HEIC go as files for now.
+- [x] Image preparation status for the current conversation; WebP is decoded and
+      re-encoded as an image. HEIC goes as a file.
+- [ ] Cross-conversation queue feedback: an image pending in another channel of
+      the same server can block text without showing preparation status here.
+      A per-bookmark rate-limit override remains open.
 - [ ] Report upstream: GPUI only drops files on a hovered element, and typing clears
       hover (Nuschl now accepts drops by position).
 - [x] Emoji picker on Ctrl+. / Ctrl+; (GNOME's chooser is GTK-only), in colour on
@@ -152,8 +162,8 @@ Later (reported):
       is forwarded without channel authorisation, docs/extension.md §7).
 - [x] LaTeX/math in messages: `$…$`, `$$…$$` and ```` ```math ```` as tokens of the
       Markdown grammar, rendered by Typst in the sandboxed math worker (docs/math.md).
-      Remaining: the worker on Windows has only process separation; `\text` in
-      other scripts than Latin lacks glyphs (one font).
+      Windows uses a less privileged AppContainer (checked in the Windows VM).
+      Remaining: `\text` in other scripts than Latin lacks glyphs (one font).
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
       relays (perhaps a small chunk cache, content-defined chunking); resumable
       across restarts and lost connections; clearly shown while still uploading.
@@ -163,8 +173,9 @@ Later (reported):
       encrypted design (chunked, resumable; magic-wormhole cannot resume).
 - [ ] Files on Nuschl servers: designed in docs/files.md (2026-11-11), the user's
       decisions in §11 folded in: *kept* files on the server (100 MiB / 10 GiB
-      defaults), *live* files sent magic-wormhole style (direct first everywhere, the
-      server as relay with a piece cache) from the sender or from recipients who help
+      defaults), *live* files sent magic-wormhole style (direct first only when the
+      user's peer policy permits it, with the server as relay and a piece cache;
+      relay-only omits peer discovery/IP advertisement) from the sender or recipients who help
       share them (a private swarm of members; deleting the message ends every source);
       shares cost nothing at rest (no announcements at login, a lazily read share
       index, §3.5); wormhole codes for stock users re-offered after a restart only for
@@ -202,7 +213,8 @@ Later (reported):
       error notice instead of stopping the app or being overwritten.
 - [ ] Managed config follow-ups: a NixOS option for `/etc/xdg/nuschl/managed.json`;
       system-wide managed config on Windows/macOS; evaluation-time checks for nested
-      settings; a way to dismiss the startup error notice.
+      settings; verify startup error dismissal when there is no selected conversation
+      (a Dismiss button already exists in a selected conversation).
 - [x] XDG Base Directory layout (crates/session/src/layout.rs, docs/desktop.md "Where Nuschl
       keeps its files"): configuration only in `$XDG_CONFIG_HOME/nuschl` (settings,
       bookmarks, managed.json); identity, end-to-end keys, history and security records
@@ -211,11 +223,12 @@ Later (reported):
       The first start moves an earlier profile file by file (never over a newer one,
       interruptible, reported); servers.json is split. The Home Manager VM test checks
       that `~/.config/nuschl` holds no identity after a session.
-- [ ] XDG follow-ups: revoke the Modify grant earlier versions gave their Windows
-      storage container on the whole data folder (needs a revoke step in
-      nuschl-sandbox-windows; see SECURITY.md, "Where secrets live"); a lock of the
-      crypto worker's own, so two instances on one profile cannot both run one on
-      `keys/` (true before the move too).
+- [x] Rename migration retires the old Windows containers and revokes their path
+      grants, including the broad data-folder Modify grant (`session/rename.rs`,
+      sandbox retirement mock regressions; SECURITY.md, "Where secrets live").
+- [ ] Validate migration from an actual earlier Windows installation in the VM.
+- [ ] Crypto worker: exclusive ownership of `keys/` across processes, acquired before
+      key/state access and held until exit. Separate instances must fail closed.
 - [x] Unread indicators (channel and DM counts, red for mentions; a pill and a red
       count on the server rail). Remember the last channel and rejoin it on start.
 - [x] Runs of routine activity lines (joins, moves, connects, disconnects) collapse into
@@ -315,13 +328,19 @@ Prefer process resource limits on the sandboxed workers (memory, CPU) and treati
 worker that runs out as "this message cannot be shown" for that message only; where
 a limit stays, it must page or say so visibly, never silently drop.
 
-- [ ] Search returns one page within a 96 KiB budget: page it (cursor) like history.
+- [x] Search pages within its 96 KiB budget using a cursor; UI continuation and
+      byte-budget/reach-every-match tests exist (`storage/src/lib.rs`, desktop search).
 - [ ] Session budgets (4,096 channels, 16,384 users, 64 MiB of blobs): evict cached
       blobs by use rather than refusing new ones; review the counts against the
       largest real servers; keep the visible notice.
 - [ ] Content worker decode caps (4096×4096, 64 MiB, 8 images, 640 KiB): lean on the
       worker's memory and CPU limits instead, and show a placeholder ("could not be
       displayed") when the worker fails on a message.
+- [ ] Crypto-store availability: sealed files have a 16 MiB read cap but writes do
+      not enforce a matching readable bound (`crypto-worker/src/store.rs`). Growing
+      retained archive bindings can become unreadable after restart. Resolve with
+      bounded/log-structured persistence and explicit failure handling; never
+      silently discard keys. Source-level finding, not an oversized-profile repro.
 
 Security review (2026-11-11):
 
@@ -350,9 +369,10 @@ Code quality and performance review (2026-11-11):
 - [x] Channel tree built in one pass (2,000 channels / 5,000 users: 74 ms → 1 ms).
 - [ ] Each `ChannelState` still does two linear searches; the "Linked with" tooltip
       looks names up linearly every frame.
-- [ ] Message text and code highlights are copied every frame; avatar lookup per
-      message scans all users.
-- [ ] Image decoding runs on the UI thread. (Bookmark saving moved off it.)
+- [ ] Visible message rows rebuild StyledText highlights and avatar lookup scans
+      users. Documents/text are already shared/cached; profile the remaining work.
+- [x] Image-format decoding runs in the content worker; the UI receives bounded
+      RGBA and converts pixels for GPUI (`document.rs`). Bookmark saving is off-thread.
 - [x] Decoded images leave GPUI's texture atlas once nothing uses them.
 - [ ] `server, generation` repeated in ~17 event types; `connect_once` and
       `drain_events` are too large.
@@ -368,13 +388,16 @@ Code quality and performance review (2026-11-11):
 
 From the timeline and icon work:
 
-- [ ] Memory while scrolled far up is unbounded and every loaded message renders each
-      frame: a virtualised list, or paging towards newer messages.
+- [x] Timeline layout renders visible rows using a virtualized list.
+- [ ] Memory while scrolled far up remains unbounded: page/evict the active timeline
+      in both directions. Current trimming happens on reopening or inactive timelines.
 - [x] Keyboard and screen-reader navigation of the timeline (2026-11-11): one Tab
       stop, ↑/↓, Page Up/Down, Home/End (Home loads older history), Enter/Space
       expands; AT-SPI ScrollTo and GrabFocus on any entry.
 - [ ] The channel description shows only at the beginning of local history.
-- [ ] A screenshot scene for the 1000-message limit.
+- [x] A 1000-message resize/screenshot scene exists (`screenshots.py`).
+- [ ] Explicit long-history memory/eviction regression across older/newer paging;
+      the screenshot scene does not prove a universal 1000-message retention cap.
 - [ ] Installs without Nix get no desktop entry (no icon on Wayland); no icon for MSVC
       builds; no AppStream metainfo.
 
@@ -384,8 +407,8 @@ From the timeline and icon work:
 
 ### 1. UDP voice transport
 
-Voice currently only uses the TLS TCP tunnel; `CryptSetup` is ignored
-(`crates/session/src/connection.rs`, message type 15).
+Voice uses encrypted UDP when reachable, with TLS TCP fallback; crypto state stays
+in the session (`crates/session/src/connection.rs`).
 
 - [x] Handle `CryptSetup` (key, client/server nonces) and keep crypto state in the
       session, never in the media worker.
@@ -401,8 +424,7 @@ Voice currently only uses the TLS TCP tunnel; `CryptSetup` is ignored
 
 ### 2. Playback quality
 
-The mixer is a plain FIFO per speaker; out-of-order packets are dropped and gaps
-are not concealed (`apps/media-worker/src/live.rs`).
+The media worker uses per-speaker adaptive jitter buffers and Opus loss concealment.
 
 - [x] Per-speaker jitter buffer keyed by sequence number, with reordering and a
       bounded, adaptive target delay. Drop stale audio instead of building latency.
@@ -413,14 +435,13 @@ are not concealed (`apps/media-worker/src/live.rs`).
 ### 3. Transmission modes and capture processing
 
 - [x] Voice activation as the default, with a threshold, hold time and level meter.
-      The client currently transmits continuously while unmuted.
-- [x] Push-to-talk with a global hotkey: XDG GlobalShortcuts portal on Wayland, X11,
-      Windows, macOS. Keep continuous transmission as an option.
-      Done; Windows/macOS hotkeys are cross-compiled but untested on those systems.
-- [x] Enable RNNoise by default. It is hard-coded off today
-      (`noise_suppression: false` in `apps/desktop/src/backend.rs`).
-- [x] Wire Sonora AEC into the capture path with the real playback mix as reference.
-      `sonora` is a dependency of the media worker but is not used yet.
+- [x] Push-to-talk with global shortcuts through the XDG portal on Wayland and
+      native Windows/macOS adapters; continuous transmission remains an option.
+      Portal tested on GNOME; Windows/macOS hotkeys are cross-compiled, not exercised.
+- [ ] X11 global shortcut adapter.
+- [x] RNNoise enabled by default, bypassed when upstream suppression is detected.
+- [x] Sonora AEC in the capture path with a playback reference; upstream AEC reuse
+      disables Nuschl's own canceller.
 - [x] Gain control / limiter stage after noise suppression.
 - [x] First-pass duplicate-processing avoidance: detect PipeWire `echo-cancel` sources
       and PulseAudio `module-echo-cancel` on the selected input, bypass Nuschl's AEC
@@ -458,16 +479,15 @@ are not concealed (`apps/media-worker/src/live.rs`).
 - [ ] Desktop notifications on Windows (toasts need an AppUserModelID) and macOS
       (UNUserNotificationCenter); Linux uses the freedesktop service. Clicking a
       notification does not open the conversation yet.
-- [ ] Decide whether mute/deafen can avoid replacing the media worker (it currently
-      restarts it so a blocked native stream teardown cannot keep the microphone open).
-      Keep the restart as fallback; measure the audible gap.
-      Decided: keep replacing the worker (no in-process stream teardown). The audible gap is not measured yet.
+- [x] Keep replacing the media worker on capture-route/privacy changes so blocked
+      native teardown cannot keep the microphone open (decided). In the shared
+      multi-server worker, not every server mute/deafen change needs replacement.
+- [ ] Measure the audible mute/unmute worker-replacement gap.
 
 ### 4. Session robustness and identity
 
 - [x] Automatic reconnection with backoff; restore channel and mute/deafen state.
-- [x] Gap markers in the chat timeline for disconnected intervals (documented in
-      the architecture, not implemented).
+- [x] Gap markers in the chat timeline for disconnected intervals.
 - [x] Specific handling for `Reject` reasons (wrong server/user password, username in
       use, invalid username, server full) with a retry prompt.
 - [x] Show actor and reason for kicks/bans (`UserRemove`) and server mute/deafen/suppress.
@@ -480,9 +500,9 @@ are not concealed (`apps/media-worker/src/live.rs`).
 
 ### 5. Protocol coverage
 
-Handled today: Version, UDPTunnel, Ping, Reject, ServerSync, ChannelRemove,
-ChannelState, UserRemove, UserState, TextMessage, PermissionDenied, CodecVersion,
-ServerConfig.
+Initial handshake, channels/users, chat and transport are handled, along with the
+permission, administration, blob, listening, context-action and statistics messages
+listed below. Plugin data remains the explicit gap.
 
 - [x] `PermissionQuery` (20): cache per-channel permissions; disable join, speak,
       text and create-channel actions the user lacks.
@@ -492,7 +512,7 @@ ServerConfig.
 - [x] Channel links and channel listening (Mumble 1.4+ `listening_channel_add`).
 - [x] Channel descriptions, user comments and avatars through `RequestBlob` (23);
       parse in the content worker; decode images with a memory-safe decoder in a worker.
-- [x] Inline images in legacy HTML messages (currently discarded): same worker path.
+- [x] Inline images in legacy HTML messages through the content worker.
 - [x] `UserStats` (22) for the connection-info dialog.
 - [x] `SuggestConfig` (25): respect the server's suggested PTT/version hints.
 - [x] `ContextActionModify` / `ContextAction` (16/17): server-defined context menu entries.
@@ -508,7 +528,7 @@ ServerConfig.
 ### 6. Desktop UI for these features
 
 - [x] Users listed inside the channel tree with talking indicators and mute/deafen/
-      suppress icons (currently a text line under the channel header).
+      suppress icons.
 - [x] Context menus: user (direct message, local volume/mute, info, whisper), channel
       (join, create sub-channel, links, description).
 - [ ] cpal's PipeWire host skips `Audio/Source/Virtual` nodes (e.g. filter-chain or
@@ -518,34 +538,35 @@ ServerConfig.
       PTT key, processing toggles and per-device override.
 - [x] Connection status: ping, UDP/TCP indicator, packet loss.
 - [x] Error/reject dialogs from section 4.
-- [x] Screen-reader pass over these flows with Orca (GPUI AccessKit), early rather
-      than at the end.
-      Done over AT-SPI (tests/accessibility.py, in the VM); Orca itself was not run.
+- [x] AT-SPI accessibility coverage through GPUI AccessKit (`tests/accessibility.py`,
+      private VM/GNOME session).
+- [ ] Actual Orca pass over these flows; AT-SPI coverage alone does not establish it.
 
 ### 7. Tests (own servers only)
 
-- [x] Drive the stock Mumble GUI client in the VM: stock/stock baseline, then stock
-      client and Nuschl client in the same channel with two-way voice and chat.
+- [x] Stock Mumble GUI and Nuschl client in a private VM channel with two-way voice
+      and chat (`stock_client.py`).
+- [ ] Two-stock-client GUI baseline to independently validate the fixture.
 - [x] UDP voice and forced TCP separately; block UDP mid-call and verify fallback and
       recovery.
-- [x] Loss, reordering and jitter injection (`tc netem` in the VM) for the jitter buffer.
+- [x] Loss and jitter injection (`tc netem` in the VM) for the jitter buffer.
+- [ ] Explicit deterministic packet-reordering injection in the live integration test.
 - [x] Older stock servers (1.3.x, 1.4.x) for the legacy UDP format, plus current 1.5.
 - [x] Whisper/shout routing isolation and permission-gated UI.
-- [x] Reconnect after server restart and network drop; history gap markers.
-      Server restart is tested; a network drop without a restart is not separately tested.
-- [x] PipeWire and pipewire-pulse restarts (only native PulseAudio is tested now),
-      device switch and format changes during a call.
-      tests/pipewire_recovery.py (private PipeWire session, in the VM): restarts, the
-      audio-server pin, and PipeWire echo-cancel reuse. Device switches and format changes
-      mid-call are not tested.
-- [x] Upstream PipeWire echo-cancel present: Nuschl must not stack its own AEC and must
-      not touch unrelated graph objects (snapshot before/after).
-      Tested with PulseAudio module-echo-cancel; the snapshot covers defaults and levels.
-- [x] Kill/stall content, media and storage workers independently.
-      Media and storage kills are tested in the desktop. Content-worker kills and stalls
-      of any worker are not tested (the content worker has a 5 s deadline in code).
+- [x] Server-restart reconnect and history gap markers (`desktop_recovery.py`).
+- [ ] TLS network drop without server restart; reconnect and history gap markers.
+- [x] Native PulseAudio, PipeWire and pipewire-pulse restart recovery in private
+      audio sessions; PipeWire replacement worker stays pinned to that backend
+      (`pipewire_recovery.py`).
+- [ ] Device switch and format changes mid-call.
+- [x] Upstream PulseAudio/PipeWire echo-cancel reuse, with Nuschl AEC bypassed;
+      tests snapshot defaults/levels, and PipeWire tests include chained RNNoise.
+- [ ] Snapshot all unrelated graph objects before/after AEC reuse and recovery.
+- [x] Media and storage worker kills preserve the desktop session/history.
+- [ ] Content-worker kill and content/media/storage stalls; verify bounded recovery
+      (a content deadline in code is not runtime stall coverage).
 - [x] Hostile inputs for legacy HTML and fenced-code parsing (fuzzing).
-- [x] libFuzzer targets for every untrusted-input parser, run with `just fuzz <target>`
+- [x] Initial libFuzzer target set, run with `just fuzz <target>`
       from the flake's nightly shell (SECURITY.md, "Fuzzing"). First campaign
       (2026-11-11, 15–45 minutes per target, 18 targets, every corpus then replayed
       under AddressSanitizer without findings): the fuzzer found a GIF that decoded
@@ -574,10 +595,10 @@ ServerConfig.
 ## Next: client on all desktop platforms
 
 - [x] Linux→Darwin cross build following `../opendeck-akp05` (pinned SDK,
-      cargo-zigbuild, x86_64 + aarch64 slices, `llvm-lipo`). The flake only builds
-      natively per system today.
-      `.#macos-aarch64` builds (SDK 14.5, minimum macOS 14.2, checked per binary; cargo-zigbuild
-      is patched to honour MACOSX_DEPLOYMENT_TARGET). Not yet run on a Mac.
+      cargo-zigbuild, x86_64 + aarch64 slices, `llvm-lipo`); both architectures and
+      `.#macos-app` cross-built during the rename checkpoint (SDK 14.5, minimum
+      macOS 14.2, checked per binary; cargo-zigbuild honours MACOSX_DEPLOYMENT_TARGET).
+      Not yet run on macOS.
 - [x] Windows cross build.
       `.#windows` via mingw builds; it found a real `!Send` hotkey bug. The workers run under
       Wine (codec, content, storage IPC); the GUI needs Windows' system ICU, which Wine lacks.
@@ -588,8 +609,10 @@ ServerConfig.
       Windows 11 in a KVM guest (`tests/windows_vm.py`): GUI, auto-connect muted and
       deafened, WASAPI device lists, microphone and echo tests, autostart, updates. It
       found the console window beside the app. Real hardware and macOS remain.
-- [ ] Automate the Windows VM checks as a script (they were driven by hand so far)
-      and add UDP (QEMU's guest forwards carry only TCP, so voice used the tunnel).
+- [x] Windows VM control harness (`windows_vm.py`) and scripted updater regression
+      (`windows_update.py`).
+- [ ] Complete unattended Windows desktop/audio/sandbox regression orchestration
+      and add UDP (the existing guest-forward voice check used the TCP tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
       macOS Seatbelt profiles (media is a deny list for now), not yet run on macOS;
       Windows AppContainers, checked in the Windows 11 VM.
@@ -604,7 +627,7 @@ ServerConfig.
 - [x] Audio callback without allocations or locks; binary IPC for audio if profiling
       warrants it.
       Allocation-free callbacks are tested; binary IPC measured as not warranted.
-- [x] Show more based on measured layout height (currently 12 lines / 2,000 chars).
+- [x] Show more based on measured layout height.
 - [x] Local history search.
 - [ ] Accessibility tests with NVDA (Windows) and VoiceOver (macOS).
       Needs Windows/macOS; the Linux AT-SPI test covers the same tree.
@@ -613,12 +636,13 @@ ServerConfig.
 
 ## Later
 
-### Nuschl server (`nuschld`) — queued (2026-11-11), in dependency order
+### Nuschl server (`nuschld`) — implemented base and remaining phases
 
 `nuschld` implements the listener, compatibility mode and experimental encrypted
-text mode. Decisions so far (user):
-end-to-end mode is the default for new Nuschl servers and turns stock clients
-away at the connection stage ("compatible" mode admits them, without E2EE); new
+text mode. The current Rust and NixOS default is `compatible`; experimental `e2ee`
+mode rejects stock clients and disables unprotected voice. Desired behavior (user):
+end-to-end mode becomes the default for new Nuschl servers ("compatible" mode
+admits stock clients, without E2EE); new
 members see earlier history by default (per-channel setting); read markers sync
 across devices; retention defaults to forever (docs/extension.md, "Decisions");
 OpenMLS with the libcrux provider (pure Rust; hybrid post-quantum X-Wing key exchange,
@@ -626,6 +650,10 @@ Ed25519 signatures until ML-DSA suites exist); trust on first use with optional
 out-of-band verification; key transparency, as in Signal's automatic key
 verification (https://signal.org/blog/automatic-key-verification/); possibly
 Nuschl-only servers and a minimum client version.
+
+- [ ] Change the new-server default to E2EE after protected media and the required
+      history proofs are ready. Do not silently flip the current compatible default
+      while E2EE voice is unavailable. Keep existing explicit server modes intact.
 
 Security review of the server plan and first code: docs/reviews/2026-11-11-server-security.md
 (P0 requirements must be met before the server listens beyond loopback).
@@ -780,8 +808,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          account, failing the single page with `retry_after_ms`.
    - [x] Server: a PostgreSQL test that runs locally (`just test-postgres`: the
          storage worker on a throwaway PostgreSQL from nixpkgs).
-   - [ ] Session and desktop: honour `retry_after_ms` on `rate_limited` and `busy`
-         (history pages today fail without a retry).
+   - [ ] General history-page retry/desktop UX: honour `retry_after_ms` on
+         `rate_limited` and `busy` instead of failing the page. MLS send/commit/grant
+         paths and legacy chat already have bounded retry/backoff handling.
    - [ ] A burst of sends stalls: 30 messages queued at once by `nuschl-cli` against
          a loopback `nuschld` (Murmur's default text limit) get 3–8 acknowledgements,
          then nothing for 20 s, neither an acknowledgement nor `chat_failed`; the
@@ -809,8 +838,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          label is per conversation (stock direct messages say "Local history"), and
          fetched pages are kept in the local cache.
 3. **Identity and key transparency** (persistent, cross-server and multi-device;
-   user, 2026-11-11) — done without MLS (2026-11-11), see docs/e2ee.md "Phase 3 as
-   implemented": identities are created, published to each server's log, looked up,
+   user, 2026-11-11) — crypto primitives implemented (2026-11-11); simultaneous
+   linked-device sessions and the end-user linking flow remain open. See docs/e2ee.md
+   "Phase 3 as implemented": identities are created, published to each server's log, looked up,
    pinned on first use and verified; key changes and lying servers are detected.
    - [x] `crates/identity`: RFC 10073 composite ML-DSA-65 + Ed25519 root and
          device-signing keys, a separate Ed25519 credential key (172-byte MLS
@@ -852,17 +882,19 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          so a binding that comes and goes between two lookups is missed.
    - [ ] Persist the desktop's map of registration numbers to accounts (the
          worker's is persisted).
-   - [ ] Mumble-certificate binding statements; independent auditors (optional).
+   - [ ] Mumble-certificate binding statements.
+   - [ ] Deploy the implemented independent witness service, pin its key/URL in
+         `DEFAULT_WITNESSES`, and validate default protection before enabling it.
    - [ ] deny.toml ignores RUSTSEC-2026-0173 (proc-macro-error2, reachable only under
          libcrux's `cfg(hax)` verification builds): confirm.
-   Design: docs/e2ee.md. Spike: spikes/mls (own workspace). **Open questions for the
-   user** are in docs/e2ee.md §10 (device-key placement, akd vs KEYTRANS, channel
-   membership, history grants, size cap, voice groups, inactive devices, auditors,
-   release timing, ciphersuite, guests); question 1 (recovery key) became a
-   setting, offered by default.
+   Design and recorded user decisions: docs/e2ee.md §10; spike: spikes/mls (own
+   workspace). Recovery is offered with recovery-key and skip choices. Do not reopen
+   the answered design inventory; remaining witness-policy questions are listed
+   explicitly below.
 4. **End-to-end encryption (MLS)** — 4a (delivery service), 4b (direct
-   conversations, multi-device linking), and 4c (channel/SDK text and experimental
-   history) are in (2026-11-11) on OpenMLS 0.9.2 with the
+   conversations and worker linking primitives), and 4c (channel/SDK text and
+   experimental history) are in (2026-11-11); the server linking mailbox/UI and
+   concurrent authenticated device sessions remain open. Uses OpenMLS 0.9.2 with the
    provisional suite 0x004F and a patch for its vulnerable libcrux pins; see
    docs/e2ee.md "Phase 4 prototype". End-to-end is a server-level switch
    (`security = "e2ee"`, capability `e2ee/1`; docs/e2ee.md "Phase 4c and the answers
@@ -880,7 +912,7 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          before the bump break (new code point and X-Wing key derivation); the user
          accepted that while Nuschl is in early development, so the bump discards
          MLS state instead of migrating it.
-   - [ ] The user's answers to docs/e2ee.md §10 (2026-11-11), to implement:
+   - [ ] Remaining implementation of the recorded answers in docs/e2ee.md §10:
          - [x] Remove the 1000-device cap (`nuschl_e2ee::MAX_GROUP_DEVICES`, the
            server's `mls.max_devices`, the client check); bound hostile trees by
            message size and process limits instead (prevalidate.rs's node bound
@@ -903,7 +935,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
            and hear nothing (2026-11-11).
          - [x] The device-signing key on every linked device, phones included; a
            bundle without it is refused (2026-11-11).
-         - Remove devices inactive for 90 days.
+         - [x] Remove devices inactive for 90 days (server MLS policy and
+           `e2ee_channels.rs` regression); user-initiated revocation is separate.
          - History grants to every admitted member by default in `members` channels.
          - Channel membership: subscribers with lazy external joins; every device
            with `can_read` still gets the channel's latest `seq` (unread, activity)
@@ -924,8 +957,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
            blocking only new devices (both settings now); a desktop settings
            page for witnesses; history-proof growth (review G7).
    - [x] deny.toml wrapper rules: openmls only in `nuschl-e2ee`, which only the
-         crypto worker and `nuschld` link; no advisory ignores (patched instead).
-         SECURITY.md: libcrux SIMD `unsafe` in the exceptions table.
+         crypto worker and `nuschld` link. Vulnerable runtime libcrux pins are
+         patched; scoped advisory exceptions still exist in deny.toml, including
+         the `cfg(hax)` verification-only proc-macro chain. SECURITY.md records the
+         libcrux SIMD `unsafe` exception.
    - [x] OpenMLS + libcrux in the crypto worker (sealed `mls` file); key packages
          published to the server.
    - [x] Delivery service in the server: `PublicGroup` per group, epoch fencing,
@@ -937,15 +972,18 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          ACL/inactive-device removals, and direct conversations.
    - [ ] Device linking over the server's mailbox (`DeviceLink*`, §3.4) and its UI;
          the worker links devices and publishes multi-device rosters today, with the
-         messages relayed by the caller. Device revocation and inactive-device
-         removal.
+         messages relayed by the caller. User-initiated device revocation and
+         associated sync-key rotation remain open; inactivity removal is implemented.
    - [ ] Self-updates (§6.5), key-transparency head gossip in MLS, typing and read
          markers as MLS messages, the log-structured worker store (§8.3), a binary
          column for MLS rows, eviction of idle groups on the server.
-   - [x] Encrypted text and authenticated channel history, with bounded grant pages
-         covering all retained authorized keys and explicit historical-access policy.
+   - [x] Experimental encrypted text/archive checks and bounded grant pages over
+         retained authorized keys, with explicit historical-access policy. Available
+         signer/replay evidence is checked; unknown/revoked historical signers fail
+         closed. This does not complete historical membership/order proofs.
    - [ ] 4d: authenticated historical roster/membership evidence (revoked or
-         unconfirmed historical signers currently fail closed), periodic key
+         unconfirmed historical signers currently fail closed), first-observation
+         historical ordering proofs, periodic key
          rotation/self-updates, own-device self blobs, and files.
    - [x] Strict text mode: no legacy clients or plaintext chat on encrypted servers,
          no downgrades; a green conversation lock only after authenticated MLS
@@ -997,8 +1035,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          history export and erasure, check-config), offline under an operator
          lock (docs/server.md, "Administration").
    - [ ] Admin CLI follow-ups: ACL and group editing; a NixOS wrapper that runs
-         `nuschld admin` as the unit's dynamic user with its credentials; the
-         Murmur import under the operator lock; `--json` output for lists.
+         `nuschld admin` as the unit's dynamic user with its credentials;
+         `--json` output for lists. Murmur import already takes the operator lock.
 
 ### WebRTC and video (follow-ups to the str0m trial)
 
@@ -1026,12 +1064,17 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 - [ ] Real video encoder with bitrate adaptation, keyframe requests, frame dependency tracking.
 - [ ] Camera and screen capture, video rendering in GPUI, A/V sync, calling UI.
 - [ ] Browser interoperability and long-call quality tests; str0m vs webrtc-rs benchmark.
-- [ ] Resolve AWS-LC pulled in by str0m certificate generation.
+- [ ] Resolve AWS-LC still pulled in by str0m certificate generation:
+      `str0m-rust-crypto` selects `dimpl`'s `rcgen` feature, which enables AWS-LC.
+      `rust-crypto` with str0m defaults off does not remove that transitive path
+      (`cargo tree --locked --offline -p nuschl-rtc -i aws-lc-rs`, 2026-11-11).
 
 ### Release and other targets
 
 - [x] Release workflow (one Linux runner, cross builds) with signed in-place updates
-      for Windows and macOS.
+      for Windows and macOS. Helper tools use the flake's pinned nixpkgs; Nix runs
+      use `--cores 2`. Workflow syntax checked with actionlint; signing-secret setup
+      and an actual release remain separate from workflow implementation.
 - [ ] Store `UPDATE_SIGNING_KEY` as a repository secret and back the key up. It is
       the minisign secret key that release.yml uses to sign `update.json`, whose
       public half (`crates/update/update-key.pub`) is built into the app: it protects

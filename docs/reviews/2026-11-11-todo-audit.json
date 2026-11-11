@@ -1,0 +1,2604 @@
+{
+  "date": "2026-11-11",
+  "line_numbers": "TODO lines refer to the pre-audit f0116b77 checkpoint; paths/lines are source-inspection evidence, not fresh runtime execution.",
+  "desktop_audio_client": {
+    "revision": "f0116b77f613d69b3856fc7a28f5dc1dda440887",
+    "scope": "TODO.md lines 78–597, with related 599–610 platform/performance claims noted",
+    "method": "Read-only source/test/doc audit. No Cargo/Nix builds, test executions, network fixtures, target caches or audio capture. Existing test code is evidence of coverage intent, not fresh runtime proof. Performance numbers and historical VM successes were not independently reproduced.",
+    "priority": "iOS remains the next feature priority. Apple permission/audio/background/hardware claims remain unverified without an appropriate Apple environment. The tracks below are a conflict map, not authorization to start all desktop follow-ups.",
+    "decisions": [
+      {
+        "todo_line": 98,
+        "action": "mark_done",
+        "proposed_checkbox_or_prose": "[x] Code blocks have an accessible Copy code button with clipboard confirmation.",
+        "evidence": [
+          "apps/desktop/src/view.rs:3634 copy_code_button",
+          "apps/desktop/src/selection.rs:292 Desktop::copy_code",
+          "tests/screenshots.py:395 select scene asserts exact copied code"
+        ],
+        "remaining": [],
+        "conflict_tracks": []
+      },
+      {
+        "todo_line": 99,
+        "action": "split",
+        "proposed_checkbox_or_prose": "[x] Message text selection, Copy selection, Copy message and Save image as; [ ] Copy image to clipboard.",
+        "evidence": [
+          "apps/desktop/src/selection.rs:193 selected_text, :283 copy_selection; unit tests :1384/:1488/:1535",
+          "apps/desktop/src/menus.rs:422 Image menu has Open image/Save image as only; :437 Message menu has Copy/Copy message",
+          "tests/screenshots.py:402–427 selection and clipboard assertions",
+          "apps/desktop/src/viewer.rs save_image"
+        ],
+        "remaining": [
+          "Copy image is absent; do not check the entire old compound row."
+        ],
+        "conflict_tracks": [
+          "image_clipboard"
+        ]
+      },
+      {
+        "todo_line": 101,
+        "action": "split_or_narrow",
+        "proposed_checkbox_or_prose": "[x] Clickable allowlisted links, deceptive-anchor target display, and a safe supported subset of legacy HTML formatting. Remove '(In progress.)'. Do not promise arbitrary Qt HTML/CSS visual parity.",
+        "evidence": [
+          "crates/content/src/markup.rs:74 link_target; tests :1084/:1128/:1246/:1288/:1349",
+          "apps/desktop/src/selection.rs:312 open_link and :1569 deceptive-link test",
+          "apps/desktop/src/view.rs:2675 target tooltip and :3442 styled document blocks",
+          "fuzz/fuzz_targets/legacy_html.rs",
+          "tests/screenshots.py select/rich scenes"
+        ],
+        "remaining": [
+          "Tables are normalized into text rows; arbitrary resource-loading HTML and CSS are intentionally unsupported. Exact stock visual parity requires a scoped requirement and fixtures."
+        ],
+        "conflict_tracks": [
+          "rich_welcome"
+        ]
+      },
+      {
+        "todo_line": 109,
+        "action": "split",
+        "proposed_checkbox_or_prose": "Preparation status exists for the current conversation; WebP attaches as a re-encoded image. Keep open cross-conversation queue feedback, per-bookmark rate override, and HEIC handling.",
+        "evidence": [
+          "apps/desktop/src/state.rs:1616 server-wide outgoing gate; :1643 sending_status filters current conversation key",
+          "apps/desktop/src/view.rs:3034 composer displays sending_status",
+          "apps/desktop/src/attachments.rs:95 detects WebP; :275 regression",
+          "crates/content/src/lib.rs:494 webp_images_decode_and_are_sent_as_jpeg_or_png",
+          "crates/session/src/connection.rs:580 Outbox pacing"
+        ],
+        "remaining": [
+          "A pending image in another channel of the same server can block current text without current-key preparation status; no bookmark-specific pacing override found. HEIC remains a file."
+        ],
+        "conflict_tracks": [
+          "composer_queue"
+        ]
+      },
+      {
+        "todo_line": 111,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Retain as an upstream-report task; local drop-by-position workaround exists.",
+        "evidence": [
+          "apps/desktop/src/view.rs:2028–2039 position-based drop handling"
+        ],
+        "remaining": [
+          "No upstream issue link/evidence of submission found; do not invent report completion."
+        ],
+        "conflict_tracks": [
+          "upstream_gpui"
+        ]
+      },
+      {
+        "todo_line": 115,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Colour emoji fallback for message text remains separate from the working picker.",
+        "evidence": [
+          "apps/desktop/src/emoji.rs:15 explicit emoji font for picker",
+          "apps/desktop/src/document.rs text_block",
+          "apps/desktop/src/selection.rs:728 styled_text sets monospace overrides, not emoji-run overrides"
+        ],
+        "remaining": [
+          "Segment emoji runs and handle variation selectors/ZWJ without changing selection byte offsets."
+        ],
+        "conflict_tracks": [
+          "emoji_font"
+        ]
+      },
+      {
+        "todo_line": 121,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "DNS SRV support remains open.",
+        "evidence": [
+          "crates/session/src/tls.rs:101 connect; :138 TcpStream::connect(host, port)",
+          "crates/session/src/connection.rs:702 tls::connect"
+        ],
+        "remaining": [
+          "SRV priority/weight/fallback semantics and TLS name/pin identity must be specified; no SRV resolver path found."
+        ],
+        "conflict_tracks": [
+          "dns_srv"
+        ]
+      },
+      {
+        "todo_line": 124,
+        "action": "keep_open_narrow",
+        "proposed_checkbox_or_prose": "One selected output reference is implemented; retain multi-output reference capture as a conditional enhancement and wrong-output diagnostics follow-up.",
+        "evidence": [
+          "apps/media-worker/src/live.rs:1183 reference/output monitor selection",
+          "apps/media-worker/src/reference.rs",
+          "apps/desktop/src/settings.rs echo reference presentation"
+        ],
+        "remaining": [
+          "Physical multiple-output validation is absent; do not claim one output cancels unrelated HDMI/headset outputs."
+        ],
+        "conflict_tracks": [
+          "audio_native"
+        ]
+      },
+      {
+        "todo_line": 137,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Keep the load-dependent room echo test flake; correlate with the PulseAudio rig item at 441 rather than calling it fixed.",
+        "evidence": [
+          "tests/pipewire_recovery.py:493 check_room_echo; :515/:547 quality thresholds",
+          "tests/media_live.py"
+        ],
+        "remaining": [
+          "No runtime rerun performed; retain test artifacts/host-load evidence."
+        ],
+        "conflict_tracks": [
+          "audio_fixture"
+        ]
+      },
+      {
+        "todo_line": 157,
+        "action": "keep_open_scope",
+        "proposed_checkbox_or_prose": "Legacy magic-wormhole offers work; resumable Nuschl file protocol remains open. Direct-first behavior must be conditional on relay-only privacy.",
+        "evidence": [
+          "apps/desktop/src/transfer.rs",
+          "apps/transfer-worker/src/main.rs",
+          "docs/files.md"
+        ],
+        "remaining": [
+          "Persistent resumable kept/live protocol, source lifecycle and privacy policy integration; legacy wormhole cannot resume."
+        ],
+        "conflict_tracks": [
+          "files_protocol"
+        ]
+      },
+      {
+        "todo_line": 164,
+        "action": "keep_open_scope",
+        "proposed_checkbox_or_prose": "Retain the designed-but-unimplemented Nuschl files milestone; qualify 'direct first everywhere' with relay-only privacy.",
+        "evidence": [
+          "docs/files.md",
+          "crates/files/src",
+          "crates/core/src/network.rs PeerPolicy"
+        ],
+        "remaining": [
+          "Implementation remains a substantial later feature, not a checkbox implied by crate prototypes."
+        ],
+        "conflict_tracks": [
+          "files_protocol"
+        ]
+      },
+      {
+        "todo_line": 174,
+        "action": "keep_open_split",
+        "proposed_checkbox_or_prose": "Keep rendezvous/relay settings UI, wss/keepalive, offer lifecycle, automatic code retry and native validation as separate follow-ups.",
+        "evidence": [
+          "crates/session/src/config.rs:293–299 stored relay/rendezvous fields exist",
+          "apps/desktop/src/transfer.rs:118 wormhole_servers and :143 relay-only rendezvous enforcement",
+          "apps/transfer-worker/src/main.rs:337 app config"
+        ],
+        "remaining": [
+          "Stored fields are not equivalent to Settings controls; privacy mode already constrains peer-selected endpoints."
+        ],
+        "conflict_tracks": [
+          "files_protocol",
+          "transfer_settings"
+        ]
+      },
+      {
+        "todo_line": 185,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Guest archive denial needs a calm registration-aware presentation.",
+        "evidence": [
+          "crates/client/src/client.rs:1129 generic 'Server history: {reason}'",
+          "apps/desktop/src/view.rs history-source labels",
+          "apps/server/src/history.rs"
+        ],
+        "remaining": [
+          "Classify explicit guest policy without exposing hidden conversation existence."
+        ],
+        "conflict_tracks": [
+          "history_guest"
+        ]
+      },
+      {
+        "todo_line": 190,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "AVIF/video decoding remains open, with codec processing isolated by policy.",
+        "evidence": [
+          "crates/content/Cargo.toml:13 image features png/jpeg/gif/bmp/ico/webp; no AVIF",
+          "SECURITY.md memory-safe/worker rules"
+        ],
+        "remaining": [
+          "Select decoder/worker interface and resource behavior; playback lifecycle separate from static image support."
+        ],
+        "conflict_tracks": [
+          "media_formats"
+        ]
+      },
+      {
+        "todo_line": 203,
+        "action": "split",
+        "proposed_checkbox_or_prose": "Keep NixOS managed-client option, platform-wide lookup and nested evaluation validation open. A Dismiss button already clears Desktop::error in a selected conversation.",
+        "evidence": [
+          "crates/session/src/config.rs:808 system_managed disables system lookup on macOS/Windows",
+          "nix/home-manager.nix:300 settings uses attrsOf JSON; :427 top-level unknown-key checks",
+          "apps/desktop/src/state.rs:523 load problems populate error",
+          "apps/desktop/src/view.rs:1915–1924 Dismiss clears error"
+        ],
+        "remaining": [
+          "Startup errors with no selected conversation need separate verification/presentation; do not claim the remaining config milestones done."
+        ],
+        "conflict_tracks": [
+          "managed_config",
+          "notice_retention"
+        ]
+      },
+      {
+        "todo_line": 214,
+        "action": "split",
+        "proposed_checkbox_or_prose": "[x] Legacy Windows storage grants have a revoke/retire mechanism in rename migration; [ ] native Windows upgrade verification; [ ] exclusive crypto-worker profile lock.",
+        "evidence": [
+          "crates/session/src/rename.rs:195–255 retire_windows includes old broad data directory and scoped history/keys",
+          "crates/sandbox-windows/src/os.rs:615 revoke",
+          "crates/sandbox-windows/src/launch.rs:315 legacy_worker_retirement_preserves_other_grants_and_checks_failures",
+          "apps/crypto-worker/src/store.rs has no exclusive profile lock"
+        ],
+        "remaining": [
+          "SECURITY.md:264 and docs/windows-sandbox.md:74 still say old broad grant remains; reconcile with rename mechanism. Mock coverage is not native Win32 upgrade proof."
+        ],
+        "conflict_tracks": [
+          "windows_retirement",
+          "crypto_lock"
+        ]
+      },
+      {
+        "todo_line": 223,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "DM home remains open; do not merge identities across servers by untrusted username or claimed legacy certificate hash.",
+        "evidence": [
+          "apps/desktop/src/view.rs server_rail/sidebar",
+          "crates/client/src/server.rs direct conversations",
+          "crates/client/src/finder.rs"
+        ],
+        "remaining": [
+          "Shared SDK navigation and future iOS presentation should agree on stable account identity."
+        ],
+        "conflict_tracks": [
+          "dm_navigation"
+        ]
+      },
+      {
+        "todo_line": 241,
+        "action": "keep_open_narrow",
+        "proposed_checkbox_or_prose": "Earlier-session/offline DM discovery and accent/CJK search behavior remain open; in-memory offline DM conversations are already represented by finder.",
+        "evidence": [
+          "crates/client/src/finder.rs:108–148 existing direct conversations listed",
+          "crates/client/src/search.rs locate/OPENS_ONLINE",
+          "apps/desktop/src/search.rs:283–317 historical DM reopening depends on online recipient",
+          "crates/core/src/search.rs Query; crates/storage/src/lib.rs FTS queries"
+        ],
+        "remaining": [
+          "Persist conversation catalog/peer identity without unsafe cross-server merging; schema/tokenization changes must cover both SQL backends."
+        ],
+        "conflict_tracks": [
+          "dm_navigation",
+          "search_language"
+        ]
+      },
+      {
+        "todo_line": 244,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Keep typing-safe plain-letter shortcuts, portal rebinding, X11 backend, KDE validation and optional actions separate.",
+        "evidence": [
+          "apps/desktop/src/global_shortcuts.rs Linux ashpd path and Windows/macOS global-hotkey path",
+          "apps/desktop/src/shortcuts.rs",
+          "apps/desktop/src/state.rs key_down/find_shortcut"
+        ],
+        "remaining": [
+          "No dedicated X11 backend found; Linux portal availability under a desktop is not proof of X11/global support everywhere."
+        ],
+        "conflict_tracks": [
+          "shortcuts"
+        ]
+      },
+      {
+        "todo_line": 248,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Keep intermittent GNOME AT-SPI subtree loss; the initial wait fix is present.",
+        "evidence": [
+          "tests/accessibility.py:261 waits for Send/Disconnect and user",
+          "apps/desktop/src/view.rs accessibility tree; vendor GPUI AccessKit integration"
+        ],
+        "remaining": [
+          "No real-GNOME repeat run in this audit; root cause must remain unclaimed."
+        ],
+        "conflict_tracks": [
+          "accessibility_upstream"
+        ]
+      },
+      {
+        "todo_line": 253,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Orca structural navigation still needs AT-SPI Collection coverage.",
+        "evidence": [
+          "tests/accessibility.py exercises direct Component/Accessible methods, not an Orca Collection consumer",
+          "Cargo.lock accesskit_atspi_common"
+        ],
+        "remaining": [
+          "Upstream adapter work; a named list item in the tree does not prove Orca list navigation."
+        ],
+        "conflict_tracks": [
+          "accessibility_upstream"
+        ]
+      },
+      {
+        "todo_line": 255,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Dropped-content warnings can still disappear on the next successful storage event; retain explicit loss/gap notice work.",
+        "evidence": [
+          "crates/client/src/native.rs:1331 content queue overflow; :1704 HistoryRecovered",
+          "apps/desktop/src/state.rs:2299 HistoryRecovered handling"
+        ],
+        "remaining": [
+          "Separate persistent data-loss warning from transient storage-recovered errors; test saturation/recovery and dismissal."
+        ],
+        "conflict_tracks": [
+          "notice_retention"
+        ]
+      },
+      {
+        "todo_line": 262,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Text contents and expandable states need native AT-SPI adapter verification/fix.",
+        "evidence": [
+          "tests/accessibility.py text/tree assertions",
+          "apps/desktop/src/view.rs aria_expanded controls",
+          "Cargo.lock accesskit_atspi_common 0.19"
+        ],
+        "remaining": [
+          "No patch or runtime evidence establishing Text interface/EXPANDABLE/EXPANDED delivery found."
+        ],
+        "conflict_tracks": [
+          "accessibility_upstream"
+        ]
+      },
+      {
+        "todo_line": 271,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Optional actual Orca test step remains open.",
+        "evidence": [
+          "tests/accessibility.py no Orca process/test interface integration",
+          "TODO.md:521–523 explicitly admits Orca was not run"
+        ],
+        "remaining": [
+          "AT-SPI automation is valuable but is not an Orca run; isolate optional reader service in test session."
+        ],
+        "conflict_tracks": [
+          "accessibility_runtime"
+        ]
+      },
+      {
+        "todo_line": 273,
+        "action": "keep_open_rephrase",
+        "proposed_checkbox_or_prose": "Retain as a measured optimization opportunity, not an unresolved functional failure: accessibility label generation is O(loaded entries).",
+        "evidence": [
+          "apps/desktop/src/view.rs:1573–1585 author map/labels; :1650 offscreen accessibility entries",
+          "tests/accessibility.py:413 long timeline"
+        ],
+        "remaining": [
+          "4–5 ms is historical, not newly measured. Avoid treating a previous 60 fps statement as a current performance guarantee."
+        ],
+        "conflict_tracks": [
+          "timeline_performance"
+        ]
+      },
+      {
+        "todo_line": 278,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Historical author identity, shown-name sort, friends UI and whisper restrictions remain open.",
+        "evidence": [
+          "crates/client/src/names.rs:62–70 explicitly history keeps only author name",
+          "crates/core/src/lib.rs ChatMessage",
+          "apps/desktop/src/names.rs"
+        ],
+        "remaining": [
+          "Schema/IPC migration and legacy-vs-authenticated identity semantics; UI-only relabeling cannot safely recover historical identity."
+        ],
+        "conflict_tracks": [
+          "history_identity",
+          "friends_ui"
+        ]
+      },
+      {
+        "todo_line": 281,
+        "action": "keep_open_validation",
+        "proposed_checkbox_or_prose": "Retain the reported all-scenes ordering failure until a repeatable fixture resets channel expansion/coordinates.",
+        "evidence": [
+          "tests/screenshots.py:870–893 menus uses fixed tree coordinates",
+          "tests/screenshots.py server/menus scene order"
+        ],
+        "remaining": [
+          "Not reproduced in this read-only audit; a script existing does not resolve its order-dependent flake."
+        ],
+        "conflict_tracks": [
+          "screenshot_harness"
+        ]
+      },
+      {
+        "todo_line": 286,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Faint dark text still needs contrast adjustment; pointer zoom and scaled IME validation remain open.",
+        "evidence": [
+          "apps/desktop/src/theme.rs:50 MAIN #1c212b; :71 TEXT_FAINT #6c778c",
+          "apps/desktop/src/appearance.rs",
+          "tests/screenshots.py resize/zoom scenes"
+        ],
+        "remaining": [
+          "Normal-text contrast is approximately 3.6:1 for this pair. Larger/non-text uses have different thresholds; test actual roles. No IME runtime evidence."
+        ],
+        "conflict_tracks": [
+          "theme_accessibility"
+        ]
+      },
+      {
+        "todo_line": 293,
+        "action": "keep_open_validation",
+        "proposed_checkbox_or_prose": "Retain channel tree profiling/upstream reports with explicit historical measurement dates.",
+        "evidence": [
+          "apps/desktop/src/frame_timing.rs",
+          "apps/desktop/src/view.rs sidebar/channel rows",
+          "vendor/gpui-pre-wgpu"
+        ],
+        "remaining": [
+          "No current flamegraph or upstream submission evidence checked; precise ms/largest-cost ranking is historical."
+        ],
+        "conflict_tracks": [
+          "tree_performance",
+          "upstream_gpui"
+        ]
+      },
+      {
+        "todo_line": 303,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Retain all Windows sandbox hardening caveats.",
+        "evidence": [
+          "docs/windows-sandbox.md:339–371",
+          "crates/sandbox-windows/src/plan.rs:39–42 mitigations omit dynamic-code prohibition/win32k lockdown",
+          "crates/sandbox-windows/tests/confinement.rs:133/:534 HKCU Environment behavior"
+        ],
+        "remaining": [
+          "Workers share desktop; media/transfer are full AppContainers and can read HKCU Environment; no ACG, broad read audit or physical-hardware proof. Do not present VM AppContainer success as full least-privilege proof."
+        ],
+        "conflict_tracks": [
+          "windows_hardening"
+        ]
+      },
+      {
+        "todo_line": 309,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Legacy HTML welcome is still flattened before UI rendering.",
+        "evidence": [
+          "crates/client/src/native.rs:1334 SessionEvent::Welcome keeps prepare(...).0 only",
+          "apps/desktop/src/view.rs:2147–2161 text!(welcome), no renderer-ready Document"
+        ],
+        "remaining": [
+          "Carry source/document through SDK for rich welcome without re-enabling resource loading."
+        ],
+        "conflict_tracks": [
+          "rich_welcome"
+        ]
+      },
+      {
+        "todo_line": 318,
+        "action": "mark_done",
+        "proposed_checkbox_or_prose": "[x] Search uses a stable cursor and pages results within the byte budget, including a More results UI.",
+        "evidence": [
+          "crates/core/src/search.rs:127 SearchCursor, :140 SearchPage.next",
+          "crates/storage/src/lib.rs:827–938 History::search",
+          "crates/storage/src/lib.rs:1296 search_pages_within_the_byte_budget; :1320 search_pages_reach_every_match",
+          "apps/desktop/src/search.rs:212 more_results; :584 More results button"
+        ],
+        "remaining": [],
+        "conflict_tracks": []
+      },
+      {
+        "todo_line": 319,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Session count/blob budgets remain; improve cache eviction and scale validation separately.",
+        "evidence": [
+          "crates/session/src/connection.rs:77–85 4096 channels/16384 users/64MiB blobs and notices; :2497/:3109 reject new blob data"
+        ],
+        "remaining": [
+          "Do not remove limits without replacing resource protection; require visible failure and LRU/eviction semantics."
+        ],
+        "conflict_tracks": [
+          "session_budgets"
+        ]
+      },
+      {
+        "todo_line": 322,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Content decode/document caps remain and per-message failure presentation still needs review.",
+        "evidence": [
+          "crates/content/src/lib.rs:43–45 MAX_IMAGES, MAX_DOCUMENT_PIXELS_BYTES, MAX_SOURCE_DIMENSION",
+          "apps/desktop/src/document.rs:202 fallback '[image]'",
+          "crates/ipc/src/host.rs request budgets"
+        ],
+        "remaining": [
+          "Resource-limit substitution must preserve IPC frame bounds and avoid one failed member dropping a whole history batch."
+        ],
+        "conflict_tracks": [
+          "content_limits"
+        ]
+      },
+      {
+        "todo_line": 329,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "PipeWire-pinned workers still receive the PulseAudio directory/socket when present.",
+        "evidence": [
+          "crates/ipc/src/host.rs:386–425 binds both pipewire-0 and pulse and sets PULSE_SERVER"
+        ],
+        "remaining": [
+          "Narrow only after route detection/reference compatibility is preserved; this is extra audio-service authority, not network authority."
+        ],
+        "conflict_tracks": [
+          "audio_capabilities"
+        ]
+      },
+      {
+        "todo_line": 330,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "macOS media policy is still allow-default with deny rules.",
+        "evidence": [
+          "crates/ipc/src/host.rs:526–557 Seatbelt MEDIA"
+        ],
+        "remaining": [
+          "Deny-default narrowing and sandbox-exec behavior require macOS runtime evidence, unavailable here."
+        ],
+        "conflict_tracks": [
+          "macos_sandbox"
+        ]
+      },
+      {
+        "todo_line": 341,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Display-name control-character sanitization remains open.",
+        "evidence": [
+          "crates/client/src/names.rs:47 display_name returns nickname/server name directly; :55 full_name formats it",
+          "apps/desktop/src/view.rs names rendered as supplied"
+        ],
+        "remaining": [
+          "Use one safe presentation boundary, preserve protocol identity bytes, cover bidi/control cases and screen-reader labels."
+        ],
+        "conflict_tracks": [
+          "name_sanitization"
+        ]
+      },
+      {
+        "todo_line": 342,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Windows VM harness HTTP control is still unauthenticated, though host listener is loopback-only and guest network is restricted.",
+        "evidence": [
+          "tests/windows_vm.py:81–126 GET/POST handler; :195 ThreadingHTTPServer(127.0.0.1,0)"
+        ],
+        "remaining": [
+          "Add per-run authentication and bounded requests without opening network exposure or logging secrets; test-only scope."
+        ],
+        "conflict_tracks": [
+          "windows_harness"
+        ]
+      },
+      {
+        "todo_line": 351,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Linear channel updates/link-tooltip lookups remain; avoid quoting two-search count as a timeless guarantee.",
+        "evidence": [
+          "apps/desktop/src/view.rs:882–895 computes linked names while constructing row",
+          "crates/client/src/client.rs ServerEvent::ChannelState handling"
+        ],
+        "remaining": [
+          "Add indexed lookup/invalidation only after current profile identifies useful work."
+        ],
+        "conflict_tracks": [
+          "tree_performance"
+        ]
+      },
+      {
+        "todo_line": 353,
+        "action": "narrow_open",
+        "proposed_checkbox_or_prose": "Message documents/text are cached with SharedString/Arc, not wholly deep-copied every frame. Visible rows still rebuild StyledText highlights, and author lookup scans users.",
+        "evidence": [
+          "apps/desktop/src/presentation.rs:83–104 rebuild only on new message/revision",
+          "apps/desktop/src/document.rs:20–45 highlights use Arc and :90 SharedString",
+          "apps/desktop/src/selection.rs:728–747 cloned highlight runs into StyledText",
+          "apps/desktop/src/view.rs:1621–1625 names::author scan"
+        ],
+        "remaining": [
+          "Profile row styling/lookup rather than reimplementing already-cached documents."
+        ],
+        "conflict_tracks": [
+          "timeline_performance"
+        ]
+      },
+      {
+        "todo_line": 355,
+        "action": "mark_done_narrow",
+        "proposed_checkbox_or_prose": "[x] Encoded image-format decoding is in the content worker. UI still converts validated raw RGBA/base64 into GPUI textures.",
+        "evidence": [
+          "apps/desktop/src/document.rs:2–5 and :141–158 render_image",
+          "crates/content/src/lib.rs decode_image",
+          "apps/desktop/src/services.rs image decoding requests"
+        ],
+        "remaining": [
+          "Raw pixel/base64 conversion, color swap and GPU upload may still cost UI time; this is distinct from running image decoders on UI thread."
+        ],
+        "conflict_tracks": [
+          "timeline_performance"
+        ]
+      },
+      {
+        "todo_line": 357,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Event-envelope duplication and oversized async driver/event functions remain refactoring opportunities.",
+        "evidence": [
+          "crates/client/src/native.rs Event/connect_once",
+          "apps/desktop/src/state.rs apply_events/drain event logic"
+        ],
+        "remaining": [
+          "Coordinate with any mobile SDK extraction; a single event-envelope refactor touches many consumers."
+        ],
+        "conflict_tracks": [
+          "sdk_refactor"
+        ]
+      },
+      {
+        "todo_line": 364,
+        "action": "keep_open_narrow",
+        "proposed_checkbox_or_prose": "Activation-key/data URI helpers and test modes still warrant deduplication/release-surface review.",
+        "evidence": [
+          "apps/desktop/src/dialogs.rs activation; apps/desktop/src/view.rs activation_key",
+          "apps/desktop/src/document.rs:385 data_uri_file",
+          "apps/media-worker/src/main.rs diagnostic modes"
+        ],
+        "remaining": [
+          "Check intended support/diagnostic commands before hiding or deleting them."
+        ],
+        "conflict_tracks": [
+          "helper_cleanup"
+        ]
+      },
+      {
+        "todo_line": 366,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Vendored CPAL/GPUI patches remain; upstream acceptance has not been established by this source audit.",
+        "evidence": [
+          "vendor/cpal",
+          "vendor/gpui-pre-wgpu",
+          "Cargo.toml patch sections"
+        ],
+        "remaining": [
+          "Require upstream version/feature comparison and native tests before removing patches."
+        ],
+        "conflict_tracks": [
+          "upstream_gpui",
+          "audio_native"
+        ]
+      },
+      {
+        "todo_line": 371,
+        "action": "split",
+        "proposed_checkbox_or_prose": "[x] Viewport-only message layout is implemented; [ ] bounded retained message memory while browsing/paging an active timeline.",
+        "evidence": [
+          "apps/desktop/src/view.rs:1507–1555 viewport range; :1588 only shown.range creates rows; :1650 a11y-only offscreen labels",
+          "crates/client/src/timeline.rs:14 MAX_TIMELINE=1000 and :329 trim_oldest",
+          "crates/client/src/client.rs:596 trim on reopening, :1633 trim only when not selected",
+          "tests/accessibility.py:457/:520 offscreen rows not laid out"
+        ],
+        "remaining": [
+          "Loaded old pages and selected conversation live messages are not bounded by a universal trim. Existing next_after paging for search is not a bounded sliding window."
+        ],
+        "conflict_tracks": [
+          "timeline_memory"
+        ]
+      },
+      {
+        "todo_line": 376,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Channel description is still shown only in timeline_intro at the beginning of loaded history.",
+        "evidence": [
+          "apps/desktop/src/view.rs:2075 early return when next_before exists; :2123–2143 description rendering"
+        ],
+        "remaining": [
+          "Offer a stable header/details affordance instead of requiring loading the oldest page."
+        ],
+        "conflict_tracks": [
+          "channel_details"
+        ]
+      },
+      {
+        "todo_line": 377,
+        "action": "split",
+        "proposed_checkbox_or_prose": "A 1000-message resize/screenshot scene exists; keep an explicit bounded-history/1000-limit regression open.",
+        "evidence": [
+          "tests/screenshots.py:203 default resize-messages=1000; :1418–1445 busy/scrolled screenshots",
+          "crates/client/src/timeline.rs trimming unit tests"
+        ],
+        "remaining": [
+          "The resize scene does not assert a universal memory cap or exercise long older/newer window eviction."
+        ],
+        "conflict_tracks": [
+          "screenshot_harness",
+          "timeline_memory"
+        ]
+      },
+      {
+        "todo_line": 378,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Keep non-Nix Linux desktop integration, MSVC executable icon and AppStream packaging open.",
+        "evidence": [
+          "nix/desktop-files.nix:34 Linux desktop entry/icons apply to Nix package",
+          "apps/desktop/build.rs:22–27 only GNU x86/x86_64 icon resources; MSVC warning/no icon",
+          "flake.nix:230 copies Nix desktop files"
+        ],
+        "remaining": [
+          "Do not confuse existing GNU .ico embedding/Nix integration with non-Nix installers or MSVC support."
+        ],
+        "conflict_tracks": [
+          "platform_packaging"
+        ]
+      },
+      {
+        "todo_line": 441,
+        "action": "keep_open_validation",
+        "proposed_checkbox_or_prose": "Retain PulseAudio loopback drift/load-dependent echo quality work.",
+        "evidence": [
+          "tests/media_live.py loopback echo rig",
+          "tests/pipewire_recovery.py:493 separate common-clock room rig",
+          "TODO.md historical results"
+        ],
+        "remaining": [
+          "No hardware check or fresh load sweep here. A passing synthetic run cannot close real-device drift risk."
+        ],
+        "conflict_tracks": [
+          "audio_fixture",
+          "audio_native"
+        ]
+      },
+      {
+        "todo_line": 450,
+        "action": "keep_open_validation",
+        "proposed_checkbox_or_prose": "macOS process-tap permission/refusal fallback remains unvalidated.",
+        "evidence": [
+          "vendor/cpal/src/host/coreaudio/macos/loopback.rs",
+          "apps/media-worker/src/live.rs:1183 reference opening",
+          "docs/architecture.md:139 system-output reference"
+        ],
+        "remaining": [
+          "Needs macOS permission-grant/deny lifecycle and hardware audio; no owned Apple hardware, so keep explicit blocker."
+        ],
+        "conflict_tracks": [
+          "audio_native"
+        ]
+      },
+      {
+        "todo_line": 452,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Second PulseAudio client workaround exists; reduced upstream report remains open.",
+        "evidence": [
+          "apps/media-worker/src/live.rs:1220 comment and separate monitor connection"
+        ],
+        "remaining": [
+          "Reproduce in isolated native PulseAudio fixture, link upstream report; do not remove workaround without validation."
+        ],
+        "conflict_tracks": [
+          "audio_fixture",
+          "upstream_audio"
+        ]
+      },
+      {
+        "todo_line": 455,
+        "action": "keep_open_validation",
+        "proposed_checkbox_or_prose": "Retain module-sine-source/monitor rig anomalies until isolated regressions establish whether current workaround resolves each.",
+        "evidence": [
+          "apps/media-worker/src/live.rs:1210–1248 PulseAudio monitor workaround",
+          "tests/media_live.py"
+        ],
+        "remaining": [
+          "Historical fixture reports are not automatically cleared by a working alternate room test."
+        ],
+        "conflict_tracks": [
+          "audio_fixture"
+        ]
+      },
+      {
+        "todo_line": 458,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Windows/macOS notifications and notification-click conversation routing remain open.",
+        "evidence": [
+          "apps/desktop/src/notify.rs:4–5 non-Linux not implemented",
+          "apps/desktop/src/services.rs notification task"
+        ],
+        "remaining": [
+          "Native identifiers/permissions plus a shared SDK navigation action; compile-only evidence insufficient."
+        ],
+        "conflict_tracks": [
+          "notifications"
+        ]
+      },
+      {
+        "todo_line": 461,
+        "action": "split",
+        "proposed_checkbox_or_prose": "[x] Keep process replacement for microphone privacy/capture-route changes; [ ] measure audible interruption.",
+        "evidence": [
+          "crates/client/src/native/media.rs:9–13 lifecycle ownership; :205–220 capture destination/revision change drops worker; :255–265 reopen/close/no listeners",
+          "crates/client/src/native/media.rs:470 routing_revisions_invalidate_buffered_capture_even_after_rapid_toggles"
+        ],
+        "remaining": [
+          "Shared-worker semantics now replace on capture route changes, not blindly for every muted/deafened server update. Audible gap remains unmeasured."
+        ],
+        "conflict_tracks": [
+          "audio_native"
+        ]
+      },
+      {
+        "todo_line": 505,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Client PluginDataTransmission remains unimplemented/lower priority; server forwarding is not client support.",
+        "evidence": [
+          "crates/session/src/connection.rs message type/handler coverage has no PluginDataTransmission command/event",
+          "apps/server/src/handlers.rs plugin_data_transmission"
+        ],
+        "remaining": [
+          "Define authorized use before adding client consumption; legacy typing deliberately does not use it."
+        ],
+        "conflict_tracks": [
+          "plugin_data"
+        ]
+      },
+      {
+        "todo_line": 514,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Explicit native PipeWire enumeration of Audio/Source/Virtual remains missing.",
+        "evidence": [
+          "vendor/cpal/src/host/pipewire/utils.rs:34–44 known classes omit Audio/Source/Virtual",
+          "vendor/cpal/src/host/pipewire/device.rs:968–1001 class matching",
+          "tests/pipewire_recovery.py:441 acknowledges test microphone omitted; default-path still works"
+        ],
+        "remaining": [
+          "Add enum class/role handling or backend-consistent fallback, with virtual-only fixture and no hardware capture."
+        ],
+        "conflict_tracks": [
+          "audio_devices"
+        ]
+      },
+      {
+        "todo_line": 559,
+        "action": "keep_open_narrow",
+        "proposed_checkbox_or_prose": "Retain campaign automation/corpus management and unexercised parser paths; update target count/date when reflecting later targets.",
+        "evidence": [
+          "fuzz/fuzz_targets",
+          "tests/README.md fuzz/security testing",
+          "fuzz/Cargo.toml"
+        ],
+        "remaining": [
+          "Source audit cannot revalidate historical campaign duration/ASan replay. 'Every parser' overclaims known absent third-party update/storage/wormhole/mixer paths."
+        ],
+        "conflict_tracks": [
+          "fuzz_coverage"
+        ]
+      },
+      {
+        "todo_line": 587,
+        "action": "keep_open_validation",
+        "proposed_checkbox_or_prose": "Native Windows/macOS hardware audio validation remains open; Windows VM observations are narrower.",
+        "evidence": [
+          "tests/README.md:164–167 native hardware/screen readers still needed",
+          "docs/windows-sandbox.md:369 physical device absent",
+          "tests/windows_vm.py"
+        ],
+        "remaining": [
+          "No physical audio/macOS/permission/Bluetooth/long-call validation. iOS platform work shares these dependencies."
+        ],
+        "conflict_tracks": [
+          "audio_native"
+        ]
+      },
+      {
+        "todo_line": 591,
+        "action": "keep_open_narrow",
+        "proposed_checkbox_or_prose": "Windows VM control harness exists; automate end-to-end scenario assertions and UDP coverage.",
+        "evidence": [
+          "tests/windows_vm.py:198–217 guestfwd=tcp only; generic run/screenshot/push commands",
+          "tests/README.md:76–110 manual VM/confinement procedure"
+        ],
+        "remaining": [
+          "Do not call existing harness absent, but no consolidated assertive GUI/audio/upgrade scenario found; network remains intentionally private."
+        ],
+        "conflict_tracks": [
+          "windows_harness"
+        ]
+      },
+      {
+        "todo_line": 596,
+        "action": "keep_open",
+        "proposed_checkbox_or_prose": "Automatic Windows/macOS upstream audio-effect detection remains open.",
+        "evidence": [
+          "docs/architecture.md:153–155 proposed IAudioEffectsManager/IAcousticEchoCancellationControl/Voice Processing",
+          "apps/media-worker/src/live.rs upstream detection is Linux graph-oriented",
+          "crates/core/src/audio.rs per-device EchoMode override"
+        ],
+        "remaining": [
+          "Needs reviewed COM/Objective-C worker adapter and native validation; retain manual override meanwhile."
+        ],
+        "conflict_tracks": [
+          "audio_effects"
+        ]
+      }
+    ],
+    "checked_claim_corrections": [
+      {
+        "todo_line": 153,
+        "action": "correct_prose",
+        "replacement": "Keep math feature checked, replace Windows 'only process separation' caveat: math now runs in a networkless LPAC with limits; non-Latin glyph coverage still open.",
+        "evidence": [
+          "crates/ipc/src/host.rs:64–66",
+          "apps/math-worker/src/main.rs:15–17",
+          "docs/windows-sandbox.md:56–60"
+        ]
+      },
+      {
+        "todo_line": 387,
+        "action": "remove_stale_intro",
+        "replacement": "Voice uses encrypted UDP when reachable and falls back to TLS tunnel; CryptSetup initializes/resynchronizes OCB2 state.",
+        "evidence": [
+          "crates/session/src/udp.rs:2–8/:55–128",
+          "crates/session/src/connection.rs:2711 CryptSetup handler",
+          "tests/udp_voice.py",
+          "nix/vm-smoke.nix:110/:129–131"
+        ]
+      },
+      {
+        "todo_line": 404,
+        "action": "remove_stale_intro",
+        "replacement": "Per-speaker adaptive jitter buffers reorder packets and conceal loss with Opus PLC/FEC; no longer plain FIFO.",
+        "evidence": [
+          "apps/media-worker/src/jitter.rs:42 JitterBuffer; :247 reorders_recovers_with_fec_and_conceals_gaps",
+          "apps/media-worker/src/live.rs playback mixer"
+        ]
+      },
+      {
+        "todo_line": 415,
+        "action": "correct_prose",
+        "replacement": "Keep checked: default VoiceActivity, optional PTT/Continuous; remove 'currently transmits continuously'.",
+        "evidence": [
+          "crates/core/src/audio.rs:8–13/:66",
+          "apps/media-worker/src/dsp.rs:397/:482 tests"
+        ]
+      },
+      {
+        "todo_line": 417,
+        "action": "split_coverage",
+        "replacement": "GlobalShortcuts portal on Linux is implemented; Windows/macOS adapters are compiled. Dedicated X11 backend and native hotkey validation remain open.",
+        "evidence": [
+          "apps/desktop/src/global_shortcuts.rs Linux ashpd and cfg Windows/macOS paths",
+          "TODO.md:244–247"
+        ]
+      },
+      {
+        "todo_line": 420,
+        "action": "correct_prose",
+        "replacement": "RNNoise via nnnoiseless defaults on, bypassed if recognized upstream suppression is present. Remove obsolete backend.rs/hard-coded-off claim.",
+        "evidence": [
+          "crates/core/src/audio.rs:68",
+          "apps/media-worker/src/dsp.rs:8/:91–92",
+          "apps/media-worker/src/live.rs:650–654",
+          "tests/pipewire_recovery.py:464–488"
+        ]
+      },
+      {
+        "todo_line": 422,
+        "action": "correct_prose",
+        "replacement": "Sonora AEC3 is wired before RNNoise/gain using own playback or selected output loopback reference; remove 'not used yet'.",
+        "evidence": [
+          "apps/media-worker/src/dsp.rs:5–12/:71–101/:136",
+          "apps/media-worker/src/live.rs capture path",
+          "apps/media-worker/src/dsp.rs:512 synthetic cancellation test"
+        ]
+      },
+      {
+        "todo_line": 469,
+        "action": "correct_prose",
+        "replacement": "Keep gap markers checked, remove '(documented ... not implemented)'.",
+        "evidence": [
+          "crates/client/src/native.rs:1221 Event::Gap",
+          "crates/client/src/client.rs:995 log_gap/:1254 gap handler",
+          "tests/desktop_recovery.py:105"
+        ]
+      },
+      {
+        "todo_line": 483,
+        "action": "refresh_coverage_intro",
+        "replacement": "Handled-today summary should include the additional handlers below it rather than implying only the old initial list.",
+        "evidence": [
+          "crates/session/src/connection.rs:2711–2951 CryptSetup/CodecVersion/UserStats/SuggestConfig/context/ACL handlers"
+        ]
+      },
+      {
+        "todo_line": 495,
+        "action": "correct_prose",
+        "replacement": "Inline legacy HTML images render through isolated content worker; remove '(currently discarded)'.",
+        "evidence": [
+          "crates/content/src/lib.rs decode_image",
+          "apps/desktop/src/document.rs:190–209",
+          "tests/screenshots.py image/paste/viewer scenes"
+        ]
+      },
+      {
+        "todo_line": 510,
+        "action": "correct_prose",
+        "replacement": "Channel tree user rows have talking/privacy icons; remove obsolete '(currently a text line...)'.",
+        "evidence": [
+          "apps/desktop/src/view.rs user_row/sidebar tree rendering"
+        ]
+      },
+      {
+        "todo_line": 521,
+        "action": "narrow_checked",
+        "replacement": "[x] AT-SPI tree/actions pass; [ ] actual Orca user-flow validation. Do not label AT-SPI automation an Orca pass.",
+        "evidence": [
+          "tests/accessibility.py:413–525",
+          "TODO.md:523 explicit non-run admission"
+        ]
+      },
+      {
+        "todo_line": 527,
+        "action": "split",
+        "replacement": "[x] Stock Mumble GUI ↔ Nuschl CLI two-way voice/chat and PKCS12 interoperability; [ ] independently driven stock-GUI↔stock-GUI baseline.",
+        "evidence": [
+          "tests/stock_client.py:168–172 launches one stock client plus Nuschl Client",
+          "tests/stock_client.py:214/:242 two-way voice; final chat assertions",
+          "tests/README.md:127 required matrix baseline, no matching two-stock harness found"
+        ]
+      },
+      {
+        "todo_line": 531,
+        "action": "narrow_checked",
+        "replacement": "[x] VM delay/jitter/5% loss plus deterministic jitter-buffer reorder unit coverage; [ ] explicit controlled reordering in end-to-end netem fixture.",
+        "evidence": [
+          "tests/udp_voice.py:94–95 netem delay40ms/jitter20ms/loss5%; no reorder argument",
+          "apps/media-worker/src/jitter.rs:247"
+        ]
+      },
+      {
+        "todo_line": 534,
+        "action": "split",
+        "replacement": "[x] Server restart/reconnect/gap marker; [ ] TLS network interruption without server restart.",
+        "evidence": [
+          "tests/desktop_recovery.py:94–107",
+          "tests/udp_voice.py UDP block is not a TCP session network drop"
+        ]
+      },
+      {
+        "todo_line": 536,
+        "action": "split",
+        "replacement": "[x] Native private PipeWire, pipewire-pulse and PulseAudio restart coverage including real sandbox; [ ] device switches and live format changes. Remove stale 'only native PulseAudio'.",
+        "evidence": [
+          "tests/pipewire_recovery.py:296–413",
+          "nix/vm-smoke.nix:114",
+          "tests/media_live.py"
+        ]
+      },
+      {
+        "todo_line": 541,
+        "action": "narrow_checked",
+        "replacement": "[x] PipeWire/PulseAudio upstream canceller and filter-chain reuse, playback routing, unchanged defaults; [ ] complete unrelated graph-object/levels noninterference snapshot.",
+        "evidence": [
+          "tests/pipewire_recovery.py:424–448 compares defaults; :464–488 checks graph route and defaults",
+          "apps/media-worker/src/graph.rs",
+          "tests/media_live.py"
+        ],
+        "limit": "Assertions inspected do not establish all unrelated objects remain untouched."
+      },
+      {
+        "todo_line": 544,
+        "action": "split",
+        "replacement": "[x] Desktop media/storage worker kills; [ ] content-worker kill and stalls/deadline recovery for every worker.",
+        "evidence": [
+          "tests/desktop_recovery.py:75–91 only media/storage SIGKILL",
+          "crates/ipc/src/host.rs:39 content5s budget is code behavior, not an integration stall test"
+        ]
+      },
+      {
+        "todo_line": 548,
+        "action": "narrow_claim",
+        "replacement": "Targets exist for selected first-party parsers; retain historical campaign results as dated evidence and known omissions under559. Do not claim every untrusted parser is fuzzed.",
+        "evidence": [
+          "fuzz/Cargo.toml",
+          "fuzz/fuzz_targets",
+          "TODO.md:559–566"
+        ]
+      },
+      {
+        "todo_line": 576,
+        "action": "correct_prose",
+        "replacement": "Cross-build definitions exist for both Darwin slices and universal bundle; remove 'flake only builds natively today'. Keep build success and not-run-on-Mac distinction.",
+        "evidence": [
+          "flake.nix:330–437 Darwin toolchain/macSlice/macUniversal/macApp"
+        ],
+        "limit": "This audit neither rebuilds nor verifies macOS runtime."
+      },
+      {
+        "todo_line": 593,
+        "action": "narrow_checked",
+        "replacement": "Windows AppContainer confinement has VM evidence; macOS Seatbelt profiles are implemented with tests not run on macOS. Media remains a deny list.",
+        "evidence": [
+          "crates/ipc/src/host.rs:526–578/:992 native-only test",
+          "docs/windows-sandbox.md:271–371",
+          "tests/README.md:164–167"
+        ]
+      },
+      {
+        "todo_line": 607,
+        "action": "remove_stale_parenthetical",
+        "replacement": "Show more uses measured height, not 12 lines/2000 chars.",
+        "evidence": [
+          "apps/desktop/src/presentation.rs:13–43 COLLAPSED_HEIGHT=300/has_more",
+          "apps/desktop/src/view.rs:2747–2786 measured bounds"
+        ],
+        "scope_note": "Just beyond requested line597; affects same UI correctness."
+      }
+    ],
+    "other_checked_items": [
+      {
+        "todo_lines": [
+          76,
+          81,
+          87,
+          92
+        ],
+        "assessment": "Implementation and meaningful regression sources exist; no fresh runtime rerun in this audit.",
+        "evidence": [
+          "crates/core/src/network.rs PeerPolicy; apps/desktop/src/transfer.rs:1090+ privacy tests",
+          "crates/client/src/client.rs:2369/:2396/:2422 private-recipient/notice tests",
+          "apps/desktop/src/unread.rs",
+          "crates/client/src/client.rs:2529 rapid_deafen_toggles_ignore_delayed_and_out_of_order_server_echoes",
+          "crates/client/src/native/media.rs:470 route revision test"
+        ]
+      },
+      {
+        "todo_lines": [
+          104,
+          106,
+          188
+        ],
+        "assessment": "Clipboard/attachment sequencing and WebP feature sources and assertions exist. Native clipboard behavior outside tested Linux session remains platform-dependent.",
+        "evidence": [
+          "apps/desktop/src/state.rs:1662 paste_image; :1926 send_attachments; :2001 flush_outgoing",
+          "apps/desktop/src/attachments.rs",
+          "tests/screenshots.py:1185–1268 paste/attachment rate assertions",
+          "crates/content/src/lib.rs:494 WebP regression"
+        ]
+      },
+      {
+        "todo_lines": [
+          288,
+          290,
+          346,
+          350,
+          356,
+          359,
+          362,
+          373
+        ],
+        "assessment": "Viewport layout, accessibility placeholders, cached documents, efficient tree construction, texture retirement, event-driven updates, cursor storage/search and keyboard/accessibility navigation have source/tests. Historical ms/speedup figures were not remeasured.",
+        "evidence": [
+          "apps/desktop/src/view.rs:1507–1675",
+          "apps/desktop/src/presentation.rs",
+          "apps/desktop/src/images.rs:18",
+          "apps/desktop/src/state.rs:465 event loop",
+          "crates/client/src/tree.rs tests",
+          "crates/storage/src/lib.rs:1260+ query plan and paging tests",
+          "apps/desktop/src/timeline_keys.rs",
+          "tests/accessibility.py:413–525"
+        ]
+      },
+      {
+        "todo_lines": [
+          390,
+          392,
+          395,
+          397,
+          399,
+          400,
+          407,
+          409,
+          410,
+          411
+        ],
+        "assessment": "UDP/crypt/jitter/playback features have implementations, unit coverage and private VM fixture wiring. VM wiring and source do not itself re-prove historical full VM pass.",
+        "evidence": [
+          "crates/session/src/udp.rs",
+          "crates/protocol/src/crypt.rs",
+          "apps/media-worker/src/jitter.rs",
+          "apps/media-worker/src/live.rs",
+          "tests/udp_voice.py",
+          "nix/vm-smoke.nix:110/:129–131"
+        ]
+      },
+      {
+        "todo_lines": [
+          425,
+          429,
+          433,
+          434
+        ],
+        "assessment": "Linux graph detection/reference processing and Settings tests are implemented, with virtual-fixture assertions; native Windows/macOS detection and hardware quality remain explicitly open.",
+        "evidence": [
+          "apps/media-worker/src/graph.rs",
+          "apps/media-worker/src/reference.rs",
+          "apps/media-worker/src/live.rs",
+          "tests/pipewire_recovery.py:424–547",
+          "apps/desktop/src/preview.rs"
+        ]
+      },
+      {
+        "todo_lines": [
+          468,
+          471,
+          473,
+          474,
+          477,
+          478,
+          487,
+          489,
+          492,
+          493,
+          496,
+          497,
+          498,
+          499,
+          500,
+          503,
+          512,
+          517,
+          519,
+          520
+        ],
+        "assessment": "Protocol handlers/SDK actions/UI surfaces exist with unit/private fixture coverage; dedicated whisper hotkeys remain excluded. Comprehensive per-platform runtime validation is not implied.",
+        "evidence": [
+          "crates/session/src/connection.rs",
+          "crates/session/src/config.rs PKCS12 tests",
+          "tests/protocol_features.py",
+          "apps/desktop/src/menus.rs",
+          "apps/desktop/src/panels.rs",
+          "apps/desktop/src/settings.rs"
+        ]
+      },
+      {
+        "todo_lines": [
+          296,
+          581,
+          584
+        ],
+        "assessment": "Windows sandbox/cross-build/shader paths exist; VM evidence is documented but limited to tested build/configuration. macOS GPU/audio runtime and physical Windows hardware remain unverified.",
+        "evidence": [
+          "docs/windows-sandbox.md:269–371",
+          "tests/README.md:76–110",
+          "flake.nix:310–324 Windows cross build",
+          "vendor/gpui-pre-apple/build.rs",
+          "vendor/gpui-pre-windows"
+        ]
+      }
+    ],
+    "conflict_map": {
+      "image_clipboard": {
+        "files": [
+          "apps/desktop/src/menus.rs",
+          "apps/desktop/src/viewer.rs",
+          "apps/desktop/src/document.rs",
+          "tests/screenshots.py"
+        ],
+        "apis": [
+          "Image menu action",
+          "GPUI ClipboardItem image construction"
+        ],
+        "conflicts_with": [
+          "rich_welcome touches document/menu only if shared refactor",
+          "screenshot_harness"
+        ],
+        "dependencies": [
+          "Use existing validated RGBA/original bytes; do not decode unsafe formats in UI."
+        ]
+      },
+      "composer_queue": {
+        "files": [
+          "apps/desktop/src/state.rs",
+          "apps/desktop/src/view.rs",
+          "crates/session/src/config.rs",
+          "crates/session/src/connection.rs",
+          "tests/screenshots.py"
+        ],
+        "apis": [
+          "Desktop::sending_status/send_message",
+          "Outbox Rate"
+        ],
+        "conflicts_with": [
+          "managed_config",
+          "shortcuts",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Server-wide queue semantics and per-bookmark migration; preserve encrypted attachment refusal."
+        ]
+      },
+      "dns_srv": {
+        "files": [
+          "crates/session/src/tls.rs",
+          "crates/session/src/config.rs",
+          "crates/session/src/connection.rs",
+          "tests/protocol_features.py"
+        ],
+        "apis": [
+          "tls::connect",
+          "ServerBookmark host/port and TLS name"
+        ],
+        "conflicts_with": [
+          "session_budgets",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Clarify explicit port policy, DNS weight/priority, certificate identity; local DNS fixtures only."
+        ]
+      },
+      "timeline_memory": {
+        "files": [
+          "crates/client/src/timeline.rs",
+          "crates/client/src/client.rs",
+          "apps/desktop/src/scrolling.rs",
+          "apps/desktop/src/presentation.rs",
+          "apps/desktop/src/search.rs",
+          "tests/accessibility.py",
+          "tests/screenshots.py"
+        ],
+        "apis": [
+          "Timeline::take_page/receive/trim_oldest/next_after",
+          "scroll anchors and search jump"
+        ],
+        "conflicts_with": [
+          "timeline_performance",
+          "dm_navigation",
+          "history_identity",
+          "screenshot_harness"
+        ],
+        "dependencies": [
+          "Bidirectional bounded sliding window must preserve selected/focused/accessibility anchors and reach all persisted history. Shared SDK behavior should serve iOS too."
+        ]
+      },
+      "timeline_performance": {
+        "files": [
+          "apps/desktop/src/view.rs",
+          "apps/desktop/src/selection.rs",
+          "apps/desktop/src/document.rs",
+          "apps/desktop/src/presentation.rs",
+          "apps/desktop/src/frame_timing.rs"
+        ],
+        "apis": [
+          "BlockText",
+          "Presentation cache",
+          "author lookup"
+        ],
+        "conflicts_with": [
+          "timeline_memory",
+          "emoji_font",
+          "rich_welcome"
+        ],
+        "dependencies": [
+          "New profile first; retain O(loaded) accessibility labels where required."
+        ]
+      },
+      "emoji_font": {
+        "files": [
+          "apps/desktop/src/selection.rs",
+          "apps/desktop/src/document.rs",
+          "apps/desktop/src/emoji.rs"
+        ],
+        "apis": [
+          "StyledText font-family overrides/byte mapping"
+        ],
+        "conflicts_with": [
+          "timeline_performance"
+        ],
+        "dependencies": [
+          "Unicode grapheme/variation selector fixtures; preserve copying and selection offsets."
+        ]
+      },
+      "rich_welcome": {
+        "files": [
+          "crates/client/src/native.rs",
+          "crates/client/src/client.rs",
+          "crates/client/src/server.rs",
+          "apps/desktop/src/view.rs",
+          "crates/core/src/model.rs",
+          "tests/screenshots.py"
+        ],
+        "apis": [
+          "SessionEvent::Welcome/ServerEvent::Welcome",
+          "renderer-ready MessageDocument"
+        ],
+        "conflicts_with": [
+          "sdk_refactor",
+          "timeline_performance",
+          "screenshot_harness"
+        ],
+        "dependencies": [
+          "Use existing sanitized worker document; no remote resources."
+        ]
+      },
+      "notice_retention": {
+        "files": [
+          "apps/desktop/src/state.rs",
+          "apps/desktop/src/view.rs",
+          "crates/client/src/client.rs",
+          "crates/client/src/native.rs"
+        ],
+        "apis": [
+          "HistoryError/HistoryRecovered",
+          "Desktop::error/global notices"
+        ],
+        "conflicts_with": [
+          "history_guest",
+          "managed_config",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Distinguish data loss from transient worker failure; independent dismissal/expiry."
+        ]
+      },
+      "history_guest": {
+        "files": [
+          "crates/client/src/client.rs",
+          "crates/client/src/native.rs",
+          "apps/desktop/src/view.rs",
+          "apps/server/src/history.rs"
+        ],
+        "apis": [
+          "history failure classification"
+        ],
+        "conflicts_with": [
+          "notice_retention",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Server authorization semantics must not become a conversation-existence oracle."
+        ]
+      },
+      "dm_navigation": {
+        "files": [
+          "crates/client/src/finder.rs",
+          "crates/client/src/search.rs",
+          "crates/client/src/client.rs",
+          "crates/client/src/server.rs",
+          "crates/core/src/model.rs",
+          "crates/storage/src/lib.rs",
+          "apps/desktop/src/finder.rs",
+          "apps/desktop/src/view.rs"
+        ],
+        "apis": [
+          "conversation catalog/identity",
+          "finder Target",
+          "Client::locate"
+        ],
+        "conflicts_with": [
+          "history_identity",
+          "timeline_memory",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Persist stable scoped identity and read-only offline history. Coordinate with iOS conversation list architecture."
+        ]
+      },
+      "history_identity": {
+        "files": [
+          "crates/core/src/lib.rs",
+          "crates/core/src/model.rs",
+          "crates/ipc/src",
+          "crates/storage/migrations",
+          "crates/storage/src/lib.rs",
+          "crates/client/src/native.rs",
+          "crates/client/src/names.rs"
+        ],
+        "apis": [
+          "ChatMessage author identity and storage schema"
+        ],
+        "conflicts_with": [
+          "dm_navigation",
+          "friends_ui",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Backward-compatible SQLite/PostgreSQL migrations; differentiate legacy claimed cert from authenticated MLS identity."
+        ]
+      },
+      "search_language": {
+        "files": [
+          "crates/core/src/search.rs",
+          "crates/storage/src/lib.rs",
+          "crates/storage/migrations",
+          "crates/client/src/search.rs"
+        ],
+        "apis": [
+          "FTS5/tsquery token normalization"
+        ],
+        "conflicts_with": [
+          "history_identity",
+          "dm_navigation"
+        ],
+        "dependencies": [
+          "Equivalent SQL backend semantics and migration/reindex story. Search cursor paging itself is complete."
+        ]
+      },
+      "friends_ui": {
+        "files": [
+          "apps/desktop/src/names.rs",
+          "apps/desktop/src/menus.rs",
+          "apps/desktop/src/view.rs",
+          "crates/client/src/tree.rs",
+          "crates/session/src/config.rs"
+        ],
+        "apis": [
+          "Names preferences",
+          "tree sorting/whisper policy"
+        ],
+        "conflicts_with": [
+          "history_identity",
+          "tree_performance",
+          "managed_config"
+        ],
+        "dependencies": [
+          "Legacy certificate claims remain server-scoped."
+        ]
+      },
+      "shortcuts": {
+        "files": [
+          "apps/desktop/src/shortcuts.rs",
+          "apps/desktop/src/global_shortcuts.rs",
+          "apps/desktop/src/state.rs",
+          "apps/desktop/src/settings.rs",
+          "tests/screenshots.py"
+        ],
+        "apis": [
+          "record/rebind/press-release events"
+        ],
+        "conflicts_with": [
+          "composer_queue",
+          "managed_config"
+        ],
+        "dependencies": [
+          "Portal version support, optional private compositor sessions; Windows/macOS require native validation."
+        ]
+      },
+      "theme_accessibility": {
+        "files": [
+          "apps/desktop/src/theme.rs",
+          "apps/desktop/src/appearance.rs",
+          "apps/desktop/src/view.rs",
+          "tests/screenshots.py"
+        ],
+        "apis": [
+          "Token contrast",
+          "zoom/input geometry"
+        ],
+        "conflicts_with": [
+          "emoji_font",
+          "timeline_performance",
+          "screenshot_harness"
+        ],
+        "dependencies": [
+          "Role-specific contrast tests; IME native validation."
+        ]
+      },
+      "accessibility_upstream": {
+        "files": [
+          "vendor GPUI AccessKit integration or new accesskit adapter patch",
+          "Cargo.toml",
+          "Cargo.lock",
+          "tests/accessibility.py"
+        ],
+        "apis": [
+          "AT-SPI Text/Collection/expanded state"
+        ],
+        "conflicts_with": [
+          "accessibility_runtime",
+          "upstream_gpui"
+        ],
+        "dependencies": [
+          "Upstream API verification and private session fixtures; do not infer actual reader behavior from tree only."
+        ]
+      },
+      "accessibility_runtime": {
+        "files": [
+          "tests/accessibility.py",
+          "tests/windows_vm.py",
+          "tests/README.md"
+        ],
+        "apis": [
+          "Orca test D-Bus adapter",
+          "NVDA/VoiceOver workflows"
+        ],
+        "conflicts_with": [
+          "screenshot_harness",
+          "windows_harness"
+        ],
+        "dependencies": [
+          "Appropriate native reader environment; no owned Apple hardware means VoiceOver remains blocked."
+        ]
+      },
+      "tree_performance": {
+        "files": [
+          "crates/client/src/client.rs",
+          "crates/client/src/server.rs",
+          "crates/client/src/tree.rs",
+          "apps/desktop/src/view.rs"
+        ],
+        "apis": [
+          "channel ID/name indexes",
+          "channel-state invalidation"
+        ],
+        "conflicts_with": [
+          "friends_ui",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Current profile before changing data structures."
+        ]
+      },
+      "managed_config": {
+        "files": [
+          "nix/home-manager.nix",
+          "nix/module.nix or new client module",
+          "crates/session/src/config.rs",
+          "apps/desktop/src/settings.rs",
+          "nix/home-manager-test.nix"
+        ],
+        "apis": [
+          "managed settings schema/system lookup"
+        ],
+        "conflicts_with": [
+          "composer_queue",
+          "transfer_settings",
+          "friends_ui",
+          "notice_retention"
+        ],
+        "dependencies": [
+          "Native system lookup differs from Home Manager user file; preserve top-level validation already present."
+        ]
+      },
+      "windows_retirement": {
+        "files": [
+          "crates/session/src/rename.rs",
+          "crates/sandbox-windows/src/os.rs",
+          "crates/sandbox-windows/src/windows.rs",
+          "crates/sandbox-windows/tests/confinement.rs",
+          "tests/windows_vm.py",
+          "SECURITY.md",
+          "docs/windows-sandbox.md"
+        ],
+        "apis": [
+          "retire_legacy_profile/revoke"
+        ],
+        "conflicts_with": [
+          "windows_hardening",
+          "windows_harness"
+        ],
+        "dependencies": [
+          "Mechanism implemented; verify native inherited-ACE removal and interrupted upgrade."
+        ]
+      },
+      "crypto_lock": {
+        "files": [
+          "apps/crypto-worker/src/store.rs",
+          "apps/crypto-worker/src/main.rs",
+          "crates/session/src/identity.rs",
+          "crates/ipc/src/host.rs"
+        ],
+        "apis": [
+          "exclusive own-profile lock/startup error"
+        ],
+        "conflicts_with": [
+          "sdk_refactor",
+          "windows_hardening"
+        ],
+        "dependencies": [
+          "Cross-platform lock semantics; no second worker corrupting shared keystore."
+        ]
+      },
+      "windows_hardening": {
+        "files": [
+          "crates/sandbox-windows/src/plan.rs",
+          "crates/sandbox-windows/src/launch.rs",
+          "crates/sandbox-windows/src/os.rs",
+          "crates/ipc/src/host.rs",
+          "crates/sandbox-windows/tests/confinement.rs"
+        ],
+        "apis": [
+          "AppContainer capabilities/mitigations/job desktop",
+          "ACL/profile cleanup"
+        ],
+        "conflicts_with": [
+          "windows_retirement",
+          "audio_effects"
+        ],
+        "dependencies": [
+          "Native Windows VM proof per mitigation; COM/Winsock compatibility; physical audio remains separate."
+        ]
+      },
+      "windows_harness": {
+        "files": [
+          "tests/windows_vm.py",
+          "tests/windows_vm/agent.ps1",
+          "tests/windows_vm/firstlogon.ps1",
+          "tests/README.md"
+        ],
+        "apis": [
+          "authenticated test agent HTTP",
+          "private UDP networking"
+        ],
+        "conflicts_with": [
+          "accessibility_runtime",
+          "windows_retirement"
+        ],
+        "dependencies": [
+          "Existing private KVM image only; no large cache recreation/public network."
+        ]
+      },
+      "macos_sandbox": {
+        "files": [
+          "crates/ipc/src/host.rs",
+          "apps/media-worker/src/live.rs",
+          "tests/README.md"
+        ],
+        "apis": [
+          "Seatbelt MEDIA deny-default policy"
+        ],
+        "conflicts_with": [
+          "audio_capabilities",
+          "audio_native"
+        ],
+        "dependencies": [
+          "Cannot validate Mach-service/audio permission needs through Linux cross-build; requires macOS."
+        ]
+      },
+      "audio_capabilities": {
+        "files": [
+          "crates/ipc/src/host.rs",
+          "crates/session/src/workers.rs",
+          "apps/media-worker/src/live.rs",
+          "tests/pipewire_recovery.py"
+        ],
+        "apis": [
+          "media_sandbox_command and backend pin"
+        ],
+        "conflicts_with": [
+          "audio_devices",
+          "audio_effects",
+          "macos_sandbox"
+        ],
+        "dependencies": [
+          "Scope service sockets while preserving Linux reference/upstream detection and daemon restarts."
+        ]
+      },
+      "audio_devices": {
+        "files": [
+          "vendor/cpal/src/host/pipewire/utils.rs",
+          "vendor/cpal/src/host/pipewire/device.rs",
+          "apps/media-worker/src/live.rs",
+          "tests/pipewire_recovery.py"
+        ],
+        "apis": [
+          "PipeWire class enumeration/default device IDs"
+        ],
+        "conflicts_with": [
+          "audio_effects",
+          "audio_native",
+          "upstream_audio"
+        ],
+        "dependencies": [
+          "Virtual-only fixture can test on Linux without hardware."
+        ]
+      },
+      "audio_effects": {
+        "files": [
+          "apps/media-worker/src/live.rs",
+          "apps/media-worker/src/graph.rs",
+          "crates/core/src/audio.rs",
+          "new platform-specific worker adapters"
+        ],
+        "apis": [
+          "IAudioEffectsManager/IAcousticEchoCancellationControl",
+          "macOS VoiceProcessing"
+        ],
+        "conflicts_with": [
+          "audio_devices",
+          "audio_native",
+          "windows_hardening"
+        ],
+        "dependencies": [
+          "Unsafe system adapter only in worker; native COM/Objective-C and audio validation required."
+        ]
+      },
+      "audio_fixture": {
+        "files": [
+          "tests/media_live.py",
+          "tests/pipewire_recovery.py",
+          "apps/media-worker/src/reference.rs",
+          "apps/media-worker/src/dsp.rs"
+        ],
+        "apis": [
+          "room/drift/load metrics and fixture clock"
+        ],
+        "conflicts_with": [
+          "audio_native",
+          "audio_effects"
+        ],
+        "dependencies": [
+          "Private virtual audio only; do not silently relax quality thresholds to turn flaky tests green."
+        ]
+      },
+      "audio_native": {
+        "files": [
+          "apps/media-worker/src/live.rs",
+          "apps/media-worker/src/reference.rs",
+          "apps/media-worker/src/dsp.rs",
+          "crates/client/src/native/media.rs",
+          "vendor/cpal",
+          "docs/dsp-evaluation.md"
+        ],
+        "apis": [
+          "capture/loopback/audio permissions/recovery"
+        ],
+        "conflicts_with": [
+          "audio_fixture",
+          "audio_devices",
+          "audio_effects",
+          "macos_sandbox"
+        ],
+        "dependencies": [
+          "Physical Windows/macOS/Apple device access absent. macOS/iOS platform work needs shared native audio ownership design; iOS is priority."
+        ]
+      },
+      "notifications": {
+        "files": [
+          "apps/desktop/src/notify.rs",
+          "apps/desktop/src/services.rs",
+          "crates/client/src/navigation.rs",
+          "apps/desktop/src/state.rs"
+        ],
+        "apis": [
+          "native notification actions -> scoped conversation navigation"
+        ],
+        "conflicts_with": [
+          "dm_navigation",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Native IDs/permissions and click callbacks; mobile notification design should share core action semantics."
+        ]
+      },
+      "platform_packaging": {
+        "files": [
+          "apps/desktop/build.rs",
+          "nix/desktop-files.nix",
+          "new installer/desktop/AppStream metadata"
+        ],
+        "apis": [
+          "MSVC icon resources and non-Nix integration"
+        ],
+        "conflicts_with": [
+          "managed_config"
+        ],
+        "dependencies": [
+          "Preserve GNU embedding; test MSVC separately."
+        ]
+      },
+      "session_budgets": {
+        "files": [
+          "crates/session/src/connection.rs",
+          "crates/core/src/model.rs",
+          "tests/protocol_features.py"
+        ],
+        "apis": [
+          "blob LRU/server snapshot budgets"
+        ],
+        "conflicts_with": [
+          "dns_srv",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Visible refusal and memory bound remain mandatory."
+        ]
+      },
+      "content_limits": {
+        "files": [
+          "crates/content/src/lib.rs",
+          "crates/ipc/src/host.rs",
+          "crates/client/src/native.rs",
+          "apps/desktop/src/document.rs"
+        ],
+        "apis": [
+          "ContentRequest batch failure/resource budget"
+        ],
+        "conflicts_with": [
+          "media_formats",
+          "rich_welcome",
+          "notice_retention"
+        ],
+        "dependencies": [
+          "Keep framing bounds; per-message placeholder/partial batch behavior."
+        ]
+      },
+      "media_formats": {
+        "files": [
+          "crates/content/Cargo.toml",
+          "new isolated decoder worker",
+          "crates/ipc/src/lib.rs",
+          "apps/desktop/src/document.rs",
+          "apps/desktop/src/viewer.rs"
+        ],
+        "apis": [
+          "safe decoded-frame IPC"
+        ],
+        "conflicts_with": [
+          "content_limits",
+          "image_clipboard"
+        ],
+        "dependencies": [
+          "Codec choice/license/security and worker capability review."
+        ]
+      },
+      "name_sanitization": {
+        "files": [
+          "crates/client/src/names.rs",
+          "apps/desktop/src/names.rs",
+          "crates/client/src/server.rs",
+          "tests/accessibility.py"
+        ],
+        "apis": [
+          "safe display label boundary"
+        ],
+        "conflicts_with": [
+          "friends_ui",
+          "history_identity"
+        ],
+        "dependencies": [
+          "Preserve authenticated identity/protocol storage, sanitize presentation only."
+        ]
+      },
+      "channel_details": {
+        "files": [
+          "apps/desktop/src/view.rs",
+          "apps/desktop/src/panels.rs"
+        ],
+        "apis": [
+          "description/details entry"
+        ],
+        "conflicts_with": [
+          "rich_welcome",
+          "tree_performance"
+        ],
+        "dependencies": [
+          "Use existing sanitized Document and accessible affordance."
+        ]
+      },
+      "screenshot_harness": {
+        "files": [
+          "tests/screenshots.py",
+          "tests/accessibility.py"
+        ],
+        "apis": [
+          "scene fixture/reset/assertions"
+        ],
+        "conflicts_with": [
+          "all GUI-facing tracks touching shared screenshot fixtures"
+        ],
+        "dependencies": [
+          "Existing scene/coordinates need deterministic state, not just another screenshot file."
+        ]
+      },
+      "sdk_refactor": {
+        "files": [
+          "crates/client/src/native.rs",
+          "crates/client/src/client.rs",
+          "crates/client/src/platform.rs",
+          "crates/core/src/model.rs",
+          "apps/desktop/src/state.rs"
+        ],
+        "apis": [
+          "Event server/generation envelope, platform facade"
+        ],
+        "conflicts_with": [
+          "nearly all SDK state work"
+        ],
+        "dependencies": [
+          "Highest-conflict track: coordinate with iOS binding/shared-core work, do not run alongside broad event consumers."
+        ]
+      },
+      "plugin_data": {
+        "files": [
+          "crates/session/src/connection.rs",
+          "crates/core/src/model.rs",
+          "crates/client/src/native.rs",
+          "tests/protocol_features.py"
+        ],
+        "apis": [
+          "PluginDataTransmission inbound/outbound"
+        ],
+        "conflicts_with": [
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Security/authorization use case before exposing untrusted plugin payloads."
+        ]
+      },
+      "helper_cleanup": {
+        "files": [
+          "apps/desktop/src/dialogs.rs",
+          "apps/desktop/src/view.rs",
+          "apps/desktop/src/document.rs",
+          "crates/content/src/lib.rs",
+          "apps/media-worker/src/main.rs"
+        ],
+        "apis": [
+          "activation/data URI helpers/diagnostic command surface"
+        ],
+        "conflicts_with": [
+          "image_clipboard",
+          "rich_welcome",
+          "audio_fixture"
+        ],
+        "dependencies": [
+          "Avoid moving parser logic into privileged process."
+        ]
+      },
+      "transfer_settings": {
+        "files": [
+          "apps/desktop/src/settings.rs",
+          "crates/session/src/config.rs",
+          "apps/desktop/src/transfer.rs"
+        ],
+        "apis": [
+          "stored relay/rendezvous controls"
+        ],
+        "conflicts_with": [
+          "managed_config",
+          "files_protocol"
+        ],
+        "dependencies": [
+          "Honor managed relay-only settings and endpoint policy."
+        ]
+      },
+      "files_protocol": {
+        "files": [
+          "docs/files.md",
+          "crates/files/src",
+          "apps/transfer-worker/src/main.rs",
+          "apps/server/src/history.rs",
+          "crates/ipc/src",
+          "apps/desktop/src/transfer.rs"
+        ],
+        "apis": [
+          "resumable kept/live file protocol"
+        ],
+        "conflicts_with": [
+          "transfer_settings",
+          "history_identity",
+          "sdk_refactor"
+        ],
+        "dependencies": [
+          "Large later milestone; preserves relay-only opt-out and encryption boundaries."
+        ]
+      },
+      "fuzz_coverage": {
+        "files": [
+          "fuzz/Cargo.toml",
+          "fuzz/fuzz_targets",
+          "fuzz/seeds",
+          "justfile",
+          "CI workflows"
+        ],
+        "apis": [
+          "harness adapters/campaign jobs"
+        ],
+        "conflicts_with": [
+          "any parser/interface change"
+        ],
+        "dependencies": [
+          "Do not infer coverage of third-party internals from first-party framing harness."
+        ]
+      },
+      "upstream_gpui": {
+        "files": [
+          "vendor/gpui-pre-wgpu",
+          "vendor GPUI platform crates",
+          "Cargo.toml",
+          "Cargo.lock"
+        ],
+        "apis": [
+          "drop/emoji/a11y/frame scheduling"
+        ],
+        "conflicts_with": [
+          "accessibility_upstream",
+          "timeline_performance"
+        ],
+        "dependencies": [
+          "Upstream reports/versions not verified in read-only source audit."
+        ]
+      },
+      "upstream_audio": {
+        "files": [
+          "vendor/cpal",
+          "Cargo.toml",
+          "Cargo.lock",
+          "tests/media_live.py"
+        ],
+        "apis": [
+          "CPAL stream naming/monitor regression"
+        ],
+        "conflicts_with": [
+          "audio_devices",
+          "audio_fixture"
+        ],
+        "dependencies": [
+          "Reduced fixture and upstream acceptance; no unsafe backend replacement without isolation."
+        ]
+      }
+    },
+    "doc_inconsistencies": [
+      {
+        "paths": [
+          "SECURITY.md:264",
+          "docs/windows-sandbox.md:74",
+          "docs/desktop.md:214"
+        ],
+        "issue": "First two still describe old broad grant remaining; rename implementation and desktop docs now revoke/retire legacy grants. State mechanism implemented with native migration validation still needed."
+      },
+      {
+        "paths": [
+          "docs/windows-sandbox.md:101–107/:352–353",
+          "SECURITY.md transfer privacy section"
+        ],
+        "issue": "Unqualified transfer may connect anywhere/direct peers language should distinguish kernel sandbox capability from enforced relay-only application policy; kernel broad network rights still remain true."
+      },
+      {
+        "paths": [
+          "docs/architecture.md:92",
+          "apps/desktop/src/view.rs:1507–1645"
+        ],
+        "issue": "Check renderer virtualization future-tense guidance against implemented viewport-only layout; bounded retention is still future work."
+      }
+    ]
+  },
+  "server_security_crypto_data": {
+    "audit": "server-security-crypto-data-e2ee-video TODO audit",
+    "source_revision": "f0116b77",
+    "mode": "READ ONLY: no repository changes, builds, tests, network or host audio; only this external report written",
+    "findings": [
+      {
+        "id": "S01",
+        "kind": "unmet_requirement_deliberate_default",
+        "todo_lines": [
+          613,
+          617,
+          890,
+          897
+        ],
+        "summary": "Requested E2EE default is not implemented: Rust config, sample-config test, and NixOS module all deliberately default to compatible mode.",
+        "evidence": [
+          "apps/server/src/config.rs:23-39 (Compatible #[default])",
+          "apps/server/src/config.rs:504-508 (Config default)",
+          "apps/server/src/config.rs:835-838 (assert compatible)",
+          "nix/module.nix:154-165 (comment defers default until SFrame, default compatible)",
+          "crates/session/src/connection.rs:1191 (encrypted voice rejected)"
+        ],
+        "recommendation": "Add an explicit unchecked default-transition requirement; describe current compatible default separately from desired eventual E2EE default. Do not silently flip while encrypted mode disables voice and remains experimental.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S02",
+        "kind": "already_implemented_stale_followup",
+        "todo_lines": [
+          211,
+          215
+        ],
+        "summary": "Old Windows whole-data-folder Modify grant revocation is implemented during namespace migration; crypto single-store locking in the same bullet is still missing.",
+        "evidence": [
+          "crates/session/src/rename.rs:14-30 (migration invokes retirement before move)",
+          "crates/session/src/rename.rs:195-255 (old broad storage data path and destination retry paths)",
+          "crates/sandbox-windows/src/windows.rs:148-185 (revoke tree, refuse reparse points, delete profile)",
+          "crates/sandbox-windows/src/launch.rs:315-340 (retirement preserves unrelated ACLs, idempotency, injected failures)"
+        ],
+        "recommendation": "Split the combined item: mark rename-time Windows retirement implemented with platform validation caveat, retain crypto-store lock unchecked.",
+        "limits": "Windows production path is cfg(windows, not(test)); mock failure tests exist. This audit did not execute Windows migration or establish physical-hardware coverage."
+      },
+      {
+        "id": "S03",
+        "kind": "genuine_security_followup",
+        "todo_lines": [
+          211,
+          215,
+          824,
+          828
+        ],
+        "summary": "Crypto Store has no exclusive lock. One CryptoHandle shares a worker within one process, but a second process can open the same keys directory and replace sealed state/MLS ratchets.",
+        "evidence": [
+          "apps/crypto-worker/src/store.rs:38-41 (only directory and key fields)",
+          "apps/crypto-worker/src/store.rs:83-108 (no locking before key read/create)",
+          "apps/crypto-worker/src/store.rs:65-74 (shared deterministic .new temporary paths)",
+          "apps/crypto-worker/src/main.rs:23-28 (Store/Worker open)",
+          "apps/crypto-worker/tests/common/mod.rs:69-70 (replacement worker opens while old worker alive)",
+          "crates/session/src/identity.rs:54-56 (one handle per process/profile claim)"
+        ],
+        "recommendation": "Keep unchecked; qualify one-per-profile wording as intended/per-process until exclusive store ownership is enforced. Suitable small independent task; see lock_assessment.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S04",
+        "kind": "implemented_stale_followup",
+        "todo_lines": [
+          318
+        ],
+        "summary": "Search is already paginated within its byte budget, including UI continuation state and reach-every-match tests.",
+        "evidence": [
+          "crates/storage/src/lib.rs:827-834 (after cursor)",
+          "crates/storage/src/lib.rs:932-937 (SearchPage.next)",
+          "crates/storage/src/lib.rs:1296 (search_pages_within_the_byte_budget)",
+          "crates/storage/src/lib.rs:1320 (search_pages_reach_every_match)",
+          "crates/ipc/src/lib.rs:127 (Search.after)",
+          "apps/desktop/src/search.rs:253-256 (next cursor retained)"
+        ],
+        "recommendation": "Mark cursor pagination implemented; retain separate text/tokenizer, diacritics, CJK and matching-quality followups.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S05",
+        "kind": "still_open_security_hardening",
+        "todo_lines": [
+          329
+        ],
+        "summary": "M2 is still true: Linux media sandbox binds PulseAudio directory whenever available, including PipeWire hosts.",
+        "evidence": [
+          "crates/ipc/src/host.rs:386-404 (both pipewire-0 and pulse bindings)",
+          "apps/media-worker/src/live.rs:820-827 (Pulse API identifies real sinks/source metadata)"
+        ],
+        "recommendation": "Keep unchecked and explain backend/metadata/fallback need; future least-capability binding must preserve current audio recovery and echo-graph behavior.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S06",
+        "kind": "still_open_security_hardening",
+        "todo_lines": [
+          330
+        ],
+        "summary": "M3 remains true: media Seatbelt profile is an allow-default deny-list; content/storage deny default.",
+        "evidence": [
+          "crates/ipc/src/host.rs:533-557 (MEDIA allow default, network/write/home restrictions)",
+          "crates/ipc/src/host.rs:831-852 (profile assertions)"
+        ],
+        "recommendation": "Keep unchecked. Do not describe media sandbox as a macOS deny-default boundary; native validation needed for narrowing.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S07",
+        "kind": "duplicate_lifecycle_status",
+        "todo_lines": [
+          906,
+          936,
+          941
+        ],
+        "summary": "Inactive-device removal is implemented and tested, but a later aggregate checkbox still lists it as pending alongside genuinely missing revocation/mailbox/UI work.",
+        "evidence": [
+          "apps/server/src/mls.rs:2286-2288 (90-day seen and 30-day unopened removal)",
+          "apps/cli/tests/e2ee_channels.rs:307 (a_device_unseen_for_90_days_is_removed)",
+          "TODO.md:936-937 (ACL/inactive removals checked)"
+        ],
+        "recommendation": "Split lifecycle entries: mark inactivity removal implemented; retain user-initiated revocation, server DeviceLink mailbox/UI, sync-key rotation, and full mobile lifecycle unchecked.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S08",
+        "kind": "prototype_scope_overstatement",
+        "todo_lines": [
+          811,
+          820,
+          863,
+          865,
+          938,
+          941,
+          1221,
+          1228
+        ],
+        "summary": "Core multi-device provisioning/MLS works, but same-account concurrent desktop/mobile sessions are not a shipping feature; the server still ghost-kicks another connection for that account/name.",
+        "evidence": [
+          "apps/crypto-worker/src/link.rs:195-207,291-309 (SPAKE2/link worker primitives)",
+          "apps/cli/src/main.rs:82-84,468-471 (offline/caller-relayed linking)",
+          "apps/server/src/auth.rs:271-278 (same account/name lookup)",
+          "apps/server/src/auth.rs:394-400 (disconnect ghost)",
+          "TODO.md:1221-1228 (correctly states missing concurrency prerequisite)"
+        ],
+        "recommendation": "Qualify phase-3/4b completion as crypto primitives/prototype, not complete end-user multi-device login/linking. Keep the concurrent authenticated-device login prerequisite centralized with sync/mobile work.",
+        "limits": "Existing fixtures may deliberately bypass or sequence connection constraints; passing crypto multi-device tests must not be cited as proof of concurrent-account product support."
+      },
+      {
+        "id": "S09",
+        "kind": "stale_open_question_inventory",
+        "todo_lines": [
+          858,
+          862,
+          883
+        ],
+        "summary": "The broad Open questions for the user inventory is stale: docs/e2ee.md already records the user answers and recovery offer/skip choice.",
+        "evidence": [
+          "docs/e2ee.md:1233-1250 (Answers section, recovery/device key/backend/membership/history)",
+          "docs/e2ee.md:1511-1512 (questions now answered)",
+          "TODO.md:913-925 (specific remaining witness choices)"
+        ],
+        "recommendation": "Replace broad re-ask list with links to decided requirements and a short explicit list of genuinely unresolved witness/provider choices. Do not infer new permission requirements.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S10",
+        "kind": "advisory_wording_inconsistent",
+        "todo_lines": [
+          856,
+          857,
+          926,
+          928
+        ],
+        "summary": "The blanket no advisory ignores assertion is false; deny.toml explicitly ignores many scoped advisories, including proc-macro-error2. The three vulnerable runtime libcrux pins are patched rather than ignored.",
+        "evidence": [
+          "deny.toml:12-27 (explicit exceptions including RUSTSEC-2026-0173)",
+          "Cargo.toml:79-84 (libcrux patched runtime dependencies)",
+          "Cargo.lock:4295-4304 (hax-lib-macros 0.3.7 -> proc-macro-error2)",
+          "Cargo.lock:5706-5713 (libcrux-intrinsics verification chain)",
+          "deny.toml:156-177 (OpenMLS wrapper policy)"
+        ],
+        "recommendation": "Narrow wording to the specific patched runtime libcrux advisories and document the compile-time cfg(hax) exception. Keep verification of active-target reachability distinct from mere lockfile presence.",
+        "limits": "No cargo tree or fresh cargo-deny run performed. Policy records a reachability justification; this static audit does not independently prove all cfg combinations unreachable."
+      },
+      {
+        "id": "S11",
+        "kind": "experimental_history_scope",
+        "todo_lines": [
+          945,
+          949
+        ],
+        "summary": "Authenticated channel history checkbox is too broad without its neighboring caveat: known-sequence replay/auth checks exist, but first-observation historical ordering/membership proofs are incomplete; revoked/unconfirmed historical signers intentionally produce gaps.",
+        "evidence": [
+          "apps/crypto-worker/src/mls.rs:2158-2199 (pinned author-account/signer/roster validation)",
+          "apps/crypto-worker/tests/mls.rs:1017-1178 (bad/current grant and unknown/revoked signer checks)",
+          "apps/crypto-worker/tests/mls.rs:1183,1237 (own replay/live attribution)",
+          "crates/client/src/native.rs:2677,2718 (unsigned mutation/cache-gap protection)",
+          "docs/e2ee.md:1811-1848 (prototype and historical evidence limitations)"
+        ],
+        "recommendation": "Retain implemented experimental live/archive text as checked, explicitly qualify verified available evidence; keep full retained authorized history with historical membership/order proofs unchecked in one canonical 4d task. Never weaken fail-closed behavior to make old messages display.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S12",
+        "kind": "bounded_message_not_total_history",
+        "todo_lines": [
+          945,
+          946
+        ],
+        "summary": "Grant transport genuinely pages rather than limiting the accessible archive to 256 keys; this checked subclaim is supported.",
+        "evidence": [
+          "crates/e2ee/src/history.rs:57 (256 per grant)",
+          "crates/e2ee/src/history.rs:251-268 (cursor paging)",
+          "crates/e2ee/src/history.rs:359-377 (700-key regression)",
+          "apps/crypto-worker/src/mls.rs:138-157 (coverage)",
+          "crates/session/src/mls.rs:229-280 (bounded retry scheduling)",
+          "tests/e2ee_direct.py (offline donor regression)"
+        ],
+        "recommendation": "Keep the bounded-page implementation checked; distinguish it from end-to-end storage/availability guarantees and deferred historical evidence.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S13",
+        "kind": "untracked_availability_limit",
+        "todo_lines": [
+          314,
+          316,
+          945,
+          949
+        ],
+        "summary": "The sealed crypto store has a 16 MiB read cap, but writes do not enforce/read-back that cap. Growing archive hash bindings and retained state may save successfully and become unreadable on restart.",
+        "evidence": [
+          "apps/crypto-worker/src/store.rs:27-28,43-54 (MAX_FILE read rejection)",
+          "apps/crypto-worker/src/store.rs:140-142 (save has no corresponding bound)",
+          "apps/crypto-worker/src/mls.rs:166-171 (retained archive map)",
+          "TODO.md:943 (log-structured store already queued)"
+        ],
+        "recommendation": "Record as a limits/store follow-up tied to log-structured 4d state: do not claim unlimited durable archive availability from paged grants alone; do not silently discard keys or raise arbitrary limits without migration/availability design.",
+        "limits": "Static failure-mode inference, not a reproduced oversized-profile test. Not proposed as unrelated crypto expansion ahead of iOS."
+      },
+      {
+        "id": "S14",
+        "kind": "strict_mode_implemented_but_media_unavailable",
+        "todo_lines": [
+          890,
+          897,
+          950,
+          953
+        ],
+        "summary": "Strict encrypted text mode is implemented; voice/whispers/shouts, raw attachments/file offers, edits/deletes and plaintext paths are blocked rather than transparently supported with MLS.",
+        "evidence": [
+          "crates/session/src/connection.rs:1191,1277-1280,1763,1885,2223 (voice/plaintext/outbox guards)",
+          "crates/client/src/native.rs:1199-1204 (voice_allowed invalidation)",
+          "apps/desktop/src/transfer.rs:offer_files (E2EE refusal)",
+          "crates/session/src/mls.rs:86,1380-1476 (verified local-only decrypted page)",
+          "apps/server/tests/mls.rs:939 (encrypted admission boundary)"
+        ],
+        "recommendation": "Keep strict text checkbox checked; preserve the full-feature encrypted-server requirement unchecked, and say blocked until SFrame/files/edits implementations exist. Nix option description should say voice disabled, not merely not end-to-end encrypted.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S15",
+        "kind": "witness_implementation_vs_deployment",
+        "todo_lines": [
+          855,
+          913,
+          925
+        ],
+        "summary": "Independent witnesses exist, but bundled default protection is intentionally off until auditor deployment. Generic independent auditors optional unchecked entry duplicates built witness machinery.",
+        "evidence": [
+          "crates/kt/src/witness/policy.rs:28-33 (DEFAULT_WITNESSES empty)",
+          "crates/ipc/src/crypto.rs:152-167 (24h, block_new_devices defaults)",
+          "docs/witness.md:7,84-89 (deployment and proposal status)",
+          "nix/witness-module.nix (deployed-service module source)"
+        ],
+        "recommendation": "Separate built witness protocol/module/config from unchecked deployment/default-key activation, UI and historical-proof growth. Replace duplicate broad auditors task with these specific operational requirements.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S16",
+        "kind": "video_roadmap_correctly_unbuilt",
+        "todo_lines": [
+          1005,
+          1028
+        ],
+        "summary": "Video roadmap items are correctly unchecked. Current RTC is an Opus/VP8 encoded-media transport trial with one offer/answer and one track per kind; it is not calling UI, camera pipeline, SFU, scalable AV1/VP9 video or MLS media.",
+        "evidence": [
+          "crates/rtc/src/lib.rs:2-6,28-39 (caller-owned signaling and VP8)",
+          "crates/rtc/src/lib.rs:68-70 (no live encoder)",
+          "crates/rtc/src/lib.rs:87-88 (one initial offer/answer)",
+          "crates/rtc/src/lib.rs:125-127 (TURN/discovery future adapters)",
+          "crates/rtc/src/lib.rs:176-177 (fingerprint not a user identity)",
+          "crates/rtc/src/lib.rs:379-394 (one audio, <=one video)",
+          "crates/rtc/tests/transport.rs:165,201,240,249,289,317 (transport regressions)"
+        ],
+        "recommendation": "Keep unchecked and explicitly contrast the existing bounded transport trial with future product video. iOS shell work may reuse core boundaries without implying camera/WebRTC product support.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S17",
+        "kind": "unresolved_transitive_certificate_dependency",
+        "todo_lines": [
+          1029
+        ],
+        "summary": "AWS-LC RTC follow-up is genuinely still open. str0m selects rust-crypto for media/DTLS provider, but str0m-rust-crypto enables dimpl rcgen, which explicitly enables AWS-LC certificate support. Lockfile contains aws-lc-rs/sys.",
+        "evidence": [
+          "crates/rtc/Cargo.toml:14-16 (selected rust-crypto; does not prove transitive absence)",
+          "Cargo.lock:803-824 (aws-lc-rs/sys)",
+          "Cargo.lock:2517,9511,14100 (dimpl, rcgen, x509-parser reference AWS-LC)",
+          "Cached str0m-rust-crypto-0.7.0/Cargo.toml:42-48 (dimpl features rust-crypto + rcgen)",
+          "Cached dimpl-0.9.0/Cargo.toml:59-62 (rcgen feature enables aws-lc-rs)",
+          "Root independently ran cargo tree --locked --offline -p nuschl-rtc -i aws-lc-rs and confirmed selection"
+        ],
+        "recommendation": "Keep TODO1029 unchecked; distinguish RustCrypto provider selection from the unresolved transitive AWS-LC certificate-generation dependency. Do not assert a globally AWS-LC-free lockfile or active graph.",
+        "limits": "Correction: original report mistakenly inferred absence from truncated search output. Dependency path now verified against full lockfile/cached crate feature manifests and root active-tree check; no dependency changes proposed in this lock task."
+      },
+      {
+        "id": "S18",
+        "kind": "recovery_and_sync_roadmap_correctly_unbuilt",
+        "todo_lines": [
+          1170,
+          1228
+        ],
+        "summary": "Passkey PRF backup/vault/native credential adapters/preferences merge sync are still roadmap work. Existing recovery blob/key and device-sync primitives do not implement these services or product flows.",
+        "evidence": [
+          "apps/crypto-worker/src/store.rs:14-18,30-35 (file key, supplied source unwired)",
+          "apps/crypto-worker/src/worker.rs:181-203 (recovery show/save/skip)",
+          "crates/identity/src/keystore.rs:301-396 (recovery key/blob)",
+          "apps/server/src/auth.rs:271-278,394-400 (concurrent session prerequisite missing)",
+          "TODO.md:1192-1211 (browser/native trust boundary requirements)"
+        ],
+        "recommendation": "Keep all unchecked; consolidate prerequisites with iOS-first mobile plan. Preserve offer/recovery-key/skip choices, no provider prerequisite, and no weaker PRF fallback. Do not conflate WebRTC DTLS fingerprint, browser serving origin, passkey provider or local store key trust boundaries.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S19",
+        "kind": "scoped_retry_followup",
+        "todo_lines": [
+          783,
+          789
+        ],
+        "summary": "General history-page retry TODO remains open, but wording should not imply all session paths ignore retry hints: MLS commits/sends/grants and legacy chat have bounded retry/backoff code.",
+        "evidence": [
+          "crates/session/src/mls.rs:64-68 (Busy delay)",
+          "crates/session/src/mls.rs:1031,1335 (send/grant retry paths)",
+          "crates/session/src/connection.rs:1974 (Busy/RateLimited legacy send)",
+          "crates/client/src/native.rs history error branch (page fails rather than automatically re-requesting)"
+        ],
+        "recommendation": "Narrow unchecked item to general history paging/desktop retry UX; keep burst-send stall as an explicitly historical reproduction until reproduced, not automatically mark fixed from unrelated passing tests.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      },
+      {
+        "id": "S20",
+        "kind": "unchecked_policy_decision_confirmed",
+        "todo_lines": [
+          711,
+          713
+        ],
+        "summary": "Deleted-channel moderation remains a real policy decision: Action::Moderate requires Kind::Channel and Write; a deleted-channel archive is not covered.",
+        "evidence": [
+          "apps/server/src/authz.rs:570-573",
+          "apps/server/src/authz/tests.rs:997-1012 (moderation cases including ARCHIVE)"
+        ],
+        "recommendation": "Keep unchecked; decide operator/SuperUser archived-content moderation explicitly rather than silently broaden authorization.",
+        "limits": "Static source/test inspection only; no tests or builds run in this audit."
+      }
+    ],
+    "lock_assessment": {
+      "feasible_independently": true,
+      "priority": "Small genuine integrity fix that can proceed independently if assigned; iOS remains product priority; no other crypto expansion.",
+      "production_files": [
+        "apps/crypto-worker/src/store.rs"
+      ],
+      "api": "Add an owned fs::File lock guard to Store. In Store::open, open a persistent private .store.lock read+write/create/truncate(false), Unix mode 0600; File::try_lock before reading/creating store.key or any sealed file. Keep descriptor alive until Store drops. Existing std APIs already used in session layout and storage operator lock; no Cargo/dependency/unsafe change needed.",
+      "failure_policy": "Fail closed on WouldBlock and unsupported/error. No PID authority, no lock-file unlink on Drop (inode split-brain), no second writer, no deleting/resetting stores. An immediate lock refusal is bounded. Do not copy operator lock fail-open fallback.",
+      "test_files": [
+        "apps/crypto-worker/src/store.rs (existing reopened-store test assumes simultaneous opens; restructure drop/reopen)",
+        "apps/crypto-worker/tests/common/mod.rs (consume Client::restart(self)->Self so Worker drops before reopen; update ten restart call sites)",
+        "apps/crypto-worker/tests/worker.rs (three restart call sites)",
+        "apps/crypto-worker/tests/link.rs (one restart call site)",
+        "apps/crypto-worker/tests/mls.rs (six restart call sites and worker_with: drop initial Store before open_worker)",
+        "apps/crypto-worker/tests/store_lock.rs (optional focused child-process owner/crash-release regression)"
+      ],
+      "required_tests": [
+        "same existing directory second owner rejected and no key/state mutation",
+        "first owner dropped -> reopen succeeds and data remains intact",
+        "separate directories allowed concurrently",
+        "both File and Supplied key sources take lock",
+        "child owns lock; second process refused; kill/exit releases OS lock",
+        "restart and link/MLS fixtures represent drop-before-reopen, never bypass locking"
+      ],
+      "conflicts": "No production overlap with iOS app shell, UI, server auth, SQLite schemas, Cargo*, flake*, TODO or docs/clients integration. Test helper/call-site edits overlap other crypto test writers only; root should reserve these files. No repo edits made now.",
+      "extra_limit": "Crypto supervisor discards child stderr; initial lock error may surface as generic worker EOF unless separately improved. File lock is an integrity boundary even without new UI startup-error plumbing. Scope that UX improvement separately if needed."
+    },
+    "verified_keep": [
+      "Compatible Mumble listener/base server, extension history/retention/admin and SQLite/PostgreSQL implementations have corresponding source/test suites; audit did not rerun historical VM claims.",
+      "E2EE remains experimental/fail closed; reviewed archive/grant/live attribution and plaintext boundaries have regression source.",
+      "M2/M3 and hardware/platform validation caveats remain open.",
+      "Same-account concurrent-device login, passkey backup/preferences vault, SFrame/media/file delivery and historical proof completeness remain unchecked."
+    ],
+    "root_owned_integration": [
+      "TODO.md",
+      "Cargo*",
+      "flake*",
+      "justfile",
+      "docs/clients.md"
+    ]
+  }
+}

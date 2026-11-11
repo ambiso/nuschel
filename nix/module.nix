@@ -162,7 +162,7 @@ in
         "compatible" admits stock Mumble clients and has no end-to-end encryption.
         "e2ee" turns stock clients away, carries text only in MLS groups (every
         channel and direct message) and admits unregistered users only to register;
-        voice is not end-to-end encrypted yet (docs/server.md, "Security mode").
+        voice is disabled until end-to-end media exists (docs/server.md, "Security mode").
       '';
     };
     listenAddresses = lib.mkOption {

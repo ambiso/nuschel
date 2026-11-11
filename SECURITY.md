@@ -271,7 +271,8 @@ still needs a native VM test (TODO.md).
 ## Fuzzing
 
 The libFuzzer targets in `fuzz/` (cargo-fuzz; a workspace of its own whose committed
-lock is the main lock cut down) give hostile input to every parser that takes it:
+lock is the main lock cut down) exercise the input paths below. Coverage gaps,
+including update-signature parsing and storage requests, remain listed in TODO.md:
 
 | Targets | Input |
 | --- | --- |

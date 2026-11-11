@@ -48,8 +48,8 @@ flowchart LR
 ```
 
 The native session adapter owns TLS identity, server authentication, control state,
-TCP-tunneled Opus, and typed connection events. Encrypted UDP and automatic reconnection
-remain future work. Workers receive only the data and capabilities they
+encrypted UDP voice with TLS fallback, reconnection and typed connection events.
+Workers receive only the data and capabilities they
 need. In particular, the media worker receives Opus/PCM and route instructions, not
 the credentials or encryption keys that authenticate the Mumble session.
 
@@ -87,17 +87,18 @@ The content worker returns text and style runs, not HTML, scripts, or image URLs
 execute. Renderer adapters remain responsible for selection, accessibility, focus,
 layout, and a keyboard-accessible Show more action.
 
-Initial previews collapse after 12 physical lines or 2,000 Unicode scalar values.
-This handles both pasted documents and long single lines. The full message remains
-available for expansion, copying, and history. A production renderer should also
-use its measured layout height to handle narrow windows and text scaling.
+Desktop previews collapse when their measured wrapped height exceeds 300 logical
+pixels. The full message remains available for expansion, copying and history.
+The timeline lays out visible rows; offscreen accessibility entries remain exposed.
+Bounding retained message memory while paging an active timeline is still open.
 
-Parsing and history each have explicit limits. The initial content limit is 64 KiB;
+Parsing and history each have explicit limits. The content limit is 256 KiB;
 the adapter must report a rejected message rather than silently truncate it. Revisit
-the storage limit separately when adding attachments or legacy HTML. Legacy Mumble HTML is converted to inert text in the content worker: entities and
-line breaks are preserved, executable/resource elements are discarded. Images
+the storage limit separately when adding attachments or legacy HTML. Legacy Mumble
+HTML is converted to inert text and supported style runs in the content worker:
+entities and line breaks are preserved, executable/resource elements are discarded. Images
 embedded as `data:` URIs (as stock Mumble sends them) are decoded in the content
-worker; remote images and other rich formatting are not rendered.
+worker; remote images and arbitrary HTML/CSS are not rendered.
 
 History is on by default, including with stock servers. Server and channel identities
 scope queries; persist author display snapshots and local observation timestamps.
@@ -258,7 +259,7 @@ The storage worker implements exclusive-ID paging for SQLite and PostgreSQL. It
 returns chronological pages capped at 100 messages and 96 KiB of unescaped text,
 with a cursor when older records remain. Byte limits must not silently skip a message.
 Concurrent inserts do not shift older pages. IDs are scoped to a database and query;
-the future session adapter must not treat an arbitrary remote cursor as authorization.
+the session adapter must not treat an arbitrary remote cursor as authorization.
 The existing plaintext message table supports local and non-E2EE server history.
 
 ## MLS and encrypted history
@@ -269,13 +270,17 @@ and transport encryption, but the server can read message and audio content. An
 MLS-required server rejects clients without the negotiated MLS protocol and must not
 silently downgrade, bridge plaintext to a legacy participant, or expose decrypted
 history through legacy APIs. Operators can run separate server instances for the
-two policies. No MLS wire protocol or cryptographic session is implemented yet.
+two policies. Experimental strict encrypted text and archive handling are implemented
+with OpenMLS in the crypto worker. Full historical membership and first-observation
+ordering proofs remain open; unavailable signer/key evidence yields explicit gaps.
+Encrypted servers block unprotected voice until SFrame exists.
 
 The client shows a red open lock for transport-only sessions and a green closed lock
 only after the authenticated MLS session is established. Unknown or negotiating state
 has a neutral or pending indicator. A server advertisement or configuration flag
 cannot produce a green lock. Labels explain "no end-to-end encryption" so that users
-do not confuse transport encryption with E2EE. The current client displays only transport-only sessions.
+do not confuse transport encryption with E2EE. Conversation locks derive from
+authenticated crypto-worker state; an advertisement alone cannot establish them.
 
 Identities are separate by protocol. The Mumble identity is an RSA-2048 X.509
 TLS client certificate used only for Mumble logins; stock Mumble imports only
