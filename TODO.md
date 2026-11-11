@@ -180,14 +180,19 @@ Later (reported):
 - [ ] The channel tree is now the largest per-frame cost (~2.4 ms for 80
       rows); report upstream: wgpu/Mesa capability queries on every reconfigure, and
       GPUI's 30 fps cap for windows without focus during compositor grabs.
-- [ ] Proper Windows sandboxing for the workers: **ready on the unmerged bookmark
-      `windows-sandbox`, waiting for the user's decision** (2026-11-11). Every worker
-      runs in an AppContainer (LPAC for content, storage and crypto), job limits,
-      explicit handle list; verified in the Windows 11 VM. It needs the first
-      first-party `unsafe` (crates/sandbox-windows, ~50 commented blocks over
-      windows-sys, only the workers may depend on it) because no maintained safe
-      wrapper fits (comparison in that branch's docs/windows-sandbox.md). Today on
-      main the workers only run in a kill-on-close job object.
+- [x] Proper Windows sandboxing for the workers: an AppContainer per worker kind
+      (storage and crypto per directory), a job each (memory, one process, UI limits),
+      an explicit handle list, no network except transfer, the offered file by handle,
+      less privileged AppContainers for content, math, storage and crypto
+      (docs/windows-sandbox.md). Checked from inside each worker in the Windows 11 VM
+      (`crates/sandbox-windows/tests/confinement.rs`); media works in its AppContainer
+      with the microphone capability, so no restricted-token fallback.
+- [ ] Windows sandbox follow-ups: a separate desktop or win32k lockdown (workers can
+      still create windows on the user's desktop), Arbitrary Code Guard, less
+      privileged AppContainers for media and transfer too (COM and Winsock refuse
+      them today, so both can read `HKCU\Environment`; try `lpacCom` and friends), an
+      audit of what AppContainers may read (registry, system folders), removing a
+      deleted Nuschel profile's AppContainer profiles, a run on physical hardware.
 - [ ] The desktop shows Murmur's HTML welcome text as stripped source: tags vanish
       and images become U+FFFC boxes (seen on Windows against a stock Murmur).
 
@@ -467,7 +472,8 @@ ServerConfig.
 - [ ] Automate the Windows VM checks as a script (they were driven by hand so far)
       and add UDP (QEMU's guest forwards carry only TCP, so voice used the tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
-      macOS Seatbelt profiles (media is a deny list for now); Windows is only a kill-on-close job, not a sandbox. Neither has run on its OS.
+      macOS Seatbelt profiles (media is a deny list for now), not yet run on macOS;
+      Windows AppContainers, checked in the Windows 11 VM.
 - [ ] Platform effect detection: Windows `IAudioEffectsManager` /
       `IAcousticEchoCancellationControl`, macOS Voice Processing (check its ducking).
       Not done: needs unsafe COM/Objective-C and native validation. Documented in docs/architecture.md; users have the per-microphone override.

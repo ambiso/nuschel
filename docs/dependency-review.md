@@ -18,6 +18,7 @@ platforms. First-party source forbids unsafe code; dependencies require separate
 | Desktop | GPUI Kit without default component/assets features | Native rendering exception, not a message HTML or embedded-browser runtime |
 | TLS | rustls with ring | Explicit crypto exception; no OpenSSL dependency |
 | WebRTC trial | str0m 0.25, defaults disabled, `rust-crypto` | Rust protocol core forbids unsafe; codecs stay in workers; DTLS crypto exception described below |
+| Windows worker sandbox | Own adapter `nuschel-sandbox-windows` over `windows-sys` | The one first-party crate with unsafe code; crates that wrap AppContainers were reviewed and rejected in docs/windows-sandbox.md |
 
 The live media worker owns CPAL streams, per-speaker Opus decoders, mixing, resampling,
 and optional RNNoise. AEC route detection and automatic DSP selection remain subsequent

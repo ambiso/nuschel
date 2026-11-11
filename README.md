@@ -63,7 +63,8 @@ Linux is covered by integration tests in NixOS VMs. Windows and macOS packages a
 cross-built from Linux (`.#windows`, `.#macos-app`, `.#macos-universal`,
 `.#macos-aarch64`). The Windows build runs in an unattended Windows 11 VM
 (`tests/windows_vm.py`): GUI, connection, autostart, audio devices, the microphone
-and echo tests, and in-place updates. macOS has not been run. The macOS build needs
+and echo tests, in-place updates, and the workers' AppContainer sandboxes
+(docs/windows-sandbox.md). macOS has not been run. The macOS build needs
 macOS 14.2 or later because the audio library links Core Audio's process-tap API.
 
 ## Releases and updates

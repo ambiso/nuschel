@@ -52,6 +52,37 @@ except forwards into host loopback (the harness on 10.0.2.100:80, a test Murmur 
 10.0.2.100:64738). Keep its state directory (`$NUSCHEL_WINDOWS_VM_DIR`, default
 `~/vms/nuschel-windows`) out of backups and off a RAM-backed `/tmp`.
 
+### Windows worker sandbox
+
+`crates/sandbox-windows/tests/confinement.rs` checks every worker's AppContainer from
+the inside (docs/windows-sandbox.md). Cross-build it with the workers
+(`cargo test --target x86_64-pc-windows-gnu -p nuschel-sandbox-windows --test
+confinement --no-run`), copy the test executable and the five worker executables
+into one folder in the guest (`windows_vm.py push`, then `Invoke-WebRequest`), and
+run `confinement.exe --workers <folder>` there. It starts itself through
+`nuschel_ipc::host`'s real commands as each worker kind; inside, it must fail to read
+a file it creates in Documents, list or write the profile, `C:\Users\Public` or the
+user's TEMP, connect to 10.0.2.100:80 (only transfer may), start a process, open the
+test's own process to query or terminate it, commit more memory than its job
+allows, read the clipboard (the test puts text there first) or the autostart key, or
+create a registry key; content, storage and crypto (less privileged AppContainers)
+must also fail to read `HKCU\Environment`, which media and transfer can (printed, not
+failed). Storage and crypto must write their directory and transfer must read its
+offered file by handle. Then the real workers run in the same sandboxes: content decodes a
+PNG, storage writes and reads history, crypto creates an identity, media opens the
+default WASAPI devices (the VM's sound card has no host backend), transfer offers a
+file. For a full transfer, start the VM with `--forward 4710 --forward 4711`, run
+`twist wormhole-mailbox --port=tcp:4710:interface=127.0.0.1` and `twist transitrelay
+--port=tcp:4711:interface=127.0.0.1` on the host, and add `--rendezvous
+ws://10.0.2.100:4710/v1 --relay tcp://10.0.2.100:4711` plus `--code-file PATH`
+(the host receives with the reference CLI and the code written there) or `--receive
+CODE --expect TEXT` (the host sends). It exits non-zero if any check fails.
+
+Result on 2026-11-11 (Windows 11 25H2): all checks passed for every worker kind,
+including both transfer directions; the desktop, run in the VM against a stock Murmur
+on host loopback, rendered an image message, stored history and captured from the
+microphone with its workers in AppContainers.
+
 The VM also checks worker confinement, SQLite/PostgreSQL pagination and the NixOS
 module's hardened database preflight. Nuschel server protocol tests remain deferred.
 Both databases reopen the worker between pages and retain duplicate messages correctly.
@@ -99,7 +130,8 @@ Run a separate NixOS VM sandbox test to establish forbidden file/network access.
 it separate from parser tests: successful IPC alone does not prove confinement.
 Windows/macOS hardware, microphone permission, screen readers (NVDA, Narrator,
 VoiceOver), Bluetooth, echo, and mobile background-call behavior still need native
-platform testing. The macOS Seatbelt profiles have a macOS-only test that has not run.
+platform testing. The macOS Seatbelt profiles have a macOS-only test that has not run;
+the Windows sandbox has run in the Windows 11 VM only (above).
 
 ## WebRTC transport trial
 

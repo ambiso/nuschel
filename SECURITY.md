@@ -5,7 +5,8 @@ If a suitable implementation is unavailable, isolate that processing in a worker
 the minimum required capabilities. Even memory-safe code needs input/resource limits:
 panics, excessive allocations, infinite loops, and corrupted output remain possible.
 
-All first-party crates inherit `unsafe_code = "forbid"`. This is an enforced rule for
+All first-party crates inherit `unsafe_code = "forbid"`, except the Windows sandbox
+adapter `nuschel-sandbox-windows` (below). This is an enforced rule for
 Nuschel source, not a claim about the entire dependency graph. A safe API around a C
 library does not make its implementation memory-safe. A Rust port with unchecked SIMD
 or raw pointers also needs review. Dependency changes must include that assessment.
@@ -21,6 +22,7 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | SQLx PostgreSQL backend | Server persistence on a managed database | Storage worker; database credentials and a scoped database connection |
 | TLS crypto provider | Cryptographic implementation and CPU-specific acceleration | Session/server authority; bounded protocol framing and reviewed provider |
 | OS sandbox/process APIs | Establish restricted worker execution | Small supervisor adapter; prefer safe Rust wrappers (`win32job` for Windows job objects) |
+| `nuschel-sandbox-windows` (Win32 calls via `windows-sys`) | No maintained safe wrapper creates AppContainer processes with an explicit handle list and job limits (docs/windows-sandbox.md) | The workers' own launch stage only, before any input is read (`cargo-deny` allows only the five workers to depend on it); `unsafe` only in its `win32` module, one operation per block, each with a `SAFETY:` comment; `unsafe_op_in_unsafe_fn` denied |
 | `aes` (OCB2 voice crypto) | Mumble's UDP voice encryption; AES-NI intrinsics | Session authority; fixed-size blocks, keys from the TLS control channel |
 | `rsa` (identity generation only) | Stock Mumble imports only RSA client certificates | Generates the local Mumble client key only; TLS signing uses ring, so the Marvin timing issue (RUSTSEC-2023-0071) in private-key operations never runs on untrusted input; `cargo-deny` confines the crate to `nuschel-session` |
 | `image` decoders (PNG, JPEG, GIF) | Inline images and avatars from untrusted peers | Content worker only, with dimension and allocation limits; the UI receives raw RGBA |
@@ -136,7 +138,7 @@ desktop replaces the media process on mute/deafen transitions: native stream tea
 can block, so dropping a stream alone is insufficient to guarantee capture closes.
 The NixOS server's storage preflight inherits its hardened systemd unit.
 
-### macOS and Windows (implemented, not yet validated on those systems)
+### macOS (implemented, not yet validated on macOS)
 
 macOS workers start under `sandbox-exec` with Seatbelt profiles (`crates/ipc/src/host.rs`).
 Content, math and storage workers are deny-by-default on top of Apple's `system.sb`. Storage
@@ -148,12 +150,47 @@ narrowed to deny-by-default once it can be traced on real hardware. Unit tests c
 that the profiles are well formed. A macOS-only test checks that they load and block
 writes to the home directory. Neither test has run on macOS yet.
 
-Windows workers run with an empty environment (except `SystemRoot`, `WINDIR`, `TEMP`,
-`TMP`), without a console window, inside a kill-on-close job object. That guarantees
-they never outlive Nuschel, but **it is not a sandbox**: a Windows worker can read
-the user's files and use the network. AppContainer or restricted-token process creation
-needs unsafe Win32 calls and Windows testing. Until then, Windows offers process
-separation only.
+### Windows (validated in a Windows 11 VM)
+
+Windows workers run in AppContainers, each in a job object of its own
+(docs/windows-sandbox.md). A worker executable is its own launch stage: started with
+`--nuschel-sandbox` and a policy (`crates/ipc/src/host.rs`), it creates or reuses the
+worker kind's AppContainer profile, grants it its directories, and starts itself
+again inside it, suspended, then assigned to a job, then resumed; it waits and passes
+on the exit code. It reads no untrusted input, and it refuses (exit 125) rather than
+start a worker unconfined, as Linux refuses without bwrap.
+
+Content, storage and crypto get no capabilities, so no network at all, and run as
+less privileged AppContainers: unlike a full one, they cannot read what Windows grants
+every AppContainer, such as the user's environment variables in the registry. Media gets
+`microphone`; transfer gets `internetClient` and `privateNetworkClientServer`
+(outgoing connections, and the LAN both ways for direct transit; nothing inbound from
+the Internet, and no AppContainer reaches loopback). Beyond the container's own
+folder and what every AppContainer may read (the Windows directory, Program Files),
+storage may modify only its history directory and crypto only its own directory, each
+in a container of its own per directory; an offer's file reaches the transfer worker
+as an inherited read-only handle, its permissions unchanged. Only the standard handles
+(and that file) are inherited, through an explicit handle list; there is no console.
+The job kills the worker when the launch stage exits or is killed (the supervisor's
+kill-on-close job holds the launch stage), admits one process (the child-process
+policy refuses process creation too), limits committed memory (512 MiB content, 1 GiB
+the others) and content's CPU time as on Linux, and blocks the clipboard, global atoms,
+other processes' USER handles, desktop switching and system settings. Extension-point
+DLLs, non-system fonts and remote or low-label images are refused.
+
+In the VM, each worker kind failed to read a file in Documents, list or write the
+user's profile, `C:\Users\Public` or the user's TEMP, connect over TCP (except
+transfer), start a process, open the supervisor's process, commit past its limit,
+read the clipboard or the autostart registry key, or create a registry key,
+while the real workers decoded an image, wrote history, created an identity, opened
+WASAPI capture and playback, and exchanged files through a magic-wormhole rendezvous
+and relay on host loopback. The desktop ran against a test Murmur with images.
+Remaining: workers share the user's desktop (they could open windows of their own; no
+separate desktop, no win32k lockdown or Arbitrary Code Guard); media and transfer, full
+AppContainers because COM and Winsock refuse less privileged ones, can read the
+user's environment variables (`HKCU\Environment`), and what AppContainers may read in
+general was not audited; media can use what the audio service offers, subject to
+Windows' microphone privacy setting; no physical hardware has been tested.
 
 ## Fuzzing
 
