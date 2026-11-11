@@ -222,6 +222,7 @@ async fn serve(
         address,
         certificates,
         certificate_hash,
+        strong: false,
         negotiation,
         info: Default::default(),
         link,

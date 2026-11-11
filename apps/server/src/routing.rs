@@ -3,10 +3,7 @@
 //! in which context, and re-encoding it per receiver for UDP (OCB2) or the TLS
 //! tunnel. Buffers are reused across packets, so steady-state routing does not
 //! allocate except for tunneled frames.
-use crate::{
-    acl::{self, perm},
-    state::State,
-};
+use crate::{authz::Action, state::State};
 use nuschel_protocol::{
     control::permission_denied::DenyType,
     crypt, encode_tunnel, kind,
@@ -291,7 +288,7 @@ impl State {
                 if !channel.links.is_empty() {
                     for linked in self.channels.all_links(user.channel) {
                         if linked != user.channel
-                            && self.has(speaker, linked, perm::SPEAK)
+                            && self.allowed(speaker, Action::Speak { channel: linked })
                             && let Some(linked) = self.channels.get(linked)
                         {
                             self.push_channel(linked, receivers);
@@ -348,7 +345,7 @@ impl State {
                 continue;
             };
             if let Some(group) = group
-                && !acl::group_applies(&self.channels, channel, channel, group, &listener.subject())
+                && !self.in_group(session, channel, group)
             {
                 continue;
             }
@@ -386,18 +383,14 @@ impl State {
                 targets.extend(self.channels.subtree(*id));
             }
             for sub in targets {
-                if !self.has(speaker, sub, perm::WHISPER) {
+                if !self.allowed(speaker, Action::Whisper { channel: sub }) {
                     continue;
                 }
                 let Some(channel) = self.channels.get(sub) else {
                     continue;
                 };
                 for &session in &channel.users {
-                    let applies = group.is_none_or(|group| {
-                        self.users.get(&session).is_some_and(|user| {
-                            acl::group_applies(&self.channels, sub, sub, group, &user.subject())
-                        })
-                    });
+                    let applies = group.is_none_or(|group| self.in_group(session, sub, group));
                     if applies {
                         receivers.push(Receiver {
                             session,
@@ -415,10 +408,12 @@ impl State {
             .map(|receiver| receiver.session)
             .collect();
         for &session in &spec.sessions {
-            let Some(user) = self.users.get(&session) else {
+            if !self.users.contains_key(&session) {
                 continue;
-            };
-            if !shouted.contains(&session) && self.has(speaker, user.channel, perm::WHISPER) {
+            }
+            if !shouted.contains(&session)
+                && self.allowed(speaker, Action::WhisperUser { user: session })
+            {
                 receivers.push(Receiver {
                     session,
                     context: Context::Whisper,

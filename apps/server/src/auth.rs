@@ -4,7 +4,7 @@
 //! argon2id verification and loading a registered user's blobs, run without
 //! the state lock; the decision is re-checked under it.
 use crate::{
-    acl::perm,
+    authz::{self, Action},
     handlers::bounded_tokens,
     limits::{BandwidthRecord, LeakyBucket},
     password,
@@ -299,13 +299,16 @@ fn complete(
         }
     }
     let config = &state.settings.config;
-    if user_id != Some(0) && state.users.len() >= config.max_users as usize {
+    if !authz::exempt_from_admission(user_id) && state.users.len() >= config.max_users as usize {
         result = Err(reject(
             RejectType::ServerFull,
             format!("Server is full (max {} users)", config.max_users),
         ));
     }
-    if user_id != Some(0) && peer.certificate_hash.is_none() && config.certificate_required {
+    if !authz::exempt_from_admission(user_id)
+        && peer.certificate_hash.is_none()
+        && config.certificate_required
+    {
         result = Err(reject(
             RejectType::NoCertificate,
             "A certificate is required to connect to this server",
@@ -363,7 +366,7 @@ fn complete(
     });
     let usable = |state: &State, channel: u32| {
         state.channels.get(channel).is_some()
-            && state.has(session, channel, perm::ENTER)
+            && state.allowed(session, Action::Enter { channel })
             && !state.channel_full(channel, Some(session))
     };
     let channel = [remembered, Some(state.settings.config.default_channel)]
@@ -372,7 +375,7 @@ fn complete(
         .find(|channel| usable(state, *channel));
     let channel = match channel {
         Some(channel) => channel,
-        None if !state.has(session, 0, perm::ENTER) => {
+        None if !state.allowed(session, Action::Enter { channel: 0 }) => {
             state.users.remove(&session);
             state.invalidate();
             return Err(reject(
@@ -447,7 +450,13 @@ fn restore_listeners(state: &mut State, session: u32, listeners: Vec<(u32, f32)>
             continue;
         };
         if target.temporary
-            || !state.has(session, channel, perm::LISTEN)
+            || !state.allowed(
+                session,
+                Action::Listen {
+                    user: session,
+                    channel,
+                },
+            )
             || per_channel.is_some_and(|limit| target.listeners.len() >= limit as usize)
             || per_user.is_some_and(|limit| added.len() >= limit as usize)
         {
@@ -592,15 +601,7 @@ fn send_initial_state(
     for message in others {
         state.send(session, kind::USER_STATE, &message);
     }
-    let permissions = if state
-        .users
-        .get(&session)
-        .is_some_and(|user| user.user_id == Some(0))
-    {
-        perm::ALL
-    } else {
-        state.permissions(session, 0)
-    };
+    let permissions = state.sync_permissions(session);
     let settings = state.settings.clone();
     let config = &settings.config;
     // Stock clients are told that text is kept (docs/extension.md §9).
@@ -689,7 +690,7 @@ impl State {
             target.users.push(session);
         }
         self.invalidate();
-        let may_speak = self.has(session, channel, perm::SPEAK);
+        let may_speak = self.allowed(session, Action::Speak { channel });
         if let Some(user) = self.users.get_mut(&session) {
             user.suppress = !may_speak;
             if user.suppress {
@@ -727,6 +728,7 @@ pub(crate) fn new_user(
         user_id,
         certificate_hash: peer.certificate_hash.clone(),
         certificates: peer.certificates.clone(),
+        strong: peer.strong,
         address: peer.address,
         account: None,
         notified: Default::default(),

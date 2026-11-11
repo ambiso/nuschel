@@ -6,7 +6,7 @@
 //! at most 16 in flight, and fails with one uniform error per cause: "no such
 //! conversation" and "not allowed" are the same answer.
 use crate::{
-    acl::perm,
+    authz::Action,
     conversations::{Conversations, Id, Kind, hex, parse},
     history::{Delivery, Done, Read, Stock},
     state::{State, random},
@@ -329,9 +329,7 @@ impl State {
             return Err(fail(Code::TooLarge));
         }
         self.text_limited(session)?;
-        if !self.can_write(session, &id) {
-            return Err(fail(Code::NotFound));
-        }
+        self.authorize(session, Action::Send(&id))?;
         if message.reply_to > self.conversations.head(&id) {
             return Err(fail(Code::Malformed));
         }
@@ -394,12 +392,12 @@ impl State {
             return Err(fail(Code::TooLarge));
         }
         self.text_limited(session)?;
-        let (account, user_id, name) = self.author(session);
         // Unregistered authors cannot edit; only while they may still post,
         // and not where nothing is stored.
+        self.authorize(session, Action::Edit(&id))?;
+        let (account, user_id, name) = self.author(session);
         let account = account.ok_or(fail(Code::NotFound))?;
-        if !self.can_write(session, &id)
-            || self.live_only(&id)
+        if self.live_only(&id)
             || message.target == 0
             || message.target > self.conversations.head(&id)
         {
@@ -446,16 +444,13 @@ impl State {
         let id = conversation(&message.conversation)?;
         self.text_limited(session)?;
         let (account, user_id, name) = self.author(session);
-        let moderator = self.settings.config.history.moderators_delete
-            && matches!(self.conversations.kind(&id), Some(Kind::Channel(channel))
-                if self.has(session, channel, perm::WRITE));
         // Authors may delete their own messages at any time, even after
         // losing access; moderators any message in their channels.
-        if (account.is_none() && !moderator)
-            || self.conversations.kind(&id).is_none()
-            || message.target == 0
-            || message.target > self.conversations.head(&id)
-        {
+        let moderator = self.allowed(session, Action::Moderate(&id));
+        if !moderator {
+            self.authorize(session, Action::DeleteOwn(&id))?;
+        }
+        if message.target == 0 || message.target > self.conversations.head(&id) {
             return Err(fail(Code::NotFound));
         }
         let reason = u32::from(moderator);
@@ -577,20 +572,6 @@ impl State {
         }
     }
 
-    /// Whether a connection may see `seq` live: always in the channel's live
-    /// audience, otherwise within its visible ranges.
-    fn sees(&self, session: u32, id: &Id, seq: u64) -> bool {
-        if let Some(Kind::Channel(channel)) = self.conversations.kind(id)
-            && self.users.get(&session).is_some_and(|user| {
-                user.channel == channel || user.listening.contains_key(&channel)
-            })
-        {
-            return true;
-        }
-        let (ranges, clipped) = self.visible_ranges(session, id);
-        !clipped || ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&seq))
-    }
-
     /// Live fan-out, under the lock, to whoever may read the conversation now
     /// (never `origin`, which has the acknowledgement).
     fn deliver(&mut self, id: &Id, delivery: Delivery, origin: u32) {
@@ -615,7 +596,13 @@ impl State {
         };
         for session in self.readers(id) {
             if session != origin
-                && self.sees(session, id, shown)
+                && self.allowed(
+                    session,
+                    Action::SeeLive {
+                        conversation: id,
+                        seq: shown,
+                    },
+                )
                 && let Some(user) = self.users.get(&session)
             {
                 user.link.send(frame.clone());
@@ -743,9 +730,7 @@ impl State {
             self.counters.rate_limited.fetch_add(1, Ordering::Relaxed);
             return Err((Code::RateLimited, retry));
         }
-        if !self.can_read(session, &id) {
-            return Err(fail(Code::NotFound));
-        }
+        self.authorize(session, Action::ReadHistory(&id))?;
         if self.live_only(&id) {
             // Not archived: no pages, even of what was kept before.
             self.send(
@@ -806,8 +791,8 @@ impl State {
         let (ranges, clipped) = if read.epoch == self.authz_epoch {
             (read.query.ranges, read.clipped)
         } else {
-            if !self.can_read(session, &id) {
-                self.failed(session, request_id, fail(Code::NotFound));
+            if let Err(denial) = self.authorize(session, Action::ReadHistory(&id)) {
+                self.failed(session, request_id, denial.into());
                 return;
             }
             self.visible_ranges(session, &id)
@@ -892,7 +877,7 @@ impl State {
             .sum();
         let mut accepted = Vec::new();
         for id in ids {
-            if !self.can_read(session, &id) {
+            if !self.allowed(session, Action::ReadHistory(&id)) {
                 continue;
             }
             let Some(extension) = self
@@ -948,7 +933,7 @@ impl State {
         let Some(account) = self.users.get(&session).and_then(|user| user.account) else {
             return;
         };
-        if !self.can_read(session, &id)
+        if !self.allowed(session, Action::ReadMarker(&id))
             || message.seq > self.conversations.head(&id)
             || message.seq <= self.conversations.marker(Some(account), &id)
         {
@@ -1008,7 +993,7 @@ impl State {
                 .retain(|_, last| now.duration_since(*last).as_secs() < 3);
         }
         extension.typing.insert(id, now);
-        if !self.can_write(session, &id) {
+        if !self.allowed(session, Action::Typing(&id)) {
             return;
         }
         let typing = v1::Typing {
@@ -1066,17 +1051,17 @@ impl State {
 
     fn open_direct(&mut self, session: u32, message: v1::OpenDirect) -> Result<(), Failure> {
         self.extension_limited(session, |extension| &mut extension.requests)?;
-        let me = self
-            .users
-            .get(&session)
-            .and_then(|user| user.account)
-            .ok_or(fail(Code::NotFound))?;
         let peer = self
             .registry
             .users
             .get(&message.user_id)
             .map(|user| user.account)
-            .filter(|peer| *peer != me)
+            .ok_or(fail(Code::NotFound))?;
+        self.authorize(session, Action::OpenDirect { peer: &peer })?;
+        let me = self
+            .users
+            .get(&session)
+            .and_then(|user| user.account)
             .ok_or(fail(Code::NotFound))?;
         if self.conversations.direct(me, peer).is_none()
             && self.conversations.directs_of(&me).len() >= MAX_DIRECTS
@@ -1098,6 +1083,7 @@ impl State {
 
     fn list_direct(&mut self, session: u32, request_id: u64) -> Result<(), Failure> {
         self.extension_limited(session, |extension| &mut extension.requests)?;
+        self.authorize(session, Action::ListDirects)?;
         let me = self
             .users
             .get(&session)
@@ -1165,12 +1151,8 @@ impl State {
     ) -> Result<(), Failure> {
         self.extension_limited(session, |extension| &mut extension.requests)?;
         let channel = message.channel;
-        let Some(conversation) = self
-            .channels
-            .get(channel)
-            .map(|channel| channel.conversation_id)
-            .filter(|_| self.has(session, channel, perm::WRITE))
-        else {
+        self.authorize(session, Action::ChannelSettings { channel })?;
+        let Some(conversation) = self.conversation_of_channel(channel) else {
             return Err(fail(Code::NotFound));
         };
         let visibility = match message.visibility.map(v1::Visibility::try_from) {

@@ -4,6 +4,11 @@
 //! `auth`, `strong`, `in`, `out`, `sub,a,b,c`, `#token`, `$hash`, with the `!`
 //! (invert) and `~` (evaluate in the ACL's channel) prefixes. Behaviour follows
 //! stock Murmur's `ChanACL::effectivePermissions` and `Group::appliesToUser`.
+//!
+//! The evaluation functions are private to [`crate::authz`]: handlers ask it
+//! whether an actor may do something and never evaluate ACLs themselves. The
+//! data types and the editor's views (inherited entries, group members) are
+//! public.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub mod perm {
@@ -131,8 +136,8 @@ pub struct Subject<'a> {
     /// SHA-256 digests of the access tokens, lowercased first (Mumble compares
     /// tokens case-insensitively); see [`token_digest`].
     pub tokens: &'a [[u8; 32]],
-    /// A certificate verified against a CA (Nuschel does not verify client chains,
-    /// so this is false for everyone today).
+    /// A certificate that chains to a configured certificate authority
+    /// (Murmur's `bVerified`, the `strong` group; see `tls::Strength`).
     pub strong: bool,
 }
 
@@ -168,7 +173,7 @@ fn path_from_root(tree: &impl Tree, channel: u32) -> Vec<u32> {
     path
 }
 
-pub fn effective_permissions(tree: &impl Tree, subject: &Subject, channel: u32) -> u32 {
+pub(super) fn effective_permissions(tree: &impl Tree, subject: &Subject, channel: u32) -> u32 {
     use perm::*;
     if subject.superuser() {
         return ALL & !(SPEAK | WHISPER);
@@ -246,7 +251,7 @@ pub fn effective_permissions(tree: &impl Tree, subject: &Subject, channel: u32) 
 
 /// Murmur's `Group::appliesToUser`: `current` is the channel permissions are
 /// evaluated for, `acl_channel` the channel holding the ACL entry.
-pub fn group_applies(
+pub(super) fn group_applies(
     tree: &impl Tree,
     current: u32,
     acl_channel: u32,

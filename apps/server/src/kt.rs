@@ -19,11 +19,13 @@
 //!   (`C ‖ account`), in the same table: nuschel-kt's keys start with lowercase
 //!   letters. One task serves every request in order, so a lookup never sees a
 //!   new value with an old record.
-//! - **Who may ask.** Lookups: any connection, for any registered account of this
-//!   server. Histories: the account's owner and its contacts (a direct
-//!   conversation, or the same channel now), or everyone with `history =
-//!   "members"`. Audits and heads: anyone. Each kind has its own rate limit.
+//! - **Who may ask** (decided in authz.rs, `Action::Kt*`). Lookups: any
+//!   connection, for any registered account of this server. Histories: the
+//!   account's owner and its contacts (a direct conversation, or the same
+//!   channel now), or everyone with `history = "members"`. Audits and heads:
+//!   anyone. Each kind has its own rate limit.
 use crate::{
+    authz::Action,
     config::{Kt as KtConfig, KtHistoryAccess},
     conversations::Id,
     server::{Server, StartError},
@@ -715,7 +717,7 @@ impl State {
         Ok(())
     }
 
-    /// A registered account of this server, from a registration number or id.
+    /// The account a lookup names, by registration number or id.
     fn kt_account(&self, target: Option<v1::kt_lookup::Target>) -> Result<Id, Failure> {
         let account = match target {
             Some(v1::kt_lookup::Target::UserId(id)) => self
@@ -723,49 +725,24 @@ impl State {
                 .users
                 .get(&id)
                 .map(|registered| registered.account),
-            Some(v1::kt_lookup::Target::Account(bytes)) => {
-                nuschel::id(&bytes).filter(|account| self.registry.by_account(account).is_some())
-            }
+            Some(v1::kt_lookup::Target::Account(bytes)) => nuschel::id(&bytes),
             None => None,
         };
         account.ok_or((Code::NotFound, 0))
     }
 
-    /// Whether `session` may see the history of `account` (see the module
-    /// documentation).
-    pub fn kt_history_allowed(&self, session: u32, account: &Id) -> bool {
-        let Some(user) = self.users.get(&session) else {
-            return false;
-        };
-        if user.account.as_ref() == Some(account) {
-            return true;
-        }
-        if self.registry.by_account(account).is_none() {
-            return false;
-        }
-        match self.kt.as_ref().map(|kt| kt.history) {
-            Some(KtHistoryAccess::Members) => true,
-            Some(KtHistoryAccess::Contacts) => {
-                let direct = user
-                    .account
-                    .is_some_and(|own| self.conversations.direct(own, *account).is_some());
-                direct
-                    || self.users.values().any(|other| {
-                        other.account.as_ref() == Some(account) && other.channel == user.channel
-                    })
-            }
-            None => false,
-        }
-    }
-
     fn kt_authorise(&mut self, session: u32, request: Pending) -> Result<Job, Failure> {
         Ok(match request {
-            Pending::Status => Job::Status {
-                account: self.users.get(&session).and_then(|user| user.account),
-            },
+            Pending::Status => {
+                self.authorize(session, Action::KtStatus)?;
+                Job::Status {
+                    account: self.users.get(&session).and_then(|user| user.account),
+                }
+            }
             Pending::Publish(publish) => {
                 self.kt_limited(session, |e| &mut e.kt_publishes)?;
                 // Only for one's own account, and only for registered users.
+                self.authorize(session, Action::KtPublish)?;
                 let account = self
                     .users
                     .get(&session)
@@ -783,20 +760,19 @@ impl State {
             }
             Pending::Lookup(target) => {
                 self.kt_limited(session, |e| &mut e.kt_lookups)?;
-                Job::Lookup {
-                    account: self.kt_account(target)?,
-                }
+                let account = self.kt_account(target)?;
+                self.authorize(session, Action::KtLookup { account: &account })?;
+                Job::Lookup { account }
             }
             Pending::History(account) => {
                 self.kt_limited(session, |e| &mut e.kt_histories)?;
                 let account = nuschel::id(&account).ok_or((Code::Malformed, 0))?;
-                if !self.kt_history_allowed(session, &account) {
-                    return Err((Code::NotFound, 0));
-                }
+                self.authorize(session, Action::KtHistory { account: &account })?;
                 Job::History { account }
             }
             Pending::Audit(from, to) => {
                 self.kt_limited(session, |e| &mut e.kt_histories)?;
+                self.authorize(session, Action::KtAudit)?;
                 if from >= to || to - from > MAX_AUDIT_SPAN {
                     return Err((Code::Malformed, 0));
                 }
@@ -804,6 +780,7 @@ impl State {
             }
             Pending::Head(epoch) => {
                 self.kt_limited(session, |e| &mut e.kt_histories)?;
+                self.authorize(session, Action::KtHead)?;
                 Job::Head { epoch }
             }
         })

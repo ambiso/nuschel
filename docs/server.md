@@ -234,11 +234,49 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
                                              under the lock before sending)
 ```
 
+- **Authorisation** (authz.rs). Every permission decision goes through one
+  function, `State::authorize(actor, action)`: the actor is a session, the
+  `Action` names what it wants and its target (about 50 of them: entering,
+  moving, speaking, whispering, texting, listening, muting, comments, kicks,
+  bans, registration, channels, links, ACLs; the extension's reading, sending,
+  editing, deleting as author or moderator, channel settings, read markers,
+  typing, direct conversations; `kt/1` publications, lookups and histories). The
+  answer is `Ok` or a `Denial` in the protocol's terms: Murmur's
+  `PermissionDenied` (the same permission, channel and session, or the same
+  type), a request Murmur ignores, or the extension's uniform `not_found`.
+  Handlers keep only limits and validation (sizes, counts, rate limits, names,
+  user limits), and fan-out keeps membership (who is in a channel or listens to
+  it), which Mumble delivers to without asking the ACLs. The ACL engine
+  (`authz/acl.rs`, Murmur's `ACL.cpp` and `Group.cpp`) can only be evaluated
+  from authz.rs: its evaluation functions, the permission cache and the lookups
+  on it are private there, and a test fails if SuperUser checks or inline
+  permission tests appear anywhere else. The same module reports permissions
+  to clients (`PermissionQuery`, `ServerSync`), keeps `suppress` in step with
+  Speak after every change, and says what part of a `since_access`
+  conversation a reader sees.
 - **One state, one lock.** Channels, users, registrations, bans and permission
   caches live in `State` behind a mutex. Handlers run synchronously under it and
   never across an `.await`; Murmur serialises the same way (its main thread plus
   a voice read-lock). Authentication's slow parts (argon2id, loading a registered
   user's blobs) run outside the lock and are re-checked under it.
+  The security review asked for one task that owns authorisation state (D3,
+  §3 item 1); the mutex is that owner, so it stays rather than becoming an
+  actor. What the review needs from an owner holds: every change to
+  authorisation state is applied under the lock and bumps `authz_epoch`;
+  subscriptions are re-evaluated before the lock is released, so an
+  `Unsubscribed` is queued before any later event; live fan-out of stored
+  messages runs under the lock against the readers of that moment; and each
+  step that leaves the lock is checked again when its result comes back:
+  history pages (the epoch moved: `can_read` and the visible ranges again),
+  logins (the account and its password hash re-read before the session
+  exists) and voice target caches (keyed by the routing generation). An actor
+  would serialise the same commands in the same order with a message hop
+  more, and would not close any of these windows by itself; the audit found
+  no other check whose effect lands after another lock holder could have
+  changed the answer. What remains open is throughput:
+  the UDP path takes the lock per packet, which an immutable routing snapshot
+  (review §3 item 2) would avoid; that is a performance question, not a
+  correctness one.
 - **Output.** Each connection has a queue bounded in bytes (`max_queued_bytes`).
   Control frames are never dropped: a client that lets the limit fill is
   disconnected. Voice frames are dropped once 64 KiB are waiting. Broadcasts

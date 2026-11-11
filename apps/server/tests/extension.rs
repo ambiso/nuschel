@@ -1284,14 +1284,20 @@ async fn revoking_access_ends_subscriptions_fan_out_and_pages_in_flight() {
     assert_eq!(error_code(&answer), Some(v1::error::Code::NotFound));
     // Being in the channel or listening still reads it (Mumble's live audience).
     let mut state = fixture.running.server.lock();
-    assert!(!state.can_read(alice.session, &conversation));
+    assert!(!state.allowed(
+        alice.session,
+        nuscheld::authz::Action::ReadHistory(&conversation)
+    ));
     state
         .users
         .get_mut(&alice.session)
         .unwrap()
         .listening
         .insert(channel, 1.0);
-    assert!(state.can_read(alice.session, &conversation));
+    assert!(state.allowed(
+        alice.session,
+        nuscheld::authz::Action::ReadHistory(&conversation)
+    ));
 }
 
 #[tokio::test]

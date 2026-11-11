@@ -98,6 +98,7 @@ impl Harness {
             address: SocketAddr::from(([10, 0, 0, session as u8], 50_000)),
             certificates: Vec::new(),
             certificate_hash: hash,
+            strong: false,
             negotiation: Default::default(),
             info: ClientInfo {
                 version: (1 << 48) | (minor << 32),
@@ -188,7 +189,8 @@ impl Harness {
                 assert!(extension.outstanding.len() <= nuschel_protocol::nuschel::MAX_OUTSTANDING);
                 for id in &extension.subscriptions {
                     assert!(
-                        self.state.can_read(*session, id),
+                        self.state
+                            .allowed(*session, crate::authz::Action::ReadHistory(id)),
                         "session {session} kept a subscription it may not read"
                     );
                 }

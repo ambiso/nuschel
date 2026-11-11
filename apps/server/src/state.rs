@@ -4,7 +4,8 @@
 //! briefly and never across an `await`; outgoing frames go to per-connection
 //! queues ([`Link`]) without blocking.
 use crate::{
-    acl::{self, AclEntry, Group, Node, Subject, Tree, perm},
+    acl::{AclEntry, Group, Node, Tree, perm},
+    authz::Action,
     config::Settings,
     conversations::{self, Conversations, Id},
     limits::{BandwidthRecord, LeakyBucket},
@@ -193,6 +194,8 @@ pub struct Peer {
     /// Leaf first, DER.
     pub certificates: Vec<Vec<u8>>,
     pub certificate_hash: Option<String>,
+    /// The certificate chains to a configured authority (Murmur's `bVerified`).
+    pub strong: bool,
     /// The Nuschel extension's negotiation (frozen at `Authenticate`).
     pub negotiation: crate::extension::Negotiation,
     pub info: ClientInfo,
@@ -237,6 +240,9 @@ pub struct User {
     pub user_id: Option<u32>,
     pub certificate_hash: Option<String>,
     pub certificates: Vec<Vec<u8>>,
+    /// A certificate that chains to a configured authority: the `strong`
+    /// group, `UserStats.strong_certificate` (Murmur's `bVerified`).
+    pub strong: bool,
     pub address: SocketAddr,
     /// The immutable account id of a registered user.
     pub account: Option<Id>,
@@ -248,7 +254,7 @@ pub struct User {
     pub opus: bool,
     pub celt_versions: Vec<i32>,
     pub bot: bool,
-    /// Access-token digests ([`acl::token_digest`]).
+    /// Access-token digests ([`crate::acl::token_digest`]).
     pub tokens: Vec<[u8; 32]>,
     pub channel: u32,
     pub mute: bool,
@@ -285,16 +291,6 @@ pub struct User {
 }
 
 impl User {
-    pub fn subject(&self) -> Subject<'_> {
-        Subject {
-            user_id: self.user_id,
-            channel: self.channel,
-            hash: self.certificate_hash.as_deref(),
-            tokens: &self.tokens,
-            strong: false,
-        }
-    }
-
     /// The full `UserState` another client receives (blobs by hash when long).
     pub fn state_message(&self) -> proto::UserState {
         let mut message = proto::UserState {
@@ -770,9 +766,9 @@ pub struct State {
     pub udp_peers: HashMap<SocketAddr, u32>,
     pub storage: StorageHandle,
     pub counters: Arc<Counters>,
-    /// (session, channel) → permissions; cleared whenever anything that
+    /// Effective permissions (authz.rs), cleared whenever anything that
     /// permissions depend on changes.
-    cache: RefCell<HashMap<(u32, u32), u32>>,
+    pub permission_cache: crate::authz::Cache,
     /// Bumped with the cache; voice target caches compare against it.
     pub generation: u64,
     next_session: u32,
@@ -814,7 +810,7 @@ impl State {
             udp_peers: HashMap::new(),
             storage,
             counters,
-            cache: RefCell::new(HashMap::new()),
+            permission_cache: Default::default(),
             generation: 0,
             next_session: 1,
             scratch: Default::default(),
@@ -883,46 +879,15 @@ impl State {
         None
     }
 
-    // ---- permissions ----
+    // ---- permissions (decided in authz.rs) ----
 
     pub fn invalidate(&mut self) {
-        self.cache.get_mut().clear();
+        self.permission_cache.clear();
         self.generation += 1;
         self.authz_epoch += 1;
     }
 
-    pub fn permissions(&self, session: u32, channel: u32) -> u32 {
-        if let Some(&cached) = self.cache.borrow().get(&(session, channel)) {
-            return cached;
-        }
-        let Some(user) = self.users.get(&session) else {
-            return perm::NONE;
-        };
-        let granted = acl::effective_permissions(&self.channels, &user.subject(), channel);
-        self.cache.borrow_mut().insert((session, channel), granted);
-        granted
-    }
-
-    pub fn has(&self, session: u32, channel: u32, permission: u32) -> bool {
-        self.permissions(session, channel) & permission != 0
-    }
-
-    /// Murmur's `PERM_DENIED`: tell the client which permission it lacks.
-    pub fn deny(&self, to: u32, who: u32, channel: u32, permission: u32) {
-        if let Some(user) = self.users.get(&to) {
-            user.link.message(
-                kind::PERMISSION_DENIED,
-                &proto::PermissionDenied {
-                    permission: Some(permission),
-                    channel_id: Some(channel),
-                    session: Some(who),
-                    r#type: Some(proto::permission_denied::DenyType::Permission as i32),
-                    ..Default::default()
-                },
-            );
-        }
-    }
-
+    /// A `PermissionDenied` of a type without a permission (limits, names).
     pub fn deny_type(&self, to: u32, deny: proto::permission_denied::DenyType) {
         self.deny_with(to, deny, None, None);
     }
@@ -947,99 +912,11 @@ impl State {
         }
     }
 
-    /// Send `PermissionQuery` for `channel` if it changed since last sent (or
-    /// always when the client asked).
-    pub fn send_permissions(&mut self, session: u32, channel: u32, requested: bool) {
-        let granted = self.permissions(session, channel);
-        let Some(user) = self.users.get_mut(&session) else {
-            return;
-        };
-        if user.user_id == Some(0) {
-            return;
-        }
-        if requested {
-            user.last_permission_check = Some(channel);
-        }
-        if requested || user.permission_sent.get(&channel) != Some(&granted) {
-            user.permission_sent.insert(channel, granted);
-            user.link.message(
-                kind::PERMISSION_QUERY,
-                &proto::PermissionQuery {
-                    channel_id: Some(channel),
-                    permissions: Some(granted),
-                    flush: None,
-                },
-            );
-        }
-    }
-
-    /// After permissions may have changed for `who` (or everyone): Murmur's
-    /// `clearACLCache`. Stale permission caches in clients are flushed, and
-    /// suppression follows the Speak permission in the user's channel.
-    pub fn permissions_changed(&mut self, who: Option<u32>) {
-        self.invalidate();
-        let sessions: Vec<u32> = match who {
-            Some(session) => vec![session],
-            None => self.users.keys().copied().collect(),
-        };
-        for session in sessions {
-            self.flush_permission_cache(session);
-            let Some(user) = self.users.get(&session) else {
-                continue;
-            };
-            let may_speak = self.has(session, user.channel, perm::SPEAK);
-            if may_speak == user.suppress {
-                if let Some(user) = self.users.get_mut(&session) {
-                    user.suppress = !may_speak;
-                }
-                self.broadcast(
-                    kind::USER_STATE,
-                    &proto::UserState {
-                        session: Some(session),
-                        suppress: Some(!may_speak),
-                        ..Default::default()
-                    },
-                    None,
-                );
-            }
-        }
-    }
-
-    fn flush_permission_cache(&mut self, session: u32) {
-        let Some(user) = self.users.get(&session) else {
-            return;
-        };
-        let sent: Vec<(u32, u32)> = user.permission_sent.iter().map(|(c, p)| (*c, *p)).collect();
-        let matches = sent.len() < 20
-            && sent.iter().all(|(channel, granted)| {
-                self.channels.get(*channel).is_some()
-                    && self.permissions(session, *channel) == *granted
-            });
-        if matches {
-            return;
-        }
-        let channel = user
-            .last_permission_check
-            .filter(|channel| self.channels.get(*channel).is_some())
-            .unwrap_or(user.channel);
-        let granted = self.permissions(session, channel);
-        if let Some(user) = self.users.get_mut(&session) {
-            user.permission_sent.clear();
-            user.permission_sent.insert(channel, granted);
-            user.last_permission_check = Some(channel);
-            user.link.message(
-                kind::PERMISSION_QUERY,
-                &proto::PermissionQuery {
-                    channel_id: Some(channel),
-                    permissions: Some(granted),
-                    flush: Some(true),
-                },
-            );
-        }
-    }
-
+    /// Whether `channel` has no room for `session` (whoever may ignore its
+    /// user limit always finds room).
     pub fn channel_full(&self, channel: u32, session: Option<u32>) -> bool {
-        if session.is_some_and(|session| self.has(session, channel, perm::WRITE)) {
+        if session.is_some_and(|session| self.allowed(session, Action::IgnoreUserLimit { channel }))
+        {
             return false;
         }
         let Some(channel) = self.channels.get(channel) else {
@@ -1101,7 +978,12 @@ impl State {
             position: Some(channel.position),
             max_users: Some(channel.max_users),
             is_enter_restricted: Some(channel.is_enter_restricted()),
-            can_enter: Some(self.has(viewer, channel.id, perm::ENTER)),
+            can_enter: Some(self.allowed(
+                viewer,
+                Action::Enter {
+                    channel: channel.id,
+                },
+            )),
             ..Default::default()
         };
         if let Some(hash) = channel.description_hash {

@@ -3,17 +3,13 @@
 //!
 //! A conversation is a channel's (its random `conversation_id`), a direct
 //! conversation between two accounts, or the archive of a deleted permanent
-//! channel (administrators only). `can_read` is Enter on the channel, being in
-//! it or listening to it, evaluated with persistent credentials only (the
-//! access tokens from `Authenticate`, never temporary ones). The state mutex
-//! is the single owner of authorisation state; `authz_epoch` counts its
-//! changes, and every trigger re-evaluates subscriptions and `since_access`
-//! intervals before the handler's lock is released ([`State::finish`]).
-use crate::{
-    acl::{self, Subject, perm},
-    config::GuestHistory,
-    state::{Registered, State},
-};
+//! channel (administrators only). Who may read or write one is decided in
+//! authz.rs (`Action::ReadHistory`, `can_read` in docs/extension.md §5). The
+//! state mutex is the single owner of authorisation state; `authz_epoch`
+//! counts its changes, and every trigger re-evaluates subscriptions and
+//! `since_access` intervals before the handler's lock is released
+//! ([`State::finish`]).
+use crate::{authz::Action, state::State};
 use nuschel_ipc::server::{HistoryVisibility, Retention, ServerStorageRequest as Request};
 use nuschel_protocol::nuschel::{self, kind, v1};
 use std::collections::{BTreeSet, HashMap};
@@ -205,67 +201,6 @@ impl State {
             .map(|channel| channel.conversation_id)
     }
 
-    fn guests_read(&self) -> bool {
-        self.settings.config.history.guests == GuestHistory::Full
-    }
-
-    /// `can_read` (docs/extension.md §5).
-    pub fn can_read(&self, session: u32, id: &Id) -> bool {
-        let Some(user) = self.users.get(&session) else {
-            return false;
-        };
-        match self.conversations.kind(id) {
-            None => false,
-            Some(Kind::Channel(channel)) => {
-                (user.account.is_some() || self.guests_read())
-                    && (user.channel == channel
-                        || user.listening.contains_key(&channel)
-                        || self.has(session, channel, perm::ENTER))
-            }
-            Some(Kind::Direct(a, b)) => user.account.is_some_and(|me| me == a || me == b),
-            Some(Kind::Archived) => user.user_id == Some(0),
-        }
-    }
-
-    /// `can_read` for an account that is not online: its registration and
-    /// certificate only (no tokens, in no channel).
-    pub fn can_read_offline(&self, registered: &Registered, channel: u32) -> bool {
-        let subject = Subject {
-            user_id: Some(registered.id),
-            channel: u32::MAX,
-            hash: registered.certificate_hash.as_deref(),
-            tokens: &[],
-            strong: false,
-        };
-        acl::effective_permissions(&self.channels, &subject, channel) & perm::ENTER != 0
-    }
-
-    /// May this connection post to the conversation (send, edit)?
-    pub fn can_write(&self, session: u32, id: &Id) -> bool {
-        let Some(user) = self.users.get(&session) else {
-            return false;
-        };
-        match self.conversations.kind(id) {
-            Some(Kind::Channel(channel)) => self.has(session, channel, perm::TEXT_MESSAGE),
-            Some(Kind::Direct(a, b)) => {
-                let Some(me) = user.account.filter(|me| *me == a || *me == b) else {
-                    return false;
-                };
-                let peer = if me == a { b } else { a };
-                // A deleted account's conversations are frozen.
-                if self.registry.by_account(&peer).is_none() {
-                    return false;
-                }
-                // Murmur's rule for messages to a user: TextMessage in their channel.
-                self.users
-                    .values()
-                    .filter(|other| other.account == Some(peer))
-                    .all(|other| self.has(session, other.channel, perm::TEXT_MESSAGE))
-            }
-            Some(Kind::Archived) | None => false,
-        }
-    }
-
     pub fn visibility(&self, id: &Id) -> HistoryVisibility {
         match self.conversations.kind(id) {
             Some(Kind::Channel(channel)) => self
@@ -276,20 +211,6 @@ impl State {
                 }),
             _ => HistoryVisibility::Members,
         }
-    }
-
-    /// The seq ranges this connection may see, and whether they are clipped.
-    pub fn visible_ranges(&self, session: u32, id: &Id) -> (Vec<(u64, u64)>, bool) {
-        if self.visibility(id) == HistoryVisibility::Members {
-            return (vec![(1, u64::MAX)], false);
-        }
-        let ranges = self
-            .users
-            .get(&session)
-            .and_then(|user| user.account)
-            .map(|account| self.conversations.intervals(id, &account))
-            .unwrap_or_default();
-        (ranges, true)
     }
 
     /// Connections that negotiated history and receive a conversation's live
@@ -323,7 +244,7 @@ impl State {
             out.extend(
                 subscribers
                     .iter()
-                    .filter(|session| self.can_read(**session, id))
+                    .filter(|session| self.allowed(**session, Action::ReadHistory(id)))
                     .copied(),
             );
         }
@@ -386,7 +307,7 @@ impl State {
                 Some(extension) => extension
                     .subscriptions
                     .iter()
-                    .filter(|id| !self.can_read(session, id))
+                    .filter(|id| !self.allowed(session, Action::ReadHistory(id)))
                     .copied()
                     .collect(),
                 None => continue,
@@ -432,21 +353,6 @@ impl State {
         out
     }
 
-    /// Whether an account can read a channel now: through any of its
-    /// connections, or by its persistent identity while offline.
-    fn account_reads(&self, online: &HashMap<Id, Vec<u32>>, account: &Id, channel: u32) -> bool {
-        let Some(id) = self.conversation_of_channel(channel) else {
-            return false;
-        };
-        match online.get(account) {
-            Some(sessions) => sessions.iter().any(|session| self.can_read(*session, &id)),
-            None => self
-                .registry
-                .by_account(account)
-                .is_some_and(|registered| self.can_read_offline(registered, channel)),
-        }
-    }
-
     /// Open and close `since_access` intervals for the accounts a change may
     /// affect. Intervals open when the server sees an account able to read
     /// (online, or while offline on a global change) and close at the head
@@ -478,7 +384,7 @@ impl State {
         let online = self.sessions_by_account();
         for (channel, id) in channels {
             for account in &accounts {
-                let reads = self.account_reads(&online, account, channel);
+                let reads = self.account_may_read(&online, account, channel);
                 self.set_access(id, *account, reads);
             }
         }
@@ -535,7 +441,7 @@ impl State {
             .collect();
         let online = self.sessions_by_account();
         for account in accounts {
-            if self.account_reads(&online, &account, channel) {
+            if self.account_may_read(&online, &account, channel) {
                 let intervals = vec![(1, None)];
                 self.conversations
                     .access

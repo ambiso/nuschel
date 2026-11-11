@@ -4,6 +4,7 @@
 //! same `PermissionDenied` types, and the same broadcasts.
 use crate::{
     acl::{self, AclEntry, Group, perm},
+    authz::Action,
     conversations::{Scope, hex},
     state::{Ban, Channel, Registered, State, WhisperTarget, mapped, now_unix, random},
     text,
@@ -38,7 +39,7 @@ impl State {
     /// Every control message from an authenticated client passes through here:
     /// the one place that decides which types are accepted after
     /// authentication and applies the flood limit, before any handler runs.
-    /// Handlers then check permissions with [`State::has`].
+    /// Handlers then ask [`State::authorize`] (authz.rs) for every permission.
     pub fn handle(
         &mut self,
         session: u32,
@@ -264,7 +265,7 @@ impl State {
             .keys()
             .map(|&channel| proto::ChannelState {
                 channel_id: Some(channel),
-                can_enter: Some(self.has(session, channel, perm::ENTER)),
+                can_enter: Some(self.allowed(session, Action::Enter { channel })),
                 ..Default::default()
             })
             .collect();
@@ -335,7 +336,27 @@ impl State {
 
     // ---- users ----
 
-    fn user_state(&mut self, source: u32, message: proto::UserState) {
+    /// Murmur's `msgUserState`: every check first, in Murmur's order, then the
+    /// changes.
+    fn user_state(&mut self, source: u32, mut message: proto::UserState) {
+        let target = message.session.unwrap_or(source);
+        if !self.users.contains_key(&source) || !self.users.contains_key(&target) {
+            return;
+        }
+        if !self.check(source, Action::ChangeUser { user: target }) {
+            return;
+        }
+        message.session = Some(target);
+        message.actor = Some(source);
+        if message.name.is_some() {
+            self.check(source, Action::RenameUser { user: target });
+            return;
+        }
+        if source == target && self.rate_limited(source) {
+            return;
+        }
+        // Temporary access tokens count for this message only (Murmur's
+        // `TemporaryAccessTokenHelper`).
         let temporary: Vec<[u8; 32]> = match self.users.get(&source) {
             Some(user) => bounded_tokens(&message.temporary_access_tokens)
                 .into_iter()
@@ -349,8 +370,8 @@ impl State {
             }
             self.invalidate();
         }
-        self.user_state_inner(source, message);
-        if !temporary.is_empty() {
+        self.user_state_inner(source, target, message);
+        if !temporary.is_empty() && self.users.contains_key(&source) {
             if let Some(user) = self.users.get_mut(&source) {
                 user.tokens.retain(|token| !temporary.contains(token));
             }
@@ -358,42 +379,26 @@ impl State {
         }
     }
 
-    fn user_state_inner(&mut self, source: u32, mut message: proto::UserState) {
-        let target = message.session.unwrap_or(source);
+    fn user_state_inner(&mut self, source: u32, target: u32, mut message: proto::UserState) {
         let (Some(source_user), Some(destination)) =
             (self.users.get(&source), self.users.get(&target))
         else {
             return;
         };
-        let source_id = source_user.user_id;
-        let destination_id = destination.user_id;
         let destination_channel = destination.channel;
-        let destination_hash = destination.certificate_hash.is_some();
         let source_version_121 = source_user.info.at_least(1, 2, 1);
         let source_version_140 = source_user.info.at_least(1, 4, 0);
-        if destination_id == Some(0) && source_id != Some(0) {
-            self.deny_type(source, DenyType::SuperUser);
-            return;
-        }
-        message.session = Some(target);
-        message.actor = Some(source);
-        if message.name.is_some() {
-            self.deny_type(source, DenyType::UserName);
-            return;
-        }
-        if source == target && self.rate_limited(source) {
-            return;
-        }
         if let Some(channel) = message.channel_id {
             if self.channels.get(channel).is_none() || channel == destination_channel {
                 return;
             }
-            if source != target && !self.has(source, destination_channel, perm::MOVE) {
-                self.deny(source, source, destination_channel, perm::MOVE);
-                return;
-            }
-            if !self.has(source, channel, perm::MOVE) && !self.has(target, channel, perm::ENTER) {
-                self.deny(source, target, channel, perm::ENTER);
+            if !self.check(
+                source,
+                Action::Move {
+                    user: target,
+                    to: channel,
+                },
+            ) {
                 return;
             }
             if self.channel_full(channel, Some(source)) {
@@ -422,8 +427,13 @@ impl State {
             if listen_add.contains(&channel) {
                 continue;
             }
-            if !self.has(target, channel, perm::LISTEN) {
-                self.deny(source, target, channel, perm::LISTEN);
+            if !self.check(
+                source,
+                Action::Listen {
+                    user: target,
+                    channel,
+                },
+            ) {
                 continue;
             }
             if self
@@ -460,48 +470,29 @@ impl State {
             || message.deaf.is_some()
             || message.suppress.is_some()
             || message.priority_speaker.is_some();
-        if speak_state {
-            if destination_id == Some(0) {
-                self.deny_type(source, DenyType::SuperUser);
-                return;
-            }
-            if !self.has(source, destination_channel, perm::MUTE_DEAFEN)
-                || message.suppress == Some(true)
-            {
-                self.deny(source, source, destination_channel, perm::MUTE_DEAFEN);
-                return;
-            }
-        }
-        if (message.mute.is_some() || message.deaf.is_some() || message.suppress.is_some())
-            && self
-                .channels
-                .get(destination_channel)
-                .is_some_and(|channel| channel.temporary)
+        if speak_state
+            && !self.check(
+                source,
+                Action::SpeakState {
+                    user: target,
+                    suppress: message.suppress == Some(true),
+                    muting: message.mute.is_some()
+                        || message.deaf.is_some()
+                        || message.suppress.is_some(),
+                },
+            )
         {
-            // In a temporary channel, Mute/Deafen is needed in the first
-            // permanent ancestor, so a channel's creator cannot rule it alone.
-            let mut current = Some(destination_channel);
-            while let Some(id) = current {
-                match self.channels.get(id) {
-                    Some(channel) if channel.temporary => current = channel.parent(),
-                    _ => break,
-                }
-            }
-            if !current.is_some_and(|channel| self.has(source, channel, perm::MUTE_DEAFEN)) {
-                self.deny_type(source, DenyType::TemporaryChannel);
-                return;
-            }
+            return;
         }
         if let Some(comment) = &message.comment {
-            if source != target {
-                if !self.has(source, 0, perm::RESET_USER_CONTENT) {
-                    self.deny(source, source, 0, perm::RESET_USER_CONTENT);
-                    return;
-                }
-                if !comment.is_empty() {
-                    self.deny_type(source, DenyType::TextTooLong);
-                    return;
-                }
+            if !self.check(
+                source,
+                Action::SetComment {
+                    user: target,
+                    clearing: comment.is_empty(),
+                },
+            ) {
+                return;
             }
             match text::check(comment, self.text_limits()) {
                 Err(text::TooLong) => {
@@ -518,40 +509,27 @@ impl State {
                 self.deny_type(source, DenyType::TextTooLong);
                 return;
             }
-            if source != target {
-                if !self.has(source, 0, perm::RESET_USER_CONTENT) {
-                    self.deny(source, source, 0, perm::RESET_USER_CONTENT);
-                    return;
-                }
-                if !texture.is_empty() {
-                    self.deny_type(source, DenyType::TextTooLong);
-                    return;
-                }
-            }
-        }
-        if message.user_id.is_some() {
-            let permission = if source == target {
-                perm::SELF_REGISTER
-            } else {
-                perm::REGISTER
-            };
-            if destination_id.is_some() || !self.has(source, 0, permission) {
-                self.deny(source, source, 0, permission);
-                return;
-            }
-            if !destination_hash {
-                self.deny_with(source, DenyType::MissingCertificate, None, Some(target));
+            if !self.check(
+                source,
+                Action::SetTexture {
+                    user: target,
+                    clearing: texture.is_empty(),
+                },
+            ) {
                 return;
             }
         }
-        if source != target
-            && (message.self_deaf.is_some()
-                || message.self_mute.is_some()
-                || message.plugin_context.is_some()
-                || message.plugin_identity.is_some()
-                || message.recording.is_some()
-                || !message.listening_channel_add.is_empty()
-                || !message.listening_channel_remove.is_empty())
+        if message.user_id.is_some() && !self.check(source, Action::Register { user: target }) {
+            return;
+        }
+        if (message.self_deaf.is_some()
+            || message.self_mute.is_some()
+            || message.plugin_context.is_some()
+            || message.plugin_identity.is_some()
+            || message.recording.is_some()
+            || !message.listening_channel_add.is_empty()
+            || !message.listening_channel_remove.is_empty())
+            && !self.check(source, Action::SelfState { user: target })
         {
             return;
         }
@@ -769,7 +747,7 @@ impl State {
             next.users.push(session);
         }
         self.invalidate();
-        let may_speak = self.has(session, channel, perm::SPEAK);
+        let may_speak = self.allowed(session, Action::Speak { channel });
         if let Some(user) = self.users.get_mut(&session) {
             if may_speak == user.suppress {
                 user.suppress = !may_speak;
@@ -918,13 +896,12 @@ impl State {
         };
         message.actor = Some(source);
         let ban = message.ban == Some(true);
-        let permission = if ban {
-            perm::BAN
+        let action = if ban {
+            Action::Ban { user: target }
         } else {
-            perm::BAN | perm::KICK
+            Action::Kick { user: target }
         };
-        if destination.user_id == Some(0) || !self.has(source, 0, permission) {
-            self.deny(source, source, 0, permission);
+        if !self.check(source, action) {
             return;
         }
         if let Some(reason) = &mut message.reason {
@@ -1028,8 +1005,7 @@ impl State {
     }
 
     fn user_list(&mut self, source: u32, message: proto::UserList) {
-        if !self.has(source, 0, perm::REGISTER) {
-            self.deny(source, source, 0, perm::REGISTER);
+        if !self.check(source, Action::ManageRegistrations) {
             return;
         }
         if message.users.is_empty() {
@@ -1050,7 +1026,9 @@ impl State {
         }
         for entry in message.users.into_iter().take(1024) {
             let id = entry.user_id;
-            if id == 0 || !self.registry.users.contains_key(&id) {
+            if !self.allowed(source, Action::EditRegistration { user_id: id })
+                || !self.registry.users.contains_key(&id)
+            {
                 continue;
             }
             match entry.name {
@@ -1174,12 +1152,7 @@ impl State {
         if self.query_limited(source) || message.ids.len() + message.names.len() > 256 {
             return;
         }
-        let may_write = self
-            .channels
-            .0
-            .keys()
-            .any(|&channel| self.has(source, channel, perm::WRITE));
-        if !may_write {
+        if !self.allowed(source, Action::QueryUsers) {
             return;
         }
         let mut reply = proto::QueryUsers::default();
@@ -1206,14 +1179,12 @@ impl State {
         let Some(destination) = self.users.get(&target) else {
             return;
         };
-        let extend = source == target || self.has(source, 0, perm::BAN);
-        if !extend && !self.has(source, destination.channel, perm::ENTER) {
-            self.deny(source, source, destination.channel, perm::ENTER);
+        if !self.check(source, Action::UserStats { user: target }) {
             return;
         }
-        let source_channel = self.users.get(&source).map(|user| user.channel);
-        let details = extend && !message.stats_only();
-        let local = extend || source_channel == Some(destination.channel);
+        let details = self.allowed(source, Action::UserStatsDetails { user: target })
+            && !message.stats_only();
+        let local = self.allowed(source, Action::UserStatsLocal { user: target });
         let now = Instant::now();
         let voice = &destination.voice;
         let mut reply = proto::UserStats {
@@ -1222,7 +1193,7 @@ impl State {
         };
         if details {
             reply.certificates = destination.certificates.clone();
-            reply.strong_certificate = Some(false);
+            reply.strong_certificate = Some(destination.strong);
             reply.version = Some(destination.info.to_proto());
             reply.celt_versions = destination.celt_versions.clone();
             reply.opus = Some(destination.opus);
@@ -1392,8 +1363,7 @@ impl State {
     // ---- bans ----
 
     fn ban_list(&mut self, source: u32, message: proto::BanList) {
-        if !self.has(source, 0, perm::BAN) {
-            self.deny(source, source, 0, perm::BAN);
+        if !self.check(source, Action::ManageBans) {
             return;
         }
         if message.query() {
@@ -1508,24 +1478,23 @@ impl State {
         // Every channel the message reaches, to be stored there.
         let mut reached = BTreeSet::new();
         for &channel in &message.channel_id {
+            if self.channels.get(channel).is_none()
+                || !self.check(source, Action::TextChannel { channel })
+            {
+                return;
+            }
             let Some(target) = self.channels.get(channel) else {
                 return;
             };
-            if !self.has(source, channel, perm::TEXT_MESSAGE) {
-                self.deny(source, source, channel, perm::TEXT_MESSAGE);
-                return;
-            }
             recipients.extend(target.users.iter().copied());
             recipients.extend(target.listeners.iter().copied());
             reached.insert(channel);
         }
         let mut trees = Vec::new();
         for &channel in &message.tree_id {
-            if self.channels.get(channel).is_none() {
-                return;
-            }
-            if !self.has(source, channel, perm::TEXT_MESSAGE) {
-                self.deny(source, source, channel, perm::TEXT_MESSAGE);
+            if self.channels.get(channel).is_none()
+                || !self.check(source, Action::TextChannel { channel })
+            {
                 return;
             }
             trees.push(channel);
@@ -1533,7 +1502,7 @@ impl State {
         // Sub-channels without permission are skipped, together with what is below them.
         let mut visited = BTreeSet::new();
         while let Some(channel) = trees.pop() {
-            if !visited.insert(channel) || !self.has(source, channel, perm::TEXT_MESSAGE) {
+            if !visited.insert(channel) || !self.allowed(source, Action::TextChannel { channel }) {
                 continue;
             }
             if let Some(target) = self.channels.get(channel) {
@@ -1544,9 +1513,8 @@ impl State {
             }
         }
         for &session in &message.session {
-            if let Some(user) = self.users.get(&session) {
-                if !self.has(source, user.channel, perm::TEXT_MESSAGE) {
-                    self.deny(source, source, user.channel, perm::TEXT_MESSAGE);
+            if self.users.contains_key(&session) {
+                if !self.check(source, Action::TextUser { user: session }) {
                     return;
                 }
                 recipients.insert(session);
@@ -1608,8 +1576,7 @@ impl State {
         if self.channels.get(channel).is_none() {
             return;
         }
-        if !self.has(source, channel, perm::WRITE) || channel == 0 {
-            self.deny(source, source, channel, perm::WRITE);
+        if !self.check(source, Action::RemoveChannel { channel }) {
             return;
         }
         tracing::info!(actor = %self.log_name(source), channel, "removed channel");
@@ -1647,7 +1614,7 @@ impl State {
         for session in users {
             let mut target = destination;
             while let Some(parent) = self.channels.get(target).and_then(Channel::parent) {
-                if self.has(session, target, perm::ENTER)
+                if self.allowed(session, Action::Enter { channel: target })
                     && !self.channel_full(target, Some(session))
                 {
                     break;
@@ -1845,31 +1812,13 @@ impl State {
             return;
         }
         let temporary = message.temporary();
-        let permission = if temporary {
-            perm::MAKE_TEMP_CHANNEL
-        } else {
-            perm::MAKE_CHANNEL
-        };
-        if !self.has(source, parent, permission) {
-            self.deny(source, source, parent, permission);
+        if !self.check(source, Action::MakeChannel { parent, temporary }) {
             return;
         }
         let Some(user) = self.users.get(&source) else {
             return;
         };
         let (user_id, hash) = (user.user_id, user.certificate_hash.clone());
-        if user_id.is_none() && hash.is_none() {
-            self.deny_with(source, DenyType::MissingCertificate, None, Some(source));
-            return;
-        }
-        if self
-            .channels
-            .get(parent)
-            .is_some_and(|parent| parent.temporary)
-        {
-            self.deny_type(source, DenyType::TemporaryChannel);
-            return;
-        }
         // One user's temporary channels are capped, so nobody fills
         // channel_count_limit alone; the request fails with the reason.
         let creator = temporary.then(|| match (user_id, &hash) {
@@ -1918,7 +1867,7 @@ impl State {
             parent.children.push(id);
         }
         self.invalidate();
-        if !self.has(source, id, perm::WRITE) {
+        if !self.allowed(source, Action::EditChannel { channel: id }) {
             if let Some(channel) = self.channels.get_mut(id) {
                 channel.node.acls.push(AclEntry {
                     apply_here: true,
@@ -1958,40 +1907,27 @@ impl State {
         let Some(channel) = self.channels.get(id) else {
             return;
         };
-        let (old_parent, temporary, old_name) =
-            (channel.parent(), channel.temporary, channel.name.clone());
-        let write = self.has(source, id, perm::WRITE);
-        if message.name.is_some() && (!write || id == 0) {
-            self.deny(source, source, id, perm::WRITE);
+        let (old_parent, old_name) = (channel.parent(), channel.name.clone());
+        let edit = Action::EditChannel { channel: id };
+        if message.name.is_some() && !self.check(source, Action::RenameChannel { channel: id }) {
             return;
         }
-        if (message.description.is_some() || message.position.is_some()) && !write {
-            self.deny(source, source, id, perm::WRITE);
+        if (message.description.is_some() || message.position.is_some())
+            && !self.check(source, edit)
+        {
             return;
         }
         if let Some(parent) = message.parent {
             if Some(parent) == old_parent || self.channels.is_ancestor(id, parent) {
                 return;
             }
-            if self
-                .channels
-                .get(parent)
-                .is_some_and(|parent| parent.temporary)
-            {
-                self.deny_type(source, DenyType::TemporaryChannel);
-                return;
-            }
-            if !write {
-                self.deny(source, source, id, perm::WRITE);
-                return;
-            }
-            let make = if temporary {
-                perm::MAKE_TEMP_CHANNEL
-            } else {
-                perm::MAKE_CHANNEL
-            };
-            if !self.has(source, parent, make) {
-                self.deny(source, source, parent, make);
+            if !self.check(
+                source,
+                Action::MoveChannel {
+                    channel: id,
+                    to: parent,
+                },
+            ) {
                 return;
             }
             let name = message.name.clone().unwrap_or(old_name);
@@ -2003,8 +1939,7 @@ impl State {
         let mut add = Vec::new();
         let mut remove = Vec::new();
         if !message.links_add.is_empty() || !message.links_remove.is_empty() {
-            if !self.has(source, id, perm::LINK_CHANNEL) {
-                self.deny(source, source, id, perm::LINK_CHANNEL);
+            if !self.check(source, Action::LinkChannel { channel: id }) {
                 return;
             }
             if message.links_add.len() + message.links_remove.len() > 4096 {
@@ -2017,18 +1952,15 @@ impl State {
                 remove.push(link);
             }
             for &link in &message.links_add {
-                if self.channels.get(link).is_none() {
-                    return;
-                }
-                if !self.has(source, link, perm::LINK_CHANNEL) {
-                    self.deny(source, source, link, perm::LINK_CHANNEL);
+                if self.channels.get(link).is_none()
+                    || !self.check(source, Action::LinkChannel { channel: link })
+                {
                     return;
                 }
                 add.push(link);
             }
         }
-        if message.max_users.is_some() && !write {
-            self.deny(source, source, id, perm::WRITE);
+        if message.max_users.is_some() && !self.check(source, edit) {
             return;
         }
         // All checks passed.
@@ -2113,10 +2045,7 @@ impl State {
         if self.channels.get(id).is_none() {
             return;
         }
-        // Write in the channel, or Write at the root: admins can always edit, so
-        // a channel creator cannot lock them out.
-        if !self.has(source, id, perm::WRITE) && !self.has(source, 0, perm::WRITE) {
-            self.deny(source, source, id, perm::WRITE);
+        if !self.check(source, Action::EditAcl { channel: id }) {
             return;
         }
         if self.rate_limited(source) {
@@ -2270,7 +2199,9 @@ impl State {
             return;
         };
         let (user_id, hash) = (user.user_id, user.certificate_hash.clone());
-        if !self.has(source, id, perm::WRITE) && (user_id.is_some() || hash.is_some()) {
+        if !self.allowed(source, Action::EditChannel { channel: id })
+            && (user_id.is_some() || hash.is_some())
+        {
             // Never lock the editor out of the channel they just edited.
             if let Some(channel) = self.channels.get_mut(id) {
                 channel.node.acls.push(AclEntry {
@@ -2299,7 +2230,7 @@ impl State {
             let state = proto::ChannelState {
                 channel_id: Some(id),
                 is_enter_restricted: Some(restricted),
-                can_enter: Some(self.has(session, id, perm::ENTER)),
+                can_enter: Some(self.allowed(session, Action::Enter { channel: id })),
                 ..Default::default()
             };
             self.send(session, kind::CHANNEL_STATE, &state);

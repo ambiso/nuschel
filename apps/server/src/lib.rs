@@ -4,9 +4,9 @@
 //! in memory and written through to the storage worker. See docs/server.md.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-pub mod acl;
 pub mod admin;
 pub mod auth;
+pub mod authz;
 pub mod chat;
 pub mod config;
 pub mod connection;
@@ -31,3 +31,6 @@ pub mod text;
 pub mod timefmt;
 pub mod tls;
 pub mod udp;
+
+/// The ACL engine's data types (its evaluation is private to [`authz`]).
+pub use authz::acl;
