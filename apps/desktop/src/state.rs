@@ -1307,26 +1307,24 @@ impl Desktop {
         }
     }
     pub fn trust_certificate(&mut self, index: usize) {
-        let Some(server) = self.client.servers.get_mut(index) else {
+        let Some(server) = self.client.servers.get(index) else {
             return;
         };
-        let Some(prompt) = server.certificate.take() else {
+        let Some(prompt) = server.certificate.as_ref() else {
             return;
         };
-        let old = server.bookmark.certificate_sha256.replace(prompt.sha256);
-        if let Err(error) = self.write_servers(
-            &self
-                .client
-                .servers
-                .iter()
-                .map(|server| server.bookmark.clone())
-                .collect::<Vec<_>>(),
-        ) {
-            self.client.servers[index].bookmark.certificate_sha256 = old;
+        let mut bookmarks = self
+            .client
+            .servers
+            .iter()
+            .map(|server| server.bookmark.clone())
+            .collect::<Vec<_>>();
+        bookmarks[index].certificate_sha256 = Some(prompt.sha256.clone());
+        if let Err(error) = self.write_servers(&bookmarks) {
             self.error = Some(error.to_string());
             return;
         }
-        self.connect(index, None);
+        self.client.trust_certificate(index, false);
     }
     pub fn disconnect(&mut self, index: usize) {
         self.client.disconnect(index);

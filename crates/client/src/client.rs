@@ -349,10 +349,38 @@ impl Client {
         let Some(prompt) = server.certificate.take() else {
             return false;
         };
+        let changed = server
+            .history_identity()
+            .is_some_and(|identity| identity != server.bookmark.history_identity(&prompt.sha256));
         server.bookmark.certificate_sha256 = Some(prompt.sha256);
         self.updates.push(Update::BookmarksChangedNow);
+        if changed {
+            self.forget_server_history(index);
+        }
         self.connect(index, None, deafened);
         true
+    }
+
+    /// Cached rows and pending pages belong to the previously authenticated
+    /// identity. Forget the view, never the persisted history in its old scope.
+    fn forget_server_history(&mut self, index: usize) {
+        let server = &mut self.servers[index];
+        for channel in &mut server.channels {
+            channel.timeline = Default::default();
+            channel.activity.clear();
+            channel.new_messages = 0;
+            channel.unread = 0;
+            channel.unread_mention = false;
+            channel.read_seq = 0;
+        }
+        if let Some(selection) = self
+            .navigation
+            .selection()
+            .filter(|selection| selection.server == server.id)
+            .cloned()
+        {
+            self.navigation.browse(selection, server.history_source);
+        }
     }
 
     pub fn disconnect(&mut self, index: usize) {
@@ -1789,15 +1817,18 @@ impl Client {
                 // where the reader is in it) alone; a new identity has
                 // other history.
                 if server.history_identity() != identity {
-                    for channel in &mut server.channels {
-                        channel.timeline.loaded = false;
-                    }
-                    if self
+                    let selected = self
                         .navigation
                         .selection()
-                        .is_some_and(|selected| selected.server == server.id)
-                        && let Err(error) = self.load_history(None)
-                    {
+                        .is_some_and(|selected| selected.server == server.id);
+                    if identity.is_some() {
+                        self.forget_server_history(index);
+                    } else {
+                        for channel in &mut server.channels {
+                            channel.timeline.loaded = false;
+                        }
+                    }
+                    if selected && let Err(error) = self.load_history(None) {
                         self.updates.push(Update::HistoryFailed(error));
                     }
                 }
@@ -2363,6 +2394,98 @@ mod tests {
         client.settle();
         client.take_updates();
         (client, recorder, id)
+    }
+
+    #[test]
+    fn a_new_certificate_cannot_keep_old_rows_or_accept_an_old_history_page() {
+        let (mut client, recorder, id) = connected();
+        client.open(0, 2).unwrap();
+        let old_ticket = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.handle(message(&id, 2, "old certificate's private history", 1));
+        client.handle(message(&id, 3, "another cached conversation", 2));
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::PeerCertificate("cd".repeat(32)),
+        });
+        assert!(
+            client.servers[0]
+                .channels
+                .iter()
+                .all(|channel| channel.timeline.messages.is_empty())
+        );
+        assert!(!client.navigation.accepts(&old_ticket));
+        // An answer already in flight from the old scope must not restore rows.
+        let Input::Message { message, .. } = message(&id, 2, "late old row", 3) else {
+            unreachable!()
+        };
+        client.handle(Input::History {
+            server: id.clone(),
+            ticket: old_ticket,
+            before: None,
+            messages: vec![message],
+            next_before: None,
+        });
+        let current = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.handle(Input::History {
+            server: id,
+            ticket: current,
+            before: None,
+            messages: vec![],
+            next_before: None,
+        });
+        assert!(
+            client.servers[0]
+                .channels
+                .iter()
+                .all(|channel| channel.timeline.messages.is_empty())
+        );
+    }
+
+    #[test]
+    fn the_same_certificate_preserves_loaded_rows_and_pending_pages() {
+        let (mut client, recorder, id) = connected();
+        client.open(0, 2).unwrap();
+        let ticket = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.handle(message(&id, 2, "keep this conversation", 1));
+        client.handle(Input::Server {
+            server: id,
+            generation: 1,
+            event: ServerEvent::PeerCertificate("ab".repeat(32)),
+        });
+        assert!(client.navigation.accepts(&ticket));
+        assert_eq!(
+            client.servers[0]
+                .channels
+                .iter()
+                .find(|channel| channel.id == 2)
+                .unwrap()
+                .timeline
+                .messages
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn accepting_a_changed_certificate_invalidates_the_old_view_before_reconnecting() {
+        let (mut client, recorder, id) = connected();
+        client.open(0, 2).unwrap();
+        let ticket = recorder.pages.lock().unwrap().last().unwrap().1.clone();
+        client.handle(message(&id, 2, "old scoped row", 1));
+        client.servers[0].certificate = Some(CertificatePrompt {
+            sha256: "cd".repeat(32),
+            changed: true,
+            reason: "changed".into(),
+        });
+        assert!(client.trust_certificate(0, false));
+        assert!(!client.navigation.accepts(&ticket));
+        assert!(
+            client.servers[0]
+                .channels
+                .iter()
+                .all(|channel| channel.timeline.messages.is_empty())
+        );
     }
 
     #[test]
