@@ -303,6 +303,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschel-witness" = rec {
+      packageId = "nuschel-witness";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschel-witness";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuscheld" = rec {
       packageId = "nuscheld";
       build = internal.buildRustCrateWithFeatures {
@@ -18933,7 +18943,7 @@ rec {
           "simd256" = [ "libcrux-sha3/simd256" "libcrux-intrinsics/simd256" ];
           "std" = [ "tls_codec?/std" ];
         };
-        resolvedDefaultFeatures = [ "mldsa65" "std" ];
+        resolvedDefaultFeatures = [ "mldsa44" "mldsa65" "std" ];
       };
       "libcrux-ml-kem" = rec {
         crateName = "libcrux-ml-kem";
@@ -22886,6 +22896,10 @@ rec {
             packageId = "nuschel-session";
           }
           {
+            name = "nuschel-witness";
+            packageId = "nuschel-witness";
+          }
+          {
             name = "nuscheld";
             packageId = "nuscheld";
           }
@@ -23106,6 +23120,10 @@ rec {
             packageId = "async-trait";
           }
           {
+            name = "base64";
+            packageId = "base64 0.22.1";
+          }
+          {
             name = "blake3";
             packageId = "blake3";
             usesDefaultFeatures = false;
@@ -23116,6 +23134,16 @@ rec {
             packageId = "ed25519-dalek";
             usesDefaultFeatures = false;
             features = [ "std" "zeroize" ];
+          }
+          {
+            name = "getrandom";
+            packageId = "getrandom 0.4.3";
+          }
+          {
+            name = "libcrux-ml-dsa";
+            packageId = "libcrux-ml-dsa";
+            usesDefaultFeatures = false;
+            features = [ "std" "mldsa44" ];
           }
           {
             name = "nuschel-identity";
@@ -23796,6 +23824,95 @@ rec {
         ];
 
       };
+      "nuschel-witness" = rec {
+        crateName = "nuschel-witness";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "nuschel-witness";
+            path = "src/main.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/witness; };
+        libName = "nuschel_witness";
+        dependencies = [
+          {
+            name = "clap";
+            packageId = "clap";
+            features = [ "derive" ];
+          }
+          {
+            name = "getrandom";
+            packageId = "getrandom 0.4.3";
+          }
+          {
+            name = "httparse";
+            packageId = "httparse";
+          }
+          {
+            name = "nuschel-kt";
+            packageId = "nuschel-kt";
+          }
+          {
+            name = "nuschel-protocol";
+            packageId = "nuschel-protocol";
+          }
+          {
+            name = "rustls";
+            packageId = "rustls";
+            usesDefaultFeatures = false;
+            features = [ "ring" "std" "tls12" ];
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.10.9";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "macros" "rt-multi-thread" "net" "io-util" "signal" "sync" "time" ];
+          }
+          {
+            name = "tokio-rustls";
+            packageId = "tokio-rustls";
+            usesDefaultFeatures = false;
+            features = [ "ring" "tls12" ];
+          }
+          {
+            name = "tracing";
+            packageId = "tracing";
+          }
+          {
+            name = "tracing-subscriber";
+            packageId = "tracing-subscriber";
+            features = [ "env-filter" ];
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "rcgen";
+            packageId = "rcgen";
+            usesDefaultFeatures = false;
+            features = [ "ring" "pem" ];
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+          {
+            name = "ureq";
+            packageId = "ureq";
+            usesDefaultFeatures = false;
+          }
+        ];
+
+      };
       "nuscheld" = rec {
         crateName = "nuscheld";
         version = "0.1.0";
@@ -23928,6 +24045,12 @@ rec {
             name = "tracing-subscriber";
             packageId = "tracing-subscriber";
             features = [ "env-filter" ];
+          }
+          {
+            name = "ureq";
+            packageId = "ureq";
+            usesDefaultFeatures = false;
+            features = [ "rustls" ];
           }
           {
             name = "webpki-roots";
