@@ -93,7 +93,27 @@ pub struct IncomingText {
     pub html: bool,
     pub outgoing: bool,
     pub observed_at_ms: i64,
+    /// The server's sequence number (Nuschel servers: from history).
+    pub seq: Option<u64>,
+    /// Our own message on a Nuschel server, until `ChatAcked`: its key.
+    pub pending: Option<[u8; 16]>,
 }
+
+/// Our message to a Nuschel conversation until the server acknowledged it.
+/// Retries (also after a reconnect) carry the same idempotency key, so the
+/// server stores it once.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingChat {
+    pub channel: u32,
+    pub conversation: [u8; 16],
+    pub key: [u8; 16],
+    pub content: String,
+}
+
+/// Request ids the session uses itself; frontends use smaller ones.
+const INTERNAL: u64 = 1 << 63;
+/// Busy or rate-limited sends are retried this often before they fail.
+const MAX_SEND_ATTEMPTS: u32 = 5;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ServerLimits {
@@ -117,6 +137,24 @@ pub enum SessionEvent {
         info: v1::ChannelInfo,
     },
     Nuschel(NuschelEvent),
+    /// Our message went to a Nuschel server and waits for its acknowledgement.
+    ChatPending(PendingChat),
+    /// The server stored our message as `seq`.
+    ChatAcked {
+        key: [u8; 16],
+        seq: u64,
+    },
+    /// The server refused our message; it was not stored.
+    ChatFailed {
+        key: [u8; 16],
+        reason: String,
+    },
+    /// A subscribed channel's newest seq and our read marker (Nuschel servers).
+    ConversationState {
+        channel: u32,
+        head: u64,
+        read: u64,
+    },
     Channel(Channel),
     ChannelRemoved(u32),
     User(User),
@@ -240,6 +278,12 @@ pub enum Command {
     QueryAcl(u32),
     UpdateAcl(Acl),
     QueryUserNames(Vec<u32>),
+    /// Mark a channel read up to `seq` (Nuschel servers; synced to the
+    /// account's other devices).
+    MarkRead {
+        channel: u32,
+        seq: u64,
+    },
     /// A Nuschel extension request; only sent when the extension (and the
     /// capability it needs) was negotiated, otherwise answered locally with
     /// `UNSUPPORTED`.
@@ -263,6 +307,9 @@ pub struct ConnectOptions {
     pub deafened: bool,
     /// Rejoin this channel after login (reconnect).
     pub channel: Option<u32>,
+    /// Messages not acknowledged on an earlier connection, sent again with
+    /// their keys (Nuschel servers).
+    pub resend: Vec<PendingChat>,
     /// The server's rate limit for text, which it does not announce.
     pub message_rate: MessageRate,
     /// What this server negotiated before (the sticky policy, or an invite):
@@ -448,6 +495,9 @@ struct Outgoing {
     wire: String,
     body: String,
     html: bool,
+    /// A Nuschel conversation's message (sent as `ChatSend`), and whether it
+    /// was already shown (a retry or resend).
+    chat: Option<(PendingChat, bool)>,
 }
 
 /// Text waiting for the server's rate limit, and our estimate of its bucket.
@@ -586,6 +636,7 @@ pub async fn run(
             local_deafened: options.deafened,
             rejoin: options.channel,
             outbox: Outbox::new(options.message_rate),
+            resend: options.resend,
             ..State::default()
         };
         // With the extension (or a sticky record) the server's hello decides
@@ -748,6 +799,13 @@ struct State {
     outbox: Outbox,
     /// The Nuschel extension's capabilities, when negotiated.
     extension: Option<Vec<String>>,
+    /// Channel → conversation id (Nuschel servers).
+    conversations: BTreeMap<u32, [u8; 16]>,
+    /// Our sends in flight by request id, with their attempts.
+    sending: BTreeMap<u64, (PendingChat, u32)>,
+    subscribed: BTreeSet<u32>,
+    next_request: u64,
+    resend: Vec<PendingChat>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -775,6 +833,11 @@ impl Default for State {
             notices: BTreeSet::new(),
             outbox: Outbox::new(MessageRate::default()),
             extension: None,
+            conversations: BTreeMap::new(),
+            sending: BTreeMap::new(),
+            subscribed: BTreeSet::new(),
+            next_request: 0,
+            resend: Vec::new(),
         }
     }
 }
@@ -1085,6 +1148,7 @@ impl State {
                         wire: html.clone(),
                         body: html,
                         html: true,
+                        chat: None,
                     });
                 }
                 self.flush_outbox(events).await?;
@@ -1400,23 +1464,277 @@ impl State {
                     )
                     .await;
                 }
+                let chat = match target {
+                    TextTarget::Channel(channel) if self.history() => self
+                        .conversations
+                        .get(&channel)
+                        .filter(|_| body.len() <= nuschel::MAX_CONTENT_BYTES)
+                        .map(|conversation| {
+                            (
+                                PendingChat {
+                                    channel,
+                                    conversation: *conversation,
+                                    key: random_key(),
+                                    content: body.clone(),
+                                },
+                                false,
+                            )
+                        }),
+                    _ => None,
+                };
                 self.outbox.push(Outgoing {
                     target,
                     expected_peer,
                     wire: wire_body,
                     body,
                     html: false,
+                    chat,
                 });
                 self.flush_outbox(events).await?;
+            }
+            Command::MarkRead { channel, seq } => {
+                if self.history()
+                    && let Some(conversation) = self.conversations.get(&channel)
+                {
+                    self.outbound.push((
+                        nuschel::kind::READ_MARKER,
+                        v1::ReadMarker {
+                            conversation: conversation.to_vec(),
+                            seq,
+                        }
+                        .encode_to_vec(),
+                    ));
+                }
             }
         }
         Ok(())
     }
 
+    /// Whether the Nuschel extension's history was negotiated.
+    fn history(&self) -> bool {
+        self.extension.as_ref().is_some_and(|capabilities| {
+            capabilities
+                .iter()
+                .any(|c| c == nuschel::capability::HISTORY)
+        })
+    }
+
+    /// Send a Nuschel conversation's message (paced like text by the outbox).
+    async fn send_chat(
+        &mut self,
+        (pending, shown): (PendingChat, bool),
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        self.next_request += 1;
+        let request_id = INTERNAL | self.next_request;
+        self.queue(
+            nuschel::kind::CHAT_SEND,
+            &v1::ChatSend {
+                request_id,
+                conversation: pending.conversation.to_vec(),
+                idempotency_key: pending.key.to_vec(),
+                format: v1::Format::Text as i32,
+                content: pending.content.clone(),
+                reply_to: 0,
+            },
+        );
+        let attempts = self
+            .sending
+            .values()
+            .find(|(sent, _)| sent.key == pending.key)
+            .map_or(0, |(_, attempts)| *attempts);
+        self.sending.retain(|_, (sent, _)| sent.key != pending.key);
+        self.sending
+            .insert(request_id, (pending.clone(), attempts + 1));
+        if shown {
+            return Ok(());
+        }
+        let author = self
+            .own_session
+            .and_then(|own| self.users.get(&own))
+            .map(|user| user.name.clone())
+            .unwrap_or_default();
+        emit(events, SessionEvent::ChatPending(pending.clone())).await?;
+        emit(
+            events,
+            SessionEvent::Text(IncomingText {
+                target: TextTarget::Channel(pending.channel),
+                author,
+                peer: None,
+                body: pending.content,
+                html: false,
+                outgoing: true,
+                observed_at_ms: now_ms(),
+                seq: None,
+                pending: Some(pending.key),
+            }),
+        )
+        .await
+    }
+
+    /// What the session handles of the extension itself: its own sends'
+    /// answers, subscriptions, and live messages (as `Text`). The rest goes
+    /// to the frontend.
+    async fn nuschel(
+        &mut self,
+        event: NuschelEvent,
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        match event {
+            NuschelEvent::Ack(ack) if ack.request_id & INTERNAL != 0 => {
+                if let Some((pending, _)) = self.sending.remove(&ack.request_id) {
+                    emit(
+                        events,
+                        SessionEvent::ChatAcked {
+                            key: pending.key,
+                            seq: ack.seq,
+                        },
+                    )
+                    .await?;
+                }
+            }
+            NuschelEvent::Error(error) if error.request_id & INTERNAL != 0 => {
+                let Some((pending, attempts)) = self.sending.remove(&error.request_id) else {
+                    return Ok(());
+                };
+                let code =
+                    v1::error::Code::try_from(error.code).unwrap_or(v1::error::Code::Unspecified);
+                let transient =
+                    matches!(code, v1::error::Code::Busy | v1::error::Code::RateLimited);
+                if transient && attempts < MAX_SEND_ATTEMPTS {
+                    // The outbox paces the retry; the key makes it idempotent.
+                    self.sending
+                        .insert(error.request_id, (pending.clone(), attempts));
+                    self.outbox.charge(Instant::now());
+                    self.outbox.push(Outgoing {
+                        target: TextTarget::Channel(pending.channel),
+                        expected_peer: None,
+                        wire: String::new(),
+                        body: String::new(),
+                        html: false,
+                        chat: Some((pending, true)),
+                    });
+                } else {
+                    emit(
+                        events,
+                        SessionEvent::ChatFailed {
+                            key: pending.key,
+                            reason: error.detail,
+                        },
+                    )
+                    .await?;
+                }
+            }
+            NuschelEvent::Subscribed(subscribed) if subscribed.request_id & INTERNAL != 0 => {
+                for state in subscribed.conversations {
+                    if let Some(channel) = self.channel_of(&state.conversation) {
+                        emit(
+                            events,
+                            SessionEvent::ConversationState {
+                                channel,
+                                head: state.head,
+                                read: state.read,
+                            },
+                        )
+                        .await?;
+                    }
+                }
+            }
+            NuschelEvent::Chat(chat) => {
+                // Frontends with a timeline use the `Text` below; the event
+                // itself also carries edits and deletions.
+                emit(
+                    events,
+                    SessionEvent::Nuschel(NuschelEvent::Chat(chat.clone())),
+                )
+                .await?;
+                let Some(message) = chat.message else {
+                    return Ok(());
+                };
+                match (self.channel_of(&chat.conversation), message.kind) {
+                    (Some(channel), kind) if kind == v1::message::Kind::Message as i32 => {
+                        let author = message.author.unwrap_or_default();
+                        let peer = self
+                            .users
+                            .values()
+                            .find(|user| {
+                                author.user_id != 0 && user.user_id == Some(author.user_id)
+                            })
+                            .cloned();
+                        emit(
+                            events,
+                            SessionEvent::Text(IncomingText {
+                                target: TextTarget::Channel(channel),
+                                author: if author.name.is_empty() {
+                                    "Deleted user".into()
+                                } else {
+                                    author.name
+                                },
+                                peer,
+                                body: message.content,
+                                html: message.format == v1::Format::LegacyHtml as i32,
+                                outgoing: false,
+                                observed_at_ms: message.sent_ms,
+                                seq: Some(message.seq),
+                                pending: None,
+                            }),
+                        )
+                        .await?;
+                    }
+                    _ => {}
+                }
+            }
+            other => emit(events, SessionEvent::Nuschel(other)).await?,
+        }
+        Ok(())
+    }
+
+    fn channel_of(&self, conversation: &[u8]) -> Option<u32> {
+        self.conversations
+            .iter()
+            .find(|(_, id)| id.as_slice() == conversation)
+            .map(|(channel, _)| *channel)
+    }
+
+    /// Subscribe to channels' conversations (all channels the sidebar shows,
+    /// up to the server's limit), so their messages arrive anywhere.
+    fn subscribe(&mut self, channels: Vec<u32>) {
+        if !self.extension.as_ref().is_some_and(|capabilities| {
+            capabilities
+                .iter()
+                .any(|c| c == nuschel::capability::SUBSCRIBE)
+        }) {
+            return;
+        }
+        let ids: Vec<Vec<u8>> = channels
+            .into_iter()
+            .filter(|channel| {
+                self.subscribed.len() < nuschel::MAX_SUBSCRIPTIONS
+                    && self.subscribed.insert(*channel)
+            })
+            .filter_map(|channel| self.conversations.get(&channel))
+            .map(|id| id.to_vec())
+            .collect();
+        for chunk in ids.chunks(nuschel::MAX_SUBSCRIBE_PER_MESSAGE) {
+            self.next_request += 1;
+            self.outbound.push((
+                nuschel::kind::SUBSCRIBE,
+                v1::Subscribe {
+                    request_id: INTERNAL | self.next_request,
+                    conversations: chunk.to_vec(),
+                }
+                .encode_to_vec(),
+            ));
+        }
+    }
+
     /// Send the text the rate limit has room for, and report on what waits.
     async fn flush_outbox(&mut self, events: &mpsc::Sender<SessionEvent>) -> Result<(), Error> {
-        while let Some(message) = self.outbox.pop(Instant::now()) {
-            self.send_text(message, events).await?;
+        while let Some(mut message) = self.outbox.pop(Instant::now()) {
+            match message.chat.take() {
+                Some(chat) => self.send_chat(chat, events).await?,
+                None => self.send_text(message, events).await?,
+            }
         }
         match self.outbox.progress() {
             Some(event) => emit(events, event).await,
@@ -1433,6 +1751,7 @@ impl State {
             wire,
             body,
             html,
+            chat: _,
         }: Outgoing,
         events: &mpsc::Sender<SessionEvent>,
     ) -> Result<(), Error> {
@@ -1481,6 +1800,8 @@ impl State {
                 html,
                 outgoing: true,
                 observed_at_ms: now_ms(),
+                seq: None,
+                pending: None,
             }),
         )
         .await
@@ -1578,6 +1899,34 @@ impl State {
                         },
                     );
                 }
+                if self.history() {
+                    let channels = self.conversations.keys().copied().collect();
+                    self.subscribe(channels);
+                    // What an earlier connection could not get acknowledged,
+                    // with the same keys: the server stores each once.
+                    for pending in std::mem::take(&mut self.resend) {
+                        if self.conversations.get(&pending.channel) == Some(&pending.conversation) {
+                            self.outbox.push(Outgoing {
+                                target: TextTarget::Channel(pending.channel),
+                                expected_peer: None,
+                                wire: String::new(),
+                                body: String::new(),
+                                html: false,
+                                chat: Some((pending, true)),
+                            });
+                        } else {
+                            emit(
+                                events,
+                                SessionEvent::ChatFailed {
+                                    key: pending.key,
+                                    reason: "The conversation is no longer available.".into(),
+                                },
+                            )
+                            .await?;
+                        }
+                    }
+                    self.flush_outbox(events).await?;
+                }
             }
             kind::CHANNEL_REMOVE => {
                 let channel: proto::ChannelRemove = decode(&frame)?;
@@ -1667,6 +2016,12 @@ impl State {
                 if self.extension.is_some()
                     && let Some(info) = nuschel::channel_info(&frame.payload)
                 {
+                    if let Some(conversation) = nuschel::id(&info.conversation) {
+                        self.conversations.insert(id, conversation);
+                        if self.logged_in() {
+                            self.subscribe(vec![id]);
+                        }
+                    }
                     emit(events, SessionEvent::ChannelInfo { channel: id, info }).await?;
                 }
                 if over_budget {
@@ -1771,6 +2126,8 @@ impl State {
                             html: self.allow_html,
                             outgoing: false,
                             observed_at_ms: now_ms(),
+                            seq: None,
+                            pending: None,
                         }),
                     )
                     .await?;
@@ -2112,7 +2469,7 @@ impl State {
                 if self.extension.is_some()
                     && let Some(event) = nuschel_event(&frame)?
                 {
-                    emit(events, SessionEvent::Nuschel(event)).await?;
+                    self.nuschel(event, events).await?;
                 }
             }
             _ => { /* Optional messages (e.g. plugin data) are framed and ignored. */ }

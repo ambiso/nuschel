@@ -390,6 +390,8 @@ pub struct MemoryHistory {
     access: BTreeMap<(String, String, u64), Option<u64>>,
     /// (account, conversation) → seq.
     markers: BTreeMap<(String, String), u64>,
+    /// (conversation, account, key) → seq and body hash: the unique index.
+    keys: std::collections::HashMap<(String, String, String), (u64, Option<String>)>,
 }
 
 struct MemoryRows<'a>(&'a BTreeMap<(String, u64), StoredMessage>);
@@ -468,17 +470,12 @@ impl MemoryHistory {
     fn apply(&mut self, request: Request) -> Response {
         match request {
             Request::HistoryAppend { message } => {
-                let earlier = self
-                    .messages
-                    .values()
-                    .find(|row| {
-                        row.conversation == message.conversation
-                            && message.idempotency_key.is_some()
-                            && message.author_account.is_some()
-                            && row.author_account == message.author_account
-                            && row.idempotency_key == message.idempotency_key
-                    })
-                    .map(|row| (row.seq, row.body_hash.clone()));
+                let key = message
+                    .author_account
+                    .clone()
+                    .zip(message.idempotency_key.clone())
+                    .map(|(account, key)| (message.conversation.clone(), account, key));
+                let earlier = key.as_ref().and_then(|key| self.keys.get(key).cloned());
                 match earlier {
                     Some((seq, hash)) => {
                         self.void(&message);
@@ -493,6 +490,9 @@ impl MemoryHistory {
                     }
                     None => {
                         let seq = message.seq;
+                        if let Some(key) = key {
+                            self.keys.insert(key, (seq, message.body_hash.clone()));
+                        }
                         self.insert(message);
                         Response::Appended {
                             seq,
@@ -545,6 +545,7 @@ impl MemoryHistory {
             },
             Request::HistoryPurge { conversation } => {
                 self.messages.retain(|(id, _), _| *id != conversation);
+                self.keys.retain(|(id, _, _), _| *id != conversation);
                 self.access.retain(|(id, _, _), _| *id != conversation);
                 self.markers.retain(|(_, id), _| *id != conversation);
                 Response::Done

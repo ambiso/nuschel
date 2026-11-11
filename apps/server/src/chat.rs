@@ -536,6 +536,7 @@ impl State {
                 }
             }
             Done::Stock {
+                source,
                 conversation,
                 message,
                 fallback,
@@ -548,12 +549,14 @@ impl State {
                         message,
                         stock: None,
                     },
-                    0,
+                    source,
                 ),
                 // Not stored: Nuschel users in the channel still see it live.
                 _ => {
                     for session in self.readers(&conversation) {
-                        if let Some(user) = self.users.get(&session) {
+                        if session != source
+                            && let Some(user) = self.users.get(&session)
+                        {
                             user.link.send(fallback.clone());
                         }
                     }
@@ -644,6 +647,7 @@ impl State {
             // Too large to keep: Nuschel users in the channel see it live only.
             self.stored(
                 Done::Stock {
+                    source,
                     conversation: id,
                     message: v1::Message::default(),
                     fallback: fallback.clone(),
@@ -670,6 +674,7 @@ impl State {
         self.history.store(
             Request::HistoryAppend { message: row },
             Done::Stock {
+                source,
                 conversation: id,
                 message,
                 fallback: fallback.clone(),

@@ -272,6 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             burst: args.message_burst,
             per_second: args.message_limit,
         },
+        resend: Vec::new(),
         required: nuschel_session::sticky::Requirement {
             nuschel: args.require_nuschel,
             ..Default::default()
@@ -494,7 +495,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::User(user) => json!({"kind":"user", "user":user}),
                 SessionEvent::UserRemoved(session) => json!({"kind":"user_removed", "session":session}),
                 SessionEvent::Connected { session, max_bandwidth } => json!({"kind":"connected", "session":session, "max_bandwidth":max_bandwidth}),
-                SessionEvent::Text(message) => json!({"kind":"text", "target":message.target, "author":message.author, "body":message.body, "html":message.html, "outgoing":message.outgoing}),
+                SessionEvent::Text(message) => json!({"kind":"text", "target":message.target, "author":message.author, "body":message.body, "html":message.html, "outgoing":message.outgoing, "seq":message.seq}),
                 SessionEvent::Welcome(body) => json!({"kind":"welcome", "body":body}),
                 SessionEvent::Notice(message) => json!({"kind":"notice", "message":message}),
                 SessionEvent::PermissionDenied(message) => json!({"kind":"permission_denied", "message":message}),
@@ -514,6 +515,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::Outbox { sent, total } => json!({"kind":"outbox", "sent":sent, "total":total}),
                 SessionEvent::ChannelInfo { channel, info } => json!({"kind":"channel_info", "channel":channel, "conversation":hex(&info.conversation), "visibility":info.visibility}),
                 SessionEvent::Nuschel(event) => nuschel_json(&event),
+                SessionEvent::ChatPending(pending) => json!({"kind":"chat_pending", "channel":pending.channel, "key":hex(&pending.key)}),
+                SessionEvent::ChatAcked { key, seq } => json!({"kind":"chat_acked", "key":hex(&key), "seq":seq}),
+                SessionEvent::ChatFailed { key, reason } => json!({"kind":"chat_failed", "key":hex(&key), "reason":reason}),
+                SessionEvent::ConversationState { channel, head, read } => json!({"kind":"conversation_state", "channel":channel, "head":head, "read":read}),
             })?,
         }
     }

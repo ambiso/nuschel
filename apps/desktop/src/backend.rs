@@ -4,10 +4,14 @@ use nuschel_client::HistoryTicket;
 use nuschel_core::audio::{AudioDevice, EchoSource, Sound, TransmitMode};
 use nuschel_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
 use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
+use nuschel_protocol::nuschel::v1;
 use nuschel_session::{
     Error,
     config::{ClientSettings, Profile, ServerBookmark},
-    connection::{self, Command, ConnectOptions, IncomingText, SessionEvent, TextTarget},
+    connection::{
+        self, Command, ConnectOptions, IncomingText, NuschelEvent, NuschelRequest, PendingChat,
+        SessionEvent, TextTarget,
+    },
     model::RejectKind,
     workers::{self, Media, Storage},
 };
@@ -18,10 +22,73 @@ use tokio::{
 };
 
 pub struct RenderedMessage {
+    /// The local row id, or on a Nuschel server the server's seq.
     pub id: Option<i64>,
     pub message: ChatMessage,
     pub document: MessageDocument,
     pub outgoing: bool,
+    /// Our message on a Nuschel server until it is acknowledged: its key.
+    pub pending: Option<[u8; 16]>,
+}
+
+/// Server history pages asked for, by request id: server, ticket and cursor.
+type ServerPages = BTreeMap<u64, (String, HistoryTicket, Option<i64>)>;
+static SERVER_PAGES: std::sync::Mutex<ServerPages> = std::sync::Mutex::new(BTreeMap::new());
+
+fn server_pages() -> std::sync::MutexGuard<'static, ServerPages> {
+    SERVER_PAGES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Render a Nuschel server's history page like a local one: text in one
+/// content worker, stock clients' HTML made inert first. Ids are seqs; edits,
+/// deletions and voids only move the cursor.
+async fn render_server_page(page: v1::HistoryPage) -> (Vec<RenderedMessage>, Option<i64>) {
+    let next_before = page
+        .more_before
+        .then(|| page.messages.first().map(|message| message.seq as i64))
+        .flatten();
+    let shown: Vec<v1::Message> = page
+        .messages
+        .into_iter()
+        .filter(|message| message.kind == v1::message::Kind::Message as i32)
+        .collect();
+    let mut out = Vec::with_capacity(shown.len());
+    for message in shown {
+        let author = message.author.clone().unwrap_or_default();
+        let author = if author.name.is_empty() && author.account.is_empty() {
+            "Unknown".to_owned()
+        } else if author.name.is_empty() {
+            "Deleted user".to_owned()
+        } else {
+            author.name
+        };
+        let (source, document) = if message.deleted_ms != 0 {
+            let text = "This message was deleted.".to_owned();
+            (text.clone(), plain(&text))
+        } else {
+            prepare(
+                &message.content,
+                message.format == v1::Format::LegacyHtml as i32,
+            )
+            .await
+        };
+        out.push(RenderedMessage {
+            id: Some(message.seq as i64),
+            message: ChatMessage {
+                server: String::new(),
+                channel: String::new(),
+                author,
+                observed_at_ms: message.sent_ms,
+                body: source,
+            },
+            document,
+            outgoing: false,
+            pending: None,
+        });
+    }
+    (out, next_before)
 }
 pub enum Event {
     Protocol {
@@ -95,6 +162,18 @@ pub enum Event {
         next_after: Option<i64>,
     },
     HistoryError(String),
+    /// A server history page could not be loaded.
+    HistoryFailed {
+        server: String,
+        ticket: HistoryTicket,
+        reason: String,
+    },
+    /// The server offers less than it did before (the sticky policy).
+    Downgrade {
+        server: String,
+        generation: u64,
+        reason: String,
+    },
     /// Results for search `request` (see `Backend::search`).
     SearchResults {
         request: u64,
@@ -416,6 +495,42 @@ impl Backend {
         );
         Ok(generation)
     }
+    /// A page of a Nuschel server's history (`before` a seq, or the latest).
+    pub fn server_history(
+        &self,
+        server: String,
+        conversation: [u8; 16],
+        ticket: HistoryTicket,
+        before: Option<i64>,
+    ) -> Result<(), String> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let request_id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let anchor = match before {
+            Some(seq) => v1::history_request::Anchor::Before(seq.max(0) as u64),
+            None => v1::history_request::Anchor::Latest(true),
+        };
+        {
+            let mut pages = server_pages();
+            // Answers that never came (a dropped connection) do not pile up.
+            while pages.len() >= 64 {
+                pages.pop_first();
+            }
+            pages.insert(request_id, (server.clone(), ticket, before));
+        }
+        let result = self.command(
+            &server,
+            Command::Nuschel(NuschelRequest::History(v1::HistoryRequest {
+                request_id,
+                conversation: conversation.to_vec(),
+                anchor: Some(anchor),
+                limit: 50,
+            })),
+        );
+        if result.is_err() {
+            server_pages().remove(&request_id);
+        }
+        result
+    }
     pub fn command(&self, server: &str, command: Command) -> Result<(), String> {
         self.connections
             .get(server)
@@ -600,6 +715,9 @@ struct Restore {
     deafened: bool,
     connected: bool,
     disconnected_at_ms: Option<i64>,
+    /// Our messages a Nuschel server has not acknowledged yet; sent again
+    /// with their keys after a reconnect.
+    unacked: Vec<PendingChat>,
 }
 
 enum Outcome {
@@ -659,6 +777,16 @@ async fn connection_loop(
                         generation,
                         reason: "Disconnected".into(),
                         reject: None,
+                    })
+                    .await;
+                return;
+            }
+            Ok(Err(Error::Downgrade(reason))) => {
+                let _ = events
+                    .send(Event::Downgrade {
+                        server: id.clone(),
+                        generation,
+                        reason,
                     })
                     .await;
                 return;
@@ -769,6 +897,7 @@ async fn connect_once(
             muted: restore.muted,
             deafened: restore.deafened,
             channel: restore.channel,
+            resend: restore.unacked.clone(),
             message_rate: Default::default(),
             required,
         },
@@ -894,6 +1023,34 @@ async fn connect_once(
                 if session_commands.send(command).await.is_err() { break; }
             },
             Some(event) = incoming.recv() => match event {
+                SessionEvent::ChatPending(pending) => {
+                    if restore.unacked.len() < 256 { restore.unacked.push(pending); }
+                },
+                SessionEvent::ChatAcked { key, seq } => {
+                    restore.unacked.retain(|pending| pending.key != key);
+                    let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::ChatAcked { key, seq } }).await;
+                },
+                SessionEvent::ChatFailed { key, reason } => {
+                    restore.unacked.retain(|pending| pending.key != key);
+                    let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::ChatFailed { key, reason } }).await;
+                },
+                SessionEvent::Nuschel(NuschelEvent::Page(page)) => {
+                    let asked = server_pages().remove(&page.request_id);
+                    if let Some((server, ticket, before)) = asked {
+                        let events = events.clone();
+                        tokio::spawn(async move {
+                            let (messages, next_before) = render_server_page(page).await;
+                            let _ = events.send(Event::History { server, ticket, before, messages, next_before }).await;
+                        });
+                    }
+                },
+                SessionEvent::Nuschel(NuschelEvent::Error(error)) => {
+                    let asked = server_pages().remove(&error.request_id);
+                    match asked {
+                        Some((server, ticket, _)) => { let _ = events.send(Event::HistoryFailed { server, ticket, reason: error.detail }).await; },
+                        None => { let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Nuschel(NuschelEvent::Error(error)) }).await; },
+                    }
+                },
                 SessionEvent::Negotiated(negotiated) => {
                     // Remember what this server offers: a weaker answer later fails.
                     let raised = nuschel_session::sticky::PolicyStore::load(&profile.config_dir)
@@ -1194,6 +1351,14 @@ async fn storage_loop(
                 if id.is_some() {
                     let _ = events.send(Event::HistoryRecovered).await;
                 }
+                // On a Nuschel server the timeline counts in the server's seqs;
+                // the local copy is the offline cache. Our own message has
+                // none until it is acknowledged.
+                let id = match (job.text.seq, job.text.pending) {
+                    (Some(seq), _) => Some(seq as i64),
+                    (None, Some(_)) => None,
+                    (None, None) => id,
+                };
                 let _ = events
                     .send(Event::Message {
                         server: job.server,
@@ -1206,6 +1371,7 @@ async fn storage_loop(
                             message,
                             document,
                             outgoing: job.text.outgoing,
+                            pending: job.text.pending,
                         },
                     })
                     .await;
@@ -1283,6 +1449,7 @@ async fn history_loop(
                 document: document.unwrap_or_else(|| plain(&entry.message.body)),
                 message: entry.message,
                 outgoing: false,
+                pending: None,
             })
             .collect();
         let history = match kind {

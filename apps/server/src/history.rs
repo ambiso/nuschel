@@ -32,6 +32,8 @@ pub enum Done {
     /// A stock client's channel message: deliver to Nuschel readers, or the
     /// stock frame if storing failed.
     Stock {
+        /// The sender, who has its own copy.
+        source: u32,
         conversation: Id,
         message: v1::Message,
         fallback: Bytes,

@@ -46,6 +46,8 @@ pub struct MessageView {
     /// The row's height when last laid out, for the room it keeps while
     /// scrolled out of view.
     pub height: crate::scrolling::Height,
+    /// Our message on a Nuschel server until it is acknowledged: its key.
+    pub pending: Option<[u8; 16]>,
 }
 /// Name a text field for screen readers. GPUI-kit inputs expose no role or
 /// name to AT-SPI/UIA/AX unless the state is told what it is.
@@ -89,7 +91,9 @@ impl From<RenderedMessage> for MessageView {
             author: message.message.author,
             observed_at_ms: message.message.observed_at_ms,
             time: local_time(message.message.observed_at_ms),
-            status: if message.id.is_none() {
+            status: if message.pending.is_some() {
+                Some("sending…")
+            } else if message.id.is_none() {
                 Some("not saved")
             } else if message.outgoing {
                 Some("sent")
@@ -101,6 +105,7 @@ impl From<RenderedMessage> for MessageView {
             document: message.document.into(),
             expanded: false,
             offer,
+            pending: message.pending,
         }
     }
 }
@@ -207,6 +212,9 @@ pub struct ChannelView {
     /// Raw Mumble HTML description and its inert rendering from the content worker.
     pub description_raw: String,
     pub description: Option<Document>,
+    /// Its conversation on a Nuschel server, and the read marker sent last.
+    pub conversation: Option<[u8; 16]>,
+    pub read_seq: i64,
 }
 #[derive(Clone)]
 pub struct ActivityLine {
@@ -266,6 +274,8 @@ impl ChannelView {
             max_users: 0,
             description_raw: String::new(),
             description: None,
+            conversation: None,
+            read_seq: 0,
         }
     }
 }
@@ -360,6 +370,11 @@ pub struct ServerView {
     pub audio_status: String,
     pub welcome: Option<String>,
     pub certificate: Option<CertificatePrompt>,
+    /// The server answered weaker than it did before (the sticky policy).
+    pub downgrade: Option<String>,
+    /// Acknowledgements (or refusals, `None`) of our messages that arrived
+    /// before the messages themselves were shown.
+    pub acked: BTreeMap<[u8; 16], Option<u64>>,
     pub talking: BTreeSet<u32>,
     pub transport: Option<TransportStats>,
     pub audio: AudioInfo,
@@ -441,6 +456,8 @@ impl ServerView {
             audio_status: "Audio disconnected".into(),
             welcome: None,
             certificate: None,
+            downgrade: None,
+            acked: BTreeMap::new(),
             talking: BTreeSet::new(),
             transport: None,
             audio: AudioInfo::default(),
@@ -1583,6 +1600,25 @@ impl Desktop {
             Err(error) => server.notice = Some(error),
         }
     }
+    /// The user's explicit reset of a server's sticky security record, then
+    /// connect again.
+    pub fn reset_security_record(&mut self, index: usize) {
+        let Some(server) = self.servers.get_mut(index) else {
+            return;
+        };
+        let (host, port) = (server.bookmark.host.clone(), server.bookmark.port);
+        match nuschel_session::sticky::PolicyStore::load(&self.profile.config_dir)
+            .and_then(|mut store| store.reset(&host, port))
+        {
+            Ok(()) => {
+                self.servers[index].downgrade = None;
+                self.connect(index, self.passwords.get(&self.servers[index].id).cloned());
+            }
+            Err(error) => {
+                self.error = Some(format!("Could not reset the security record: {error}"))
+            }
+        }
+    }
     pub fn trust_certificate(&mut self, index: usize) {
         let Some(server) = self.servers.get_mut(index) else {
             return;
@@ -1626,6 +1662,15 @@ impl Desktop {
         server.status = Status::Disconnected;
         server.security = SessionSecurity::Unknown;
         server.own_session = None;
+        // Offline, the timeline is local observations again.
+        if server.history_source == HistorySource::ServerArchive {
+            server.history_source = HistorySource::LocalObserved;
+            for channel in &mut server.channels {
+                channel.loaded = false;
+                channel.messages.clear();
+                channel.next_before = None;
+            }
+        }
         server.users.clear();
         server.talking.clear();
         server.transport = None;
@@ -2464,20 +2509,34 @@ impl Desktop {
         if before.is_none() {
             channel.new_messages = 0;
         }
+        let archive = server.history_source == HistorySource::ServerArchive;
         let ticket = self.navigation.browse(
             Conversation {
                 server: server.id.clone(),
                 channel: channel.id,
             },
-            HistorySource::LocalObserved,
+            server.history_source,
         );
-        if let Err(error) = self.backend.history(
-            server.id.clone(),
-            identity,
-            channel.storage_key.clone(),
-            ticket,
-            before,
-        ) {
+        let requested = match channel.conversation.filter(|_| archive) {
+            // A Nuschel server's history: everything this member may read.
+            Some(conversation) => {
+                self.backend
+                    .server_history(server.id.clone(), conversation, ticket, before)
+            }
+            // Until the server names the conversation, nothing loads.
+            None if archive => {
+                channel.loading = false;
+                return;
+            }
+            None => self.backend.history(
+                server.id.clone(),
+                identity,
+                channel.storage_key.clone(),
+                ticket,
+                before,
+            ),
+        };
+        if let Err(error) = requested {
             channel.loading = false;
             self.older_paused = true;
             self.error = Some(error);
@@ -2586,6 +2645,36 @@ impl Desktop {
                         .is_some_and(|error| error.starts_with("Local history"))
                     {
                         self.error = None;
+                    }
+                }
+                Event::HistoryFailed {
+                    server,
+                    ticket,
+                    reason,
+                } => {
+                    if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server)
+                        && let Some(channel) = server
+                            .channels
+                            .iter_mut()
+                            .find(|entry| entry.id == ticket.conversation.channel)
+                    {
+                        channel.loading = false;
+                    }
+                    self.older_paused = true;
+                    self.error = Some(format!("Server history: {reason}"));
+                }
+                Event::Downgrade {
+                    server,
+                    generation,
+                    reason,
+                } => {
+                    if let Some(index) = self
+                        .servers
+                        .iter()
+                        .position(|entry| entry.id == server && entry.generation == generation)
+                    {
+                        self.disconnect(index);
+                        self.servers[index].downgrade = Some(reason);
                     }
                 }
                 Event::HistoryError(error) => {
@@ -2942,7 +3031,7 @@ impl Desktop {
                     target,
                     storage_key,
                     peer,
-                    message,
+                    mut message,
                 } => {
                     let Some(server) = self
                         .servers
@@ -2951,6 +3040,13 @@ impl Desktop {
                     else {
                         continue;
                     };
+                    // Acknowledged before it was shown.
+                    if let Some(key) = message.pending
+                        && let Some(seq) = server.acked.remove(&key)
+                    {
+                        message.pending = None;
+                        message.id = seq.map(|seq| seq as i64);
+                    }
                     let index = if let Some(index) = server.channels.iter().position(|channel| {
                         channel.storage_key == storage_key
                             || (channel.target == target
@@ -3210,10 +3306,61 @@ impl Desktop {
     fn apply_protocol(&mut self, index: usize, event: SessionEvent) {
         let server = &mut self.servers[index];
         match event {
-            // The backend keeps the sticky record; server history comes later.
-            SessionEvent::Negotiated(_)
-            | SessionEvent::ChannelInfo { .. }
-            | SessionEvent::Nuschel(_) => {}
+            // The backend keeps the sticky record. With history, the timeline
+            // pages from the server (seqs), not from local observations.
+            SessionEvent::Negotiated(negotiated) => {
+                let history = negotiated
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == "history/1");
+                if history && server.history_source != HistorySource::ServerArchive {
+                    server.history_source = HistorySource::ServerArchive;
+                    for channel in &mut server.channels {
+                        channel.loaded = false;
+                        channel.messages.clear();
+                        channel.next_before = None;
+                    }
+                }
+            }
+            SessionEvent::ChannelInfo { channel, info } => {
+                let selected = self.navigation.selection().is_some_and(|selected| {
+                    selected.server == server.id && selected.channel == channel
+                });
+                if let Some(view) = server.channel_view(channel) {
+                    view.conversation = info.conversation.as_slice().try_into().ok();
+                    if selected && !view.loaded && !view.loading {
+                        self.load_history(None);
+                    }
+                }
+            }
+            SessionEvent::ChatAcked { key, seq } => {
+                if !settle_pending(server, key, Some(seq)) {
+                    server.acked.insert(key, Some(seq));
+                }
+            }
+            SessionEvent::ChatFailed { key, reason } => {
+                server.notice = Some(format!("A message was not sent: {reason}"));
+                if !settle_pending(server, key, None) {
+                    server.acked.insert(key, None);
+                }
+            }
+            SessionEvent::ConversationState {
+                channel,
+                head,
+                read,
+            } => {
+                let selected = self.navigation.selection().is_some_and(|selected| {
+                    selected.server == server.id && selected.channel == channel
+                });
+                if let Some(view) = server.channel_view(channel)
+                    && !selected
+                {
+                    view.unread = usize::try_from(head.saturating_sub(read))
+                        .unwrap_or(usize::MAX)
+                        .min(999);
+                }
+            }
+            SessionEvent::ChatPending(_) | SessionEvent::Nuschel(_) => {}
             SessionEvent::PeerCertificate(pin) => {
                 let identity = server.history_identity();
                 server.peer_sha256 = Some(pin.clone());
@@ -3576,6 +3723,29 @@ fn lost_messages(server: &mut ServerView) -> Option<String> {
     })
 }
 /// Returns whether the message is new to this timeline.
+/// Our message on a Nuschel server was acknowledged as `seq` (or refused):
+/// returns whether it is shown yet.
+fn settle_pending(server: &mut ServerView, key: [u8; 16], seq: Option<u64>) -> bool {
+    for channel in &mut server.channels {
+        if let Some(message) = channel
+            .messages
+            .iter_mut()
+            .find(|message| message.pending == Some(key))
+        {
+            message.pending = None;
+            match seq {
+                Some(seq) => {
+                    message.id = Some(seq as i64);
+                    message.status = Some("sent");
+                }
+                None => message.status = Some("not sent"),
+            }
+            return true;
+        }
+    }
+    false
+}
+
 pub(crate) fn merge_message(channel: &mut ChannelView, message: RenderedMessage) -> bool {
     if message
         .id
@@ -3642,7 +3812,7 @@ impl ChannelView {
 #[cfg(test)]
 mod tests {
     // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::{ChannelView, RenderedMessage, merge_message};
+    use super::{ChannelView, RenderedMessage, ServerView, merge_message, settle_pending};
 
     fn message(id: Option<i64>, observed_at_ms: i64) -> RenderedMessage {
         RenderedMessage {
@@ -3656,11 +3826,36 @@ mod tests {
             },
             document: nuschel_core::MessageDocument { blocks: Vec::new() },
             outgoing: false,
+            pending: None,
         }
     }
 
     fn page(ids: std::ops::RangeInclusive<i64>) -> Vec<RenderedMessage> {
         ids.map(|id| message(Some(id), id * 1000)).collect()
+    }
+
+    #[test]
+    fn our_messages_are_pending_until_the_server_acknowledges_them() {
+        let bookmark =
+            nuschel_session::config::ServerBookmark::new("", "example.org", 64738, "Ada").unwrap();
+        let mut server = ServerView::new(bookmark);
+        let mut pending = message(None, 1000);
+        pending.outgoing = true;
+        pending.pending = Some([7; 16]);
+        merge_message(&mut server.channels[0], pending);
+        assert_eq!(server.channels[0].messages[0].status, Some("sending…"));
+        assert!(!settle_pending(&mut server, [8; 16], Some(3)));
+        assert!(settle_pending(&mut server, [7; 16], Some(42)));
+        let shown = &server.channels[0].messages[0];
+        assert_eq!(
+            (shown.id, shown.status, shown.pending),
+            (Some(42), Some("sent"), None)
+        );
+        // A latest page keeps it (by seq) and does not show it twice.
+        assert!(!merge_message(
+            &mut server.channels[0],
+            message(Some(42), 1000)
+        ));
     }
 
     fn ids(channel: &ChannelView) -> Vec<Option<i64>> {

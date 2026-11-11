@@ -42,8 +42,7 @@ impl Requirement {
             return Err(
                 "This server used the Nuschel protocol before but now answers as a plain \
                  Mumble server. That can mean someone is impersonating it. Nuschel did not log \
-                 in. If the operator changed the server, reset its security record in the \
-                 server's settings."
+                 in. If the operator changed the server, reset this server's security record."
                     .into(),
             );
         }
@@ -57,7 +56,7 @@ impl Requirement {
             return Err(format!(
                 "This server no longer offers {} although it did before. That can mean \
                  someone is impersonating it. Nuschel did not log in. If the operator changed \
-                 the server, reset its security record in the server's settings.",
+                 the server, reset this server's security record.",
                 missing.join(", ")
             ));
         }

@@ -159,6 +159,7 @@ fn options(address: SocketAddr, pin: &str, name: &str, identity: usize) -> Conne
         muted: true,
         deafened: false,
         channel: None,
+        resend: Vec::new(),
         message_rate: Default::default(),
         required: Requirement::default(),
     }
@@ -231,8 +232,12 @@ impl Session {
             let event = self.backlog.remove(index).unwrap();
             return pick(&event).unwrap();
         }
+        // One deadline for the whole wait: unrelated events (transport
+        // statistics every few seconds) must not extend it.
+        let deadline = tokio::time::Instant::now() + WAIT;
         loop {
-            let Some(event) = self.receive(WAIT).await else {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let Some(event) = self.receive(left).await else {
                 let ended = if self.task.is_finished() {
                     format!("{:?}", (&mut self.task).await)
                 } else {
@@ -871,6 +876,11 @@ use nuscheld::acl::perm;
 
 const QUIET: Duration = Duration::from_millis(400);
 
+/// A stock `TextMessage` (live text from history carries its seq).
+fn stock_text(event: &SessionEvent) -> bool {
+    matches!(event, SessionEvent::Text(text) if text.seq.is_none())
+}
+
 fn is_chat(event: &SessionEvent) -> bool {
     matches!(event, SessionEvent::Nuschel(NuschelEvent::Chat(_)))
 }
@@ -902,8 +912,7 @@ async fn messages_are_stored_acknowledged_and_copied_for_stock_clients() {
     assert_eq!(text.actor, Some(alice.session));
     assert_eq!(text.channel_id, [0]);
     assert!(
-        !bob.arrives(QUIET, |event| matches!(event, SessionEvent::Text(_)))
-            .await,
+        !bob.arrives(QUIET, stock_text).await,
         "Nuschel clients get no TextMessage duplicate"
     );
     // A stock sender's message reaches Nuschel readers from history.
@@ -924,9 +933,8 @@ async fn messages_are_stored_acknowledged_and_copied_for_stock_clients() {
         assert_eq!(message.content, "<i>stock</i>");
     }
     assert!(
-        !alice
-            .arrives(QUIET, |event| matches!(event, SessionEvent::Text(_)))
-            .await
+        !alice.arrives(QUIET, stock_text).await,
+        "stored messages arrive from history only"
     );
     let page = alice.page(root, latest(), 10).await;
     assert_eq!(seqs(&page), [1, 2]);
@@ -1854,4 +1862,90 @@ async fn stock_direct_messages_are_kept_only_when_the_operator_says_so() {
             assert!(fixture.store.lock().unwrap().history.messages.is_empty());
         }
     }
+}
+
+// ---- §8 the client: channel text as durable chat ----
+
+#[tokio::test]
+async fn the_session_sends_channel_text_durably_and_resends_after_a_reconnect() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    bob.register().await;
+    let root = alice.conversations[&0];
+    // Plain SendText becomes ChatSend: pending, then acknowledged with a seq.
+    alice
+        .command(Command::SendText {
+            target: connection::TextTarget::Channel(0),
+            body: "hello there".into(),
+            expected_peer: None,
+        })
+        .await;
+    let pending = alice
+        .wait(|event| match event {
+            SessionEvent::ChatPending(pending) => Some(pending.clone()),
+            _ => None,
+        })
+        .await;
+    let shown = alice
+        .wait(|event| match event {
+            SessionEvent::Text(text) if text.outgoing => Some(text.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(shown.pending, Some(pending.key));
+    let (key, seq) = alice
+        .wait(|event| match event {
+            SessionEvent::ChatAcked { key, seq } => Some((*key, *seq)),
+            _ => None,
+        })
+        .await;
+    assert_eq!((key, seq), (pending.key, 1));
+    // Bob sees it as text with its seq, not as a stock TextMessage.
+    let text = bob
+        .wait(|event| match event {
+            SessionEvent::Text(text) => Some(text.clone()),
+            _ => None,
+        })
+        .await;
+    assert_eq!((text.body.as_str(), text.seq), ("hello there", Some(1)));
+    assert_eq!(text.author, "Alice");
+    // After a reconnect, an unacknowledged message goes again with its key:
+    // stored once.
+    drop(alice);
+    let mut again = options(fixture.address(), &fixture.running.fingerprint, "Alice", 0);
+    again.resend = vec![pending.clone()];
+    let (mut alice, _) = Session::connect(again).await;
+    let (key, seq) = alice
+        .wait(|event| match event {
+            SessionEvent::ChatAcked { key, seq } => Some((*key, *seq)),
+            _ => None,
+        })
+        .await;
+    assert_eq!(
+        (key, seq),
+        (pending.key, 1),
+        "the original seq, not a second copy"
+    );
+    assert!(
+        !bob.arrives(QUIET, |event| matches!(event, SessionEvent::Text(_)))
+            .await
+    );
+    // The session subscribed to the channels and reports their state.
+    let state = alice
+        .wait(|event| match event {
+            SessionEvent::ConversationState {
+                channel: 0, head, ..
+            } => Some(*head),
+            _ => None,
+        })
+        .await;
+    assert!(state >= 1);
+    // Read markers from the session reach the server.
+    alice
+        .command(Command::MarkRead { channel: 0, seq: 2 })
+        .await;
+    let marker = alice.subscribe(&[root]).await.conversations[0].read;
+    assert_eq!(marker, 2);
 }

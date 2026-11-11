@@ -1335,9 +1335,30 @@ impl Desktop {
             return;
         }
         if let Some((server, channel)) = self.selected_indices() {
+            let archive = self.servers[server].history_source == HistorySource::ServerArchive;
             let channel = &mut self.servers[server].channels[channel];
             channel.unread = 0;
             channel.unread_mention = false;
+            // A Nuschel server keeps the read marker (synced to the account's
+            // other devices; unread counts come from it).
+            let newest = channel
+                .messages
+                .iter()
+                .filter_map(|message| message.id)
+                .max();
+            if archive
+                && let (TextTarget::Channel(id), Some(newest)) = (channel.target.clone(), newest)
+                && newest > channel.read_seq
+            {
+                channel.read_seq = newest;
+                let _ = self.backend.command(
+                    &self.servers[server].id,
+                    nuschel_session::connection::Command::MarkRead {
+                        channel: id,
+                        seq: u64::try_from(newest).unwrap_or(0),
+                    },
+                );
+            }
         }
     }
 
@@ -1770,6 +1791,9 @@ fn conversation(
         )
         .when_some(server.certificate.as_ref(), |view, certificate| {
             view.child(certificate_card(certificate, index, cx))
+        })
+        .when_some(server.downgrade.as_ref(), |view, reason| {
+            view.child(downgrade_card(reason, index, cx))
         })
         .map(|view| match crate::search::panel(this, cx) {
             Some(panel) => view.child(panel),
@@ -2859,6 +2883,52 @@ fn certificate_card(
                         cx,
                     )),
                 ),
+        )
+        .into_any_element()
+}
+
+/// The server answered weaker than it did before (docs/extension.md §1): the
+/// error, and the explicit reset only the user can make.
+fn downgrade_card(reason: &str, index: usize, cx: &mut Context<Desktop>) -> AnyElement {
+    div()
+        .mx_4()
+        .mt_3()
+        .p_4()
+        .rounded(px(10.))
+        .bg(tint(DANGER, 0x1c))
+        .border_1()
+        .border_color(tint(DANGER, 0x60))
+        .flex()
+        .gap_3()
+        .child(icon("shield", 24., color(DANGER)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .child(text!("Server security changed").with_id("downgrade-heading")),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(color(TEXT_MUTED))
+                        .child(text!(reason.to_owned()).with_id("downgrade-reason")),
+                )
+                .child(div().flex().child(styled_button(
+                    "reset-security-record",
+                    "Reset this server's security record and connect",
+                    Tone::Danger,
+                    move |this, _, cx| {
+                        this.reset_security_record(index);
+                        cx.notify();
+                    },
+                    cx,
+                ))),
         )
         .into_any_element()
 }
