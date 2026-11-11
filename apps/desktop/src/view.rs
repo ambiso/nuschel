@@ -1915,15 +1915,22 @@ fn conversation(
                         .child(icon("alert", 16., color(DANGER_HOVER)))
                         .child(
                             div()
+                                .id("connection-notice-details")
                                 .flex_1()
                                 .flex_basis(px(240.))
                                 .min_w_0()
+                                // Long reasons must not push dismissal below the
+                                // viewport when zoom leaves a narrow chat pane.
+                                .max_h(px(f32::from(window.viewport_size().height) / 3.))
+                                .overflow_y_scroll()
                                 .child(text!(notice).with_id("connection-notice")),
                         )
-                        .child(styled_button(
+                        .child(icon_button(
                             "dismiss-connection-notice",
+                            "window-close",
                             "Dismiss notice",
-                            Tone::Ghost,
+                            DANGER_TEXT,
+                            None,
                             move |this, _, cx| {
                                 if from_server {
                                     this.client.servers[index].dismiss_notice();
