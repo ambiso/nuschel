@@ -8,6 +8,9 @@
   craneLib,
   projectRoot,
   rootsByTarget,
+  # Pinned toolchain/native-runtime notices are outside Cargo's dependency graph.
+  # [{ name; version; source; files = [{ name; path; }]; }]
+  externalNotices ? [ ],
 }:
 let
   inherit (pkgs) lib;
@@ -24,6 +27,7 @@ let
       ]);
   };
   roots = pkgs.writeText "nuschl-license-roots.json" (builtins.toJSON rootsByTarget);
+  external = pkgs.writeText "nuschl-external-notices.json" (builtins.toJSON externalNotices);
   collect = pkgs.writeText "nuschl-collect-licenses.py" ''
     import hashlib, json, os, pathlib, re, shutil, subprocess
 
@@ -163,9 +167,43 @@ let
     ]
     for source_path, name in assets:
         copy_text(source / source_path, out / name)
+    external_entries = []
+    external_names = set()
+    for component in json.loads(pathlib.Path(os.environ['EXTERNAL_NOTICES']).read_text()):
+        name = component['name']
+        identity = (name, component['version'])
+        if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,100}', name) or name in external_names:
+            raise SystemExit('invalid or duplicate external component')
+        external_names.add(name)
+        files = []
+        for file in component['files']:
+            relative = pathlib.PurePosixPath(file['name'])
+            if relative.is_absolute() or '..' in relative.parts:
+                issue(identity, 'unsafe external notice name')
+                continue
+            try:
+                digest = copy_text(pathlib.Path(file['path']).resolve(), out / 'external' / name / relative)
+                files.append({'path': str(relative), 'sha256': digest})
+            except ValueError as error:
+                issue(identity, str(error))
+        if not files: issue(identity, 'external component has no actual notice files')
+        external_entries.append({'name': name, 'version': component['version'],
+                                 'source': component['source'], 'files': files})
+    required_external = {'rust-standard-library'}
+    if any('windows-gnu' in target['target'] for target in targets):
+        required_external.update({'mingw-w64-runtime', 'gcc-runtime'})
+    if any(name == 'nuschl-math-worker' for name, _ in selected):
+        required_external.add('newcm-math-font')
+    if any(name == 'syntect' for name, _ in selected):
+        required_external.add('syntect-default-assets')
+    if any(name == 'nuschl-client-wasm' for name, _ in selected):
+        required_external.add('web-runtime-assets')
+    for name in sorted(required_external - external_names):
+        issue((name, 'toolchain'), 'pinned non-Cargo runtime notices have not been supplied')
     report = {
         'format': 1, 'scope': 'normal non-proc-macro dependency union of explicit packaged roots/targets',
         'roots_by_target': targets, 'packages': entries, 'unresolved': issues,
+        'external_components': external_entries,
         'limits': [
             'Inventory is not a legal compatibility or compliance assurance.',
             'Presence of one notice does not establish every upstream embedded asset was reviewed.',
@@ -189,6 +227,7 @@ let
     nativeBuildInputs = [ pkgs.python3 ];
     doCheck = false;
     ROOTS_FILE = roots;
+    EXTERNAL_NOTICES = external;
     buildPhaseCargoCommand = ''
       cargo metadata --locked --offline --format-version 1 > metadata.json
       python3 ${collect}
