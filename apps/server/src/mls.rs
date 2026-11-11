@@ -33,16 +33,21 @@
 //!   | --- | --- |
 //!   | `E` ‖ group id | epoch (8), newest commit's seq (8), conversation (16) |
 //!   | `G` ‖ group id | version 1, conversation, commit seq, recent commit keys, `DeliveryGroup::state` |
-//!   | `P` ‖ account ‖ device ‖ time (8) ‖ n (4) | a one-time key package |
+//!   | `P` ‖ account ‖ device ‖ time (8) ‖ n (4) ‖ ref | a one-time key package |
 //!   | `L` ‖ account ‖ device | the device's last-resort key package |
 //!   | `K` ‖ key package ref | account ‖ device ‖ last resort (1): where a Welcome goes |
 //!   | `W` ‖ account ‖ device ‖ id (16) | a waiting Welcome (`v1::MlsWelcome`) |
+//!   | `N` ‖ group id | a commit waiting for its row: the group after it ([`pending_record`]) |
 //!
 //!   An empty value deletes a key.
 //!
-//! Known limit: a crash between storing a commit's row and saving the group's
-//! state leaves the server's view one epoch behind its stream (replaying stored
-//! commits after the saved commit seq on start is the follow-up).
+//! **Crash safety.** A commit's new state is written as `N` before its row is
+//! queued; once the row is stored, `G`, `E`, the Welcomes and the deletion of `N`
+//! are one batch. On start, each `N` left behind is resolved against the stream:
+//! adopted if the conversation has an `MLS_HANDSHAKE` row with that commit after
+//! the saved commit seq (the server crashed between the two writes), deleted
+//! otherwise (it crashed before the row was stored, and the committer, never
+//! acknowledged, retries). So the server's view never falls behind its stream.
 use crate::{
     authz::Action,
     config::Mls as MlsConfig,
@@ -60,7 +65,10 @@ use nuschel_e2ee::{
     prevalidate::{self, ContentType, WireFormat},
 };
 use nuschel_identity::{DeviceCertificate, DeviceCredential, IdentityFingerprint};
-use nuschel_ipc::server::{MessageKind, ServerStorageRequest as Request, StoredMessage};
+use nuschel_ipc::server::{
+    Anchor, MessageKind, PageQuery, ServerStorageRequest as Request,
+    ServerStorageResponse as Response, StoredMessage,
+};
 use nuschel_kt::KtStore;
 use nuschel_protocol::{
     ControlFrame,
@@ -83,6 +91,8 @@ use tokio::sync::mpsc;
 const QUEUE: usize = 256;
 /// Commit idempotency keys remembered per group.
 const RECENT: usize = 64;
+/// Welcome fetches and acknowledgements per account and minute.
+const MAILBOX_PER_MINUTE: u32 = 60;
 /// Accounts with a rate-limit bucket before the oldest are forgotten.
 const MAX_BUCKETS: usize = 10_000;
 const PREFIX_EPOCH: u8 = b'E';
@@ -91,8 +101,17 @@ const PREFIX_PACKAGE: u8 = b'P';
 const PREFIX_LAST_RESORT: u8 = b'L';
 const PREFIX_REFERENCE: u8 = b'K';
 const PREFIX_WELCOME: u8 = b'W';
+const PREFIX_PENDING: u8 = b'N';
+/// `P` ‖ account ‖ device ‖ time ‖ n, before the key package reference.
+const PACKAGE_KEY_FIXED: usize = 1 + 16 + 16 + 8 + 4;
+/// History pages read per pending record at start.
+const MAX_RESOLVE_PAGES: usize = 1000;
 
 type Device = [u8; 16];
+/// Key-value writes (an empty value deletes).
+type Records = Vec<(Vec<u8>, Vec<u8>)>;
+/// A Welcome to push to a device's connections.
+type Push = (Id, Device, v1::MlsWelcome);
 type Failure = (Code, u64);
 
 /// An MLS row keeps its message as base64 in the stored `content` (the history
@@ -162,8 +181,12 @@ pub struct MlsHandle {
     pub groups: HashMap<Id, GroupCache>,
     /// (account, device) → connections that fetched its mailbox.
     listeners: HashMap<(Id, Device), BTreeSet<u32>>,
+    /// Session → the (account, device) pairs it listens for, to forget them when
+    /// it disconnects.
+    listening: HashMap<u32, Vec<(Id, Device)>>,
     claims: HashMap<Id, LeakyBucket>,
     uploads: HashMap<Id, LeakyBucket>,
+    mailboxes: HashMap<Id, LeakyBucket>,
     config: MlsConfig,
 }
 
@@ -172,12 +195,12 @@ impl MlsHandle {
         self.groups.contains_key(conversation)
     }
 
-    fn limited(&mut self, account: Id, claim: bool) -> bool {
+    fn limited(&mut self, account: Id, bucket: Bucket) -> bool {
         let now = Instant::now();
-        let (buckets, per_minute) = if claim {
-            (&mut self.claims, self.config.claims_per_minute)
-        } else {
-            (&mut self.uploads, self.config.uploads_per_minute)
+        let (buckets, per_minute) = match bucket {
+            Bucket::Claim => (&mut self.claims, self.config.claims_per_minute),
+            Bucket::Upload => (&mut self.uploads, self.config.uploads_per_minute),
+            Bucket::Mailbox => (&mut self.mailboxes, MAILBOX_PER_MINUTE),
         };
         if buckets.len() >= MAX_BUCKETS && !buckets.contains_key(&account) {
             buckets.clear();
@@ -188,6 +211,51 @@ impl MlsHandle {
             .limited(now)
     }
 
+    /// Push this device's Welcomes to `session`. At most a roster's worth of
+    /// devices per account (the key-transparency record's limit) are listened for;
+    /// beyond that the fetch is answered but nothing is pushed.
+    fn listen(&mut self, session: u32, account: Id, device: Device, live: impl Fn(u32) -> bool) {
+        if !self.listeners.contains_key(&(account, device)) {
+            self.listeners.retain(|(owner, _), sessions| {
+                if *owner == account {
+                    sessions.retain(|session| live(*session));
+                }
+                !sessions.is_empty()
+            });
+            let devices = self
+                .listeners
+                .keys()
+                .filter(|(owner, _)| *owner == account)
+                .count();
+            if devices >= nuschel::MAX_KT_DEVICES {
+                return;
+            }
+        }
+        if self
+            .listeners
+            .entry((account, device))
+            .or_default()
+            .insert(session)
+        {
+            self.listening
+                .entry(session)
+                .or_default()
+                .push((account, device));
+        }
+    }
+
+    /// A connection went away: it listens for nothing any more.
+    pub fn disconnected(&mut self, session: u32) {
+        for pair in self.listening.remove(&session).unwrap_or_default() {
+            if let Some(sessions) = self.listeners.get_mut(&pair) {
+                sessions.remove(&session);
+                if sessions.is_empty() {
+                    self.listeners.remove(&pair);
+                }
+            }
+        }
+    }
+
     /// A handle whose queue goes nowhere (fuzzing and unit tests).
     pub fn detached(config: MlsConfig) -> Self {
         Self {
@@ -195,11 +263,20 @@ impl MlsHandle {
             stored: mpsc::unbounded_channel().0,
             groups: HashMap::new(),
             listeners: HashMap::new(),
+            listening: HashMap::new(),
             claims: HashMap::new(),
             uploads: HashMap::new(),
+            mailboxes: HashMap::new(),
             config,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum Bucket {
+    Claim,
+    Upload,
+    Mailbox,
 }
 
 /// What a connection asked for, authorised under the state lock.
@@ -374,7 +451,10 @@ pub async fn open(
     storage: StorageHandle,
     server_id: [u8; 32],
 ) -> Result<(MlsHandle, Service), crate::server::StartError> {
-    let store = StorageKt::new(storage);
+    let store = StorageKt::new(storage.clone());
+    resolve_pending(&store, &storage)
+        .await
+        .map_err(|error| crate::server::StartError::Storage(format!("mls: {error}")))?;
     let epochs = store
         .scan_prefix(&[PREFIX_EPOCH])
         .await
@@ -407,8 +487,10 @@ pub async fn open(
             stored,
             groups,
             listeners: HashMap::new(),
+            listening: HashMap::new(),
             claims: HashMap::new(),
             uploads: HashMap::new(),
+            mailboxes: HashMap::new(),
             config: config.clone(),
         },
         Service {
@@ -472,6 +554,223 @@ fn decode_group(group_id: &[u8], bytes: &[u8]) -> Option<Loaded> {
         recent,
         pending: None,
     })
+}
+
+/// A commit waiting for its row: what [`Service`] writes as `N` ‖ group id.
+struct PendingRecord {
+    /// The group's newest commit seq before this one: its row comes after.
+    after_seq: u64,
+    epoch: u64,
+    /// SHA-256 of the commit (the row's content).
+    hash: [u8; 32],
+    welcome: Option<Vec<u8>>,
+    recipients: Vec<(Id, Device, bool, Vec<u8>)>,
+    /// The group after the commit (the `G` encoding).
+    group: Vec<u8>,
+}
+
+fn encode_pending(record: &PendingRecord) -> Vec<u8> {
+    let welcome = record.welcome.as_deref().unwrap_or_default();
+    let mut out = Vec::with_capacity(64 + welcome.len() + record.group.len());
+    out.push(1);
+    out.extend_from_slice(&record.after_seq.to_be_bytes());
+    out.extend_from_slice(&record.epoch.to_be_bytes());
+    out.extend_from_slice(&record.hash);
+    out.push(u8::from(record.welcome.is_some()));
+    out.extend_from_slice(&(welcome.len() as u32).to_be_bytes());
+    out.extend_from_slice(welcome);
+    out.extend_from_slice(&(record.recipients.len() as u16).to_be_bytes());
+    for (account, device, last_resort, reference) in &record.recipients {
+        out.extend_from_slice(account);
+        out.extend_from_slice(device);
+        out.push(u8::from(*last_resort));
+        out.push(reference.len().min(255) as u8);
+        out.extend_from_slice(&reference[..reference.len().min(255)]);
+    }
+    out.extend_from_slice(&record.group);
+    out
+}
+
+fn decode_pending(bytes: &[u8]) -> Option<PendingRecord> {
+    let mut at = 0usize;
+    let mut take = |n: usize| -> Option<&[u8]> {
+        let slice = bytes.get(at..at + n)?;
+        at += n;
+        Some(slice)
+    };
+    if take(1)? != [1] {
+        return None;
+    }
+    let after_seq = u64::from_be_bytes(take(8)?.try_into().ok()?);
+    let epoch = u64::from_be_bytes(take(8)?.try_into().ok()?);
+    let hash: [u8; 32] = take(32)?.try_into().ok()?;
+    let has_welcome = take(1)?[0] == 1;
+    let length = u32::from_be_bytes(take(4)?.try_into().ok()?) as usize;
+    let welcome = take(length)?.to_vec();
+    let count = u16::from_be_bytes(take(2)?.try_into().ok()?) as usize;
+    let mut recipients = Vec::with_capacity(count.min(1024));
+    for _ in 0..count {
+        let account: Id = take(16)?.try_into().ok()?;
+        let device: Device = take(16)?.try_into().ok()?;
+        let last_resort = take(1)?[0] == 1;
+        let length = take(1)?[0] as usize;
+        recipients.push((account, device, last_resort, take(length)?.to_vec()));
+    }
+    let group = bytes.get(at..)?.to_vec();
+    Some(PendingRecord {
+        after_seq,
+        epoch,
+        hash,
+        welcome: has_welcome.then_some(welcome),
+        recipients,
+        group,
+    })
+}
+
+/// A pending record for a commit without a Welcome: what the service writes
+/// before the commit's row (for tests that simulate a crash).
+#[doc(hidden)]
+pub fn pending_record(after_seq: u64, epoch: u64, commit: &[u8], group: &[u8]) -> Vec<u8> {
+    encode_pending(&PendingRecord {
+        after_seq,
+        epoch,
+        hash: sha256(&[commit]),
+        welcome: None,
+        recipients: Vec::new(),
+        group: group.to_vec(),
+    })
+}
+
+/// The writes that make a stored commit the group's state: `G`, `E`, a mailbox
+/// entry per Welcome recipient (and the end of its one-time reference). Returns
+/// them and the Welcomes to push.
+fn promote(
+    group_id: &[u8],
+    loaded: &mut Loaded,
+    seq: u64,
+    epoch: u64,
+    welcome: Option<&[u8]>,
+    recipients: &[(Id, Device, bool, Vec<u8>)],
+) -> (Records, Vec<Push>) {
+    loaded.commit_seq = seq;
+    if let Some(last) = loaded.recent.back_mut()
+        && last.seq == 0
+    {
+        last.seq = seq;
+    }
+    let conversation = loaded.conversation;
+    let mut epoch_value = epoch.to_be_bytes().to_vec();
+    epoch_value.extend_from_slice(&seq.to_be_bytes());
+    epoch_value.extend_from_slice(&conversation);
+    let mut records = vec![
+        (key(PREFIX_GROUP, &[group_id]), encode_group(loaded)),
+        (key(PREFIX_EPOCH, &[group_id]), epoch_value),
+    ];
+    let mut pushes = Vec::new();
+    if let Some(welcome) = welcome {
+        for (account, device, last_resort, reference) in recipients {
+            let mut id = now_ms().to_be_bytes().to_vec();
+            id.extend_from_slice(&crate::state::random::<8>());
+            let entry = v1::MlsWelcome {
+                id: id.clone(),
+                conversation: conversation.to_vec(),
+                seq,
+                epoch,
+                welcome: welcome.to_vec(),
+            };
+            records.push((
+                key(PREFIX_WELCOME, &[account, device, &id]),
+                entry.encode_to_vec(),
+            ));
+            if !last_resort {
+                records.push((key(PREFIX_REFERENCE, &[reference]), Vec::new()));
+            }
+            pushes.push((*account, *device, entry));
+        }
+    }
+    (records, pushes)
+}
+
+/// The seq of the conversation's `MLS_HANDSHAKE` row after `after` that carries
+/// the commit with this hash, if there is one.
+async fn find_commit_row(
+    history: &StorageHandle,
+    conversation: &Id,
+    after: u64,
+    hash: &[u8; 32],
+) -> Result<Option<u64>, String> {
+    let mut anchor = after;
+    for _ in 0..MAX_RESOLVE_PAGES {
+        let query = PageQuery {
+            conversation: hex(conversation),
+            anchor: Anchor::After(anchor),
+            limit: nuschel::MAX_PAGE_MESSAGES as u32,
+            ranges: vec![(1, u64::MAX)],
+            max_bytes: nuschel::MAX_PAGE_BYTES as u32,
+        };
+        let page = match history.request(Request::HistoryPage { query }).await {
+            Some(Response::Page(page)) => page,
+            _ => return Err("history unavailable".into()),
+        };
+        for row in &page.rows {
+            if row.kind == MessageKind::Message
+                && row.format == v1::Format::MlsHandshake as u8
+                && sha256(&[&row_content(row.format, row.content.clone()).1]) == *hash
+            {
+                return Ok(Some(row.seq));
+            }
+        }
+        match page.rows.last() {
+            Some(last) if page.more_after => anchor = last.seq,
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// Resolves the commits a crash left pending (see the module documentation).
+async fn resolve_pending(store: &StorageKt, history: &StorageHandle) -> Result<usize, String> {
+    let pending = store
+        .scan_prefix(&[PREFIX_PENDING])
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut adopted = 0;
+    for (pending_key, value) in pending {
+        let group_id = pending_key[1..].to_vec();
+        let mut records = vec![(pending_key, Vec::new())];
+        let resolved = decode_pending(&value).and_then(|record| {
+            decode_group(&group_id, &record.group).map(|loaded| (record, loaded))
+        });
+        match resolved {
+            Some((record, mut loaded)) => {
+                let conversation = loaded.conversation;
+                match find_commit_row(history, &conversation, record.after_seq, &record.hash)
+                    .await?
+                {
+                    Some(seq) => {
+                        let (promotion, _) = promote(
+                            &group_id,
+                            &mut loaded,
+                            seq,
+                            record.epoch,
+                            record.welcome.as_deref(),
+                            &record.recipients,
+                        );
+                        records.extend(promotion);
+                        adopted += 1;
+                        tracing::warn!(seq, "adopted an MLS commit stored before a crash");
+                    }
+                    None => tracing::info!("dropped an MLS commit that was never stored"),
+                }
+            }
+            None => tracing::error!("an MLS commit's pending record is unreadable; dropped"),
+        }
+        store
+            .write(records)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(adopted)
 }
 
 fn credential_identity(credential: &[u8]) -> Option<(IdentityFingerprint, DeviceCredential)> {
@@ -659,6 +958,7 @@ impl Service {
             if last_resort {
                 records.push((key(PREFIX_LAST_RESORT, &[&account, &id]), bytes));
             } else {
+                // The reference ends the key, so a dropped package's routing goes too.
                 records.push((
                     key(
                         PREFIX_PACKAGE,
@@ -667,6 +967,7 @@ impl Service {
                             &id,
                             &now.to_be_bytes(),
                             &(index as u32).to_be_bytes(),
+                            &info.reference,
                         ],
                     ),
                     bytes,
@@ -682,11 +983,15 @@ impl Service {
             .await
             .map_err(store_failure)?;
         let excess = existing.len().saturating_sub(MAX_MLS_DEVICE_PACKAGES);
-        let drop: Vec<(Vec<u8>, Vec<u8>)> = existing
-            .iter()
-            .take(excess)
-            .map(|(key, _)| (key.clone(), Vec::new()))
-            .collect();
+        let mut drop: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for (dropped, _) in existing.iter().take(excess) {
+            drop.push((dropped.clone(), Vec::new()));
+            if let Some(reference) = dropped.get(PACKAGE_KEY_FIXED..)
+                && !reference.is_empty()
+            {
+                drop.push((key(PREFIX_REFERENCE, &[reference]), Vec::new()));
+            }
+        }
         self.write(drop).await?;
         let last_resort = self
             .get(&key(PREFIX_LAST_RESORT, &[&account, &device]))
@@ -925,10 +1230,11 @@ impl Service {
                 "a Welcome for a key package this server did not serve",
             ));
         }
+        let after_seq = loaded.commit_seq;
         loaded.pending = Some(Pending {
             previous,
             welcome: welcome.map(<[u8]>::to_vec),
-            recipients,
+            recipients: recipients.clone(),
             epoch,
         });
         // Its seq is filled in once stored.
@@ -942,6 +1248,23 @@ impl Service {
         while loaded.recent.len() > RECENT {
             loaded.recent.pop_front();
         }
+        // The new state is durable before its row is queued (crash safety, see the
+        // module documentation).
+        let record = encode_pending(&PendingRecord {
+            after_seq,
+            epoch,
+            hash,
+            welcome: welcome.map(<[u8]>::to_vec),
+            recipients,
+            group: encode_group(loaded),
+        });
+        if let Err(failure) = self
+            .write(vec![(key(PREFIX_PENDING, &[group_id]), record)])
+            .await
+        {
+            self.undo(group_id);
+            return Err(failure);
+        }
         Ok(Reply::Accepted(Box::new(Accepted {
             conversation,
             group_id: group_id.to_vec(),
@@ -953,67 +1276,56 @@ impl Service {
         })))
     }
 
+    /// Forgets a pending commit: the group goes back to its state before it.
+    fn undo(&mut self, group_id: &[u8]) {
+        let Some(loaded) = self.groups.get_mut(group_id) else {
+            return;
+        };
+        let Some(pending) = loaded.pending.take() else {
+            return;
+        };
+        match &pending.previous {
+            None => {
+                self.groups.remove(group_id);
+            }
+            Some(previous) => {
+                if let Ok(group) = DeliveryGroup::restore(group_id, previous) {
+                    loaded.group = group;
+                }
+                loaded.recent.pop_back();
+            }
+        }
+    }
+
     /// A commit's row was stored (or not): save the group and deliver the Welcome,
     /// or go back. Returns the Welcomes to push.
     async fn stored(&mut self, notice: StoredNotice) -> Vec<(Id, Device, v1::MlsWelcome)> {
+        let pending_key = key(PREFIX_PENDING, &[&notice.group_id]);
+        if !notice.ok {
+            self.undo(&notice.group_id);
+            if let Err(error) = self.store.write(vec![(pending_key, Vec::new())]).await {
+                // Harmless: on start, a pending record without its row is deleted.
+                tracing::warn!(%error, "could not drop a refused MLS commit's record");
+            }
+            return Vec::new();
+        }
         let Some(loaded) = self.groups.get_mut(&notice.group_id) else {
             return Vec::new();
         };
         let Some(pending) = loaded.pending.take() else {
             return Vec::new();
         };
-        if !notice.ok {
-            match &pending.previous {
-                None => {
-                    self.groups.remove(&notice.group_id);
-                }
-                Some(previous) => {
-                    if let Ok(group) = DeliveryGroup::restore(&notice.group_id, previous) {
-                        loaded.group = group;
-                    }
-                    loaded.recent.pop_back();
-                }
-            }
-            return Vec::new();
-        }
-        loaded.commit_seq = notice.seq;
-        if let Some(last) = loaded.recent.back_mut()
-            && last.seq == 0
-        {
-            last.seq = notice.seq;
-        }
-        let conversation = loaded.conversation;
-        let mut epoch_value = pending.epoch.to_be_bytes().to_vec();
-        epoch_value.extend_from_slice(&notice.seq.to_be_bytes());
-        epoch_value.extend_from_slice(&conversation);
-        let mut records = vec![
-            (key(PREFIX_GROUP, &[&notice.group_id]), encode_group(loaded)),
-            (key(PREFIX_EPOCH, &[&notice.group_id]), epoch_value),
-        ];
-        let mut pushes = Vec::new();
-        if let Some(welcome) = &pending.welcome {
-            for (account, device, last_resort, reference) in &pending.recipients {
-                let mut id = now_ms().to_be_bytes().to_vec();
-                id.extend_from_slice(&crate::state::random::<8>());
-                let entry = v1::MlsWelcome {
-                    id: id.clone(),
-                    conversation: conversation.to_vec(),
-                    seq: notice.seq,
-                    epoch: pending.epoch,
-                    welcome: welcome.clone(),
-                };
-                records.push((
-                    key(PREFIX_WELCOME, &[account, device, &id]),
-                    entry.encode_to_vec(),
-                ));
-                if !last_resort {
-                    records.push((key(PREFIX_REFERENCE, &[reference]), Vec::new()));
-                }
-                pushes.push((*account, *device, entry));
-            }
-        }
+        let (mut records, pushes) = promote(
+            &notice.group_id,
+            loaded,
+            notice.seq,
+            pending.epoch,
+            pending.welcome.as_deref(),
+            &pending.recipients,
+        );
+        records.push((pending_key, Vec::new()));
         if let Err(error) = self.store.write(records).await {
-            // The row is in the stream; the next start replays from the saved state.
+            // The pending record stays: the next start adopts it from the stream.
             tracing::error!(%error, "could not save an MLS group after its commit");
         }
         pushes
@@ -1147,7 +1459,7 @@ impl State {
                         return Err((Code::TooLarge, 0));
                     }
                     let mls = state.mls.as_mut().ok_or((Code::Unsupported, 0))?;
-                    if mls.limited(account, false) {
+                    if mls.limited(account, Bucket::Upload) {
                         return Err((Code::RateLimited, 6000));
                     }
                     state.mls_submit(
@@ -1169,7 +1481,7 @@ impl State {
                     // One's own devices, and direct-conversation partners only.
                     state.authorize(session, Action::MlsClaim { account: &target })?;
                     let mls = state.mls.as_mut().ok_or((Code::Unsupported, 0))?;
-                    if mls.limited(account, true) {
+                    if mls.limited(account, Bucket::Claim) {
                         return Err((Code::RateLimited, 2000));
                     }
                     state.mls_submit(session, request_id, Job::Claim { target })
@@ -1196,10 +1508,14 @@ impl State {
                     state.authorize(session, Action::MlsMailbox)?;
                     let account = state.mls_account(session)?;
                     let device = device_id(&message.device)?;
+                    let users = &state.users;
                     let mls = state.mls.as_mut().ok_or((Code::Unsupported, 0))?;
-                    let listeners = mls.listeners.entry((account, device)).or_default();
-                    listeners.retain(|session| state.users.contains_key(session));
-                    listeners.insert(session);
+                    if mls.limited(account, Bucket::Mailbox) {
+                        return Err((Code::RateLimited, 2000));
+                    }
+                    mls.listen(session, account, device, |session| {
+                        users.contains_key(&session)
+                    });
                     state.mls_submit(session, request_id, Job::Welcomes { account, device })
                 });
             }
@@ -1212,6 +1528,10 @@ impl State {
                     let device = device_id(&message.device)?;
                     if message.ids.len() > MAX_MLS_WELCOMES {
                         return Err((Code::TooLarge, 0));
+                    }
+                    let mls = state.mls.as_mut().ok_or((Code::Unsupported, 0))?;
+                    if mls.limited(account, Bucket::Mailbox) {
+                        return Err((Code::RateLimited, 2000));
                     }
                     state.mls_submit(
                         session,
@@ -1629,6 +1949,50 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_records_round_trip() {
+        let record = PendingRecord {
+            after_seq: 7,
+            epoch: 3,
+            hash: [5; 32],
+            welcome: Some(vec![1, 2, 3]),
+            recipients: vec![([1; 16], [2; 16], true, vec![9; 32])],
+            group: vec![4; 10],
+        };
+        let decoded = decode_pending(&encode_pending(&record)).unwrap();
+        assert_eq!(
+            (decoded.after_seq, decoded.epoch, decoded.hash),
+            (7, 3, [5; 32])
+        );
+        assert_eq!(decoded.welcome, Some(vec![1, 2, 3]));
+        assert_eq!(decoded.recipients, record.recipients);
+        assert_eq!(decoded.group, record.group);
+        let plain = decode_pending(&pending_record(1, 2, b"commit", &[8])).unwrap();
+        assert_eq!((plain.welcome, plain.hash), (None, sha256(&[b"commit"])));
+        assert!(decode_pending(&[2, 0]).is_none());
+    }
+
+    #[test]
+    fn welcome_listeners_are_bounded_and_forgotten() {
+        let mut handle = MlsHandle::detached(MlsConfig::default());
+        let account = [1; 16];
+        for device in 0..20u8 {
+            handle.listen(u32::from(device) + 1, account, [device; 16], |_| true);
+        }
+        assert_eq!(handle.listeners.len(), nuschel::MAX_KT_DEVICES);
+        // Entries of gone connections make room again.
+        handle.listen(99, account, [99; 16], |session| session > 4);
+        assert_eq!(handle.listeners.len(), nuschel::MAX_KT_DEVICES - 3);
+        for session in 1..=99 {
+            handle.disconnected(session);
+        }
+        assert!(handle.listeners.is_empty());
+        assert!(handle.listening.is_empty());
+        // Fetches and acknowledgements are rate-limited per account.
+        let limited = (0..200).any(|_| handle.limited(account, Bucket::Mailbox));
+        assert!(limited);
+    }
 
     #[test]
     fn mls_rows_carry_their_message_as_base64() {

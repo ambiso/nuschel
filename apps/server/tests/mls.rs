@@ -951,6 +951,23 @@ async fn hostile_key_packages_are_refused_and_the_server_stays_up() {
     let conversation = [9u8; 16];
     let answer = m.send_mls(conversation, key(), vec![0, 1, 0, 2, 9]).await;
     assert_eq!(code(&answer), Some(v1::error::Code::NotFound));
+    // At most 50 one-time packages per device; dropped ones lose their routing.
+    let mut last = None;
+    for _ in 0..4 {
+        let batch = (0..16).map(|_| mallory.key_package(false)).collect();
+        last = Some(m.upload(batch, Vec::new()).await);
+    }
+    let status = v1::MlsKeyPackageStatus::decode(last.unwrap().payload).unwrap();
+    assert_eq!(status.one_time, 50);
+    let references = fixture
+        .store
+        .lock()
+        .unwrap()
+        .kt
+        .keys()
+        .filter(|key| key.first() == Some(&b'K'))
+        .count();
+    assert_eq!(references, 50);
 }
 
 #[tokio::test]
@@ -1089,4 +1106,200 @@ async fn groups_and_mailboxes_survive_a_restart() {
     assert_eq!(accepted.epoch, 2);
     let _ = fixture.store.lock().unwrap().kt.len();
     let _ = fixture.directory.path();
+}
+
+fn record_key(prefix: u8, group: &[u8]) -> Vec<u8> {
+    let mut key = vec![prefix];
+    key.extend_from_slice(group);
+    key
+}
+
+/// Waits until the service saved the group at `epoch` (it does so after the
+/// acknowledgement) and no commit is pending.
+async fn saved_at(fixture: &Fixture, group: &[u8], epoch: u64) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        {
+            let store = fixture.store.lock().unwrap();
+            let saved = store
+                .kt
+                .get(&record_key(b'E', group))
+                .is_some_and(|value| value[..8] == epoch.to_be_bytes());
+            if saved && !store.kt.contains_key(&record_key(b'N', group)) {
+                return;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the group was not saved"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Stops the server, changes its stored state, starts it again on the same port.
+async fn restart_with(fixture: Fixture, edit: impl FnOnce(&mut MemoryStore)) -> Fixture {
+    let Fixture {
+        running,
+        store,
+        directory,
+    } = fixture;
+    let port = running.addresses[0].port();
+    running.shutdown().await;
+    edit(&mut store.lock().unwrap());
+    Fixture::start_in(directory, store, port).await
+}
+
+async fn page_after(
+    connection: &mut Connection,
+    conversation: [u8; 16],
+    after: u64,
+) -> Vec<v1::Message> {
+    let id = request_id();
+    let page = connection
+        .request(
+            nk::HISTORY_REQUEST,
+            &v1::HistoryRequest {
+                request_id: id,
+                conversation: conversation.to_vec(),
+                anchor: Some(v1::history_request::Anchor::After(after)),
+                limit: 100,
+            },
+            id,
+        )
+        .await;
+    v1::HistoryPage::decode(page.payload).unwrap().messages
+}
+
+fn update_commit(user: &User, conversation: [u8; 16], group: &[u8]) -> v1::MlsCommit {
+    let update = user.mls.self_update(&user.identity.device, group).unwrap();
+    v1::MlsCommit {
+        request_id: 0,
+        conversation: conversation.to_vec(),
+        idempotency_key: key().to_vec(),
+        commit: update.commit,
+        group_info: update.group_info,
+        welcome: Vec::new(),
+        create: None,
+    }
+}
+
+#[tokio::test]
+async fn a_commit_stored_before_a_crash_is_adopted_on_restart() {
+    let fixture = Fixture::start().await;
+    let Pair {
+        alice,
+        bob,
+        a,
+        mut b,
+        conversation,
+        group,
+        created_seq,
+        ..
+    } = pair(&fixture).await;
+    saved_at(&fixture, &group, 1).await;
+    let (old_group, old_epoch) = {
+        let store = fixture.store.lock().unwrap();
+        (
+            store.kt[&record_key(b'G', &group)].clone(),
+            store.kt[&record_key(b'E', &group)].clone(),
+        )
+    };
+    // Bob's update is stored and acknowledged ...
+    let update = update_commit(&bob, conversation, &group);
+    let updated = ack(&b.commit(update.clone()).await);
+    assert_eq!(updated.epoch, 2);
+    bob.mls.merge_pending(&group).unwrap();
+    saved_at(&fixture, &group, 2).await;
+    drop((a, b));
+    // ... and the server crashes after storing its row, before saving the group:
+    // the old state and the pending record are what is left.
+    let fixture = restart_with(fixture, |store| {
+        let new_group = store.kt[&record_key(b'G', &group)].clone();
+        store.kt.insert(
+            record_key(b'N', &group),
+            nuscheld::mls::pending_record(created_seq, 2, &update.commit, &new_group),
+        );
+        store.kt.insert(record_key(b'G', &group), old_group);
+        store.kt.insert(record_key(b'E', &group), old_epoch);
+    })
+    .await;
+    assert!(
+        !fixture
+            .store
+            .lock()
+            .unwrap()
+            .kt
+            .contains_key(&record_key(b'N', &group))
+    );
+    let mut a = Connection::connect(fixture.address(), &alice).await;
+    let mut b = Connection::connect(fixture.address(), &bob).await;
+    let info = v1::MlsJoinInfo::decode(b.join_info(conversation).await.payload).unwrap();
+    assert_eq!((info.epoch, info.commit_seq), (2, updated.seq));
+    // Alice catches up from the stream; her message and Bob's next commit are
+    // accepted at the adopted epoch.
+    let rows = page_after(&mut a, conversation, created_seq).await;
+    let commit = rows.iter().find(|row| row.seq == updated.seq).unwrap();
+    match alice.mls.process(&group, &commit.mls).unwrap() {
+        Incoming::Commit(commit) => assert_eq!(alice.mls.merge(&group, commit).unwrap(), 2),
+        _ => panic!("expected a commit"),
+    }
+    let message = alice
+        .mls
+        .encrypt(&alice.identity.device, &group, b"after the crash")
+        .unwrap();
+    assert_eq!(
+        ack(&a.send_mls(conversation, key(), message).await).epoch,
+        2
+    );
+    let next = ack(&b.commit(update_commit(&bob, conversation, &group)).await);
+    assert_eq!(next.epoch, 3);
+}
+
+#[tokio::test]
+async fn a_pending_commit_without_its_row_is_dropped_on_restart() {
+    let fixture = Fixture::start().await;
+    let Pair {
+        alice,
+        bob,
+        a,
+        b,
+        conversation,
+        group,
+        created_seq,
+        ..
+    } = pair(&fixture).await;
+    saved_at(&fixture, &group, 1).await;
+    drop((a, b));
+    // The server crashed after writing a commit's pending record, before its row.
+    let fixture = restart_with(fixture, |store| {
+        let current = store.kt[&record_key(b'G', &group)].clone();
+        store.kt.insert(
+            record_key(b'N', &group),
+            nuscheld::mls::pending_record(created_seq, 2, b"a commit never stored", &current),
+        );
+    })
+    .await;
+    assert!(
+        !fixture
+            .store
+            .lock()
+            .unwrap()
+            .kt
+            .contains_key(&record_key(b'N', &group))
+    );
+    let mut a = Connection::connect(fixture.address(), &alice).await;
+    let mut b = Connection::connect(fixture.address(), &bob).await;
+    let info = v1::MlsJoinInfo::decode(b.join_info(conversation).await.payload).unwrap();
+    assert_eq!((info.epoch, info.commit_seq), (1, created_seq));
+    let message = alice
+        .mls
+        .encrypt(&alice.identity.device, &group, b"still epoch 1")
+        .unwrap();
+    assert_eq!(
+        ack(&a.send_mls(conversation, key(), message).await).epoch,
+        1
+    );
+    let next = ack(&b.commit(update_commit(&bob, conversation, &group)).await);
+    assert_eq!(next.epoch, 2);
 }

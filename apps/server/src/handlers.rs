@@ -950,6 +950,9 @@ impl State {
         let Some(user) = self.users.remove(&session) else {
             return;
         };
+        if let Some(mls) = self.mls.as_mut() {
+            mls.disconnected(session);
+        }
         if let Some((_, address)) = user.voice.udp {
             self.udp_peers.remove(&address);
         }
