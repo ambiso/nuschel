@@ -171,10 +171,12 @@
           cargoExtraArgs = "-p nuschel-rtc -p nuschel-rtc-probe";
           buildInputs = [ ];
         };
-        witnessPackage = pkgs.runCommand "nuschel-witness-0.1.0" { meta.mainProgram = "nuschel-witness"; } ''
-          install -Dm755 ${crates.project.workspaceMembers.nuschel-witness.build}/bin/nuschel-witness "$out/bin/nuschel-witness"
-          install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
-        '';
+        witnessPackage =
+          pkgs.runCommand "nuschel-witness-0.1.0" { meta.mainProgram = "nuschel-witness"; }
+            ''
+              install -Dm755 ${crates.project.workspaceMembers.nuschel-witness.build}/bin/nuschel-witness "$out/bin/nuschel-witness"
+              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschel/EUPL-1.2"
+            '';
         rtcPackage = craneLib.buildPackage (
           rtcCommon
           // {
@@ -498,9 +500,15 @@
             );
           audit = craneLib.cargoAudit {
             inherit src advisory-db;
-            # RUSTSEC-2023-0071: rsa only generates the local Mumble key; RUSTSEC-2026-0459:
-            # SQLite opens only Nuschel's own database (see deny.toml).
-            cargoAuditExtraArgs = "--deny unsound --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0459";
+            # Share the individually reviewed exceptions with cargo-deny. Audit
+            # scans every lockfile entry, including OpenMLS's unselected RustCrypto
+            # test provider: only that unused graph retains crypto-bigint 0.5.
+            # cargo-deny must still reject RUSTSEC-2026-0387 if it becomes reachable.
+            cargoAuditExtraArgs =
+              "--deny unsound --ignore RUSTSEC-2026-0387"
+              +
+                lib.concatMapStrings (item: " --ignore ${item.id}")
+                  (builtins.fromTOML (builtins.readFile ./deny.toml)).advisories.ignore;
             # Registry-dependent yanked checks remain enabled in `cargo deny check`.
             preBuild = ''
               mkdir -p .cargo

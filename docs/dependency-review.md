@@ -79,3 +79,21 @@ Revisit the corresponding entries whenever GPUI Kit or Syntect is upgraded. Do n
 add a workspace-direct dependency on these packages to exploit a transitive allowance.
 The release process also needs a third-party notice inventory; cargo-deny alone does
 not establish fulfillment of attribution or copyleft conditions.
+
+## Audit scope
+
+The Nix `audit` check uses the advisory database pinned by `flake.lock` and the
+same individually reviewed advisory exceptions as `deny.toml`. That includes the
+quick-xml 0.38 citation-parser exceptions: the sandboxed math worker removes
+bibliographies, citations and arbitrary Typst code from its accepted language.
+Upgrade Typst's citation stack when it accepts quick-xml 0.41 or later.
+
+`cargo audit` also checks optional dependencies retained in `Cargo.lock` that no
+workspace target selects. Its additional exception for
+[RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html) applies to
+crypto-bigint 0.5.5 in OpenMLS's unselected RustCrypto/test-utility provider. The
+selected libcrux provider does not use it; the reachable RustCrypto stack uses
+crypto-bigint 0.7.10, newer than the fixed 0.7.6. Verify this on updates with
+`cargo tree --workspace --all-features --target all -i crypto-bigint@0.5.5`.
+This advisory is deliberately **not** ignored in `deny.toml`: if that older
+provider becomes reachable, `cargo deny check advisories` must fail.
