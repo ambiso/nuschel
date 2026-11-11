@@ -16,6 +16,24 @@ pub struct Note {
     pub image: Option<(u32, u32, Vec<u8>)>,
 }
 
+/// Largest thumbnail side, as for images in the timeline.
+const MAX_THUMBNAIL_SIDE: u32 = 4096;
+
+/// A message image's RGBA pixels for a notification, if its size is plausible
+/// and matches the pixel data. The size is computed in `usize`, so a hostile
+/// width and height cannot wrap around to match a short buffer.
+pub fn thumbnail(width: u32, height: u32, rgba: &str) -> Option<(u32, u32, Vec<u8>)> {
+    use base64::Engine as _;
+    let sides = 1..=MAX_THUMBNAIL_SIDE;
+    if !sides.contains(&width) || !sides.contains(&height) {
+        return None;
+    }
+    let pixels = base64::engine::general_purpose::STANDARD
+        .decode(rgba)
+        .ok()?;
+    (pixels.len() == width as usize * height as usize * 4).then_some((width, height, pixels))
+}
+
 /// Escape the characters notification markup gives meaning to.
 pub fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -157,6 +175,23 @@ mod tests {
             escape("<img src=\"https://tracker.invalid/x\"> & <b>"),
             "&lt;img src=&quot;https://tracker.invalid/x&quot;&gt; &amp; &lt;b&gt;"
         );
+    }
+
+    #[test]
+    fn thumbnails_match_their_pixel_data() {
+        use base64::Engine as _;
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let pixels = encode(&[0; 2 * 3 * 4]);
+        assert_eq!(
+            thumbnail(2, 3, &pixels).map(|(w, h, _)| (w, h)),
+            Some((2, 3))
+        );
+        assert!(thumbnail(3, 3, &pixels).is_none());
+        assert!(thumbnail(0, 3, &pixels).is_none());
+        // 65536 * 65536 * 4 wraps to 0 in u32; the old check accepted an empty image.
+        assert!(thumbnail(65536, 65536, "").is_none());
+        assert!(thumbnail(1 << 30, 4, &encode(&[0; 16])).is_none());
+        assert!(thumbnail(1, 1, "not base64!").is_none());
     }
 
     #[test]

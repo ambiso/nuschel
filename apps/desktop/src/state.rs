@@ -2496,14 +2496,7 @@ impl Desktop {
                                     rgba,
                                     ..
                                 } if image.is_none() => {
-                                    use base64::Engine as _;
-                                    image = base64::engine::general_purpose::STANDARD
-                                        .decode(rgba)
-                                        .ok()
-                                        .filter(|pixels| {
-                                            pixels.len() == (*width * *height * 4) as usize
-                                        })
-                                        .map(|pixels| (*width, *height, pixels));
+                                    image = crate::notify::thumbnail(*width, *height, rgba);
                                 }
                                 _ => {}
                             }
