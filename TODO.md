@@ -581,7 +581,16 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    membership, history grants, size cap, voice groups, inactive devices, auditors,
    release timing, ciphersuite, guests); question 1 (recovery key) became a
    setting, offered by default.
-4. **End-to-end encryption (MLS)**
+4. **End-to-end encryption (MLS)** — 4a (delivery service) and 4b (direct
+   conversations, multi-device linking) are prototyped on the unmerged bookmark
+   `mls-prototype` (2026-11-11, OpenMLS 0.9.2, provisional suite 0x004F; VM check
+   with an E2EE DM step passes). It merges only after an OpenMLS release with the
+   draft code points and fixed libcrux crates; the bump steps are in that branch's
+   docs/e2ee.md "Phase 4 prototype". Still open there: the desktop sends and shows
+   E2EE DMs through the worker (today only the lock), the `DeviceLink*` mailbox and
+   UI, device revocation and inactive-device removal, self-updates (§6.5), gossip in
+   MLS, typing and read markers as MLS messages, channels (4c), the log-structured
+   worker store, a binary column for MLS rows, eviction of idle groups on the server.
    - [ ] Wait for the next OpenMLS release before shipping persistent groups:
          0.9.2 pins libcrux crates with RUSTSEC-2026-0329/-0330/-0331 (a hostile
          key package can crash the crypto worker) and an X-Wing suite code point
