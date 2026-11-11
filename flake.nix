@@ -39,6 +39,8 @@
     }:
     {
       nixosModules.default = import ./nix/module.nix { inherit self; };
+      # The web host: web client, share links and the tunnel relay (docs/web.md).
+      nixosModules.web = import ./nix/web-module.nix { inherit self; };
       # The key-transparency auditor (docs/witness.md).
       nixosModules.witness = import ./nix/witness-module.nix { inherit self; };
       homeModules.default = import ./nix/home-manager.nix { inherit self; };
@@ -429,6 +431,13 @@
         packages.macos-app = macApp;
         packages.macos-aarch64 = macSlice "aarch64";
         packages.rtc-probe = rtcPackage;
+        # The web client's tunnel relay and its probe (docs/web.md), from cached crates.
+        packages.web-relay = crates.project.workspaceMembers."nuschel-web-relay".build;
+        # The web host's static files: the share-link landing page and, until
+        # the Svelte client exists, a placeholder.
+        packages.web-site = pkgs.runCommand "nuschel-web-site" { } ''
+          cp -R ${./web/site} "$out"
+        '';
         apps.rtc-probe =
           (flake-utils.lib.mkApp {
             drv = rtcPackage;
@@ -516,6 +525,13 @@
               nuschel = package;
               module = self.nixosModules.default;
               witnessModule = self.nixosModules.witness;
+            };
+            # The web host's module: site, landing page, app links, and a login
+            # to Murmur through the relay (`nix build .#checks.x86_64-linux.vm-web`).
+            vm-web = import ./nix/vm-web.nix {
+              inherit pkgs;
+              relay = crates.project.workspaceMembers."nuschel-web-relay".build;
+              module = self.nixosModules.web;
             };
             vm-smoke = import ./nix/vm-smoke.nix {
               inherit pkgs;
