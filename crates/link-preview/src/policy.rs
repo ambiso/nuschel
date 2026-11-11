@@ -176,7 +176,10 @@ impl Proxy {
         let ip = match url.host().ok_or(Error::Proxy)? {
             Host::Ipv4(ip) => ip.into(),
             Host::Ipv6(ip) => ip.into(),
-            Host::Domain(_) => return Err(Error::Proxy),
+            // SOCKS is not a WHATWG special URL scheme: its numeric IPv4
+            // authority is returned as Domain, unlike http/https. Accept only
+            // an actual IP literal here, never a hostname/system DNS lookup.
+            Host::Domain(host) => host.parse::<IpAddr>().map_err(|_| Error::Proxy)?,
         };
         let port = url.port().filter(|port| *port != 0).ok_or(Error::Proxy)?;
         if !service_ip(ip) {
@@ -387,6 +390,10 @@ mod tests {
     #[test]
     fn proxy_and_dns_services_need_explicit_addresses_and_no_credentials() {
         assert!(Proxy::parse("socks5://127.0.0.1:9050").is_ok());
+        assert_eq!(
+            Proxy::parse("socks5://[::1]:9050").unwrap().address(),
+            "[::1]:9050".parse().unwrap()
+        );
         for proxy in [
             "socks5h://127.0.0.1:9050",
             "socks5://proxy.example:9050",
