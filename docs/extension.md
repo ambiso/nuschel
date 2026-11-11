@@ -438,3 +438,55 @@ the wire definition):
   also audits and heads) and `kt.publishes_per_minute` (6). A missing account, one
   without a binding, and a history the requester may not see are the same
   `not_found`.
+
+## Desktop client (2026-11-11)
+
+How the desktop uses the extension, and the decisions taken while the user was away
+(each can be revisited):
+
+- **Edits and deletions** are offered only on Nuschel servers with `history/1`, while
+  connected, in conversations the server named. Your own messages (sent from this
+  device, or by your registration number) get *Edit message* and *Delete message*;
+  unregistered users get neither, since the server refuses them. Moderators get
+  *Delete message* on others' messages only where the server says so: the hello's
+  `Policy.moderators_delete` (field 7, added for this) and Write on the channel, the
+  server's own rule. Up in an empty composer edits your last message; Enter saves,
+  Escape restores what the composer held; emptying an edit asks whether to delete.
+  Deletion asks first and says that stock Mumble users keep the message. The server
+  sends edits and deletions to others only, so the client applies its own on
+  `ChatAck`, rendering the new text in the content worker like any message.
+- **Tombstones** are one faint line ("Message deleted", "… by a moderator") in the
+  message's place; they keep the author group they are in but never start one, so the
+  next message shows its author again. An edited message shows "(edited)" with the
+  edit time in its tooltip; screen readers hear ", edited" and "message deleted".
+- **Typing**: a `Typing` at most every 3 s (the server's limit) while the composer
+  changes and is not empty; nothing while editing, nothing once sent or emptied, and
+  only in conversations the server named where we may write (Text message
+  permission). The protocol has no "stopped typing": an indicator ends with that
+  person's next message or 6 s after their last `Typing`. The indicator replaces the
+  composer's "Message #channel" footer, a line that is always there, so nothing moves;
+  it is a polite live region (AccessKit `live`, set by a small custom element because
+  GPUI's elements cannot). Settings → Privacy → *Show when you are typing* (on by
+  default) stops sending; others' indicators still show.
+- **Direct messages** between two registered accounts on a Nuschel server use the
+  pair's direct conversation (`OpenDirect`, `TextTarget::DirectConversation` in the
+  session): sends are paced, idempotent and resent after a reconnect like channel
+  messages, the timeline pages the server's history, and read markers and unread counts
+  work as for channels. `DirectList` at login gives unread counts; a conversation with
+  unread messages is listed even while the other account is offline (one without stays
+  out of the list until opened: the DM home is a later item). A message in an unknown
+  conversation is a new direct one (the server delivers those to its two accounts only)
+  and the session asks for the list again. Stock servers, unregistered people on either
+  side, and a refused `OpenDirect` keep the stock path (a `TextMessage` to the session);
+  those timelines load local history and say "Local history". A registered peer on a
+  stock client still gets the server's stock copy of our messages; their replies come
+  over the stock path into a separate local conversation and are stored by the server
+  only with `history.archive_stock_direct_messages`.
+- **Local cache**: server pages, live messages, edits and deletions are written to the
+  local history by `(server identity, storage key, seq)`: a message seen live and again
+  in a page is kept once, an edit overwrites the text and search index, a deletion
+  empties both and keeps a tombstone that a later copy cannot bring back, and our own
+  message gets its seq when acknowledged. Local pages run in time order (ties by row
+  id) because pages fetched later hold older messages than rows stored before them.
+  Direct conversations are stored under `conversation:<id>`, channels under their
+  channel id, which Mumble reuses (see TODO.md).

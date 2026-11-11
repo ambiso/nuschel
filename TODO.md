@@ -61,8 +61,10 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
-- [ ] Typing indicators: stock Mumble has none; between Nuschel clients over
-      `PluginDataTransmission`.
+- [x] Typing indicators on Nuschel servers (`typing/1`, 2026-11-11): "Ada is typing…"
+      in the composer's footer line (no layout shift), a polite live region; Settings →
+      Privacy turns sending off. Stock Mumble servers: none (`PluginDataTransmission`
+      is forwarded without channel authorisation, docs/extension.md §7).
 - [ ] LaTeX/math in messages: e.g. a Typst compiler in its own sandboxed worker
       rendering to an image, with resource limits.
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
@@ -576,9 +578,18 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    intervals, subscriptions, edits/deletions with tombstones, read markers, typing,
    stock-client notices, `nuscheld --erase-user`; the desktop shows server history and
    pending sends. Open:
-   - [ ] Desktop: direct messages as durable direct conversations; edit and delete UI
-         (events are ignored today); typing indicators; write fetched server pages
-         into the local cache.
+   - [x] Desktop (2026-11-11): direct messages as durable direct conversations; edit
+         and delete UI; typing indicators; fetched server pages kept in the local
+         cache by seq (decisions in docs/extension.md, "Desktop client").
+   - [ ] Desktop follow-ups: direct conversations are listed once opened or unread
+         (the DM home is a later item); a stock client's reply in a durable direct
+         conversation takes the stock path and is stored only with
+         `archive_stock_direct_messages`; the edit limit is not shown before the
+         server refuses; no reply UI yet (`reply_to`); typing has no "stopped" message
+         (indicators expire after 6 s); cached server messages are keyed by channel
+         id and seq, and Mumble reuses channel ids (key by conversation id instead);
+         an AT-SPI check of the edit and delete menu entries and the typing status
+         on a Nuschel server (tests/accessibility.py runs against Murmur).
    - [ ] Desktop: show each channel's retention (`ChannelInfo.retention_days`,
          `live_only`, `own_retention`) and offer it in channel settings to users with
          Write: say what a shortening removes ("messages older than N days", all for
@@ -606,9 +617,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          as tombstones, subscriptions, per-channel retention (docs/extension.md
          "Implementation notes").
    - [x] Client side: with `history/1` the desktop's timeline pages from the server
-         (`HistorySource::ServerArchive`) and goes back to local observations when
-         offline; keeping fetched pages in the local cache is the desktop item
-         above.
+         (`HistorySource::ServerArchive`), channels and durable direct conversations
+         alike, and goes back to local observations when offline; the history source
+         label is per conversation (stock direct messages say "Local history"), and
+         fetched pages are kept in the local cache.
 3. **Identity and key transparency** (persistent, cross-server and multi-device;
    user, 2026-11-11) — done without MLS (2026-11-11), see docs/e2ee.md "Phase 3 as
    implemented": identities are created, published to each server's log, looked up,

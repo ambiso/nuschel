@@ -229,7 +229,13 @@ touch a database a running server holds.
 With Nuschel clients the server negotiates its extension (docs/extension.md): durable
 server history that new members can read (kept forever unless the server or a
 channel sets a shorter retention, or "none" for live-only channels), sends that
-survive reconnects, read markers and typing. Nuschel never falls back to plain Mumble with a server that
+survive reconnects, read markers and typing. On such a server you can edit and delete
+your messages (right-click a message, or Up in an empty composer to edit your last
+one), moderators can delete others' where the server allows it, you see who is typing
+under the composer (**Settings → Privacy** stops showing that you type), and direct
+messages between registered users are stored by the server, so they reach someone who
+is offline and come back with their history. Server history you read is also kept on
+your device for offline reading and search. Nuschel never falls back to plain Mumble with a server that
 once offered the extension. Invite links can carry the server's certificate
 fingerprint and policy (`mumble://…?fp=sha256:…&policy=nuschel`).
 
@@ -254,8 +260,8 @@ state directory, restricted permissions and systemd hardening. See
 - Local chat history is enabled by default, including on legacy Mumble servers.
   Legacy history contains messages observed locally, not messages sent while offline.
 - Nuschel server archives use bounded cursor pages so the full retained history is
-  reachable. The SQLite/PostgreSQL storage worker implements this; session negotiation
-  and history fetching over the network remain unimplemented.
+  reachable. Pages the client fetched are kept in local history by their sequence
+  number: edits overwrite them, deleted messages stay as tombstones without text.
 
 Red open locks mean **no end-to-end encryption**, not an absence of Mumble transport
 encryption. Green locks are reserved for authenticated MLS sessions. MLS is a planned
