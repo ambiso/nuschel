@@ -37,7 +37,7 @@ function refresh() {
     storageQueue = storageQueue.then(() => history.bookmarks(bookmarks)).catch((error) => { saved = null; fail(error); });
   }
 }
-const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "send_text", "older", "join"]);
+const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join"]);
 onmessage = async ({ data }) => {
   try {
     if (!data || typeof data !== "object") throw new Error("Invalid browser command.");

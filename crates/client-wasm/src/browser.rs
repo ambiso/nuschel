@@ -131,7 +131,7 @@ impl Shared {
                             .as_ref()
                             .and_then(|peer| peer.certificate_hash.as_ref())
                             .filter(|hash| !hash.is_empty())
-                            .map(|hash| format!("direct:{}", hash.to_ascii_lowercase()))
+                            .map(|hash| format!("direct:{hash}"))
                             .unwrap_or_else(|| {
                                 format!(
                                     "direct:{generation}:{id}:{}",
@@ -466,6 +466,16 @@ impl WebClient {
             .navigation
             .remembered_channel(&server.id)
             .unwrap_or(0);
+        self.client.open(index, channel)
+    }
+
+    pub fn open_direct(&mut self, index: usize, session: u32) -> Result<bool, String> {
+        if index >= self.client.servers.len() {
+            return Ok(false);
+        }
+        let Some(channel) = self.client.open_direct(index, session) else {
+            return Ok(false);
+        };
         self.client.open(index, channel)
     }
 

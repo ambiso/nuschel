@@ -90,6 +90,7 @@ pub enum Event {
 const PING_MS: f64 = 10_000.0;
 /// Plaintext waiting to be framed; a server sending more is cut off.
 const MAX_BUFFER: usize = 16 * 1024 * 1024;
+const MAX_EVENTS: usize = 512;
 
 fn next_user_instance() -> u64 {
     static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -519,8 +520,16 @@ impl Session {
 
     fn frames(&mut self) {
         loop {
+            if self.is_closed() {
+                return;
+            }
             match decode_control(&mut self.plaintext) {
-                Ok(Some(frame)) => self.control(frame.kind, frame.payload),
+                Ok(Some(frame)) => {
+                    self.control(frame.kind, frame.payload);
+                    if self.events.len() > MAX_EVENTS {
+                        return self.close("The server sent too much at once.".into());
+                    }
+                }
                 Ok(None) => return,
                 Err(_) => return self.close("The server sent a frame that is too large.".into()),
             }
@@ -655,6 +664,9 @@ impl Session {
                     targets.into_iter().map(TextTarget::Channel).collect()
                 };
                 for target in targets {
+                    if self.events.len() >= MAX_EVENTS {
+                        return self.close("The server sent too much text at once.".into());
+                    }
                     self.events.push_back(Event::Text {
                         target,
                         peer: peer.clone(),
@@ -747,6 +759,29 @@ mod tests {
             pin: None,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn text_fanout_is_bounded_before_body_clones_accumulate() {
+        let mut session = session();
+        session.phase = Phase::LoggedIn;
+        for id in 0..600 {
+            session.channels.insert(
+                id,
+                Channel {
+                    id,
+                    ..Default::default()
+                },
+            );
+        }
+        let text = proto::TextMessage {
+            channel_id: (0..600).collect(),
+            message: "bounded".into(),
+            ..Default::default()
+        };
+        session.control(kind::TEXT_MESSAGE, text.encode_to_vec().into());
+        assert!(session.is_closed());
+        assert!(session.take_events().len() <= MAX_EVENTS + 1);
     }
 
     #[test]

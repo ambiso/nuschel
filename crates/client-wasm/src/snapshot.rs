@@ -32,6 +32,7 @@ pub struct ServerView {
 pub struct ChannelView {
     pub id: u32,
     pub parent: Option<u32>,
+    pub direct: bool,
     pub name: String,
 }
 
@@ -76,10 +77,10 @@ pub fn servers(servers: &[ServerState]) -> Vec<ServerView> {
             channels: server
                 .channels
                 .iter()
-                .filter(|channel| matches!(channel.target, TextTarget::Channel(_)))
                 .map(|channel| ChannelView {
                     id: channel.id,
                     parent: channel.parent,
+                    direct: !matches!(channel.target, TextTarget::Channel(_)),
                     name: channel.name.clone(),
                 })
                 .collect(),

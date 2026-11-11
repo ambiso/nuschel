@@ -26,6 +26,15 @@
   const selected = $derived(servers.find((server) => server.id === timeline?.server));
   const selectedIndex = $derived(servers.findIndex((server) => server.id === timeline?.server));
   const rows = $derived(selected ? channelRows(selected.channels, expanded, selected.id) : []);
+  const usersByChannel = $derived.by(() => {
+    const groups = new Map();
+    for (const user of selected?.users || []) {
+      const group = groups.get(user.channel) || [];
+      group.push(user);
+      groups.set(user.channel, group);
+    }
+    return groups;
+  });
   const labels = { connected:"Connected", connecting:"Connecting…", disconnected:"Disconnected" };
   function command(method, ...args) {
     return new Promise((resolve, reject) => {
@@ -135,9 +144,9 @@
         {#each rows as row (row.id)}
           <div class="channel-row" style:padding-left={`${row.depth * .75}rem`}>
             {#if row.hasChildren}<button class="expand" aria-label={`${row.open ? "Collapse" : "Expand"} ${row.name}`} aria-expanded={row.open} onclick={() => toggle(row)}>{row.open ? "▾" : "▸"}</button>{:else}<span class="spacer"></span>{/if}
-            <button class:current={timeline?.channel === row.id} class="channel" title={row.name} onclick={() => act("open", selectedIndex, row.id)}>{row.name || "Root"}</button>
+            <button class:current={timeline?.channel === row.id} class="channel" title={row.name} onclick={() => act("open", selectedIndex, row.id)}>{row.direct ? "@ " : ""}{row.name || "Root"}</button>
           </div>
-          {#each selected.users.filter((user) => user.channel === row.id) as user (user.session)}<div class="user" style:padding-left={`${row.depth * .75 + 1.8}rem`}>{user.name}</div>{/each}
+          {#each usersByChannel.get(row.id) || [] as user (user.session)}<button class="user" aria-label={`Private message ${user.name}`} disabled={user.session === selected.own_session} style:padding-left={`${row.depth * .75 + 1.8}rem`} onclick={() => act("open_direct", selectedIndex, user.session)}>{user.name}</button>{/each}
         {/each}
       </nav>
     {:else}<p class="muted">Add a server to start chatting.</p>{/if}
@@ -177,7 +186,7 @@
 main { display:grid; grid-template-columns:76px minmax(180px,230px) minmax(0,1fr); height:100dvh; overflow:hidden; }
 button,input,textarea { font:inherit; } button { cursor:pointer; border:1px solid var(--border); border-radius:.4rem; background:var(--surface); color:var(--text); padding:.4rem .65rem; } button:disabled { opacity:.5; cursor:default; }
 .servers { background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; align-items:center; gap:.6rem; padding:.9rem .4rem; overflow-y:auto; } .brand { margin-bottom:.5rem; } .server-icon,.add { width:48px; height:48px; flex-shrink:0; border-radius:35%; font-weight:700; } .active { background:var(--accent); color:var(--accent-text); border-radius:25%; }
-.channels { display:flex; flex-direction:column; overflow:hidden; padding:.85rem .7rem; background:color-mix(in srgb,var(--surface) 70%,var(--background)); border-right:1px solid var(--border); } h1,h2 { font-size:1.05rem; margin:0; overflow-wrap:anywhere; } .status,.security { font-size:.75rem; margin:.3rem 0; color:var(--muted); } .security { color:var(--bad); } .notice,.certificate { font-size:.8rem; overflow-wrap:anywhere; } .certificate code { display:block; font-size:.7rem; margin:.5rem 0; } .channel-tree { min-height:0; overflow:auto; scrollbar-gutter:stable; margin:.75rem -.25rem; padding:.25rem; flex:1; scroll-behavior:smooth; } .channel-row { display:flex; align-items:center; min-width:0; } .expand { width:1.5rem; padding:0; border:0; background:none; flex-shrink:0; } .spacer { width:1.5rem; flex-shrink:0; } .channel { text-align:left; border:0; min-width:0; width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:none; } .current { background:color-mix(in srgb,var(--accent) 20%,transparent); color:var(--accent); } .user { color:var(--muted); font-size:.8rem; overflow-wrap:anywhere; margin:.1rem 0 .2rem; } .scope { color:var(--muted); font-size:.7rem; margin:.5rem 0 0; } .muted { color:var(--muted); }
+.channels { display:flex; flex-direction:column; overflow:hidden; padding:.85rem .7rem; background:color-mix(in srgb,var(--surface) 70%,var(--background)); border-right:1px solid var(--border); } h1,h2 { font-size:1.05rem; margin:0; overflow-wrap:anywhere; } .status,.security { font-size:.75rem; margin:.3rem 0; color:var(--muted); } .security { color:var(--bad); } .notice,.certificate { font-size:.8rem; overflow-wrap:anywhere; } .certificate code { display:block; font-size:.7rem; margin:.5rem 0; } .channel-tree { min-height:0; overflow:auto; scrollbar-gutter:stable; margin:.75rem -.25rem; padding:.25rem; flex:1; scroll-behavior:smooth; } .channel-row { display:flex; align-items:center; min-width:0; } .expand { width:1.5rem; padding:0; border:0; background:none; flex-shrink:0; } .spacer { width:1.5rem; flex-shrink:0; } .channel { text-align:left; border:0; min-width:0; width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; background:none; } .current { background:color-mix(in srgb,var(--accent) 20%,transparent); color:var(--accent); } .user { display:block; border:0; background:none; text-align:left; width:100%; padding-top:0; padding-bottom:0; color:var(--muted); font-size:.8rem; overflow-wrap:anywhere; margin:.1rem 0 .2rem; } .scope { color:var(--muted); font-size:.7rem; margin:.5rem 0 0; } .muted { color:var(--muted); }
 .chat { display:flex; flex-direction:column; min-width:0; min-height:0; } .chat-header { min-height:56px; display:flex; align-items:center; justify-content:space-between; padding:.6rem 1rem; border-bottom:1px solid var(--border); gap:1rem; } .connection { max-width:600px; padding:1rem; display:grid; grid-template-columns:1fr 1fr; gap:.6rem; max-height:60vh; overflow:auto; } .connection h2,.connection details { grid-column:1/-1; } label { display:grid; gap:.2rem; font-size:.8rem; } input,textarea { background:var(--background); color:var(--text); caret-color:var(--text); border:1px solid var(--border); border-radius:.4rem; padding:.5rem; min-width:0; width:100%; } .error { color:var(--bad); display:flex; justify-content:space-between; padding:.5rem 1rem; border-bottom:1px solid var(--border); overflow-wrap:anywhere; } .messages { flex:1; min-height:0; overflow:auto; scrollbar-gutter:stable; scroll-behavior:smooth; padding:.75rem 0; } .empty { color:var(--muted); padding:1rem; } .older { margin:.5rem 1rem; } .composer { padding:.75rem 1rem; } .composer textarea { resize:vertical; max-height:35vh; } .composer div { display:flex; justify-content:space-between; gap:.5rem; align-items:center; } small { color:var(--muted); font-size:.72rem; } .composer button { background:var(--accent); color:var(--accent-text); } .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 @media(max-width:650px) { main { grid-template-columns:56px 150px minmax(0,1fr); } .servers { padding:.5rem .2rem; } .server-icon,.add { width:40px; height:40px; } .connection { grid-template-columns:1fr; } .composer div small { display:none; } }
 @media(prefers-reduced-motion:reduce) { .messages,.channel-tree { scroll-behavior:auto; } }
