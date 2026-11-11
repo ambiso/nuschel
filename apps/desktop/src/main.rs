@@ -14,6 +14,7 @@ mod global_ptt;
 mod icons;
 mod images;
 mod menus;
+mod motion;
 mod notify;
 mod panels;
 mod preview;

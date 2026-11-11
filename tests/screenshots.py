@@ -121,7 +121,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,emoji,clipping,viewer,notify,scroll,paste,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -313,6 +313,25 @@ def main():
                 shell.key("Escape")
                 time.sleep(0.6)
                 shot("13-search-closed")
+            if want("toggles"):
+                # Mute animates (slash, red); rapid clicks reverse it smoothly.
+                def footer(name):
+                    shot(name)
+                    subprocess.run(["magick", str(args.output / f"{name}.png"), "-crop", "130x60+210+743",
+                                    str(args.output / f"{name}-footer.png")], check=False)
+                footer("30-muted")
+                click(279, 773)
+                time.sleep(0.6)
+                footer("31-unmuted")
+                click(279, 773)
+                footer("32-muting")
+                time.sleep(0.6)
+                footer("33-muted-again")
+                for _ in range(7):
+                    click(279, 773)
+                    time.sleep(0.04)
+                time.sleep(0.6)
+                footer("34-after-rapid-clicks")
             if want("emoji"):
                 # Ctrl+. opens the picker; typing searches; Enter inserts the first match.
                 click(800, 738)  # the composer

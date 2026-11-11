@@ -744,6 +744,9 @@ pub struct Desktop {
     pub emoji: Option<crate::emoji::Picker>,
     pub emoji_recent: Vec<&'static str>,
     pub emoji_focus: FocusHandle,
+    /// The footer's mute and deafen animations (created on first render).
+    pub mute_ease: Option<crate::motion::Ease>,
+    pub deafen_ease: Option<crate::motion::Ease>,
     pub menu: Option<crate::menus::Menu>,
     pub prompt: Option<crate::menus::Prompt>,
     pub panel: Option<Panel>,
@@ -906,6 +909,8 @@ impl Desktop {
             emoji: None,
             emoji_recent: Vec::new(),
             emoji_focus: cx.focus_handle(),
+            mute_ease: None,
+            deafen_ease: None,
             menu: None,
             prompt: None,
             panel: None,

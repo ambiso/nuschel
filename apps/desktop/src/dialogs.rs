@@ -109,6 +109,95 @@ pub fn icon_button(
         .into_any_element()
 }
 
+/// A voice toggle (mute, deafen): `on` from 0 to 1 eases the background to
+/// red and draws a slash across the icon, so a toggle animates instead of
+/// swapping icons (see `motion::Ease`).
+pub fn toggle_button(
+    id: impl Into<ElementId>,
+    name: &'static str,
+    label: impl Into<SharedString>,
+    on: f32,
+    action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    let action = Rc::new(action);
+    let click = action.clone();
+    let label = label.into();
+    let tooltip = label.clone();
+    let foreground = mix(TEXT_MUTED, DANGER, on);
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label)
+        .tab_index(0)
+        .cursor_pointer()
+        .size(px(32.))
+        .flex_shrink_0()
+        .rounded(px(6.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(on > 0., |button| {
+            button.bg(tint(DANGER, (f32::from(0x2e_u8) * on) as u8))
+        })
+        // Hovering deepens the red rather than replacing it.
+        .hover(move |style| {
+            if on > 0.5 {
+                style.bg(tint(DANGER, 0x48))
+            } else {
+                style.bg(color(SELECTED))
+            }
+        })
+        .tooltip(move |_, cx| cx.new(|_| Tooltip(tooltip.clone())).into())
+        .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            if activation(event) {
+                action(this, window, cx);
+                cx.stop_propagation();
+            }
+        }))
+        .child(
+            div()
+                .relative()
+                .size(px(18.))
+                .child(icon(name, 18., foreground))
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            if on <= 0. {
+                                return;
+                            }
+                            let inset = bounds.size.width * 0.1;
+                            let a = point(bounds.left() + inset, bounds.top() + inset);
+                            let reach = (bounds.size.width - inset * 2.) * on;
+                            let mut slash = PathBuilder::stroke(px(2.));
+                            slash.move_to(a);
+                            slash.line_to(point(a.x + reach, a.y + reach));
+                            if let Ok(path) = slash.build() {
+                                window.paint_path(path, foreground);
+                            }
+                        },
+                    )
+                    .absolute()
+                    .inset_0(),
+                ),
+        )
+        .into_any_element()
+}
+
+/// The colour `t` of the way from `a` to `b`.
+fn mix(a: u32, b: u32, t: f32) -> Rgba {
+    let (a, b) = (color(a), color(b));
+    let t = t.clamp(0., 1.);
+    Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
 pub struct Tooltip(pub SharedString);
 impl Render for Tooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {

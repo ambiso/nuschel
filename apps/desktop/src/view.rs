@@ -22,6 +22,7 @@ const GROUP_MS: i64 = 5 * 60 * 1000;
 impl Render for Desktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::images::collect(window);
+        self.ease_voice_toggles(window, cx);
         // Which dialog the last frame showed (see dialogs::modal).
         self.modal_seen.set(self.modal_shown.take());
         self.apply_composer_acks(window, cx);
@@ -546,7 +547,7 @@ fn sidebar(
         .when_some(voice_card(server, server_index, cx), |sidebar, card| {
             sidebar.child(card)
         })
-        .child(user_panel(server, this.settings.audio.transmit, cx))
+        .child(user_panel(this, server, cx))
         .into_any_element()
 }
 
@@ -1036,11 +1037,8 @@ fn voice_card(
     )
 }
 
-fn user_panel(
-    server: &ServerView,
-    transmit: nuschel_core::audio::TransmitMode,
-    cx: &mut Context<Desktop>,
-) -> AnyElement {
+fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) -> AnyElement {
+    let transmit = this.settings.audio.transmit;
     let own = server
         .own_session
         .and_then(|session| server.users.get(&session));
@@ -1130,32 +1128,26 @@ fn user_panel(
         ))
         .when(connected, |panel| {
             panel
-                .child(icon_button(
+                .child(dialogs::toggle_button(
                     "mute",
-                    if server.muted { "mic-off" } else { "mic" },
+                    "mic",
                     if server.muted { "Unmute" } else { "Mute" },
-                    if server.muted { DANGER } else { TEXT_MUTED },
-                    server.muted.then_some(DANGER),
+                    eased(&this.mute_ease, server.muted),
                     |this, _, cx| {
                         this.set_mute(false);
                         cx.notify();
                     },
                     cx,
                 ))
-                .child(icon_button(
+                .child(dialogs::toggle_button(
                     "deafen",
-                    if server.deafened {
-                        "headphones-off"
-                    } else {
-                        "headphones"
-                    },
+                    "headphones",
                     if server.deafened {
                         "Undeafen"
                     } else {
                         "Deafen"
                     },
-                    if server.deafened { DANGER } else { TEXT_MUTED },
-                    server.deafened.then_some(DANGER),
+                    eased(&this.deafen_ease, server.deafened),
                     |this, _, cx| {
                         this.set_mute(true);
                         cx.notify();
@@ -1164,6 +1156,36 @@ fn user_panel(
                 ))
         })
         .into_any_element()
+}
+
+/// An animated toggle's value, or its end state before the first render.
+fn eased(ease: &Option<crate::motion::Ease>, on: bool) -> f32 {
+    ease.as_ref()
+        .map_or(f32::from(u8::from(on)), crate::motion::Ease::value)
+}
+
+impl Desktop {
+    /// Retarget the footer's mute and deafen animations to the selected
+    /// server's state, and keep frames coming while they move.
+    fn ease_voice_toggles(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((server, _)) = self.selected_indices() else {
+            return;
+        };
+        let (muted, deafened) = (self.servers[server].muted, self.servers[server].deafened);
+        let reduce = cx.reduce_motion();
+        let mute = self
+            .mute_ease
+            .get_or_insert_with(|| crate::motion::Ease::new(muted));
+        mute.set(muted, reduce);
+        let moving = mute.moving();
+        let deafen = self
+            .deafen_ease
+            .get_or_insert_with(|| crate::motion::Ease::new(deafened));
+        deafen.set(deafened, reduce);
+        if moving || deafen.moving() {
+            window.request_animation_frame();
+        }
+    }
 }
 
 fn conversation(
