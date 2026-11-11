@@ -5,6 +5,14 @@ If a suitable implementation is unavailable, isolate that processing in a worker
 the minimum required capabilities. Even memory-safe code needs input/resource limits:
 panics, excessive allocations, infinite loops, and corrupted output remain possible.
 
+Prefer RustCrypto crates for cryptographic primitives when they meet the protocol's
+requirements and have a suitable security and maintenance history. Review the actual
+implementation, enabled features and transitive dependencies: a RustCrypto API does
+not imply that its implementation is free of unsafe code. Keep required native or
+SIMD implementations behind the boundaries below. Retain and document an existing
+provider when replacing it would weaken security, interoperability or support; do
+not change cryptographic protocols merely to change dependencies.
+
 All first-party crates inherit `unsafe_code = "forbid"`, except the Windows sandbox
 adapter `nuschl-sandbox-windows` (below). This is an enforced rule for
 Nuschl source, not a claim about the entire dependency graph. A safe API around a C
