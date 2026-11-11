@@ -23,6 +23,12 @@ pub struct ServerView {
     /// The certificate waiting for the user's decision.
     pub certificate: Option<String>,
     pub own_session: Option<u32>,
+    pub own_channel: Option<u32>,
+    pub muted: bool,
+    pub deafened: bool,
+    pub voice_supported: bool,
+    pub capabilities: Vec<String>,
+    pub permissions: std::collections::BTreeMap<u32, u32>,
     pub pin: Option<String>,
     pub channels: Vec<ChannelView>,
     pub users: Vec<UserView>,
@@ -41,6 +47,9 @@ pub struct UserView {
     pub session: u32,
     pub name: String,
     pub channel: u32,
+    pub self_mute: bool,
+    pub self_deaf: bool,
+    pub talking: bool,
 }
 
 #[derive(Serialize)]
@@ -73,6 +82,12 @@ pub fn servers(servers: &[ServerState]) -> Vec<ServerView> {
                 .as_ref()
                 .map(|prompt| prompt.sha256.clone()),
             own_session: server.own_session,
+            own_channel: server.voice_channel(),
+            muted: server.muted,
+            deafened: server.deafened,
+            voice_supported: server.has_mumble_voice(),
+            capabilities: server.capabilities.clone(),
+            permissions: server.permissions.clone(),
             pin: server.bookmark.certificate_sha256.clone(),
             channels: server
                 .channels
@@ -91,6 +106,9 @@ pub fn servers(servers: &[ServerState]) -> Vec<ServerView> {
                     session: user.session,
                     name: user.name.clone(),
                     channel: user.channel,
+                    self_mute: user.self_muted || user.muted || user.suppressed,
+                    self_deaf: user.self_deafened || user.deafened,
+                    talking: server.talking.contains(&user.session),
                 })
                 .collect(),
         })

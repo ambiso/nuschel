@@ -21,8 +21,10 @@ relay (`wss://<web host>/relay`, subprotocol `nuschl-tunnel.1`); the relay conne
 to the Mumble or Nuschl server's TCP port and, if the server answers a Mumble ping,
 a UDP socket for voice datagrams. TLS runs in the browser (rustls in WebAssembly),
 so the relay forwards ciphertext it cannot read and the client checks the server's
-certificate itself, exactly as the apps do. Voice datagrams are OCB2-encrypted with
-keys from that TLS session.
+certificate itself. The browser voice adapter uses Mumble `UDPTunnel` frames
+inside that verified TLS stream. It does not send relay-visible voice datagrams
+or implement OCB2/UDP transport. The relay's optional UDP facility remains
+available for other clients.
 
 **Framing** (`nuschl_protocol::tunnel`, fuzz target `tunnel`): every WebSocket
 message is a type byte and a body: `Open` (port, host; first and once), `Stream`
@@ -90,8 +92,8 @@ services.nuschl-web = {
 
 One nginx virtual host with `enableACME` and `forceSSL` (both on by default) serves:
 
-- `/`: the web client's static files (`package`, by default `packages.web-site`:
-  today the landing page and a placeholder; the Svelte build joins it later).
+- `/`: the landing page and share-link routes, with the built Svelte client at
+  `/app/` (`package`, by default `packages.web-site`).
 - `/join/…`: the share-link landing page, with access logging off for the path.
 - `/.well-known/assetlinks.json` and `/.well-known/apple-app-site-association`, from
   `appLinks` (empty lists by default), served as JSON.
@@ -188,10 +190,10 @@ against the pin or the web's certificate authorities (anything else is the user'
 decision, as in the apps), the Mumble login, the channel tree and users. It uses no
 DOM, so a Web Worker can host it.
 
-- `just wasm-client` builds it (ring's C needs an unwrapped clang for wasm32; the
-  wasm-bindgen CLI is nixpkgs' `wasm-bindgen-cli_0_2_130`, the crate's exact pinned
-  version) into `web/app/src/sdk`; `just web` builds the Svelte page into
-  `web/app/dist`. The module is about 1.4 MB (520 KB compressed).
+- `nix build .#web-wasm`, `.#web-audio-wasm`, `.#web-client` and `.#web-site`
+  build the session SDK, separate Opus codec, Svelte app and complete site.
+  `just wasm-client` and `just web` remain development entry points. The exact
+  wasm-bindgen version is pinned; generated developer outputs are not Nix inputs.
 - `web/app` is a minimal Svelte 5 page: server, port, name and optional pin, the
   relay's address (the same origin by default), "Connected" or "Not connected" as a
   live status, a certificate prompt and the channels with their users. A share link's
@@ -206,8 +208,82 @@ DOM, so a Web Worker can host it.
   browser's WebSocket and Web Crypto) through the relay to a loopback Murmur, trusting
   the certificate it is shown.
 
-Left for the web client: text, history and the Nuschl extension through the SDK
-(today the browser session speaks plain Mumble only), voice (WebAudio and
-getUserMedia, datagrams through the tunnel), storage (IndexedDB) and identity in a
-Worker, the Svelte client itself, its version requirement, building the site with
-the client in Nix, and a real-browser test.
+## SDK and browser capability status
+
+The Svelte frontend uses the shared Rust `Client` for selected conversations,
+private-recipient presence checks, channel navigation and local history paging.
+TLS, legacy HTML-to-text parsing, syntax runs and IndexedDB requests run in
+`sdk.worker.js`; the UI receives inert documents. Newlines are preserved and long
+messages can be expanded. The text-only content build does not decode image
+formats in the worker that holds TLS keys. Images, remote images and attachment
+sending remain unsupported in this adapter.
+
+IndexedDB saves observed messages by default, scoped to the server address and
+verified certificate, plus saved server bookmarks. Opaque Rust storage tickets
+bind asynchronous replies to their original conversation, connection and server
+certificate. A stale response cannot populate a replacement connection's history.
+This is local observed history, including on a compatible Nuschl server; it is
+not a promise of that server's entire archive. Passwords are supplied for a
+connection and are not written to IndexedDB.
+
+The voice transport slice supports bounded Opus `UDPTunnel` frames in the same
+verified TLS session, for legacy Mumble/compatible servers. `join(index,channel)`
+selects **one explicit voice route**, leaves the microphone muted and allows
+listening after the server acknowledges the channel. Single-click text navigation
+never changes this route. Moving to another voice destination first mutes the
+previous one through shared SDK policy. `toggle_mute(index)` and
+`toggle_deaf(index)` operate only on the joined route; deaf implies mute. Server
+mute/suppression and acknowledgement are additional gates and cannot undo a newer
+local mute/deaf choice. This slice alone is not a finished browser call UI:
+separate audio-worker/controller integration, browser permission and device UX,
+and exact-package synthetic playback/capture tests must also pass.
+
+The worker posts `state.voice` as `null` or:
+
+```text
+{server_id, connection_generation, voice_generation, channel_id,
+ joined, muted, deafened, can_transmit}
+```
+
+Generations and packet sequences are decimal strings, preserving values beyond
+JavaScript's integer precision. Encoded packets carry this route context plus
+`speaker`, `sequence`, copied `Uint8Array opus`, `end` and `volume`. The codec
+worker receives no TLS/session/identity/MLS objects. Audio readiness is explicitly
+acknowledged for the current generation; stale replies, duplicate outbound
+sequences, unjoined/muted/deaf routes and oversized packets are rejected before
+transmission. Readiness does not change the generation, avoiding a reset loop.
+Queued inbound packets have a 64-packet budget and are discarded after route
+changes; a blocked WebSocket refuses new voice data above its bounded backlog.
+Only the active route receives playback. This does not provide UDP jitter/latency
+advantages or a second simultaneous call.
+
+Audio-only notifications drain Opus independently of timeline snapshots. Speaking
+state changes only on transitions and expires after one second without packets;
+idle timer ticks do not redraw the UI. The main-thread message handler must route
+`voice_packet` directly to the audio controller without replacing Svelte state.
+
+`remove_server(index)`, `dismiss_notice(index)` and
+`connect_with_password(index,password)` complement existing bookmark addition,
+certificate acceptance, legacy channel/private chat and paging APIs. Server
+snapshots expose own channel, local mute/deaf, per-user observed voice state,
+permissions and actually negotiated capabilities; unsupported actions must remain
+absent or visibly disabled in presentation.
+
+Still unsupported: modern extension negotiation/server archives/edit/delete,
+read receipts/typing sync, a persistent per-device client-certificate identity,
+registration/import/export, MLS/key transparency, policy-required Nuschl invites,
+video/screen sharing and attachments. A browser currently authenticates without
+a client certificate. Stock Nuschl guest archive permissions therefore remain in
+force; tests must not weaken server policy or grant guests archive access to
+claim parity. A future browser-owned identity must be generated/imported only in
+the identity/session worker, stored within this origin's scoped IndexedDB and
+explicitly registered. Desktop device secrets must not be cloned automatically.
+Unimplemented MLS/SFrame cannot fall back to plaintext voice. The hosting origin
+can ship new JavaScript and therefore remains part of the browser trust boundary.
+
+Validation for this slice uses `tests/web_voice_transport.mjs` (worker event and
+snapshot counters), `crates/client-wasm` unit tests and private loopback TLS relay
+fixtures, with an optional installed Murmur fixture. No public servers or host
+microphone/speaker devices are used. The focused worker test runs with
+`node --experimental-vm-modules --test tests/web_voice_transport.mjs`; it covers
+actual Worker command routing with a deterministic SDK facade, not real codecs.

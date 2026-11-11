@@ -54,6 +54,13 @@ async fn mumble_server() -> (u16, String) {
                 }
                 let frames = [
                     encode_control(
+                        kind::VERSION,
+                        &proto::Version {
+                            version_v2: Some(nuschl_protocol::voice::PROTOBUF_VERSION),
+                            ..Default::default()
+                        },
+                    ),
+                    encode_control(
                         kind::CHANNEL_STATE,
                         &proto::ChannelState {
                             channel_id: Some(0),
@@ -83,7 +90,29 @@ async fn mumble_server() -> (u16, String) {
                 }
                 loop {
                     while let Ok(Some(frame)) = decode_control(&mut buffer) {
-                        if frame.kind == kind::TEXT_MESSAGE {
+                        if frame.kind == kind::USER_STATE {
+                            // Full/sparse real server acknowledgements use the same control frame.
+                            let state =
+                                proto::UserState::decode(frame.payload).expect("self state");
+                            let reply = proto::UserState {
+                                session: Some(3),
+                                ..state
+                            };
+                            let _ = tls
+                                .write_all(&encode_control(kind::USER_STATE, &reply).unwrap())
+                                .await;
+                        } else if frame.kind == kind::UDP_TUNNEL {
+                            let mut audio =
+                                nuschl_protocol::udp::Audio::decode(&frame.payload[1..])
+                                    .expect("protobuf Opus");
+                            assert_eq!(audio.sender_session, 0);
+                            audio.sender_session = 3;
+                            let mut packet = vec![0];
+                            audio.encode(&mut packet).unwrap();
+                            let _ = tls
+                                .write_all(&nuschl_protocol::encode_tunnel(&packet))
+                                .await;
+                        } else if frame.kind == kind::TEXT_MESSAGE {
                             let text = proto::TextMessage::decode(frame.payload).expect("text");
                             let reply = proto::TextMessage {
                                 actor: Some(3),
@@ -195,10 +224,11 @@ async fn logs_in_through_the_relay_with_tls_in_the_client() {
     assert!(events.iter().any(
         |event| matches!(event, Event::Server(ServerEvent::User(user)) if user.session == 3 && user.name == "web")
     ));
-    assert!(matches!(
-        events.last(),
-        Some(Event::Server(ServerEvent::Connected { session: 3 }))
-    ));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::Server(ServerEvent::Connected { session: 3 })))
+    );
 }
 
 #[tokio::test]
@@ -385,4 +415,71 @@ async fn logs_in_to_murmur() {
     assert!(events.iter().any(
         |event| matches!(event, Event::Server(ServerEvent::Channel(channel)) if channel.id == 0)
     ));
+}
+
+#[tokio::test]
+async fn opus_voice_round_trips_only_after_explicit_unmute_over_private_tls_relay() {
+    let (port, pin) = mumble_server().await;
+    let relay = relay().await;
+    let mut request = relay.into_client_request().unwrap();
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        HeaderValue::from_static(tunnel::SUBPROTOCOL),
+    );
+    let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    let mut session = Session::new(Login {
+        host: "127.0.0.1".into(),
+        port,
+        username: "web".into(),
+        password: None,
+        tokens: vec![],
+        pin: Some(pin),
+    })
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let mut requested = false;
+    let mut sent = false;
+    loop {
+        for event in session.take_events() {
+            match event {
+                Event::Server(ServerEvent::Connected { .. }) => {
+                    assert!(session.send_voice(0, vec![1, 2, 3], false).is_err());
+                    session.set_self(false, false);
+                    requested = true;
+                }
+                Event::Server(ServerEvent::User(_))
+                    if requested && !sent && !session.voice_policy().0 =>
+                {
+                    session
+                        .send_voice(9007199254740993, vec![1, 2, 3], true)
+                        .unwrap();
+                    sent = true;
+                }
+                Event::Voice(packet) => {
+                    assert!(sent);
+                    assert_eq!(packet.sender, 3);
+                    assert_eq!(packet.sequence, 9007199254740993);
+                    assert_eq!(packet.opus, [1, 2, 3]);
+                    assert!(packet.end);
+                    session.set_self(true, false);
+                    assert!(
+                        session
+                            .send_voice(9007199254740995, vec![1, 2, 3], true)
+                            .is_err()
+                    );
+                    return;
+                }
+                Event::Closed { reason } => panic!("closed: {reason}"),
+                _ => {}
+            }
+        }
+        for message in session.take_outgoing() {
+            ws.send(Message::binary(message)).await.unwrap();
+        }
+        match tokio::time::timeout_at(deadline, ws.next()).await {
+            Ok(Some(Ok(Message::Binary(bytes)))) => session.receive(&bytes),
+            Ok(Some(Ok(_))) => {}
+            other => panic!("voice relay ended: {other:?}"),
+        }
+    }
 }

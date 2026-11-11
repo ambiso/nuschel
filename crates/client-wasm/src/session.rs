@@ -6,8 +6,8 @@
 //! the saved pin, or the web's certificate authorities, as the apps do.
 //!
 //! The browser glue (`browser.rs`) moves bytes; tests drive this directly.
-//! Legacy text and presence are supported. Voice, modern server archives and
-//! MLS are deliberately not negotiated by this adapter.
+//! Legacy text, presence and Opus over TLS UDPTunnel are supported. Modern
+//! server archives and MLS are deliberately not negotiated by this adapter.
 
 use bytes::BytesMut;
 use nuschl_client::input::ServerEvent;
@@ -76,6 +76,8 @@ pub enum Event {
         html: bool,
         outgoing: bool,
     },
+    /// Bounded encoded Opus; decoding belongs to the separate audio worker.
+    Voice(nuschl_protocol::voice::VoicePacket),
     Sent {
         target: TextTarget,
         body: String,
@@ -188,6 +190,10 @@ pub struct Session {
     last_ping: f64,
     certificate_reported: bool,
     allow_html: bool,
+    voice_version: u64,
+    opus_allowed: bool,
+    desired_muted: bool,
+    desired_deafened: bool,
 }
 
 impl Session {
@@ -236,6 +242,10 @@ impl Session {
             last_ping: 0.0,
             certificate_reported: false,
             allow_html: true,
+            voice_version: 0,
+            opus_allowed: true,
+            desired_muted: true,
+            desired_deafened: true,
         })
     }
 
@@ -265,7 +275,7 @@ impl Session {
                 self.flush_tls();
             }
             Ok(Frame::Stream(bytes)) if self.phase != Phase::Opening => self.tls_in(bytes),
-            // Voice comes later; datagrams are ignored until then.
+            // Voice deliberately uses TLS UDPTunnel, never relay-visible UDP.
             Ok(Frame::Datagram(_)) => {}
             Ok(Frame::Closed(reason)) => self.close(match reason {
                 CloseReason::Ended => "The server closed the connection.".into(),
@@ -301,6 +311,62 @@ impl Session {
                 ..Default::default()
             },
         );
+    }
+
+    /// Send local policy in full; sparse/delayed echoes cannot undo it.
+    pub fn set_self(&mut self, muted: bool, deafened: bool) {
+        self.desired_muted = muted || deafened;
+        self.desired_deafened = deafened;
+        if let Some(session) = self.own_session() {
+            self.send(
+                kind::USER_STATE,
+                &proto::UserState {
+                    session: Some(session),
+                    self_mute: Some(self.desired_muted),
+                    self_deaf: Some(deafened),
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
+    /// Server acknowledgement AND local intent gate the transport itself.
+    pub fn voice_policy(&self) -> (bool, bool) {
+        let Some(own) = self.own_session().and_then(|id| self.users.get(&id)) else {
+            return (true, true);
+        };
+        let deaf = self.desired_deafened || own.self_deafened || own.deafened;
+        (
+            self.desired_muted
+                || deaf
+                || own.self_muted
+                || own.muted
+                || own.suppressed
+                || !self.opus_allowed,
+            deaf,
+        )
+    }
+
+    pub fn send_voice(&mut self, sequence: u64, opus: Vec<u8>, end: bool) -> Result<(), String> {
+        if self.voice_policy().0 {
+            return Err("Voice is muted or not acknowledged by the server.".into());
+        }
+        let packet = nuschl_protocol::voice::VoicePacket {
+            sender: 0,
+            sequence,
+            opus,
+            end,
+            volume: 1.0,
+        };
+        let bytes = nuschl_protocol::voice::encode_voice(self.voice_version, 0, &packet)
+            .map_err(|_| "Invalid or oversized voice packet.")?;
+        let frame = nuschl_protocol::encode_tunnel(&bytes);
+        if self.tls.writer().write_all(&frame).is_err() {
+            self.close("TLS failed.".into());
+            return Err("TLS failed.".into());
+        }
+        self.flush_tls();
+        Ok(())
     }
 
     /// Legacy text only. Modern/encrypted sends have no fallback here.
@@ -494,7 +560,8 @@ impl Session {
         self.send(
             kind::USER_STATE,
             &proto::UserState {
-                self_mute: Some(true),
+                self_mute: Some(self.desired_muted),
+                self_deaf: Some(self.desired_deafened),
                 ..Default::default()
             },
         );
@@ -544,6 +611,31 @@ impl Session {
 
     fn control(&mut self, frame_kind: u16, payload: bytes::Bytes) {
         match frame_kind {
+            kind::VERSION => {
+                if let Ok(version) = proto::Version::decode(payload) {
+                    self.voice_version = version.version_v2.unwrap_or_else(|| {
+                        let v = version.version_v1.unwrap_or(0);
+                        (((v >> 16) as u64) << 48)
+                            | ((((v >> 8) & 255) as u64) << 32)
+                            | (((v & 255) as u64) << 16)
+                    });
+                }
+            }
+            kind::CODEC_VERSION => {
+                if let Ok(codec) = proto::CodecVersion::decode(payload) {
+                    self.opus_allowed = codec.opus.unwrap_or(false);
+                }
+            }
+            kind::UDP_TUNNEL => {
+                if self.phase != Phase::LoggedIn || self.voice_policy().1 || !self.opus_allowed {
+                    return;
+                }
+                if let Ok(packet) = nuschl_protocol::voice::decode_voice(&payload) {
+                    if self.users.contains_key(&packet.sender) && self.events.len() < MAX_EVENTS {
+                        self.events.push_back(Event::Voice(packet));
+                    }
+                }
+            }
             kind::SERVER_SYNC => {
                 let Ok(sync) = proto::ServerSync::decode(payload) else {
                     return;
@@ -720,6 +812,15 @@ impl Session {
                     }
                     user.certificate_hash = Some(bounded(hash));
                 }
+                if let Some(muted) = state.mute {
+                    user.muted = muted;
+                }
+                if let Some(deafened) = state.deaf {
+                    user.deafened = deafened;
+                }
+                if let Some(suppressed) = state.suppress {
+                    user.suppressed = suppressed;
+                }
                 if let Some(muted) = state.self_mute {
                     user.self_muted = muted;
                 }
@@ -767,6 +868,117 @@ mod tests {
             pin: None,
         })
         .unwrap()
+    }
+
+    fn voice_session() -> Session {
+        let mut s = session();
+        s.phase = Phase::LoggedIn;
+        s.own = Some(3);
+        s.users.insert(
+            3,
+            User {
+                session: 3,
+                channel: 1,
+                ..Default::default()
+            },
+        );
+        s
+    }
+
+    #[test]
+    fn local_mute_and_deafen_survive_sparse_and_delayed_server_echoes() {
+        let mut s = voice_session();
+        assert_eq!(s.voice_policy(), (true, true));
+        assert!(s.send_voice(0, vec![1], false).is_err());
+        s.set_self(false, false);
+        assert_eq!(s.voice_policy(), (false, false));
+        s.set_self(false, true);
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                self_mute: Some(false),
+                self_deaf: Some(false),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert_eq!(s.voice_policy(), (true, true));
+        assert!(s.send_voice(2, vec![1], false).is_err());
+        s.set_self(true, false);
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                channel_id: Some(2),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert_eq!(s.voice_policy(), (true, false));
+        s.set_self(false, false);
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                suppress: Some(true),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert!(s.voice_policy().0);
+    }
+
+    #[test]
+    fn tunneled_voice_is_bounded_known_opus_and_blocked_while_deafened() {
+        let mut s = voice_session();
+        let mut packet = vec![0];
+        nuschl_protocol::udp::Audio {
+            sender_session: 3,
+            frame_number: 9007199254740993,
+            opus_data: vec![1, 2, 3],
+            ..Default::default()
+        }
+        .encode(&mut packet)
+        .unwrap();
+        s.control(kind::UDP_TUNNEL, packet.clone().into());
+        assert!(s.take_events().is_empty());
+        s.set_self(true, false);
+        s.control(kind::UDP_TUNNEL, packet.clone().into());
+        assert!(
+            matches!(s.take_events().as_slice(),[Event::Voice(p)] if p.sequence == 9007199254740993 && p.opus == [1,2,3])
+        );
+        s.control(kind::UDP_TUNNEL, vec![0; 1025].into());
+        assert!(s.take_events().is_empty());
+        s.users.clear();
+        s.control(kind::UDP_TUNNEL, packet.into());
+        assert!(s.take_events().is_empty());
+        s.users.insert(
+            3,
+            User {
+                session: 3,
+                ..Default::default()
+            },
+        );
+        s.set_self(false, false);
+        assert!(s.send_voice(1, vec![0; 1025], false).is_err());
+        s.control(
+            kind::CODEC_VERSION,
+            proto::CodecVersion {
+                alpha: 0,
+                beta: 0,
+                prefer_alpha: true,
+                opus: Some(false),
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert!(s.send_voice(1, vec![1], false).is_err());
+        s.disconnected();
+        assert_eq!(s.voice_policy(), (true, true));
     }
 
     #[test]

@@ -9,6 +9,7 @@ use crate::{
     session::{Event, Login, Session},
     snapshot,
     storage::Storage,
+    voice::{self, Route},
 };
 use nuschl_client::{
     Client, HistoryTicket, Update,
@@ -51,8 +52,12 @@ struct Shared {
     connections: RefCell<HashMap<String, Connection>>,
     generation: Cell<u64>,
     wake: RefCell<Option<js_sys::Function>>,
+    audio_wake: RefCell<Option<js_sys::Function>>,
+    talking: RefCell<HashMap<(String, u64, u32), f64>>,
     storage: RefCell<Storage>,
     renderer: ContentRenderer,
+    voice: RefCell<Route>,
+    voice_packets: RefCell<Vec<voice::Incoming>>,
 }
 
 impl Shared {
@@ -85,10 +90,46 @@ impl Shared {
             return;
         }
         let mut inputs = self.inputs.borrow_mut();
+        let old_inputs = inputs.len();
+        let mut audio_changed = false;
         for event in events {
             let server = server.to_owned();
             inputs.push_back(match event {
                 Event::Opened { .. } => continue,
+                Event::Voice(packet) => {
+                    if let Some(context) = self.voice.borrow().receive(&server, generation) {
+                        let mut packets = self.voice_packets.borrow_mut();
+                        if packets.len() < 64 {
+                            let key = (server.clone(), generation, packet.sender);
+                            let mut talking = self.talking.borrow_mut();
+                            let changed = if packet.end {
+                                talking.remove(&key).is_some()
+                            } else if talking.len() < 64 || talking.contains_key(&key) {
+                                talking.insert(key, js_sys::Date::now() + 1000.0).is_none()
+                            } else {
+                                continue;
+                            };
+                            if changed {
+                                inputs.push_back(Input::Talking {
+                                    server: server.clone(),
+                                    generation,
+                                    session: packet.sender,
+                                    talking: !packet.end,
+                                });
+                            }
+                            audio_changed = true;
+                            packets.push(voice::Incoming {
+                                context,
+                                speaker: packet.sender,
+                                sequence: packet.sequence.to_string(),
+                                opus: packet.opus,
+                                end: packet.end,
+                                volume: packet.volume,
+                            });
+                        }
+                    }
+                    continue;
+                }
                 Event::Server(event) => Input::Server {
                     server,
                     generation,
@@ -188,8 +229,16 @@ impl Shared {
                 }
             });
         }
+        let changed = old_inputs != inputs.len();
         drop(inputs);
-        self.wake();
+        if changed {
+            self.wake();
+        }
+        if audio_changed {
+            if let Some(callback) = self.audio_wake.borrow().as_ref() {
+                let _ = callback.call0(&JsValue::NULL);
+            }
+        }
     }
 }
 
@@ -202,7 +251,7 @@ impl Platform for BrowserPlatform {
         &self,
         bookmark: ServerBookmark,
         password: Option<String>,
-        _deafened: bool,
+        deafened: bool,
     ) -> Result<u64, String> {
         self.disconnect(&bookmark.id);
         let shared = &self.0;
@@ -216,6 +265,7 @@ impl Platform for BrowserPlatform {
             tokens: bookmark.tokens.clone(),
             pin: bookmark.certificate_sha256.clone(),
         })?));
+        session.borrow_mut().set_self(true, deafened);
         let socket = WebSocket::new_with_str(&shared.relay, tunnel::SUBPROTOCOL)
             .map_err(|_| "The relay's address is not valid.".to_string())?;
         socket.set_binary_type(BinaryType::Arraybuffer);
@@ -294,6 +344,9 @@ impl Platform for BrowserPlatform {
         let connection = connections.get(server).ok_or("Not connected.")?;
         match request {
             Request::Join(channel) => connection.session.borrow_mut().join(channel),
+            Request::SetSelf { muted, deafened } => {
+                connection.session.borrow_mut().set_self(muted, deafened)
+            }
             Request::SendText {
                 target,
                 body,
@@ -388,8 +441,12 @@ impl WebClient {
             connections: RefCell::new(HashMap::new()),
             generation: Cell::new(0),
             wake: RefCell::new(None),
+            audio_wake: RefCell::new(None),
+            talking: RefCell::new(HashMap::new()),
             storage: RefCell::new(Storage::default()),
             renderer: ContentRenderer::default(),
+            voice: RefCell::new(Route::default()),
+            voice_packets: RefCell::new(Vec::new()),
         });
         let client = Client::new(
             Box::new(BrowserPlatform(shared.clone())),
@@ -402,6 +459,11 @@ impl WebClient {
     /// Called whenever something arrived; then call `poll()`.
     pub fn on_change(&self, callback: js_sys::Function) {
         *self.shared.wake.borrow_mut() = Some(callback);
+    }
+
+    /// Encoded packets have their own notification; 20ms media does not redraw timelines.
+    pub fn on_audio(&self, callback: js_sys::Function) {
+        *self.shared.audio_wake.borrow_mut() = Some(callback);
     }
 
     /// Add a server; its index.
@@ -439,6 +501,7 @@ impl WebClient {
     pub fn disconnect(&mut self, index: usize) {
         if index < self.client.servers.len() {
             self.client.disconnect(index);
+            self.reconcile_voice();
         }
     }
 
@@ -455,10 +518,144 @@ impl WebClient {
         }
     }
 
-    pub fn join(&mut self, index: usize, channel: u32) {
-        if index < self.client.servers.len() {
-            self.client.join(index, channel);
+    /// Joining never silently transfers a live microphone to another destination.
+    pub fn join(&mut self, index: usize, channel: u32) -> Result<(), String> {
+        let server = self.client.servers.get(index).ok_or("Unknown server.")?;
+        if server.status != nuschl_client::server::Status::Connected
+            || !server.has_mumble_voice()
+            || !server
+                .channels
+                .iter()
+                .any(|entry| entry.id == channel && matches!(entry.target, TextTarget::Channel(_)))
+        {
+            return Err("Connect and choose a voice channel first.".into());
         }
+        let (id, generation) = (server.id.clone(), server.generation);
+        self.shared
+            .voice
+            .borrow_mut()
+            .select(id, generation, channel);
+        self.shared.voice_packets.borrow_mut().clear();
+        // Shared SDK owns multi-server consent. Mute before moving its route.
+        for candidate in 0..self.client.servers.len() {
+            if !self.client.servers[candidate].muted {
+                self.client.set_mute(candidate, false);
+            }
+        }
+        self.client.join(index, channel);
+        if self.client.servers[index].deafened {
+            self.client.set_mute(index, true);
+        }
+        self.reconcile_voice();
+        Ok(())
+    }
+
+    pub fn toggle_mute(&mut self, index: usize) -> Result<(), String> {
+        self.toggle_audio(index, false)
+    }
+    pub fn toggle_deaf(&mut self, index: usize) -> Result<(), String> {
+        self.toggle_audio(index, true)
+    }
+
+    pub fn audio_ready(&mut self, raw: String) -> Result<(), String> {
+        if raw.len() > 2048 {
+            return Err("Invalid audio readiness.".into());
+        }
+        self.reconcile_voice();
+        let ready = serde_json::from_str(&raw).map_err(|_| "Invalid audio readiness.")?;
+        self.shared.voice.borrow_mut().ready(ready)
+    }
+
+    pub fn voice_packet(&mut self, raw: String, opus: &[u8]) -> Result<(), String> {
+        if raw.len() > 2048 {
+            return Err("Invalid voice context.".into());
+        }
+        self.reconcile_voice();
+        let packet: voice::Outgoing =
+            serde_json::from_str(&raw).map_err(|_| "Invalid voice context.")?;
+        let sequence = self.shared.voice.borrow_mut().admit(&packet, opus.len())?;
+        let connections = self.shared.connections.borrow();
+        let connection = connections
+            .get(&packet.context.server_id)
+            .ok_or("Disconnected voice route.")?;
+        if connection.generation.to_string() != packet.context.connection_generation {
+            return Err("Stale voice connection.".into());
+        }
+        if connection.socket.ready_state() != WebSocket::OPEN
+            || connection.socket.buffered_amount() > 128 * 1024
+        {
+            return Err("Voice transport is busy.".into());
+        }
+        connection
+            .session
+            .borrow_mut()
+            .send_voice(sequence, opus.to_vec(), packet.end)?;
+        if let Some(own) = connection.session.borrow().own_session() {
+            let key = (packet.context.server_id.clone(), connection.generation, own);
+            let mut talking = self.shared.talking.borrow_mut();
+            let changed = if packet.end {
+                talking.remove(&key).is_some()
+            } else {
+                talking.insert(key, js_sys::Date::now() + 1000.0).is_none()
+            };
+            if changed {
+                self.shared.inputs.borrow_mut().push_back(Input::Talking {
+                    server: packet.context.server_id.clone(),
+                    generation: connection.generation,
+                    session: own,
+                    talking: !packet.end,
+                });
+                self.shared.wake();
+            }
+        }
+        self.shared.pump(
+            &packet.context.server_id,
+            connection.generation,
+            &connection.socket,
+            &connection.session,
+        );
+        Ok(())
+    }
+
+    pub fn voice(&mut self) -> String {
+        self.reconcile_voice();
+        serde_json::to_string(&self.shared.voice.borrow().view()).unwrap_or_else(|_| "null".into())
+    }
+
+    pub fn voice_packets(&mut self) -> String {
+        self.reconcile_voice();
+        let view = self.shared.voice.borrow().view();
+        let packets: Vec<_> = self
+            .shared
+            .voice_packets
+            .borrow_mut()
+            .drain(..)
+            .filter(|packet| view.as_ref().is_some_and(|v| v == &packet.context))
+            .collect();
+        serde_json::to_string(&packets).unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn remove_server(&mut self, index: usize) {
+        if let Some(server) = self.client.servers.get(index) {
+            let id = server.id.clone();
+            self.client.remove_server(&id);
+            self.reconcile_voice();
+        }
+    }
+
+    pub fn dismiss_notice(&mut self, index: usize) {
+        if let Some(server) = self.client.servers.get_mut(index) {
+            server.dismiss_notice();
+        }
+    }
+
+    pub fn connect_with_password(&mut self, index: usize, password: String) -> Result<(), String> {
+        if password.len() > 1024 || index >= self.client.servers.len() {
+            return Err("Invalid password or server.".into());
+        }
+        self.client.connect(index, Some(password), true);
+        self.reconcile_voice();
+        Ok(())
     }
 
     /// Single-click navigation uses the shared SDK's selected timeline.
@@ -581,7 +778,7 @@ impl WebClient {
     }
 
     /// Keep connections alive; call every few seconds with a monotonic clock.
-    pub fn tick(&mut self, now_ms: f64) {
+    pub fn tick(&mut self, now_ms: f64) -> bool {
         let connections: Vec<(String, u64, WebSocket, Rc<RefCell<Session>>)> = self
             .shared
             .connections
@@ -600,7 +797,26 @@ impl WebClient {
             session.borrow_mut().tick(now_ms);
             self.shared.pump(&server, generation, &socket, &session);
         }
-        self.client.set_time(now_ms.max(0.0) as u64);
+        let changed = self.client.set_time(now_ms.max(0.0) as u64);
+        let now = js_sys::Date::now();
+        let mut expired = false;
+        self.shared
+            .talking
+            .borrow_mut()
+            .retain(|(server, generation, session), until| {
+                if *until > now {
+                    return true;
+                }
+                expired = true;
+                self.shared.inputs.borrow_mut().push_back(Input::Talking {
+                    server: server.clone(),
+                    generation: *generation,
+                    session: *session,
+                    talking: false,
+                });
+                false
+            });
+        changed || expired
     }
 
     /// Apply what arrived; what changed, as JSON (`[{"kind": …}]`).
@@ -611,6 +827,7 @@ impl WebClient {
             self.client.handle(input);
         }
         self.client.settle();
+        self.reconcile_voice();
         if self.client.navigation.selection().is_none() {
             if let Some(index) = self
                 .client
@@ -634,5 +851,59 @@ impl WebClient {
     pub fn servers(&self) -> String {
         serde_json::to_string(&snapshot::servers(&self.client.servers))
             .unwrap_or_else(|_| "[]".into())
+    }
+}
+
+// Non-exported helpers keep browser devices outside the SDK/session boundary.
+impl WebClient {
+    fn reconcile_voice(&mut self) {
+        let view = self.shared.voice.borrow().view();
+        let Some(view) = view else {
+            return;
+        };
+        let Some(server) = self.client.servers.iter().find(|s| {
+            s.id == view.server_id
+                && s.generation.to_string() == view.connection_generation
+                && s.status == nuschl_client::server::Status::Connected
+                && s.has_mumble_voice()
+                && s.channels
+                    .iter()
+                    .any(|c| c.id == view.channel_id && matches!(c.target, TextTarget::Channel(_)))
+        }) else {
+            self.shared.voice.borrow_mut().clear();
+            self.shared.voice_packets.borrow_mut().clear();
+            return;
+        };
+        let (muted, deafened) = self
+            .shared
+            .connections
+            .borrow()
+            .get(&server.id)
+            .map(|c| c.session.borrow().voice_policy())
+            .unwrap_or((true, true));
+        self.shared.voice.borrow_mut().policy(
+            server.voice_channel() == Some(view.channel_id),
+            muted || server.muted,
+            deafened || server.deafened,
+        );
+    }
+
+    fn toggle_audio(&mut self, index: usize, deafen: bool) -> Result<(), String> {
+        let server = self.client.servers.get(index).ok_or("Unknown server.")?;
+        if !self.shared.voice.borrow().view().is_some_and(|v| {
+            v.server_id == server.id
+                && v.connection_generation == server.generation.to_string()
+                && v.joined
+        }) {
+            return Err("Join this server's voice channel first.".into());
+        }
+        // Revoke readiness before any asynchronous acknowledgement can arrive.
+        self.shared.voice.borrow_mut().policy(true, true, true);
+        self.shared.voice_packets.borrow_mut().clear();
+        if self.client.set_mute(index, deafen).is_some() {
+            return Err("Move voice to this server before unmuting.".into());
+        }
+        self.reconcile_voice();
+        Ok(())
     }
 }

@@ -10,6 +10,7 @@
 pub mod session;
 pub mod snapshot;
 pub mod storage;
+pub mod voice;
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod browser;

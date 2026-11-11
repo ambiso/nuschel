@@ -14,10 +14,25 @@ function wake() {
   queued = true;
   queueMicrotask(() => { queued = false; refresh(); });
 }
+let audioQueued = false;
+function wakeAudio() {
+  if (audioQueued) return;
+  audioQueued = true;
+  queueMicrotask(() => { audioQueued = false; drainVoice(); });
+}
+function drainVoice() {
+  if (!client) return;
+  for (const packet of JSON.parse(client.voice_packets())) {
+    // A new owned allocation, never a view into the TLS WASM heap.
+    packet.opus = Uint8Array.from(packet.opus);
+    postMessage({kind:"voice_packet",packet},[packet.opus.buffer]);
+  }
+}
 function refresh() {
   if (!client) return;
   const updates = JSON.parse(client.poll());
-  postMessage({ kind: "state", servers: JSON.parse(client.servers()), timeline: JSON.parse(client.timeline()), updates });
+  postMessage({ kind: "state", servers: JSON.parse(client.servers()), timeline: JSON.parse(client.timeline()), voice: JSON.parse(client.voice()), updates });
+  drainVoice();
   for (const operation of JSON.parse(client.storage_requests())) {
     // Pages cannot overtake preceding writes. Rust retains opaque navigation
     // tickets and drops replies for old selections/connections/certificates.
@@ -37,7 +52,7 @@ function refresh() {
     storageQueue = storageQueue.then(() => history.bookmarks(bookmarks)).catch((error) => { saved = null; fail(error); });
   }
 }
-const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join"]);
+const methods = new Set(["add_server", "connect", "disconnect", "accept_certificate", "open", "browse_server", "open_direct", "send_text", "older", "join", "toggle_mute", "toggle_deaf", "audio_ready", "voice_packet", "remove_server", "dismiss_notice", "connect_with_password"]);
 onmessage = async ({ data }) => {
   try {
     if (!data || typeof data !== "object") throw new Error("Invalid browser command.");
@@ -47,17 +62,31 @@ onmessage = async ({ data }) => {
       await init();
       client = new WebClient(data.relay);
       client.on_change(wake);
+      client.on_audio(wakeAudio);
       try { history = await openHistory(); client.restore_bookmarks(await history.bookmarks()); saved = client.bookmarks(); }
       catch { fail("Local history is unavailable. Messages will be shown but cannot be saved."); }
-      setInterval(() => { client.tick(performance.now()); wake(); }, 5000);
+      setInterval(() => { if (client.tick(performance.now())) wake(); }, 250);
       postMessage({ kind: "ready" });
     } else {
       if (!client || !methods.has(data.method) || !Array.isArray(data.args) || data.args.length > 5) throw new Error("Unsupported browser command.");
-      const value = client[data.method](...data.args);
-      postMessage({ kind: "result", id: data.id, value });
+      let value;
+      if (data.method === "audio_ready") {
+        value = client.audio_ready(JSON.stringify(data.args[0]));
+      } else if (data.method === "voice_packet") {
+        const packet = data.args[0];
+        if (!packet || !(packet.opus instanceof Uint8Array) || packet.opus.length > 960) throw new Error("Invalid voice packet.");
+        const {opus,...context} = packet;
+        value = client.voice_packet(JSON.stringify(context),opus);
+      } else value = client[data.method](...data.args);
+      if (data.id !== undefined) postMessage({ kind: "result", id: data.id, value });
+      // Encoding is frequent; its route has already been admitted in Rust.
+      if (data.method === "voice_packet") return;
     }
     wake();
   } catch (reason) {
+    // Muting/reconnecting routinely races already queued codec work. Drop these
+    // revoked internal packets without turning them into user-facing toasts.
+    if (data?.id === undefined && (data?.method === "voice_packet" || data?.method === "audio_ready")) return;
     postMessage({ kind: "result", id: data?.id, error: String(reason?.message || reason) });
   }
 };
