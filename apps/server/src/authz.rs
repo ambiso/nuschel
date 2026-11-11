@@ -343,6 +343,13 @@ impl State {
                 let from = self.channel_of(target)?;
                 if actor != target {
                     self.require(actor, from, perm::MOVE)?;
+                    // Forced movement creates a channel reader. Without an MLS
+                    // no-history join policy this would silently grant old keys,
+                    // even if no knock was pending. Ordinary moves/evictions to
+                    // destinations the target can enter keep their semantics.
+                    if self.end_to_end() {
+                        return self.require(target, to, perm::ENTER);
+                    }
                 }
                 if self.has(actor, to, perm::MOVE) || self.has(target, to, perm::ENTER) {
                     Ok(())

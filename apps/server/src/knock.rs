@@ -26,73 +26,6 @@ struct Pending {
     created: Instant,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        acl::{AclEntry, perm},
-        state::Channel,
-    };
-
-    #[test]
-    fn requests_coalesce_expire_and_bound_per_session_fanout() {
-        let mut h = crate::fuzzing::Harness::new();
-        let requester = h
-            .state
-            .users
-            .values()
-            .find(|u| u.name == "Anonymous")
-            .unwrap()
-            .session;
-        for id in 100..105 {
-            let mut c = Channel::new(id, Some(0), format!("Private{id}"));
-            c.node.acls.push(AclEntry {
-                apply_here: true,
-                apply_subs: true,
-                user_id: None,
-                group: "all".into(),
-                grant: 0,
-                deny: perm::ENTER,
-            });
-            h.state.conversations.add_channel(c.conversation_id, id);
-            h.state.channels.0.insert(id, c);
-        }
-        let id = h.state.knock_request(requester, 100).unwrap();
-        assert_eq!(h.state.knock_request(requester, 100), Ok(id));
-        assert_eq!(h.state.knocks.pending.len(), 1);
-        assert_eq!(
-            h.state.knock_request(requester, 101),
-            Err((v1::error::Code::RateLimited, 10_000))
-        );
-        for channel in 101..104 {
-            h.state
-                .knocks
-                .last
-                .insert(requester, Instant::now() - COOLDOWN);
-            h.state.knock_request(requester, channel).unwrap();
-        }
-        h.state
-            .knocks
-            .last
-            .insert(requester, Instant::now() - COOLDOWN);
-        assert_eq!(
-            h.state.knock_request(requester, 104),
-            Err((v1::error::Code::TooManyRequests, 0))
-        );
-        assert_eq!(h.state.knocks.pending.len(), MAX_PENDING);
-        for pending in h.state.knocks.pending.values_mut() {
-            pending.created = Instant::now() - TTL;
-        }
-        h.state.sweep_knocks_at(Instant::now());
-        assert!(h.state.knocks.pending.is_empty());
-        assert!(h.state.knock_decide(1, id, true).is_err());
-        h.state.knock_request(requester, 104).unwrap();
-        h.state.disconnect(requester, false);
-        assert!(h.state.knocks.pending.is_empty());
-        assert!(!h.state.knocks.last.contains_key(&requester));
-    }
-}
-
 #[derive(Clone)]
 pub struct Grant {
     pub id: u64,
@@ -466,5 +399,72 @@ impl State {
             }
             Ok(())
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        acl::{AclEntry, perm},
+        state::Channel,
+    };
+
+    #[test]
+    fn requests_coalesce_expire_and_bound_per_session_fanout() {
+        let mut h = crate::fuzzing::Harness::new();
+        let requester = h
+            .state
+            .users
+            .values()
+            .find(|u| u.name == "Anonymous")
+            .unwrap()
+            .session;
+        for id in 100..105 {
+            let mut c = Channel::new(id, Some(0), format!("Private{id}"));
+            c.node.acls.push(AclEntry {
+                apply_here: true,
+                apply_subs: true,
+                user_id: None,
+                group: "all".into(),
+                grant: 0,
+                deny: perm::ENTER,
+            });
+            h.state.conversations.add_channel(c.conversation_id, id);
+            h.state.channels.0.insert(id, c);
+        }
+        let id = h.state.knock_request(requester, 100).unwrap();
+        assert_eq!(h.state.knock_request(requester, 100), Ok(id));
+        assert_eq!(h.state.knocks.pending.len(), 1);
+        assert_eq!(
+            h.state.knock_request(requester, 101),
+            Err((v1::error::Code::RateLimited, 10_000))
+        );
+        for channel in 101..104 {
+            h.state
+                .knocks
+                .last
+                .insert(requester, Instant::now() - COOLDOWN);
+            h.state.knock_request(requester, channel).unwrap();
+        }
+        h.state
+            .knocks
+            .last
+            .insert(requester, Instant::now() - COOLDOWN);
+        assert_eq!(
+            h.state.knock_request(requester, 104),
+            Err((v1::error::Code::TooManyRequests, 0))
+        );
+        assert_eq!(h.state.knocks.pending.len(), MAX_PENDING);
+        for pending in h.state.knocks.pending.values_mut() {
+            pending.created = Instant::now() - TTL;
+        }
+        h.state.sweep_knocks_at(Instant::now());
+        assert!(h.state.knocks.pending.is_empty());
+        assert!(h.state.knock_decide(1, id, true).is_err());
+        h.state.knock_request(requester, 104).unwrap();
+        h.state.disconnect(requester, false);
+        assert!(h.state.knocks.pending.is_empty());
+        assert!(!h.state.knocks.last.contains_key(&requester));
     }
 }

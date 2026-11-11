@@ -337,6 +337,54 @@ fn knock_protocol_negotiation_cancel_and_e2ee_fail_closed() {
     );
 }
 
+#[test]
+fn e2ee_forced_moves_cannot_bypass_unsupported_no_history_admission() {
+    let mut f = Fixture::new(Config::default());
+    let requester = f.actor("registered");
+    let moderator = f.actor("admin");
+    let member = f.actor("member");
+    // No pending knock exists: forcing someone into the channel would still
+    // make them an MLS reader and trigger an ordinary retained-key grant.
+    f.state.mls = Some(crate::mls::MlsHandle::detached(
+        f.state.settings.config.mls.clone(),
+    ));
+    assert!(!f.state.allowed(
+        moderator,
+        Action::Move {
+            user: requester,
+            to: PRIVATE
+        }
+    ));
+    f.handle(
+        moderator,
+        kind::USER_STATE,
+        &proto::UserState {
+            session: Some(requester),
+            channel_id: Some(PRIVATE),
+            ..Default::default()
+        },
+    );
+    assert_eq!(f.state.users[&requester].channel, LOBBY);
+    // Move OUT of a channel, or between channels the target may enter, works.
+    assert!(f.state.allowed(
+        moderator,
+        Action::Move {
+            user: member,
+            to: LOBBY
+        }
+    ));
+    f.handle(
+        moderator,
+        kind::USER_STATE,
+        &proto::UserState {
+            session: Some(member),
+            channel_id: Some(LOBBY),
+            ..Default::default()
+        },
+    );
+    assert_eq!(f.state.users[&member].channel, LOBBY);
+}
+
 fn account(id: u32) -> Id {
     [0x10 + id as u8; 16]
 }
