@@ -473,6 +473,20 @@ def main():
                 acknowledged(caption)
                 assert proof["wire_images"][0]["rgba_sha256"] != proof["wire_images"][1]["rgba_sha256"], "second paste was not fresh content"
                 shot("02c-caption-acknowledged")
+            clipboard_text = "Private native clipboard text, not the preceding PNG."
+            shell.eval("imports.gi.St.Clipboard.get_default().set_text(imports.gi.St.ClipboardType.CLIPBOARD,"
+                       + json.dumps(clipboard_text) + "); 'ok'")
+            if not args.expect_unavailable:
+                shell.chord("Control_L", "v")
+                eventually(lambda: "does not provide" in screen(capture).splitlines()[-2]
+                           and "PNG" in screen(capture).splitlines()[-2], "text clipboard reused stale PNG data")
+                assert "1 image attached;" not in screen(capture)
+                shell.key("Return")
+                time.sleep(0.3)
+                assert sum(e["kind"] == "text" and e.get("author") == "Media TUI" and "data:image/" in e.get("body", "")
+                           for e in peer.events) == 2, "text clipboard sent a stale image"
+                proof["text_clipboard_rejected_without_stale_image"] = True
+                shot("02d-text-is-not-an-image")
             proof["graphics"] = graphics(capture)
             for index in range(16):
                 peer.send(kind="text", channel=2, body=f"Older readable row {index:02}: before the incoming image.")
@@ -497,6 +511,12 @@ def main():
             peer.send(kind="html", channel=2, html=f"inert control: \x1b]52;c;{marker}\x07")
             eventually(lambda: "inert control:" in screen(capture), "control canary did not reach the native TUI")
             assert f"\x1b]52;c;{marker}".encode() not in (capture / "output.bin").read_bytes(), "message executed OSC52"
+            shell.eval("global._nuschlClipboardDone=false; global._nuschlClipboardText=null;"
+                       "imports.gi.St.Clipboard.get_default().get_text(imports.gi.St.ClipboardType.CLIPBOARD,"
+                       "(_,text)=>{global._nuschlClipboardText=text;global._nuschlClipboardDone=true;}); 'ok'")
+            eventually(lambda: shell.eval("global._nuschlClipboardDone") == "true", "private clipboard canary read did not finish")
+            assert shell.eval("global._nuschlClipboardText") == clipboard_text, "remote text changed the private clipboard"
+            proof["osc52_inert_clipboard_unchanged"] = True
             for _ in range(4):
                 shell.key("Page_Up")
             time.sleep(0.6)
