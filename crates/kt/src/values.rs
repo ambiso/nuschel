@@ -9,6 +9,8 @@
 //! | 1 | `acct:` | [`AccountBinding`]: identity root public key ‖ roster commitment |
 //! | 2 | `name:` | [`NameBinding`]: the account id |
 //! | 3 | `acct:` | [`AccountBinding`] with the hash of the identity's [`AccountStatement`] |
+//! | 2 | `reg:` | [`NameBinding`]: the account id |
+//! | 4 | `name:`, `reg:` | [`NameBinding::Released`]: no account any more (renamed or unregistered) |
 //!
 //! Nuschel servers publish format 3; [`verify_account_record`] requires it, because
 //! without the identity's signed statement a server could bind someone else's
@@ -34,6 +36,8 @@ pub const FORMAT_ACCOUNT_BINDING_V1: u16 = 1;
 pub const FORMAT_NAME_BINDING_V1: u16 = 2;
 /// [`DirectoryValue::format`] of an [`AccountBinding`] with an account statement.
 pub const FORMAT_ACCOUNT_BINDING_V2: u16 = 3;
+/// [`DirectoryValue::format`] of a name or number that names no account any more.
+pub const FORMAT_NAME_RELEASED: u16 = 4;
 
 const ROSTER_CONTEXT: &[u8] = b"nuschel-kt/v1 roster\0";
 /// Most device certificates or revocations in one roster commitment.
@@ -199,22 +203,37 @@ impl AccountBinding {
     }
 }
 
-/// The value of a `name:` label: the account behind a registered user name.
-/// `data = opaque account_id[16]`.
+/// The value of a `name:` or `reg:` label (docs/e2ee.md §5.9): the account behind a
+/// registered user name or registration number, or none any more.
+///
+/// `Account`: format 2, `data = opaque account_id[16]`. `Released`: format 4, no data
+/// (the user was renamed or unregistered; a renamed user's new name is a new label).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct NameBinding(pub AccountId);
+pub enum NameBinding {
+    Account(AccountId),
+    Released,
+}
 
 impl NameBinding {
     pub fn to_value(&self) -> DirectoryValue {
-        DirectoryValue::new(FORMAT_NAME_BINDING_V1, self.0.0.to_vec()).expect("16 bytes")
+        match self {
+            Self::Account(id) => {
+                DirectoryValue::new(FORMAT_NAME_BINDING_V1, id.0.to_vec()).expect("16 bytes")
+            }
+            Self::Released => DirectoryValue::new(FORMAT_NAME_RELEASED, Vec::new()).expect("empty"),
+        }
     }
 
     pub fn from_value(value: &DirectoryValue) -> Result<Self, ValueError> {
-        if value.format() != FORMAT_NAME_BINDING_V1 {
-            return Err(ValueError::UnknownFormat(value.format()));
+        match value.format() {
+            FORMAT_NAME_BINDING_V1 => {
+                let id = value.data().try_into().map_err(|_| ValueError::Malformed)?;
+                Ok(Self::Account(AccountId(id)))
+            }
+            FORMAT_NAME_RELEASED if value.data().is_empty() => Ok(Self::Released),
+            FORMAT_NAME_RELEASED => Err(ValueError::Malformed),
+            other => Err(ValueError::UnknownFormat(other)),
         }
-        let id = value.data().try_into().map_err(|_| ValueError::Malformed)?;
-        Ok(Self(AccountId(id)))
     }
 }
 

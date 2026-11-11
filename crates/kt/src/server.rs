@@ -7,6 +7,9 @@ use crate::head::SignedHead;
 use crate::log::LogDescriptor;
 use crate::messages::{AuditResponse, HistoryResponse, LookupResponse};
 use crate::types::{DirectoryValue, Label};
+use crate::witness::Checkpoint;
+use crate::witness::auditor::AddEpochs;
+use crate::witness::tlog::Hash;
 use async_trait::async_trait;
 
 /// Most label updates in one epoch.
@@ -51,4 +54,24 @@ pub trait Directory: Send + Sync {
     /// Append-only proof from `from_epoch` to `to_epoch` (at most
     /// [`crate::MAX_AUDIT_SPAN`] epochs apart).
     async fn audit(&self, from_epoch: u64, to_epoch: u64) -> Result<AuditResponse, DirectoryError>;
+
+    /// The epoch log's size: the newest epoch + 1 (docs/e2ee.md §5.9).
+    async fn log_size(&self) -> Result<u64, DirectoryError>;
+
+    /// The epoch log's checkpoint at its current size under `origin`, and the signed
+    /// note (the log's signature only) to collect cosignatures on.
+    async fn checkpoint(&self, origin: &str) -> Result<(Checkpoint, String), DirectoryError>;
+
+    /// The inclusion proof of epoch `epoch`'s leaf in the epoch log of `size` leaves.
+    async fn inclusion(&self, epoch: u64, size: u64) -> Result<Vec<Hash>, DirectoryError>;
+
+    /// The project auditor's next submission for `origin`, from the `old_size` it
+    /// holds (0 for none) forward by at most `max_epochs` (at most
+    /// [`crate::MAX_AUDIT_SPAN`]); without new epochs it refreshes the cosignature.
+    async fn add_epochs(
+        &self,
+        origin: &str,
+        old_size: u64,
+        max_epochs: u64,
+    ) -> Result<AddEpochs, DirectoryError>;
 }

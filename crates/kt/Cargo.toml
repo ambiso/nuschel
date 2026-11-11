@@ -35,6 +35,11 @@ ed25519-dalek = { version = "2.2.0", default-features = false, features = [
   "zeroize",
 ] }
 sha2 = "0.10.9"
+# Witnessing (docs/e2ee.md §5.9): C2SP signed notes (base64) and ML-DSA-44
+# checkpoint cosignatures, as libcrux in nuschel-identity (already in the tree).
+base64 = "0.22"
+getrandom = "0.4.3"
+libcrux-ml-dsa = { version = "0.0.11", default-features = false, features = ["std", "mldsa44"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt", "sync"] }
 zeroize = "1.9.1"

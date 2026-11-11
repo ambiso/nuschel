@@ -41,11 +41,15 @@ pub enum Label {
     Identity(IdentityFingerprint),
     /// `name:` — the account behind a registered user name, as the server normalises it.
     Name(String),
+    /// `reg:` — the account behind a registration number (Mumble's user id, which
+    /// clients show and look people up by). Nuschel servers never reuse one.
+    Registration(u32),
 }
 
 const LABEL_ACCOUNT: u8 = 1;
 const LABEL_IDENTITY: u8 = 2;
 const LABEL_NAME: u8 = 3;
+const LABEL_REGISTRATION: u8 = 4;
 
 impl Label {
     /// A name label; `None` if the name is empty or longer than [`MAX_NAME_BYTES`].
@@ -55,8 +59,8 @@ impl Label {
     }
 
     /// The canonical encoding, which is also the label the backend commits to:
-    /// `kind (1 = account, 2 = identity, 3 = name) || data`, where a name is
-    /// `u8 length || UTF-8`.
+    /// `kind (1 = account, 2 = identity, 3 = name, 4 = registration) || data`, where
+    /// a name is `u8 length || UTF-8` and a registration number a `u32`.
     pub fn encode(&self) -> Result<Vec<u8>, EncodeError> {
         let mut w = Writer::new();
         self.write(&mut w)?;
@@ -91,6 +95,10 @@ impl Label {
                 w.u8(LABEL_NAME);
                 w.bytes_u8("label.name", name.as_bytes(), MAX_NAME_BYTES)?;
             }
+            Self::Registration(number) => {
+                w.u8(LABEL_REGISTRATION);
+                w.u32(*number);
+            }
         }
         Ok(())
     }
@@ -113,6 +121,7 @@ impl Label {
                 })?;
                 Ok(Self::Name(name.to_owned()))
             }
+            LABEL_REGISTRATION => Ok(Self::Registration(r.u32("label.registration")?)),
             _ => Err(DecodeError::InvalidValue {
                 field: "label.kind",
             }),
@@ -188,6 +197,7 @@ mod tests {
             Label::Account(AccountId([7; 16])),
             Label::Identity(IdentityFingerprint::from_bytes([7; 32])),
             Label::name("alice").unwrap(),
+            Label::Registration(7),
         ];
         let mut encodings = Vec::new();
         for label in &labels {
@@ -196,7 +206,7 @@ mod tests {
             encodings.push(bytes);
         }
         encodings.dedup();
-        assert_eq!(encodings.len(), 3);
+        assert_eq!(encodings.len(), 4);
     }
 
     #[test]

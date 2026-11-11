@@ -35,6 +35,9 @@ const PREFIX_VALUE: u8 = b'v';
 pub(crate) const PREFIX_HEAD: u8 = b'h';
 const PREFIX_AUDIT: u8 = b'p';
 pub(crate) const KEY_DESCRIPTOR: &[u8] = b"mdescriptor";
+/// The epoch log's size (u64, big-endian), written with every leaf.
+pub(crate) const KEY_TREE_SIZE: &[u8] = b"mtreesize";
+const PREFIX_TREE: u8 = b't';
 /// Largest stored record (a value state with the largest value and label).
 const MAX_RECORD: usize = 16 * 1024;
 const MAX_AKD_LABEL: usize = crate::types::MAX_LABEL_ENCODED;
@@ -42,6 +45,13 @@ const MAX_AKD_LABEL: usize = crate::types::MAX_LABEL_ENCODED;
 pub(crate) fn head_key(epoch: u64) -> Vec<u8> {
     let mut k = vec![PREFIX_HEAD];
     k.extend_from_slice(&epoch.to_be_bytes());
+    k
+}
+
+/// A complete subtree of the epoch log: `t || level || index` (docs/e2ee.md §5.9).
+pub(crate) fn tree_key(level: u8, index: u64) -> Vec<u8> {
+    let mut k = vec![PREFIX_TREE, level];
+    k.extend_from_slice(&index.to_be_bytes());
     k
 }
 

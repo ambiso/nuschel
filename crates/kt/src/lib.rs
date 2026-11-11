@@ -103,6 +103,7 @@ mod tofu;
 mod types;
 mod values;
 mod verify;
+pub mod witness;
 
 pub use akd_backend::{AkdConfig, AkdDirectory, VrfSecret, descriptor as akd_descriptor};
 pub use codec::{DecodeError, EncodeError};
@@ -131,13 +132,17 @@ pub use types::{
 };
 pub use values::{
     AccountBinding, FORMAT_ACCOUNT_BINDING_V1, FORMAT_ACCOUNT_BINDING_V2, FORMAT_NAME_BINDING_V1,
-    IdentityRecord, MAX_ROSTER_ENTRIES, NameBinding, RosterCommitment, ValueError, VerifiedAccount,
-    roster_for_binding, verify_account_record,
+    FORMAT_NAME_RELEASED, IdentityRecord, MAX_ROSTER_ENTRIES, NameBinding, RosterCommitment,
+    ValueError, VerifiedAccount, roster_for_binding, verify_account_record,
 };
 pub use verify::{
     MonitorCheckpoint, MonitorReport, VerifiedEntry, VerifiedHistory, monitor_own, verify_audit,
     verify_history, verify_lookup,
 };
+pub use witness::policy::{
+    DEFAULT_WITNESSES, DefaultWitness, WitnessOutcome, WitnessPolicy, check_witnessed,
+};
+pub use witness::{Checkpoint, EpochLeaf, WitnessedHead};
 
 /// The format version of every message in this crate.
 pub const FORMAT_VERSION: u8 = 1;
@@ -148,6 +153,10 @@ const MSG_HISTORY: u8 = 4;
 const MSG_AUDIT: u8 = 5;
 const MSG_GOSSIP: u8 = 6;
 const MSG_EVIDENCE: u8 = 7;
+const MSG_EPOCH_LEAF: u8 = 8;
+const MSG_WITNESSED: u8 = 9;
+const MSG_ADD_EPOCHS: u8 = 10;
+const MSG_AUDITOR_STATE: u8 = 11;
 
 #[doc(hidden)]
 pub mod __private {

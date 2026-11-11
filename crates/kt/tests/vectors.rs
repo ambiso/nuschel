@@ -51,7 +51,7 @@ async fn generate() -> Vec<(String, String)> {
     put("value.acct1.v2", hex::encode(binding(1, 2).encode()));
     put(
         "value.alice",
-        hex::encode(NameBinding(account(1)).to_value().encode()),
+        hex::encode(NameBinding::Account(account(1)).to_value().encode()),
     );
 
     put(
@@ -63,7 +63,7 @@ async fn generate() -> Vec<(String, String)> {
         (acct(2), binding(2, 1)),
         (
             Label::name("alice").unwrap(),
-            NameBinding(account(1)).to_value(),
+            NameBinding::Account(account(1)).to_value(),
         ),
     ];
     dir.publish(epoch1.clone(), T0 + 1000).await.unwrap();

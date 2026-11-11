@@ -92,6 +92,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "kt_witness"
+path = "fuzz_targets/kt_witness.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "kt_messages"
 path = "fuzz_targets/kt_messages.rs"
 test = false

@@ -389,7 +389,7 @@ async fn a_real_identity_roster_is_checked_against_the_log() {
         AccountBinding::from_value(&DirectoryValue::new(9, vec![0]).unwrap()),
         Err(ValueError::UnknownFormat(9))
     );
-    let name = NameBinding(account(7));
+    let name = NameBinding::Account(account(7));
     assert_eq!(NameBinding::from_value(&name.to_value()).unwrap(), name);
 }
 
@@ -489,7 +489,7 @@ async fn messages_round_trip_and_have_the_documented_sizes() {
             (acct(1), binding(1, 1)),
             (
                 Label::name("alice").unwrap(),
-                NameBinding(account(1)).to_value(),
+                NameBinding::Account(account(1)).to_value(),
             ),
         ],
         T0 + 1,
@@ -530,7 +530,7 @@ async fn messages_round_trip_and_have_the_documented_sizes() {
     let (_, entry) = verify_lookup(&descriptor, &Label::name("alice").unwrap(), &lookup).unwrap();
     assert_eq!(
         NameBinding::from_value(&entry.value).unwrap(),
-        NameBinding(account(1))
+        NameBinding::Account(account(1))
     );
 }
 

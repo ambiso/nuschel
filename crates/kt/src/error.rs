@@ -52,6 +52,16 @@ pub enum KtError {
     HistoryRewritten { version: u64 },
     #[error("the label went back from version {known} to {got}")]
     VersionRegressed { known: u64, got: u64 },
+    #[error("the server's checkpoint does not check out: {0}")]
+    CheckpointInvalid(String),
+    #[error(
+        "the server showed epoch {epoch} as its newest although its witnessed log holds {size} epochs"
+    )]
+    NotNewest { epoch: u64, size: u64 },
+    #[error("automatic verification unavailable: {0}")]
+    WitnessMissing(String),
+    #[error("the log maps {what} to another account")]
+    NameMismatch { what: String },
 }
 
 /// What a [`KtError`] means for the user, following Signal's flow (docs/e2ee.md §5.5).
@@ -90,7 +100,11 @@ impl KtError {
             | Self::MalformedValue
             | Self::RosterMismatch
             | Self::InvalidRecord(_)
-            | Self::NotFound => ErrorClass::Failure,
+            | Self::NotFound
+            | Self::CheckpointInvalid(_)
+            | Self::NotNewest { .. }
+            | Self::WitnessMissing(_)
+            | Self::NameMismatch { .. } => ErrorClass::Failure,
         }
     }
 
