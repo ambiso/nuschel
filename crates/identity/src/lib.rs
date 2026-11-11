@@ -14,6 +14,7 @@
 //! - [`keys`]: algorithms, public keys, the root, device-signing and device key pairs.
 //! - [`certificate`]: the signed formats and their issuance.
 //! - [`roster`]: what a verifier accepts ([`VerifiedIdentity`], [`DeviceRoster`]).
+//! - [`safety`]: safety numbers and the QR payload.
 //! - [`keystore`]: the encrypted device keystore, recovery key and identity export.
 //! - [`hpke`]: X-Wing HPKE and [`SealedToDevice`].
 //!
@@ -34,6 +35,7 @@ pub mod hpke;
 pub mod keys;
 pub mod keystore;
 pub mod roster;
+pub mod safety;
 
 #[cfg(test)]
 mod tests;
@@ -54,6 +56,7 @@ pub use keystore::{
     StoreKey,
 };
 pub use roster::{DeviceRoster, VerifiedDevice, VerifiedIdentity};
+pub use safety::{QrComparison, SafetyNumber, SafetyQr};
 
 /// The MLS credential type that carries a [`DeviceCredential`] (private-use range,
 /// docs/e2ee.md §3.3).
