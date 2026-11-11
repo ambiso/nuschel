@@ -408,6 +408,8 @@ pub struct ServerView {
     pub expansion: BTreeMap<u32, bool>,
     /// Channel updates arrived since `channels` was last sorted.
     unsorted: bool,
+    /// Identities and key transparency on this server.
+    pub identity: crate::identity::IdentityState,
 }
 impl ServerView {
     fn new(bookmark: ServerBookmark) -> Self {
@@ -481,6 +483,7 @@ impl ServerView {
             pending_channel: Vec::new(),
             expansion: BTreeMap::new(),
             unsorted: false,
+            identity: Default::default(),
         }
     }
     pub fn status_label(&self) -> String {
@@ -826,6 +829,8 @@ pub struct Desktop {
     /// (and Escape) only through a focused element.
     pub window_focus: FocusHandle,
     pub identity_status: Option<String>,
+    /// The Nuschel identity, as the crypto worker last reported it (Settings).
+    pub own_identity: crate::identity::OwnIdentity,
     pub search: Option<crate::search::SearchView>,
     /// The message a search result opened, highlighted for a moment.
     pub jumped: Option<crate::search::Jumped>,
@@ -1030,6 +1035,7 @@ impl Desktop {
             shortcuts: Default::default(),
             window_focus,
             identity_status: None,
+            own_identity: Default::default(),
             search: None,
             jumped: None,
             finder: Default::default(),
@@ -1769,6 +1775,8 @@ impl Desktop {
     pub fn open_settings(&mut self) {
         self.settings_open = true;
         self.autostart = Some(crate::autostart::enabled());
+        self.backend
+            .identity(nuschel_ipc::crypto::CryptoRequest::Identity);
         if self.preview.is_none() {
             self.preview = Some(Default::default());
             self.backend.start_preview();
@@ -2480,6 +2488,11 @@ impl Desktop {
         let Some(peer) = server.users.get(&session).cloned() else {
             return;
         };
+        // A direct conversation checks the peer's identity (and its history).
+        if let Some(user_id) = peer.user_id {
+            crate::identity::check(self, index, user_id, true);
+        }
+        let server = &mut self.servers[index];
         let key = peer
             .certificate_hash
             .as_ref()
@@ -2741,6 +2754,7 @@ impl Desktop {
                         }
                     }
                 }
+                Event::OwnIdentity(result) => self.own_identity.apply(result),
                 Event::Protocol {
                     server,
                     generation,
@@ -3388,6 +3402,26 @@ impl Desktop {
                 }
             }
             SessionEvent::ChatPending(_) | SessionEvent::Nuschel(_) => {}
+            SessionEvent::Identity(event) => {
+                if let nuschel_session::identity::IdentityEvent::Own(view) = &event {
+                    self.own_identity.view = Some(view.clone());
+                }
+                let users = &server.users;
+                let name = |user_id: u32| {
+                    users
+                        .values()
+                        .find(|user| user.user_id == Some(user_id))
+                        .map(|user| user.name.clone())
+                };
+                let alarmed = server.identity.alarm.is_some();
+                if let Some(notice) = server.identity.apply_named(event, name) {
+                    server.notice = Some(notice);
+                }
+                // A new alarm interrupts: it is shown as a dialog until acknowledged.
+                if !alarmed && server.identity.alarm.is_some() && self.panel.is_none() {
+                    self.panel = Some(crate::panels::Panel::IdentityAlarm { server: index });
+                }
+            }
             SessionEvent::PeerCertificate(pin) => {
                 let identity = server.history_identity();
                 server.peer_sha256 = Some(pin.clone());

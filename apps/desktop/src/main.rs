@@ -17,6 +17,7 @@ mod finder;
 mod frame_timing;
 mod global_shortcuts;
 mod icons;
+mod identity;
 mod images;
 mod menus;
 mod motion;

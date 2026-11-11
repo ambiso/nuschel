@@ -91,6 +91,8 @@ async fn render_server_page(page: v1::HistoryPage) -> (Vec<RenderedMessage>, Opt
     (out, next_before)
 }
 pub enum Event {
+    /// The crypto worker's answer to [`Backend::identity`].
+    OwnIdentity(Result<nuschel_ipc::crypto::CryptoResponse, String>),
     Protocol {
         server: String,
         generation: u64,
@@ -268,6 +270,8 @@ struct Connection {
 pub struct Backend {
     handle: Handle,
     profile: Profile,
+    /// The crypto worker, shared by every connection (identity and key transparency).
+    crypto: nuschel_session::identity::CryptoHandle,
     sender: mpsc::Sender<Event>,
     storage: mpsc::Sender<StorageCommand>,
     content: mpsc::Sender<ContentJob>,
@@ -327,8 +331,19 @@ impl Backend {
             sender.clone(),
         ));
         let content_task = handle.spawn(content_loop(content_rx, storage.clone(), sender.clone()));
+        // Started on first use, in its sandbox, on its own directory beside the
+        // configuration (docs/e2ee.md §3.7).
+        let crypto = {
+            let _runtime = handle.enter();
+            nuschel_session::identity::CryptoHandle::start(
+                nuschel_session::workers::sibling("nuschel-crypto-worker")
+                    .unwrap_or_else(|_| "nuschel-crypto-worker".into()),
+                profile.config_dir.join("nuschel-identity"),
+            )
+        };
         let backend = Self {
             handle,
+            crypto,
             profile,
             sender,
             storage,
@@ -476,7 +491,7 @@ impl Backend {
         let (sounds, sound_requests) = mpsc::channel(8);
         let id = server.id.clone();
         let task = self.handle.spawn(connection_loop(
-            self.profile.clone(),
+            (self.profile.clone(), self.crypto.clone()),
             server,
             (password, deafened),
             generation,
@@ -530,6 +545,18 @@ impl Backend {
             server_pages().remove(&request_id);
         }
         result
+    }
+    /// A request to the crypto worker that concerns no server (Settings → Identity).
+    pub fn identity(&self, request: nuschel_ipc::crypto::CryptoRequest) {
+        let crypto = self.crypto.clone();
+        let events = self.sender.clone();
+        self.handle.spawn(async move {
+            let result = crypto
+                .request(request)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = events.send(Event::OwnIdentity(result)).await;
+        });
     }
     pub fn command(&self, server: &str, command: Command) -> Result<(), String> {
         self.connections
@@ -730,7 +757,7 @@ enum Outcome {
 /// failures, restoring channel and mute/deafen, and report gaps in history.
 #[allow(clippy::too_many_arguments)]
 async fn connection_loop(
-    profile: Profile,
+    (profile, crypto): (Profile, nuschel_session::identity::CryptoHandle),
     server: ServerBookmark,
     (password, deafened): (Option<String>, bool),
     generation: u64,
@@ -751,7 +778,7 @@ async fn connection_loop(
     loop {
         let started = tokio::time::Instant::now();
         let outcome = connect_once(
-            &profile,
+            (&profile, &crypto),
             &server,
             password.clone(),
             generation,
@@ -864,9 +891,22 @@ async fn connection_loop(
     }
 }
 
+/// This device's name in its identity certificate: the host's name when known.
+fn device_name() -> String {
+    let host = std::env::var("HOSTNAME")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .map(|name| name.trim().chars().take(48).collect::<String>())
+        .filter(|name| !name.is_empty() && !name.chars().any(char::is_control));
+    match host {
+        Some(host) => format!("Nuschel on {host}"),
+        None => format!("Nuschel ({})", std::env::consts::OS),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn connect_once(
-    profile: &Profile,
+    (profile, crypto): (&Profile, &nuschel_session::identity::CryptoHandle),
     server: &ServerBookmark,
     password: Option<String>,
     generation: u64,
@@ -900,7 +940,11 @@ async fn connect_once(
             resend: restore.unacked.clone(),
             message_rate: Default::default(),
             required,
-            crypto: None,
+            crypto: Some(nuschel_session::identity::IdentitySetup {
+                crypto: crypto.clone(),
+                device_name: device_name(),
+                recovery: settings.borrow().recovery_key,
+            }),
         },
         Err(error) => {
             let _ = events

@@ -414,9 +414,13 @@ impl Desktop {
                 let name = display_name(&user, &self.settings).to_string();
                 let mine = own == Some(session);
                 let channel = user.channel;
+                let registered = user.user_id.filter(|_| !mine);
                 entries.push(item("Profile and connection", "info", move |this, _, _| {
                     this.run(index, Command::RequestStats(session));
                     this.render_comment(index, session);
+                    if let Some(user_id) = registered {
+                        crate::identity::check(this, index, user_id, false);
+                    }
                     this.panel = Some(Panel::UserInfo {
                         server: index,
                         session,

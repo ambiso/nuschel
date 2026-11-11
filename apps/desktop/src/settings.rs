@@ -1120,6 +1120,10 @@ pub fn dialog(
             .child(text!(this.identity_status.clone().unwrap_or_else(|| "Servers recognise registered users by this certificate. Mumble's Certificate Wizard exports compatible .p12 files.".into())).with_id("identity-status"))
             .into_any_element(),
     ];
+    let identity_section = identity_section
+        .into_iter()
+        .chain(crate::identity::settings_rows(this, cx))
+        .collect();
     let content = div()
         .flex()
         .flex_col()

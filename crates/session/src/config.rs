@@ -349,6 +349,9 @@ pub struct ClientSettings {
     pub wormhole_relay: String,
     /// Theme, fonts, text size and zoom.
     pub appearance: AppearanceSettings,
+    /// Whether a recovery key is offered when the Nuschel identity is created
+    /// (docs/e2ee.md §10, question 1: offered and skippable by default).
+    pub recovery_key: nuschel_ipc::crypto::RecoveryPolicy,
 }
 
 /// Light or dark, or as the desktop prefers.
@@ -432,6 +435,7 @@ impl Default for ClientSettings {
             wormhole_rendezvous: nuschel_core::transfer::PUBLIC_RENDEZVOUS.into(),
             wormhole_relay: nuschel_core::transfer::PUBLIC_RELAY.into(),
             appearance: AppearanceSettings::default(),
+            recovery_key: Default::default(),
         }
     }
 }

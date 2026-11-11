@@ -22,6 +22,11 @@ pub enum Panel {
         server: usize,
         session: u32,
     },
+    /// Self-monitoring found someone else's key on our account, or the server's
+    /// key log contradicted itself (docs/e2ee.md §4).
+    IdentityAlarm {
+        server: usize,
+    },
     Connection {
         server: usize,
     },
@@ -289,6 +294,11 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                                 .child(text!(shown_name).with_id("info-name")),
                         ),
                 )
+                // Who they are comes first: the identity, then what they say.
+                .when_some(user.user_id, |column, user_id| {
+                    let own = server_view.own_session == Some(*session);
+                    column.child(crate::identity::section(this, *server, user_id, own, cx))
+                })
                 .when_some(comment, |column, blocks| {
                     column.child(
                         div()
@@ -505,6 +515,11 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     .into_any_element(),
             };
             ("Registered users".into(), 560., body)
+        }
+        Panel::IdentityAlarm { server } => {
+            let view = this.servers.get(*server)?;
+            let body = crate::identity::alarm(this, *server, view.identity.alarm.as_deref()?, cx);
+            (format!("Your identity on {}", view.name), 520., body)
         }
         Panel::Bans { server } => {
             let view = this.servers.get(*server)?;
