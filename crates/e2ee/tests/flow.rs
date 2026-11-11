@@ -287,16 +287,15 @@ fn trees_with_short_keys_are_refused() {
     let (_alice, _bob, ds, _group) = pair();
     let (_, tree) = ds.join_info().unwrap();
     assert_eq!(prevalidate::ratchet_tree(&tree).unwrap().len(), 2);
-    // Find Bob's leaf encryption key (the second leaf) and shorten its length prefix.
+    // The first leaf's encryption key: after the tree's length prefix (2 or 4
+    // bytes), the presence byte and the node type, its own 2-byte length (1216).
     let mut broken = tree.clone();
-    let needle = [0x44, 0xc0];
-    let positions: Vec<usize> = broken
-        .windows(2)
-        .enumerate()
-        .filter(|(_, w)| *w == needle)
-        .map(|(i, _)| i)
-        .collect();
-    assert!(positions.len() >= 2);
-    broken[*positions.last().unwrap() + 1] = 0xbf;
+    let prefix = match broken[0] >> 6 {
+        1 => 2,
+        2 => 4,
+        _ => panic!("unexpected tree length prefix"),
+    };
+    assert_eq!(&broken[prefix..prefix + 4], &[1, 1, 0x44, 0xc0]);
+    broken[prefix + 3] = 0xbf;
     assert!(prevalidate::ratchet_tree(&broken).is_err());
 }

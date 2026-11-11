@@ -131,7 +131,12 @@ impl OpenMlsProvider for Provider {
 pub(crate) fn capabilities() -> Capabilities {
     Capabilities::builder()
         .ciphersuites(vec![SUITE])
-        .extensions(vec![ExtensionType::Unknown(BINDING_EXTENSION)])
+        // LastResort: a last-resort key package carries it, and OpenMLS's validation
+        // wants every key package extension listed in the leaf's capabilities.
+        .extensions(vec![
+            ExtensionType::Unknown(BINDING_EXTENSION),
+            ExtensionType::LastResort,
+        ])
         .credentials(vec![CredentialType::Other(CREDENTIAL_TYPE)])
         .build()
 }

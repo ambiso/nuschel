@@ -23,6 +23,7 @@
 //! [`CryptoRequest::Due`]: nuschel_ipc::crypto::CryptoRequest::Due
 #![forbid(unsafe_code)]
 
+pub mod mls;
 pub mod state;
 pub mod store;
 pub mod worker;

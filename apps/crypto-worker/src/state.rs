@@ -3,7 +3,7 @@
 //! key-transparency log, the heads it accepted, its own binding and
 //! self-monitoring checkpoint, and trust on first use per contact; per identity,
 //! where it was verified out of band. Sealed under the store key as JSON.
-use nuschel_ipc::crypto::{ContactState, RecoveryPolicy, base64_bytes, base64_list};
+use nuschel_ipc::crypto::{ContactState, KtRecordBytes, RecoveryPolicy, base64_bytes, base64_list};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -98,6 +98,16 @@ pub struct Contact {
     pub last_history_ms: u64,
     pub state: ContactState,
     pub notice: Option<String>,
+    /// The record behind the pinned identity's binding, as last verified against
+    /// key transparency (the root key and the certificates): the device roster
+    /// MLS credentials are checked against (docs/e2ee.md §3.3, §5.4).
+    #[serde(default, with = "base64_bytes")]
+    pub roster_root: Vec<u8>,
+    #[serde(default)]
+    pub roster: Option<KtRecordBytes>,
+    /// When it was verified (milliseconds).
+    #[serde(default)]
+    pub roster_ms: u64,
 }
 
 impl Default for Contact {
@@ -112,6 +122,9 @@ impl Default for Contact {
             last_history_ms: 0,
             state: ContactState::Unknown,
             notice: None,
+            roster_root: Vec::new(),
+            roster: None,
+            roster_ms: 0,
         }
     }
 }

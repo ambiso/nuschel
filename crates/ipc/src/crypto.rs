@@ -774,6 +774,9 @@ pub enum CryptoResponse {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct KeyPackageBatch {
+    /// This device's id (16 bytes): its Welcome mailbox on the server.
+    #[serde(with = "base64_bytes")]
+    pub device: Vec<u8>,
     #[serde(with = "base64_list")]
     pub one_time: Vec<Vec<u8>>,
     /// Empty when none was asked for.
@@ -839,6 +842,11 @@ pub struct ConversationView {
     pub notices: Vec<String>,
     /// A commit of ours waits for the server's answer.
     pub pending_commit: bool,
+    /// Accounts (16 bytes: the peer, or our own) whose key-transparency roster
+    /// lists devices that are not members yet: claim key packages for them and
+    /// send `MlsAddDevices`.
+    #[serde(default, with = "base64_list")]
+    pub missing: Vec<Vec<u8>>,
 }
 
 /// A commit to send as `MlsCommit`.

@@ -83,12 +83,14 @@ impl From<KtError> for Step {
 }
 
 pub struct Worker {
-    store: Store,
-    keystore: Option<DeviceKeystore>,
-    state: State,
+    pub(crate) store: Store,
+    pub(crate) keystore: Option<DeviceKeystore>,
+    pub(crate) state: State,
     /// The recovery key made at creation, until it is saved or skipped.
     recovery: Option<Zeroizing<String>>,
     clock: Box<dyn Fn() -> u64 + Send>,
+    /// MLS groups and conversations (crate::mls).
+    pub(crate) mls: crate::mls::Mls,
 }
 
 fn now_ms() -> u64 {
@@ -115,12 +117,14 @@ impl Worker {
             )),
             None => None,
         };
+        let mls = crate::mls::Mls::load(&store)?;
         Ok(Self {
             store,
             keystore,
             state,
             recovery,
             clock: Box::new(now_ms),
+            mls,
         })
     }
 
@@ -130,11 +134,11 @@ impl Worker {
         self
     }
 
-    fn now(&self) -> u64 {
+    pub(crate) fn now(&self) -> u64 {
         (self.clock)()
     }
 
-    fn save(&self) -> Result<(), String> {
+    pub(crate) fn save(&self) -> Result<(), String> {
         let json = Zeroizing::new(
             serde_json::to_vec(&self.state).map_err(|error| format!("state: {error}"))?,
         );
@@ -316,7 +320,7 @@ impl Worker {
                 self.save()?;
                 CryptoResponse::Done
             }
-            _ => return Err("MLS is not implemented yet".into()),
+            request => return self.mls_request(request),
         })
     }
 
@@ -414,7 +418,7 @@ impl Worker {
 
     // ---- servers and heads ----
 
-    fn server(&self, key: &str) -> Result<&ServerState, String> {
+    pub(crate) fn server(&self, key: &str) -> Result<&ServerState, String> {
         self.state
             .servers
             .get(key)
@@ -778,7 +782,11 @@ impl Worker {
 
     // ---- contacts ----
 
-    fn contact_entry(&mut self, key: &str, account: &[u8; 16]) -> Result<&mut Contact, String> {
+    pub(crate) fn contact_entry(
+        &mut self,
+        key: &str,
+        account: &[u8; 16],
+    ) -> Result<&mut Contact, String> {
         let entry = self.server_mut(key)?;
         let full = entry.contacts.len() >= MAX_CONTACTS;
         let id = hex(account);
@@ -788,7 +796,7 @@ impl Worker {
         Ok(entry.contacts.entry(id).or_default())
     }
 
-    fn is_verified(&self, root: &str) -> bool {
+    pub(crate) fn is_verified(&self, root: &str) -> bool {
         self.state.verified.contains_key(root)
     }
 
@@ -884,15 +892,19 @@ impl Worker {
         let verified = LookupResponse::decode(lookup)
             .map_err(KtError::from)
             .and_then(|response| verify_lookup(&descriptor, &label, &response));
+        let mut roster = None;
         let observation = match verified {
             Ok((head, entry)) => match self.accept_head(key, &mut known, &head) {
                 Ok(()) => {
                     self.store_heads(key, &known)?;
                     match check_record(&descriptor, account, &entry.value, record) {
-                        Ok(root) => Observation::Lookup {
-                            root,
-                            version: entry.version,
-                        },
+                        Ok((root, root_key)) => {
+                            roster = Some((root, root_key));
+                            Observation::Lookup {
+                                root,
+                                version: entry.version,
+                            }
+                        }
                         Err(error) => Observation::Failed(error),
                     }
                 }
@@ -902,6 +914,18 @@ impl Worker {
             Err(error) => Observation::Failed(error),
         };
         self.observe(key, &account, observation)?;
+        // The record behind the pinned identity is the roster MLS credentials are
+        // checked against; another identity's (a key change waiting for the user)
+        // is not kept.
+        if let (Some((root, root_key)), Some(record)) = (roster, record) {
+            let now = self.now();
+            let contact = self.contact_entry(key, &account)?;
+            if contact.pinned.as_deref() == Some(root.to_hex().as_str()) {
+                contact.roster_root = root_key;
+                contact.roster = Some(record.clone());
+                contact.roster_ms = now;
+            }
+        }
         self.save()?;
         Ok(None)
     }
@@ -1170,7 +1194,7 @@ fn check_record(
     account: [u8; 16],
     value: &DirectoryValue,
     record: Option<&KtRecordBytes>,
-) -> Result<IdentityFingerprint, KtError> {
+) -> Result<(IdentityFingerprint, Vec<u8>), KtError> {
     let binding = AccountBinding::from_value(value).map_err(|_| KtError::MalformedValue)?;
     let record = record.ok_or_else(|| KtError::InvalidRecord("no record".into()))?;
     let invalid = |what: &str| KtError::InvalidRecord(format!("malformed {what}"));
@@ -1194,5 +1218,5 @@ fn check_record(
     };
     let verified =
         verify_account_record(&binding, &record, descriptor.log_id(), AccountId(account))?;
-    Ok(verified.identity)
+    Ok((verified.identity, binding.root().encode()))
 }

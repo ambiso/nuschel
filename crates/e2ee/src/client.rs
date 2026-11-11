@@ -474,9 +474,14 @@ impl Client {
                 ProcessedMessageContent::StagedCommitMessage(staged) => {
                     let tree = staged
                         .export_ratchet_tree(self.provider.crypto(), group.export_ratchet_tree())
-                        .map_err(mls)?
-                        .ok_or(Error::Invalid("no tree for the commit"))?;
-                    let members = members_of_tree(&serialize(&tree)?)?;
+                        .map_err(mls)?;
+                    // A commit removing this device stages without member state: there
+                    // is no tree for us after it, and no member to check.
+                    let members = match tree {
+                        Some(tree) => members_of_tree(&serialize(&tree)?)?,
+                        None if staged.self_removed() => Vec::new(),
+                        None => return Err(Error::Invalid("no tree for the commit")),
+                    };
                     if binding_of(staged.group_context()) != binding_in(group.extensions()) {
                         return Err(Error::Invalid(
                             "the commit changes the conversation binding",
