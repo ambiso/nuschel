@@ -18,7 +18,7 @@
 
 use crate::{
     MAX_DOCUMENT_PIXELS_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_IMAGES, data_uri,
-    decode_image,
+    decode_image, math::Token as Formula,
 };
 use html5ever::{
     Attribute,
@@ -626,7 +626,9 @@ fn bare_links(text: &str, spans: &[Span], count: &mut usize) -> Vec<(usize, usiz
             }
             end -= last.len_utf8();
         }
-        let linked = |span: &Span| span.link.is_some() && span.start < end && start < span.end;
+        let linked = |span: &Span| {
+            (span.link.is_some() || span.math.is_some()) && span.start < end && start < span.end
+        };
         if spans.iter().any(linked) {
             continue;
         }
@@ -677,11 +679,12 @@ fn with_links(spans: Vec<Span>, links: Vec<(usize, usize, String)>) -> Vec<Span>
             end,
             style: styled.map(|span| span.style).unwrap_or_default(),
             link: styled.and_then(|span| span.link.clone()),
+            math: styled.and_then(|span| span.math.clone()),
         };
-        if piece.link.is_none() {
+        if piece.link.is_none() && piece.math.is_none() {
             piece.link = url;
         }
-        if !piece.style.is_plain() || piece.link.is_some() {
+        if !piece.style.is_plain() || piece.link.is_some() || piece.math.is_some() {
             out.push(piece);
         }
     }
@@ -713,6 +716,7 @@ struct Expand {
     links: usize,
     images: usize,
     budget: usize,
+    formulas: usize,
 }
 
 impl Expand {
@@ -753,6 +757,7 @@ impl Expand {
                     end,
                     style,
                     link,
+                    math: None,
                 });
             }
         }
@@ -814,6 +819,64 @@ impl Expand {
         self.text.push_str(part);
     }
 
+    /// Visible text with the formulas in it: an inline formula is a span
+    /// over its text as written, a display formula a block of its own, its
+    /// text as written too. Not in code or links (`<code>`, `<a>` of legacy
+    /// HTML), and not past the limits on formulas, spans and blocks, where
+    /// the text stays as it is.
+    fn text_with_math(&mut self, part: &str, tokens: &[Formula]) {
+        let excluded = self
+            .open
+            .iter()
+            .any(|open| matches!(open, Open::Code | Open::Link(_)));
+        if excluded || tokens.is_empty() {
+            return self.visible(part);
+        }
+        let mut done = 0;
+        for token in tokens {
+            if self.formulas == 0 || token.range.start < done {
+                break;
+            }
+            let source = &part[token.range.clone()];
+            let tex = token.tex(part);
+            self.visible(&part[done..token.range.start]);
+            done = token.range.end;
+            if token.display {
+                if self.out.len() + 2 >= MAX_BLOCKS {
+                    self.visible(source);
+                    continue;
+                }
+                self.end_block();
+                self.out.push(ContentBlock::Math {
+                    source: source.to_owned(),
+                    tex: tex.to_owned(),
+                });
+            } else {
+                // A heading or list item is one line: a formula with a line
+                // break in it there stays text.
+                let one_line = matches!(self.role, TextRole::Heading(_) | TextRole::Item { .. });
+                if self.styled >= MAX_SPANS || (one_line && source.contains('\n')) {
+                    self.visible(source);
+                    continue;
+                }
+                self.cut();
+                let start = self.text.len();
+                self.text.push_str(source);
+                self.styled += 1;
+                self.spans.push(Span {
+                    start,
+                    end: self.text.len(),
+                    style: Style::default(),
+                    link: None,
+                    math: Some(tex.to_owned()),
+                });
+                self.run = self.text.len();
+            }
+            self.formulas -= 1;
+        }
+        self.visible(&part[done..]);
+    }
+
     fn image(&mut self, uri: &str) {
         let decoded = (self.images < MAX_IMAGES)
             .then(|| data_uri(uri))
@@ -844,10 +907,21 @@ impl Expand {
         self.out.push(image);
     }
 
-    fn markup(&mut self, text: &str) {
+    /// Marked-up text, with the formula tokens the parser found in it: those
+    /// within one visible part (not crossing or inside a marker) count.
+    fn markup(&mut self, text: &str, tokens: &[Formula]) {
+        let mut start = 0;
         for (index, part) in text.split(EMBED).enumerate() {
+            let end = start + part.len();
+            let part_start = start;
+            start = end + EMBED.len_utf8();
             if index % 2 == 0 {
-                self.visible(part);
+                let inside: Vec<Formula> = tokens
+                    .iter()
+                    .filter(|token| token.range.start >= part_start && token.range.end <= end)
+                    .map(|token| token.shifted(part_start))
+                    .collect();
+                self.text_with_math(part, &inside);
                 continue;
             }
             let (name, argument) = part.split_once(':').unwrap_or((part, ""));
@@ -912,12 +986,19 @@ impl Expand {
     }
 }
 
+/// What `render` found: text, with the formula tokens in it, or a block.
+pub(crate) enum Piece {
+    Text(String, Vec<Formula>),
+    Block(ContentBlock),
+}
+
 /// The blocks `render` found, with markers expanded: text blocks get spans
-/// and roles (and links for bare URLs), images and rules become blocks of
+/// and roles (and links for bare URLs), formula tokens become math spans or
+/// blocks (at most `formulas` of them), images and rules become blocks of
 /// their own, code passes through. Unknown markers are dropped.
-pub fn expand(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
+pub(crate) fn expand(pieces: Vec<Piece>, formulas: usize) -> Vec<ContentBlock> {
     let mut expand = Expand {
-        out: Vec::with_capacity(blocks.len()),
+        out: Vec::with_capacity(pieces.len()),
         text: String::new(),
         spans: Vec::new(),
         run: 0,
@@ -928,13 +1009,14 @@ pub fn expand(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
         links: 0,
         images: 0,
         budget: MAX_DOCUMENT_PIXELS_BYTES,
+        formulas,
     };
-    for block in blocks {
-        match block {
-            ContentBlock::Text { text, .. } => expand.markup(&text),
-            other => {
+    for piece in pieces {
+        match piece {
+            Piece::Text(text, tokens) => expand.markup(&text, &tokens),
+            Piece::Block(block) => {
                 expand.end_block();
-                expand.out.push(other);
+                expand.out.push(block);
             }
         }
     }
@@ -1242,6 +1324,7 @@ mod tests {
                     runs.iter().map(|run| run.text.as_str()).collect::<String>()
                 ),
                 ContentBlock::Image { .. } => "image".into(),
+                ContentBlock::Math { source, .. } => source.clone(),
             })
             .collect();
         assert_eq!(kinds, ["look:", "code: let a = 1;\n```\nb();\n", "done"]);
@@ -1358,6 +1441,85 @@ mod tests {
         // Search and previews read every other part: the visible text.
         let visible: String = stored.split(EMBED).step_by(2).collect();
         assert_eq!(visible, "Hi you\nx");
+        Ok(())
+    }
+
+    /// Each block: text with its formulas (written, LaTeX), or a display formula.
+    fn formulas(document: &MessageDocument) -> Vec<(String, Vec<(String, String)>)> {
+        document
+            .blocks
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Text { text, spans, .. } => (
+                    text.clone(),
+                    spans
+                        .iter()
+                        .filter_map(|span| {
+                            Some((text[span.start..span.end].to_owned(), span.math.clone()?))
+                        })
+                        .collect(),
+                ),
+                ContentBlock::Math { source, tex } => {
+                    ("display".into(), vec![(source.clone(), tex.clone())])
+                }
+                _ => ("other".into(), Vec::new()),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn formulas_become_math_spans_and_blocks_as_written() -> Result<(), Error> {
+        let renderer = ContentRenderer::default();
+        let pair = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+        let document = renderer
+            .render("Area $\\pi r^2$, see https://a.example\n$$\\sum_i x_i$$\nand `$c$`")?;
+        assert_eq!(
+            formulas(&document),
+            [
+                (
+                    "Area $\\pi r^2$, see https://a.example\n".to_owned(),
+                    vec![pair("$\\pi r^2$", "\\pi r^2")]
+                ),
+                (
+                    "display".to_owned(),
+                    vec![pair("$$\\sum_i x_i$$", "\\sum_i x_i")]
+                ),
+                ("\nand `$c$`".to_owned(), Vec::new()),
+            ]
+        );
+        // The link is still found beside the formula.
+        assert_eq!(
+            links(&document)[0].1,
+            [pair("https://a.example", "https://a.example")]
+        );
+        // Fenced code holds no math.
+        let document = renderer.render("```\n$x$\n```")?;
+        assert!(matches!(document.blocks[..], [ContentBlock::Code { .. }]));
+        // Stock Mumble escapes HTML; backslashes and underscores pass as typed.
+        let document = html(&renderer, "<p>$a &lt; b_1 \\le c$ <b>$x$</b></p>")?;
+        assert_eq!(
+            formulas(&document)[0].1,
+            [pair("$a < b_1 \\le c$", "a < b_1 \\le c"), pair("$x$", "x")]
+        );
+        // Not in code or links.
+        let document = html(
+            &renderer,
+            "<code>$x$</code> <a href=\"https://a.example\">$y$</a> <tt>\\(z\\)</tt>",
+        )?;
+        assert_eq!(formulas(&document)[0].1, []);
+        Ok(())
+    }
+
+    #[test]
+    fn formulas_stop_at_their_limit() -> Result<(), Error> {
+        let renderer = ContentRenderer::default();
+        let many = "$x$ $$y$$ ".repeat(40);
+        let document = renderer.render(&many)?;
+        let found: usize = formulas(&document)
+            .iter()
+            .map(|(_, formulas)| formulas.len())
+            .sum();
+        assert_eq!(found, crate::math::MAX_FORMULAS);
         Ok(())
     }
 }

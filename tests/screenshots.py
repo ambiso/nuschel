@@ -92,6 +92,8 @@ PATCH_WORD = (536, 254)
 PRINTLN_WORD = (478, 350)
 GOOD_WORD = (472, 450)
 SHIP_END = (464, 474)
+# In the math scene's second message (the Gaussian integral).
+MATH_MESSAGE = (520, 330)
 # In the message the links scene sends: "the guide" and "come to the Lobby".
 GUIDE_LINK = (497, 684)
 LOBBY_LINK = (835, 684)
@@ -180,7 +182,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: resize (measures resizing), managed")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too)")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
@@ -400,6 +402,36 @@ def main():
                 assert copied == "Ship", copied
                 click(width // 2, 140)  # clears the selection
                 time.sleep(0.4)
+            if "math" in scenes:
+                # LaTeX in messages, as people type it; a price stays a price,
+                # code stays code, and a broken formula shows as its source.
+                bots[0].send(kind="text", channel=2, body=(
+                    "Euler: $e^{i\\pi} + 1 = 0$, and a circle's area is $A = \\pi r^2$. "
+                    "It costs $5 and $10; `$HOME` is code."))
+                time.sleep(0.4)
+                bots[1].send(kind="text", channel=2, body=(
+                    "The Gaussian integral:\n$$\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}$$\n"
+                    "with a fraction $\\frac{a+b}{2}$ inline, between the lines."))
+                time.sleep(0.4)
+                # Stock Mumble sends HTML: the formula arrives escaped and comes back as typed.
+                bots[0].send(kind="html", channel=2, html=(
+                    "Cases: $$f(x) = \\begin{cases} x^2 &amp; x \\ge 0 \\\\ -x &amp; \\text{otherwise} "
+                    "\\end{cases}$$ and a typo: $\\frac{1}$ next to $\\sum_{i=1}^n i$."))
+                time.sleep(0.4)
+                bots[1].send(kind="text", channel=2, body=(
+                    "```math\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n```\n$$\\foo{x}$$"))
+                time.sleep(3.0)
+                shot("60-math")
+                # "Copy message" copies the formulas as they were typed.
+                click(*MATH_MESSAGE, button=3)
+                time.sleep(0.8)
+                shot("61-math-menu")
+                click(MATH_MESSAGE[0] + 60, MATH_MESSAGE[1] + 22)  # "Copy message"
+                time.sleep(0.4)
+                copied = clipboard()
+                assert copied == ("The Gaussian integral:\n$$\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = "
+                                  "\\sqrt{\\pi}$$\nwith a fraction $\\frac{a+b}{2}$ inline, between the lines."), copied
+
             if want("multiline"):
                 # A paragraph that wraps over three rows, and three lines in one message.
                 words = " ".join(f"wrap{n:02}" for n in range(36))

@@ -21,6 +21,7 @@ mod global_shortcuts;
 mod icons;
 mod identity;
 mod images;
+mod math;
 mod menus;
 mod motion;
 mod names;

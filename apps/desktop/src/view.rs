@@ -3485,6 +3485,7 @@ fn blocks(
     texts: &mut Texts,
     cx: &mut Context<Desktop>,
 ) -> Vec<AnyElement> {
+    crate::math::prepare(this, cx);
     document
         .blocks
         .iter()
@@ -3502,6 +3503,7 @@ fn blocks(
                 highlights,
                 links,
                 code,
+                math,
                 kind,
             } => {
                 let selected =
@@ -3511,7 +3513,7 @@ fn blocks(
                     .and_then(|hovered| Some(links.get(hovered.link)?.0.clone()));
                 let links = (!links.is_empty()).then(|| links.clone());
                 let id = Some(("body", index).into());
-                let content = BlockText::new(
+                let content = BlockText::with_math(
                     id,
                     text.clone(),
                     highlights,
@@ -3519,6 +3521,7 @@ fn blocks(
                     selected,
                     underlined,
                     links.clone(),
+                    math.clone(),
                 );
                 texts.push(TextBox {
                     block: index,
@@ -3610,6 +3613,10 @@ fn blocks(
                     )
                     .child(img(image.clone()).size_full())
                     .into_any_element()
+            }
+            Block::Math { source, tex, .. } => {
+                let em = px(this.settings.appearance.text_size);
+                crate::math::display(index, source, tex, em, cx)
             }
             Block::Code {
                 language,

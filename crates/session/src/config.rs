@@ -379,6 +379,8 @@ pub struct AppearanceSettings {
     pub text_size: f32,
     /// Everything larger or smaller, 1 being 100 % (Ctrl+= and Ctrl+-).
     pub zoom: f32,
+    /// Show LaTeX formulas in messages rendered (docs/math.md).
+    pub render_math: bool,
 }
 
 pub const TEXT_SIZE: std::ops::RangeInclusive<f32> = 12.0..=24.0;
@@ -391,6 +393,7 @@ impl Default for AppearanceSettings {
             mono_font: None,
             text_size: 15.,
             zoom: 1.,
+            render_math: true,
         }
     }
 }

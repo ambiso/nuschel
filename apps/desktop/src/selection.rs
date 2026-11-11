@@ -10,7 +10,7 @@
 //! beyond the timeline's edges (which then scroll). The selection lives in
 //! [`Desktop`], so Ctrl+C and the message menu can copy it.
 use crate::{
-    document::{Document, Links},
+    document::{Document, InlineMath, Links},
     menus::{Menu, MenuTarget},
     state::{Desktop, MessageView, Status},
     theme::{ACCENT, tint},
@@ -20,7 +20,7 @@ use nuschel_session::{
     config::MumbleUrl,
     connection::{Command, TextTarget},
 };
-use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
+use std::{cell::Cell, ops::Range, rc::Rc, sync::Arc, time::Duration};
 
 /// A place in a message: a block and a byte offset into its text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -412,9 +412,10 @@ impl Desktop {
     }
 }
 
-/// The text between two carets: blocks joined by newlines, images left out.
+/// The text between two carets: blocks joined by newlines (formulas within
+/// a line stay in it), images left out.
 pub fn selected_text(document: &Document, start: Caret, end: Caret) -> String {
-    let parts: Vec<&str> = document
+    let parts = document
         .blocks
         .iter()
         .enumerate()
@@ -432,11 +433,9 @@ pub fn selected_text(document: &Document, start: Caret, end: Caret) -> String {
             } else {
                 text.len()
             };
-            text.get(from..to)
-        })
-        .filter(|part| !part.is_empty())
-        .collect();
-    parts.join("\n")
+            Some((index, std::borrow::Cow::from(text.get(from..to)?)))
+        });
+    document.join(parts)
 }
 
 fn floor_boundary(text: &str, mut offset: usize) -> usize {
@@ -548,12 +547,32 @@ fn underline(style: &mut HighlightStyle) {
 
 /// A block's text with its highlights, the selected part and the hovered
 /// link. With an id it is a label for screen readers, as `text!` makes, and
-/// its links are links in it.
+/// its links and formulas are links and formulas in it.
+///
+/// Inline formulas are placed when the text is laid out, once the font and
+/// the scale are known (`crate::math::place`): the text laid out then has a
+/// stand-in for each rendered formula, which is painted over it. Offsets
+/// outside this element (carets, links, the selection) stay those of the
+/// block's own text; [`BlockLayout`] maps between them.
 pub struct BlockText {
     id: Option<ElementId>,
     text: SharedString,
     links: Option<Links>,
     styled: StyledText,
+    layout: BlockLayout,
+    math: Option<MathText>,
+}
+
+/// What laying out inline formulas needs: the formulas, the styles over the
+/// block's own text, and where they were placed.
+struct MathText {
+    formulas: Arc<[InlineMath]>,
+    styles: Vec<(Range<usize>, HighlightStyle)>,
+    monospace: Vec<Range<usize>>,
+    placed: Vec<crate::math::Placed>,
+    line_height: Option<Pixels>,
+    baseline: Pixels,
+    em: Pixels,
 }
 
 impl BlockText {
@@ -566,6 +585,24 @@ impl BlockText {
         hovered: Option<Range<usize>>,
         links: Option<Links>,
     ) -> Self {
+        let math = Arc::from([]);
+        Self::with_math(
+            id, text, highlights, monospace, selected, hovered, links, math,
+        )
+    }
+
+    /// A text block with inline formulas.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_math(
+        id: Option<ElementId>,
+        text: SharedString,
+        highlights: &[(Range<usize>, HighlightStyle)],
+        monospace: &[Range<usize>],
+        selected: Option<Range<usize>>,
+        hovered: Option<Range<usize>>,
+        links: Option<Links>,
+        formulas: Arc<[InlineMath]>,
+    ) -> Self {
         let mut styles: Option<Vec<_>> = None;
         if let Some(range) = hovered {
             styles = Some(overlay(highlights, range, text.len(), underline));
@@ -574,33 +611,180 @@ impl BlockText {
             let base = styles.as_deref().unwrap_or(highlights);
             styles = Some(overlay(base, range, text.len(), select));
         }
-        let styled = StyledText::new(text.clone());
-        let styled = match styles {
-            Some(styles) => styled.with_highlights(styles),
-            None if highlights.is_empty() => styled,
-            None => styled.with_highlights(highlights.iter().cloned()),
-        };
-        let styled = if monospace.is_empty() {
-            styled
-        } else {
-            let family = crate::theme::mono_font();
-            styled.with_font_family_overrides(
-                monospace
-                    .iter()
-                    .map(|range| (range.clone(), family.clone())),
-            )
-        };
+        let styled = styled_text(
+            text.clone(),
+            styles.as_deref().unwrap_or(highlights),
+            monospace,
+        );
+        let layout = BlockLayout::default();
+        layout.0.borrow_mut().layout = styled.layout().clone();
+        // Formulas are placed at layout time, from the styles kept here.
+        let math = (!formulas.is_empty()).then(|| MathText {
+            formulas,
+            styles: styles.unwrap_or_else(|| highlights.to_vec()),
+            monospace: monospace.to_vec(),
+            placed: Vec::new(),
+            line_height: None,
+            baseline: px(0.),
+            em: px(0.),
+        });
         Self {
             id,
             text,
             links,
             styled,
+            layout,
+            math,
         }
     }
 
     /// Maps positions to offsets once the text is laid out.
-    pub fn layout(&self) -> TextLayout {
-        self.styled.layout().clone()
+    pub fn layout(&self) -> BlockLayout {
+        self.layout.clone()
+    }
+
+    /// With formulas, the text with their stand-ins, and the styles moved
+    /// to it; a formula that failed shows as code with a wavy underline, one
+    /// on its way in a faint colour.
+    fn place_math(&mut self, window: &mut Window, cx: &mut App) {
+        let Some(math) = self.math.as_mut().filter(|math| !math.formulas.is_empty()) else {
+            self.math = None;
+            return;
+        };
+        let placement = crate::math::place(&self.text, &math.formulas, window, cx);
+        let mut styles = std::mem::take(&mut math.styles);
+        let mut monospace = std::mem::take(&mut math.monospace);
+        for range in &placement.failed {
+            styles = overlay(&styles, range.clone(), self.text.len(), |style| {
+                style.background_color = Some(crate::theme::color(crate::theme::CODE_SPAN).into());
+                style.underline = Some(UnderlineStyle {
+                    thickness: px(1.),
+                    color: Some(crate::theme::color(crate::theme::WARNING).into()),
+                    wavy: true,
+                });
+            });
+            monospace.push(range.clone());
+        }
+        for range in &placement.pending {
+            styles = overlay(&styles, range.clone(), self.text.len(), |style| {
+                style.color = Some(crate::theme::color(crate::theme::TEXT_FAINT).into());
+            });
+        }
+        monospace.sort_by_key(|range| range.start);
+        let map: Vec<(Range<usize>, Range<usize>)> = placement
+            .placed
+            .iter()
+            .map(|placed| (placed.source.clone(), placed.shown.clone()))
+            .collect();
+        if !map.is_empty() || !placement.failed.is_empty() || !placement.pending.is_empty() {
+            let shown = |range: &Range<usize>| {
+                to_shown(&map, range.start, false)..to_shown(&map, range.end, true)
+            };
+            let styles: Vec<_> = styles
+                .iter()
+                .map(|(range, style)| (shown(range), *style))
+                .filter(|(range, _)| !range.is_empty())
+                .collect();
+            let monospace: Vec<_> = monospace.iter().map(shown).collect();
+            self.styled = styled_text(placement.text.into(), &styles, &monospace);
+            let mut layout = self.layout.0.borrow_mut();
+            layout.layout = self.styled.layout().clone();
+            layout.map = map;
+        }
+        self.math = Some(MathText {
+            formulas: math.formulas.clone(),
+            styles: Vec::new(),
+            monospace: Vec::new(),
+            placed: placement.placed,
+            line_height: placement.line_height,
+            baseline: placement.baseline,
+            em: placement.em,
+        });
+    }
+}
+
+fn styled_text(
+    text: SharedString,
+    styles: &[(Range<usize>, HighlightStyle)],
+    monospace: &[Range<usize>],
+) -> StyledText {
+    let styled = StyledText::new(text);
+    let styled = if styles.is_empty() {
+        styled
+    } else {
+        styled.with_highlights(styles.iter().cloned())
+    };
+    if monospace.is_empty() {
+        styled
+    } else {
+        let family = crate::theme::mono_font();
+        styled.with_font_family_overrides(
+            monospace
+                .iter()
+                .map(|range| (range.clone(), family.clone())),
+        )
+    }
+}
+
+/// An offset in a block's text as an offset in its laid-out text: in a
+/// formula, its stand-in's start or (`end`) end.
+fn to_shown(map: &[(Range<usize>, Range<usize>)], offset: usize, end: bool) -> usize {
+    let mut shift = 0_isize;
+    for (source, shown) in map {
+        if offset <= source.start {
+            break;
+        }
+        if offset < source.end {
+            return if end { shown.end } else { shown.start };
+        }
+        shift = shown.end as isize - source.end as isize;
+    }
+    offset.saturating_add_signed(shift)
+}
+
+/// An offset in the laid-out text as one in the block's text: in a
+/// formula's stand-in, the nearer end of the formula.
+fn to_source(map: &[(Range<usize>, Range<usize>)], offset: usize) -> usize {
+    let mut shift = 0_isize;
+    for (source, shown) in map {
+        if offset <= shown.start {
+            break;
+        }
+        if offset < shown.end {
+            return if offset - shown.start < shown.end - offset {
+                source.start
+            } else {
+                source.end
+            };
+        }
+        shift = source.end as isize - shown.end as isize;
+    }
+    offset.saturating_add_signed(shift)
+}
+
+/// A block's text as laid out, with offsets in the block's own text.
+#[derive(Clone, Default)]
+pub struct BlockLayout(Rc<std::cell::RefCell<Laid>>);
+
+#[derive(Default)]
+struct Laid {
+    layout: TextLayout,
+    /// Each placed formula: its text as written, and its stand-in.
+    map: Vec<(Range<usize>, Range<usize>)>,
+}
+
+impl BlockLayout {
+    pub fn bounds(&self) -> Bounds<Pixels> {
+        self.0.borrow().layout.bounds()
+    }
+
+    pub fn index_for_position(&self, position: Point<Pixels>) -> Result<usize, usize> {
+        let laid = self.0.borrow();
+        let map = |offset| to_source(&laid.map, offset);
+        laid.layout
+            .index_for_position(position)
+            .map(map)
+            .map_err(map)
     }
 }
 
@@ -633,11 +817,23 @@ impl Element for BlockText {
     }
 
     fn a11y_synthetic_children(&mut self, _: &mut (), builder: &mut A11ySubtreeBuilder) {
-        for (index, (range, url)) in self.links.iter().flat_map(|links| links.iter()).enumerate() {
+        let mut index = 0;
+        for (range, url) in self.links.iter().flat_map(|links| links.iter()) {
             let mut node = accesskit::Node::new(Role::Link);
             node.set_label(&self.text[range.clone()]);
             node.set_url(url.to_string());
             builder.push_child(builder.synthetic_node_id(index), node);
+            index += 1;
+        }
+        // A formula's name is its source, as written.
+        for formula in self.math.iter().flat_map(|math| math.formulas.iter()) {
+            let Some(source) = self.text.get(formula.range.clone()) else {
+                continue;
+            };
+            let mut node = accesskit::Node::new(Role::Math);
+            node.set_label(source);
+            builder.push_child(builder.synthetic_node_id(index), node);
+            index += 1;
         }
     }
 
@@ -648,7 +844,15 @@ impl Element for BlockText {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, ()) {
-        self.styled.request_layout(None, inspector_id, window, cx)
+        self.place_math(window, cx);
+        let line_height = self.math.as_ref().and_then(|math| math.line_height);
+        let refinement = line_height.map(|height| TextStyleRefinement {
+            line_height: Some(height.into()),
+            ..Default::default()
+        });
+        window.with_text_style(refinement, |window| {
+            self.styled.request_layout(None, inspector_id, window, cx)
+        })
     }
 
     fn prepaint(
@@ -676,6 +880,25 @@ impl Element for BlockText {
     ) {
         self.styled
             .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+        let Some(math) = &self.math else {
+            return;
+        };
+        let color = window.text_style().color;
+        let layout = self.styled.layout();
+        for placed in &math.placed {
+            let Some(line) = layout.position_for_index(placed.shown.start) else {
+                continue;
+            };
+            let (width, height, baseline) = placed.formula.metrics(math.em);
+            let origin = point(
+                line.x + (placed.width - width) / 2.,
+                line.y + math.baseline - baseline,
+            );
+            if let Some(image) = placed.formula.image(color) {
+                let bounds = Bounds::new(origin, size(width, height));
+                let _ = window.paint_image(bounds, bounds, Corners::default(), image, 0, false);
+            }
+        }
     }
 }
 
@@ -683,7 +906,7 @@ impl Element for BlockText {
 pub struct TextBox {
     pub block: usize,
     pub text: SharedString,
-    pub layout: TextLayout,
+    pub layout: BlockLayout,
     pub links: Option<Links>,
 }
 
@@ -691,7 +914,7 @@ pub struct TextBox {
 pub type Texts = Vec<TextBox>;
 
 /// The offset in laid-out text for a position, the nearest one beside glyphs.
-fn offset_at(layout: &TextLayout, position: Point<Pixels>) -> usize {
+fn offset_at(layout: &BlockLayout, position: Point<Pixels>) -> usize {
     // Half a pixel down: exactly on a line's bottom edge GPUI answers with the
     // start of that line rather than a place in it.
     let probe = point(position.x, position.y + px(0.5));
@@ -1254,6 +1477,7 @@ mod tests {
                     highlights: Vec::new().into(),
                     links: Vec::new().into(),
                     code: Vec::new().into(),
+                    math: Vec::new().into(),
                     kind: Kind::Paragraph,
                 },
                 image,
@@ -1267,6 +1491,7 @@ mod tests {
                     highlights: Vec::new().into(),
                     links: Vec::new().into(),
                     code: Vec::new().into(),
+                    math: Vec::new().into(),
                     kind: Kind::Paragraph,
                 },
             ],
@@ -1325,5 +1550,30 @@ mod tests {
         assert!(names_target("www.example.com", "http://www.example.com"));
         assert!(!names_target("example.com", "https://evil.example"));
         assert!(!names_target("the docs", "https://docs.example"));
+    }
+
+    #[test]
+    fn offsets_map_between_the_text_and_its_formulas_stand_ins() {
+        use super::{to_shown, to_source};
+        // "a $x^2$ b $y$": formulas at 2..7 and 10..13 stand in as 4 and 2 bytes.
+        let map = [(2..7, 2..6), (10..13, 9..11)];
+        assert_eq!(to_shown(&map, 0, false), 0);
+        assert_eq!(to_shown(&map, 2, false), 2);
+        assert_eq!(to_shown(&map, 4, false), 2, "inside: the stand-in's start");
+        assert_eq!(to_shown(&map, 4, true), 6, "inside: or its end");
+        assert_eq!(to_shown(&map, 7, false), 6);
+        assert_eq!(to_shown(&map, 9, false), 8);
+        assert_eq!(to_shown(&map, 13, false), 11);
+        assert_eq!(to_shown(&map, 14, false), 12);
+        assert_eq!(to_source(&map, 2), 2);
+        assert_eq!(to_source(&map, 3), 2, "nearer the formula's start");
+        assert_eq!(to_source(&map, 5), 7, "nearer its end");
+        assert_eq!(to_source(&map, 6), 7);
+        assert_eq!(to_source(&map, 8), 9);
+        assert_eq!(to_source(&map, 12), 14);
+        // Every offset maps back to where it came from, outside formulas.
+        for offset in [0, 1, 2, 7, 8, 9, 10, 13, 14] {
+            assert_eq!(to_source(&map, to_shown(&map, offset, false)), offset);
+        }
     }
 }

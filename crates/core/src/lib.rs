@@ -107,6 +107,11 @@ pub enum ContentBlock {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },
+    /// A display formula (`$$…$$` or `\[…\]`): `tex` is the LaTeX between
+    /// the delimiters, which the math worker renders; `source` is the
+    /// formula as written, for copying, screen readers and when it cannot
+    /// be shown.
+    Math { source: String, tex: String },
 }
 
 impl ContentBlock {
@@ -155,6 +160,10 @@ pub struct Span {
     /// The http, https or mumble URL this part links to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+    /// Inline LaTeX math (`$…$` or `\(…\)`): the LaTeX between the
+    /// delimiters. The span's text is the formula as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub math: Option<String>,
 }
 
 /// Inline formatting from legacy Mumble rich text.

@@ -6,7 +6,7 @@ use std::cell::OnceCell;
 use base64::Engine as _;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder as _, ImageFormat, ImageReader, Limits};
 use nuschel_core::{CodeRun, ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
-use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use syntect::{
     easy::HighlightLines,
     highlighting::{FontStyle, Theme, ThemeSet},
@@ -16,6 +16,7 @@ use syntect::{
 use thiserror::Error;
 
 mod markup;
+pub mod math;
 pub use markup::{MAX_LINKS, MAX_URL_BYTES};
 
 #[derive(Debug, Error)]
@@ -344,7 +345,10 @@ impl ContentRenderer {
     }
 
     /// Ordinary message text is literal, including all newlines and blank lines.
-    /// Only fenced code blocks are interpreted. HTML and embedded resources stay inert text.
+    /// Only fenced code blocks and formulas are interpreted, both found by one
+    /// Markdown parse (pulldown-cmark, with math): `$…$` and `$$…$$`, and
+    /// fences with the language `math` (docs/math.md). HTML and embedded
+    /// resources stay inert text.
     pub fn render(&self, source: &str) -> Result<MessageDocument, Error> {
         if source.len() > MAX_CONTENT_BYTES {
             return Err(Error::TooLarge);
@@ -352,10 +356,22 @@ impl ContentRenderer {
         // Leading line breaks carry no content; messages that open with a code
         // fence are sent with one so stock Mumble starts the fence on its own line.
         let source = source.trim_start_matches(['\n', '\r']);
-        let mut blocks = Vec::new();
+        let mut pieces = Vec::new();
         let mut consumed = 0;
         let mut code: Option<(usize, Option<String>, String)> = None;
-        for (event, range) in Parser::new(source).into_offset_iter() {
+        let mut tokens: Vec<math::Token> = Vec::new();
+        let mut fences = 0;
+        // Formulas of the text not yet cut into a piece.
+        let text = |start: usize, end: usize, tokens: &mut Vec<math::Token>| {
+            let inside = tokens
+                .iter()
+                .filter(|token| token.range.start >= start && token.range.end <= end)
+                .map(|token| token.shifted(start))
+                .collect();
+            tokens.clear();
+            markup::Piece::Text(source[start..end].to_owned(), inside)
+        };
+        for (event, range) in Parser::new_ext(source, Options::ENABLE_MATH).into_offset_iter() {
             match event {
                 Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
                     let language = info
@@ -369,29 +385,51 @@ impl ContentRenderer {
                         body.push_str(&text);
                     }
                 }
+                Event::InlineMath(tex) if code.is_none() => {
+                    tokens.extend(math::Token::new(source, range, &tex, false));
+                }
+                Event::DisplayMath(tex) if code.is_none() => {
+                    tokens.extend(math::Token::new(source, range, &tex, true));
+                }
                 Event::End(TagEnd::CodeBlock) => {
                     // Past the block limit, a fence stays in the text around it.
                     if let Some((start, language, body)) = code.take()
-                        && blocks.len() < markup::MAX_BLOCKS
+                        && pieces.len() < markup::MAX_BLOCKS
                     {
                         if start > consumed {
-                            blocks.push(ContentBlock::text(&source[consumed..start]));
+                            pieces.push(text(consumed, start, &mut tokens));
                         }
-                        // Mumble links URLs even inside a fence: code shows text only.
-                        let body = markup::without_markers(&body);
-                        let runs = self.highlight(&body, language.as_deref())?;
-                        blocks.push(ContentBlock::Code { language, runs });
+                        let written = source[start..range.end].trim_end_matches(['\n', '\r']);
+                        // A math fence is a display formula, as on GitHub.
+                        let formula = language.as_deref() == Some("math")
+                            && fences < math::MAX_FORMULAS
+                            && !body.trim().is_empty()
+                            && body.len() <= math::MAX_FORMULA_BYTES
+                            && !written.contains(nuschel_core::EMBED);
+                        let block = if formula {
+                            fences += 1;
+                            ContentBlock::Math {
+                                source: written.to_owned(),
+                                tex: body,
+                            }
+                        } else {
+                            // Mumble links URLs even inside a fence: code shows text only.
+                            let body = markup::without_markers(&body);
+                            let runs = self.highlight(&body, language.as_deref())?;
+                            ContentBlock::Code { language, runs }
+                        };
+                        pieces.push(markup::Piece::Block(block));
                         consumed = range.end;
                     }
                 }
                 _ => {}
             }
         }
-        if consumed < source.len() || blocks.is_empty() {
-            blocks.push(ContentBlock::text(&source[consumed..]));
+        if consumed < source.len() || pieces.is_empty() {
+            pieces.push(text(consumed, source.len(), &mut tokens));
         }
         Ok(MessageDocument {
-            blocks: markup::expand(blocks),
+            blocks: markup::expand(pieces, math::MAX_FORMULAS - fences),
         })
     }
 
@@ -516,6 +554,7 @@ mod tests {
                 ContentBlock::Text { .. } => "text",
                 ContentBlock::Code { .. } => "code",
                 ContentBlock::Image { .. } => "image",
+                ContentBlock::Math { .. } => "math",
             })
             .collect();
         assert_eq!(kinds, ["text", "image", "text"]);

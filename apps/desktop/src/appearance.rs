@@ -619,6 +619,29 @@ pub fn settings(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
         cx,
     );
     rows.push(managed(this, "appearance.text_size", text_size_row));
+    let render_math = appearance.render_math;
+    rows.push(managed(
+        this,
+        "appearance.render_math",
+        crate::settings::toggle(
+            "render-math",
+            "Render math",
+            "Shows LaTeX between $…$ and $$…$$, and math code blocks, as formulas. \
+             Others see what was typed."
+                .into(),
+            render_math,
+            Rc::new(
+                move |this: &mut Desktop, window: &mut Window, cx: &mut Context<Desktop>| {
+                    this.change_appearance(
+                        |appearance| appearance.render_math = !render_math,
+                        window,
+                        cx,
+                    )
+                },
+            ),
+            cx,
+        ),
+    ));
     let zoom_row = div()
         .flex()
         .flex_col()

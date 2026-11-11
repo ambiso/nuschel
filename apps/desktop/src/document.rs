@@ -59,6 +59,14 @@ impl std::ops::Deref for Highlights {
 /// Link targets (http, https or mumble) by byte range, sorted and disjoint.
 pub type Links = Arc<[(Range<usize>, SharedString)]>;
 
+/// An inline formula: its text as written (`$…$`, `\(…\)`) by byte range,
+/// and the LaTeX the math worker renders.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlineMath {
+    pub range: Range<usize>,
+    pub tex: SharedString,
+}
+
 /// What a text block is.
 #[derive(Clone, PartialEq)]
 pub enum Kind {
@@ -84,6 +92,8 @@ pub enum Block {
         links: Links,
         /// Inline code, shown in a monospace font.
         code: Arc<[Range<usize>]>,
+        /// Inline formulas, sorted and disjoint.
+        math: Arc<[InlineMath]>,
         kind: Kind,
     },
     Code {
@@ -100,13 +110,24 @@ pub enum Block {
         /// The original `data:` URI (viewer and Save as), when known.
         source: Option<Arc<str>>,
     },
+    /// A display formula: `source` as written (copied, read out, and shown
+    /// when the formula cannot be), `tex` for the math worker. `joined`:
+    /// written on the same line as the text before it, and after it (copying
+    /// adds no line break there).
+    Math {
+        source: SharedString,
+        tex: SharedString,
+        joined: (bool, bool),
+    },
 }
 
 impl Block {
-    /// The text a block shows, if it shows text (code included).
+    /// The text a block shows, if it shows text (code included), or
+    /// stands for (a formula's source).
     pub fn text(&self) -> Option<&SharedString> {
         match self {
             Block::Text { text, .. } | Block::Code { text, .. } => Some(text),
+            Block::Math { source, .. } => Some(source),
             Block::Image { .. } => None,
         }
     }
@@ -140,6 +161,19 @@ pub fn render_image(width: u32, height: u32, rgba: &str) -> Option<Arc<RenderIma
 impl From<MessageDocument> for Document {
     fn from(document: MessageDocument) -> Self {
         let last = document.blocks.len().saturating_sub(1);
+        // Whether each block continues the line of the text before it, and
+        // the text after it continues its line.
+        let text = |index: Option<usize>| match index.and_then(|index| document.blocks.get(index)) {
+            Some(ContentBlock::Text { text, .. }) if !text.is_empty() => Some(text.clone()),
+            _ => None,
+        };
+        let joined: Vec<(bool, bool)> = (0..document.blocks.len())
+            .map(|index| {
+                let before = text(index.checked_sub(1)).is_some_and(|text| !text.ends_with('\n'));
+                let after = text(Some(index + 1)).is_some_and(|text| !text.starts_with('\n'));
+                (before, after)
+            })
+            .collect();
         Self {
             blocks: document
                 .blocks
@@ -150,6 +184,9 @@ impl From<MessageDocument> for Document {
                         text_block(text, spans, role, index, last)
                     }
                     ContentBlock::Code { language, runs } => code(language, runs),
+                    ContentBlock::Math { source, tex } => {
+                        math_block(source, tex, joined[index], index, last)
+                    }
                     ContentBlock::Image {
                         width,
                         height,
@@ -233,8 +270,8 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
     if kind == Kind::Rule {
         kept = 0..0;
     }
-    let (mut dark, mut light, mut links, mut code) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut dark, mut light, mut links, mut code, mut math) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut covered = kept.start;
     for span in spans {
         let range = span.start.max(covered)..span.end.min(kept.end);
@@ -246,6 +283,17 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
         }
         covered = range.end;
         let range = range.start - kept.start..range.end - kept.start;
+        if let Some(tex) = span.math {
+            // Only whole formulas within the limit; their text stays plain.
+            if range.len() == span.end - span.start && tex.len() <= nuschel_ipc::math::MAX_TEX_BYTES
+            {
+                math.push(InlineMath {
+                    range,
+                    tex: tex.into(),
+                });
+            }
+            continue;
+        }
         let link = span.link.filter(|url| nuschel_core::allowed_link(url));
         if span.style.is_plain() && link.is_none() {
             continue;
@@ -269,7 +317,27 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
         highlights: Highlights::new(dark, light),
         links: links.into(),
         code: code.into(),
+        math: math.into(),
         kind,
+    }
+}
+
+/// A display formula, or its source as a paragraph when its LaTeX is too
+/// long to send to the math worker.
+fn math_block(
+    source: String,
+    tex: String,
+    joined: (bool, bool),
+    index: usize,
+    last: usize,
+) -> Block {
+    if tex.len() > nuschel_ipc::math::MAX_TEX_BYTES || tex.trim().is_empty() {
+        return text_block(source, Vec::new(), TextRole::Paragraph, index, last);
+    }
+    Block::Math {
+        source: source.into(),
+        tex: tex.into(),
+        joined,
     }
 }
 
@@ -348,23 +416,57 @@ impl Document {
         })
     }
 
-    /// What "Copy message" copies: text as text, code as its code, one block
-    /// per line; images are left out.
+    /// What "Copy message" copies: text as text, code as its code, formulas
+    /// as written, one block per line (a formula written within a line stays
+    /// in it); images are left out.
     pub fn plain_text(&self) -> String {
-        let parts: Vec<Cow<str>> = self
-            .blocks
-            .iter()
-            .filter_map(|block| match block {
+        self.join(self.blocks.iter().enumerate().filter_map(|(index, block)| {
+            let text = match block {
                 Block::Text {
                     text,
                     kind: Kind::Item { marker, .. },
                     ..
-                } => Some(format!("{marker} {text}").into()),
-                _ => Some(Cow::from(block.text()?.as_ref())),
-            })
-            .filter(|text| !text.is_empty())
-            .collect();
-        parts.join("\n")
+                } => format!("{marker} {text}").into(),
+                _ => Cow::from(block.text()?.as_ref()),
+            };
+            Some((index, text))
+        }))
+    }
+
+    /// Blocks' texts (by block index, in order) on lines of their own, apart
+    /// from display formulas written within a line.
+    pub fn join<'a>(&self, parts: impl IntoIterator<Item = (usize, Cow<'a, str>)>) -> String {
+        let mut joined = String::new();
+        let mut previous = None;
+        for (index, part) in parts {
+            if part.is_empty() {
+                continue;
+            }
+            if previous.is_some() {
+                let same_line = previous == index.checked_sub(1)
+                    && (matches!(
+                        self.blocks.get(index),
+                        Some(Block::Math {
+                            joined: (true, _),
+                            ..
+                        })
+                    ) || matches!(
+                        index
+                            .checked_sub(1)
+                            .and_then(|index| self.blocks.get(index)),
+                        Some(Block::Math {
+                            joined: (_, true),
+                            ..
+                        })
+                    ));
+                if !same_line {
+                    joined.push('\n');
+                }
+            }
+            joined.push_str(&part);
+            previous = Some(index);
+        }
+        joined
     }
 }
 
@@ -521,6 +623,7 @@ mod tests {
             end,
             style,
             link: None,
+            math: None,
         };
         let dark_bold = Style {
             bold: true,
@@ -580,5 +683,71 @@ mod tests {
             matches!(&document.blocks[2], Block::Text { text, kind: Kind::Rule, .. } if text.is_empty())
         );
         assert_eq!(document.plain_text(), "dark code\n12345678 item");
+    }
+
+    #[test]
+    fn formulas_keep_their_source_for_copying_and_screen_readers() {
+        let math = |start, end, tex: &str| Span {
+            start,
+            end,
+            math: Some(tex.into()),
+            ..Default::default()
+        };
+        let document = Document::from(MessageDocument {
+            blocks: vec![
+                ContentBlock::Text {
+                    text: "Area $\\pi r^2$ and $x$\n".into(),
+                    spans: vec![math(5, 14, "\\pi r^2"), math(19, 22, "x")],
+                    role: TextRole::Paragraph,
+                },
+                ContentBlock::Math {
+                    source: "$$\\sum_i x_i$$".into(),
+                    tex: "\\sum_i x_i".into(),
+                },
+                ContentBlock::Math {
+                    source: "$$too long$$".into(),
+                    tex: "x".repeat(nuschel_ipc::math::MAX_TEX_BYTES + 1),
+                },
+            ],
+        });
+        let Block::Text {
+            text,
+            math,
+            highlights,
+            ..
+        } = &document.blocks[0]
+        else {
+            panic!("not text");
+        };
+        let formulas: Vec<_> = math
+            .iter()
+            .map(|formula| (&text[formula.range.clone()], formula.tex.as_ref()))
+            .collect();
+        assert_eq!(formulas, [("$\\pi r^2$", "\\pi r^2"), ("$x$", "x")]);
+        // Formulas are not styled text.
+        assert!(highlights.is_empty());
+        assert!(matches!(&document.blocks[1], Block::Math { tex, .. } if tex == "\\sum_i x_i"));
+        // A formula too long for the worker is its source as text.
+        assert!(matches!(&document.blocks[2], Block::Text { text, .. } if text == "$$too long$$"));
+        assert_eq!(
+            document.plain_text(),
+            "Area $\\pi r^2$ and $x$\n$$\\sum_i x_i$$\n$$too long$$"
+        );
+        // A display formula within a line is copied within it.
+        let document = Document::from(MessageDocument {
+            blocks: vec![
+                ContentBlock::text("so "),
+                ContentBlock::Math {
+                    source: "$$x$$".into(),
+                    tex: "x".into(),
+                },
+                ContentBlock::text(" and\n"),
+                ContentBlock::Math {
+                    source: "$$y$$".into(),
+                    tex: "y".into(),
+                },
+            ],
+        });
+        assert_eq!(document.plain_text(), "so $$x$$ and\n$$y$$");
     }
 }
