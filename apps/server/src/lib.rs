@@ -8,6 +8,8 @@ pub mod acl;
 pub mod auth;
 pub mod config;
 pub mod connection;
+#[doc(hidden)]
+pub mod fuzzing;
 pub mod handlers;
 pub mod limits;
 pub mod password;

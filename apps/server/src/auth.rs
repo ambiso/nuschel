@@ -233,63 +233,16 @@ fn complete(
     // The user exists from here on; permission checks need it in the state.
     let now = Instant::now();
     let (crypt, crypt_setup) = CryptState::generate_server(random());
-    let config = &state.settings.config;
-    let mut user = User {
+    let mut user = new_user(
+        &state.settings.config,
         session,
-        name: name.clone(),
+        name.clone(),
         user_id,
-        certificate_hash: peer.certificate_hash.clone(),
-        certificates: peer.certificates.clone(),
-        address: peer.address,
-        nuschel: peer.nuschel,
-        info: peer.info.clone(),
-        opus: message.opus(),
-        celt_versions: message.celt_versions.iter().copied().take(32).collect(),
-        bot: message.client_type() == 1,
-        tokens: bounded_tokens(&message.tokens),
-        channel: 0,
-        mute: false,
-        deaf: false,
-        suppress: false,
-        self_mute: false,
-        self_deaf: false,
-        priority_speaker: false,
-        recording: false,
-        comment: String::new(),
-        comment_hash: None,
-        texture: Bytes::new(),
-        texture_hash: None,
-        plugin_context: Vec::new(),
-        plugin_identity: String::new(),
-        listening: Default::default(),
-        targets: HashMap::new(),
-        target_cache: RefCell::new(HashMap::new()),
-        voice: Voice {
-            crypt,
-            udp: None,
-            udp_active: true,
-            last_good: now,
-            last_resync_request: None,
-            remote: Default::default(),
-            bandwidth: BandwidthRecord::new(now),
-            udp_ping: (0., 0., 0),
-            tcp_ping: (0., 0., 0),
-            failures: LeakyBucket::new(100, 400, now),
-            blocked_until: None,
-        },
-        link: peer.link.clone(),
-        rate: LeakyBucket::new(config.message_limit, config.message_burst, now),
-        plugin_rate: LeakyBucket::new(
-            config.plugin_message_limit,
-            config.plugin_message_burst,
-            now,
-        ),
-        flood: LeakyBucket::new(100, 1000, now),
-        queries: LeakyBucket::new(20, 200, now),
-        permission_sent: HashMap::new(),
-        last_permission_check: None,
-        last_activity: now,
-    };
+        peer,
+        &message,
+        crypt,
+        now,
+    );
     if let Some((comment, texture)) = blobs {
         user.set_comment(comment);
         user.set_texture(texture);
@@ -554,5 +507,75 @@ impl State {
         {
             self.send_permissions(session, parent, false);
         }
+    }
+}
+
+/// A freshly authenticated user (also used by the fuzzing harness).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn new_user(
+    config: &crate::config::Config,
+    session: u32,
+    name: String,
+    user_id: Option<u32>,
+    peer: &Peer,
+    message: &proto::Authenticate,
+    crypt: CryptState,
+    now: Instant,
+) -> User {
+    User {
+        session,
+        name,
+        user_id,
+        certificate_hash: peer.certificate_hash.clone(),
+        certificates: peer.certificates.clone(),
+        address: peer.address,
+        nuschel: peer.nuschel,
+        info: peer.info.clone(),
+        opus: message.opus(),
+        celt_versions: message.celt_versions.iter().copied().take(32).collect(),
+        bot: message.client_type() == 1,
+        tokens: bounded_tokens(&message.tokens),
+        channel: 0,
+        mute: false,
+        deaf: false,
+        suppress: false,
+        self_mute: false,
+        self_deaf: false,
+        priority_speaker: false,
+        recording: false,
+        comment: String::new(),
+        comment_hash: None,
+        texture: Bytes::new(),
+        texture_hash: None,
+        plugin_context: Vec::new(),
+        plugin_identity: String::new(),
+        listening: Default::default(),
+        targets: HashMap::new(),
+        target_cache: RefCell::new(HashMap::new()),
+        voice: Voice {
+            crypt,
+            udp: None,
+            udp_active: true,
+            last_good: now,
+            last_resync_request: None,
+            remote: Default::default(),
+            bandwidth: BandwidthRecord::new(now),
+            udp_ping: (0., 0., 0),
+            tcp_ping: (0., 0., 0),
+            failures: LeakyBucket::new(100, 400, now),
+            blocked_until: None,
+        },
+        link: peer.link.clone(),
+        rate: LeakyBucket::new(config.message_limit, config.message_burst, now),
+        plugin_rate: LeakyBucket::new(
+            config.plugin_message_limit,
+            config.plugin_message_burst,
+            now,
+        ),
+        flood: LeakyBucket::new(100, 1000, now),
+        queries: LeakyBucket::new(20, 200, now),
+        permission_sent: HashMap::new(),
+        last_permission_check: None,
+        last_activity: now,
     }
 }

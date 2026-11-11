@@ -15,10 +15,42 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 nuschel-content = { path = "../crates/content" }
 nuschel-core = { path = "../crates/core" }
+nuschel-protocol = { path = "../crates/protocol" }
+nuscheld = { path = "../apps/server" }
+bytes = "1.12.1"
+prost = "0.14.4"
 
 [[bin]]
 name = "html"
 path = "fuzz_targets/html.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "server_messages"
+path = "fuzz_targets/server_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "control_frames"
+path = "fuzz_targets/control_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "relay"
+path = "fuzz_targets/relay.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypt"
+path = "fuzz_targets/crypt.rs"
 test = false
 doc = false
 bench = false
