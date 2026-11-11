@@ -60,6 +60,14 @@ impl Render for Desktop {
             .text_color(color(TEXT))
             .font_family(theme::ui_font())
             .text_size(px(self.settings.appearance.text_size))
+            .track_focus(&self.window_focus)
+            // A shortcut being recorded takes the key before any focused control.
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if this.record_key(&event.keystroke) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if crate::emoji::shortcut(&event.keystroke)
                     && this.selected_indices().is_some()
@@ -70,7 +78,7 @@ impl Render for Desktop {
                     cx.notify();
                     return;
                 }
-                if !event.is_held && this.key_down(&event.keystroke) {
+                if this.key_down(&event.keystroke, event.is_held) {
                     cx.stop_propagation();
                     cx.notify();
                 }
@@ -1142,6 +1150,8 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
         "Deafened".into()
     } else if server.muted {
         "Muted".into()
+    } else if this.push_muted {
+        "Push to mute".into()
     } else if talking {
         "Talking".into()
     } else if detail.starts_with("Audio ready") {
@@ -1566,7 +1576,9 @@ fn conversation(
                                             nuschel_core::audio::TransmitMode::PushToTalk
                                     });
                                     this.servers[index].suggestion = None;
-                                    if this.settings.push_to_talk_key.is_none() {
+                                    if !this.settings.shortcuts.contains_key(
+                                        &nuschel_session::config::ShortcutAction::PushToTalk,
+                                    ) {
                                         this.open_settings();
                                     }
                                     cx.notify();

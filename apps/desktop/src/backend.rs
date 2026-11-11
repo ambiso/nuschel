@@ -176,7 +176,7 @@ pub struct Backend {
     connections: BTreeMap<String, Connection>,
     generation: u64,
     settings: watch::Sender<ClientSettings>,
-    push_to_talk: watch::Sender<bool>,
+    voice_keys: watch::Sender<VoiceKeys>,
     render_permits: std::sync::Arc<tokio::sync::Semaphore>,
     image_permits: std::sync::Arc<tokio::sync::Semaphore>,
     storage_task: tokio::task::JoinHandle<()>,
@@ -237,7 +237,7 @@ impl Backend {
             connections: BTreeMap::new(),
             generation: 0,
             settings: watch::Sender::new(settings),
-            push_to_talk: watch::Sender::new(false),
+            voice_keys: watch::Sender::new(VoiceKeys::default()),
             render_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             image_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             storage_task,
@@ -384,7 +384,7 @@ impl Backend {
             (receiver, sound_requests),
             self.sender.clone(),
             self.content.clone(),
-            (self.settings.subscribe(), self.push_to_talk.subscribe()),
+            (self.settings.subscribe(), self.voice_keys.subscribe()),
         ));
         self.connections.insert(
             id,
@@ -511,8 +511,12 @@ impl Backend {
         }
     }
     pub fn set_push_to_talk(&self, active: bool) {
-        self.push_to_talk
-            .send_if_modified(|current| std::mem::replace(current, active) != active);
+        self.voice_keys
+            .send_if_modified(|keys| std::mem::replace(&mut keys.talk, active) != active);
+    }
+    pub fn set_push_to_mute(&self, active: bool) {
+        self.voice_keys
+            .send_if_modified(|keys| std::mem::replace(&mut keys.mute, active) != active);
     }
     pub fn disconnect(&mut self, server: &str) {
         if let Some(connection) = self.connections.remove(server) {
@@ -575,7 +579,7 @@ async fn connection_loop(
     (mut commands, mut sounds): (mpsc::Receiver<Command>, mpsc::Receiver<Sound>),
     events: mpsc::Sender<Event>,
     content: mpsc::Sender<ContentJob>,
-    (mut settings, mut push_to_talk): (watch::Receiver<ClientSettings>, watch::Receiver<bool>),
+    (mut settings, mut voice_keys): (watch::Receiver<ClientSettings>, watch::Receiver<VoiceKeys>),
 ) {
     let id = server.id.clone();
     // A fresh connection rejoins the channel you were last in, like a reconnect.
@@ -596,7 +600,7 @@ async fn connection_loop(
             (&mut commands, &mut sounds),
             &events,
             &content,
-            (&mut settings, &mut push_to_talk),
+            (&mut settings, &mut voice_keys),
             &mut restore,
         )
         .await;
@@ -701,9 +705,9 @@ async fn connect_once(
     (commands, sounds): (&mut mpsc::Receiver<Command>, &mut mpsc::Receiver<Sound>),
     events: &mpsc::Sender<Event>,
     content: &mpsc::Sender<ContentJob>,
-    (settings, push_to_talk): (
+    (settings, voice_keys): (
         &mut watch::Receiver<ClientSettings>,
-        &mut watch::Receiver<bool>,
+        &mut watch::Receiver<VoiceKeys>,
     ),
     restore: &mut Restore,
 ) -> Outcome {
@@ -756,6 +760,7 @@ async fn connect_once(
     let mut loss_percent = 5_u8;
     // Our own voice is on the air (no terminator sent yet).
     let mut transmitting = false;
+    let mut talk_key = voice_keys.borrow().talk;
     let mut speaking = BTreeMap::<u32, tokio::time::Instant>::new();
     let mut talk_tick = tokio::time::interval(std::time::Duration::from_millis(100));
     talk_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -778,15 +783,21 @@ async fn connect_once(
                 }
                 applied_audio = audio;
             },
-            changed = push_to_talk.changed() => {
+            changed = voice_keys.changed() => {
                 if changed.is_err() { break; }
-                let active = *push_to_talk.borrow_and_update();
-                if let Some(media) = &media {
-                    let _ = media.commands.try_send(LiveMediaRequest::PushToTalk { active });
+                let keys = *voice_keys.borrow_and_update();
+                // The talk key's own changes reach the worker, with their sound.
+                if std::mem::replace(&mut talk_key, keys.talk) != keys.talk && let Some(media) = &media {
+                    let _ = media.commands.try_send(LiveMediaRequest::PushToTalk { active: keys.talk });
                     let current = settings.borrow();
                     if !muted && current.audio.transmit == TransmitMode::PushToTalk {
-                        play(media, &current, if active { Sound::TalkOn } else { Sound::TalkOff });
+                        play(media, &current, if keys.talk { Sound::TalkOn } else { Sound::TalkOff });
                     }
+                }
+                // Push to mute holds back what the worker sends, without replacing it.
+                if keys.mute && std::mem::take(&mut transmitting) {
+                    let _ = session_commands.try_send(silent_terminator(&mut sequence));
+                    if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, false).await; }
                 }
             },
             _ = talk_tick.tick(), if !speaking.is_empty() => {
@@ -815,11 +826,7 @@ async fn connect_once(
                     let cue = crate::sounds::self_state((muted, deafened), (*mute || *deaf, *deaf));
                     muted = *mute || *deaf; deafened = *deaf; capture_epoch += 1;
                     if muted && std::mem::take(&mut transmitting) {
-                        // Receivers stop at once, as with stock Mumble, but the terminator is
-                        // silence: nothing the microphone captured after muting leaves.
-                        let packet = nuschel_protocol::voice::VoicePacket { sender: 0, sequence, opus: nuschel_core::audio::SILENT_OPUS.to_vec(), end: true, volume: 1. };
-                        sequence += 2;
-                        let _ = session_commands.try_send(Command::Voice { target: 0, packet });
+                        let _ = session_commands.try_send(silent_terminator(&mut sequence));
                         if let Some(session) = own_session { mark_talking(events, &id, generation, &mut speaking, session, false).await; }
                     }
                     // Native stream teardown can block inside a backend (including Pulse).
@@ -902,7 +909,7 @@ async fn connect_once(
                     Ok(worker) => {
                         configure(&worker, &applied_audio, (bitrate, loss_percent), pinned_host(&audio_host));
                         let _ = worker.commands.try_send(LiveMediaRequest::SetState { epoch: capture_epoch, muted, deafened });
-                        let _ = worker.commands.try_send(LiveMediaRequest::PushToTalk { active: *push_to_talk.borrow() });
+                        let _ = worker.commands.try_send(LiveMediaRequest::PushToTalk { active: voice_keys.borrow().talk });
                         for (sound, requested) in pending.drain(..) {
                             if requested.elapsed() < MAX_SOUND_DELAY { play(&worker, &settings.borrow(), sound); }
                         }
@@ -915,7 +922,7 @@ async fn connect_once(
             event = async { media.as_mut().unwrap().events.recv().await }, if media.is_some() => match event {
                 Some(LiveMediaEvent::Packet { epoch, opus, end, .. }) => {
                     // A muted worker never encodes, and nothing from an older one leaves.
-                    if epoch != capture_epoch || muted { continue; }
+                    if epoch != capture_epoch || muted || voice_keys.borrow().mute { continue; }
                     let packet = nuschel_protocol::voice::VoicePacket { sender: 0, sequence, opus, end, volume: 1. };
                     sequence += 2;
                     transmitting = !end;
@@ -955,6 +962,27 @@ async fn connect_once(
 }
 
 const TALK_HOLD: std::time::Duration = std::time::Duration::from_millis(280);
+
+/// Push-to-talk and push-to-mute keys, held or not.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct VoiceKeys {
+    pub talk: bool,
+    pub mute: bool,
+}
+
+/// Ends our transmission. Receivers stop at once, as with stock Mumble, but
+/// the terminator is silence: nothing the microphone captured after muting leaves.
+fn silent_terminator(sequence: &mut u64) -> Command {
+    let packet = nuschel_protocol::voice::VoicePacket {
+        sender: 0,
+        sequence: *sequence,
+        opus: nuschel_core::audio::SILENT_OPUS.to_vec(),
+        end: true,
+        volume: 1.,
+    };
+    *sequence += 2;
+    Command::Voice { target: 0, packet }
+}
 
 async fn mark_talking(
     events: &mpsc::Sender<Event>,

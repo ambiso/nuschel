@@ -216,6 +216,37 @@ fn percent_decode(text: &str) -> Result<String, String> {
     Ok(decoded)
 }
 
+/// What a keyboard shortcut does. Holds act while the key is down; toggles
+/// act once per press.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShortcutAction {
+    PushToTalk,
+    ToggleMute,
+    ToggleDeafen,
+    PushToMute,
+}
+impl ShortcutAction {
+    pub const ALL: [Self; 4] = [
+        Self::PushToTalk,
+        Self::ToggleMute,
+        Self::ToggleDeafen,
+        Self::PushToMute,
+    ];
+    /// The stable name, as in the settings file and system shortcut registrations.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::PushToTalk => "push-to-talk",
+            Self::ToggleMute => "toggle-mute",
+            Self::ToggleDeafen => "toggle-deafen",
+            Self::PushToMute => "push-to-mute",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|action| action.id() == id)
+    }
+}
+
 /// Local preferences. Per-user adjustments are keyed by certificate hash, as in
 /// Mumble, so they follow a person rather than a reusable display name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -228,8 +259,11 @@ pub struct ClientSettings {
     pub auto_reconnect: bool,
     pub user_volumes: std::collections::BTreeMap<String, f32>,
     pub local_mutes: std::collections::BTreeSet<String>,
-    /// Push-to-talk key in GPUI keystroke notation, e.g. "f13" or "ctrl-space".
-    pub push_to_talk_key: Option<String>,
+    /// Keyboard shortcuts in GPUI keystroke notation, e.g. "f13" or "ctrl-shift-m".
+    pub shortcuts: std::collections::BTreeMap<ShortcutAction, String>,
+    /// The push-to-talk key of older versions, read once into `shortcuts`.
+    #[serde(skip_serializing)]
+    push_to_talk_key: Option<String>,
     /// Enter sends a message and Shift+Enter starts a new line; otherwise
     /// Enter starts a new line and Ctrl/Cmd+Enter sends.
     pub enter_sends: bool,
@@ -326,6 +360,7 @@ impl Default for ClientSettings {
             auto_reconnect: true,
             user_volumes: Default::default(),
             local_mutes: Default::default(),
+            shortcuts: Default::default(),
             push_to_talk_key: None,
             enter_sends: true,
             sidebar_width: 248.,
@@ -365,18 +400,18 @@ impl ClientSettings {
                 names.pop_first();
             }
         }
-        if self
-            .push_to_talk_key
-            .as_ref()
-            .is_some_and(|key| key.is_empty() || key.len() > 64)
-        {
-            self.push_to_talk_key = None;
+        if let Some(key) = self.push_to_talk_key.take() {
+            self.shortcuts
+                .entry(ShortcutAction::PushToTalk)
+                .or_insert(key);
         }
         self.sound_volume = if self.sound_volume.is_finite() {
             self.sound_volume.clamp(0., 1.)
         } else {
             0.7
         };
+        self.shortcuts
+            .retain(|_, key| !key.is_empty() && key.len() <= 64);
         self.sidebar_width = if self.sidebar_width.is_finite() {
             self.sidebar_width
                 .clamp(*SIDEBAR_WIDTH.start(), *SIDEBAR_WIDTH.end())
@@ -1063,6 +1098,50 @@ mod tests {
         profile.save_settings(&settings).unwrap();
         assert_eq!(profile.load_settings().unwrap(), settings);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn shortcuts_load_from_older_settings() {
+        let old: ClientSettings =
+            serde_json::from_str(r#"{"push_to_talk_key": "f13", "enter_sends": false}"#).unwrap();
+        let settings = old.sanitized();
+        assert_eq!(
+            settings
+                .shortcuts
+                .get(&ShortcutAction::PushToTalk)
+                .map(String::as_str),
+            Some("f13")
+        );
+        assert!(!settings.enter_sends);
+        // The old field is not written back, and a saved binding wins over it.
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert!(!saved.contains("push_to_talk_key"), "{saved}");
+        assert!(
+            saved.contains(r#""shortcuts":{"push-to-talk":"f13"}"#),
+            "{saved}"
+        );
+        let both: ClientSettings = serde_json::from_str(
+            r#"{"push_to_talk_key": "f13", "shortcuts": {"push-to-talk": "f14", "toggle-mute": "ctrl-shift-m", "push-to-mute": ""}}"#,
+        )
+        .unwrap();
+        let both = both.sanitized();
+        assert_eq!(
+            both.shortcuts.into_iter().collect::<Vec<_>>(),
+            [
+                (ShortcutAction::PushToTalk, "f14".to_string()),
+                (ShortcutAction::ToggleMute, "ctrl-shift-m".to_string()),
+            ]
+        );
+        assert_eq!(
+            ClientSettings::default().sanitized(),
+            ClientSettings::default()
+        );
+        for action in ShortcutAction::ALL {
+            assert_eq!(ShortcutAction::from_id(action.id()), Some(action));
+            assert_eq!(
+                serde_json::to_string(&action).unwrap(),
+                format!("\"{}\"", action.id())
+            );
+        }
     }
     #[test]
     fn parses_mumble_urls_like_stock_clients() {

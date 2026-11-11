@@ -12,7 +12,7 @@ use gpui_kit::{
 use nuschel_client::{Conversation, HistorySource, Navigation, SessionSecurity};
 use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_session::{
-    config::{CachedChannel, ClientSettings, MumbleUrl, Profile, ServerBookmark},
+    config::{CachedChannel, ClientSettings, MumbleUrl, Profile, ServerBookmark, ShortcutAction},
     connection::{Command, ServerLimits, SessionEvent, TextTarget, User},
     model::{Acl, Ban, ContextAction, RegisteredUser, RejectKind, UserStats},
     udp::TransportStats,
@@ -787,12 +787,15 @@ pub struct Desktop {
     /// File offers and downloads (transfer.rs).
     pub transfers: crate::transfer::Transfers,
     pub panel: Option<Panel>,
-    pub recording_ptt: bool,
     pub ptt_active: bool,
+    /// Push to mute is held: nothing is sent.
+    pub push_muted: bool,
+    pub shortcuts: crate::shortcuts::Shortcuts,
+    /// Focused whenever nothing else is: keys reach the window's shortcuts
+    /// (and Escape) only through a focused element.
+    pub window_focus: FocusHandle,
     pub identity_status: Option<String>,
     pub search: Option<SearchView>,
-    global_ptt: Option<(String, crate::global_ptt::GlobalPtt)>,
-    pub global_ptt_status: Option<String>,
     pending_browse: Option<(String, u32)>,
     /// A rejected login waiting to reopen the server form for a retry.
     pending_retry: Option<(usize, RejectKind, String)>,
@@ -818,7 +821,7 @@ pub struct Desktop {
     outgoing: std::collections::VecDeque<Outgoing>,
     _subscriptions: Vec<Subscription>,
     _receive: Task<()>,
-    /// Wakes the push-to-talk poll when a system-wide shortcut is bound.
+    /// Wakes the shortcut poll when system-wide shortcuts are bound.
     ptt_wake: Arc<tokio::sync::Notify>,
     _ptt_poll: Task<()>,
 }
@@ -877,6 +880,25 @@ impl Desktop {
         let settings = profile.load_settings().unwrap_or_default();
         let activation = cx.observe_window_activation(window, |this: &mut Self, window, _| {
             this.window_active = window.is_window_active();
+            if !this.window_active {
+                // Its key releases go elsewhere now.
+                for effect in this
+                    .shortcuts
+                    .held
+                    .release(crate::shortcuts::Source::Window)
+                {
+                    this.apply_shortcut(effect);
+                }
+            }
+        });
+        let window_focus = cx.focus_handle();
+        window.focus(&window_focus, cx);
+        // A closed dialog or menu leaves nothing focused.
+        let focus_lost = cx.on_focus_lost(window, |this: &mut Self, window, cx| {
+            let target = window
+                .focus_lost_restore_target(cx)
+                .unwrap_or_else(|| this.window_focus.clone());
+            window.focus(&target, cx);
         });
         let (backend, mut events) = Backend::new(handle.clone(), profile.clone(), settings.clone());
         // Events apply as they arrive, a bounded batch per update.
@@ -906,7 +928,7 @@ impl Desktop {
             let wake = ptt_wake.clone();
             async move |this, cx| {
                 loop {
-                    match this.update(cx, |this, cx| this.poll_global_ptt(cx)) {
+                    match this.update(cx, |this, cx| this.poll_global_shortcuts(cx)) {
                         Ok(true) => {
                             cx.background_executor()
                                 .timer(std::time::Duration::from_millis(20))
@@ -963,12 +985,12 @@ impl Desktop {
             prompt: None,
             transfers: Default::default(),
             panel: None,
-            recording_ptt: false,
             ptt_active: false,
+            push_muted: false,
+            shortcuts: Default::default(),
+            window_focus,
             identity_status: None,
             search: None,
-            global_ptt: None,
-            global_ptt_status: None,
             pending_browse: None,
             pending_retry: None,
             cache_dirty: false,
@@ -985,7 +1007,7 @@ impl Desktop {
             attachment_ids: 0,
             dragged_files: Default::default(),
             outgoing: std::collections::VecDeque::new(),
-            _subscriptions: vec![subscription, activation],
+            _subscriptions: vec![subscription, activation, focus_lost],
             _receive: receive,
             ptt_wake,
             _ptt_poll: ptt_poll,
@@ -1004,7 +1026,7 @@ impl Desktop {
                 }
             }
         }
-        desktop.sync_global_ptt();
+        desktop.sync_global_shortcuts();
         desktop.refresh_icons();
         if crate::update::supported() {
             crate::update::cleanup();
@@ -1023,26 +1045,14 @@ impl Desktop {
             self.update = crate::update::UpdateState::Installing { done: 0, total: 0 };
         }
     }
-    /// Keep the system-wide push-to-talk binding in step with the settings.
-    pub fn sync_global_ptt(&mut self) {
-        let wanted = (self.settings.audio.transmit
-            == nuschel_core::audio::TransmitMode::PushToTalk)
-            .then(|| self.settings.push_to_talk_key.clone())
-            .flatten();
-        match (&wanted, &self.global_ptt) {
-            (Some(key), Some((bound, _))) if key == bound => {}
-            (Some(key), _) => {
-                self.global_ptt = Some((
-                    key.clone(),
-                    crate::global_ptt::GlobalPtt::start(self.backend.runtime(), key.clone()),
-                ));
-                self.global_ptt_status = Some("Requesting a system-wide shortcut…".into());
-                self.ptt_wake.notify_one();
+    /// Keep the system-wide shortcuts in step with the settings.
+    pub fn sync_global_shortcuts(&mut self) {
+        let wanted = crate::shortcuts::active(&self.settings);
+        if let Some(released) = self.shortcuts.rebind(wanted, self.backend.runtime()) {
+            for effect in released {
+                self.apply_shortcut(effect);
             }
-            (None, _) => {
-                self.global_ptt = None;
-                self.global_ptt_status = None;
-            }
+            self.ptt_wake.notify_one();
         }
     }
     /// Connect to a `mumble://` link, reusing a matching saved server.
@@ -1653,7 +1663,7 @@ impl Desktop {
     pub fn close_settings(&mut self) {
         self.settings_open = false;
         self.appearance.close_picker();
-        self.recording_ptt = false;
+        self.shortcuts.recording = None;
         self.preview = None;
         self.backend.stop_preview();
     }
@@ -1728,13 +1738,7 @@ impl Desktop {
         }
         self.backend.apply_settings(settings.clone());
         self.settings = settings;
-        self.sync_global_ptt();
-    }
-    fn ptt_key_matches(&self, key: &str) -> bool {
-        self.settings
-            .push_to_talk_key
-            .as_deref()
-            .is_some_and(|wanted| wanted.eq_ignore_ascii_case(key))
+        self.sync_global_shortcuts();
     }
     pub fn set_push_to_talk(&mut self, active: bool) {
         if self.ptt_active != active {
@@ -1742,14 +1746,20 @@ impl Desktop {
             self.backend.set_push_to_talk(active);
         }
     }
-    /// Returns true when the key was consumed by push-to-talk or key recording.
-    pub fn key_down(&mut self, keystroke: &Keystroke) -> bool {
+    /// Returns true when the key was consumed by a shortcut or key recording.
+    pub fn key_down(&mut self, keystroke: &Keystroke, repeat: bool) -> bool {
+        if repeat {
+            // Key repeat never acts, but a shortcut's key is not typed either.
+            return !self
+                .shortcuts
+                .window_actions(&self.settings, keystroke, true)
+                .is_empty();
+        }
         if keystroke.key == "escape" && self.viewer.is_some() && self.menu.is_none() {
             self.viewer = None;
             return true;
         }
         if keystroke.key == "escape"
-            && !self.recording_ptt
             && (self.form.is_some()
                 || self.settings_open
                 || self.menu.is_some()
@@ -1767,43 +1777,71 @@ impl Desktop {
             }
             return true;
         }
-        if self.recording_ptt {
-            if keystroke.key != "escape" {
-                let key = keystroke.key.clone();
-                self.update_settings(|settings| settings.push_to_talk_key = Some(key));
-            }
-            self.recording_ptt = false;
-            return true;
-        }
-        if self.ptt_key_matches(&keystroke.key) {
-            self.set_push_to_talk(true);
-            return true;
-        }
-        false
+        self.shortcut_key(keystroke, true)
     }
     pub fn key_up(&mut self, keystroke: &Keystroke) -> bool {
-        if self.ptt_key_matches(&keystroke.key) {
-            self.set_push_to_talk(false);
-            return true;
-        }
-        false
+        self.shortcut_key(keystroke, false)
     }
-    /// Modifier-only push-to-talk keys (e.g. "control") arrive as modifier changes.
+    /// Modifier-only shortcuts (e.g. "control", from older settings) arrive
+    /// as modifier changes.
     pub fn modifiers_changed(&mut self, modifiers: &Modifiers) {
-        let Some(key) = self.settings.push_to_talk_key.as_deref() else {
-            return;
-        };
-        let held = match key {
-            "control" | "ctrl" => modifiers.control,
-            "alt" => modifiers.alt,
-            "shift" => modifiers.shift,
-            "platform" | "super" | "cmd" => modifiers.platform,
-            _ => return,
-        };
-        if self.recording_ptt {
+        if self.shortcuts.recording.is_some() {
             return;
         }
-        self.set_push_to_talk(held);
+        for effect in self.shortcuts.window_modifiers(&self.settings, modifiers) {
+            self.apply_shortcut(effect);
+        }
+    }
+    /// While a shortcut is being recorded, every key press is for it (Escape
+    /// cancels), ahead of focused controls. True when the key was taken.
+    pub fn record_key(&mut self, keystroke: &Keystroke) -> bool {
+        let Some(action) = self.shortcuts.recording else {
+            return false;
+        };
+        if keystroke.is_modifier_key() {
+            return false;
+        }
+        self.shortcuts.recording = None;
+        if keystroke.key != "escape" {
+            self.bind_shortcut(action, crate::shortcuts::notation(keystroke));
+        }
+        true
+    }
+    /// A key does one thing: binding it to an action unbinds it elsewhere.
+    pub fn bind_shortcut(&mut self, action: ShortcutAction, key: String) {
+        self.update_settings(|settings| {
+            settings.shortcuts.retain(|_, bound| *bound != key);
+            settings.shortcuts.insert(action, key);
+        });
+    }
+    fn shortcut_key(&mut self, keystroke: &Keystroke, down: bool) -> bool {
+        use crate::shortcuts::Source;
+        let actions = self
+            .shortcuts
+            .window_actions(&self.settings, keystroke, down);
+        for &action in &actions {
+            if let Some(effect) = self.shortcuts.held.set(action, Source::Window, down) {
+                self.apply_shortcut(effect);
+            }
+        }
+        !actions.is_empty()
+    }
+    /// What a shortcut does matches the footer's buttons and push to talk.
+    fn apply_shortcut(&mut self, effect: crate::shortcuts::Effect) {
+        use crate::shortcuts::Effect;
+        let connected = self
+            .selected_indices()
+            .is_some_and(|(server, _)| self.servers[server].status == Status::Connected);
+        match effect {
+            Effect::PushToTalk(active) => self.set_push_to_talk(active),
+            Effect::PushToMute(active) => {
+                self.push_muted = active;
+                self.backend.set_push_to_mute(active);
+            }
+            Effect::ToggleMute if connected => self.set_mute(false),
+            Effect::ToggleDeafen if connected => self.set_mute(true),
+            Effect::ToggleMute | Effect::ToggleDeafen => {}
+        }
     }
     pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((index, _)) = self.selected_indices() else {
@@ -2495,28 +2533,15 @@ impl Desktop {
             self.servers[server].channels[channel].new_messages = 0;
         }
     }
-    /// Apply system-wide push-to-talk events; false while no shortcut is wanted.
-    fn poll_global_ptt(&mut self, cx: &mut Context<Self>) -> bool {
-        while let Some(event) = self
-            .global_ptt
-            .as_mut()
-            .and_then(|(_, global)| global.try_next())
-        {
+    /// Apply system-wide shortcut events; false while none are wanted.
+    fn poll_global_shortcuts(&mut self, cx: &mut Context<Self>) -> bool {
+        while let Some(effects) = self.shortcuts.poll_global() {
             cx.notify();
-            match event {
-                crate::global_ptt::GlobalEvent::Pressed => self.set_push_to_talk(true),
-                crate::global_ptt::GlobalEvent::Released => self.set_push_to_talk(false),
-                crate::global_ptt::GlobalEvent::Bound(trigger) => {
-                    self.global_ptt_status =
-                        Some(format!("System-wide shortcut active: {trigger}"));
-                }
-                crate::global_ptt::GlobalEvent::Unavailable(reason) => {
-                    self.global_ptt_status =
-                        Some(format!("Only while Nuschel is focused: {reason}"));
-                }
+            for effect in effects {
+                self.apply_shortcut(effect);
             }
         }
-        self.global_ptt.is_some()
+        self.shortcuts.polling()
     }
     fn apply_events(&mut self, events: impl IntoIterator<Item = Event>, cx: &mut Context<Self>) {
         for event in events {

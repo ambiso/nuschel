@@ -2,13 +2,14 @@
 //! Voice and audio settings. Changes apply immediately and are saved locally.
 use crate::{
     assets::icon,
-    dialogs::{Tone, Tooltip, modal, styled_button},
+    dialogs::{Tone, Tooltip, modal, named_button, styled_button},
     preview::{EchoTestState, PreviewView},
     state::{Desktop, ServerView},
     theme::*,
 };
 use gpui_kit::{prelude::*, *};
 use nuschel_core::audio::{AudioDevice, EchoMode, EchoSource, TransmitMode};
+use nuschel_session::config::ShortcutAction;
 use std::rc::Rc;
 
 pub type Action = Rc<dyn Fn(&mut Desktop, &mut Window, &mut Context<Desktop>)>;
@@ -568,61 +569,16 @@ pub fn dialog(
             cx,
         ));
     }
-    if transmit == TransmitMode::PushToTalk || settings.push_to_talk_key.is_some() {
-        let label = if this.recording_ptt {
-            "Press a key… (Esc cancels)".to_string()
-        } else {
-            settings
-                .push_to_talk_key
-                .clone()
-                .map(|key| format!("Push-to-talk key: {key}"))
-                .unwrap_or_else(|| "No push-to-talk key".into())
-        };
-        voice.push(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(icon("keyboard", 18., color(TEXT_MUTED)))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_sm()
-                        .child(text!(label).with_id("ptt-key")),
-                )
-                .child(styled_button(
-                    "record-ptt",
-                    if this.recording_ptt {
-                        "Cancel"
-                    } else {
-                        "Set key"
-                    },
-                    Tone::Secondary,
-                    |this, _, cx| {
-                        this.recording_ptt = !this.recording_ptt;
-                        cx.notify();
-                    },
-                    cx,
-                ))
-                .when(settings.push_to_talk_key.is_some(), |row| {
-                    row.child(styled_button(
-                        "clear-ptt",
-                        "Clear",
-                        Tone::Ghost,
-                        |this, _, cx| {
-                            this.update_settings(|settings| settings.push_to_talk_key = None);
-                            cx.notify();
-                        },
-                        cx,
-                    ))
-                })
-                .into_any_element(),
-        );
+    if transmit == TransmitMode::PushToTalk
+        && !settings.shortcuts.contains_key(&ShortcutAction::PushToTalk)
+    {
         voice.push(
             div()
                 .text_xs()
-                .text_color(color(TEXT_FAINT))
-                .child(text!(this.global_ptt_status.clone().unwrap_or_else(|| "The key works while Nuschel is focused, and system-wide where the desktop grants a global shortcut.".into())).with_id("ptt-note"))
+                .text_color(color(TEXT_MUTED))
+                .child(
+                    text!("Choose a push-to-talk key under Shortcuts below.").with_id("ptt-note"),
+                )
                 .into_any_element(),
         );
     }
@@ -1114,6 +1070,7 @@ pub fn dialog(
                 .gap_6()
                 .child(section("MICROPHONE TEST", audio_check(this, cx)))
                 .child(section("TRANSMISSION", voice))
+                .child(section("SHORTCUTS", shortcut_rows(this, cx)))
                 .child(section("PROCESSING", processing))
                 .child(section("DEVICES", devices))
                 .child(section("NETWORK", network))
@@ -1131,4 +1088,146 @@ pub fn dialog(
         cx,
         |this| this.close_settings(),
     )
+}
+
+// Shortcuts: one row per action with its key, Record and Clear.
+
+fn shortcut_description(action: ShortcutAction) -> &'static str {
+    match action {
+        ShortcutAction::PushToTalk => "Hold to transmit.",
+        ShortcutAction::ToggleMute => "Same as the microphone button.",
+        ShortcutAction::ToggleDeafen => "Same as the headphones button.",
+        ShortcutAction::PushToMute => "Hold to silence yourself while transmitting.",
+    }
+}
+
+fn shortcut_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
+    use crate::shortcuts::{applies, display, label};
+    let shortcuts = &this.shortcuts;
+    let transmit = this.settings.audio.transmit;
+    let mut rows: Vec<AnyElement> = ShortcutAction::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(index, action)| {
+            let name = label(action);
+            let binding = this.settings.shortcuts.get(&action);
+            let recording = shortcuts.recording == Some(action);
+            let system = binding.and(shortcuts.system.as_ref());
+            let detail = if recording {
+                "Press the key, with any modifiers. Esc cancels.".to_string()
+            } else if binding.is_some() && !applies(action, transmit) {
+                match action {
+                    ShortcutAction::PushToTalk => "Only in push-to-talk mode.",
+                    _ => "Only with voice activity or continuous transmission.",
+                }
+                .into()
+            } else if let Some(system) = system {
+                match system.get(&action) {
+                    Some(trigger) => format!("System-wide: {trigger}"),
+                    None => "Only while Nuschel is focused: the desktop did not grant it.".into(),
+                }
+            } else {
+                shortcut_description(action).into()
+            };
+            let key = if recording {
+                "…".to_string()
+            } else {
+                binding.map_or_else(|| "Not set".into(), |binding| display(binding))
+            };
+            div()
+                .id(("shortcut", index))
+                .role(Role::Group)
+                .aria_label(format!("{name} shortcut"))
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(text!(name).with_id(("shortcut-name", index))),
+                        )
+                        .child(
+                            div()
+                                .id(("shortcut-detail", index))
+                                .when(recording, |line| line.role(Role::Status))
+                                .text_xs()
+                                .text_color(color(if recording { ACCENT } else { TEXT_MUTED }))
+                                .child(text!(detail).with_id(("shortcut-detail-text", index))),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .min_w(px(64.))
+                        .px_2()
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .bg(color(APP))
+                        .border_1()
+                        .border_color(color(if recording { ACCENT } else { BORDER_STRONG }))
+                        .flex()
+                        .justify_center()
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(color(if binding.is_some() { TEXT } else { TEXT_FAINT }))
+                        .child(text!(key).with_id(("shortcut-key", index))),
+                )
+                .child(named_button(
+                    ("record-shortcut", index),
+                    if recording { "Cancel" } else { "Record" },
+                    if recording {
+                        format!("Cancel recording {name} shortcut")
+                    } else {
+                        format!("Record {name} shortcut")
+                    },
+                    Tone::Secondary,
+                    move |this, _, cx| {
+                        this.shortcuts.recording = (!recording).then_some(action);
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(
+                    div()
+                        .w(px(64.))
+                        .flex_shrink_0()
+                        .when(binding.is_some(), |slot| {
+                            slot.child(named_button(
+                                ("clear-shortcut", index),
+                                "Clear",
+                                format!("Clear {name} shortcut"),
+                                Tone::Ghost,
+                                move |this, _, cx| {
+                                    this.update_settings(|settings| {
+                                        settings.shortcuts.remove(&action);
+                                    });
+                                    cx.notify();
+                                },
+                                cx,
+                            ))
+                        }),
+                )
+                .into_any_element()
+        })
+        .collect();
+    if let Some((status, detail)) = shortcuts.status.clone() {
+        rows.push(
+            div()
+                .id("shortcut-status")
+                .role(Role::Status)
+                .text_xs()
+                .text_color(color(TEXT_FAINT))
+                .tooltip(move |_, cx| cx.new(|_| Tooltip(detail.clone().into())).into())
+                .child(text!(status).with_id("shortcut-status-text"))
+                .into_any_element(),
+        );
+    }
+    rows
 }

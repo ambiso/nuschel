@@ -31,6 +31,20 @@ pub fn styled_button(
     action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let label = label.into();
+    named_button(id, label.clone(), label, tone, action, cx)
+}
+
+/// A button whose name for assistive technology says more than its label
+/// ("Record" in a row is announced as "Record Toggle mute shortcut").
+pub fn named_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    name: impl Into<SharedString>,
+    tone: Tone,
+    action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
     let action = Rc::new(action);
     let click = action.clone();
     let label = label.into();
@@ -43,7 +57,7 @@ pub fn styled_button(
     div()
         .id(id)
         .role(Role::Button)
-        .aria_label(label.clone())
+        .aria_label(name.into())
         .tab_index(0)
         .cursor_pointer()
         .flex_shrink_0()
