@@ -13,12 +13,13 @@ const relay = new URL(relayUrl);
 assert.ok(relay.hostname === "127.0.0.1" && relay.protocol === "ws:","private loopback relay required");
 const { chromium } = await import(pathToFileURL(process.env.NUSCHL_PLAYWRIGHT));
 const directory = resolve(root);
+const entry = await readFile(resolve(directory,"app/index.html")).then(()=>"/app/").catch(()=>"/");
 const types={".html":"text/html",".js":"text/javascript",".wasm":"application/wasm",".css":"text/css",".svg":"image/svg+xml"};
 const server=createServer(async(req,res)=>{
  try {
   const path=resolve(directory,"."+decodeURIComponent(new URL(req.url,"http://127.0.0.1").pathname));
   if (path!==directory && !path.startsWith(directory+sep)) throw new Error("scope");
-  const target=path===directory?resolve(directory,"index.html"):path;
+  const target=extname(path)?path:resolve(path,"index.html");
   const data=await readFile(target);
   res.writeHead(200,{"Content-Type":types[extname(target)]||"application/octet-stream"});res.end(data);
  } catch {res.writeHead(404);res.end();}
@@ -46,7 +47,7 @@ async function open(username) {
  context.on("request",request=>{if(!request.url().startsWith(origin+"/")&&!request.url().startsWith("data:"))forbidden.push(request.url());});
  const page=await context.newPage();
  page.on("pageerror",error=>console.error("browser error:",error.message));
- await page.goto(`${origin}/#s=${host}:${port}&u=${username}`);
+ await page.goto(`${origin}${entry}#s=${host}:${port}&u=${username}`);
  await page.getByRole("button",{name:"Trust this certificate",exact:true}).waitFor({timeout:20000});
  await page.getByRole("button",{name:"Trust this certificate",exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('[role="status"]')?.textContent==="Connected",null,{timeout:20000});
