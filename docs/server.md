@@ -1,9 +1,10 @@
 # The Nuschel server (`nuscheld`)
 
 `nuscheld` is a Mumble-compatible server: protocol 1.5, with the legacy UDP voice
-format for 1.4 and 1.3 clients. Stock Mumble clients and Nuschel use it like a
-stock Murmur. It routes Opus voice without decoding it. This is phase 1 of the
-server roadmap (TODO.md); the Nuschel extension (docs/extension.md) builds on it.
+format for 1.4 and 1.3 clients. Stock Mumble clients use it like a stock Murmur. It
+routes Opus voice without decoding it. Nuschel clients also get the Nuschel
+extension (docs/extension.md, phase 2 of the roadmap): durable conversations, server
+history, edits and deletions, subscriptions, read markers and direct conversations.
 
 ## Running it
 
@@ -11,6 +12,7 @@ server roadmap (TODO.md); the Nuschel extension (docs/extension.md) builds on it
 nuscheld --config nuscheld.toml          # see apps/server/nuscheld.example.toml
 printf %s 'secret' | nuscheld --config nuscheld.toml --set-superuser-password
 nuscheld --config nuscheld.toml --check-config
+nuscheld --config nuscheld.toml --erase-user Alice   # GDPR: her stored messages become tombstones
 ```
 
 Every configuration key is optional; names and defaults follow murmur.ini
@@ -32,6 +34,12 @@ Every configuration key is optional; names and defaults follow murmur.ini
 - **SuperUser** (user 0) has no password until one is set; without one it cannot
   log in.
 
+- **History** (`[history]`): kept forever by default (`retention_days`); guests read
+  none (`guests = "none"`); stock clients are told in the welcome text and when they
+  enter a channel with history (`notify_stock_clients`); stock senders' direct
+  messages are not stored (`archive_stock_direct_messages`); `edit_limit`,
+  `moderators_delete`, page limits and advisory client versions.
+
 The NixOS module (`services.nuschel`, nix/module.nix) generates the TOML file
 from `settings` (never secrets), runs a database preflight, and hardens the unit
 (DynamicUser, a private state directory, no capabilities, system call filter,
@@ -44,10 +52,16 @@ TCP accept ──► connection task ──┐            ┌──► writer ta
  (admission, TLS, framing,       │  Mutex     │    (byte-bounded queue)
   per-type limits)               ├─► State ───┤
 UDP socket ──► udp task ─────────┘  (handlers,└──► UDP sockets
- (decrypt, bind, info pings)         routing)      (after the lock)
+ (decrypt, bind, info pings)         routing,      (after the lock)
+                                     authz_epoch)
                                        │
-                                       └──► storage task ──► nuschel-storage-worker
-                                            (ordered writes)   (SQLite / PostgreSQL)
+                                       ├──► storage task ──────► storage worker (state)
+                                       ├──► history writer ────► storage worker (history,
+                                       │    (ordered; acks and     ordered writes)
+                                       │     fan-out under the lock)
+                                       └──► history reader ────► storage worker (pages)
+                                            (bounded queue; pages re-checked
+                                             under the lock before sending)
 ```
 
 - **One state, one lock.** Channels, users, registrations, bans and permission
@@ -147,29 +161,40 @@ autoban (Murmur's 10 attempts in 120 s → 300 s) and IP and certificate bans ar
 checked before a connection gets anywhere. The accept loop backs off on
 descriptor exhaustion.
 
-## Extension points (phase 2)
+## The Nuschel extension
 
-- `tls.rs` offers ALPN `nuschel/1` (and `mumble`); whether a connection
-  negotiated it is recorded per user (`User::nuschel`).
-- `ClientInfo::apply` is the only place a `Version` message is interpreted; the
-  `NuschelHello` field (7200) is decoded there.
-- `State::handle` is the single dispatch point; frames in 0x4E00–0x4EFF are
-  counted and ignored until the extension's handlers exist.
-- Every text message goes through `State::text_message`, where persistence with
-  per-conversation sequence numbers and idempotency keys slots in.
-- Channels carry a random 128-bit `conversation_id`, assigned once and never
-  reused, and a per-channel `history_visibility` (default: members read earlier
-  history). Nothing is pruned (retention defaults to forever).
-- `State::broadcast` is where a second encoding with extension fields would be
-  chosen per connection; stock clients never receive extension fields.
+- **Negotiation.** `tls.rs` selects ALPN `nuschel/1` (and accepts `mumble`); the
+  connection's `Negotiation` (extension.rs) accepts the client's hello once before
+  `Authenticate` and freezes the capabilities; ALPN without a hello closes the
+  connection before the credentials are decoded, a hello without ALPN is ignored.
+  `nuschel/1` connections get a `Version` with the server's hello and policy.
+- **Dispatch.** `State::handle` passes frames in 0x4E00–0x4EFF to
+  `State::extension_frame` (chat.rs), which processes them only for connections that
+  negotiated the needed capability; caps per type come from the header
+  (`nuschel::client_limit`) and again after decoding; at most 16 requests in flight.
+- **Conversations** (conversations.rs): channels' `conversation_id`, direct
+  conversations per pair of accounts, and archives of deleted permanent channels
+  (SuperUser only); temporary channels' history is purged with them. Registered users
+  have immutable 128-bit account ids. `can_read`, `can_write`, visible ranges,
+  subscriptions, `since_access` intervals and read markers live in the state;
+  `authz_changed` records each trigger and `State::finish` re-evaluates before the
+  lock is released.
+- **Writes** are assigned their `seq` under the lock and queued to the history writer
+  (history.rs), which stores them in order and then, under the lock, acknowledges,
+  fans out to current readers and sends stock clients their copy (made with
+  `nuschel-legacy-html`, checked by Murmur's text rules). Stock senders' channel
+  messages are stored as `legacy_html` (`State::text_message`).
+- **Pages** go to the history reader through a bounded queue; the result is clipped
+  again if `authz_epoch` moved and dropped if `can_read` no longer holds.
 
 ## Tests
 
 | Command | What it covers |
 | --- | --- |
-| `cargo test -p nuscheld` | ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state; loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames |
+| `cargo test -p nuscheld` | ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames |
+| `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends |
 | `cargo test -p nuschel-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |
-| `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark |
+| `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase |
 | `python3 tests/with_local_nuscheld.py <bins> tests/<suite>.py <bins> --port PORT …` | `mumble_client.py`, `udp_voice.py`, `protocol_features.py` against nuscheld; `with_local_murmur.py` runs the same scripts against stock Murmur |
 | `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), and the stock Mumble GUI (login with a Nuschel-exported certificate, voice both ways) |
-| `cargo +nightly fuzz run server_messages` (in `fuzz/`) | also `control_frames`, `relay`, `crypt` |
+| `cargo +nightly fuzz run server_messages` (in `fuzz/`) | also `control_frames`, `relay`, `crypt`, `extension_messages` |

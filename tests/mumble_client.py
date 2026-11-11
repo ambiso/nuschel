@@ -208,11 +208,15 @@ def check_session(binaries, host, port, reference):
             body = "First line\n\n```rust\nfn main() {}\n```\n<literal>&"
             alice.send(kind="text", channel=channel, body=body)
             incoming = bob.wait(lambda event: event["kind"] == "text" and event["author"] == "NuschelAlice")
-            assert incoming["html"], "stock servers allow HTML"
-            prepared, = exchange(Path(binaries) / "nuschel-content-worker", [{"kind": "legacy_html", "html": incoming["body"]}])
-            assert prepared["status"] == "prepared"
-            assert prepared["value"]["source"] == body
-            assert any(block["kind"] == "code" for block in prepared["value"]["document"]["blocks"])
+            if incoming.get("seq") is not None:
+                # A Nuschel server: the text itself, stored with a seq (docs/extension.md).
+                assert not incoming["html"] and incoming["body"] == body, incoming
+            else:
+                assert incoming["html"], "stock servers allow HTML"
+                prepared, = exchange(Path(binaries) / "nuschel-content-worker", [{"kind": "legacy_html", "html": incoming["body"]}])
+                assert prepared["status"] == "prepared"
+                assert prepared["value"]["source"] == body
+                assert any(block["kind"] == "code" for block in prepared["value"]["document"]["blocks"])
             packets = reference.encode_tone(6)
             alice.unmute()
             alice.send(kind="voice", target=31, sequence=0, opus=packets[0])

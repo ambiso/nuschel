@@ -1,8 +1,11 @@
 # The Nuschel protocol extension
 
-Status: design (2026-11-11), revised after the security review of the same day; not
-implemented. It covers roadmap phase 2 (TODO.md, "Nuschel server"): negotiation,
-durable conversations, persistent history, subscriptions. Identity, key transparency
+Status: design (2026-11-11), revised after the security review of the same day;
+implemented in `nuscheld`, `nuschel-session` and the desktop except files (§8), MLS
+and key transparency. Where the implementation refined the design, the text says so
+and "Implementation notes" at the end lists the refinements. It covers roadmap phase
+2 (TODO.md, "Nuschel server"): negotiation, durable conversations, persistent
+history, subscriptions. Identity, key transparency
 and MLS (phases 3–4) are designed in `docs/e2ee.md` (in progress) and build on the
 framing and identifiers defined here.
 
@@ -50,8 +53,8 @@ authenticated channel, so a network attacker cannot strip `nuschel/1` or capabil
 without breaking the connection, provided the server is authenticated. Rules:
 
 1. *No fallback.* The client never reconnects with fewer options after a failure.
-2. *Sticky policy, never downgrade.* A server that negotiated `nuschel/1` (or a
-   capability such as `mls/1`) is remembered by its address (later by its identity
+2. *Sticky policy, never downgrade.* A server that negotiated `nuschel/1` (and every
+   capability it negotiated, such as `mls/1`) is remembered by its address (later by its identity
    key), not by its leaf certificate: CA-issued certificates rotate every few months,
    and a rotation (or a misissued certificate) must not reset the record. If the
    server later answers as plain Mumble or without that capability, the connection
@@ -114,8 +117,10 @@ separate protobuf package (`nuschel.v1`) in `crates/protocol`.
   one per pair of accounts. Temporary channels keep no history by default (it is
   deleted with the channel); a deleted permanent channel's history becomes
   administrator-only, since no ACL remains to authorise it.
-- **Messages.** A per-conversation sequence number (`seq`, u64 from 1) assigned when
-  the message is durably stored. A global counter would let members infer activity in
+- **Messages.** A per-conversation sequence number (`seq`, u64 from 1) assigned by the
+  single owner of authorisation state (the server's state lock) and acknowledged once
+  the message is durably stored; storage, fan-out and access intervals therefore agree
+  on one order. A global counter would let members infer activity in
   conversations they cannot read. `seq` reveals how many messages came before a
   reader's window; that is accepted and documented.
 - **Identifiers are not capabilities.** Knowing a `ConversationId`, a `seq` or a
@@ -127,11 +132,13 @@ separate protobuf package (`nuschel.v1`) in `crates/protocol`.
 
 **Idempotency.** Every send carries a client-generated 128-bit `idempotency_key`
 (random). It is scoped to `(account, conversation, key)` and stored on the message row
-under a unique constraint, inserted with `INSERT … ON CONFLICT DO NOTHING RETURNING
-seq` (two devices retrying at once cannot both insert). A retry with the same key and
-the same body returns the original `seq`; with a different body it returns
-`idempotency_conflict` (a buggy client must not lose messages silently). Keys are
-never forwarded to other users.
+under a unique constraint, checked and inserted in one transaction by the single
+history writer (two devices retrying at once cannot both insert). A retry with the
+same key and the same body (a hash of conversation, format, reply and content)
+returns the original `seq`; with a different body it returns `idempotency_conflict`
+(a buggy client must not lose messages silently). The `seq` the server had assigned to
+the retry is stored as a `void` row, so seq ranges stay explicit. Keys are never
+forwarded to other users or returned in pages.
 
 ## 4. Sending and live delivery
 
@@ -160,8 +167,14 @@ never forwarded to other users.
 - **Rate limits.** `ChatSend` and edits share Murmur's text bucket with `TextMessage`
   (`messagelimit`/`messageburst`, default 1/s with a burst of 5), so Nuschel clients
   get no second allowance.
-- Live delivery is `ChatEvent { conversation, message }` to each subscribed
-  connection that may read the conversation at that moment (§5).
+- Live delivery is `ChatEvent { conversation, message }`, after the message is
+  stored, to each subscribed connection that may read the conversation at that moment
+  (§5), and to Nuschel connections in its live audience as for stock text (in the
+  channel or listening, guests included; both accounts of a direct conversation).
+  Stock clients get the `TextMessage` copy; a Nuschel connection never gets both. A
+  stock sender's channel message reaches stock recipients at once and Nuschel readers
+  once stored (live as `TextMessage` if storing fails, or if it exceeds 1 MiB, which
+  is not kept).
 
 ## 5. Who may read, and subscriptions
 
@@ -182,7 +195,16 @@ stock client would silently erase (or, for a deny, open) it.
   the user could read the channel, not first join (a user removed and later readmitted
   does not see what was said while they were out). All anchors, including
   `around(seq)`, are clipped to those intervals; outside them is indistinguishable from
-  nonexistent, and pages carry a `restricted` flag at the window's edge.
+  nonexistent, and pages carry a `restricted` flag at the window's edge. Intervals are
+  kept in seq space per account: one opens (at head + 1) when the server sees the
+  account able to read (at login, or on any change while it is online) and closes (at
+  head) when it no longer can, which is checked on every global change even while the
+  account is offline (by its registration and certificate, without tokens). An
+  account granted access while offline gets its interval at its next login, so
+  `since_access` errs towards showing less. Switching a channel to `since_access` keeps
+  what its current readers could see (an interval from seq 1); the setting is
+  `ChannelSettings` and needs Write on the channel. At most 32 intervals are kept per
+  account and channel; the oldest are dropped, never merged.
 - **One owner of authorisation state.** A single task owns channels, ACLs, groups,
   memberships and tokens, with a version counter (`authz_epoch`). Every change that
   can affect reading re-evaluates subscriptions: ACL edits, user moves, joining or
@@ -217,11 +239,14 @@ stock client would silently erase (or, for a deny, open) it.
   `reply_to` previews and mentions. Attachments are released by reference count (§8).
 - Edits and deletions are events with their own `seq` that refer to the target;
   pages return each message's current state plus tombstones, so clients converge
-  without replaying everything. Stock clients see neither: a "removed" message stays
+  without replaying everything. Event rows in pages carry no content (the target row
+  has it); an event about a message outside the reader's visible ranges is a `void`.
+  A live edit event carries the new content, only to readers who may see the target. Stock clients see neither: a "removed" message stays
   on their screens and in their logs, and the UI says so to moderators.
 - **Retention:** per server and per channel (keep forever, N days, or none); the
   default is forever (user decision). Expired messages become tombstones without
-  content, so `seq` ranges stay explicit.
+  content, so `seq` ranges stay explicit. Implemented: a server-wide number of days
+  (checked hourly); per-channel retention and "none" are not.
 - **Search** stays client-side (over pages the client has fetched and stored),
   consistent for plaintext and encrypted conversations; a server-side search for
   plaintext servers can be added later as a separate capability.
@@ -230,7 +255,9 @@ stock client would silently erase (or, for a deny, open) it.
 
 - `ReadMarker { conversation, seq }`: per account, accepted only for readable
   conversations, monotonic, `seq ≤ head`, bounded per account; synced across the
-  user's devices by default (user decision) and never shown to others unless read
+  user's devices by default (pushed to the account's other connections and returned
+  with `Subscribed`; Mumble allows one connection per account at a time, so in practice
+  the next device to log in gets it) (user decision) and never shown to others unless read
   receipts are enabled (off by default). In end-to-end conversations markers sync as
   an encrypted per-user blob or an MLS message to oneself, so the server does not
   learn reading times.
@@ -270,8 +297,11 @@ in a channel and who listens. On a server in compatible mode:
 
 - Stock clients are told, in the welcome text and when entering an archived channel,
   that text is retained and for how long; retention is visible per channel.
-- Direct messages from stock senders are not archived by default.
-- Operators get tools to erase a user's messages (and must, for GDPR requests).
+- Direct messages from stock senders are not archived by default
+  (`history.archive_stock_direct_messages` stores those between two accounts).
+- Operators get tools to erase a user's messages (and must, for GDPR requests):
+  `nuscheld --erase-user NAME` turns them into tombstones. Copies already on clients
+  (Nuschel caches, stock clients' logs) remain.
 
 ## 10. What the server can see
 
@@ -305,3 +335,37 @@ read no history by default; account ids never reused; access intervals for
 fail-closed negotiation with frozen capabilities; upload ids instead of hash
 capabilities; notices for stock users on mixed servers; per-sender ordering inside
 end-to-end payloads.
+
+## Implementation notes (2026-11-11)
+
+What the implementation settled or refined (`crates/protocol/proto/nuschel.proto` is
+the wire definition):
+
+- **Messages** `0x4E00`–`0x4E13`: `Error`, `ChatSend`, `ChatAck`, `ChatEvent`,
+  `HistoryRequest`, `HistoryPage`, `Subscribe`, `Subscribed`, `Unsubscribe`,
+  `Unsubscribed`, `ChatEdit`, `ChatDelete`, `ReadMarker`, `Typing`, `OpenDirect`,
+  `DirectOpened`, `ListDirect`, `DirectList`, `ChannelSettings`, `Done`. Field 7200 of
+  `ChannelState` carries a channel's conversation id, visibility and retention, to
+  Nuschel connections only.
+- **Capabilities**: `history/1` covers sending, history, edits, deletions, read
+  markers, direct conversations and channel settings; `subscribe/1` and `typing/1` are
+  separate. The client's sticky record keeps `nuschel/1` and every negotiated
+  capability.
+- **Rows** are `message`, `edit`, `delete` or `void`; deletion reasons are 0 author,
+  1 moderator, 2 expired, 3 erased by the operator.
+- **Errors**: `unsupported`, `malformed`, `not_found` (also "not allowed"),
+  `too_large`, `rate_limited`, `idempotency_conflict`, `busy`, `duplicate_request`,
+  `too_many_requests`, `limit_reached`, each with one fixed detail string.
+- **Limits**: `ChatSend`/`ChatEdit` text ≤ 64 KiB (and the stock copy within the
+  server's text limit), stored stock HTML ≤ 1 MiB, ≤ 64 conversations per
+  `Subscribe`, ≤ 256 subscriptions per connection and 1,024 per account, ≤ 1,024
+  direct conversations per account, pages ≤ 100 rows and 256 KiB of content, pages and
+  bytes per minute per connection (`history.pages_per_minute`,
+  `page_bytes_per_minute`). History pages are not yet limited per address prefix;
+  `connections_per_address` bounds them.
+- **Guests**: `history.guests = none | full` (no `since_connect`).
+- **Direct conversations** are opened by registration number, created on first use,
+  and need Murmur's TextMessage permission in the online peer's channel; a deleted
+  account's conversations are frozen and its messages show no name.
+- **Storage**: three storage-worker processes on one database (server state,
+  history writes in order, history reads), so a page never waits behind a write.

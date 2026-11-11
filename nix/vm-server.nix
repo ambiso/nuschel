@@ -1,6 +1,7 @@
 # nuscheld under the NixOS module, with stock clients: the stock Mumble GUI
 # (login with a Nuschel-exported certificate, voice both ways) and the same
-# client suites vm-smoke runs against stock Murmur. A second node runs the
+# client suites vm-smoke runs against stock Murmur; and Nuschel with the
+# extension's server history (SQLite and PostgreSQL). A second node runs the
 # server on local PostgreSQL. State must survive service restarts.
 {
   pkgs,
@@ -102,6 +103,10 @@ pkgs.testers.runNixOSTest {
     client.succeed(f"python3 {tests}/udp_voice.py {bins} --host server --opus-library ${opus} --netem --block-udp")
     as_tester(f"python3 {tests}/protocol_features.py {bins} --host server --opus-library ${opus} --openssl ${pkgs.openssl.bin}/bin/openssl")
 
+    # Nuschel with the extension: stored, acknowledged, read from the server's
+    # history after being offline (docs/extension.md).
+    as_tester(f"python3 {tests}/nuschel_history.py {bins} --host server")
+
     # The real stock Mumble GUI against nuscheld: login with a certificate
     # exported by Nuschel, then voice in both directions.
     as_tester(f"xvfb-run -a -s \"-screen 0 1280x800x24\" python3 {tests}/stock_client.py {bins} --mumble ${pkgs.mumble}/bin/mumble --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${opus} --output /tmp/nuschel-stock-artifacts")
@@ -112,6 +117,11 @@ pkgs.testers.runNixOSTest {
     postgres.succeed("systemctl restart nuschel.service")
     postgres.wait_for_open_port(64738)
     as_tester(f"python3 {tests}/seed_server.py {bins} --host postgres --verify")
+    # The history schema on PostgreSQL, and that it survives a restart.
+    as_tester(f"python3 {tests}/nuschel_history.py {bins} --host postgres")
+    postgres.succeed("systemctl restart nuschel.service")
+    postgres.wait_for_open_port(64738)
+    as_tester(f"python3 {tests}/nuschel_history.py {bins} --host postgres")
     print(server.succeed("journalctl -u nuschel.service --no-pager | tail -n 40"))
   '';
 }
