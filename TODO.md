@@ -914,13 +914,18 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
   - [ ] Push for mobile: content-free pushes (Signal-style), UnifiedPush on Android.
 - [ ] **Voice on several servers at once** (user, 2026-11-11): every connected server
       that is not deafened starts its own media worker, so unmuted on two servers you
-      speak into both, hear both mixed, and push-to-talk transmits on every one; the
-      footer names only one. Proposed: exactly one voice server (the one whose channel
-      you last joined); other servers are set muted and deafened and run no media
-      worker; switching restores the previous mute state; push-to-talk and mute
-      shortcuts act on the voice server only; the voice server is highlighted in the
-      server rail (green ring and speaker badge, pulsing while someone talks) and
-      named in the footer. Awaiting the user's go.
+      speak into both and push-to-talk transmits on every one; the footer names only
+      one; and each worker's echo canceller knows only its own playback, so another
+      server's audio leaks into the microphone as echo. The user listens to several
+      voice channels at once and very rarely speaks in more than one. Plan: **listen
+      anywhere** (each server's audio mixed, per-server volume, deafen per server);
+      **speak in one place by default**: one talk server owns the microphone, and
+      push-to-talk and mute shortcuts act on it; unmuting on a second server asks
+      once ("Speak on two servers?"). **One media worker for the app**: one capture
+      encoded once and sent to the talk server(s), all playback mixed into one output
+      that is also the echo reference. Rail: green microphone ring on the talk server,
+      a headphone badge on listening servers, pulsing while someone talks; the footer
+      says "Talking on X · listening to Y, Z". Awaiting the user's go.
 - [ ] Knocking (user, 2026-11-11): someone who may not enter a voice or chat channel
       knocks; online users with **Move and Enter** in that channel get a notice with
       Admit / Decline (knocks rate-limited). Admitting grants temporary Enter, Speak,
