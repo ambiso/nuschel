@@ -22,9 +22,11 @@ Every configuration key is optional; names and defaults follow murmur.ini
 `--database-url-file`, `--tls-certificate-file`/`--tls-key-file`, `--password-file`,
 `--superuser-password-file`, and `--ephemeral` (state in memory only).
 
-- **Security mode.** `security = "compatible"` admits stock clients and has no
-  end-to-end encryption. `"e2ee"` will become the default once MLS exists; until
-  then the server refuses to start with it, so nobody believes they have E2EE.
+- **Security mode.** `security = "compatible"` admits stock clients; Nuschel clients
+  can still use end-to-end encrypted direct conversations (`mls/1`, opt-in on the
+  client while experimental). `"e2ee"`, which rejects stock clients at the connection
+  stage, is not implemented yet: the server refuses to start with it, so nobody
+  believes stock clients are kept out.
 - **Secrets** come from files: `password_file`, `superuser_password_file`,
   `database_url_file`, `private_key`, `kt.signing_key_file`, `kt.vrf_secret_file`.
   The NixOS module passes them through systemd `LoadCredential`
@@ -558,8 +560,8 @@ descriptor exhaustion.
   each binding beside the log, publishes waiting bindings every `publish_interval`
   and re-signs the head every `refresh_interval`.
 
-- **MLS delivery service** (mls.rs, `mls` branch): `mls/1` requests are authorised
-  under the lock and processed by one task through nuschel-e2ee (`PublicGroup` per
+- **MLS delivery service** (mls.rs): `mls/1` requests are authorised through
+  authz.rs under the lock and processed by one task through nuschel-e2ee (`PublicGroup` per
   group, structural checks before OpenMLS, `catch_unwind`): the key package directory,
   epoch fencing with `STALE_EPOCH`, commits and application messages as rows of the
   conversation's `seq` stream, Welcome mailboxes with push, join info; state in the

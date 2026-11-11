@@ -5,9 +5,10 @@ MLS) is implemented: `nuschel-identity`, `nuschel-kt`, the crypto worker
 (`apps/crypto-worker`), the `kt/1` directory in `nuscheld` and the client flow in
 `nuschel-session` and the desktop; "Phase 3 as implemented" at the end lists what the
 implementation settled. Phases 4a (delivery service) and 4b (direct conversations) are
-prototyped on the `mls` branch on OpenMLS 0.9.2, which is not merged until an OpenMLS
-release with the draft's code points and fixed libcrux crates exists (§1.1, §1.4);
-"Phase 4 prototype" at the end describes it. It covers roadmap phases 3
+implemented on OpenMLS 0.9.2 with a patch for its vulnerable libcrux pins and the
+provisional suite code point; end-to-end direct messages are opt-in until the client
+shows them. "Phase 4 prototype" at the end describes it, and how to move to the
+OpenMLS release with the draft's code points (§1.1, §1.4). It covers roadmap phases 3
 (identity, key transparency) and 4 (MLS) in TODO.md, "Nuschel server", and builds on
 the framing, identifiers and policies of [docs/extension.md](extension.md). Claims
 marked *(spike)* are checked by tests in [`spikes/mls`](../spikes/mls), a standalone
@@ -1161,10 +1162,11 @@ on flash become unreadable once the old key is gone from the OS credential store
   tls_codec, hpke-rs, the libcrux family, libcrux-ml-dsa; for KT: akd and akd_core
   (blake3 with `pure`, protobuf 3, dalek curves); for linking: spake2. All MIT or
   Apache-2.0.
-- `cargo deny` fails on three libcrux advisories pinned by openmls_libcrux_crypto
-  0.4.0 (§1.4). `main` adds no ignores; the `mls` branch ignores exactly these three,
-  commented and to be removed with the release that moves to hpke-rs 0.8, and is not
-  merged before it.
+- The three libcrux advisories pinned by openmls_libcrux_crypto 0.4.0 (§1.4) are
+  patched, not ignored: the provider and hpke-rs-libcrux 0.7.0 are vendored onto
+  libcrux-hmac-drbg 0.0.2 and libcrux-kem 0.0.10 (manifest changes only,
+  `vendor/*/NUSCHEL-PATCH.md`), and `cargo deny` passes without ignores. The patch goes
+  with the OpenMLS release that moves to hpke-rs 0.8 (TODO.md).
 - `rayon` (from OpenMLS) starts a thread pool in the crypto worker; its CPU limit must
   allow for it.
 
@@ -1191,6 +1193,8 @@ on flash become unreadable once the old key is gone from the OS credential store
    into, or leave auditors to operators?
 10. **Release timing**: agree to ship persistent end-to-end groups only on an OpenMLS
     release with the draft's code points and fixed libcrux crates (prototype on 0.9.2)?
+    *(Decided 2026-11-11: merge on 0.9.2 with the libcrux pins patched; groups break at
+    the bump to that release, accepted for early development.)*
 11. **Ciphersuite**: the draft's AES-128-GCM X-Wing suite (recommended), or OpenMLS's
     ChaCha20 suite 0x004D, which is not in the draft?
 12. **Guests**: unregistered users cannot join end-to-end conversations, so on an
@@ -1279,12 +1283,16 @@ the log-structured store of §8.3); credential verification uses the device rost
 blocking moves from the profile into the conversation's send path; and device linking
 publishes the new roster with the existing `KtPublish`.
 
-## Phase 4 prototype (`mls` branch, 2026-11-11)
+## Phase 4 prototype (2026-11-11)
 
 Phases 4a (delivery service) and 4b (direct conversations) run end to end on OpenMLS
-0.9.2. **This branch is not merged into `main`** until an OpenMLS release carries the
-draft's code points and the fixed libcrux crates (§1.1, §1.4); nothing persistent may
-depend on what it creates. How to bump is at the end of this section.
+0.9.2. The user decided to merge it now rather than wait for the next OpenMLS release
+(§1.1): the vulnerable libcrux pins are **patched** (decision 15), and the provisional
+code point stays until that release, whose bump breaks the groups made before it, which
+the user accepted for early development ("we can have some breaking changes while
+we're still in early development"). End-to-end direct messages are **opt-in**
+(decision 16) until the client sends and shows them. How to bump is at the end of this
+section.
 
 ### What exists
 
@@ -1296,7 +1304,7 @@ depend on what it creates. How to bump is at the end of this section.
 | `nuschel-session` (`crates/session/src/mls.rs`) | Moves bytes between the server and the worker inside the key-transparency driver: key package uploads, Welcomes, creating a direct conversation's group, sending, catching up in `seq` order |
 | `nuschel-cli` | `e2ee_open`, `e2ee_send`, `e2ee_status`, `e2ee_sync` and `e2ee_*` events: the test driver; `--offline` runs only the crypto worker for device linking (`link_offer`, `link_join`, `link_approve`, `link_complete`) |
 | Device linking (`apps/crypto-worker/src/link.rs`) | §3.4's protocol from nuschel-identity through the worker, with the messages relayed by the caller (the server mailbox is later work); multi-device publishing and self-monitoring (see decision 13) |
-| Desktop | Opens a direct conversation's group on `mls/1` servers and shows its lock (§7.4) in the conversation header; MLS rows never reach the timeline as text |
+| Desktop | With `e2ee_direct_messages` on (off by default), opens a direct conversation's group on `mls/1` servers; shows its lock (§7.4) in the conversation header; MLS rows never reach the timeline as text |
 
 **Wire** (docs/extension.md conventions; `crates/protocol/proto/nuschel.proto`):
 capability `mls/1` (requires `kt/1`, sticky like every capability; a client refuses a
@@ -1412,6 +1420,28 @@ Where §6–§10 left room, with the reason:
     stored one batch promotes it. On start every pending record is adopted if the
     stream has its commit (by hash) and dropped otherwise; an unreadable history stops
     the start rather than guessing.
+15. **The libcrux patch.** OpenMLS 0.9.2's provider pulls libcrux-hmac-drbg 0.0.1
+    (RUSTSEC-2026-0329) itself and libcrux-kem 0.0.9 (RUSTSEC-2026-0330/-0331) through
+    hpke-rs-libcrux 0.7.0's exact pin. The smallest fix vendors both crates
+    (`vendor/openmls_libcrux_crypto`, `vendor/hpke-rs-libcrux`, `[patch.crates-io]`)
+    with only their manifests changed: libcrux-kem `=0.0.10` (length-checked decoding;
+    the same API apart from a `TryCryptoRng` bound every `CryptoRng` meets, the same
+    X-Wing derivation) and libcrux-hmac-drbg 0.0.2 with its `sys_rng` feature (the same
+    generator). Moving the provider to hpke-rs 0.8, as OpenMLS `main` does, would have
+    changed the X-Wing key derivation and code that is not ours to maintain, for groups
+    that break at the bump anyway. Prevalidation and `catch_unwind` stay: a planted short
+    key would no longer crash anyone, but it would still break every later commit.
+16. **Opt-in end-to-end direct messages.** The desktop does not send or show
+    end-to-end messages yet (the client SDK will), and the server refuses plaintext in
+    a conversation that has a group. So group creation is behind
+    `ClientSettings.e2ee_direct_messages` (off by default; `nuschel-cli --e2ee`):
+    without it the session uploads no key packages and creates no groups, so nobody
+    can add the device to a group and its direct conversations stay plaintext. Groups
+    joined earlier keep working. The server offers `mls/1` by default.
+17. **Main's server rules.** Every MLS permission decision goes through `authz.rs`
+    (`Action::MlsUpload`, `MlsClaim`, `MlsCommit`, `MlsSend`, `MlsMailbox`,
+    `MlsJoinInfo`), and MLS commits are exempt from retention and the erase in the one
+    `expirable` predicate (SQL and in memory) that main made the hook for it.
 
 ### The delivery service
 
@@ -1470,12 +1500,12 @@ nuschel-e2ee only; answers go out under the lock. It runs only with `kt/1` and
 
 | Command | What it covers |
 | --- | --- |
-| `cargo test -p nuschel-e2ee` | Envelope encoding and chains, prevalidation, the binding; in process: a direct conversation through the `DeliveryGroup`, stale epochs and a losing concurrent commit, restore of both halves, replay refused, the DS refusing what does not fit (wrong GroupInfo rolls back, another server's binding), a validly signed key package with a 32-byte X-Wing init key refused before libcrux (and OpenMLS 0.9.2 shown to accept it and libcrux-kem 0.0.9 to panic on it), a tree with a short key refused |
+| `cargo test -p nuschel-e2ee` | Envelope encoding and chains, prevalidation, the binding; in process: a direct conversation through the `DeliveryGroup`, stale epochs and a losing concurrent commit, restore of both halves, replay refused, the DS refusing what does not fit (wrong GroupInfo rolls back, another server's binding), a validly signed key package with a 32-byte X-Wing init key refused before libcrux (OpenMLS 0.9.2 accepts it; the patched libcrux-kem refuses to encapsulate to it with an error where 0.0.9 panicked), a tree with a short key refused |
 | `cargo test -p nuschel-crypto-worker --test mls` | The worker against a delivery service in the test (in the style of `tests/malicious.rs`): two and three devices (a second device of one identity made with its device-signing key, standing in for linking), restarts, a server that drops, reorders, replays and forks, stale epoch with the same envelope resent, a stranger's commit refused, a device KT does not list (blocked, then unblocked by a lookup), a hostile key package, a Welcome for a pinned conversation, concurrent creations, a lost ack settled by the stream, removal |
 | `cargo test -p nuscheld --test mls` | The delivery service over the wire with raw protocol clients and real identities (6 tests): upload, claim, creation, Welcome push, fetch and ack, join info, a message decrypted by the other side and a history page with both row formats; idempotent resends of the creation and of a message; `STALE_EPOCH` with epoch and head for an old-epoch message and a racing commit, catch-up and resend; plaintext and edits refused; hostile key packages (a short X-Wing init key as one-time and last-resort package, garbage, another identity's) refused while the server keeps serving; a claim without a direct conversation and a commit adding a third identity refused; the mailbox, epoch and fencing after a restart; a commit stored just before a crash adopted on restart, and a pending commit without its row dropped. Storage tests: delete on empty value, commits surviving expiry and erase |
 | `cargo test -p nuschel-crypto-worker --test link` | Linking two workers in process; a wrong code and steps out of order refused |
 | `cargo test -p nuschel-cli --test e2ee_devices` (after `cargo build -p nuschel-crypto-worker`) | Three devices via `nuschel-cli`: Bob's phone linked to his laptop, the two-device roster published without an own-key alarm, Alice's group with three verified members, each Bob device reading Alice's message while online, the phone's reply reaching Alice and later the laptop as its own; and a device linked after the conversation existed, added through the missing-device report, which unblocks Alice after her next lookup |
-| `cargo test -p nuschel-cli --test e2ee` (after `cargo build -p nuschel-crypto-worker`) | Two `nuschel-cli` processes with sandboxed crypto workers through `nuscheld` on loopback: key packages, the group created by `e2ee_open`, the Welcome pushed, messages both ways in order, offline delivery read by a new worker process, plaintext into the conversation refused |
+| `cargo test -p nuschel-cli --test e2ee` (after `cargo build -p nuschel-crypto-worker`) | Without the opt-in (`--e2ee`) a device uploads no key packages and creates no group, a peer cannot create one with it, and the plaintext direct conversation keeps working; with it, two `nuschel-cli` processes with sandboxed crypto workers through `nuscheld` on loopback: key packages, the group created by `e2ee_open`, the Welcome pushed, messages both ways in order, offline delivery read by a new worker process, plaintext into the conversation refused |
 | `python3 tests/with_local_nuscheld.py <bins> tests/e2ee_direct.py <bins> --port PORT` | The same as a script; `--state DIR` and `--phase second` check the group and stream after a server restart. `vm-server` runs it on SQLite across a restart and on PostgreSQL |
 | `fuzz/fuzz_targets/mls.rs` | Prevalidation, key package checks, Welcome routing, envelopes (one encoding), the `mls/1` messages, and the DS paths on a fixture group that garbage must never move |
 
@@ -1494,8 +1524,9 @@ libcrux-kem and libcrux-hmac-drbg):
    and X-Wing key derivation following draft-ietf-hpke-pq; no variant uses the draft's
    0x0010 yet. If the release keeps 0x004F, the wire id does not change but the key
    derivation does: prototype state is unreadable either way.
-3. deny.toml: delete the three `RUSTSEC-2026-0329/-0330/-0331` ignores; `cargo deny
-   check` must pass without them. `just crate2nix`.
+3. Delete the libcrux patch: `vendor/hpke-rs-libcrux`, `vendor/openmls_libcrux_crypto`
+   and their `[patch.crates-io]` and `exclude` entries in `Cargo.toml`; `cargo deny
+   check` must pass (it has no ignores for these advisories). `just crate2nix`.
 4. API changes on OpenMLS `main` that touch this code (from its changelog; check
    against the release):
    - `Capabilities` lose their defaults (#2205): every list except versions is empty
@@ -1514,13 +1545,13 @@ libcrux-kem and libcrux-hmac-drbg):
      may be named `load_psk` (#2242); `PublicGroup::validate_key_package_for_add`
      (#2167) can replace part of the directory's own checks.
    - MSRV 1.94 (#2234; the workspace is on 1.95).
-5. Run `cargo test -p nuschel-e2ee` first: the short-key test must now see libcrux
-   refuse the key instead of panicking, and the flow tests show whether the API
-   changes above were complete; then the worker, server and CLI tests above and
-   `vm-server`.
-6. Discard prototype state rather than migrate it: worker `mls` files, the server's
-   MLS records and its `MLS_HANDSHAKE`/`MLS_APPLICATION` rows. Nothing persistent was
-   allowed to depend on 0x004F.
+5. Run `cargo test -p nuschel-e2ee` first (the short-key test expects libcrux to
+   refuse the key with an error, which the patched and the released crates both do;
+   the flow tests show whether the API changes above were complete), then the
+   worker, server and CLI tests above and `vm-server`.
+6. Discard MLS state rather than migrate it: worker `mls` files, the server's MLS
+   records and its `MLS_HANDSHAKE`/`MLS_APPLICATION` rows. Groups made on 0x004F break
+   at the bump, as the user accepted.
 
 ### What remains for 4b to ship
 
@@ -1529,9 +1560,10 @@ libcrux-kem and libcrux-hmac-drbg):
   implemented. A binding value another own device published and replaced before this
   device looked again is unknown to it and would raise the own-key alarm if it falls
   after this device's monitoring checkpoint.
-- **Desktop timeline**: the desktop shows the lock and opens the group, but does not
-  yet send through `MlsCommand::Send` or show decrypted messages
-  (`MlsEvent::Received`) in its timeline and local history.
+- **Client SDK**: sending through `MlsCommand::Send` and showing decrypted messages
+  (`MlsEvent::Received`) in the timeline and local history, in `crates/client`; then
+  `e2ee_direct_messages` can default to on. The desktop shows the lock and, with the
+  setting on, opens the group.
 - Self-updates (§6.5), removing revoked and inactive devices (§3.6), key-transparency
   head gossip inside MLS (§5.3), typing and read markers as MLS messages (§6.3 items
   4–5), external proposals and every channel feature (4c).
@@ -1548,12 +1580,13 @@ libcrux-kem and libcrux-hmac-drbg):
 
 ### Risks
 
-- OpenMLS 0.9.2 with libcrux-kem 0.0.9: prevalidation covers the known panics
-  (X-Wing public keys decoded from key packages and trees); an unknown panic elsewhere
-  is contained by `catch_unwind` in the server's MLS task and in the worker, but would
-  still fail the request.
+- OpenMLS 0.9.2 on a patched provider: the patch changes only dependency versions
+  (libcrux-kem 0.0.10, libcrux-hmac-drbg 0.0.2), but it is ours to carry until the
+  release; prevalidation still refuses short X-Wing keys before libcrux, and an
+  unknown panic is contained by `catch_unwind` in the server's MLS task and in the
+  worker, though it fails the request.
 - The X-Wing key derivation changes on OpenMLS `main` (draft-ietf-hpke-pq): groups made
-  now cannot be carried over, which is why nothing persistent may depend on them.
+  now cannot be carried over to the release; the bump discards them (accepted).
 - The server is trusted for availability only, as designed: it can withhold Welcomes
   or drop messages (shown as gaps), and the lock turns amber; it cannot add a device
   the identity's KT roster does not list without blocking the conversation.

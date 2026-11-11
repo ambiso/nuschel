@@ -714,42 +714,47 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    release timing, ciphersuite, guests); question 1 (recovery key) became a
    setting, offered by default.
 4. **End-to-end encryption (MLS)** — 4a (delivery service) and 4b (direct
-   conversations, multi-device linking) are prototyped on the unmerged bookmark
-   `mls-prototype` (2026-11-11, OpenMLS 0.9.2, provisional suite 0x004F; VM check
-   with an E2EE DM step passes). It merges only after an OpenMLS release with the
-   draft code points and fixed libcrux crates; the bump steps are in that branch's
-   docs/e2ee.md "Phase 4 prototype". Still open there: the desktop sends and shows
-   E2EE DMs through the worker (today only the lock), the `DeviceLink*` mailbox and
-   UI, device revocation and inactive-device removal, self-updates (§6.5), gossip in
-   MLS, typing and read markers as MLS messages, channels (4c), the log-structured
-   worker store, a binary column for MLS rows, eviction of idle groups on the server.
-   - [ ] Wait for the next OpenMLS release before shipping persistent groups:
-         0.9.2 pins libcrux crates with RUSTSEC-2026-0329/-0330/-0331 (a hostile
-         key package can crash the crypto worker) and an X-Wing suite code point
-         that is not in the IETF draft; `main` already has both fixed. Prototype
-         against 0.9.2 meanwhile. The bump steps are in docs/e2ee.md.
+   conversations, multi-device linking) are in (2026-11-11) on OpenMLS 0.9.2 with the
+   provisional suite 0x004F and a patch for its vulnerable libcrux pins; see
+   docs/e2ee.md "Phase 4 prototype". End-to-end direct messages are opt-in and
+   experimental (`e2ee_direct_messages`, `nuschel-cli --e2ee`) until the client sends
+   and shows them; the server offers `mls/1` by default.
+   - [ ] **Remove the libcrux patch and move to the official OpenMLS release** that
+         carries the fixed libcrux crates (hpke-rs-libcrux 0.8, libcrux-kem ≥ 0.0.10,
+         libcrux-hmac-drbg ≥ 0.0.2) and the draft's ciphersuite code points, when
+         possible: delete `vendor/hpke-rs-libcrux` and `vendor/openmls_libcrux_crypto`
+         with their `[patch.crates-io]` and `exclude` entries, then follow the bump
+         steps in docs/e2ee.md "Phase 4 prototype" (suite constant, API changes known
+         from OpenMLS `main`, tests, `just crate2nix`). Groups and key packages made
+         before the bump break (new code point and X-Wing key derivation); the user
+         accepted that while Nuschel is in early development, so the bump discards
+         MLS state instead of migrating it.
    - [x] deny.toml wrapper rules: openmls only in `nuschel-e2ee`, which only the
-         crypto worker and `nuscheld` link (`mls` branch, with the three advisory
-         ignores to remove at the bump). SECURITY.md: libcrux SIMD `unsafe` in the
-         exceptions table.
+         crypto worker and `nuscheld` link; no advisory ignores (patched instead).
+         SECURITY.md: libcrux SIMD `unsafe` in the exceptions table.
    - [x] OpenMLS + libcrux in the crypto worker (sealed `mls` file); key packages
-         published to the server (`mls` branch).
+         published to the server.
    - [x] Delivery service in the server: `PublicGroup` per group, epoch fencing,
          one `seq` stream with commits, key package directory, Welcome mailboxes,
-         join info (`mls` branch).
-   - [ ] One MLS group per conversation; membership follows ACL changes; direct
-         messages as two-party groups (direct conversations done on the `mls`
-         branch; channels are 4c).
-   - [ ] Device linking over the server's mailbox (§3.4) and its UI; the worker's
-         linking and multi-device key-transparency publishing exist on the `mls`
-         branch, with the messages relayed by the caller. Device revocation.
-   - [ ] Desktop: send through the crypto worker and show decrypted messages in the
-         timeline (the lock in the header exists).
+         join info, crash-consistent commits, permissions through authz.rs.
+   - [ ] Client SDK (`crates/client`): send through the crypto worker and show
+         decrypted messages in the timeline (`MlsCommand::Send`, `MlsEvent::Received`;
+         the desktop today shows only the lock), then turn `e2ee_direct_messages` on
+         by default.
+   - [ ] One MLS group per conversation; membership follows ACL changes (channels,
+         4c); direct messages as two-party groups are done.
+   - [ ] Device linking over the server's mailbox (`DeviceLink*`, §3.4) and its UI;
+         the worker links devices and publishes multi-device rosters today, with the
+         messages relayed by the caller. Device revocation and inactive-device
+         removal.
+   - [ ] Self-updates (§6.5), key-transparency head gossip in MLS, typing and read
+         markers as MLS messages, the log-structured worker store (§8.3), a binary
+         column for MLS rows, eviction of idle groups on the server.
    - [ ] Encrypted messages, files (the file-transfer design for Nuschel servers) and
          history archive with an explicit historical-access policy.
    - [ ] Strict mode: no legacy clients in end-to-end channels, no downgrades; a
          green lock only after authenticated MLS establishment (pins, plaintext
-         refusal and the lock exist for direct conversations on the `mls` branch).
+         refusal and the lock exist for direct conversations).
    - [ ] Media later: SFrame with MLS-exported keys (with the WebRTC work below).
 5. **Moderation and operations**
    - [ ] Moderation tools on top of E2EE (reports, membership removal), metrics.
