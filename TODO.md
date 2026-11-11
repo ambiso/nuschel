@@ -478,7 +478,18 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          per-device keys; each device has its own signing key and an X-Wing
          (ML-KEM-768 + X25519) key for device linking, history sharing and first
          contact. Separate from the Mumble RSA certificate.
-   - [ ] Device linking (QR / short code), revocation of lost devices, recovery.
+   - [x] `crates/identity` (2026-11-11): RFC 10073 composite ML-DSA-65 + Ed25519
+         root and device-signing keys, a separate Ed25519 credential key (compact
+         172-byte MLS credentials), X-Wing device keys, certificates and revocations
+         by key epoch, Signal-style safety numbers and QR payload, SPAKE2 device
+         linking with a PSK-bound HPKE bundle, encrypted keystore and recovery key;
+         vectors and a fuzz target. Not wired into the client yet.
+   - [ ] Crypto worker: OpenMLS `Signer` over the device leaf key, credential
+         validation against rosters from the transparency log, the `DeviceLink*`
+         mailbox, OS keychain for the store key, account and Mumble-certificate
+         binding statements, device-sync key rotation, recovery-key policy and UI.
+   - [ ] deny.toml ignores RUSTSEC-2026-0173 (proc-macro-error2, reachable only under
+         libcrux's `cfg(hax)` verification builds): confirm.
    - [ ] The same identity on every Nuschel server, bound per server in its
          key-transparency log; verification over the identity root holds everywhere.
    - [ ] Trust on first use: pin a contact's identity key on first sight; a changed
