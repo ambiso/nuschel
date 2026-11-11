@@ -175,6 +175,10 @@ pub struct ChannelView {
     pub loading: bool,
     /// Messages that arrived while the reader was scrolled up.
     pub new_messages: usize,
+    /// Messages that arrived out of sight, and whether one mentions you or
+    /// is a direct message (shown in the channel list and server rail).
+    pub unread: usize,
+    pub unread_mention: bool,
     /// Joins, moves, moderation and connection gaps; in memory only.
     pub activity: std::collections::VecDeque<ActivityLine>,
     pub links: BTreeSet<u32>,
@@ -223,6 +227,8 @@ impl ChannelView {
             loaded: false,
             loading: false,
             new_messages: 0,
+            unread: 0,
+            unread_mention: false,
             activity: Default::default(),
             links: BTreeSet::new(),
             temporary: false,
@@ -739,7 +745,7 @@ pub struct Desktop {
     pub update: crate::update::UpdateState,
     /// Desktop notifications, and whether the window has focus.
     notes: tokio::sync::mpsc::Sender<crate::notify::Note>,
-    window_active: bool,
+    pub window_active: bool,
     /// The image viewer, its request counter, and the image a context menu is for.
     pub viewer: Option<crate::viewer::Viewer>,
     pub viewer_requests: u64,
@@ -2630,7 +2636,22 @@ impl Desktop {
                         channel.storage_key = storage_key;
                     }
                     let outgoing = message.outgoing;
+                    let mention = !outgoing
+                        && (matches!(channel.target, TextTarget::Direct(_))
+                            || message.document.blocks.iter().any(|block| {
+                                matches!(block, nuschel_core::ContentBlock::Text { text, .. }
+                                    if crate::notify::mentions(text, &server.bookmark.username))
+                            }));
                     let added = merge_message(channel, message);
+                    let in_sight = self.window_active
+                        && self.following
+                        && self.navigation.selection().is_some_and(|selected| {
+                            selected.server == server.id && selected.channel == channel.id
+                        });
+                    if added && !outgoing && !in_sight {
+                        channel.unread += 1;
+                        channel.unread_mention |= mention;
+                    }
                     if self.navigation.selection().is_some_and(|selected| {
                         selected.server == server.id && selected.channel == channel.id
                     }) {

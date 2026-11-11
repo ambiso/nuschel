@@ -30,6 +30,7 @@ impl Render for Desktop {
         self.apply_composer_acks(window, cx);
         self.reconcile_selection(window, cx);
         self.settle_timeline();
+        self.mark_read();
         let selected = self.selected_indices();
         let title = selected
             .map(|(server, channel)| {
@@ -141,6 +142,15 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         .map(|(index, server)| {
             let active = Some(index) == selected;
             let online = server.status == Status::Connected;
+            // Discord-like: the pill marks unread conversations; a red count
+            // marks mentions and direct messages.
+            let unread = server.channels.iter().any(|channel| channel.unread > 0);
+            let mentions: usize = server
+                .channels
+                .iter()
+                .filter(|channel| channel.unread_mention)
+                .map(|channel| channel.unread)
+                .sum();
             div()
                 .id(("server-slot", index))
                 .relative()
@@ -156,7 +166,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         .h(px(if active { 36. } else { 10. }))
                         .rounded_r(px(4.))
                         .bg(color(TEXT))
-                        .when(!active && !online, |pill| pill.invisible()),
+                        .when(!active && !unread, |pill| pill.invisible()),
                 )
                 .child(
                     div()
@@ -231,7 +241,33 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 .items_center()
                                 .justify_center()
                                 .child(security_icon(server.security, index, 12.)),
-                        ),
+                        )
+                        .when(mentions > 0, |tile| {
+                            tile.child(
+                                div()
+                                    .absolute()
+                                    .right(px(-6.))
+                                    .top(px(-6.))
+                                    .min_w(px(20.))
+                                    .h(px(20.))
+                                    .px(px(4.))
+                                    .rounded_full()
+                                    .border_2()
+                                    .border_color(color(RAIL))
+                                    .bg(color(DANGER))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(color(0xffffff))
+                                    .child(if mentions > 99 {
+                                        "99+".to_string()
+                                    } else {
+                                        mentions.to_string()
+                                    }),
+                            )
+                        }),
                 )
         })
         .collect::<Vec<_>>();
@@ -411,8 +447,13 @@ fn sidebar(
                         .min_w_0()
                         .flex_1()
                         .truncate()
+                        .when(channel.unread > 0, |name| {
+                            name.font_weight(FontWeight::SEMIBOLD)
+                                .text_color(color(TEXT))
+                        })
                         .child(channel.name.trim_start_matches("@ ").to_string()),
                 )
+                .children(unread_badge(channel))
                 .into_any_element()
         })
         .collect::<Vec<_>>();
@@ -691,10 +732,14 @@ fn channel_row(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .when(in_voice, |name| name.font_weight(FontWeight::SEMIBOLD))
+                .when(in_voice || entry.unread > 0, |name| {
+                    name.font_weight(FontWeight::SEMIBOLD)
+                })
+                .when(entry.unread > 0, |name| name.text_color(color(TEXT)))
                 .id(("channel-name", id as usize))
                 .child(entry.name.clone()),
         )
+        .children(unread_badge(entry))
         .when(!entry.links.is_empty(), |row| {
             row.child(
                 div()
@@ -1163,6 +1208,46 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
         .into_any_element()
 }
 
+/// How many messages arrived out of sight; red for mentions and direct messages.
+fn unread_badge(channel: &crate::state::ChannelView) -> Option<AnyElement> {
+    (channel.unread > 0).then(|| {
+        let count = if channel.unread > 99 {
+            "99+".to_string()
+        } else {
+            channel.unread.to_string()
+        };
+        div()
+            .id(("unread", channel.id as usize))
+            .aria_label(format!(
+                "{} unread {}",
+                channel.unread,
+                if channel.unread == 1 {
+                    "message"
+                } else {
+                    "messages"
+                }
+            ))
+            .flex_shrink_0()
+            .min_w(px(18.))
+            .h(px(18.))
+            .px(px(5.))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_xs()
+            .font_weight(FontWeight::BOLD)
+            .text_color(color(0xffffff))
+            .bg(color(if channel.unread_mention {
+                DANGER
+            } else {
+                ACCENT
+            }))
+            .child(count)
+            .into_any_element()
+    })
+}
+
 /// An animated toggle's value, or its end state before the first render.
 fn eased(ease: &Option<crate::motion::Ease>, on: bool) -> f32 {
     ease.as_ref()
@@ -1170,6 +1255,19 @@ fn eased(ease: &Option<crate::motion::Ease>, on: bool) -> f32 {
 }
 
 impl Desktop {
+    /// The conversation in sight is read: selected, the window in front and
+    /// scrolled to the newest message.
+    fn mark_read(&mut self) {
+        if !(self.window_active && self.following) {
+            return;
+        }
+        if let Some((server, channel)) = self.selected_indices() {
+            let channel = &mut self.servers[server].channels[channel];
+            channel.unread = 0;
+            channel.unread_mention = false;
+        }
+    }
+
     pub fn dialog_open(&self) -> bool {
         self.form.is_some() || self.settings_open || self.panel.is_some() || self.prompt.is_some()
     }

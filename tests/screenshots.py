@@ -140,7 +140,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,links,rich,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,links,rich,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -428,6 +428,20 @@ def main():
                 shell.key("Escape")
                 time.sleep(0.6)
                 shot("13-search-closed")
+            if want("unread"):
+                # Messages out of sight: a count on the channel; a mention turns it red
+                # and puts a red count on the server.
+                click(189, 233)  # browse Lobby; Andi stays in Development
+                time.sleep(0.8)
+                bots[0].send(kind="text", channel=2, body="Anyone here?")
+                time.sleep(1.2)
+                shot("37-unread")
+                bots[0].send(kind="text", channel=2, body="Andi, are you there?")
+                time.sleep(1.2)
+                shot("38-unread-mention")
+                click(228, 267)  # back to Development: read
+                time.sleep(0.8)
+                shot("39-read")
             if want("toggles"):
                 # Mute animates (slash, red); rapid clicks reverse it smoothly.
                 def footer(name):
