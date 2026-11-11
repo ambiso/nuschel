@@ -33,6 +33,9 @@ change has its own validation.
    concurrent linked logins or synced auto-connect; optional passkey/recovery-key/
    skip flows and preferences vault retain their requirements. Android remains
    future work. No private device-key or MLS-state cloning.
+7. **Optional local speech:** Kokoro TTS and Voxtral Mini 4B Realtime captions;
+   isolate inference, download verified models only on demand, target Linux/Windows
+   Vulkan, optional Nix ROCm and macOS Metal. See [speech plan](docs/speech.md).
 
 Dependency path: shared protocol/authorization → server handlers → shared SDK
 commands/events → desktop/web controls. Web build/worker storage and RTC encoded-media
@@ -513,6 +516,26 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       native teardown cannot keep the microphone open (decided). In the shared
       multi-server worker, not every server mute/deafen change needs replacement.
 - [ ] Measure the audible mute/unmute worker-replacement gap.
+
+### Optional local speech (requested 2026-11-11)
+
+- [ ] Voxtral Mini 4B Realtime streaming captions through an isolated inference
+      helper. Use `~/Projects/whisper-cpp` as the llama.cpp/model reference; its
+      current adapter uses ROCm and file chunks, so live latency remains unproven.
+- [ ] Native inference backends: Linux Vulkan and optional Nix ROCm package variant,
+      Windows Vulkan, macOS Metal, CPU fallback; benchmark the exact pinned model,
+      required audio encoder and runtime on each supported backend.
+- [ ] Kokoro TTS: evaluate memory-safe runtime/phonemizer first, otherwise isolated
+      native/ONNX backend; local playback and explicit transmit controls.
+- [ ] Verified, resumable, on-demand model/voice downloads with size/progress,
+      cancellation/removal, disk-backed cache and offline reuse. No default weight
+      downloads or downloaded executable/pickle model code.
+- [ ] Generation-safe per-speaker PCM taps and bounded partial/final captions;
+      ephemeral local transcripts by default, explicit sharing/persistence, no
+      audio-callback inference, no TTS feedback, no capture/mute/permission bypass.
+- [ ] Sandbox/resource/failure tests and call-quality measurements under GPU load;
+      desktop controls and accessible download/caption/TTS states. Full design,
+      dependencies and platform evidence requirements: [docs/speech.md](docs/speech.md).
 
 ### 4. Session robustness and identity
 

@@ -59,6 +59,12 @@ A process boundary alone is not an OS sandbox. The supervisor must limit inherit
 handles, environment, filesystem/network access, outstanding work, memory, and lifetime.
 Current enforcement and exceptions are recorded in [the safety policy](../SECURITY.md).
 
+Optional local Kokoro TTS and Voxtral Realtime captions are planned in
+[the speech design](speech.md). Inference belongs in its own restricted process,
+separate from live media callbacks and the media worker, with verified model files
+downloaded on demand. Vulkan, optional Nix ROCm, Metal and CPU are backend targets;
+model support and confinement must be validated per backend before shipping.
+
 Control IPC is a versioned, length-prefixed JSON protocol with a 4 MiB limit checked
 before allocating a frame body (inline images make content and history replies the
 largest frames). Unknown versions, truncated frames, and oversized
