@@ -2,13 +2,14 @@
 //! Structural checks on MLS bytes before OpenMLS or libcrux see them (docs/e2ee.md
 //! §6.3, "Hostile input").
 //!
-//! libcrux-kem 0.0.9 (pinned by OpenMLS 0.9.2) panics when it decodes an X-Wing
-//! public key shorter than 1216 bytes (RUSTSEC-2026-0330/-0331). Nobody decodes a
-//! key on receipt: the panic comes later, in whoever encapsulates to it (a member
-//! adding a key package's owner, or committing to a tree with a planted leaf or
-//! parent key). So every HPKE key that can end up in a key package or a ratchet tree
-//! is checked here, by a small parser of RFC 9420's TLS encoding that knows nothing
-//! of OpenMLS:
+//! libcrux-kem 0.0.9 (pinned by OpenMLS 0.9.2) panicked when it decoded an X-Wing
+//! public key shorter than 1216 bytes (RUSTSEC-2026-0330/-0331); the workspace now
+//! patches it to 0.0.10, which returns an error (vendor/hpke-rs-libcrux). Nobody
+//! decodes a key on receipt: the failure comes later, in whoever encapsulates to it
+//! (a member adding a key package's owner, or committing to a tree with a planted
+//! leaf or parent key), and would break that member's commit. So every HPKE key that
+//! can end up in a key package or a ratchet tree is checked here, by a small parser of
+//! RFC 9420's TLS encoding that knows nothing of OpenMLS:
 //!
 //! - [`key_package`]: version, suite, the init key, the leaf node (encryption and
 //!   signature key lengths, a Nuschel credential, capabilities, the key-package

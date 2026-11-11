@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*"]
-exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu", "vendor/gpui-pre"]
+exclude = ["vendor/cpal", "vendor/pulseaudio", "vendor/gpui-pre-windows", "vendor/gpui-pre-apple", "vendor/gpui-pre-wgpu", "vendor/gpui-pre", "vendor/hpke-rs-libcrux", "vendor/openmls_libcrux_crypto"]
 default-members = ["apps/desktop", "apps/server"]
 
 [workspace.metadata.crane]
@@ -71,3 +71,9 @@ gpui-pre-apple = { path = "vendor/gpui-pre-apple" }
 gpui-pre-wgpu = { path = "vendor/gpui-pre-wgpu" }
 # Window zoom (Ctrl+= / Ctrl+-) scaling everything like a browser (vendor/gpui-pre/NUSCHEL-PATCH.md).
 gpui-pre = { path = "vendor/gpui-pre" }
+# OpenMLS 0.9.2's libcrux provider on the fixed libcrux crates (libcrux-kem 0.0.10,
+# libcrux-hmac-drbg 0.0.2; RUSTSEC-2026-0329/-0330/-0331). Manifest changes only;
+# remove both with the OpenMLS release that carries them (vendor/*/NUSCHEL-PATCH.md,
+# TODO.md).
+hpke-rs-libcrux = { path = "vendor/hpke-rs-libcrux" }
+openmls_libcrux_crypto = { path = "vendor/openmls_libcrux_crypto" }

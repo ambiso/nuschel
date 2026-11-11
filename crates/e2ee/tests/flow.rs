@@ -204,7 +204,7 @@ fn the_delivery_service_refuses_what_does_not_fit() {
 }
 
 /// Re-signs a key package with a 32-byte init key: everything OpenMLS checks is
-/// valid, but libcrux-kem 0.0.9 panics when someone encapsulates to it.
+/// valid, but encapsulating to it fails (libcrux-kem 0.0.9 panicked; 0.0.10 errs).
 fn short_init_key_package(device: &Device) -> Vec<u8> {
     let valid = device.key_package();
     // version (2) || suite (2) || init_key<V> (2-byte length 1216) || rest
@@ -251,7 +251,8 @@ fn a_short_xwing_key_in_a_key_package_is_refused_before_libcrux() {
         Err(Error::Malformed(Malformed::Length { .. }))
     ));
     assert!(ValidKeyPackage::check(&poisoned).is_err());
-    // Without the check, OpenMLS accepts it, and encapsulating to it panics.
+    // Without the check, OpenMLS accepts it; encapsulating to it fails (with the
+    // patched libcrux-kem; 0.0.9 panicked).
     {
         use openmls::prelude::tls_codec::Deserialize as _;
         use openmls::prelude::*;
@@ -277,12 +278,11 @@ fn a_short_xwing_key_in_a_key_package_is_refused_before_libcrux() {
             )
             .is_ok()
         }));
-        // OpenMLS 0.9.2 (libcrux-kem 0.0.9, RUSTSEC-2026-0330) panics here; the
-        // release with fixed libcrux crates must refuse the key instead. Either
-        // way, sealing to it never succeeds.
+        // libcrux-kem 0.0.9 (RUSTSEC-2026-0330) panicked here; the patched 0.0.10
+        // (vendor/hpke-rs-libcrux) refuses the key with an error.
         assert!(
-            !matches!(outcome, Ok(true)),
-            "a 32-byte X-Wing key must never be usable"
+            matches!(outcome, Ok(false)),
+            "a 32-byte X-Wing key must be refused with an error, not a panic or a ciphertext"
         );
     }
     // The real flow never gets there: a group with Alice still works.

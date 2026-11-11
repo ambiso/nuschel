@@ -7,8 +7,8 @@
 //!   0x004F, not the draft's 0x0010 (see its documentation).
 //! - [`binding`]: the conversation binding extension and group ids (§6.1).
 //! - [`prevalidate`]: structural checks of key packages, trees and message framing
-//!   before OpenMLS or libcrux see them (libcrux-kem 0.0.9 panics on short X-Wing
-//!   keys).
+//!   before OpenMLS or libcrux see them (short X-Wing keys made libcrux-kem 0.0.9
+//!   panic; it is patched to 0.0.10, and a planted key would still break commits).
 //! - [`envelope`]: the application payload with per-sender counters (§6.4).
 //! - [`ds`]: the delivery service's view of a group (`PublicGroup`), and key
 //!   package checks for the directory (§6.3).
@@ -34,16 +34,17 @@ pub use binding::{BINDING_EXTENSION, ConversationBinding, ConversationKind};
 
 use openmls::prelude::Ciphersuite;
 
-/// **PROVISIONAL CODE POINT. Nothing persistent may depend on it.**
+/// **PROVISIONAL CODE POINT.** Groups made with it break at the OpenMLS bump.
 ///
 /// `MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519`: X-Wing (ML-KEM-768 + X25519)
 /// HPKE, AES-128-GCM, SHA-256, Ed25519 leaf signatures. This is the suite
 /// docs/e2ee.md §1.1 targets, under OpenMLS 0.9.2's private code point 0x004F
 /// (feature `draft-ietf-mls-pq-ciphersuites`). draft-ietf-mls-pq-ciphersuites-07
 /// assigns it 0x0010 with HPKE KEM 0x647a, and OpenMLS `main` already changes the
-/// X-Wing key derivation. Groups and key packages made with this constant are
-/// prototypes: they will not be readable by the release this branch waits for,
-/// and the bump changes only this constant (and [`SUITE_ID`]).
+/// X-Wing key derivation. Groups and key packages made with this constant will
+/// not be readable after the bump to the release that carries the draft's code
+/// points (accepted while Nuschel is in early development, TODO.md); the bump
+/// changes only this constant (and [`SUITE_ID`]).
 pub const SUITE: Ciphersuite = Ciphersuite::MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519;
 
 /// [`SUITE`]'s code point on the wire (checked by [`prevalidate`]).

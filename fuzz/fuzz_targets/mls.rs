@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! MLS input from hostile peers (docs/e2ee.md §6, `mls/1`): nuschel-e2ee's structural
 //! checks of key packages, ratchet trees and message framing (which run before
-//! OpenMLS, since libcrux-kem 0.0.9 panics on short X-Wing keys); the directory's and
+//! OpenMLS: short X-Wing keys made libcrux-kem 0.0.9 panic); the directory's and
 //! the client's key package validation; Welcome routing; the §6.4 envelope, whose
 //! decoding must re-encode to the same bytes; the `mls/1` messages; and the delivery
 //! service's fencing and commit path on a fixture group, which must refuse without

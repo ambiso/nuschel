@@ -113,6 +113,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschel-e2ee" = rec {
+      packageId = "nuschel-e2ee";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschel-e2ee";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschel-files" = rec {
       packageId = "nuschel-files";
       build = internal.buildRustCrateWithFeatures {
@@ -805,7 +815,7 @@ rec {
           "stream" = [ "aead/stream" ];
           "zeroize" = [ "dep:zeroize" ];
         };
-        resolvedDefaultFeatures = [ "aes" ];
+        resolvedDefaultFeatures = [ "aes" "alloc" "default" "getrandom" "rand_core" ];
       };
       "aes-gcm 0.11.1" = rec {
         crateName = "aes-gcm";
@@ -2942,7 +2952,20 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
-      "base16ct" = rec {
+      "base16ct 0.2.0" = rec {
+        crateName = "base16ct";
+        version = "0.2.0";
+        edition = "2021";
+        sha256 = "1kylrjhdzk7qpknrvlphw8ywdnvvg39dizw9622w3wk5xba04zsc";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        features = {
+          "std" = [ "alloc" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" ];
+      };
+      "base16ct 1.0.0" = rec {
         crateName = "base16ct";
         version = "1.0.0";
         edition = "2024";
@@ -4324,6 +4347,7 @@ rec {
           "std" = [ "aead/std" "alloc" ];
           "stream" = [ "aead/stream" ];
         };
+        resolvedDefaultFeatures = [ "alloc" "default" "getrandom" "rand_core" ];
       };
       "chacha20poly1305 0.11.0" = rec {
         crateName = "chacha20poly1305";
@@ -6173,7 +6197,30 @@ rec {
         ];
 
       };
-      "crabgrind" = rec {
+      "crabgrind 0.2.6" = rec {
+        crateName = "crabgrind";
+        version = "0.2.6";
+        edition = "2021";
+        sha256 = "15bfbq36l852yj9273pxwilg7c7vznip7kqz01sdxxijfzh5jx6c";
+        buildDependencies = [
+          {
+            name = "bindgen";
+            packageId = "bindgen";
+          }
+          {
+            name = "cc";
+            packageId = "cc";
+          }
+          {
+            name = "pkg-config";
+            packageId = "pkg-config";
+          }
+        ];
+        features = {
+        };
+        resolvedDefaultFeatures = [ "default" ];
+      };
+      "crabgrind 0.3.1" = rec {
         crateName = "crabgrind";
         version = "0.3.1";
         edition = "2021";
@@ -6363,7 +6410,59 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "limit_128" ];
       };
-      "crypto-bigint" = rec {
+      "crypto-bigint 0.5.5" = rec {
+        crateName = "crypto-bigint";
+        version = "0.5.5";
+        edition = "2021";
+        sha256 = "0xmbdff3g6ii5sbxjxc31xfkv9lrmyril4arh3dzckd4gjsjzj8d";
+        libName = "crypto_bigint";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "generic-array";
+            packageId = "generic-array";
+            optional = true;
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            optional = true;
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            features = [ "std" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "serdect?/alloc" ];
+          "default" = [ "rand" ];
+          "der" = [ "dep:der" ];
+          "generic-array" = [ "dep:generic-array" ];
+          "rand" = [ "rand_core/std" ];
+          "rand_core" = [ "dep:rand_core" ];
+          "rlp" = [ "dep:rlp" ];
+          "serde" = [ "dep:serdect" ];
+          "zeroize" = [ "dep:zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "generic-array" "rand_core" "zeroize" ];
+      };
+      "crypto-bigint 0.7.10" = rec {
         crateName = "crypto-bigint";
         version = "0.7.10";
         edition = "2024";
@@ -7086,6 +7185,12 @@ rec {
             optional = true;
           }
           {
+            name = "pem-rfc7468";
+            packageId = "pem-rfc7468 0.7.0";
+            optional = true;
+            features = [ "alloc" ];
+          }
+          {
             name = "zeroize";
             packageId = "zeroize";
             optional = true;
@@ -7104,7 +7209,7 @@ rec {
           "time" = [ "dep:time" ];
           "zeroize" = [ "dep:zeroize" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "oid" "std" "zeroize" ];
+        resolvedDefaultFeatures = [ "alloc" "oid" "pem" "std" "zeroize" ];
       };
       "der 0.8.3" = rec {
         crateName = "der";
@@ -7132,7 +7237,7 @@ rec {
           }
           {
             name = "pem-rfc7468";
-            packageId = "pem-rfc7468";
+            packageId = "pem-rfc7468 1.0.0";
             optional = true;
             features = [ "alloc" ];
           }
@@ -7240,6 +7345,14 @@ rec {
         authors = [
           "Jacob Pratt <jacob@jhpratt.dev>"
         ];
+        dependencies = [
+          {
+            name = "serde_core";
+            packageId = "serde_core";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
         features = {
           "macros" = [ "dep:deranged-macros" ];
           "num" = [ "dep:num-traits" ];
@@ -7251,7 +7364,7 @@ rec {
           "rand09" = [ "dep:rand09" ];
           "serde" = [ "dep:serde_core" ];
         };
-        resolvedDefaultFeatures = [ "default" ];
+        resolvedDefaultFeatures = [ "default" "serde" ];
       };
       "derive_builder" = rec {
         crateName = "derive_builder";
@@ -7617,7 +7730,7 @@ rec {
           }
           {
             name = "ecdsa";
-            packageId = "ecdsa";
+            packageId = "ecdsa 0.17.0";
             optional = true;
             features = [ "algorithm" "pkcs8" ];
           }
@@ -7647,13 +7760,13 @@ rec {
           }
           {
             name = "p256";
-            packageId = "p256";
+            packageId = "p256 0.14.0";
             optional = true;
             features = [ "ecdh" ];
           }
           {
             name = "p384";
-            packageId = "p384";
+            packageId = "p384 0.14.0";
             optional = true;
             features = [ "ecdh" ];
           }
@@ -7676,7 +7789,7 @@ rec {
           }
           {
             name = "sec1";
-            packageId = "sec1";
+            packageId = "sec1 0.8.1";
             optional = true;
           }
           {
@@ -8069,7 +8182,80 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "fallible" ];
       };
-      "ecdsa" = rec {
+      "ecdsa 0.16.9" = rec {
+        crateName = "ecdsa";
+        version = "0.16.9";
+        edition = "2021";
+        sha256 = "1jhb0bcbkaz4001sdmfyv8ajrv8a1cg7z7aa5myrd4jjbhmz69zf";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "der";
+            packageId = "der 0.7.10";
+            optional = true;
+          }
+          {
+            name = "digest";
+            packageId = "digest 0.10.7";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "oid" ];
+          }
+          {
+            name = "elliptic-curve";
+            packageId = "elliptic-curve 0.13.8";
+            usesDefaultFeatures = false;
+            features = [ "digest" "sec1" ];
+          }
+          {
+            name = "rfc6979";
+            packageId = "rfc6979 0.4.0";
+            optional = true;
+          }
+          {
+            name = "signature";
+            packageId = "signature 2.2.0";
+            usesDefaultFeatures = false;
+            features = [ "rand_core" ];
+          }
+          {
+            name = "spki";
+            packageId = "spki 0.7.3";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "elliptic-curve";
+            packageId = "elliptic-curve 0.13.8";
+            usesDefaultFeatures = false;
+            features = [ "dev" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "elliptic-curve/alloc" "signature/alloc" "spki/alloc" ];
+          "arithmetic" = [ "elliptic-curve/arithmetic" ];
+          "default" = [ "digest" ];
+          "der" = [ "dep:der" ];
+          "dev" = [ "arithmetic" "digest" "elliptic-curve/dev" "hazmat" ];
+          "digest" = [ "dep:digest" "signature/digest" ];
+          "pem" = [ "elliptic-curve/pem" "pkcs8" ];
+          "pkcs8" = [ "digest" "elliptic-curve/pkcs8" "der" ];
+          "rfc6979" = [ "dep:rfc6979" ];
+          "serde" = [ "elliptic-curve/serde" "serdect" ];
+          "serdect" = [ "dep:serdect" ];
+          "sha2" = [ "dep:sha2" ];
+          "signing" = [ "arithmetic" "digest" "hazmat" "rfc6979" ];
+          "spki" = [ "dep:spki" ];
+          "std" = [ "alloc" "elliptic-curve/std" "signature/std" ];
+          "verifying" = [ "arithmetic" "digest" "hazmat" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "arithmetic" "der" "digest" "hazmat" "pem" "pkcs8" "rfc6979" "signing" "spki" "std" "verifying" ];
+      };
+      "ecdsa 0.17.0" = rec {
         crateName = "ecdsa";
         version = "0.17.0";
         edition = "2024";
@@ -8092,13 +8278,13 @@ rec {
           }
           {
             name = "elliptic-curve";
-            packageId = "elliptic-curve";
+            packageId = "elliptic-curve 0.14.3";
             usesDefaultFeatures = false;
             features = [ "sec1" ];
           }
           {
             name = "rfc6979";
-            packageId = "rfc6979";
+            packageId = "rfc6979 0.6.0";
             optional = true;
           }
           {
@@ -8122,7 +8308,7 @@ rec {
         devDependencies = [
           {
             name = "elliptic-curve";
-            packageId = "elliptic-curve";
+            packageId = "elliptic-curve 0.14.3";
             usesDefaultFeatures = false;
             features = [ "dev" ];
           }
@@ -8223,6 +8409,12 @@ rec {
             usesDefaultFeatures = false;
           }
           {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
             name = "serde";
             packageId = "serde";
             optional = true;
@@ -8259,6 +8451,11 @@ rec {
             features = [ "digest" "rand_core" ];
           }
           {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            usesDefaultFeatures = false;
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -8281,7 +8478,7 @@ rec {
           "std" = [ "alloc" "ed25519/std" "serde?/std" "sha2/std" ];
           "zeroize" = [ "dep:zeroize" "curve25519-dalek/zeroize" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "digest" "fast" "legacy_compatibility" "signature" "std" "zeroize" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "digest" "fast" "legacy_compatibility" "rand_core" "signature" "std" "zeroize" ];
       };
       "either" = rec {
         crateName = "either";
@@ -8304,7 +8501,111 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "serde" "std" "use_std" ];
       };
-      "elliptic-curve" = rec {
+      "elliptic-curve 0.13.8" = rec {
+        crateName = "elliptic-curve";
+        version = "0.13.8";
+        edition = "2021";
+        sha256 = "0ixx4brgnzi61z29r3g1606nh2za88hzyz8c5r3p6ydzhqq09rmm";
+        libName = "elliptic_curve";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "base16ct";
+            packageId = "base16ct 0.2.0";
+          }
+          {
+            name = "crypto-bigint";
+            packageId = "crypto-bigint 0.5.5";
+            usesDefaultFeatures = false;
+            features = [ "rand_core" "generic-array" "zeroize" ];
+          }
+          {
+            name = "digest";
+            packageId = "digest 0.10.7";
+            optional = true;
+          }
+          {
+            name = "ff";
+            packageId = "ff 0.13.1";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "generic-array";
+            packageId = "generic-array";
+            usesDefaultFeatures = false;
+            features = [ "zeroize" ];
+          }
+          {
+            name = "group";
+            packageId = "group 0.13.0";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "hkdf";
+            packageId = "hkdf 0.12.4";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "pem-rfc7468";
+            packageId = "pem-rfc7468 0.7.0";
+            optional = true;
+            features = [ "alloc" ];
+          }
+          {
+            name = "pkcs8";
+            packageId = "pkcs8 0.10.2";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "sec1";
+            packageId = "sec1 0.7.3";
+            optional = true;
+            features = [ "subtle" "zeroize" ];
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "alloc" = [ "base16ct/alloc" "ff?/alloc" "group?/alloc" "pkcs8?/alloc" "sec1?/alloc" "zeroize/alloc" ];
+          "arithmetic" = [ "group" ];
+          "bits" = [ "arithmetic" "ff/bits" "dep:tap" ];
+          "default" = [ "arithmetic" ];
+          "dev" = [ "arithmetic" "dep:hex-literal" "pem" "pkcs8" ];
+          "digest" = [ "dep:digest" ];
+          "ecdh" = [ "arithmetic" "digest" "dep:hkdf" ];
+          "ff" = [ "dep:ff" ];
+          "group" = [ "dep:group" "ff" ];
+          "hash2curve" = [ "arithmetic" "digest" ];
+          "jwk" = [ "dep:base64ct" "dep:serde_json" "alloc" "serde" "zeroize/alloc" ];
+          "pem" = [ "dep:pem-rfc7468" "alloc" "arithmetic" "pkcs8" "sec1/pem" ];
+          "pkcs8" = [ "dep:pkcs8" "sec1" ];
+          "sec1" = [ "dep:sec1" ];
+          "serde" = [ "dep:serdect" "alloc" "pkcs8" "sec1/serde" ];
+          "std" = [ "alloc" "rand_core/std" "pkcs8?/std" "sec1?/std" ];
+          "voprf" = [ "digest" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "arithmetic" "digest" "ecdh" "ff" "group" "hazmat" "pem" "pkcs8" "sec1" "std" ];
+      };
+      "elliptic-curve 0.14.3" = rec {
         crateName = "elliptic-curve";
         version = "0.14.3";
         edition = "2024";
@@ -8316,11 +8617,11 @@ rec {
         dependencies = [
           {
             name = "base16ct";
-            packageId = "base16ct";
+            packageId = "base16ct 1.0.0";
           }
           {
             name = "crypto-bigint";
-            packageId = "crypto-bigint";
+            packageId = "crypto-bigint 0.7.10";
             rename = "bigint";
             usesDefaultFeatures = false;
             features = [ "hybrid-array" "rand_core" "subtle" "zeroize" ];
@@ -8338,13 +8639,13 @@ rec {
           }
           {
             name = "ff";
-            packageId = "ff";
+            packageId = "ff 0.14.0";
             optional = true;
             usesDefaultFeatures = false;
           }
           {
             name = "group";
-            packageId = "group";
+            packageId = "group 0.14.0";
             optional = true;
             usesDefaultFeatures = false;
           }
@@ -8363,7 +8664,7 @@ rec {
           }
           {
             name = "pem-rfc7468";
-            packageId = "pem-rfc7468";
+            packageId = "pem-rfc7468 1.0.0";
             optional = true;
             features = [ "alloc" ];
           }
@@ -8380,7 +8681,7 @@ rec {
           }
           {
             name = "sec1";
-            packageId = "sec1";
+            packageId = "sec1 0.8.1";
             optional = true;
             features = [ "ctutils" "subtle" "zeroize" ];
           }
@@ -8989,6 +9290,33 @@ rec {
         };
         resolvedDefaultFeatures = [ "rayon" ];
       };
+      "fallible-iterator" = rec {
+        crateName = "fallible-iterator";
+        version = "0.3.0";
+        edition = "2018";
+        sha256 = "0ja6l56yka5vn4y4pk6hn88z0bpny7a8k1919aqjzp0j1yhy9k1a";
+        libName = "fallible_iterator";
+        authors = [
+          "Steven Fackler <sfackler@gmail.com>"
+        ];
+        features = {
+          "default" = [ "alloc" ];
+          "std" = [ "alloc" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" ];
+      };
+      "fallible-streaming-iterator" = rec {
+        crateName = "fallible-streaming-iterator";
+        version = "0.1.9";
+        edition = "2015";
+        sha256 = "0nj6j26p71bjy8h42x6jahx1hn0ng6mc2miwpgwnp8vnwqf4jq3k";
+        libName = "fallible_streaming_iterator";
+        authors = [
+          "Steven Fackler <sfackler@gmail.com>"
+        ];
+        features = {
+        };
+      };
       "fancy-regex 0.16.2" = rec {
         crateName = "fancy-regex";
         version = "0.16.2";
@@ -9136,7 +9464,41 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
-      "ff" = rec {
+      "ff 0.13.1" = rec {
+        crateName = "ff";
+        version = "0.13.1";
+        edition = "2021";
+        sha256 = "14v3bc6q24gbcjnxjfbq2dddgf4as2z2gd4mj35gjlrncpxhpdf0";
+        authors = [
+          "Sean Bowe <ewillbefull@gmail.com>"
+          "Jack Grigg <thestr4d@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            usesDefaultFeatures = false;
+            features = [ "i128" ];
+          }
+        ];
+        features = {
+          "bits" = [ "bitvec" ];
+          "bitvec" = [ "dep:bitvec" ];
+          "byteorder" = [ "dep:byteorder" ];
+          "default" = [ "bits" "std" ];
+          "derive" = [ "byteorder" "ff_derive" ];
+          "derive_bits" = [ "bits" "ff_derive/bits" ];
+          "ff_derive" = [ "dep:ff_derive" ];
+          "std" = [ "alloc" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" ];
+      };
+      "ff 0.14.0" = rec {
         crateName = "ff";
         version = "0.14.0";
         edition = "2021";
@@ -13041,7 +13403,43 @@ rec {
         libName = "ztracing_macro";
 
       };
-      "group" = rec {
+      "group 0.13.0" = rec {
+        crateName = "group";
+        version = "0.13.0";
+        edition = "2021";
+        sha256 = "0qqs2p5vqnv3zvq9mfjkmw3qlvgqb0c3cm6p33srkh7pc9sfzygh";
+        authors = [
+          "Sean Bowe <ewillbefull@gmail.com>"
+          "Jack Grigg <jack@z.cash>"
+        ];
+        dependencies = [
+          {
+            name = "ff";
+            packageId = "ff 0.13.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "default" = [ "alloc" ];
+          "memuse" = [ "dep:memuse" ];
+          "rand" = [ "dep:rand" ];
+          "rand_xorshift" = [ "dep:rand_xorshift" ];
+          "tests" = [ "alloc" "rand" "rand_xorshift" ];
+          "wnaf-memuse" = [ "alloc" "memuse" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" ];
+      };
+      "group 0.14.0" = rec {
         crateName = "group";
         version = "0.14.0";
         edition = "2021";
@@ -13053,7 +13451,7 @@ rec {
         dependencies = [
           {
             name = "ff";
-            packageId = "ff";
+            packageId = "ff 0.14.0";
             usesDefaultFeatures = false;
           }
           {
@@ -13325,7 +13723,28 @@ rec {
         };
         resolvedDefaultFeatures = [ "default-hasher" "inline-more" "raw-entry" ];
       };
-      "hashlink" = rec {
+      "hashlink 0.10.0" = rec {
+        crateName = "hashlink";
+        version = "0.10.0";
+        edition = "2018";
+        sha256 = "1h8lzvnl9qxi3zyagivzz2p1hp6shgddfmccyf6jv7s1cdicz0kk";
+        authors = [
+          "kyren <kerriganw@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "hashbrown";
+            packageId = "hashbrown 0.15.5";
+            usesDefaultFeatures = false;
+            features = [ "default-hasher" "inline-more" ];
+          }
+        ];
+        features = {
+          "serde" = [ "dep:serde" ];
+          "serde_impl" = [ "serde" ];
+        };
+      };
+      "hashlink 0.11.1" = rec {
         crateName = "hashlink";
         version = "0.11.1";
         edition = "2021";
@@ -14178,6 +14597,7 @@ rec {
         features = {
           "std" = [ "digest/std" ];
         };
+        resolvedDefaultFeatures = [ "reset" ];
       };
       "hmac 0.13.0" = rec {
         crateName = "hmac";
@@ -14223,7 +14643,104 @@ rec {
         ];
 
       };
-      "hpke-rs" = rec {
+      "hpke-rs 0.7.0" = rec {
+        crateName = "hpke-rs";
+        version = "0.7.0";
+        edition = "2021";
+        sha256 = "1cdpp7n8wf34z43ayr2vv6xf6aj0x6x56x8dqk37df3knlmfcbc1";
+        libName = "hpke_rs";
+        authors = [
+          "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "hpke-rs-crypto";
+            packageId = "hpke-rs-crypto 0.7.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "hpke-rs-libcrux";
+            packageId = "hpke-rs-libcrux 0.7.0";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "hpke-rs-rust-crypto";
+            packageId = "hpke-rs-rust-crypto";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "libcrux-sha3";
+            packageId = "libcrux-sha3 0.0.10";
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            optional = true;
+            features = [ "derive" ];
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "tls_codec";
+            packageId = "tls_codec";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "derive" ];
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            features = [ "zeroize_derive" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "hpke-rs-crypto";
+            packageId = "hpke-rs-crypto 0.7.0";
+            usesDefaultFeatures = false;
+            features = [ "std" ];
+          }
+          {
+            name = "hpke-rs-libcrux";
+            packageId = "hpke-rs-libcrux 0.7.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "hpke-rs-rust-crypto";
+            packageId = "hpke-rs-rust-crypto";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+        ];
+        features = {
+          "draft-connolly-cfrg-hpke-mlkem" = [ "hpke-rs-libcrux?/draft-connolly-cfrg-hpke-mlkem" ];
+          "experimental" = [ "hpke-rs-rust-crypto?/experimental" ];
+          "hpke-test" = [ "std" ];
+          "hpke-test-prng" = [ "hpke-rs-rust-crypto?/deterministic-prng" "hpke-rs-libcrux?/deterministic-prng" ];
+          "libcrux" = [ "dep:hpke-rs-libcrux" ];
+          "libcrux-rustcrypto-p-curves" = [ "hpke-rs-libcrux?/rustcrypto-p-curves" ];
+          "rustcrypto" = [ "dep:hpke-rs-rust-crypto" ];
+          "serde" = [ "dep:serde" ];
+          "serialization" = [ "serde" "tls_codec" "tls_codec/serde" "std" ];
+          "std" = [ "hpke-rs-crypto/std" "hpke-rs-rust-crypto?/std" "hpke-rs-libcrux?/std" ];
+          "tls_codec" = [ "dep:tls_codec" ];
+        };
+        resolvedDefaultFeatures = [ "default" "experimental" "hazmat" "serde" "serialization" "std" "tls_codec" ];
+      };
+      "hpke-rs 0.8.0" = rec {
         crateName = "hpke-rs";
         version = "0.8.0";
         edition = "2021";
@@ -14235,12 +14752,12 @@ rec {
         dependencies = [
           {
             name = "hpke-rs-crypto";
-            packageId = "hpke-rs-crypto";
+            packageId = "hpke-rs-crypto 0.8.0";
             usesDefaultFeatures = false;
           }
           {
             name = "libcrux-sha3";
-            packageId = "libcrux-sha3";
+            packageId = "libcrux-sha3 0.0.11";
           }
           {
             name = "log";
@@ -14260,7 +14777,7 @@ rec {
         devDependencies = [
           {
             name = "hpke-rs-crypto";
-            packageId = "hpke-rs-crypto";
+            packageId = "hpke-rs-crypto 0.8.0";
             usesDefaultFeatures = false;
             features = [ "std" ];
           }
@@ -14281,7 +14798,33 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" ];
       };
-      "hpke-rs-crypto" = rec {
+      "hpke-rs-crypto 0.7.0" = rec {
+        crateName = "hpke-rs-crypto";
+        version = "0.7.0";
+        edition = "2021";
+        sha256 = "090fl9zhbym2y8p4p0spbhnhvyqlhb3z15xmfpc9770c5vd63i6j";
+        libName = "hpke_rs_crypto";
+        authors = [
+          "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        features = {
+          "serde" = [ "dep:serde" ];
+          "std" = [ "rand/std" ];
+        };
+        resolvedDefaultFeatures = [ "std" ];
+      };
+      "hpke-rs-crypto 0.8.0" = rec {
         crateName = "hpke-rs-crypto";
         version = "0.8.0";
         edition = "2021";
@@ -14306,7 +14849,70 @@ rec {
           "std" = [ "rand/std" ];
         };
       };
-      "hpke-rs-libcrux" = rec {
+      "hpke-rs-libcrux 0.7.0" = rec {
+        crateName = "hpke-rs-libcrux";
+        version = "0.7.0";
+        edition = "2021";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/hpke-rs-libcrux; };
+        libName = "hpke_rs_libcrux";
+        authors = [
+          "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "hpke-rs-crypto";
+            packageId = "hpke-rs-crypto 0.7.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "libcrux-aead";
+            packageId = "libcrux-aead 0.0.9";
+          }
+          {
+            name = "libcrux-ecdh";
+            packageId = "libcrux-ecdh 0.0.8";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "libcrux-hkdf";
+            packageId = "libcrux-hkdf 0.0.8";
+          }
+          {
+            name = "libcrux-kem";
+            packageId = "libcrux-kem";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+            usesDefaultFeatures = false;
+            features = [ "sys_rng" ];
+          }
+          {
+            name = "rand_chacha";
+            packageId = "rand_chacha 0.10.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.10.1";
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        features = {
+          "rustcrypto-p-curves" = [ "dep:p384" "dep:p521" ];
+          "std" = [ "rand/std" "rand_chacha/std" "libcrux-ecdh/std" "libcrux-kem/std" "hpke-rs-crypto/std" ];
+        };
+        resolvedDefaultFeatures = [ "std" ];
+      };
+      "hpke-rs-libcrux 0.8.0" = rec {
         crateName = "hpke-rs-libcrux";
         version = "0.8.0";
         edition = "2021";
@@ -14318,21 +14924,21 @@ rec {
         dependencies = [
           {
             name = "hpke-rs-crypto";
-            packageId = "hpke-rs-crypto";
+            packageId = "hpke-rs-crypto 0.8.0";
             usesDefaultFeatures = false;
           }
           {
             name = "libcrux-aead";
-            packageId = "libcrux-aead";
+            packageId = "libcrux-aead 0.0.10";
           }
           {
             name = "libcrux-ecdh";
-            packageId = "libcrux-ecdh";
+            packageId = "libcrux-ecdh 0.0.9";
             usesDefaultFeatures = false;
           }
           {
             name = "libcrux-hkdf";
-            packageId = "libcrux-hkdf";
+            packageId = "libcrux-hkdf 0.0.9";
           }
           {
             name = "libcrux-hmac-drbg";
@@ -14352,11 +14958,11 @@ rec {
           }
           {
             name = "libcrux-sha3";
-            packageId = "libcrux-sha3";
+            packageId = "libcrux-sha3 0.0.11";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
           {
             name = "rand";
@@ -14371,6 +14977,116 @@ rec {
           "sys-rng" = [ "libcrux-hmac-drbg/sys_rng" "rand/sys_rng" ];
         };
         resolvedDefaultFeatures = [ "default" "sys-rng" ];
+      };
+      "hpke-rs-rust-crypto" = rec {
+        crateName = "hpke-rs-rust-crypto";
+        version = "0.7.0";
+        edition = "2021";
+        sha256 = "0w9dcpkgdhb63a01fx04nk7vy9v2dp93jpzgc8c89njik30nlq1s";
+        libName = "hpke_rs_rust_crypto";
+        authors = [
+          "Franziskus Kiefer <franziskuskiefer@gmail.com>"
+        ];
+        dependencies = [
+          {
+            name = "aes-gcm";
+            packageId = "aes-gcm 0.10.3";
+            usesDefaultFeatures = false;
+            features = [ "aes" ];
+          }
+          {
+            name = "chacha20poly1305";
+            packageId = "chacha20poly1305 0.10.1";
+            usesDefaultFeatures = false;
+            features = [ "alloc" ];
+          }
+          {
+            name = "hkdf";
+            packageId = "hkdf 0.13.0";
+          }
+          {
+            name = "hpke-rs-crypto";
+            packageId = "hpke-rs-crypto 0.7.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "k256";
+            packageId = "k256";
+            usesDefaultFeatures = false;
+            features = [ "arithmetic" "ecdh" ];
+          }
+          {
+            name = "ml-kem";
+            packageId = "ml-kem";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "p256";
+            packageId = "p256 0.13.2";
+            usesDefaultFeatures = false;
+            features = [ "arithmetic" "ecdh" ];
+          }
+          {
+            name = "p384";
+            packageId = "p384 0.13.1";
+            usesDefaultFeatures = false;
+            features = [ "arithmetic" ];
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+            usesDefaultFeatures = false;
+            features = [ "sys_rng" ];
+          }
+          {
+            name = "rand_chacha";
+            packageId = "rand_chacha 0.10.0";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.10.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.11.1";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "x-wing";
+            packageId = "x-wing";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "x25519-dalek";
+            packageId = "x25519-dalek 2.0.1";
+            features = [ "static_secrets" ];
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+          }
+        ];
+        features = {
+          "deterministic-prng" = [ "hpke-rs-crypto/std" "rand/std" ];
+          "experimental" = [ "dep:x-wing" "dep:ml-kem" ];
+          "std" = [ "rand/std" "rand_chacha/std" ];
+        };
+        resolvedDefaultFeatures = [ "experimental" "std" ];
       };
       "html5ever 0.27.0" = rec {
         crateName = "html5ever";
@@ -14509,6 +15225,11 @@ rec {
         ];
         dependencies = [
           {
+            name = "ctutils";
+            packageId = "ctutils";
+            optional = true;
+          }
+          {
             name = "subtle";
             packageId = "subtle";
             optional = true;
@@ -14536,7 +15257,7 @@ rec {
           "zerocopy" = [ "dep:zerocopy" ];
           "zeroize" = [ "dep:zeroize" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "subtle" "zeroize" ];
+        resolvedDefaultFeatures = [ "alloc" "ctutils" "extra-sizes" "subtle" "zeroize" ];
       };
       "hypher" = rec {
         crateName = "hypher";
@@ -16473,6 +17194,55 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" "unsafe-eval" ];
       };
+      "k256" = rec {
+        crateName = "k256";
+        version = "0.13.4";
+        edition = "2021";
+        sha256 = "06s1lxjp49zgmbxnfdy2kajyklbkl4s3jvdvy0amg552padr3qzn";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "elliptic-curve";
+            packageId = "elliptic-curve 0.13.8";
+            usesDefaultFeatures = false;
+            features = [ "hazmat" "sec1" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "ecdsa-core?/alloc" "elliptic-curve/alloc" ];
+          "arithmetic" = [ "elliptic-curve/arithmetic" ];
+          "bits" = [ "arithmetic" "elliptic-curve/bits" ];
+          "critical-section" = [ "once_cell/critical-section" "precomputed-tables" ];
+          "default" = [ "arithmetic" "ecdsa" "pkcs8" "precomputed-tables" "schnorr" "std" ];
+          "digest" = [ "ecdsa-core/digest" "ecdsa-core/hazmat" ];
+          "ecdh" = [ "arithmetic" "elliptic-curve/ecdh" ];
+          "ecdsa" = [ "arithmetic" "ecdsa-core/signing" "ecdsa-core/verifying" "sha256" ];
+          "ecdsa-core" = [ "dep:ecdsa-core" ];
+          "expose-field" = [ "arithmetic" ];
+          "hash2curve" = [ "arithmetic" "elliptic-curve/hash2curve" ];
+          "hex-literal" = [ "dep:hex-literal" ];
+          "jwk" = [ "elliptic-curve/jwk" ];
+          "once_cell" = [ "dep:once_cell" ];
+          "pem" = [ "ecdsa-core/pem" "elliptic-curve/pem" "pkcs8" ];
+          "pkcs8" = [ "ecdsa-core/pkcs8" "elliptic-curve/pkcs8" ];
+          "precomputed-tables" = [ "arithmetic" "once_cell" ];
+          "schnorr" = [ "arithmetic" "sha256" "signature" ];
+          "serde" = [ "ecdsa-core/serde" "elliptic-curve/serde" "serdect" ];
+          "serdect" = [ "dep:serdect" ];
+          "sha2" = [ "dep:sha2" ];
+          "sha256" = [ "digest" "sha2" ];
+          "signature" = [ "dep:signature" ];
+          "std" = [ "alloc" "ecdsa-core?/std" "elliptic-curve/std" "once_cell?/std" ];
+          "test-vectors" = [ "hex-literal" ];
+        };
+        resolvedDefaultFeatures = [ "arithmetic" "ecdh" ];
+      };
       "kamadak-exif" = rec {
         crateName = "kamadak-exif";
         version = "0.6.2";
@@ -16489,6 +17259,53 @@ rec {
           }
         ];
 
+      };
+      "keccak" = rec {
+        crateName = "keccak";
+        version = "0.2.2";
+        edition = "2024";
+        sha256 = "160myyi46qkh2fyldxzqd3sj97wx34fj14x4nm04j3kjvg8riwfq";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "cpufeatures";
+            packageId = "cpufeatures 0.3.1";
+            target = { target, features }: ("aarch64" == target."arch" or null);
+          }
+        ];
+        features = {
+          "parallel" = [ "dep:hybrid-array" ];
+        };
+      };
+      "kem" = rec {
+        crateName = "kem";
+        version = "0.3.0";
+        edition = "2024";
+        sha256 = "1p8ycb3p0l804s0rl92c951lkfiqklhbvdc6sk7lja40p9hp2wq1";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "crypto-common";
+            packageId = "crypto-common 0.2.2";
+            rename = "common";
+            features = [ "rand_core" ];
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.10.1";
+          }
+        ];
+        features = {
+          "getrandom" = [ "common/getrandom" ];
+        };
       };
       "keyboard-types" = rec {
         crateName = "keyboard-types";
@@ -16685,7 +17502,7 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "extra_traits" "std" ];
       };
-      "libcrux-aead" = rec {
+      "libcrux-aead 0.0.10" = rec {
         crateName = "libcrux-aead";
         version = "0.0.10";
         edition = "2021";
@@ -16697,21 +17514,21 @@ rec {
         dependencies = [
           {
             name = "libcrux-aes";
-            packageId = "libcrux-aes";
+            packageId = "libcrux-aes 0.0.10";
             optional = true;
           }
           {
             name = "libcrux-chacha20poly1305";
-            packageId = "libcrux-chacha20poly1305";
+            packageId = "libcrux-chacha20poly1305 0.0.10";
             optional = true;
           }
           {
             name = "libcrux-secrets";
-            packageId = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.7";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
             optional = true;
           }
         ];
@@ -16725,7 +17542,47 @@ rec {
         };
         resolvedDefaultFeatures = [ "aesgcm128" "aesgcm256" "chacha20poly1305" "default" "xchacha20poly1305" ];
       };
-      "libcrux-aes" = rec {
+      "libcrux-aead 0.0.9" = rec {
+        crateName = "libcrux-aead";
+        version = "0.0.9";
+        edition = "2021";
+        sha256 = "0sbdj1z3vgsh6xvr93b2xr6k5i3g0f3rpqx6mcdb9dw4prlbxb12";
+        libName = "libcrux_aead";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-aes";
+            packageId = "libcrux-aes 0.0.9";
+            optional = true;
+          }
+          {
+            name = "libcrux-chacha20poly1305";
+            packageId = "libcrux-chacha20poly1305 0.0.9";
+            optional = true;
+          }
+          {
+            name = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.6";
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+            optional = true;
+          }
+        ];
+        features = {
+          "aesgcm128" = [ "dep:libcrux-aes" "dep:libcrux-traits" ];
+          "aesgcm256" = [ "dep:libcrux-aes" "dep:libcrux-traits" ];
+          "chacha20poly1305" = [ "dep:libcrux-chacha20poly1305" "dep:libcrux-traits" ];
+          "check-secret-independence" = [ "libcrux-secrets/check-secret-independence" "libcrux-traits/check-secret-independence" ];
+          "default" = [ "chacha20poly1305" "xchacha20poly1305" "aesgcm128" "aesgcm256" ];
+          "xchacha20poly1305" = [ "dep:libcrux-chacha20poly1305" "dep:libcrux-traits" ];
+        };
+        resolvedDefaultFeatures = [ "aesgcm128" "aesgcm256" "chacha20poly1305" "default" "xchacha20poly1305" ];
+      };
+      "libcrux-aes 0.0.10" = rec {
         crateName = "libcrux-aes";
         version = "0.0.10";
         edition = "2021";
@@ -16737,19 +17594,19 @@ rec {
         dependencies = [
           {
             name = "libcrux-intrinsics";
-            packageId = "libcrux-intrinsics";
+            packageId = "libcrux-intrinsics 0.0.9";
           }
           {
             name = "libcrux-platform";
-            packageId = "libcrux-platform";
+            packageId = "libcrux-platform 0.0.4";
           }
           {
             name = "libcrux-secrets";
-            packageId = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.7";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
         ];
         features = {
@@ -16758,7 +17615,40 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" ];
       };
-      "libcrux-chacha20poly1305" = rec {
+      "libcrux-aes 0.0.9" = rec {
+        crateName = "libcrux-aes";
+        version = "0.0.9";
+        edition = "2021";
+        sha256 = "0wg9d9gwwhkkmlss05p55kpfdi058byb2rwl2qg7nydw3nqrbk2p";
+        libName = "libcrux_aes";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-intrinsics";
+            packageId = "libcrux-intrinsics 0.0.8";
+          }
+          {
+            name = "libcrux-platform";
+            packageId = "libcrux-platform 0.0.3";
+          }
+          {
+            name = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.6";
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+          }
+        ];
+        features = {
+          "simd128" = [ "libcrux-intrinsics/simd128" ];
+          "simd256" = [ "libcrux-intrinsics/simd256" ];
+        };
+        resolvedDefaultFeatures = [ "default" ];
+      };
+      "libcrux-chacha20poly1305 0.0.10" = rec {
         crateName = "libcrux-chacha20poly1305";
         version = "0.0.10";
         edition = "2021";
@@ -16770,31 +17660,105 @@ rec {
         dependencies = [
           {
             name = "libcrux-hacl-rs";
-            packageId = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.6";
           }
           {
             name = "libcrux-macros";
-            packageId = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.4";
           }
           {
             name = "libcrux-poly1305";
-            packageId = "libcrux-poly1305";
+            packageId = "libcrux-poly1305 0.0.7";
             features = [ "expose-hacl" ];
           }
           {
             name = "libcrux-secrets";
-            packageId = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.7";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
         ];
         features = {
           "check-secret-independence" = [ "libcrux-secrets/check-secret-independence" ];
         };
       };
-      "libcrux-curve25519" = rec {
+      "libcrux-chacha20poly1305 0.0.9" = rec {
+        crateName = "libcrux-chacha20poly1305";
+        version = "0.0.9";
+        edition = "2021";
+        sha256 = "0xaxyflkm0zp2jqqkxvdb7q195p01d5phn6h2h09i6nwbkp6wzjk";
+        libName = "libcrux_chacha20poly1305";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.5";
+          }
+          {
+            name = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.3";
+          }
+          {
+            name = "libcrux-poly1305";
+            packageId = "libcrux-poly1305 0.0.6";
+            features = [ "expose-hacl" ];
+          }
+          {
+            name = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.6";
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+          }
+        ];
+        features = {
+          "check-secret-independence" = [ "libcrux-secrets/check-secret-independence" ];
+        };
+      };
+      "libcrux-curve25519 0.0.8" = rec {
+        crateName = "libcrux-curve25519";
+        version = "0.0.8";
+        edition = "2021";
+        sha256 = "0a70cgnv198jgpy0jjv5hhlc83iq5hi63q0f55g79f8wwgawzwz4";
+        libName = "libcrux_curve25519";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.5";
+          }
+          {
+            name = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.3";
+          }
+          {
+            name = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.6";
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+            features = [ "generic-tests" ];
+          }
+        ];
+        features = {
+          "check-secret-independence" = [ "libcrux-secrets/check-secret-independence" "libcrux-traits/check-secret-independence" ];
+        };
+      };
+      "libcrux-curve25519 0.0.9" = rec {
         crateName = "libcrux-curve25519";
         version = "0.0.9";
         edition = "2021";
@@ -16806,25 +17770,25 @@ rec {
         dependencies = [
           {
             name = "libcrux-hacl-rs";
-            packageId = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.6";
           }
           {
             name = "libcrux-macros";
-            packageId = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.4";
           }
           {
             name = "libcrux-secrets";
-            packageId = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.7";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
         ];
         devDependencies = [
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
             features = [ "generic-tests" ];
           }
         ];
@@ -16832,11 +17796,11 @@ rec {
           "check-secret-independence" = [ "libcrux-secrets/check-secret-independence" "libcrux-traits/check-secret-independence" ];
         };
       };
-      "libcrux-ecdh" = rec {
+      "libcrux-ecdh 0.0.8" = rec {
         crateName = "libcrux-ecdh";
-        version = "0.0.9";
+        version = "0.0.8";
         edition = "2021";
-        sha256 = "1dh1hdbqk7j7m9azhqhjvj1772j31bdbf1456lpxxahcbjiszash";
+        sha256 = "1mr4flg2fvgvsjs0p29vizdk3ll2ii3agdcprpkmrxczp287a8ja";
         libName = "libcrux_ecdh";
         libPath = "src/ecdh.rs";
         authors = [
@@ -16845,11 +17809,11 @@ rec {
         dependencies = [
           {
             name = "libcrux-curve25519";
-            packageId = "libcrux-curve25519";
+            packageId = "libcrux-curve25519 0.0.8";
           }
           {
             name = "libcrux-p256";
-            packageId = "libcrux-p256";
+            packageId = "libcrux-p256 0.0.8";
             features = [ "expose-hacl" ];
           }
           {
@@ -16879,7 +17843,54 @@ rec {
         };
         resolvedDefaultFeatures = [ "std" ];
       };
-      "libcrux-ed25519" = rec {
+      "libcrux-ecdh 0.0.9" = rec {
+        crateName = "libcrux-ecdh";
+        version = "0.0.9";
+        edition = "2021";
+        sha256 = "1dh1hdbqk7j7m9azhqhjvj1772j31bdbf1456lpxxahcbjiszash";
+        libName = "libcrux_ecdh";
+        libPath = "src/ecdh.rs";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-curve25519";
+            packageId = "libcrux-curve25519 0.0.9";
+          }
+          {
+            name = "libcrux-p256";
+            packageId = "libcrux-p256 0.0.9";
+            features = [ "expose-hacl" ];
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "tls_codec";
+            packageId = "tls_codec";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "derive" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+            features = [ "sys_rng" ];
+          }
+        ];
+        features = {
+          "codec" = [ "dep:tls_codec" ];
+          "default" = [ "std" ];
+          "std" = [ "rand/std" "tls_codec?/std" ];
+        };
+        resolvedDefaultFeatures = [ "std" ];
+      };
+      "libcrux-ed25519 0.0.10" = rec {
         crateName = "libcrux-ed25519";
         version = "0.0.10";
         edition = "2021";
@@ -16891,15 +17902,15 @@ rec {
         dependencies = [
           {
             name = "libcrux-hacl-rs";
-            packageId = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.6";
           }
           {
             name = "libcrux-macros";
-            packageId = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.4";
           }
           {
             name = "libcrux-sha2";
-            packageId = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.9";
             features = [ "expose-hacl" ];
           }
         ];
@@ -16909,7 +17920,60 @@ rec {
           "tls_codec" = [ "dep:tls_codec" ];
         };
       };
-      "libcrux-hacl-rs" = rec {
+      "libcrux-ed25519 0.0.9" = rec {
+        crateName = "libcrux-ed25519";
+        version = "0.0.9";
+        edition = "2021";
+        sha256 = "10ir654lcrgynflm6d60g4ywn4wajab7am34qqyy0iqwyhr3sinc";
+        libName = "libcrux_ed25519";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.5";
+          }
+          {
+            name = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.3";
+          }
+          {
+            name = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.8";
+            features = [ "expose-hacl" ];
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.10.1";
+            optional = true;
+          }
+        ];
+        features = {
+          "codec" = [ "tls_codec/std" ];
+          "rand" = [ "dep:rand_core" ];
+          "tls_codec" = [ "dep:tls_codec" ];
+        };
+        resolvedDefaultFeatures = [ "rand" ];
+      };
+      "libcrux-hacl-rs 0.0.5" = rec {
+        crateName = "libcrux-hacl-rs";
+        version = "0.0.5";
+        edition = "2021";
+        sha256 = "1kja5b7j5pc8r5ph4lv69lwizskkrx4f1bhid7w9l95ffsrns436";
+        libName = "libcrux_hacl_rs";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.3";
+          }
+        ];
+
+      };
+      "libcrux-hacl-rs 0.0.6" = rec {
         crateName = "libcrux-hacl-rs";
         version = "0.0.6";
         edition = "2021";
@@ -16921,14 +17985,43 @@ rec {
         dependencies = [
           {
             name = "libcrux-macros";
-            packageId = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.4";
           }
         ];
         features = {
         };
         resolvedDefaultFeatures = [ "alloc" ];
       };
-      "libcrux-hkdf" = rec {
+      "libcrux-hkdf 0.0.8" = rec {
+        crateName = "libcrux-hkdf";
+        version = "0.0.8";
+        edition = "2021";
+        sha256 = "0fcqix3hbdc7v9q72kksdgc2nsp1ii1b52yqrpdpxm54vi8yd56w";
+        libName = "libcrux_hkdf";
+        libPath = "src/hkdf.rs";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.5";
+          }
+          {
+            name = "libcrux-hmac";
+            packageId = "libcrux-hmac 0.0.8";
+            features = [ "expose-hacl" ];
+          }
+          {
+            name = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.6";
+          }
+        ];
+        features = {
+          "check-secret-independence" = [ "libcrux-secrets/check-secret-independence" ];
+        };
+      };
+      "libcrux-hkdf 0.0.9" = rec {
         crateName = "libcrux-hkdf";
         version = "0.0.9";
         edition = "2021";
@@ -16941,24 +18034,57 @@ rec {
         dependencies = [
           {
             name = "libcrux-hacl-rs";
-            packageId = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.6";
             features = [ "alloc" ];
           }
           {
             name = "libcrux-hmac";
-            packageId = "libcrux-hmac";
+            packageId = "libcrux-hmac 0.0.9";
             features = [ "expose-hacl" ];
           }
           {
             name = "libcrux-secrets";
-            packageId = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.7";
           }
         ];
         features = {
           "check-secret-independence" = [ "libcrux-secrets/check-secret-independence" ];
         };
       };
-      "libcrux-hmac" = rec {
+      "libcrux-hmac 0.0.8" = rec {
+        crateName = "libcrux-hmac";
+        version = "0.0.8";
+        edition = "2021";
+        sha256 = "0g4lq58ww19mqg0g8grr7c1iqfjh27xs2b0pjjsn2lbi5jrxj2jh";
+        libName = "libcrux_hmac";
+        libPath = "src/hmac.rs";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.5";
+          }
+          {
+            name = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.3";
+          }
+          {
+            name = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.8";
+            features = [ "expose-hacl" ];
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+          }
+        ];
+        features = {
+        };
+        resolvedDefaultFeatures = [ "expose-hacl" ];
+      };
+      "libcrux-hmac 0.0.9" = rec {
         crateName = "libcrux-hmac";
         version = "0.0.9";
         edition = "2021";
@@ -16971,24 +18097,24 @@ rec {
         dependencies = [
           {
             name = "libcrux-hacl-rs";
-            packageId = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.6";
           }
           {
             name = "libcrux-macros";
-            packageId = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.4";
           }
           {
             name = "libcrux-sha2";
-            packageId = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.9";
             features = [ "expose-hacl" ];
           }
           {
             name = "libcrux-sha3";
-            packageId = "libcrux-sha3";
+            packageId = "libcrux-sha3 0.0.11";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
         ];
         features = {
@@ -17007,7 +18133,7 @@ rec {
         dependencies = [
           {
             name = "libcrux-hmac";
-            packageId = "libcrux-hmac";
+            packageId = "libcrux-hmac 0.0.9";
           }
           {
             name = "rand";
@@ -17030,7 +18156,30 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "rand" "sys_rng" ];
       };
-      "libcrux-intrinsics" = rec {
+      "libcrux-intrinsics 0.0.8" = rec {
+        crateName = "libcrux-intrinsics";
+        version = "0.0.8";
+        edition = "2021";
+        sha256 = "1l3n3x7hcp6rbpmn478vhlshnzix8d51xff29f0x10gbsiscb84q";
+        libName = "libcrux_intrinsics";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "core-models";
+            packageId = "core-models";
+            target = { target, features }: (target."hax" or false);
+          }
+          {
+            name = "hax-lib";
+            packageId = "hax-lib 0.3.7";
+          }
+        ];
+        features = {
+        };
+      };
+      "libcrux-intrinsics 0.0.9" = rec {
         crateName = "libcrux-intrinsics";
         version = "0.0.9";
         edition = "2021";
@@ -17067,12 +18216,12 @@ rec {
         dependencies = [
           {
             name = "libcrux-curve25519";
-            packageId = "libcrux-curve25519";
+            packageId = "libcrux-curve25519 0.0.9";
             usesDefaultFeatures = false;
           }
           {
             name = "libcrux-ecdh";
-            packageId = "libcrux-ecdh";
+            packageId = "libcrux-ecdh 0.0.9";
             usesDefaultFeatures = false;
           }
           {
@@ -17083,16 +18232,16 @@ rec {
           }
           {
             name = "libcrux-p256";
-            packageId = "libcrux-p256";
+            packageId = "libcrux-p256 0.0.9";
             usesDefaultFeatures = false;
           }
           {
             name = "libcrux-sha3";
-            packageId = "libcrux-sha3";
+            packageId = "libcrux-sha3 0.0.11";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
           {
             name = "rand";
@@ -17103,7 +18252,7 @@ rec {
         devDependencies = [
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
             features = [ "generic-tests" ];
           }
           {
@@ -17119,7 +18268,30 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
-      "libcrux-macros" = rec {
+      "libcrux-macros 0.0.3" = rec {
+        crateName = "libcrux-macros";
+        version = "0.0.3";
+        edition = "2021";
+        sha256 = "0f03rmjm958c1d3iydijkbaccs8m7x4ivf0141k83rjvrlnsmmpz";
+        procMacro = true;
+        libName = "libcrux_macros";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+            features = [ "full" ];
+          }
+        ];
+
+      };
+      "libcrux-macros 0.0.4" = rec {
         crateName = "libcrux-macros";
         version = "0.0.4";
         edition = "2021";
@@ -17164,23 +18336,23 @@ rec {
           }
           {
             name = "libcrux-intrinsics";
-            packageId = "libcrux-intrinsics";
+            packageId = "libcrux-intrinsics 0.0.9";
           }
           {
             name = "libcrux-macros";
-            packageId = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.4";
           }
           {
             name = "libcrux-platform";
-            packageId = "libcrux-platform";
+            packageId = "libcrux-platform 0.0.4";
           }
           {
             name = "libcrux-secrets";
-            packageId = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.7";
           }
           {
             name = "libcrux-sha3";
-            packageId = "libcrux-sha3";
+            packageId = "libcrux-sha3 0.0.11";
           }
           {
             name = "tls_codec";
@@ -17216,23 +18388,23 @@ rec {
           }
           {
             name = "libcrux-intrinsics";
-            packageId = "libcrux-intrinsics";
+            packageId = "libcrux-intrinsics 0.0.9";
           }
           {
             name = "libcrux-platform";
-            packageId = "libcrux-platform";
+            packageId = "libcrux-platform 0.0.4";
           }
           {
             name = "libcrux-secrets";
-            packageId = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.7";
           }
           {
             name = "libcrux-sha3";
-            packageId = "libcrux-sha3";
+            packageId = "libcrux-sha3 0.0.11";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
           {
             name = "rand";
@@ -17251,7 +18423,7 @@ rec {
         devDependencies = [
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
             features = [ "generic-tests" ];
           }
           {
@@ -17272,7 +18444,51 @@ rec {
         };
         resolvedDefaultFeatures = [ "alloc" "default-no-std" "mlkem1024" "mlkem512" "mlkem768" "rand" "std" ];
       };
-      "libcrux-p256" = rec {
+      "libcrux-p256 0.0.8" = rec {
+        crateName = "libcrux-p256";
+        version = "0.0.8";
+        edition = "2021";
+        sha256 = "00nz7jb39bp9xg9hc7vzlqscvc79hpn8rfap49ibwy6m08kp601l";
+        libName = "libcrux_p256";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.5";
+          }
+          {
+            name = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.3";
+          }
+          {
+            name = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.6";
+          }
+          {
+            name = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.8";
+            features = [ "expose-hacl" ];
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+            features = [ "generic-tests" ];
+          }
+        ];
+        features = {
+          "check-secret-independence" = [ "libcrux-secrets/check-secret-independence" "libcrux-traits/check-secret-independence" ];
+        };
+        resolvedDefaultFeatures = [ "expose-hacl" ];
+      };
+      "libcrux-p256 0.0.9" = rec {
         crateName = "libcrux-p256";
         version = "0.0.9";
         edition = "2021";
@@ -17284,30 +18500,30 @@ rec {
         dependencies = [
           {
             name = "libcrux-hacl-rs";
-            packageId = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.6";
           }
           {
             name = "libcrux-macros";
-            packageId = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.4";
           }
           {
             name = "libcrux-secrets";
-            packageId = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.7";
           }
           {
             name = "libcrux-sha2";
-            packageId = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.9";
             features = [ "expose-hacl" ];
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
         ];
         devDependencies = [
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
             features = [ "generic-tests" ];
           }
         ];
@@ -17346,7 +18562,24 @@ rec {
         };
         resolvedDefaultFeatures = [ "rand" ];
       };
-      "libcrux-platform" = rec {
+      "libcrux-platform 0.0.3" = rec {
+        crateName = "libcrux-platform";
+        version = "0.0.3";
+        edition = "2021";
+        sha256 = "1i7cp16f4dkhwafd3lkj724fx0xif34shsdx772jma9ixpbj37hx";
+        libName = "libcrux_platform";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+        ];
+
+      };
+      "libcrux-platform 0.0.4" = rec {
         crateName = "libcrux-platform";
         version = "0.0.4";
         edition = "2021";
@@ -17363,7 +18596,30 @@ rec {
         ];
 
       };
-      "libcrux-poly1305" = rec {
+      "libcrux-poly1305 0.0.6" = rec {
+        crateName = "libcrux-poly1305";
+        version = "0.0.6";
+        edition = "2021";
+        sha256 = "1k20bhw94vlfalz09ww3kkjspfj7pb5hhzbqp2h16n44954i9abn";
+        libName = "libcrux_poly1305";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.5";
+          }
+          {
+            name = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.3";
+          }
+        ];
+        features = {
+        };
+        resolvedDefaultFeatures = [ "expose-hacl" ];
+      };
+      "libcrux-poly1305 0.0.7" = rec {
         crateName = "libcrux-poly1305";
         version = "0.0.7";
         edition = "2021";
@@ -17375,18 +18631,41 @@ rec {
         dependencies = [
           {
             name = "libcrux-hacl-rs";
-            packageId = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.6";
           }
           {
             name = "libcrux-macros";
-            packageId = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.4";
           }
         ];
         features = {
         };
         resolvedDefaultFeatures = [ "expose-hacl" ];
       };
-      "libcrux-secrets" = rec {
+      "libcrux-secrets 0.0.6" = rec {
+        crateName = "libcrux-secrets";
+        version = "0.0.6";
+        edition = "2021";
+        sha256 = "1wc6r362fg8h4jx31lj9bsphdpyplz799w3caim0vdvw0g4ly1br";
+        libName = "libcrux_secrets";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "crabgrind";
+            packageId = "crabgrind 0.2.6";
+            target = { target, features }: (target."valgrind_ct_test" or false);
+          }
+          {
+            name = "hax-lib";
+            packageId = "hax-lib 0.3.7";
+          }
+        ];
+        features = {
+        };
+      };
+      "libcrux-secrets 0.0.7" = rec {
         crateName = "libcrux-secrets";
         version = "0.0.7";
         edition = "2021";
@@ -17398,7 +18677,7 @@ rec {
         dependencies = [
           {
             name = "crabgrind";
-            packageId = "crabgrind";
+            packageId = "crabgrind 0.3.1";
             target = { target, features }: (target."valgrind_ct_test" or false);
           }
           {
@@ -17410,7 +18689,41 @@ rec {
         features = {
         };
       };
-      "libcrux-sha2" = rec {
+      "libcrux-sha2 0.0.8" = rec {
+        crateName = "libcrux-sha2";
+        version = "0.0.8";
+        edition = "2021";
+        sha256 = "07nx82hjq82ivl1l7zdrl79wlvlkciw170nfqs60jxqbpvhlc3ln";
+        libName = "libcrux_sha2";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.5";
+          }
+          {
+            name = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.3";
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+            features = [ "generic-tests" ];
+          }
+        ];
+        features = {
+        };
+        resolvedDefaultFeatures = [ "expose-hacl" ];
+      };
+      "libcrux-sha2 0.0.9" = rec {
         crateName = "libcrux-sha2";
         version = "0.0.9";
         edition = "2021";
@@ -17422,21 +18735,21 @@ rec {
         dependencies = [
           {
             name = "libcrux-hacl-rs";
-            packageId = "libcrux-hacl-rs";
+            packageId = "libcrux-hacl-rs 0.0.6";
           }
           {
             name = "libcrux-macros";
-            packageId = "libcrux-macros";
+            packageId = "libcrux-macros 0.0.4";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
         ];
         devDependencies = [
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
             features = [ "generic-tests" ];
           }
         ];
@@ -17444,7 +18757,39 @@ rec {
         };
         resolvedDefaultFeatures = [ "expose-hacl" ];
       };
-      "libcrux-sha3" = rec {
+      "libcrux-sha3 0.0.10" = rec {
+        crateName = "libcrux-sha3";
+        version = "0.0.10";
+        edition = "2021";
+        sha256 = "1vvrp27i14ganv4nz8nx34gyqjg6dqy1wg0ayzhjh1dfmwwmr7y0";
+        libName = "libcrux_sha3";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "hax-lib";
+            packageId = "hax-lib 0.3.7";
+          }
+          {
+            name = "libcrux-intrinsics";
+            packageId = "libcrux-intrinsics 0.0.8";
+          }
+          {
+            name = "libcrux-platform";
+            packageId = "libcrux-platform 0.0.3";
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+          }
+        ];
+        features = {
+          "simd128" = [ "libcrux-intrinsics/simd128" ];
+          "simd256" = [ "libcrux-intrinsics/simd256" ];
+        };
+      };
+      "libcrux-sha3 0.0.11" = rec {
         crateName = "libcrux-sha3";
         version = "0.0.11";
         edition = "2021";
@@ -17461,15 +18806,15 @@ rec {
           }
           {
             name = "libcrux-intrinsics";
-            packageId = "libcrux-intrinsics";
+            packageId = "libcrux-intrinsics 0.0.9";
           }
           {
             name = "libcrux-platform";
-            packageId = "libcrux-platform";
+            packageId = "libcrux-platform 0.0.4";
           }
           {
             name = "libcrux-traits";
-            packageId = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.9";
           }
         ];
         features = {
@@ -17477,7 +18822,31 @@ rec {
           "simd256" = [ "libcrux-intrinsics/simd256" ];
         };
       };
-      "libcrux-traits" = rec {
+      "libcrux-traits 0.0.8" = rec {
+        crateName = "libcrux-traits";
+        version = "0.0.8";
+        edition = "2021";
+        sha256 = "0nh888y3c7kbipj006wxsynvm91c1xs7dcgh825sm2rfihga59rz";
+        libName = "libcrux_traits";
+        authors = [
+          "Cryspen"
+        ];
+        dependencies = [
+          {
+            name = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.6";
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "check-secret-independence" = [ "libcrux-secrets/check-secret-independence" ];
+        };
+      };
+      "libcrux-traits 0.0.9" = rec {
         crateName = "libcrux-traits";
         version = "0.0.9";
         edition = "2021";
@@ -17489,7 +18858,7 @@ rec {
         dependencies = [
           {
             name = "libcrux-secrets";
-            packageId = "libcrux-secrets";
+            packageId = "libcrux-secrets 0.0.7";
           }
           {
             name = "rand";
@@ -17692,10 +19061,10 @@ rec {
       };
       "libsqlite3-sys" = rec {
         crateName = "libsqlite3-sys";
-        version = "0.37.0";
+        version = "0.35.0";
         edition = "2021";
         links = "sqlite3";
-        sha256 = "1cdrrwqarq4rq873ni5645r9cqllc73l8knkkjj62z0yqk413wdi";
+        sha256 = "0gy1m6j1l94fxsirzp4h4rkrksf78rz7jy3px57qd1rcd8m1hg0k";
         libName = "libsqlite3_sys";
         authors = [
           "The rusqlite developers"
@@ -17725,9 +19094,9 @@ rec {
           "bundled-sqlcipher-vendored-openssl" = [ "bundled-sqlcipher" "openssl-sys/vendored" ];
           "bundled-windows" = [ "cc" "bundled_bindings" ];
           "cc" = [ "dep:cc" ];
-          "default" = [ "min_sqlite_version_3_34_1" ];
+          "default" = [ "min_sqlite_version_3_14_0" ];
           "loadable_extension" = [ "prettyplease" "quote" "syn" ];
-          "min_sqlite_version_3_34_1" = [ "pkg-config" "vcpkg" ];
+          "min_sqlite_version_3_14_0" = [ "pkg-config" "vcpkg" ];
           "openssl-sys" = [ "dep:openssl-sys" ];
           "pkg-config" = [ "dep:pkg-config" ];
           "prettyplease" = [ "dep:prettyplease" ];
@@ -17737,7 +19106,7 @@ rec {
           "syn" = [ "dep:syn" ];
           "vcpkg" = [ "dep:vcpkg" ];
         };
-        resolvedDefaultFeatures = [ "bundled" "bundled_bindings" "cc" "pkg-config" "vcpkg" ];
+        resolvedDefaultFeatures = [ "bundled" "bundled_bindings" "cc" "default" "min_sqlite_version_3_14_0" "pkg-config" "vcpkg" ];
       };
       "linebender_resource_handle" = rec {
         crateName = "linebender_resource_handle";
@@ -19004,6 +20373,150 @@ rec {
           "os-ext" = [ "os-poll" "windows-sys/Win32_System_Pipes" "windows-sys/Win32_Security" ];
         };
         resolvedDefaultFeatures = [ "default" "log" "net" "os-ext" "os-poll" ];
+      };
+      "ml-dsa" = rec {
+        crateName = "ml-dsa";
+        version = "0.1.2";
+        edition = "2024";
+        sha256 = "0p1zfkq1nlmwvhd9278wa8vfr84ddykgspwpr8c0xqghyg1ljvbg";
+        libName = "ml_dsa";
+        dependencies = [
+          {
+            name = "const-oid";
+            packageId = "const-oid 0.10.2";
+            optional = true;
+            features = [ "db" ];
+          }
+          {
+            name = "crypto-common";
+            packageId = "crypto-common 0.2.2";
+            rename = "common";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "ctutils";
+            packageId = "ctutils";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "hybrid-array";
+            packageId = "hybrid-array";
+            features = [ "extra-sizes" ];
+          }
+          {
+            name = "module-lattice";
+            packageId = "module-lattice";
+            features = [ "ctutils" ];
+          }
+          {
+            name = "pkcs8";
+            packageId = "pkcs8 0.11.0";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "shake";
+            packageId = "shake";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "signature";
+            packageId = "signature 3.0.0";
+            usesDefaultFeatures = false;
+            features = [ "digest" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "pkcs8";
+            packageId = "pkcs8 0.11.0";
+            features = [ "pem" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "hybrid-array/alloc" "module-lattice/alloc" "pkcs8?/alloc" "signature/alloc" ];
+          "default" = [ "alloc" "getrandom" "pkcs8" ];
+          "getrandom" = [ "common/getrandom" "rand_core" ];
+          "pkcs8" = [ "dep:const-oid" "dep:pkcs8" ];
+          "rand_core" = [ "common/rand_core" "signature/rand_core" ];
+          "zeroize" = [ "dep:zeroize" "hybrid-array/zeroize" "module-lattice/zeroize" "shake/zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" "getrandom" "pkcs8" "rand_core" ];
+      };
+      "ml-kem" = rec {
+        crateName = "ml-kem";
+        version = "0.3.4";
+        edition = "2024";
+        sha256 = "1ld0ch5vgdhnfc3dhr8v23c8285bmpl3ls91z94hs1a6dyv7ijl4";
+        libName = "ml_kem";
+        dependencies = [
+          {
+            name = "hybrid-array";
+            packageId = "hybrid-array";
+            rename = "array";
+            features = [ "ctutils" "extra-sizes" ];
+          }
+          {
+            name = "kem";
+            packageId = "kem";
+          }
+          {
+            name = "module-lattice";
+            packageId = "module-lattice";
+            features = [ "ctutils" ];
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.10.1";
+          }
+          {
+            name = "sha3";
+            packageId = "sha3";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "shake";
+            packageId = "shake";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "alloc" = [ "module-lattice/alloc" "pkcs8?/alloc" ];
+          "default" = [ "alloc" ];
+          "getrandom" = [ "kem/getrandom" ];
+          "pem" = [ "pkcs8/pem" ];
+          "pkcs8" = [ "dep:const-oid" "dep:pkcs8" ];
+          "zeroize" = [ "module-lattice/zeroize" "dep:zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "hazmat" ];
+      };
+      "module-lattice" = rec {
+        crateName = "module-lattice";
+        version = "0.2.4";
+        edition = "2024";
+        sha256 = "0mb1n8zy9w0lfm4hg7qva6r9d76435i809zlg33a30zfr09f98f4";
+        libName = "module_lattice";
+        dependencies = [
+          {
+            name = "ctutils";
+            packageId = "ctutils";
+          }
+          {
+            name = "hybrid-array";
+            packageId = "hybrid-array";
+            rename = "array";
+            features = [ "ctutils" "extra-sizes" ];
+          }
+          {
+            name = "num-traits";
+            packageId = "num-traits";
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "zeroize" = [ "array/zeroize" "dep:zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "ctutils" ];
       };
       "moxcms" = rec {
         crateName = "moxcms";
@@ -20363,6 +21876,16 @@ rec {
             features = [ "rt-multi-thread" "macros" "sync" "time" ];
           }
         ];
+        devDependencies = [
+          {
+            name = "nuscheld";
+            packageId = "nuscheld";
+          }
+          {
+            name = "tempfile";
+            packageId = "tempfile";
+          }
+        ];
 
       };
       "nuschel-client" = rec {
@@ -20517,6 +22040,10 @@ rec {
         libName = "nuschel_crypto_worker";
         dependencies = [
           {
+            name = "nuschel-e2ee";
+            packageId = "nuschel-e2ee";
+          }
+          {
             name = "nuschel-identity";
             packageId = "nuschel-identity";
           }
@@ -20572,6 +22099,52 @@ rec {
         ];
 
       };
+      "nuschel-e2ee" = rec {
+        crateName = "nuschel-e2ee";
+        version = "0.1.0";
+        edition = "2024";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../crates/e2ee; };
+        libName = "nuschel_e2ee";
+        dependencies = [
+          {
+            name = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.9";
+          }
+          {
+            name = "nuschel-identity";
+            packageId = "nuschel-identity";
+          }
+          {
+            name = "openmls";
+            packageId = "openmls";
+            features = [ "libcrux-provider" "draft-ietf-mls-pq-ciphersuites" ];
+          }
+          {
+            name = "openmls_libcrux_crypto";
+            packageId = "openmls_libcrux_crypto";
+            features = [ "draft-ietf-mls-pq-ciphersuites" ];
+          }
+          {
+            name = "openmls_memory_storage";
+            packageId = "openmls_memory_storage";
+            features = [ "draft-ietf-mls-pq-ciphersuites" ];
+          }
+          {
+            name = "openmls_traits";
+            packageId = "openmls_traits";
+            features = [ "draft-ietf-mls-pq-ciphersuites" ];
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+
+      };
       "nuschel-files" = rec {
         crateName = "nuschel-files";
         version = "0.1.0";
@@ -20611,27 +22184,27 @@ rec {
           }
           {
             name = "hpke-rs";
-            packageId = "hpke-rs";
+            packageId = "hpke-rs 0.8.0";
           }
           {
             name = "hpke-rs-libcrux";
-            packageId = "hpke-rs-libcrux";
+            packageId = "hpke-rs-libcrux 0.8.0";
           }
           {
             name = "libcrux-chacha20poly1305";
-            packageId = "libcrux-chacha20poly1305";
+            packageId = "libcrux-chacha20poly1305 0.0.10";
           }
           {
             name = "libcrux-ed25519";
-            packageId = "libcrux-ed25519";
+            packageId = "libcrux-ed25519 0.0.10";
           }
           {
             name = "libcrux-hkdf";
-            packageId = "libcrux-hkdf";
+            packageId = "libcrux-hkdf 0.0.9";
           }
           {
             name = "libcrux-hmac";
-            packageId = "libcrux-hmac";
+            packageId = "libcrux-hmac 0.0.9";
           }
           {
             name = "libcrux-kem";
@@ -20645,7 +22218,7 @@ rec {
           }
           {
             name = "libcrux-sha2";
-            packageId = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.9";
           }
           {
             name = "spake2";
@@ -21409,6 +22982,10 @@ rec {
             name = "clap";
             packageId = "clap";
             features = [ "derive" ];
+          }
+          {
+            name = "nuschel-e2ee";
+            packageId = "nuschel-e2ee";
           }
           {
             name = "nuschel-identity";
@@ -24899,6 +26476,534 @@ rec {
           "shellexecute-on-windows" = [ "dep:dunce" ];
         };
       };
+      "openmls" = rec {
+        crateName = "openmls";
+        version = "0.9.2";
+        edition = "2021";
+        sha256 = "1z1z7nk7r9r4k640f5paksyzw6ry5zlik7s9v4ldvhnb2kwp6hff";
+        authors = [
+          "OpenMLS Authors"
+        ];
+        dependencies = [
+          {
+            name = "log";
+            packageId = "log";
+            features = [ "std" ];
+          }
+          {
+            name = "openmls_basic_credential";
+            packageId = "openmls_basic_credential";
+            optional = true;
+            features = [ "clonable" "test-utils" ];
+          }
+          {
+            name = "openmls_libcrux_crypto";
+            packageId = "openmls_libcrux_crypto";
+            optional = true;
+          }
+          {
+            name = "openmls_memory_storage";
+            packageId = "openmls_memory_storage";
+            optional = true;
+            features = [ "test-utils" ];
+          }
+          {
+            name = "openmls_rust_crypto";
+            packageId = "openmls_rust_crypto";
+            optional = true;
+          }
+          {
+            name = "openmls_serialization_helpers";
+            packageId = "openmls_serialization_helpers";
+          }
+          {
+            name = "openmls_sqlite_storage";
+            packageId = "openmls_sqlite_storage";
+            optional = true;
+          }
+          {
+            name = "openmls_test";
+            packageId = "openmls_test";
+            optional = true;
+          }
+          {
+            name = "openmls_traits";
+            packageId = "openmls_traits";
+          }
+          {
+            name = "rayon";
+            packageId = "rayon";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_bytes";
+            packageId = "serde_bytes";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "tls_codec";
+            packageId = "tls_codec";
+            features = [ "derive" "serde" "mls" ];
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "openmls_traits";
+            packageId = "openmls_traits";
+            features = [ "test-utils" ];
+          }
+        ];
+        features = {
+          "all-ciphersuites" = [ "openmls_test?/all-ciphersuites" ];
+          "backtrace" = [ "dep:backtrace" ];
+          "crypto-debug" = [ "openmls_traits/crypto-debug" ];
+          "draft-ietf-mls-pq-ciphersuites" = [ "openmls_traits/draft-ietf-mls-pq-ciphersuites" "openmls_memory_storage?/draft-ietf-mls-pq-ciphersuites" "openmls_sqlite_storage?/draft-ietf-mls-pq-ciphersuites" "openmls_libcrux_crypto?/draft-ietf-mls-pq-ciphersuites" "openmls_rust_crypto?/draft-ietf-mls-pq-ciphersuites" "openmls_basic_credential?/draft-ietf-mls-pq-ciphersuites" "openmls_test?/draft-ietf-mls-pq-ciphersuites" ];
+          "extensions-draft" = [ "openmls_traits/extensions-draft" ];
+          "extensions-draft-test-dependencies" = [ "openmls_sqlite_storage?/extensions-draft" "openmls_libcrux_crypto?/extensions-draft" "openmls_memory_storage?/extensions-draft" ];
+          "js" = [ "dep:getrandom" "dep:web-time" "getrandom/wasm_js" ];
+          "js-test" = [ "dep:getrandom_old" "getrandom_old/js" ];
+          "libcrux-provider" = [ "dep:openmls_libcrux_crypto" "openmls_test?/libcrux-provider" ];
+          "openmls_rust_crypto" = [ "dep:openmls_rust_crypto" ];
+          "sqlite-provider" = [ "dep:openmls_sqlite_storage" "openmls_test?/sqlite-provider" ];
+          "targeted-messages-draft" = [ "openmls_traits/targeted-messages-draft" "openmls_rust_crypto?/targeted-messages-draft" "openmls_libcrux_crypto?/targeted-messages-draft" ];
+          "test-utils" = [ "dep:serde_json" "dep:itertools" "openmls_rust_crypto/test-utils" "dep:rand" "dep:wasm-bindgen-test" "dep:openmls_basic_credential" "dep:openmls_memory_storage" "dep:openmls_test" "dep:once_cell" "backtrace" ];
+          "virtual-clients-draft" = [ "extensions-draft" "openmls_traits/virtual-clients-draft" "openmls_rust_crypto?/virtual-clients-draft" "openmls_libcrux_crypto?/virtual-clients-draft" ];
+          "virtual-clients-draft-test-dependencies" = [ "openmls_sqlite_storage?/virtual-clients-draft" "openmls_memory_storage?/virtual-clients-draft" ];
+        };
+        resolvedDefaultFeatures = [ "draft-ietf-mls-pq-ciphersuites" "libcrux-provider" ];
+      };
+      "openmls_basic_credential" = rec {
+        crateName = "openmls_basic_credential";
+        version = "0.6.0";
+        edition = "2021";
+        sha256 = "0h0yd8cmhvln06sgx5xsz29hg3f2n13vahphjs27lz1f8b1z1lyv";
+        authors = [
+          "OpenMLS Authors"
+        ];
+        dependencies = [
+          {
+            name = "ed25519-dalek";
+            packageId = "ed25519-dalek";
+            features = [ "rand_core" ];
+          }
+          {
+            name = "ml-dsa";
+            packageId = "ml-dsa";
+          }
+          {
+            name = "openmls_traits";
+            packageId = "openmls_traits";
+          }
+          {
+            name = "p256";
+            packageId = "p256 0.13.2";
+          }
+          {
+            name = "p384";
+            packageId = "p384 0.13.1";
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            features = [ "getrandom" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+          }
+          {
+            name = "tls_codec";
+            packageId = "tls_codec";
+            features = [ "derive" "serde" "mls" ];
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+          }
+        ];
+        features = {
+          "draft-ietf-mls-pq-ciphersuites" = [ "openmls_traits/draft-ietf-mls-pq-ciphersuites" ];
+        };
+        resolvedDefaultFeatures = [ "clonable" "draft-ietf-mls-pq-ciphersuites" "test-utils" ];
+      };
+      "openmls_libcrux_crypto" = rec {
+        crateName = "openmls_libcrux_crypto";
+        version = "0.4.0";
+        edition = "2021";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/openmls_libcrux_crypto; };
+        authors = [
+          "OpenMLS Authors"
+        ];
+        dependencies = [
+          {
+            name = "hpke-rs";
+            packageId = "hpke-rs 0.7.0";
+            features = [ "hazmat" "serialization" ];
+          }
+          {
+            name = "hpke-rs-crypto";
+            packageId = "hpke-rs-crypto 0.7.0";
+          }
+          {
+            name = "hpke-rs-libcrux";
+            packageId = "hpke-rs-libcrux 0.7.0";
+          }
+          {
+            name = "libcrux-aead";
+            packageId = "libcrux-aead 0.0.9";
+          }
+          {
+            name = "libcrux-ed25519";
+            packageId = "libcrux-ed25519 0.0.9";
+            features = [ "rand" ];
+          }
+          {
+            name = "libcrux-hkdf";
+            packageId = "libcrux-hkdf 0.0.8";
+          }
+          {
+            name = "libcrux-hmac";
+            packageId = "libcrux-hmac 0.0.8";
+          }
+          {
+            name = "libcrux-hmac-drbg";
+            packageId = "libcrux-hmac-drbg";
+            features = [ "rand" "sys_rng" ];
+          }
+          {
+            name = "libcrux-sha2";
+            packageId = "libcrux-sha2 0.0.8";
+          }
+          {
+            name = "libcrux-traits";
+            packageId = "libcrux-traits 0.0.8";
+          }
+          {
+            name = "openmls_memory_storage";
+            packageId = "openmls_memory_storage";
+          }
+          {
+            name = "openmls_traits";
+            packageId = "openmls_traits";
+          }
+          {
+            name = "rand";
+            packageId = "rand 0.10.3";
+          }
+          {
+            name = "tls_codec";
+            packageId = "tls_codec";
+            features = [ "derive" "serde" "mls" ];
+          }
+        ];
+        features = {
+          "draft-ietf-mls-pq-ciphersuites" = [ "openmls_traits/draft-ietf-mls-pq-ciphersuites" "openmls_memory_storage/draft-ietf-mls-pq-ciphersuites" ];
+          "extensions-draft" = [ "openmls_traits/extensions-draft" "openmls_memory_storage/extensions-draft" ];
+          "targeted-messages-draft" = [ "openmls_traits/targeted-messages-draft" ];
+          "virtual-clients-draft" = [ "extensions-draft" "openmls_traits/virtual-clients-draft" "openmls_memory_storage/virtual-clients-draft" "dep:fpe" "dep:aes" ];
+        };
+        resolvedDefaultFeatures = [ "draft-ietf-mls-pq-ciphersuites" ];
+      };
+      "openmls_memory_storage" = rec {
+        crateName = "openmls_memory_storage";
+        version = "0.6.0";
+        edition = "2021";
+        sha256 = "0r2k8ihwcbzzqi57xrkspbr6ifh15w2yzk6m5qq1kakfl52pk4nf";
+        authors = [
+          "OpenMLS Authors"
+        ];
+        dependencies = [
+          {
+            name = "hex";
+            packageId = "hex";
+            optional = true;
+            features = [ "serde" ];
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "openmls_traits";
+            packageId = "openmls_traits";
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_json";
+            packageId = "serde_json";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+        ];
+        features = {
+          "base64" = [ "dep:base64" ];
+          "draft-ietf-mls-pq-ciphersuites" = [ "openmls_traits/draft-ietf-mls-pq-ciphersuites" ];
+          "extensions-draft" = [ "openmls_traits/extensions-draft" ];
+          "hex" = [ "dep:hex" ];
+          "persistence" = [ "base64" ];
+          "test-utils" = [ "hex" "openmls_traits/test-utils" ];
+          "virtual-clients-draft" = [ "extensions-draft" "openmls_traits/virtual-clients-draft" ];
+        };
+        resolvedDefaultFeatures = [ "draft-ietf-mls-pq-ciphersuites" "hex" "test-utils" ];
+      };
+      "openmls_rust_crypto" = rec {
+        crateName = "openmls_rust_crypto";
+        version = "0.6.0";
+        edition = "2021";
+        sha256 = "1w956rp526cf4k0i9b4zjya39jpzzvbrr6pl48fyimpa4kl3zgrn";
+        authors = [
+          "OpenMLS Authors"
+        ];
+        dependencies = [
+          {
+            name = "aes-gcm";
+            packageId = "aes-gcm 0.10.3";
+          }
+          {
+            name = "chacha20poly1305";
+            packageId = "chacha20poly1305 0.10.1";
+          }
+          {
+            name = "ed25519-dalek";
+            packageId = "ed25519-dalek";
+            features = [ "rand_core" ];
+          }
+          {
+            name = "hkdf";
+            packageId = "hkdf 0.13.0";
+          }
+          {
+            name = "hmac";
+            packageId = "hmac 0.13.0";
+          }
+          {
+            name = "hpke-rs";
+            packageId = "hpke-rs 0.7.0";
+            rename = "hpke";
+            usesDefaultFeatures = false;
+            features = [ "hazmat" "serialization" "experimental" ];
+          }
+          {
+            name = "hpke-rs-crypto";
+            packageId = "hpke-rs-crypto 0.7.0";
+          }
+          {
+            name = "hpke-rs-rust-crypto";
+            packageId = "hpke-rs-rust-crypto";
+            features = [ "experimental" ];
+          }
+          {
+            name = "ml-dsa";
+            packageId = "ml-dsa";
+          }
+          {
+            name = "openmls_memory_storage";
+            packageId = "openmls_memory_storage";
+          }
+          {
+            name = "openmls_traits";
+            packageId = "openmls_traits";
+          }
+          {
+            name = "p256";
+            packageId = "p256 0.13.2";
+          }
+          {
+            name = "p384";
+            packageId = "p384 0.13.1";
+          }
+          {
+            name = "rand_chacha";
+            packageId = "rand_chacha 0.3.1";
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.10.1";
+            rename = "rand_core_0_10";
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.6.4";
+            features = [ "getrandom" ];
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.11.1";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "tls_codec";
+            packageId = "tls_codec";
+            features = [ "derive" "serde" "mls" ];
+          }
+        ];
+        features = {
+          "draft-ietf-mls-pq-ciphersuites" = [ "openmls_traits/draft-ietf-mls-pq-ciphersuites" ];
+          "extensions-draft" = [ "openmls_traits/extensions-draft" "openmls_memory_storage/extensions-draft" ];
+          "targeted-messages-draft" = [ "openmls_traits/targeted-messages-draft" ];
+          "test-utils" = [ "openmls_memory_storage/test-utils" ];
+          "virtual-clients-draft" = [ "openmls_traits/virtual-clients-draft" "openmls_memory_storage/virtual-clients-draft" "dep:fpe" "dep:aes" ];
+        };
+        resolvedDefaultFeatures = [ "draft-ietf-mls-pq-ciphersuites" ];
+      };
+      "openmls_serialization_helpers" = rec {
+        crateName = "openmls_serialization_helpers";
+        version = "0.1.0";
+        edition = "2021";
+        sha256 = "1h44481yyq1bldsk10jk93asp0s7zp149alsm3hkrs216lcz4b0f";
+        procMacro = true;
+        authors = [
+          "OpenMLS Authors"
+        ];
+        dependencies = [
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+            features = [ "span-locations" ];
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+        ];
+        features = {
+        };
+      };
+      "openmls_sqlite_storage" = rec {
+        crateName = "openmls_sqlite_storage";
+        version = "0.3.0";
+        edition = "2021";
+        sha256 = "04x7q294cnmx0jkg9m8y6ca4kzvlwf9h20y5c7nvpldyzz58m977";
+        authors = [
+          "OpenMLS Authors"
+        ];
+        dependencies = [
+          {
+            name = "openmls_traits";
+            packageId = "openmls_traits";
+          }
+          {
+            name = "refinery";
+            packageId = "refinery";
+            features = [ "rusqlite" "enums" ];
+          }
+          {
+            name = "rusqlite";
+            packageId = "rusqlite";
+            features = [ "bundled" ];
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+        ];
+        features = {
+          "draft-ietf-mls-pq-ciphersuites" = [ "openmls_traits/draft-ietf-mls-pq-ciphersuites" ];
+          "extensions-draft" = [ "openmls_traits/extensions-draft" ];
+          "virtual-clients-draft" = [ "extensions-draft" "openmls_traits/virtual-clients-draft" ];
+        };
+        resolvedDefaultFeatures = [ "draft-ietf-mls-pq-ciphersuites" ];
+      };
+      "openmls_test" = rec {
+        crateName = "openmls_test";
+        version = "0.3.0";
+        edition = "2021";
+        sha256 = "0qf7i0ickfs98wd0hjpk7rmfyma3yxqms5dmr4d3yn9v40jzkd5q";
+        procMacro = true;
+        authors = [
+          "OpenMLS Authors"
+        ];
+        dependencies = [
+          {
+            name = "openmls_libcrux_crypto";
+            packageId = "openmls_libcrux_crypto";
+            optional = true;
+          }
+          {
+            name = "openmls_rust_crypto";
+            packageId = "openmls_rust_crypto";
+          }
+          {
+            name = "openmls_sqlite_storage";
+            packageId = "openmls_sqlite_storage";
+            optional = true;
+          }
+          {
+            name = "openmls_traits";
+            packageId = "openmls_traits";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+            features = [ "full" "visit" ];
+          }
+        ];
+        features = {
+          "draft-ietf-mls-pq-ciphersuites" = [ "openmls_rust_crypto/draft-ietf-mls-pq-ciphersuites" "openmls_libcrux_crypto?/draft-ietf-mls-pq-ciphersuites" "openmls_sqlite_storage?/draft-ietf-mls-pq-ciphersuites" ];
+          "libcrux-provider" = [ "dep:openmls_libcrux_crypto" ];
+          "sqlite-provider" = [ "dep:openmls_sqlite_storage" ];
+        };
+        resolvedDefaultFeatures = [ "draft-ietf-mls-pq-ciphersuites" "libcrux-provider" ];
+      };
+      "openmls_traits" = rec {
+        crateName = "openmls_traits";
+        version = "0.6.0";
+        edition = "2021";
+        sha256 = "0743jm7qa8aizkilz4108gc985gsj6avknn1rcbikswqhsnys4xc";
+        libPath = "src/traits.rs";
+        authors = [
+          "OpenMLS Authors"
+        ];
+        dependencies = [
+          {
+            name = "serde";
+            packageId = "serde";
+            features = [ "derive" ];
+          }
+          {
+            name = "tls_codec";
+            packageId = "tls_codec";
+            features = [ "derive" "serde" "mls" ];
+          }
+        ];
+        features = {
+          "virtual-clients-draft" = [ "extensions-draft" ];
+        };
+        resolvedDefaultFeatures = [ "default" "draft-ietf-mls-pq-ciphersuites" "test-utils" ];
+      };
       "option-ext" = rec {
         crateName = "option-ext";
         version = "0.2.0";
@@ -25071,7 +27176,80 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "pbes1" ];
       };
-      "p256" = rec {
+      "p256 0.13.2" = rec {
+        crateName = "p256";
+        version = "0.13.2";
+        edition = "2021";
+        sha256 = "0jyd3c3k239ybs59ixpnl7dqkmm072fr1js8kh7ldx58bzc3m1n9";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "ecdsa";
+            packageId = "ecdsa 0.16.9";
+            rename = "ecdsa-core";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "der" ];
+          }
+          {
+            name = "elliptic-curve";
+            packageId = "elliptic-curve 0.13.8";
+            usesDefaultFeatures = false;
+            features = [ "hazmat" "sec1" ];
+          }
+          {
+            name = "primeorder";
+            packageId = "primeorder 0.13.6";
+            optional = true;
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.10.9";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "ecdsa";
+            packageId = "ecdsa 0.16.9";
+            rename = "ecdsa-core";
+            usesDefaultFeatures = false;
+            features = [ "dev" ];
+          }
+          {
+            name = "primeorder";
+            packageId = "primeorder 0.13.6";
+            features = [ "dev" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "ecdsa-core?/alloc" "elliptic-curve/alloc" ];
+          "arithmetic" = [ "dep:primeorder" "elliptic-curve/arithmetic" ];
+          "bits" = [ "arithmetic" "elliptic-curve/bits" ];
+          "default" = [ "arithmetic" "ecdsa" "pem" "std" ];
+          "digest" = [ "ecdsa-core/digest" "ecdsa-core/hazmat" ];
+          "ecdh" = [ "arithmetic" "elliptic-curve/ecdh" ];
+          "ecdsa" = [ "arithmetic" "ecdsa-core/signing" "ecdsa-core/verifying" "sha256" ];
+          "ecdsa-core" = [ "dep:ecdsa-core" ];
+          "expose-field" = [ "arithmetic" ];
+          "hash2curve" = [ "arithmetic" "elliptic-curve/hash2curve" ];
+          "jwk" = [ "elliptic-curve/jwk" ];
+          "pem" = [ "elliptic-curve/pem" "ecdsa-core/pem" "pkcs8" ];
+          "pkcs8" = [ "ecdsa-core?/pkcs8" "elliptic-curve/pkcs8" ];
+          "serde" = [ "ecdsa-core?/serde" "elliptic-curve/serde" "primeorder?/serde" "serdect" ];
+          "serdect" = [ "dep:serdect" ];
+          "sha2" = [ "dep:sha2" ];
+          "sha256" = [ "digest" "sha2" ];
+          "std" = [ "alloc" "ecdsa-core?/std" "elliptic-curve/std" ];
+          "test-vectors" = [ "dep:hex-literal" ];
+          "voprf" = [ "elliptic-curve/voprf" "sha2" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "arithmetic" "default" "digest" "ecdh" "ecdsa" "ecdsa-core" "pem" "pkcs8" "sha2" "sha256" "std" ];
+      };
+      "p256 0.14.0" = rec {
         crateName = "p256";
         version = "0.14.0";
         edition = "2024";
@@ -25082,7 +27260,7 @@ rec {
         dependencies = [
           {
             name = "ecdsa";
-            packageId = "ecdsa";
+            packageId = "ecdsa 0.17.0";
             rename = "ecdsa-core";
             optional = true;
             usesDefaultFeatures = false;
@@ -25090,7 +27268,7 @@ rec {
           }
           {
             name = "elliptic-curve";
-            packageId = "elliptic-curve";
+            packageId = "elliptic-curve 0.14.3";
             usesDefaultFeatures = false;
             features = [ "sec1" ];
           }
@@ -25101,7 +27279,7 @@ rec {
           }
           {
             name = "primeorder";
-            packageId = "primeorder";
+            packageId = "primeorder 0.14.0";
             optional = true;
           }
           {
@@ -25114,7 +27292,7 @@ rec {
         devDependencies = [
           {
             name = "ecdsa";
-            packageId = "ecdsa";
+            packageId = "ecdsa 0.17.0";
             rename = "ecdsa-core";
             usesDefaultFeatures = false;
             features = [ "dev" ];
@@ -25125,7 +27303,7 @@ rec {
           }
           {
             name = "primeorder";
-            packageId = "primeorder";
+            packageId = "primeorder 0.14.0";
             features = [ "dev" ];
           }
         ];
@@ -25153,7 +27331,76 @@ rec {
         };
         resolvedDefaultFeatures = [ "alloc" "arithmetic" "default" "digest" "ecdh" "ecdsa" "ecdsa-core" "getrandom" "pem" "pkcs8" "precomputed-tables" "sha2" "sha256" "std" ];
       };
-      "p384" = rec {
+      "p384 0.13.1" = rec {
+        crateName = "p384";
+        version = "0.13.1";
+        edition = "2021";
+        sha256 = "1dnnp133mbpp72mfss3fhm8wx3yp3p3abdhlix27v92j19kz2hpy";
+        authors = [
+          "RustCrypto Developers"
+          "Frank Denis <github@pureftpd.org>"
+        ];
+        dependencies = [
+          {
+            name = "ecdsa";
+            packageId = "ecdsa 0.16.9";
+            rename = "ecdsa-core";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "der" ];
+          }
+          {
+            name = "elliptic-curve";
+            packageId = "elliptic-curve 0.13.8";
+            usesDefaultFeatures = false;
+            features = [ "hazmat" "sec1" ];
+          }
+          {
+            name = "primeorder";
+            packageId = "primeorder 0.13.6";
+          }
+          {
+            name = "sha2";
+            packageId = "sha2 0.10.9";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        devDependencies = [
+          {
+            name = "ecdsa";
+            packageId = "ecdsa 0.16.9";
+            rename = "ecdsa-core";
+            usesDefaultFeatures = false;
+            features = [ "dev" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "ecdsa-core?/alloc" "elliptic-curve/alloc" ];
+          "arithmetic" = [ "elliptic-curve/arithmetic" "elliptic-curve/digest" ];
+          "bits" = [ "arithmetic" "elliptic-curve/bits" ];
+          "default" = [ "arithmetic" "ecdh" "ecdsa" "pem" "std" ];
+          "digest" = [ "ecdsa-core/digest" "ecdsa-core/hazmat" ];
+          "ecdh" = [ "arithmetic" "elliptic-curve/ecdh" ];
+          "ecdsa" = [ "arithmetic" "ecdsa-core/signing" "ecdsa-core/verifying" "sha384" ];
+          "ecdsa-core" = [ "dep:ecdsa-core" ];
+          "expose-field" = [ "arithmetic" ];
+          "hash2curve" = [ "arithmetic" "elliptic-curve/hash2curve" ];
+          "hex-literal" = [ "dep:hex-literal" ];
+          "jwk" = [ "elliptic-curve/jwk" ];
+          "pem" = [ "elliptic-curve/pem" "ecdsa-core/pem" "pkcs8" ];
+          "pkcs8" = [ "ecdsa-core/pkcs8" "elliptic-curve/pkcs8" ];
+          "serde" = [ "ecdsa-core/serde" "elliptic-curve/serde" "serdect" ];
+          "serdect" = [ "dep:serdect" ];
+          "sha2" = [ "dep:sha2" ];
+          "sha384" = [ "digest" "sha2" ];
+          "std" = [ "alloc" "ecdsa-core?/std" "elliptic-curve/std" ];
+          "test-vectors" = [ "hex-literal" ];
+          "voprf" = [ "elliptic-curve/voprf" "sha2" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "arithmetic" "default" "digest" "ecdh" "ecdsa" "ecdsa-core" "pem" "pkcs8" "sha2" "sha384" "std" ];
+      };
+      "p384 0.14.0" = rec {
         crateName = "p384";
         version = "0.14.0";
         edition = "2024";
@@ -25165,7 +27412,7 @@ rec {
         dependencies = [
           {
             name = "ecdsa";
-            packageId = "ecdsa";
+            packageId = "ecdsa 0.17.0";
             rename = "ecdsa-core";
             optional = true;
             usesDefaultFeatures = false;
@@ -25173,7 +27420,7 @@ rec {
           }
           {
             name = "elliptic-curve";
-            packageId = "elliptic-curve";
+            packageId = "elliptic-curve 0.14.3";
             usesDefaultFeatures = false;
             features = [ "sec1" ];
           }
@@ -25190,7 +27437,7 @@ rec {
           }
           {
             name = "primeorder";
-            packageId = "primeorder";
+            packageId = "primeorder 0.14.0";
             optional = true;
           }
           {
@@ -25203,14 +27450,14 @@ rec {
         devDependencies = [
           {
             name = "ecdsa";
-            packageId = "ecdsa";
+            packageId = "ecdsa 0.17.0";
             rename = "ecdsa-core";
             usesDefaultFeatures = false;
             features = [ "dev" ];
           }
           {
             name = "primeorder";
-            packageId = "primeorder";
+            packageId = "primeorder 0.14.0";
             features = [ "dev" ];
           }
         ];
@@ -25643,7 +27890,28 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
-      "pem-rfc7468" = rec {
+      "pem-rfc7468 0.7.0" = rec {
+        crateName = "pem-rfc7468";
+        version = "0.7.0";
+        edition = "2021";
+        sha256 = "04l4852scl4zdva31c1z6jafbak0ni5pi0j38ml108zwzjdrrcw8";
+        libName = "pem_rfc7468";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "base64ct";
+            packageId = "base64ct";
+          }
+        ];
+        features = {
+          "alloc" = [ "base64ct/alloc" ];
+          "std" = [ "alloc" "base64ct/std" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" ];
+      };
+      "pem-rfc7468 1.0.0" = rec {
         crateName = "pem-rfc7468";
         version = "1.0.0";
         edition = "2024";
@@ -26532,7 +28800,7 @@ rec {
           "std" = [ "alloc" "der/std" "spki/std" ];
           "subtle" = [ "dep:subtle" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "std" ];
+        resolvedDefaultFeatures = [ "alloc" "pem" "std" ];
       };
       "pkcs8 0.11.0" = rec {
         crateName = "pkcs8";
@@ -27119,7 +29387,7 @@ rec {
         dependencies = [
           {
             name = "crypto-bigint";
-            packageId = "crypto-bigint";
+            packageId = "crypto-bigint 0.7.10";
             rename = "bigint";
             usesDefaultFeatures = false;
             features = [ "rand_core" "hybrid-array" "subtle" ];
@@ -27132,7 +29400,7 @@ rec {
           }
           {
             name = "ff";
-            packageId = "ff";
+            packageId = "ff 0.14.0";
             usesDefaultFeatures = false;
           }
           {
@@ -27154,7 +29422,30 @@ rec {
         ];
 
       };
-      "primeorder" = rec {
+      "primeorder 0.13.6" = rec {
+        crateName = "primeorder";
+        version = "0.13.6";
+        edition = "2021";
+        sha256 = "1rp16710mxksagcjnxqjjq9r9wf5vf72fs8wxffnvhb6i6hiqgim";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "elliptic-curve";
+            packageId = "elliptic-curve 0.13.8";
+            usesDefaultFeatures = false;
+            features = [ "arithmetic" "sec1" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "elliptic-curve/alloc" ];
+          "serde" = [ "elliptic-curve/serde" "serdect" ];
+          "serdect" = [ "dep:serdect" ];
+          "std" = [ "alloc" "elliptic-curve/std" ];
+        };
+      };
+      "primeorder 0.14.0" = rec {
         crateName = "primeorder";
         version = "0.14.0";
         edition = "2024";
@@ -27165,7 +29456,7 @@ rec {
         dependencies = [
           {
             name = "elliptic-curve";
-            packageId = "elliptic-curve";
+            packageId = "elliptic-curve 0.14.3";
             usesDefaultFeatures = false;
             features = [ "arithmetic" "sec1" ];
           }
@@ -27317,7 +29608,7 @@ rec {
         features = {
           "default" = [ "proc-macro" ];
         };
-        resolvedDefaultFeatures = [ "default" "proc-macro" ];
+        resolvedDefaultFeatures = [ "default" "proc-macro" "span-locations" ];
       };
       "profiling" = rec {
         crateName = "profiling";
@@ -28135,6 +30426,35 @@ rec {
           "thread_rng" = [ "std" "std_rng" "os_rng" ];
         };
         resolvedDefaultFeatures = [ "alloc" "default" "os_rng" "small_rng" "std" "std_rng" "thread_rng" ];
+      };
+      "rand_chacha 0.10.0" = rec {
+        crateName = "rand_chacha";
+        version = "0.10.0";
+        edition = "2024";
+        sha256 = "1nxf7lj1r2nn5rwq2cigdj4lazh45npv3q7l3p255vaxwbrzfsiy";
+        authors = [
+          "The Rand Project Developers"
+          "The Rust Project Developers"
+          "The CryptoCorrosion Contributors"
+        ];
+        dependencies = [
+          {
+            name = "ppv-lite86";
+            packageId = "ppv-lite86";
+            usesDefaultFeatures = false;
+            features = [ "simd" ];
+          }
+          {
+            name = "rand_core";
+            packageId = "rand_core 0.10.1";
+          }
+        ];
+        features = {
+          "default" = [ "std" ];
+          "serde" = [ "dep:serde" ];
+          "std" = [ "ppv-lite86/std" ];
+        };
+        resolvedDefaultFeatures = [ "std" ];
       };
       "rand_chacha 0.3.1" = rec {
         crateName = "rand_chacha";
@@ -28987,6 +31307,174 @@ rec {
         ];
 
       };
+      "refinery" = rec {
+        crateName = "refinery";
+        version = "0.9.2";
+        edition = "2018";
+        sha256 = "06jm1w6fm6wy250r0azc5k0qr0mqzapvpbyymlkix1s8vd638akf";
+        authors = [
+          "Katharina Fey <kookie@spacekookie.de>"
+          "João Oliveira <hello@jxs.pt>"
+        ];
+        dependencies = [
+          {
+            name = "refinery-core";
+            packageId = "refinery-core";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "refinery-macros";
+            packageId = "refinery-macros";
+          }
+        ];
+        features = {
+          "config" = [ "refinery-core/config" ];
+          "default" = [ "toml" ];
+          "enums" = [ "refinery-macros/enums" ];
+          "int8-versions" = [ "refinery-core/int8-versions" "refinery-macros/int8-versions" ];
+          "mysql" = [ "refinery-core/mysql" "config" ];
+          "mysql_async" = [ "refinery-core/mysql_async" "config" ];
+          "postgres" = [ "refinery-core/postgres" ];
+          "postgres-tls" = [ "refinery-core/postgres-tls" "config" ];
+          "rusqlite" = [ "refinery-core/rusqlite" "config" ];
+          "rusqlite-bundled" = [ "refinery-core/rusqlite-bundled" "config" ];
+          "serde" = [ "refinery-core/serde" ];
+          "tiberius" = [ "refinery-core/tiberius" "config" ];
+          "tiberius-config" = [ "refinery-core/tiberius" "refinery-core/tiberius-config" "config" ];
+          "tokio-postgres" = [ "refinery-core/tokio-postgres" ];
+          "tokio-postgres-rustls" = [ "tokio-postgres" "refinery-core/tokio-postgres-rustls" ];
+          "tokio-postgres-tls" = [ "tokio-postgres" "refinery-core/tokio-postgres-tls" ];
+          "toml" = [ "refinery-core/toml" ];
+        };
+        resolvedDefaultFeatures = [ "config" "default" "enums" "rusqlite" "toml" ];
+      };
+      "refinery-core" = rec {
+        crateName = "refinery-core";
+        version = "0.9.2";
+        edition = "2021";
+        sha256 = "195fc2f2f180cs5kn8jhjbsvxrr7g89skbyn7lc2jkqjjgcazvi4";
+        libName = "refinery_core";
+        authors = [
+          "Katharina Fey <kookie@spacekookie.de>"
+          "João Oliveira <hello@jxs.pt>"
+        ];
+        dependencies = [
+          {
+            name = "async-trait";
+            packageId = "async-trait";
+          }
+          {
+            name = "cfg-if";
+            packageId = "cfg-if";
+          }
+          {
+            name = "log";
+            packageId = "log";
+          }
+          {
+            name = "regex";
+            packageId = "regex";
+          }
+          {
+            name = "rusqlite";
+            packageId = "rusqlite";
+            optional = true;
+          }
+          {
+            name = "serde";
+            packageId = "serde";
+            optional = true;
+            features = [ "derive" ];
+          }
+          {
+            name = "siphasher";
+            packageId = "siphasher";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+          {
+            name = "time";
+            packageId = "time";
+            features = [ "parsing" "formatting" ];
+          }
+          {
+            name = "toml";
+            packageId = "toml 1.2.1+spec-1.1.0";
+            optional = true;
+          }
+          {
+            name = "url";
+            packageId = "url";
+          }
+          {
+            name = "walkdir";
+            packageId = "walkdir";
+          }
+        ];
+        features = {
+          "mysql" = [ "dep:mysql" ];
+          "mysql_async" = [ "dep:mysql_async" "config" ];
+          "postgres" = [ "dep:postgres" ];
+          "postgres-tls" = [ "postgres" "dep:postgres-native-tls" "tls" "config" ];
+          "rusqlite" = [ "dep:rusqlite" "config" ];
+          "rusqlite-bundled" = [ "rusqlite" "rusqlite/bundled" "config" ];
+          "serde" = [ "dep:serde" "time/serde" ];
+          "tiberius" = [ "dep:tiberius" "dep:futures" "dep:tokio" "tokio/net" ];
+          "tiberius-config" = [ "tiberius" "dep:tokio-util" "dep:serde" "config" ];
+          "tls" = [ "dep:native-tls" ];
+          "tokio-postgres" = [ "dep:tokio-postgres" "dep:tokio" "tokio/rt" ];
+          "tokio-postgres-rustls" = [ "dep:tokio-postgres-rustls" "dep:rustls" "dep:rustls-native-certs" "tokio-postgres" "config" ];
+          "tokio-postgres-tls" = [ "tokio-postgres" "postgres-tls" "config" ];
+          "toml" = [ "serde" "dep:toml" ];
+        };
+        resolvedDefaultFeatures = [ "config" "default" "rusqlite" "serde" "toml" ];
+      };
+      "refinery-macros" = rec {
+        crateName = "refinery-macros";
+        version = "0.9.2";
+        edition = "2018";
+        sha256 = "05lfi6d013h2xhsxsrfa50di010h8q2n6jw8balfi95925nyl359";
+        procMacro = true;
+        libName = "refinery_macros";
+        authors = [
+          "Katharina Fey <kookie@spacekookie.de>"
+          "João Oliveira <hello@jxs.pt>"
+        ];
+        dependencies = [
+          {
+            name = "heck";
+            packageId = "heck 0.5.0";
+            optional = true;
+          }
+          {
+            name = "proc-macro2";
+            packageId = "proc-macro2";
+          }
+          {
+            name = "quote";
+            packageId = "quote";
+          }
+          {
+            name = "refinery-core";
+            packageId = "refinery-core";
+          }
+          {
+            name = "regex";
+            packageId = "regex";
+          }
+          {
+            name = "syn";
+            packageId = "syn 2.0.119";
+          }
+        ];
+        features = {
+          "enums" = [ "dep:heck" ];
+          "int8-versions" = [ "refinery-core/int8-versions" ];
+        };
+        resolvedDefaultFeatures = [ "enums" ];
+      };
       "regex" = rec {
         crateName = "regex";
         version = "1.13.1";
@@ -29254,7 +31742,30 @@ rec {
         };
         resolvedDefaultFeatures = [ "gif" "image-webp" "raster-images" ];
       };
-      "rfc6979" = rec {
+      "rfc6979 0.4.0" = rec {
+        crateName = "rfc6979";
+        version = "0.4.0";
+        edition = "2021";
+        sha256 = "1chw95jgcfrysyzsq6a10b1j5qb7bagkx8h0wda4lv25in02mpgq";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "hmac";
+            packageId = "hmac 0.12.1";
+            usesDefaultFeatures = false;
+            features = [ "reset" ];
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            usesDefaultFeatures = false;
+          }
+        ];
+
+      };
+      "rfc6979 0.6.0" = rec {
         crateName = "rfc6979";
         version = "0.6.0";
         edition = "2024";
@@ -29265,7 +31776,7 @@ rec {
         dependencies = [
           {
             name = "crypto-bigint";
-            packageId = "crypto-bigint";
+            packageId = "crypto-bigint 0.7.10";
             rename = "bigint";
             usesDefaultFeatures = false;
           }
@@ -29278,7 +31789,7 @@ rec {
         devDependencies = [
           {
             name = "crypto-bigint";
-            packageId = "crypto-bigint";
+            packageId = "crypto-bigint 0.7.10";
             rename = "bigint";
             usesDefaultFeatures = false;
             features = [ "alloc" ];
@@ -29656,6 +32167,74 @@ rec {
           "default" = [ "std" ];
         };
         resolvedDefaultFeatures = [ "default" "std" ];
+      };
+      "rusqlite" = rec {
+        crateName = "rusqlite";
+        version = "0.37.0";
+        edition = "2021";
+        sha256 = "0gqzwykyfaaddq5rg1jk0940wby6ifarnwp3fcakbq90ggjscp0n";
+        authors = [
+          "The rusqlite developers"
+        ];
+        dependencies = [
+          {
+            name = "bitflags";
+            packageId = "bitflags 2.13.2";
+          }
+          {
+            name = "fallible-iterator";
+            packageId = "fallible-iterator";
+          }
+          {
+            name = "fallible-streaming-iterator";
+            packageId = "fallible-streaming-iterator";
+          }
+          {
+            name = "hashlink";
+            packageId = "hashlink 0.10.0";
+          }
+          {
+            name = "libsqlite3-sys";
+            packageId = "libsqlite3-sys";
+          }
+          {
+            name = "smallvec";
+            packageId = "smallvec";
+          }
+        ];
+        features = {
+          "array" = [ "vtab" "modern_sqlite" ];
+          "buildtime_bindgen" = [ "libsqlite3-sys/buildtime_bindgen" ];
+          "bundled" = [ "libsqlite3-sys/bundled" "modern_sqlite" ];
+          "bundled-full" = [ "modern-full" "bundled" ];
+          "bundled-sqlcipher" = [ "libsqlite3-sys/bundled-sqlcipher" "bundled" ];
+          "bundled-sqlcipher-vendored-openssl" = [ "libsqlite3-sys/bundled-sqlcipher-vendored-openssl" "bundled-sqlcipher" ];
+          "bundled-windows" = [ "libsqlite3-sys/bundled-windows" ];
+          "chrono" = [ "dep:chrono" ];
+          "column_metadata" = [ "libsqlite3-sys/column_metadata" ];
+          "csv" = [ "dep:csv" ];
+          "csvtab" = [ "csv" "vtab" ];
+          "in_gecko" = [ "modern_sqlite" "libsqlite3-sys/in_gecko" ];
+          "jiff" = [ "dep:jiff" ];
+          "loadable_extension" = [ "libsqlite3-sys/loadable_extension" ];
+          "modern-full" = [ "array" "backup" "blob" "modern_sqlite" "chrono" "collation" "column_metadata" "column_decltype" "csvtab" "extra_check" "functions" "hooks" "i128_blob" "jiff" "limits" "load_extension" "serde_json" "serialize" "series" "time" "trace" "unlock_notify" "url" "uuid" "vtab" "window" ];
+          "modern_sqlite" = [ "libsqlite3-sys/bundled_bindings" ];
+          "preupdate_hook" = [ "libsqlite3-sys/preupdate_hook" "hooks" ];
+          "rusqlite-macros" = [ "dep:rusqlite-macros" ];
+          "serde_json" = [ "dep:serde_json" ];
+          "serialize" = [ "modern_sqlite" ];
+          "series" = [ "vtab" ];
+          "session" = [ "libsqlite3-sys/session" "hooks" ];
+          "sqlcipher" = [ "libsqlite3-sys/sqlcipher" ];
+          "time" = [ "dep:time" ];
+          "unlock_notify" = [ "libsqlite3-sys/unlock_notify" ];
+          "url" = [ "dep:url" ];
+          "uuid" = [ "dep:uuid" ];
+          "wasm32-wasi-vfs" = [ "libsqlite3-sys/wasm32-wasi-vfs" ];
+          "window" = [ "functions" "modern_sqlite" ];
+          "with-asan" = [ "libsqlite3-sys/with-asan" ];
+        };
+        resolvedDefaultFeatures = [ "bundled" "modern_sqlite" ];
       };
       "rust_decimal" = rec {
         crateName = "rust_decimal";
@@ -30691,7 +33270,67 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" ];
       };
-      "sec1" = rec {
+      "sec1 0.7.3" = rec {
+        crateName = "sec1";
+        version = "0.7.3";
+        edition = "2021";
+        sha256 = "1p273j8c87pid6a1iyyc7vxbvifrw55wbxgr0dh3l8vnbxb7msfk";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "base16ct";
+            packageId = "base16ct 0.2.0";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "der";
+            packageId = "der 0.7.10";
+            optional = true;
+            features = [ "oid" ];
+          }
+          {
+            name = "generic-array";
+            packageId = "generic-array";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "pkcs8";
+            packageId = "pkcs8 0.10.2";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "subtle";
+            packageId = "subtle";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "zeroize";
+            packageId = "zeroize";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+        ];
+        features = {
+          "alloc" = [ "der?/alloc" "pkcs8?/alloc" "zeroize?/alloc" ];
+          "default" = [ "der" "point" ];
+          "der" = [ "dep:der" "zeroize" ];
+          "pem" = [ "alloc" "der/pem" "pkcs8/pem" ];
+          "pkcs8" = [ "dep:pkcs8" ];
+          "point" = [ "dep:base16ct" "dep:generic-array" ];
+          "serde" = [ "dep:serdect" ];
+          "std" = [ "alloc" "der?/std" ];
+          "subtle" = [ "dep:subtle" ];
+          "zeroize" = [ "dep:zeroize" "der?/zeroize" ];
+        };
+        resolvedDefaultFeatures = [ "alloc" "default" "der" "pem" "pkcs8" "point" "std" "subtle" "zeroize" ];
+      };
+      "sec1 0.8.1" = rec {
         crateName = "sec1";
         version = "0.8.1";
         edition = "2024";
@@ -30702,7 +33341,7 @@ rec {
         dependencies = [
           {
             name = "base16ct";
-            packageId = "base16ct";
+            packageId = "base16ct 1.0.0";
             optional = true;
             usesDefaultFeatures = false;
           }
@@ -31197,7 +33836,7 @@ rec {
         dependencies = [
           {
             name = "base16ct";
-            packageId = "base16ct";
+            packageId = "base16ct 1.0.0";
             usesDefaultFeatures = false;
           }
           {
@@ -31427,6 +34066,81 @@ rec {
           "zeroize" = [ "digest/zeroize" ];
         };
         resolvedDefaultFeatures = [ "alloc" "default" "oid" ];
+      };
+      "sha3" = rec {
+        crateName = "sha3";
+        version = "0.12.0";
+        edition = "2024";
+        sha256 = "0n8pq71mj055aa7rdmzcxra4npi8g7qwd4i65m5p50k3q81av6xw";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "digest";
+            packageId = "digest 0.11.3";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "keccak";
+            packageId = "keccak";
+          }
+          {
+            name = "sponge-cursor";
+            packageId = "sponge-cursor";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "digest";
+            packageId = "digest 0.11.3";
+            usesDefaultFeatures = false;
+            features = [ "dev" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "digest/alloc" ];
+          "default" = [ "alloc" "oid" ];
+          "oid" = [ "digest/oid" ];
+          "zeroize" = [ "digest/zeroize" "sponge-cursor/zeroize" ];
+        };
+      };
+      "shake" = rec {
+        crateName = "shake";
+        version = "0.1.0";
+        edition = "2024";
+        sha256 = "0jkwjihnygh6qdlrq8i1jhhm9hx4z58v69hyvb9cpm4s2jr7q189";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        dependencies = [
+          {
+            name = "digest";
+            packageId = "digest 0.11.3";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "keccak";
+            packageId = "keccak";
+          }
+          {
+            name = "sponge-cursor";
+            packageId = "sponge-cursor";
+          }
+        ];
+        devDependencies = [
+          {
+            name = "digest";
+            packageId = "digest 0.11.3";
+            usesDefaultFeatures = false;
+            features = [ "dev" ];
+          }
+        ];
+        features = {
+          "alloc" = [ "digest/alloc" ];
+          "default" = [ "alloc" ];
+          "zeroize" = [ "digest/zeroize" "sponge-cursor/zeroize" ];
+        };
       };
       "sharded-slab" = rec {
         crateName = "sharded-slab";
@@ -32239,7 +34953,7 @@ rec {
           "sha2" = [ "dep:sha2" ];
           "std" = [ "der/std" "alloc" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "std" ];
+        resolvedDefaultFeatures = [ "alloc" "pem" "std" ];
       };
       "spki 0.8.1" = rec {
         crateName = "spki";
@@ -32273,6 +34987,19 @@ rec {
           "std" = [ "der/std" "alloc" ];
         };
         resolvedDefaultFeatures = [ "alloc" "pem" "std" ];
+      };
+      "sponge-cursor" = rec {
+        crateName = "sponge-cursor";
+        version = "0.1.0";
+        edition = "2024";
+        sha256 = "0836pjdf7sdsy5hpzpgsvzpqp7xcw6azchagb8j5i7cpgnyij0is";
+        libName = "sponge_cursor";
+        authors = [
+          "RustCrypto Developers"
+        ];
+        features = {
+          "zeroize" = [ "dep:zeroize" ];
+        };
       };
       "sqlx" = rec {
         crateName = "sqlx";
@@ -32431,7 +35158,7 @@ rec {
           }
           {
             name = "hashlink";
-            packageId = "hashlink";
+            packageId = "hashlink 0.11.1";
           }
           {
             name = "indexmap";
@@ -33415,7 +36142,7 @@ rec {
           }
           {
             name = "p256";
-            packageId = "p256";
+            packageId = "p256 0.14.0";
             features = [ "ecdh" ];
           }
           {
@@ -34777,7 +37504,7 @@ rec {
           "std" = [ "alloc" ];
           "wasm-bindgen" = [ "dep:js-sys" ];
         };
-        resolvedDefaultFeatures = [ "alloc" "default" "formatting" "macros" "parsing" "std" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "formatting" "macros" "parsing" "serde" "std" ];
       };
       "time-core" = rec {
         crateName = "time-core";
@@ -34815,7 +37542,7 @@ rec {
         ];
         features = {
         };
-        resolvedDefaultFeatures = [ "formatting" "parsing" ];
+        resolvedDefaultFeatures = [ "formatting" "parsing" "serde" ];
       };
       "tiny-keccak" = rec {
         crateName = "tiny-keccak";
@@ -35075,6 +37802,17 @@ rec {
         ];
         dependencies = [
           {
+            name = "serde";
+            packageId = "serde";
+            optional = true;
+            features = [ "derive" ];
+          }
+          {
+            name = "serde_bytes";
+            packageId = "serde_bytes";
+            optional = true;
+          }
+          {
             name = "tls_codec_derive";
             packageId = "tls_codec_derive";
             optional = true;
@@ -35095,7 +37833,7 @@ rec {
           "std" = [ "tls_codec_derive?/std" ];
           "tls_codec_derive" = [ "dep:tls_codec_derive" ];
         };
-        resolvedDefaultFeatures = [ "derive" "std" "tls_codec_derive" ];
+        resolvedDefaultFeatures = [ "default" "derive" "mls" "serde" "std" "tls_codec_derive" ];
       };
       "tls_codec_derive" = rec {
         crateName = "tls_codec_derive";
@@ -45903,12 +48641,12 @@ rec {
         dependencies = [
           {
             name = "ff";
-            packageId = "ff";
+            packageId = "ff 0.14.0";
             usesDefaultFeatures = false;
           }
           {
             name = "group";
-            packageId = "group";
+            packageId = "group 0.14.0";
             usesDefaultFeatures = false;
           }
           {
@@ -46023,6 +48761,45 @@ rec {
           "tokio_io" = [ "async_io_stream/tokio_io" ];
         };
         resolvedDefaultFeatures = [ "default" "not_ci" ];
+      };
+      "x-wing" = rec {
+        crateName = "x-wing";
+        version = "0.1.1";
+        edition = "2024";
+        sha256 = "12sc5lqcg4lcpwzy89d2ymvffafyll7v7mgwbrfdf0cxb5b6wmq1";
+        libName = "x_wing";
+        dependencies = [
+          {
+            name = "kem";
+            packageId = "kem";
+          }
+          {
+            name = "ml-kem";
+            packageId = "ml-kem";
+            usesDefaultFeatures = false;
+            features = [ "hazmat" ];
+          }
+          {
+            name = "sha3";
+            packageId = "sha3";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "shake";
+            packageId = "shake";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "x25519-dalek";
+            packageId = "x25519-dalek 3.0.0";
+            usesDefaultFeatures = false;
+            features = [ "static_secrets" ];
+          }
+        ];
+        features = {
+          "getrandom" = [ "kem/getrandom" ];
+          "zeroize" = [ "dep:zeroize" "ml-kem/zeroize" "x25519-dalek/zeroize" ];
+        };
       };
       "x11" = rec {
         crateName = "x11";
@@ -46192,6 +48969,13 @@ rec {
             usesDefaultFeatures = false;
           }
           {
+            name = "serde";
+            packageId = "serde";
+            optional = true;
+            usesDefaultFeatures = false;
+            features = [ "derive" ];
+          }
+          {
             name = "zeroize";
             packageId = "zeroize";
             optional = true;
@@ -46215,7 +48999,7 @@ rec {
           "serde" = [ "dep:serde" "curve25519-dalek/serde" ];
           "zeroize" = [ "dep:zeroize" "curve25519-dalek/zeroize" ];
         };
-        resolvedDefaultFeatures = [ "getrandom" "precomputed-tables" "static_secrets" "zeroize" ];
+        resolvedDefaultFeatures = [ "alloc" "default" "getrandom" "precomputed-tables" "static_secrets" "zeroize" ];
       };
       "x25519-dalek 3.0.0" = rec {
         crateName = "x25519-dalek";
