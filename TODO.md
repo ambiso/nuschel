@@ -109,7 +109,15 @@ Later (reported):
 - [x] Keyboard shortcuts (Settings → Shortcuts): push to talk, toggle mute, toggle
       deafen, push to mute; in the window and system-wide through the GlobalShortcuts
       portal (tested end to end on GNOME), Windows and macOS hotkeys (compiled only).
-- [ ] Wire Ctrl+K (finder) and Ctrl+F (search) into the configurable shortcuts.
+- [x] Ctrl+K finder (channels, people, direct conversations across servers, never
+      merging people across servers) and Ctrl+F / Ctrl+Shift+F full-text search with
+      "exact phrases", `from:`, paging and jumping to a result (SQLite FTS5,
+      PostgreSQL tsvector; older history indexed in the background).
+- [ ] Wire Ctrl+K and Ctrl+F (`Desktop::open_finder`, `open_search`) into the
+      configurable shortcuts.
+- [ ] Finder/search follow-ups: direct conversations from earlier sessions are not in
+      the finder; a result in a DM opens only if that person is online; diacritics are
+      significant (PostgreSQL would need `unaccent`); CJK text matches only by prefix.
 - [ ] Shortcuts follow-ups: a plain-letter binding is also taken from the message box
       while typing; GNOME keeps its own trigger after re-recording (needs portal v2
       for "change in desktop settings"); X11 backend; KDE untested; optional actions
