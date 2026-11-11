@@ -257,3 +257,142 @@ impl Assessment {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fp(n: u8) -> IdentityFingerprint {
+        IdentityFingerprint::from_bytes([n; 32])
+    }
+
+    fn lookup(n: u8, version: u64) -> Observation {
+        Observation::Lookup {
+            root: fp(n),
+            version,
+        }
+    }
+
+    #[test]
+    fn first_sight_pins_and_confirmations_verify_automatically() {
+        let mut t = ContactTrust::default();
+        assert_eq!(t.assess(lookup(1, 1), 0), Assessment::FirstContact { root: fp(1) });
+        assert_eq!(t.pinned, Some(fp(1)));
+        let a = t.assess(lookup(1, 3), 0);
+        assert_eq!(a.surface(ConversationKind::Direct), Surface::VerifiedAutomatically);
+        t.manually_verified = true;
+        let a = t.assess(lookup(1, 3), 0);
+        assert_eq!(a.surface(ConversationKind::Channel), Surface::VerifiedManually);
+    }
+
+    #[test]
+    fn an_unverified_key_change_is_a_notice_and_repins() {
+        let mut t = ContactTrust {
+            pinned: Some(fp(1)),
+            checked_version: 1,
+            ..Default::default()
+        };
+        let a = t.assess(lookup(2, 2), 0);
+        assert_eq!(
+            a,
+            Assessment::KeyChanged {
+                from: fp(1),
+                to: fp(2),
+                was_verified: false
+            }
+        );
+        for kind in [ConversationKind::Direct, ConversationKind::Channel] {
+            assert_eq!(a.surface(kind), Surface::KeyChangeNotice);
+        }
+        assert_eq!(t.pinned, Some(fp(2)));
+    }
+
+    #[test]
+    fn a_verified_key_change_blocks_until_accepted() {
+        let mut t = ContactTrust {
+            pinned: Some(fp(1)),
+            manually_verified: true,
+            checked_version: 1,
+            ..Default::default()
+        };
+        let a = t.assess(lookup(2, 2), 0);
+        assert_eq!(a.surface(ConversationKind::Direct), Surface::KeyChangeBlocking);
+        assert_eq!(a.surface(ConversationKind::Channel), Surface::KeyChangeAmberLock);
+        // The verified pin stays until the user decides.
+        assert_eq!((t.pinned, t.pending_change), (Some(fp(1)), Some(fp(2))));
+        t.accept_change();
+        assert_eq!((t.pinned, t.manually_verified), (Some(fp(2)), false));
+        assert_eq!(t.pending_change, None);
+    }
+
+    #[test]
+    fn failures_are_intermittent_then_unavailable_and_reset_on_success() {
+        let mut t = ContactTrust {
+            pinned: Some(fp(1)),
+            checked_version: 1,
+            ..Default::default()
+        };
+        let fail = || Observation::Failed(KtError::NotFound);
+        assert!(matches!(t.assess(fail(), 5), Assessment::Intermittent(_)));
+        assert_eq!(t.first_failure_ms, Some(5));
+        let a = t.assess(fail(), 6);
+        assert!(matches!(
+            a.surface(ConversationKind::Direct),
+            Surface::AutomaticVerificationUnavailable {
+                still_manually_verified: false,
+                ..
+            }
+        ));
+        // Nothing is unpinned by failures.
+        assert_eq!(t.pinned, Some(fp(1)));
+        t.assess(lookup(1, 1), 7);
+        assert_eq!((t.failures, t.first_failure_ms), (0, None));
+        assert!(matches!(t.assess(fail(), 8), Assessment::Intermittent(_)));
+    }
+
+    #[test]
+    fn contradictions_raise_the_alarm_at_once() {
+        let mut t = ContactTrust {
+            pinned: Some(fp(1)),
+            checked_version: 4,
+            ..Default::default()
+        };
+        // The server shows an older version than it proved before.
+        let a = t.assess(lookup(1, 3), 0);
+        assert_eq!(
+            a,
+            Assessment::ServerMisbehaviour(KtError::VersionRegressed { known: 4, got: 3 })
+        );
+        assert_eq!(a.surface(ConversationKind::Direct), Surface::ServerMisbehaviourAlarm);
+        let a = t.assess(
+            Observation::Failed(KtError::AuditFailed {
+                from: 1,
+                to: 2,
+                reason: String::new(),
+            }),
+            0,
+        );
+        assert_eq!(a.surface(ConversationKind::Channel), Surface::ServerMisbehaviourAlarm);
+        assert_eq!(t.failures, 0);
+    }
+
+    #[test]
+    fn a_binding_that_came_and_went_is_reported() {
+        let mut t = ContactTrust {
+            pinned: Some(fp(1)),
+            checked_version: 1,
+            ..Default::default()
+        };
+        let a = t.assess(
+            Observation::History {
+                root: fp(1),
+                version: 3,
+                intermediate: vec![fp(9)],
+            },
+            0,
+        );
+        assert_eq!(a, Assessment::TransientBinding { seen: vec![fp(9)] });
+        assert_eq!(a.surface(ConversationKind::Direct), Surface::KeyChangeNotice);
+        assert_eq!((t.pinned, t.checked_version), (Some(fp(1)), 3));
+    }
+}

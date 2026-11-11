@@ -28,8 +28,9 @@
 //! ```
 //!
 //! The previous-version fields of an update proof are present exactly when its version
-//! is above 1, as akd produces them; anything else is rejected, so each proof has one
-//! encoding.
+//! is above 1, as akd produces them, and the first sibling entry of a membership proof
+//! must carry the root label (length 0, all zero), which akd's verifier never hashes.
+//! Anything else is rejected, so each proof has one encoding.
 
 use crate::codec::{DecodeError, EncodeError, Reader, Writer};
 use crate::messages::{MAX_AUDIT_SPAN, MAX_HISTORY_PROOF, MAX_LOOKUP_PROOF};
@@ -120,6 +121,16 @@ fn read_membership(r: &mut Reader<'_>) -> Result<MembershipProof, DecodeError> {
             label,
             siblings: [sibling],
             direction,
+        });
+    }
+    // The first entry names the root, whose label akd's verifier never hashes: fix it,
+    // so that the proof has one encoding.
+    if sibling_proofs
+        .first()
+        .is_some_and(|s| s.label != NodeLabel::root())
+    {
+        return Err(DecodeError::InvalidValue {
+            field: "membership.root_label",
         });
     }
     Ok(MembershipProof {
