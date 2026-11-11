@@ -68,6 +68,16 @@
             ];
           }
         );
+        # Miri for nuschel-sandbox-windows' unsafe code (docs/windows-sandbox.md).
+        miriToolchain = pkgs.rust-bin.selectLatestNightlyWith (
+          toolchain:
+          toolchain.minimal.override {
+            extensions = [
+              "rust-src"
+              "miri"
+            ];
+          }
+        );
         src = lib.cleanSourceWith {
           src = ./.;
           filter =
@@ -526,6 +536,13 @@
             pkgs.just
             pkgs.protobuf
             pkgs.pkg-config
+          ];
+        };
+        # `just miri`: the sandbox adapter's tests under Miri, for Linux and Windows.
+        devShells.miri = pkgs.mkShell {
+          packages = [
+            miriToolchain
+            pkgs.just
           ];
         };
         formatter = pkgs.nixfmt;

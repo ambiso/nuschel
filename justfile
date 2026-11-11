@@ -43,6 +43,12 @@ audit:
 # without one. FUZZ_SANITIZER=address also checks the unsafe code in
 # dependencies (html5ever, the image decoders), e.g. over a corpus with
 # `just fuzz <target> 0 -runs=0`; switching rebuilds every target.
+# The Windows sandbox adapter's unit tests (its launch steps against a mock of
+# Win32) under Miri, for Linux and for Windows; docs/windows-sandbox.md.
+miri:
+    nix develop .#miri --command cargo miri test -p nuschel-sandbox-windows --lib
+    nix develop .#miri --command cargo miri test -p nuschel-sandbox-windows --lib --target x86_64-pc-windows-gnu
+
 fuzz_sanitizer := env_var_or_default("FUZZ_SANITIZER", "none")
 
 # Run a libFuzzer target (`fuzz/fuzz_targets/<target>.rs`) for `seconds`, from
