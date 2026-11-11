@@ -568,7 +568,7 @@ impl BlockText {
         let styled = if monospace.is_empty() {
             styled
         } else {
-            let family = SharedString::new_static("monospace");
+            let family = crate::theme::mono_font();
             styled.with_font_family_overrides(
                 monospace
                     .iter()

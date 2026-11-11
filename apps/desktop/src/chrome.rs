@@ -44,15 +44,12 @@ pub fn frame(window: &mut Window, content: AnyElement) -> AnyElement {
             canvas(
                 |_, window, _| {
                     window.insert_hitbox(
-                        Bounds::new(
-                            point(px(0.), px(0.)),
-                            window.window_bounds().get_bounds().size,
-                        ),
+                        Bounds::new(point(px(0.), px(0.)), window.viewport_size()),
                         HitboxBehavior::Normal,
                     )
                 },
                 move |_, hitbox, window, _| {
-                    let size = window.window_bounds().get_bounds().size;
+                    let size = window.viewport_size();
                     if let Some(edge) = resize_edge(window.mouse_position(), size, edges) {
                         window.set_cursor_style(cursor(edge), &hitbox);
                     }
@@ -65,7 +62,7 @@ pub fn frame(window: &mut Window, content: AnyElement) -> AnyElement {
         )
         .on_mouse_move(|_, window, _| window.refresh())
         .on_mouse_down(MouseButton::Left, move |event, window, _| {
-            let size = window.window_bounds().get_bounds().size;
+            let size = window.viewport_size();
             if let Some(edge) = resize_edge(event.position, size, edges) {
                 window.start_window_resize(edge);
             }
@@ -83,7 +80,7 @@ pub fn frame(window: &mut Window, content: AnyElement) -> AnyElement {
                         .border_1()
                         .border_color(color(BORDER_STRONG))
                         .shadow(vec![
-                            BoxShadow::new(px(0.), px(2.), hsla(0., 0., 0., 0.45))
+                            BoxShadow::new(px(0.), px(2.), color(SHADOW).into())
                                 .blur_radius(INSET * 0.8),
                         ])
                 })
@@ -256,7 +253,7 @@ fn control(
         .bg(color(ELEVATED))
         .hover(move |style| {
             if close {
-                style.bg(color(DANGER)).text_color(color(0xffffff))
+                style.bg(color(DANGER)).text_color(color(WHITE))
             } else {
                 style.bg(color(SELECTED)).text_color(color(TEXT))
             }
@@ -274,7 +271,7 @@ fn control(
         })
         .child(
             icon(name, 14., color(TEXT_MUTED)).group_hover(name, move |style| {
-                style.text_color(color(if close { 0xffffff } else { TEXT }))
+                style.text_color(color(if close { WHITE } else { TEXT }))
             }),
         )
         .into_any_element()

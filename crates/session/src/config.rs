@@ -256,6 +256,65 @@ pub struct ClientSettings {
     pub wormhole_rendezvous: String,
     /// magic-wormhole transit relay (`tcp://host:port`).
     pub wormhole_relay: String,
+    /// Theme, fonts, text size and zoom.
+    pub appearance: AppearanceSettings,
+}
+
+/// Light or dark, or as the desktop prefers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeChoice {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// How Nuschel looks.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AppearanceSettings {
+    pub theme: ThemeChoice,
+    /// The interface's font family; `None` is the system's.
+    pub ui_font: Option<String>,
+    /// The family for code; `None` is the system's monospace font.
+    pub mono_font: Option<String>,
+    /// Message text in logical pixels.
+    pub text_size: f32,
+    /// Everything larger or smaller, 1 being 100 % (Ctrl+= and Ctrl+-).
+    pub zoom: f32,
+}
+
+pub const TEXT_SIZE: std::ops::RangeInclusive<f32> = 12.0..=24.0;
+pub const ZOOM: std::ops::RangeInclusive<f32> = 0.5..=3.0;
+impl Default for AppearanceSettings {
+    fn default() -> Self {
+        Self {
+            theme: ThemeChoice::System,
+            ui_font: None,
+            mono_font: None,
+            text_size: 15.,
+            zoom: 1.,
+        }
+    }
+}
+impl AppearanceSettings {
+    pub fn sanitized(mut self) -> Self {
+        let family =
+            |name: Option<String>| name.filter(|name| !name.trim().is_empty() && name.len() <= 256);
+        self.ui_font = family(self.ui_font);
+        self.mono_font = family(self.mono_font);
+        let clamp = |value: f32, range: std::ops::RangeInclusive<f32>, default: f32| {
+            if value.is_finite() {
+                value.clamp(*range.start(), *range.end())
+            } else {
+                default
+            }
+        };
+        self.text_size = clamp(self.text_size, TEXT_SIZE, 15.);
+        self.zoom = clamp(self.zoom, ZOOM, 1.);
+        self
+    }
 }
 
 pub const SIDEBAR_WIDTH: std::ops::RangeInclusive<f32> = 200.0..=560.0;
@@ -280,12 +339,14 @@ impl Default for ClientSettings {
             friend_notifications: false,
             wormhole_rendezvous: nuschel_core::transfer::PUBLIC_RENDEZVOUS.into(),
             wormhole_relay: nuschel_core::transfer::PUBLIC_RELAY.into(),
+            appearance: AppearanceSettings::default(),
         }
     }
 }
 impl ClientSettings {
     pub fn sanitized(mut self) -> Self {
         self.audio = self.audio.sanitized();
+        self.appearance = self.appearance.sanitized();
         self.user_volumes
             .retain(|hash, volume| hash.len() <= 128 && volume.is_finite());
         for volume in self.user_volumes.values_mut() {
@@ -972,6 +1033,36 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(many.sanitized().nicknames.len(), MAX_PEOPLE);
+    }
+    #[test]
+    fn settings_from_before_appearance_follow_the_system_at_100_percent() {
+        let root = std::env::temp_dir().join(format!("nuschel-appearance-{}", Uuid::new_v4()));
+        let profile = Profile::open(Some(root.clone())).unwrap();
+        std::fs::write(
+            profile.config_dir.join("settings.json"),
+            r#"{"force_tcp": true, "sidebar_width": 300.0}"#,
+        )
+        .unwrap();
+        let loaded = profile.load_settings().unwrap();
+        assert!(loaded.force_tcp);
+        assert_eq!(loaded.appearance, AppearanceSettings::default());
+        assert_eq!(loaded.appearance.theme, ThemeChoice::System);
+        // Out-of-range or partial appearance values are repaired, not rejected.
+        std::fs::write(
+            profile.config_dir.join("settings.json"),
+            r#"{"appearance": {"theme": "light", "zoom": 9.0, "text_size": 2.0, "ui_font": " "}}"#,
+        )
+        .unwrap();
+        let loaded = profile.load_settings().unwrap().appearance;
+        assert_eq!(loaded.theme, ThemeChoice::Light);
+        assert_eq!((loaded.zoom, loaded.text_size), (3., 12.));
+        assert_eq!(loaded.ui_font, None);
+        let mut settings = ClientSettings::default();
+        settings.appearance.mono_font = Some("Iosevka".into());
+        settings.appearance.zoom = 1.25;
+        profile.save_settings(&settings).unwrap();
+        assert_eq!(profile.load_settings().unwrap(), settings);
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn parses_mumble_urls_like_stock_clients() {

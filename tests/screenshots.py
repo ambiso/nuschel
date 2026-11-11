@@ -98,6 +98,9 @@ imports.gi.Gio.bus_own_name_on_connection(imports.gi.Gio.DBus.session,
 # (as screenshot tools leave it).
 COMPOSER = (700, 735)
 ATTACH_BUTTON = (386, 735)
+# The Light choice in Settings scrolled to its Appearance section.
+LIGHT_THEME = (652, 140)
+INTERFACE_FONT = (834, 213)
 SET_CLIPBOARD = """
 const [, data] = imports.gi.GLib.file_get_contents(%s);
 imports.gi.St.Clipboard.get_default().set_content(imports.gi.St.ClipboardType.CLIPBOARD,
@@ -156,8 +159,12 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
+    # Dark by default, as the scenes were drawn; the private shell has no
+    # settings portal, so "system" means GPUI's fallback (light).
+    parser.add_argument("--theme", choices=["system", "light", "dark"], default="dark")
+    parser.add_argument("--zoom", type=float, default=1.0, help="scenes' coordinates assume 1.0")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     parser.add_argument("--wormhole-python", type=Path,
                         help="a python with magic-wormhole-mailbox-server and -transit-relay (transfer scene)")
@@ -225,6 +232,7 @@ def main():
             second = {"id": str(uuid.uuid4()), "name": "Friends", "host": "127.0.0.1",
                       "port": 1, "username": "Andi", "certificate_sha256": None, "cached_channels": []}
             (profile / "config/servers.json").write_text(json.dumps([bookmark, second]))
+            (profile / "config/settings.json").write_text(json.dumps({"appearance": {"theme": args.theme, "zoom": args.zoom}}))
             env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHEL_SCREENSHOT_LOG", "nuschel=info")}
             if wormhole:
                 env |= wormhole.environment()
@@ -851,6 +859,42 @@ def main():
                              and "no longer available" in e["body"], timeout=30)
                 time.sleep(1.5)
                 shot("35-offer-stopped")
+            if want("appearance"):
+                click(239, 773)  # Settings
+                time.sleep(1.0)
+                # To the end of Settings, then back up to the section's heading.
+                wheel(640, 400, 40)
+                time.sleep(1.2)
+                wheel(640, 400, -1)
+                time.sleep(0.8)
+                shot("35-appearance-dark")
+                click(*LIGHT_THEME)
+                time.sleep(0.8)
+                shot("36-appearance-light")
+                click(*INTERFACE_FONT)
+                time.sleep(0.6)
+                shell.type("sans")
+                time.sleep(0.6)
+                shot("36b-font-picker")
+                click(*INTERFACE_FONT)  # closes the picker
+                time.sleep(0.4)
+                # Zoom from anywhere, with Settings open: two steps are 125 %.
+                shell.chord("Control_L", "equal")
+                time.sleep(0.6)
+                shell.chord("Control_L", "equal")
+                time.sleep(0.8)
+                shot("37-settings-light-125")
+                shell.key("Escape")
+                time.sleep(0.8)
+                shot("38-light-125")
+                # Zoom keys leave the composer's text alone.
+                click(700, 722)  # the composer, at 125 %
+                shell.type("hi")
+                shell.chord("Control_L", "0")
+                time.sleep(0.8)
+                shot("39-light")
+                shell.key("BackSpace")
+                shell.key("BackSpace")
             if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)

@@ -757,6 +757,8 @@ pub struct Desktop {
     pub sidebar_drag: Option<(f32, f32, f32)>,
     pub settings: ClientSettings,
     pub settings_open: bool,
+    /// Theme, fonts and zoom (see crate::appearance).
+    pub appearance: crate::appearance::Appearance,
     /// The local audio check, alive while Settings is open.
     pub preview: Option<crate::preview::PreviewView>,
     /// Whether Nuschel starts at login, read from the system when Settings opens.
@@ -942,6 +944,7 @@ impl Desktop {
             sidebar_drag: None,
             settings,
             settings_open: false,
+            appearance: crate::appearance::Appearance::new(window, cx),
             preview: None,
             autostart: None,
             update: Default::default(),
@@ -987,6 +990,7 @@ impl Desktop {
             ptt_wake,
             _ptt_poll: ptt_poll,
         };
+        desktop.apply_appearance(window, cx);
         if !desktop.servers.is_empty() {
             desktop.browse_server(0, window, cx);
         }
@@ -1648,6 +1652,7 @@ impl Desktop {
     }
     pub fn close_settings(&mut self) {
         self.settings_open = false;
+        self.appearance.close_picker();
         self.recording_ptt = false;
         self.preview = None;
         self.backend.stop_preview();

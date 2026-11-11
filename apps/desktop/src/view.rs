@@ -58,8 +58,8 @@ impl Render for Desktop {
             .flex_col()
             .bg(color(MAIN))
             .text_color(color(TEXT))
-            .font_family("sans-serif")
-            .text_size(px(15.))
+            .font_family(theme::ui_font())
+            .text_size(px(self.settings.appearance.text_size))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if crate::emoji::shortcut(&event.keystroke)
                     && this.selected_indices().is_some()
@@ -130,6 +130,9 @@ impl Render for Desktop {
                 view.child(viewer)
             })
             .when_some(crate::menus::menu(self, cx), |view, menu| view.child(menu))
+            .when_some(crate::appearance::badge(self), |view, badge| {
+                view.child(badge)
+            })
             .into_any_element();
         chrome::frame(window, content)
     }
@@ -195,7 +198,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                         .when(!active && !online, |icon| icon.opacity(0.6))
                         .hover(|style| style.rounded(px(16.)).opacity(1.))
                         .cursor_pointer()
-                        .text_color(color(0xffffff))
+                        .text_color(color(WHITE))
                         .font_weight(FontWeight::BOLD)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.browse_server(index, window, cx);
@@ -261,7 +264,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                     .justify_center()
                                     .text_xs()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(color(0xffffff))
+                                    .text_color(color(WHITE))
                                     .child(if mentions > 99 {
                                         "99+".to_string()
                                     } else {
@@ -310,7 +313,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                     style
                         .rounded(px(16.))
                         .bg(color(SUCCESS))
-                        .text_color(color(0xffffff))
+                        .text_color(color(WHITE))
                 })
                 .tooltip(|_, cx| cx.new(|_| Tooltip("Add a server".into())).into())
                 .on_click(cx.listener(|this, _, window, cx| this.open_form(None, window, cx)))
@@ -321,7 +324,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                 }))
                 .child(
                     icon("plus", 22., color(SUCCESS))
-                        .group_hover("add-server", |style| style.text_color(color(0xffffff))),
+                        .group_hover("add-server", |style| style.text_color(color(WHITE))),
                 ),
         )
         .into_any_element()
@@ -1018,7 +1021,7 @@ fn avatar(
         .justify_center()
         .text_size(px((size * 0.42).max(9.)))
         .font_weight(FontWeight::BOLD)
-        .text_color(color(0xffffff))
+        .text_color(color(WHITE))
         .child(text!(theme::initials(name)).with_id(id))
         .into_any_element()
 }
@@ -1269,7 +1272,7 @@ fn unread_badge(channel: &crate::state::ChannelView) -> Option<AnyElement> {
             .justify_center()
             .text_xs()
             .font_weight(FontWeight::BOLD)
-            .text_color(color(0xffffff))
+            .text_color(color(WHITE))
             .bg(color(if channel.unread_mention {
                 DANGER
             } else {
@@ -1602,7 +1605,7 @@ fn conversation(
                         .items_center()
                         .gap_2()
                         .text_sm()
-                        .text_color(color(0xffc9cc))
+                        .text_color(color(DANGER_TEXT))
                         .child(icon("alert", 16., color(DANGER_HOVER)))
                         .child(
                             div()
@@ -1881,7 +1884,7 @@ fn jump_pill(
                     .shadow_md()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(color(0xffffff))
+                    .text_color(color(WHITE))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.jump_to_latest();
                         cx.notify();
@@ -1893,7 +1896,7 @@ fn jump_pill(
                             cx.notify();
                         }
                     }))
-                    .child(icon("chevron-down", 16., color(0xffffff)))
+                    .child(icon("chevron-down", 16., color(WHITE)))
                     .child(text!(label).with_id("jump-to-latest-label")),
             )
             .into_any_element(),
@@ -2137,7 +2140,7 @@ fn update_bar(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
 
 fn banner(
     id: &'static str,
-    tone: u32,
+    tone: Token,
     icon_name: &'static str,
     text: String,
     action: Option<AnyElement>,
@@ -2222,7 +2225,7 @@ fn message_row(
         .when(!grouped, |row| row.pt_3().pb(px(2.)))
         .rounded(px(6.))
         .group("message")
-        .hover(|style| style.bg(tint(0x000000, 0x18)))
+        .hover(|style| style.bg(color(ROW_HOVER)))
         .child(if grouped {
             div().w(px(40.)).flex_shrink_0().into_any_element()
         } else {
@@ -2293,7 +2296,7 @@ fn message_row(
                         .id(("message-content", index))
                         .flex()
                         .flex_col()
-                        .text_color(color(0xdbdfe8))
+                        .text_color(color(BODY))
                         .when(clamped, |content| {
                             content
                                 .relative()
@@ -2316,7 +2319,7 @@ fn message_row(
                         .when(clamped && message.has_more(), |content| {
                             // Fade the cut-off edge into the row background
                             // (which darkens slightly while hovered).
-                            let fade = |background: u32| {
+                            let fade = |background: Token| {
                                 linear_gradient(
                                     180.,
                                     linear_color_stop(tint(background, 0), 0.),
@@ -2724,7 +2727,7 @@ fn certificate_card(
                         .p_2()
                         .rounded(px(6.))
                         .bg(color(APP))
-                        .font_family("monospace")
+                        .font_family(theme::mono_font())
                         .text_sm()
                         .child(text!(certificate.sha256.as_bytes().chunks(8).map(|chunk| std::str::from_utf8(chunk).unwrap_or("?")).collect::<Vec<_>>().join(" ")).with_id("certificate-fingerprint")),
                 )
@@ -2745,7 +2748,7 @@ fn certificate_card(
         .into_any_element()
 }
 
-fn status_color(status: Status) -> u32 {
+fn status_color(status: Status) -> Token {
     match status {
         Status::Connected => SUCCESS,
         Status::Connecting => WARNING,
@@ -2950,7 +2953,7 @@ fn blocks(
                     .bg(color(APP))
                     .border_1()
                     .border_color(color(BORDER))
-                    .font_family("monospace")
+                    .font_family(theme::mono_font())
                     .text_sm()
                     .flex()
                     .flex_col()

@@ -6,7 +6,7 @@
 use nuschel_session::{config::ClientSettings, connection::User, model::Activity};
 
 /// The friend marker's colour.
-pub const FRIEND: u32 = 0xee6ea8;
+pub use crate::theme::FRIEND;
 
 /// The name to show for a user: your nickname for them, else their own.
 pub fn display_name<'a>(user: &'a User, settings: &'a ClientSettings) -> &'a str {

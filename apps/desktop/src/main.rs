@@ -3,6 +3,7 @@
 // Start menu or the Run key (autostart) opens an empty console window as well.
 // Command-line use goes through nuschel-cli.
 #![cfg_attr(windows, windows_subsystem = "windows")]
+mod appearance;
 mod assets;
 mod attachments;
 mod autostart;
@@ -154,11 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            // Input carets and selections resolve from Base's theme, not inherited text colors.
-            let theme = gpui_kit::base::Theme::global_mut(cx);
-            theme.appearance = gpui_kit::base::ThemeAppearance::Dark;
-            theme.tokens.colors = gpui_kit::base::ColorTokens::dark();
-            theme.tokens.colors.accent = gpui_kit::rgb(0x557ee6).into();
+            appearance::bind_keys(cx);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

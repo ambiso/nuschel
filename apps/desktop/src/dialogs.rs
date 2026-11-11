@@ -35,9 +35,9 @@ pub fn styled_button(
     let click = action.clone();
     let label = label.into();
     let (background, hover, foreground) = match tone {
-        Tone::Primary => (ACCENT, ACCENT_HOVER, 0xffffff),
+        Tone::Primary => (ACCENT, ACCENT_HOVER, WHITE),
         Tone::Secondary => (ELEVATED, SELECTED, TEXT),
-        Tone::Danger => (DANGER, DANGER_HOVER, 0xffffff),
+        Tone::Danger => (DANGER, DANGER_HOVER, WHITE),
         Tone::Ghost => (MAIN, HOVER, TEXT_MUTED),
     };
     div()
@@ -71,8 +71,8 @@ pub fn icon_button(
     id: impl Into<ElementId>,
     name: &'static str,
     label: impl Into<SharedString>,
-    foreground: u32,
-    active_background: Option<u32>,
+    foreground: Token,
+    active_background: Option<Token>,
     action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
@@ -187,7 +187,7 @@ pub fn toggle_button(
 }
 
 /// The colour `t` of the way from `a` to `b`.
-fn mix(a: u32, b: u32, t: f32) -> Rgba {
+fn mix(a: Token, b: Token, t: f32) -> Rgba {
     let (a, b) = (color(a), color(b));
     let t = t.clamp(0., 1.);
     Rgba {
@@ -259,7 +259,7 @@ pub fn modal(
         .id(SharedString::from(format!("{id}-backdrop")))
         .absolute()
         .inset_0()
-        .bg(rgba(0x000000aa))
+        .bg(color(SCRIM))
         .flex()
         .items_center()
         .justify_center()

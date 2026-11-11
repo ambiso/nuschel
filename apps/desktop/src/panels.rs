@@ -279,7 +279,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                                 .justify_center()
                                 .text_xl()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(color(0xffffff))
+                                .text_color(color(WHITE))
                                 .child(text!(theme::initials(&shown_name)).with_id("info-avatar")),
                         )
                         .child(

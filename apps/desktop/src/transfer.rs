@@ -942,7 +942,7 @@ fn receiver_status(
 }
 
 /// A file's kind by its extension, for the card's tile.
-fn kind(name: &str) -> (&'static str, u32) {
+fn kind(name: &str) -> (&'static str, Token) {
     let extension = name
         .rsplit_once('.')
         .map(|(_, extension)| extension.to_ascii_lowercase())
@@ -952,7 +952,7 @@ fn kind(name: &str) -> (&'static str, u32) {
         | "tiff" => ("Image", SUCCESS),
         "mp3" | "wav" | "flac" | "ogg" | "opus" | "m4a" | "aac" => ("Audio", WARNING),
         "mp4" | "mkv" | "webm" | "mov" | "avi" => ("Video", DANGER),
-        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" => ("Archive", 0xb48cf2),
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" => ("Archive", ARCHIVE),
         "pdf" | "txt" | "md" | "doc" | "docx" | "odt" | "rtf" | "xls" | "xlsx" | "ods" | "csv"
         | "ppt" | "pptx" | "odp" | "epub" => ("Document", ACCENT),
         _ => ("File", TEXT_MUTED),

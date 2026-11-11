@@ -131,7 +131,7 @@ pub fn overlay(this: &Desktop, window: &Window, cx: &mut Context<Desktop>) -> Op
             .flex()
             .items_center()
             .justify_center()
-            .bg(tint(0x07090e, 0xe0))
+            .bg(tint(BACKDROP, 0xe0))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, _, cx| {
                 this.viewer = None;
@@ -146,7 +146,7 @@ pub fn overlay(this: &Desktop, window: &Window, cx: &mut Context<Desktop>) -> Op
                     .overflow_hidden()
                     // A dark glow around the picture.
                     .shadow(vec![BoxShadow {
-                        color: tint(0x000000, 0xd0).into(),
+                        color: tint(BLACK, 0xd0).into(),
                         offset: point(px(0.), px(0.)),
                         blur_radius: px(140.),
                         spread_radius: px(36.),

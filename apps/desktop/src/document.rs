@@ -3,17 +3,59 @@
 //! with its styles and links, code with its highlight ranges, and images.
 //! Images arrive as raw RGBA from the sandboxed content worker; the UI never
 //! parses image formats.
-use crate::theme::{ACCENT_HOVER, tint};
+use crate::theme::{self, CODE_SPAN, LINK, MAIN};
 use base64::Engine as _;
 use gpui_kit::{
     FontStyle, FontWeight, HighlightStyle, Hsla, RenderImage, SharedString, StrikethroughStyle,
-    UnderlineStyle, px, rgb,
+    UnderlineStyle, px, rgb, rgba,
 };
 use nuschel_core::{CodeRun, ContentBlock, MessageDocument, Span, Style, TextRole};
 use std::{borrow::Cow, ops::Range, sync::Arc};
 
-/// Styles by byte range, sorted and disjoint.
-pub type Highlights = Arc<[(Range<usize>, HighlightStyle)]>;
+type Styles = Vec<(Range<usize>, HighlightStyle)>;
+
+/// Styles by byte range, sorted and disjoint, in the dark and in the light
+/// palette's colours. It dereferences to the active palette's, so a theme
+/// change needs no conversion again.
+#[derive(Clone)]
+pub struct Highlights {
+    dark: Arc<[(Range<usize>, HighlightStyle)]>,
+    light: Arc<[(Range<usize>, HighlightStyle)]>,
+}
+
+impl Highlights {
+    fn new(dark: Styles, light: Styles) -> Self {
+        if dark == light {
+            return dark.into();
+        }
+        Self {
+            dark: dark.into(),
+            light: light.into(),
+        }
+    }
+}
+
+/// The same styles in both palettes.
+impl From<Styles> for Highlights {
+    fn from(styles: Styles) -> Self {
+        let styles: Arc<[_]> = styles.into();
+        Self {
+            dark: styles.clone(),
+            light: styles,
+        }
+    }
+}
+
+impl std::ops::Deref for Highlights {
+    type Target = [(Range<usize>, HighlightStyle)];
+    fn deref(&self) -> &Self::Target {
+        if theme::is_light() {
+            &self.light
+        } else {
+            &self.dark
+        }
+    }
+}
 /// Link targets (http, https or mumble) by byte range, sorted and disjoint.
 pub type Links = Arc<[(Range<usize>, SharedString)]>;
 
@@ -134,21 +176,21 @@ impl From<MessageDocument> for Document {
     }
 }
 
-/// A sender's colour made legible on the dark background: its hue stays,
-/// a dark one gets lighter.
-fn legible([red, green, blue]: [u8; 3]) -> Hsla {
-    let mut color: Hsla = rgb(u32::from_be_bytes([0, red, green, blue])).into();
-    color.l = color.l.max(0.65);
-    color
+fn opaque([red, green, blue]: [u8; 3]) -> Hsla {
+    rgb(u32::from_be_bytes([0, red, green, blue])).into()
 }
 
-fn highlight(style: Style, link: bool) -> HighlightStyle {
+/// A span's style in the light or the dark palette. A sender's colour keeps
+/// its hue and gets as much lighter or darker as it needs to be readable.
+fn highlight(style: Style, link: bool, light: bool) -> HighlightStyle {
     let line = || px(1.);
     HighlightStyle {
         color: if link {
-            Some(rgb(ACCENT_HOVER).into())
+            Some(rgba(LINK.get(light)).into())
         } else {
-            style.color.map(legible)
+            style
+                .color
+                .map(|color| theme::readable(opaque(color), MAIN, light))
         },
         font_weight: style.bold.then_some(FontWeight::BOLD),
         font_style: style.italic.then_some(FontStyle::Italic),
@@ -160,7 +202,7 @@ fn highlight(style: Style, link: bool) -> HighlightStyle {
             thickness: line(),
             ..Default::default()
         }),
-        background_color: style.code.then(|| tint(0xffffff, 0x14).into()),
+        background_color: style.code.then(|| rgba(CODE_SPAN.get(light)).into()),
         ..Default::default()
     }
 }
@@ -191,7 +233,8 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
     if kind == Kind::Rule {
         kept = 0..0;
     }
-    let (mut highlights, mut links, mut code) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut dark, mut light, mut links, mut code) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut covered = kept.start;
     for span in spans {
         let range = span.start.max(covered)..span.end.min(kept.end);
@@ -207,7 +250,8 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
         if span.style.is_plain() && link.is_none() {
             continue;
         }
-        highlights.push((range.clone(), highlight(span.style, link.is_some())));
+        dark.push((range.clone(), highlight(span.style, link.is_some(), false)));
+        light.push((range.clone(), highlight(span.style, link.is_some(), true)));
         if span.style.code {
             code.push(range.clone());
         }
@@ -222,7 +266,7 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
     };
     Block::Text {
         text,
-        highlights: highlights.into(),
+        highlights: Highlights::new(dark, light),
         links: links.into(),
         code: code.into(),
         kind,
@@ -232,15 +276,15 @@ fn text_block(text: String, spans: Vec<Span>, role: TextRole, index: usize, last
 /// A code block's runs joined into one text with their colours as ranges.
 fn code(language: Option<String>, runs: Vec<CodeRun>) -> Block {
     let mut text = String::new();
-    let mut highlights = Vec::with_capacity(runs.len());
+    let mut dark = Vec::with_capacity(runs.len());
     for run in runs {
         let start = text.len();
         text.push_str(&run.text);
         let [red, green, blue, _] = run.foreground;
-        highlights.push((
+        dark.push((
             start..text.len(),
             HighlightStyle {
-                color: Some(rgb(u32::from_be_bytes([0, red, green, blue])).into()),
+                color: Some(opaque([red, green, blue])),
                 font_weight: run.bold.then_some(FontWeight::BOLD),
                 font_style: run.italic.then_some(FontStyle::Italic),
                 ..Default::default()
@@ -249,14 +293,21 @@ fn code(language: Option<String>, runs: Vec<CodeRun>) -> Block {
     }
     let trimmed = text.trim_end_matches(['\n', '\r']).len();
     text.truncate(trimmed);
-    highlights.retain_mut(|(range, _)| {
+    dark.retain_mut(|(range, _)| {
         range.end = range.end.min(trimmed);
         range.start < range.end
     });
+    let light = dark
+        .iter()
+        .map(|(range, style)| {
+            let color = style.color.map(|color| theme::code_color(color, true));
+            (range.clone(), HighlightStyle { color, ..*style })
+        })
+        .collect();
     Block::Code {
         language: language.map_or("code".into(), SharedString::from),
         text: text.into(),
-        highlights: highlights.into(),
+        highlights: Highlights::new(dark, light),
     }
 }
 
@@ -514,6 +565,11 @@ mod tests {
         let color = highlights[0].1.color.unwrap();
         assert!(color.l >= 0.65 && (color.h - 240. / 360.).abs() < 0.01);
         assert!(highlights[1].1.background_color.is_some());
+        // The light palette keeps navy as it is: it reads on white.
+        crate::theme::set_light(true);
+        let color = highlights[0].1.color.unwrap();
+        assert!(color.l < 0.2 && (color.h - 240. / 360.).abs() < 0.01);
+        crate::theme::set_light(false);
         assert_eq!(code.first(), Some(&(5..9)));
         assert!(matches!(
             &document.blocks[1],

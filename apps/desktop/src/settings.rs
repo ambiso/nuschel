@@ -11,7 +11,7 @@ use gpui_kit::{prelude::*, *};
 use nuschel_core::audio::{AudioDevice, EchoMode, EchoSource, TransmitMode};
 use std::rc::Rc;
 
-type Action = Rc<dyn Fn(&mut Desktop, &mut Window, &mut Context<Desktop>)>;
+pub type Action = Rc<dyn Fn(&mut Desktop, &mut Window, &mut Context<Desktop>)>;
 type Choose = Rc<dyn Fn(&mut Desktop, Option<String>)>;
 
 fn activation(event: &KeyDownEvent) -> bool {
@@ -34,7 +34,7 @@ fn section(title: &'static str, children: Vec<AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-fn segmented(
+pub fn segmented(
     id: &'static str,
     label: &'static str,
     options: Vec<(&'static str, bool, Action)>,
@@ -147,7 +147,7 @@ pub fn toggle(
                 .bg(color(if on { SUCCESS } else { BORDER_STRONG }))
                 .flex()
                 .when(on, |track| track.justify_end())
-                .child(div().size(px(16.)).rounded_full().bg(color(0xffffff))),
+                .child(div().size(px(16.)).rounded_full().bg(color(WHITE))),
         )
         .into_any_element()
 }
@@ -282,7 +282,7 @@ fn slider(
                 .ml(px(-8.))
                 .size(px(16.))
                 .rounded_full()
-                .bg(color(0xffffff))
+                .bg(color(WHITE))
                 .border_2()
                 .border_color(color(ACCENT))
                 .shadow_sm(),
@@ -1117,6 +1117,7 @@ pub fn dialog(
                 .child(section("PROCESSING", processing))
                 .child(section("DEVICES", devices))
                 .child(section("NETWORK", network))
+                .child(section("APPEARANCE", crate::appearance::settings(this, cx)))
                 .child(section("GENERAL", general))
                 .child(section("IDENTITY", identity_section)),
         )

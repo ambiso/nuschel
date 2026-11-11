@@ -1205,7 +1205,7 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     .hover(move |style| {
                         style
                             .bg(color(if danger { DANGER } else { ACCENT }))
-                            .text_color(color(0xffffff))
+                            .text_color(color(WHITE))
                     })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1227,7 +1227,7 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                             color(if danger { DANGER_HOVER } else { TEXT_MUTED }),
                         )
                         .group_hover(SharedString::from(format!("menu-item-{index}")), |style| {
-                            style.text_color(color(0xffffff))
+                            style.text_color(color(WHITE))
                         }),
                     )
                     .child(
