@@ -178,6 +178,28 @@ impl<S: KtStore> AkdDirectory<S> {
         })
     }
 
+    /// If an earlier publish committed an epoch but failed to store its head and audit
+    /// proof, signs and stores them now, while that epoch is still the newest (so its
+    /// proof is still minimal). Called with the write lock held.
+    async fn repair(&self, latest: &mut SignedHead, now_ms: u64) -> Result<(), DirectoryError> {
+        let current = self.akd.get_epoch_hash().await.map_err(akd_err)?;
+        if current.epoch() == latest.epoch {
+            return Ok(());
+        }
+        let head = SignedHead::sign(
+            self.signer.as_ref(),
+            self.log_id,
+            current.epoch(),
+            current.hash(),
+            now_ms.max(latest.issued_at_ms),
+        )?;
+        self.store
+            .write(epoch_records(&self.akd, &head).await?)
+            .await?;
+        *latest = head;
+        Ok(())
+    }
+
     async fn head_for(&self, epoch: u64, root: [u8; 32]) -> Result<SignedHead, DirectoryError> {
         let head = load_head(&*self.store, epoch)
             .await?
@@ -293,6 +315,7 @@ impl<S: KtStore> Directory for AkdDirectory<S> {
             entries.push((AkdLabel(encoded), AkdValue(value.encode())));
         }
         let mut latest = self.latest.write().await;
+        self.repair(&mut latest, now_ms).await?;
         if latest.epoch >= MAX_EPOCH {
             return Err(DirectoryError::InvalidRequest("the log is full".into()));
         }
@@ -318,6 +341,7 @@ impl<S: KtStore> Directory for AkdDirectory<S> {
 
     async fn refresh_head(&self, now_ms: u64) -> Result<SignedHead, DirectoryError> {
         let mut latest = self.latest.write().await;
+        self.repair(&mut latest, now_ms).await?;
         if now_ms <= latest.issued_at_ms {
             return Ok(latest.clone());
         }

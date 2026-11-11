@@ -446,3 +446,69 @@ async fn messages_round_trip_and_have_the_documented_sizes() {
         NameBinding(account(1))
     );
 }
+
+/// A store whose next write of an epoch's head fails, as a crash or a lost database
+/// connection after akd committed the epoch would.
+struct FailingHeadWrite {
+    inner: MemoryStore,
+    fail_next: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl KtStore for FailingHeadWrite {
+    async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StoreError> {
+        self.inner.get(key).await
+    }
+    async fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StoreError> {
+        self.inner.scan_prefix(prefix).await
+    }
+    async fn write(&self, records: Vec<(Vec<u8>, Vec<u8>)>) -> Result<(), StoreError> {
+        if records.iter().any(|(k, _)| k[0] == b'h')
+            && self
+                .fail_next
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(StoreError("connection lost".into()));
+        }
+        self.inner.write(records).await
+    }
+}
+
+#[tokio::test]
+async fn an_epoch_whose_head_was_not_stored_is_repaired() {
+    let store = Arc::new(FailingHeadWrite {
+        inner: MemoryStore::new(),
+        fail_next: false.into(),
+    });
+    let dir = open_with(store.clone(), SIGNER_SEED, VRF_SEED).await;
+    let descriptor = dir.descriptor().clone();
+    let mut client = Client::new(&descriptor);
+    let first = dir
+        .publish(vec![(acct(1), binding(1, 1))], T0 + 1)
+        .await
+        .unwrap();
+    client.accept(&dir, &first, T0 + 1).await.unwrap();
+    store
+        .fail_next
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(matches!(
+        dir.publish(vec![(acct(2), binding(2, 1))], T0 + 2).await,
+        Err(DirectoryError::Store(_))
+    ));
+    // akd committed epoch 2; until repaired, proofs for it fail instead of lying.
+    assert!(matches!(
+        dir.lookup(&acct(2)).await,
+        Err(DirectoryError::Corrupt(_))
+    ));
+    // The next publish repairs epoch 2 first, then publishes epoch 3.
+    let third = dir
+        .publish(vec![(acct(3), binding(3, 1))], T0 + 3)
+        .await
+        .unwrap();
+    assert_eq!(third.epoch, 3);
+    client.accept(&dir, &third, T0 + 3).await.unwrap();
+    verify_head(&descriptor, &dir.head_at(2).await.unwrap()).unwrap();
+    for n in 1..=3 {
+        verify_lookup(&descriptor, &acct(n), &dir.lookup(&acct(n)).await.unwrap()).unwrap();
+    }
+}
