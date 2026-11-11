@@ -240,11 +240,18 @@ impl App {
     /// One image per explicit paste. The destination is frozen at attach,
     /// not inferred from the currently open conversation after an await.
     pub fn send_image(&mut self, caption: &str) {
+        if self.client.sending() {
+            return self.warn("The previous message is still on its way.");
+        }
         if self.clipboard.flight.is_some() {
             return self.warn("The image is still awaiting the connection's send acknowledgment.");
         }
         let Some((destination, image)) = self.clipboard.ready.as_ref() else {
-            return self.warn("The clipboard image is still being prepared.");
+            return self.warn(if self.clipboard.pending.is_some() {
+                "The clipboard image is still being prepared."
+            } else {
+                "Paste an image first (/paste-image)."
+            });
         };
         let destination = destination.clone();
         if !Destination::capture(self).is_ok_and(|current| destination.matches(&current)) {

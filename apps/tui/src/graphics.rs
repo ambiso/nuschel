@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Terminal pictures from worker pixels. No image codecs or formula evaluator
-//! run here. The cache and queue are bounded; layout only requests work.
+//! Terminal pictures from worker pixels. No image-format decoder or formula
+//! evaluator runs here. The cache and queue are bounded; layout requests work.
 use base64::Engine as _;
 use nuschl_core::{ContentBlock, MessageDocument};
 use nuschl_ipc::math::{MathImage, MathRequest, MathWorker};

@@ -228,6 +228,34 @@ fn private_image_follows_the_same_certificate_but_rejects_a_reused_presence() {
 }
 
 #[test]
+fn an_old_connections_image_ack_does_not_clear_a_retained_draft() {
+    let (mut app, recorder, _) = connected();
+    app.clipboard = crate::clipboard::Clipboard::with_test_image(&app);
+    app.composer.insert("retained caption");
+    app.submit();
+    let request = recorder
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|request| match request {
+            Request::SendHtml { target, html, .. } => Some((target.clone(), html[0].clone())),
+            _ => None,
+        })
+        .unwrap();
+    app.client.servers[0].generation += 1;
+    app.clipboard_input(&Input::Sent {
+        server: app.client.servers[0].id.clone(),
+        generation: 1,
+        target: request.0,
+        body: request.1,
+    });
+    app.poll_clipboard();
+    assert!(app.clipboard.attached());
+    assert_eq!(app.composer.text(), "retained caption");
+}
+
+#[test]
 fn ssh_clipboard_action_never_starts_a_host_clipboard_read() {
     let (mut app, _, _) = connected();
     app.options.ssh = true;
