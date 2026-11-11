@@ -221,11 +221,15 @@ pub fn mix(a: Token, b: Token, t: f32) -> Rgba {
 
 pub struct Tooltip(pub SharedString);
 impl Render for Tooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .px_2()
             .py_1()
-            .max_w(px(420.))
+            .max_w(px(420.).min(window.viewport_size().width * 0.90))
+            .max_h(window.viewport_size().height * 0.50)
+            .min_w_0()
+            .overflow_hidden()
+            .whitespace_normal()
             .rounded(px(6.))
             .bg(color(APP))
             .border_1()
@@ -233,7 +237,7 @@ impl Render for Tooltip {
             .text_sm()
             .text_color(color(TEXT))
             .shadow_md()
-            .child(self.0.clone())
+            .child(text!(self.0.clone()).with_id("tooltip-full-text"))
     }
 }
 

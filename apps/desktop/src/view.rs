@@ -1646,7 +1646,7 @@ fn conversation(
     this: &Desktop,
     index: usize,
     channel_index: usize,
-    window: &Window,
+    window: &mut Window,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let server_index = index;
