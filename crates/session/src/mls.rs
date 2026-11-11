@@ -387,6 +387,8 @@ impl Context {
                 let cursor = self.mls().cursors.entry(conversation).or_insert(0);
                 *cursor = (*cursor).max(view.cursor.max(welcome.seq));
                 self.mls_view(view).await;
+                // The Welcome used up one of our key packages: top them up.
+                self.mls().upload_at.get_or_insert_with(Instant::now);
                 self.mls_sync(conversation).await?;
             }
             Ok(_) => {}
@@ -689,11 +691,20 @@ impl Context {
                 return Err(error);
             }
         };
+        // A commit that brought in a device key transparency has not confirmed:
+        // look the accounts up again, then let the worker re-check.
+        let recheck = matches!(&received, Received::Commit { view, .. } if view.blocked.is_some());
         self.mls_emit(MlsEvent::Received {
             conversation,
             received,
         })
         .await;
+        if recheck && let Some((peer, _)) = self.mls().directs.get(&conversation).copied() {
+            self.mls().own_checked = false;
+            self.mls_rosters(peer).await?;
+            let view = self.mls_status(conversation).await?;
+            self.mls_view(view).await;
+        }
         Ok(())
     }
 

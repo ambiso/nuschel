@@ -912,7 +912,13 @@ pub async fn drive(driver: Driver) {
                 // A fresh head every hour (it must stay younger than 25 hours), then
                 // whatever the daily schedule asks for.
                 let result = match context.connect(descriptor.clone()).await {
-                    Ok(true) => context.run_due(false).await,
+                    Ok(true) => match context.run_due(false).await {
+                        // End-to-end conversations start once the log is healthy.
+                        Ok(()) if mls_commands.is_some() && context.mls.is_none() => {
+                            context.mls_start().await
+                        }
+                        result => result,
+                    },
                     Ok(false) => Ok(()),
                     Err(error) => Err(error),
                 };
