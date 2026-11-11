@@ -140,7 +140,7 @@ impl Desktop {
         let servers = wormhole_servers(&self.settings);
         let rendezvous =
             (servers.rendezvous != PUBLIC_RENDEZVOUS).then(|| servers.rendezvous.clone());
-        let server = &mut self.servers[index];
+        let server = &mut self.client.servers[index];
         if server.status != Status::Connected {
             server.notice = Some("Connect before offering a file.".into());
             cx.notify();
@@ -216,7 +216,7 @@ impl Desktop {
                     .await;
                 let ready = this.update(cx, |this, _| {
                     this.selected_indices().is_some_and(|(server, channel)| {
-                        let server = &this.servers[server];
+                        let server = &this.client.servers[server];
                         server.status == Status::Connected
                             && server.voice_channel() == Some(server.channels[channel].id)
                     })
@@ -461,6 +461,7 @@ impl Desktop {
             }
         }
         let server = self
+            .client
             .servers
             .iter_mut()
             .find(|server| server.id == outgoing.server)?;

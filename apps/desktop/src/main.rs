@@ -9,7 +9,6 @@ mod attachments;
 mod autostart;
 mod chrome;
 mod dialogs;
-mod directs;
 mod document;
 mod editing;
 mod emoji;

@@ -670,7 +670,7 @@ pub fn dialog(
             move |this: &mut Desktop, _: &mut Window, _: &mut Context<Desktop>| {
                 let input = this
                     .selected_indices()
-                    .and_then(|(server, _)| this.servers[server].audio.input.clone());
+                    .and_then(|(server, _)| this.client.servers[server].audio.input.clone());
                 this.update_settings(|settings| match input {
                     Some(id) if settings.audio.device_overrides.contains_key(&id) => {
                         settings.audio.device_overrides.insert(id, choice);
@@ -1015,7 +1015,7 @@ pub fn dialog(
             send_typing,
             Rc::new(move |this, _, _| {
                 this.update_settings(|settings| settings.send_typing = !send_typing);
-                this.typing_sent = None;
+                this.client.composing(false);
             }),
             cx,
         ),

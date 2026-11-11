@@ -62,36 +62,6 @@ pub fn plain(text: &str) -> String {
         .collect()
 }
 
-/// A short, single-paragraph preview of a message body.
-pub fn preview(body: &str) -> String {
-    let flat: String = body
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .filter(|c| *c != '\u{1e}')
-        .collect();
-    if flat.chars().count() > 160 {
-        format!("{}…", flat.chars().take(160).collect::<String>())
-    } else {
-        flat
-    }
-}
-
-/// Whether `body` mentions `name` as a whole word (case-insensitive).
-pub fn mentions(body: &str, name: &str) -> bool {
-    let name = name.trim().to_lowercase();
-    if name.is_empty() {
-        return false;
-    }
-    let body = body.to_lowercase();
-    body.match_indices(&name).any(|(start, _)| {
-        let before = body[..start].chars().next_back();
-        let after = body[start + name.len()..].chars().next();
-        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
-    })
-}
-
 /// Start the notification sender; notes go to it through the returned channel.
 #[cfg(target_os = "linux")]
 pub fn start(handle: &tokio::runtime::Handle) -> tokio::sync::mpsc::Sender<Note> {
@@ -198,20 +168,5 @@ mod tests {
     fn summaries_are_one_plain_line() {
         assert_eq!(plain("Eve\nin #general\u{7}"), "Eve in #general");
         assert_eq!(plain("a & <b>"), "a & <b>");
-    }
-
-    #[test]
-    fn mentions_are_whole_words() {
-        assert!(mentions("hey andi, look", "Andi"));
-        assert!(mentions("ANDI!", "andi"));
-        assert!(!mentions("candidate", "andi"));
-        assert!(!mentions("andiamo", "andi"));
-        assert!(!mentions("anything", ""));
-    }
-
-    #[test]
-    fn previews_are_short_and_flat() {
-        assert_eq!(preview("one\n\ntwo   three"), "one two three");
-        assert!(preview(&"x".repeat(500)).ends_with('…'));
     }
 }

@@ -4,15 +4,20 @@
 //! decide them. Plain data only, no runtime and no clock: it builds for
 //! `wasm32-unknown-unknown`, and platform adapters execute what it decides.
 
+pub mod client;
 pub mod conversation;
 pub mod favicon;
+pub mod input;
+pub mod names;
 #[cfg(feature = "native")]
 pub mod native;
 mod navigation;
+pub mod platform;
 pub mod server;
 pub mod sounds;
 pub mod timeline;
 pub mod tree;
+pub use client::{Client, Focus, Notification, SendError, Update};
 pub use navigation::*;
 pub use nuschel_core::model;
 

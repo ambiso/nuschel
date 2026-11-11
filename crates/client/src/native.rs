@@ -8,6 +8,8 @@
 //! returns at once, and answers arrive as events.
 use crate::{
     HistoryTicket,
+    input::{Input, ServerEvent},
+    platform::{CacheKey, ChangeRequest, Platform, RenderKey, Request, request_id},
     server::{AudioHealth, direct_conversation_key},
     timeline::{Deletion, IncomingMessage, Page},
 };
@@ -31,14 +33,6 @@ use tokio::{
     sync::{mpsc, watch},
 };
 
-/// Where a conversation of a Nuschel server is kept in local history: the
-/// history identity of the server and the conversation's storage key.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CacheKey {
-    pub identity: String,
-    pub channel: String,
-}
-
 /// Server history pages asked for, by request id: server, ticket, cursor,
 /// and where the page is kept in local history.
 type ServerPages = BTreeMap<u64, (String, HistoryTicket, Page, Option<CacheKey>)>;
@@ -50,19 +44,6 @@ fn server_pages() -> std::sync::MutexGuard<'static, ServerPages> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// An edit or deletion we asked for, by request id, until the server answers.
-#[derive(Clone, Debug)]
-pub struct ChangeRequest {
-    pub server: String,
-    pub conversation: [u8; 16],
-    pub seq: u64,
-    /// The new text of an edit; `None` deletes.
-    pub content: Option<String>,
-    pub cache: Option<CacheKey>,
-    /// A deletion by someone who may moderate there: the server records it
-    /// as a moderator's (also for their own messages).
-    pub moderator: bool,
-}
 static CHANGES: std::sync::Mutex<BTreeMap<u64, ChangeRequest>> =
     std::sync::Mutex::new(BTreeMap::new());
 
@@ -70,13 +51,6 @@ fn changes() -> std::sync::MutexGuard<'static, BTreeMap<u64, ChangeRequest>> {
     CHANGES
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Request ids of the client's own extension requests (pages, edits,
-/// deletions, direct conversations); the session uses ids with the top bit.
-pub fn request_id() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The author shown for a server message.
@@ -335,11 +309,6 @@ pub enum Event {
         talking: bool,
     },
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RenderKey {
-    Description(u32),
-    Comment(u32),
-}
 struct Connection {
     commands: mpsc::Sender<Command>,
     sounds: mpsc::Sender<Sound>,
@@ -353,8 +322,8 @@ pub struct Driver {
     sender: mpsc::Sender<Event>,
     storage: mpsc::Sender<StorageCommand>,
     content: mpsc::Sender<ContentWork>,
-    connections: BTreeMap<String, Connection>,
-    generation: u64,
+    connections: std::sync::Mutex<BTreeMap<String, Connection>>,
+    generation: std::sync::atomic::AtomicU64,
     settings: watch::Sender<ClientSettings>,
     voice_keys: watch::Sender<VoiceKeys>,
     render_permits: std::sync::Arc<tokio::sync::Semaphore>,
@@ -466,8 +435,8 @@ impl Driver {
             sender,
             storage,
             content,
-            connections: BTreeMap::new(),
-            generation: 0,
+            connections: Default::default(),
+            generation: Default::default(),
             settings: watch::Sender::new(settings),
             voice_keys: watch::Sender::new(VoiceKeys::default()),
             render_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
@@ -478,19 +447,22 @@ impl Driver {
     }
     /// Connect self-muted; `deafened` also deafens (automatic connections at startup).
     pub fn connect(
-        &mut self,
+        &self,
         server: ServerBookmark,
         password: Option<String>,
         deafened: bool,
     ) -> Result<u64, String> {
-        if self.connections.len() >= 8 && !self.connections.contains_key(&server.id) {
+        let mut connections = self.connections();
+        if connections.len() >= 8 && !connections.contains_key(&server.id) {
             return Err("Disconnect a server before opening another connection (limit: 8).".into());
         }
-        if let Some(old) = self.connections.remove(&server.id) {
+        if let Some(old) = connections.remove(&server.id) {
             old.task.abort();
         }
-        self.generation += 1;
-        let generation = self.generation;
+        let generation = self
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
         let (commands, receiver) = mpsc::channel(32);
         let (sounds, sound_requests) = mpsc::channel(8);
         let id = server.id.clone();
@@ -504,7 +476,7 @@ impl Driver {
             (self.content.clone(), self.storage.clone()),
             (self.settings.subscribe(), self.voice_keys.subscribe()),
         ));
-        self.connections.insert(
+        connections.insert(
             id,
             Connection {
                 commands,
@@ -599,8 +571,14 @@ impl Driver {
             let _ = events.send(Event::OwnIdentity(result)).await;
         });
     }
-    pub fn command(&self, server: &str, command: Command) -> Result<(), String> {
+    fn connections(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Connection>> {
         self.connections
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+    /// Send a command to a server's session.
+    pub fn command(&self, server: &str, command: Command) -> Result<(), String> {
+        self.connections()
             .get(server)
             .ok_or("Server is not connected.")?
             .commands
@@ -683,7 +661,7 @@ impl Driver {
     }
     /// Play a sound effect on this server's media worker (see `connect_once`).
     pub fn play_sound(&self, server: &str, sound: Sound) {
-        if let Some(connection) = self.connections.get(server) {
+        if let Some(connection) = self.connections().get(server) {
             let _ = connection.sounds.try_send(sound);
         }
     }
@@ -704,8 +682,8 @@ impl Driver {
         self.voice_keys
             .send_if_modified(|keys| std::mem::replace(&mut keys.mute, active) != active);
     }
-    pub fn disconnect(&mut self, server: &str) {
-        if let Some(connection) = self.connections.remove(server) {
+    pub fn disconnect(&self, server: &str) {
+        if let Some(connection) = self.connections().remove(server) {
             connection.task.abort();
         }
     }
@@ -740,7 +718,7 @@ impl Driver {
 }
 impl Drop for Driver {
     fn drop(&mut self) {
-        for connection in self.connections.values() {
+        for connection in self.connections().values() {
             connection.task.abort();
         }
         self.storage_task.abort();
@@ -1915,6 +1893,533 @@ fn pinned_host(audio_host: &(Option<String>, tokio::time::Instant)) -> Option<St
         .0
         .clone()
         .filter(|_| tokio::time::Instant::now() < audio_host.1)
+}
+
+impl Platform for Driver {
+    fn connect(
+        &self,
+        bookmark: ServerBookmark,
+        password: Option<String>,
+        deafened: bool,
+    ) -> Result<u64, String> {
+        Driver::connect(self, bookmark, password, deafened)
+    }
+    fn disconnect(&self, server: &str) {
+        Driver::disconnect(self, server)
+    }
+    fn request(&self, server: &str, request: Request) -> Result<(), String> {
+        let command = match request {
+            Request::Join(channel) => Command::Join(channel),
+            Request::SendText {
+                target,
+                body,
+                expected_peer,
+            } => Command::SendText {
+                target,
+                body,
+                expected_peer,
+            },
+            Request::SendHtml {
+                target,
+                html,
+                expected_peer,
+            } => Command::SendHtml {
+                target,
+                html,
+                expected_peer,
+            },
+            Request::SetSelf { muted, deafened } => Command::SetSelf { muted, deafened },
+            Request::RequestPermissions(channel) => Command::RequestPermissions(channel),
+            Request::RequestBlobs {
+                textures,
+                comments,
+                descriptions,
+            } => Command::RequestBlobs {
+                textures,
+                comments,
+                descriptions,
+            },
+            Request::QueryUserNames(ids) => Command::QueryUserNames(ids),
+            Request::RegisterSelf => Command::RegisterSelf,
+            Request::MarkRead { channel, seq } => Command::MarkRead { channel, seq },
+            Request::ReadMarker { conversation, seq } => {
+                Command::Nuschel(NuschelRequest::ReadMarker(v1::ReadMarker {
+                    conversation: conversation.to_vec(),
+                    seq,
+                }))
+            }
+            Request::Typing { conversation } => {
+                Command::Nuschel(NuschelRequest::Typing(v1::Typing {
+                    conversation: conversation.to_vec(),
+                    session: 0,
+                }))
+            }
+            Request::OpenDirect {
+                request_id,
+                user_id,
+            } => Command::Nuschel(NuschelRequest::OpenDirect(v1::OpenDirect {
+                request_id,
+                user_id,
+            })),
+        };
+        self.command(server, command)
+    }
+    fn local_history(
+        &self,
+        server: String,
+        identity: String,
+        channel: String,
+        ticket: HistoryTicket,
+        page: Page,
+    ) -> Result<(), String> {
+        self.history_page(server, identity, channel, ticket, page)
+    }
+    fn server_history(
+        &self,
+        server: String,
+        conversation: [u8; 16],
+        ticket: HistoryTicket,
+        cache: Option<CacheKey>,
+        page: Page,
+    ) -> Result<(), String> {
+        Driver::server_history(self, server, conversation, (ticket, cache), page)
+    }
+    fn change_message(&self, change: ChangeRequest) -> Result<(), String> {
+        Driver::change_message(self, change)
+    }
+    fn render_html(&self, server: String, generation: u64, key: RenderKey, source: String) {
+        Driver::render_html(self, server, generation, key, source)
+    }
+    fn decode_avatar(&self, server: String, generation: u64, hash: String, encoded: Vec<u8>) {
+        Driver::decode_avatar(self, server, generation, hash, encoded)
+    }
+    fn play_sound(&self, server: &str, sound: Sound) {
+        Driver::play_sound(self, server, sound)
+    }
+    fn chime(&self, sound: Sound) {
+        Driver::chime(self, sound)
+    }
+    fn search(
+        &self,
+        request: u64,
+        scope: (Vec<String>, Option<String>),
+        query: String,
+        after: Option<nuschel_core::SearchCursor>,
+    ) -> Result<(), String> {
+        Driver::search(self, request, scope, query, after)
+    }
+}
+
+/// What the driver reports that the client does not model (yet): the
+/// crypto worker's identity and key-transparency state.
+pub enum Native {
+    /// The crypto worker's answer to [`Driver::identity`].
+    OwnIdentity(Box<Result<nuschel_ipc::crypto::CryptoResponse, String>>),
+    /// Identity and key transparency on one connection.
+    Identity {
+        server: String,
+        generation: u64,
+        event: Box<nuschel_session::identity::IdentityEvent>,
+    },
+    /// End-to-end conversations on one connection (`mls/1`).
+    Mls {
+        server: String,
+        generation: u64,
+        event: Box<nuschel_session::mls::MlsEvent>,
+    },
+    /// Nothing anyone needs.
+    Ignored,
+}
+
+impl Event {
+    /// The client's input for this event, or what the client does not model.
+    pub fn into_input(self) -> Result<Input, Native> {
+        Ok(match self {
+            Event::OwnIdentity(result) => return Err(Native::OwnIdentity(Box::new(result))),
+            Event::Protocol {
+                server,
+                generation,
+                event,
+            } => {
+                let event = match server_event(event) {
+                    Ok(event) => event,
+                    Err(Some(Unmodelled::Identity(event))) => {
+                        return Err(Native::Identity {
+                            server,
+                            generation,
+                            event,
+                        });
+                    }
+                    Err(Some(Unmodelled::Mls(event))) => {
+                        return Err(Native::Mls {
+                            server,
+                            generation,
+                            event,
+                        });
+                    }
+                    Err(None) => return Err(Native::Ignored),
+                };
+                Input::Server {
+                    server,
+                    generation,
+                    event,
+                }
+            }
+            Event::Certificate {
+                server,
+                generation,
+                sha256,
+                changed,
+                reason,
+            } => Input::Certificate {
+                server,
+                generation,
+                sha256,
+                changed,
+                reason,
+            },
+            Event::Disconnected {
+                server,
+                generation,
+                reason,
+                reject,
+            } => Input::Disconnected {
+                server,
+                generation,
+                reason,
+                reject,
+            },
+            Event::Reconnecting {
+                server,
+                generation,
+                attempt,
+                delay_secs,
+                reason,
+            } => Input::Reconnecting {
+                server,
+                generation,
+                attempt,
+                delay_secs,
+                reason,
+            },
+            Event::Gap {
+                server,
+                generation,
+                from_ms,
+                to_ms,
+            } => Input::Gap {
+                server,
+                generation,
+                from_ms,
+                to_ms,
+            },
+            Event::AudioStatus {
+                server,
+                generation,
+                message,
+            } => Input::AudioStatus {
+                server,
+                generation,
+                message,
+            },
+            Event::Message {
+                server,
+                generation,
+                target,
+                storage_key,
+                peer,
+                message,
+            } => Input::Message {
+                server,
+                generation,
+                target,
+                storage_key,
+                peer,
+                message,
+            },
+            Event::History {
+                server,
+                ticket,
+                before,
+                messages,
+                next_before,
+            } => Input::History {
+                server,
+                ticket,
+                before,
+                messages,
+                next_before,
+            },
+            Event::Sent {
+                server,
+                generation,
+                target,
+                body,
+            } => Input::Sent {
+                server,
+                generation,
+                target,
+                body,
+            },
+            Event::HistoryWindow {
+                server,
+                ticket,
+                page,
+                messages,
+                next_before,
+                next_after,
+            } => Input::HistoryWindow {
+                server,
+                ticket,
+                page,
+                messages,
+                next_before,
+                next_after,
+            },
+            Event::HistoryError(error) => Input::HistoryError(error),
+            Event::Edited {
+                server,
+                conversation,
+                seq,
+                source,
+                document,
+                edited_ms,
+            } => Input::Edited {
+                server,
+                conversation,
+                seq,
+                source,
+                document,
+                edited_ms,
+            },
+            Event::Deleted {
+                server,
+                conversation,
+                seq,
+                deletion,
+            } => Input::Deleted {
+                server,
+                conversation,
+                seq,
+                deletion,
+            },
+            Event::ChangeFailed {
+                server,
+                delete,
+                reason,
+            } => Input::ChangeFailed {
+                server,
+                delete,
+                reason,
+            },
+            Event::HistoryFailed {
+                server,
+                ticket,
+                reason,
+            } => Input::HistoryFailed {
+                server,
+                ticket,
+                reason,
+            },
+            Event::Downgrade {
+                server,
+                generation,
+                reason,
+            } => Input::Downgrade {
+                server,
+                generation,
+                reason,
+            },
+            Event::SearchResults { request, result } => Input::SearchResults { request, result },
+            Event::HistoryRecovered => Input::HistoryRecovered,
+            Event::AudioDevices {
+                server,
+                generation,
+                inputs,
+                outputs,
+                input,
+                output,
+                echo,
+                noise,
+                reference,
+            } => Input::AudioDevices {
+                server,
+                generation,
+                inputs,
+                outputs,
+                input,
+                output,
+                echo,
+                noise,
+                reference,
+            },
+            Event::Echo {
+                server,
+                generation,
+                erle_db,
+                residual_likelihood,
+            } => Input::Echo {
+                server,
+                generation,
+                erle_db,
+                residual_likelihood,
+            },
+            Event::AudioHealth {
+                server,
+                generation,
+                health,
+            } => Input::AudioHealth {
+                server,
+                generation,
+                health,
+            },
+            Event::Rendered {
+                server,
+                generation,
+                key,
+                source,
+                document,
+            } => Input::Rendered {
+                server,
+                generation,
+                key,
+                source,
+                document,
+            },
+            Event::Avatar {
+                server,
+                generation,
+                hash,
+                document,
+            } => Input::Avatar {
+                server,
+                generation,
+                hash,
+                document,
+            },
+            Event::Talking {
+                server,
+                generation,
+                session,
+                talking,
+            } => Input::Talking {
+                server,
+                generation,
+                session,
+                talking,
+            },
+        })
+    }
+}
+
+/// What the session says that the client does not model yet.
+enum Unmodelled {
+    Identity(Box<nuschel_session::identity::IdentityEvent>),
+    Mls(Box<nuschel_session::mls::MlsEvent>),
+}
+
+/// What the session said, as the client models it; identity and end-to-end
+/// events (to the UI for now) and what nobody needs (the driver's own
+/// business) are not.
+fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> {
+    Ok(match event {
+        SessionEvent::PeerCertificate(pin) => ServerEvent::PeerCertificate(pin),
+        SessionEvent::Negotiated(negotiated) => ServerEvent::Negotiated {
+            capabilities: negotiated.capabilities,
+            policy: negotiated.policy,
+        },
+        SessionEvent::ChannelInfo { channel, info } => ServerEvent::ChannelInfo {
+            channel,
+            conversation: info.conversation.as_slice().try_into().ok(),
+        },
+        SessionEvent::Nuschel(NuschelEvent::Typing(typing)) => ServerEvent::Typing(typing),
+        SessionEvent::Nuschel(NuschelEvent::DirectList(list)) => {
+            ServerEvent::DirectList(list.directs)
+        }
+        SessionEvent::Nuschel(NuschelEvent::DirectOpened(opened)) => {
+            ServerEvent::DirectOpened(opened)
+        }
+        SessionEvent::Nuschel(NuschelEvent::Error(error)) => ServerEvent::ExtensionError(error),
+        SessionEvent::Nuschel(NuschelEvent::ReadMarker(marker)) => ServerEvent::ReadMarker(marker),
+        SessionEvent::Identity(event) => return Err(Some(Unmodelled::Identity(Box::new(event)))),
+        SessionEvent::Mls(event) => return Err(Some(Unmodelled::Mls(Box::new(event)))),
+        SessionEvent::Nuschel(_)
+        | SessionEvent::ChatPending(_)
+        | SessionEvent::Text(_)
+        | SessionEvent::Audio(_) => return Err(None),
+        SessionEvent::ChatAcked { key, seq } => ServerEvent::ChatAcked { key, seq },
+        SessionEvent::ChatFailed { key, reason } => ServerEvent::ChatFailed { key, reason },
+        SessionEvent::ConversationState {
+            channel,
+            head,
+            read,
+        } => ServerEvent::ConversationState {
+            channel,
+            head,
+            read,
+        },
+        SessionEvent::Channel(channel) => ServerEvent::Channel(channel),
+        SessionEvent::ChannelRemoved(id) => ServerEvent::ChannelRemoved(id),
+        SessionEvent::User(user) => ServerEvent::User(user),
+        SessionEvent::UserRemoved(session) => ServerEvent::UserRemoved(session),
+        SessionEvent::Connected { session, .. } => ServerEvent::Connected { session },
+        SessionEvent::Welcome(text) => ServerEvent::Welcome(text),
+        SessionEvent::PermissionDenied(text) => ServerEvent::PermissionDenied(text),
+        SessionEvent::Notice(text) => ServerEvent::Notice(text),
+        SessionEvent::Transport(stats) => ServerEvent::Transport(stats),
+        SessionEvent::Permissions {
+            channel,
+            permissions,
+            flush,
+        } => ServerEvent::Permissions {
+            channel,
+            permissions,
+            flush,
+        },
+        SessionEvent::Activity(activity) => ServerEvent::Activity(activity),
+        SessionEvent::Limits(limits) => ServerEvent::Limits(limits),
+        SessionEvent::Stats(stats) => ServerEvent::Stats(stats),
+        SessionEvent::Suggest {
+            push_to_talk,
+            minimum_version,
+            ..
+        } => ServerEvent::Suggest {
+            push_to_talk,
+            minimum_version,
+        },
+        SessionEvent::ContextActions(actions) => ServerEvent::ContextActions(actions),
+        SessionEvent::RegisteredUsers(users) => ServerEvent::RegisteredUsers(users),
+        SessionEvent::Bans(bans) => ServerEvent::Bans(bans),
+        SessionEvent::Acl(acl) => ServerEvent::Acl(acl),
+        SessionEvent::UserNames(names) => ServerEvent::UserNames(names),
+        SessionEvent::UnsupportedCodec { session } => ServerEvent::UnsupportedCodec {
+            session,
+            at_ms: connection::now_ms(),
+        },
+        SessionEvent::Outbox { sent, total } => ServerEvent::Outbox { sent, total },
+    })
+}
+
+/// Your nicknames and friends as the settings keep them.
+impl crate::names::Names for ClientSettings {
+    fn nickname(&self, hash: Option<&str>) -> Option<&str> {
+        ClientSettings::nickname(self, hash)
+    }
+    fn friend(&self, hash: Option<&str>) -> Option<&str> {
+        ClientSettings::friend(self, hash)
+    }
+}
+
+/// The client's preferences from the settings.
+pub fn preferences(settings: &ClientSettings) -> crate::names::Preferences {
+    crate::names::Preferences {
+        nicknames: settings.nicknames.clone(),
+        friends: settings.friends.clone(),
+        notifications: settings.notifications,
+        friend_notifications: settings.friend_notifications,
+        send_typing: settings.send_typing,
+        push_to_talk: settings.audio.transmit == TransmitMode::PushToTalk,
+    }
 }
 
 #[cfg(test)]

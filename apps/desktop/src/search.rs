@@ -15,10 +15,7 @@ use gpui_kit::{
     prelude::*,
     *,
 };
-use nuschel_client::{
-    Conversation, HistoryTicket,
-    timeline::{IncomingMessage, Page},
-};
+use nuschel_client::{Conversation, timeline::Page};
 use nuschel_core::{SearchCursor, SearchPage, search::Query};
 use nuschel_session::connection::TextTarget;
 use std::{
@@ -97,7 +94,7 @@ impl Desktop {
         if self.dialog_open() {
             return;
         }
-        let Some(origin) = self.navigation.selection().cloned() else {
+        let Some(origin) = self.client.navigation.selection().cloned() else {
             return;
         };
         let scope = if global {
@@ -188,6 +185,7 @@ impl Desktop {
         let unknown = "Connect to this server once to search its history.";
         let search = self.search.as_ref().ok_or(unknown)?;
         let server = self
+            .client
             .servers
             .iter()
             .find(|server| server.id == search.origin.server)
@@ -207,6 +205,7 @@ impl Desktop {
             Scope::Server => Ok((vec![server.history_identity().ok_or(unknown)?], None)),
             Scope::All => {
                 let servers: Vec<String> = self
+                    .client
                     .servers
                     .iter()
                     .filter_map(|server| server.history_identity())
@@ -241,7 +240,7 @@ impl Desktop {
             return;
         }
         match scope {
-            Ok(scope) => match self.driver.search(search.request, scope, query, None) {
+            Ok(scope) => match self.client.search(search.request, scope, query, None) {
                 Ok(()) => search.loading = true,
                 Err(error) => search.error = Some(error),
             },
@@ -262,7 +261,7 @@ impl Desktop {
             return;
         }
         match self
-            .driver
+            .client
             .search(search.request, scope, search.query(cx), Some(next))
         {
             Ok(()) => search.loading = true,
@@ -276,7 +275,7 @@ impl Desktop {
         result: Result<SearchPage, String>,
         cx: &App,
     ) {
-        let (servers, settings) = (&self.servers, &self.settings);
+        let (servers, settings) = (&self.client.servers, &self.settings);
         let Some(search) = self
             .search
             .as_mut()
@@ -365,11 +364,16 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(index) = self.servers.iter().position(|entry| entry.id == server) else {
+        let Some(index) = self
+            .client
+            .servers
+            .iter()
+            .position(|entry| entry.id == server)
+        else {
             return;
         };
         let find = |this: &Self| {
-            this.servers[index]
+            this.client.servers[index]
                 .channels
                 .iter()
                 .position(|channel| channel.storage_key == storage_key)
@@ -378,7 +382,7 @@ impl Desktop {
         // An earlier direct conversation, with someone who is online again.
         if position.is_none()
             && let Some(hash) = storage_key.strip_prefix("direct:")
-            && let Some(session) = self.servers[index]
+            && let Some(session) = self.client.servers[index]
                 .users
                 .values()
                 .find(|user| user.certificate_hash.as_deref() == Some(hash))
@@ -388,18 +392,19 @@ impl Desktop {
             position = find(self);
         }
         let Some(position) = position else {
-            self.servers[index].notice =
+            self.client.servers[index].notice =
                 Some("That conversation opens once the person is online again.".into());
             return;
         };
-        let channel = self.servers[index].channels[position].id;
+        let channel = self.client.servers[index].channels[position].id;
         // A server-history timeline counts in seqs: a kept message is found
         // there by its seq, and pages come from the server.
-        let archived = self.servers[index].archived(&self.servers[index].channels[position]);
+        let archived =
+            self.client.servers[index].archived(&self.client.servers[index].channels[position]);
         let id = match (archived, seq) {
             (true, Some(seq)) => seq,
             (true, None) => {
-                self.servers[index].notice =
+                self.client.servers[index].notice =
                     Some("That message is not in the server's history.".into());
                 return;
             }
@@ -409,16 +414,16 @@ impl Desktop {
             server: server.to_string(),
             channel,
         };
-        if self.navigation.selection() != Some(&conversation) {
+        if self.client.navigation.selection() != Some(&conversation) {
             self.browse_channel(index, channel, window, cx);
         }
-        self.following = false;
+        self.client.focus.following = false;
         self.jumped = Some(Jumped {
             conversation,
             id,
             until: None,
         });
-        let loaded = self.servers[index].channels[position]
+        let loaded = self.client.servers[index].channels[position]
             .timeline
             .messages
             .iter()
@@ -434,51 +439,14 @@ impl Desktop {
     /// Ask for a page of the conversation at `position` on server `index`;
     /// replies for an earlier request are dropped.
     fn request_page(&mut self, index: usize, position: usize, page: Page) {
-        let Some(identity) = self.servers[index].history_identity() else {
-            return;
-        };
-        let server = &mut self.servers[index].state;
-        let archived = server.archived(&server.channels[position]);
-        let source = server.history_source;
-        let channel = &mut server.channels[position];
-        channel.timeline.loading = true;
-        let ticket = self.navigation.browse(
-            Conversation {
-                server: server.id.clone(),
-                channel: channel.id,
-            },
-            source,
-        );
-        let requested = match channel.conversation.filter(|_| archived) {
-            Some(conversation) => {
-                let cache = nuschel_client::native::CacheKey {
-                    identity,
-                    channel: channel.storage_key.clone(),
-                };
-                self.driver.server_history(
-                    server.id.clone(),
-                    conversation,
-                    (ticket, Some(cache)),
-                    page,
-                )
-            }
-            None => self.driver.history_page(
-                server.id.clone(),
-                identity,
-                channel.storage_key.clone(),
-                ticket,
-                page,
-            ),
-        };
-        if let Err(error) = requested {
-            channel.timeline.loading = false;
+        if let Err(error) = self.client.load_page(index, position, page) {
             self.older_paused = true;
             self.error = Some(error);
         }
     }
 
     /// Scroll the jumped-to message into view and start its highlight.
-    fn reveal_jumped(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reveal_jumped(&mut self, cx: &mut Context<Self>) {
         let Some(jumped) = &mut self.jumped else {
             return;
         };
@@ -501,43 +469,6 @@ impl Desktop {
         .detach();
     }
 
-    /// A page read around or after a message.
-    pub fn apply_history_window(
-        &mut self,
-        (server, ticket, page): (String, HistoryTicket, Page),
-        messages: Vec<IncomingMessage>,
-        (next_before, next_after): (Option<i64>, Option<i64>),
-        cx: &mut Context<Self>,
-    ) {
-        if !self.navigation.accepts(&ticket) {
-            return;
-        }
-        let Some(channel) = self
-            .servers
-            .iter_mut()
-            .find(|entry| entry.id == server)
-            .and_then(|server| {
-                server
-                    .channels
-                    .iter_mut()
-                    .find(|entry| entry.id == ticket.conversation.channel)
-            })
-        else {
-            return;
-        };
-        channel.timeline.loading = false;
-        self.older_paused = false;
-        let used = channel
-            .timeline
-            .take_window(page, messages, (next_before, next_after));
-        if used && matches!(page, Page::Around(_)) {
-            channel.new_messages = 0;
-            self.anchor.reset();
-            self.following = false;
-            self.reveal_jumped(cx);
-        }
-    }
-
     /// Before each frame, for a timeline showing older history apart from
     /// the newest (after a jump): it does not follow the bottom, and the next
     /// newer page loads before the reader reaches the end of what is loaded.
@@ -547,11 +478,11 @@ impl Desktop {
         let Some((index, position)) = self.selected_indices() else {
             return false;
         };
-        let channel = &self.servers[index].channels[position];
+        let channel = &self.client.servers[index].channels[position];
         let Some(after) = channel.timeline.next_after else {
             return false;
         };
-        if self.following {
+        if self.client.focus.following {
             if !channel.timeline.loading {
                 self.load_history(None);
             }
@@ -584,7 +515,7 @@ pub fn mark_jumped(this: &Desktop, id: Option<i64>, row: AnyElement) -> AnyEleme
     let jumped = this.jumped.as_ref().is_some_and(|jumped| {
         jumped.until.is_some()
             && Some(jumped.id) == id
-            && this.navigation.selection() == Some(&jumped.conversation)
+            && this.client.navigation.selection() == Some(&jumped.conversation)
     });
     if !jumped {
         return row;

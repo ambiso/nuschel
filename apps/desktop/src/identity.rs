@@ -339,8 +339,8 @@ pub fn settings_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElemen
 /// Asks the server's session to check a registered user (their profile opened, or
 /// a direct conversation with them).
 pub fn check(this: &mut Desktop, server: usize, user_id: u32, direct: bool) {
-    if let Some(view) = this.servers.get_mut(server) {
-        view.identity.checking.insert(user_id, true);
+    if let Some(ui) = this.ui_of_mut(server) {
+        ui.identity.checking.insert(user_id, true);
     }
     this.run(
         server,
@@ -462,8 +462,8 @@ pub fn alarm(this: &Desktop, server: usize, reason: &str, cx: &mut Context<Deskt
             "I understand",
             Tone::Danger,
             move |this, _, cx| {
-                if let Some(view) = this.servers.get_mut(server) {
-                    view.identity.alarm = None;
+                if let Some(ui) = this.ui_of_mut(server) {
+                    ui.identity.alarm = None;
                 }
                 this.run(server, Command::Identity(IdentityCommand::AcknowledgeAlarm));
                 this.panel = None;
@@ -488,7 +488,8 @@ pub fn section(
     own: bool,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
-    let state = &this.servers[server].identity;
+    let none = IdentityState::default();
+    let state = this.ui_of(server).map_or(&none, |ui| &ui.identity);
     let mut column = div()
         .flex()
         .flex_col()

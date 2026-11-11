@@ -10,17 +10,17 @@ use gpui_kit::{
     *,
 };
 use nuschel_client::{
-    Conversation, HistorySource, Navigation, SessionSecurity,
-    native::{Driver, Event, RenderKey},
+    Client, Conversation, SessionSecurity, Update,
+    native::{Driver, Event, Native},
+    platform::RenderKey,
     timeline::MAX_TIMELINE,
 };
 use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_session::{
     config::{
-        CachedChannel, ClientSettings, Loaded, ManagedSettings, MumbleUrl, Profile, ServerBookmark,
-        ShortcutAction,
+        ClientSettings, Loaded, ManagedSettings, MumbleUrl, Profile, ServerBookmark, ShortcutAction,
     },
-    connection::{Command, NuschelEvent, SessionEvent, TextTarget, User},
+    connection::{Command, TextTarget},
     model::RejectKind,
 };
 use std::{
@@ -101,22 +101,25 @@ pub use nuschel_client::{
     server::{CertificatePrompt, ServerState, Status},
     tree::{ChannelRow, TreeRow},
 };
-/// A server as the desktop shows it: the SDK's state of it, and what only
-/// drawing needs (images for the GPU, rendered descriptions and comments,
-/// which runs of activity lines are open).
-pub struct ServerView {
-    /// What the client knows of the server (`nuschel_client::server`).
-    pub state: ServerState,
+/// A server as the client knows it (`nuschel_client::server`).
+pub type ServerView = ServerState;
+/// What only drawing needs of a server, beside the client's state of it:
+/// images for the GPU, rendered descriptions and comments, which runs of
+/// activity lines are open; its identity and version notices, and the
+/// end-to-end state of its direct conversations.
+#[derive(Default)]
+pub struct ServerUi {
     /// End-to-end state of direct conversations, by the peer's registration number.
     pub e2ee: BTreeMap<u32, nuschel_ipc::crypto::ConversationView>,
     /// Rendered user comments keyed by session, with the raw HTML they came from.
     pub comments: BTreeMap<u32, (String, Document)>,
     /// Decoded avatars by texture hash.
-    pub avatars: BTreeMap<String, std::sync::Arc<RenderImage>>,
+    pub avatar_images: BTreeMap<String, std::sync::Arc<RenderImage>>,
     /// The server website's icon, from the bookmark.
     pub icon: Option<std::sync::Arc<RenderImage>>,
-    /// Channel descriptions as the content worker rendered them, by channel.
-    pub descriptions: BTreeMap<u32, Document>,
+    /// Channel descriptions as the content worker rendered them, by channel,
+    /// with the raw HTML they came from.
+    pub descriptions: BTreeMap<u32, (String, Document)>,
     /// Runs of activity lines shown expanded, by channel and the time of
     /// the run's first line.
     pub expanded_runs: BTreeMap<u32, BTreeSet<i64>>,
@@ -125,37 +128,13 @@ pub struct ServerView {
     /// The server's minimum-version policy for this client.
     pub version: crate::version_notice::VersionNotice,
 }
-impl std::ops::Deref for ServerView {
-    type Target = ServerState;
-    fn deref(&self) -> &ServerState {
-        &self.state
-    }
-}
-impl std::ops::DerefMut for ServerView {
-    fn deref_mut(&mut self) -> &mut ServerState {
-        &mut self.state
-    }
-}
-impl ServerView {
-    #[cfg(test)]
-    pub(crate) fn new_for_tests() -> Self {
-        Self::new(ServerBookmark::new("Test", "localhost", 64738, "andi").expect("valid bookmark"))
-    }
-    fn new(bookmark: ServerBookmark) -> Self {
-        let icon = bookmark
-            .icon
-            .as_ref()
-            .and_then(|icon| crate::document::render_image(icon.width, icon.height, &icon.rgba));
+impl ServerUi {
+    fn new(bookmark: &ServerBookmark) -> Self {
         Self {
-            state: ServerState::new(bookmark),
-            e2ee: BTreeMap::new(),
-            comments: BTreeMap::new(),
-            avatars: BTreeMap::new(),
-            icon,
-            descriptions: BTreeMap::new(),
-            expanded_runs: BTreeMap::new(),
-            identity: Default::default(),
-            version: Default::default(),
+            icon: bookmark.icon.as_ref().and_then(|icon| {
+                crate::document::render_image(icon.width, icon.height, &icon.rgba)
+            }),
+            ..Default::default()
         }
     }
 }
@@ -202,12 +181,6 @@ pub struct ServerForm {
     _subscriptions: Vec<Subscription>,
 }
 
-struct PendingSend {
-    conversation: Conversation,
-    target: TextTarget,
-    body: String,
-}
-
 /// A sent message with attachments, waiting for its images to be prepared.
 struct Outgoing {
     /// The conversation, by server id and channel.
@@ -220,12 +193,17 @@ struct Outgoing {
 }
 
 pub struct Desktop {
-    pub servers: Vec<ServerView>,
-    pub navigation: Navigation,
+    /// The client SDK: servers, conversations and their timelines, and what
+    /// to do about what the driver reports.
+    pub client: Client,
+    /// What only drawing needs of each server, by server id.
+    pub ui: BTreeMap<String, ServerUi>,
     /// What drawing derives from the timelines' messages (presentation.rs).
     pub presentation: crate::presentation::Presentation,
     pub history_enabled: bool,
-    pub driver: Driver,
+    /// The native driver (the client's platform), for what the client does
+    /// not model yet: administration, identities, settings, push-to-talk.
+    pub driver: Arc<Driver>,
     /// The desktop's own background work (services.rs).
     pub services: Services,
     pub profile: Profile,
@@ -246,8 +224,6 @@ pub struct Desktop {
     scroll_frame_pending: bool,
     /// Keeps the timeline still while history is prepended above.
     pub anchor: Anchor,
-    /// The timeline stays at its newest message; off once the reader scrolls up.
-    pub following: bool,
     /// Loading older history failed: wait for the reader before trying again.
     pub older_paused: bool,
     pub error: Option<String>,
@@ -267,7 +243,6 @@ pub struct Desktop {
     pub update: crate::update::UpdateState,
     /// Desktop notifications, and whether the window has focus.
     notes: tokio::sync::mpsc::Sender<crate::notify::Note>,
-    pub window_active: bool,
     /// The image viewer, its request counter, and the image a context menu is for.
     pub viewer: Option<crate::viewer::Viewer>,
     pub viewer_requests: u64,
@@ -311,7 +286,6 @@ pub struct Desktop {
     servers_unsaved: bool,
     servers_generation: u64,
     server_writes: ServerWrites,
-    sending: Option<PendingSend>,
     acknowledged: Vec<(Conversation, String)>,
     /// The message the composer edits instead of sending a new one.
     pub editing: Option<crate::editing::Editing>,
@@ -319,16 +293,10 @@ pub struct Desktop {
     /// the entry the keyboard is on, as last rendered.
     pub link_focus: Option<(u64, usize)>,
     pub timeline_current: std::cell::Cell<Option<crate::scrolling::Key>>,
-    /// Typing indicators (see typing.rs): when we last said we type, where.
-    pub typing_sent: Option<((String, u32), std::time::Instant)>,
     /// A timer to clear others' typing indicators is running.
     pub typing_timer: bool,
-    /// Direct conversations asked for (`OpenDirect`), by request id: the
-    /// server, the peer's session, and whether to open it once known.
-    pub direct_requests: BTreeMap<u64, (String, u32, bool)>,
     /// The clipboard image pasted last, and when it was last pasted.
     pasted_image: Option<(u64, std::time::Instant)>,
-    passwords: BTreeMap<String, String>,
     drafts: BTreeMap<(String, u32), String>,
     /// What each conversation's composer has attached, and a line about it.
     attachments: BTreeMap<(String, u32), Vec<Attachment>>,
@@ -405,8 +373,8 @@ impl Desktop {
             problems,
         } = loaded;
         let activation = cx.observe_window_activation(window, |this: &mut Self, window, _| {
-            this.window_active = window.is_window_active();
-            if !this.window_active {
+            this.client.focus.window_active = window.is_window_active();
+            if !this.client.focus.window_active {
                 // Its key releases go elsewhere now.
                 for effect in this
                     .shortcuts
@@ -449,6 +417,16 @@ impl Desktop {
             window.focus(&target, cx);
         });
         let (driver, mut events) = Driver::new(handle.clone(), profile.clone(), settings.clone());
+        let driver = Arc::new(driver);
+        let ui = bookmarks
+            .iter()
+            .map(|bookmark| (bookmark.id.clone(), ServerUi::new(bookmark)))
+            .collect();
+        let client = Client::new(
+            Box::new(driver.clone()),
+            bookmarks,
+            nuschel_client::native::preferences(&settings),
+        );
         let (services, mut service_events) = Services::new(handle.clone(), driver.settings());
         // The desktop's own services report apart from the driver.
         let serve = cx.spawn(async move |this, cx| {
@@ -502,8 +480,8 @@ impl Desktop {
             }
         });
         let mut desktop = Self {
-            servers: bookmarks.into_iter().map(ServerView::new).collect(),
-            navigation: Navigation::default(),
+            client,
+            ui,
             presentation: Default::default(),
             history_enabled: true,
             notes: crate::notify::start(&handle),
@@ -523,7 +501,6 @@ impl Desktop {
             dialogs_seen: 0,
             scroll_frame_pending: false,
             anchor: Anchor::default(),
-            following: true,
             older_paused: false,
             error: (!problems.is_empty()).then(|| problems.join("\n")),
             title_drag: false,
@@ -535,7 +512,6 @@ impl Desktop {
             preview: None,
             autostart: None,
             update: Default::default(),
-            window_active: true,
             viewer: None,
             viewer_requests: 0,
             menu_image: None,
@@ -565,16 +541,12 @@ impl Desktop {
             servers_unsaved: false,
             servers_generation: 0,
             server_writes: ServerWrites::default(),
-            sending: None,
             editing: None,
             link_focus: None,
             timeline_current: Default::default(),
-            typing_sent: None,
             typing_timer: false,
-            direct_requests: BTreeMap::new(),
             acknowledged: Vec::new(),
             pasted_image: None,
-            passwords: BTreeMap::new(),
             drafts: BTreeMap::new(),
             attachments: BTreeMap::new(),
             attach_note: None,
@@ -588,14 +560,14 @@ impl Desktop {
             _ptt_poll: ptt_poll,
         };
         desktop.apply_appearance(window, cx);
-        if !desktop.servers.is_empty() {
+        if !desktop.client.servers.is_empty() {
             desktop.browse_server(0, window, cx);
         }
         match startup {
             Some(url) => desktop.open_url(url, window, cx),
             None => {
-                for index in 0..desktop.servers.len() {
-                    if desktop.servers[index].bookmark.auto_connect {
+                for index in 0..desktop.client.servers.len() {
+                    if desktop.client.servers[index].bookmark.auto_connect {
                         desktop.connect_as(index, None, true);
                     }
                 }
@@ -643,7 +615,7 @@ impl Desktop {
             ));
             return;
         }
-        let existing = self.servers.iter().position(|server| {
+        let existing = self.client.servers.iter().position(|server| {
             server.bookmark.host == url.host
                 && server.bookmark.port == url.port
                 && url
@@ -678,6 +650,7 @@ impl Desktop {
                 // An invite's fp= pins the certificate before the first connection.
                 bookmark.certificate_sha256 = url.certificate_sha256.clone();
                 let mut bookmarks = self
+                    .client
                     .servers
                     .iter()
                     .map(|server| server.bookmark.clone())
@@ -687,17 +660,23 @@ impl Desktop {
                     self.error = Some(error.to_string());
                     return;
                 }
-                self.servers.push(ServerView::new(bookmark));
+                self.ui
+                    .insert(bookmark.id.clone(), ServerUi::new(&bookmark));
+                let index = self.client.add_server(bookmark);
                 self.refresh_icons();
-                self.servers.len() - 1
+                index
             }
         };
         // A link never replaces a pin; it only fills one in.
-        if self.servers[index].bookmark.certificate_sha256.is_none()
+        if self.client.servers[index]
+            .bookmark
+            .certificate_sha256
+            .is_none()
             && let Some(pin) = url.certificate_sha256
         {
-            self.servers[index].bookmark.certificate_sha256 = Some(pin);
+            self.client.servers[index].bookmark.certificate_sha256 = Some(pin);
             let bookmarks = self
+                .client
                 .servers
                 .iter()
                 .map(|server| server.bookmark.clone())
@@ -706,7 +685,7 @@ impl Desktop {
                 self.error = Some(error.to_string());
             }
         }
-        self.servers[index].pending_channel = url.channel;
+        self.client.servers[index].pending_channel = url.channel;
         self.browse_server(index, window, cx);
         self.connect(index, url.password);
     }
@@ -715,13 +694,14 @@ impl Desktop {
     /// server's transport state. Chat encryption never turns the server badge green.
     pub fn conversation_lock(&self, index: usize) -> (SessionSecurity, String) {
         use nuschel_ipc::crypto::Lock;
-        let server = &self.servers[index];
+        let server = &self.client.servers[index];
         let peer = self
             .selected_indices()
             .filter(|(selected, _)| *selected == index)
             .and_then(|(_, channel)| server.channels[channel].direct_peer.as_ref())
             .and_then(|peer| peer.user_id);
-        match peer.and_then(|peer| server.e2ee.get(&peer)) {
+        let e2ee = self.ui.get(&server.id).map(|ui| &ui.e2ee);
+        match peer.and_then(|peer| e2ee?.get(&peer)) {
             Some(view) if view.pinned => match &view.lock {
                 Lock::Encrypted => (
                     SessionSecurity::MlsEstablished,
@@ -760,19 +740,24 @@ impl Desktop {
     }
 
     pub fn selected_indices(&self) -> Option<(usize, usize)> {
-        let selected = self.navigation.selection()?;
-        let server = self.servers.iter().position(|s| s.id == selected.server)?;
-        let channel = self.servers[server]
+        let selected = self.client.navigation.selection()?;
+        let server = self
+            .client
+            .servers
+            .iter()
+            .position(|s| s.id == selected.server)?;
+        let channel = self.client.servers[server]
             .channels
             .iter()
             .position(|c| c.id == selected.channel)?;
         Some((server, channel))
     }
     pub fn browse_server(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(server) = self.servers.get(index) else {
+        let Some(server) = self.client.servers.get(index) else {
             return;
         };
         if self
+            .client
             .navigation
             .selection()
             .is_none_or(|selection| selection.server != server.id)
@@ -781,6 +766,7 @@ impl Desktop {
             self.channel_scroll.set_offset(point(px(0.), px(0.)));
         }
         let channel = self
+            .client
             .navigation
             .remembered_channel(&server.id)
             .filter(|id| server.channels.iter().any(|channel| channel.id == *id))
@@ -794,7 +780,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(selected) = self.navigation.selection().cloned() {
+        if let Some(selected) = self.client.navigation.selection().cloned() {
             // An edit in progress ends; what it replaced is the draft.
             let draft = self
                 .drop_edit()
@@ -802,7 +788,7 @@ impl Desktop {
             self.drafts
                 .insert((selected.server, selected.channel), draft);
         }
-        let Some(server) = self.servers.get(index) else {
+        let Some(server) = self.client.servers.get(index) else {
             return;
         };
         if !server.channels.iter().any(|channel| channel.id == id) {
@@ -820,30 +806,21 @@ impl Desktop {
             channel: id,
         };
         self.browsed(&conversation);
-        self.navigation
-            .browse(conversation, HistorySource::LocalObserved);
         self.chat_motion.cancel();
         self.anchor.reset();
-        self.following = true;
         self.older_paused = false;
-        let channel = self.servers[index]
-            .channels
-            .iter_mut()
-            .find(|channel| channel.id == id)
-            .expect("checked above");
-        if channel.timeline.loaded {
-            channel.timeline.trim_oldest(MAX_TIMELINE);
-            channel.new_messages = 0;
-        } else {
-            self.load_history(None);
+        if let Err(error) = self.client.open(index, id) {
+            self.older_paused = true;
+            self.error = Some(error);
         }
         self.scroll.scroll_to_bottom();
-        let server = &self.servers[index];
-        if server.status == Status::Connected && !server.permissions.contains_key(&id) {
-            let _ = self
-                .driver
-                .command(&server.id, Command::RequestPermissions(id));
-        }
+    }
+    /// What only drawing needs of the server at `index`.
+    pub fn ui_of(&self, index: usize) -> Option<&ServerUi> {
+        self.ui.get(&self.client.servers.get(index)?.id)
+    }
+    pub fn ui_of_mut(&mut self, index: usize) -> Option<&mut ServerUi> {
+        self.ui.get_mut(&self.client.servers.get(index)?.id)
     }
     /// Show all of a long message, or collapse it again.
     pub fn toggle_message(&mut self, serial: u64) {
@@ -855,12 +832,16 @@ impl Desktop {
     /// then forget the presentations of messages no timeline holds.
     pub fn present_selected(&mut self) {
         if let Some((server, channel)) = self.selected_indices() {
-            let view = &mut self.servers[server];
-            let channel = &view.state.channels[channel];
+            let state = &self.client.servers[server];
+            let channel = &state.channels[channel];
             self.presentation
                 .present(&channel.timeline.messages, &channel.activity);
             // Runs whose first line is gone are no longer open.
-            if let Some(runs) = view.expanded_runs.get_mut(&channel.id) {
+            if let Some(runs) = self
+                .ui
+                .get_mut(&state.id)
+                .and_then(|ui| ui.expanded_runs.get_mut(&channel.id))
+            {
                 let oldest = channel
                     .activity
                     .front()
@@ -869,7 +850,7 @@ impl Desktop {
             }
         }
         if self.presentation.wants_pruning() {
-            let live = self.servers.iter().flat_map(|server| {
+            let live = self.client.servers.iter().flat_map(|server| {
                 server.channels.iter().flat_map(|channel| {
                     let messages = channel.timeline.messages.iter();
                     let lines = channel.activity.iter().map(|line| line.serial);
@@ -957,7 +938,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let server = editing.and_then(|index| self.servers.get(index));
+        let server = editing.and_then(|index| self.client.servers.get(index));
         let name = server.map(|server| server.name.clone()).unwrap_or_default();
         let host = server
             .map(|server| server.bookmark.host.clone())
@@ -1119,7 +1100,7 @@ impl Desktop {
         let mut connect = editing.is_none();
         if let Some(previous) = editing
             .as_ref()
-            .and_then(|id| self.servers.iter().find(|server| &server.id == id))
+            .and_then(|id| self.client.servers.iter().find(|server| &server.id == id))
         {
             if previous.bookmark.managed {
                 // Declared in managed.json: only the password changes.
@@ -1144,14 +1125,16 @@ impl Desktop {
             if !connect {
                 // Keep the live view (users, history, state); only the saved details change.
                 let index = self
+                    .client
                     .servers
                     .iter()
                     .position(|server| server.id == bookmark.id)
                     .unwrap_or_default();
-                let server = &mut self.servers[index];
+                let server = &mut self.client.servers[index];
                 server.name = bookmark.name.clone();
                 server.bookmark = bookmark.clone();
                 let bookmarks = self
+                    .client
                     .servers
                     .iter()
                     .map(|server| server.bookmark.clone())
@@ -1169,6 +1152,7 @@ impl Desktop {
             }
         }
         let mut bookmarks = self
+            .client
             .servers
             .iter()
             .map(|server| server.bookmark.clone())
@@ -1188,11 +1172,12 @@ impl Desktop {
             cx.notify();
             return;
         }
-        if index < self.servers.len() {
-            self.driver.disconnect(&bookmark.id);
-            self.servers[index] = ServerView::new(bookmark);
+        self.ui
+            .insert(bookmark.id.clone(), ServerUi::new(&bookmark));
+        if index < self.client.servers.len() {
+            self.client.replace_server(index, bookmark);
         } else {
-            self.servers.push(ServerView::new(bookmark));
+            self.client.add_server(bookmark);
         }
         self.refresh_icons();
         self.form = None;
@@ -1215,31 +1200,12 @@ impl Desktop {
     /// Connect self-muted; automatic connections at startup are deafened too,
     /// so nobody hears a session that began without the user present.
     fn connect_as(&mut self, index: usize, password: Option<String>, deafened: bool) {
-        let server = &mut self.servers[index];
-        let password = password.or_else(|| self.passwords.get(&server.id).cloned());
-        if let Some(password) = &password {
-            self.passwords.insert(server.id.clone(), password.clone());
-        }
-        match self
-            .driver
-            .connect(server.bookmark.clone(), password, deafened)
-        {
-            Ok(generation) => {
-                server.generation = generation;
-                server.muted = true;
-                server.deafened = deafened;
-                server.status = Status::Connecting;
-                server.security = SessionSecurity::Unknown;
-                server.certificate = None;
-                server.notice = None;
-            }
-            Err(error) => server.notice = Some(error),
-        }
+        self.client.connect(index, password, deafened);
     }
     /// The user's explicit reset of a server's sticky security record, then
     /// connect again.
     pub fn reset_security_record(&mut self, index: usize) {
-        let Some(server) = self.servers.get_mut(index) else {
+        let Some(server) = self.client.servers.get_mut(index) else {
             return;
         };
         let (host, port) = (server.bookmark.host.clone(), server.bookmark.port);
@@ -1247,8 +1213,8 @@ impl Desktop {
             .and_then(|mut store| store.reset(&host, port))
         {
             Ok(()) => {
-                self.servers[index].downgrade = None;
-                self.connect(index, self.passwords.get(&self.servers[index].id).cloned());
+                self.client.servers[index].downgrade = None;
+                self.connect(index, None);
             }
             Err(error) => {
                 self.error = Some(format!("Could not reset the security record: {error}"))
@@ -1256,7 +1222,7 @@ impl Desktop {
         }
     }
     pub fn trust_certificate(&mut self, index: usize) {
-        let Some(server) = self.servers.get_mut(index) else {
+        let Some(server) = self.client.servers.get_mut(index) else {
             return;
         };
         let Some(prompt) = server.certificate.take() else {
@@ -1265,62 +1231,20 @@ impl Desktop {
         let old = server.bookmark.certificate_sha256.replace(prompt.sha256);
         if let Err(error) = self.write_servers(
             &self
+                .client
                 .servers
                 .iter()
                 .map(|server| server.bookmark.clone())
                 .collect::<Vec<_>>(),
         ) {
-            self.servers[index].bookmark.certificate_sha256 = old;
+            self.client.servers[index].bookmark.certificate_sha256 = old;
             self.error = Some(error.to_string());
             return;
         }
-        self.connect(index, self.passwords.get(&self.servers[index].id).cloned());
+        self.connect(index, None);
     }
     pub fn disconnect(&mut self, index: usize) {
-        let Some(server) = self.servers.get_mut(index) else {
-            return;
-        };
-        self.driver.disconnect(&server.id);
-        if server.status == Status::Connected && !server.deafened {
-            self.driver.chime(nuschel_core::audio::Sound::Disconnected);
-        }
-        self.passwords.remove(&server.id);
-        if let Some(lost) = lost_messages(server) {
-            server.notice = Some(lost);
-        }
-        if self
-            .sending
-            .as_ref()
-            .is_some_and(|pending| pending.conversation.server == server.id)
-        {
-            self.sending = None;
-        }
-        server.status = Status::Disconnected;
-        server.security = SessionSecurity::Unknown;
-        server.own_session = None;
-        server.capabilities.clear();
-        server.policy = None;
-        for channel in &mut server.channels {
-            channel.typing.clear();
-        }
-        // Offline, the timeline is local observations again.
-        if server.history_source == HistorySource::ServerArchive {
-            server.history_source = HistorySource::LocalObserved;
-            for channel in &mut server.channels {
-                channel.timeline.reset();
-            }
-        }
-        server.users.clear();
-        server.talking.clear();
-        server.transport = None;
-        server.audio_status = "Audio disconnected".into();
-        if self
-            .navigation
-            .voice()
-            .is_some_and(|voice| voice.server == server.id)
-        {
-            self.navigation.set_voice(None);
-        }
+        self.client.disconnect(index);
     }
     pub fn remove_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(id) = self
@@ -1332,6 +1256,7 @@ impl Desktop {
             return;
         };
         let bookmarks = self
+            .client
             .servers
             .iter()
             .filter(|server| server.id != id)
@@ -1341,11 +1266,10 @@ impl Desktop {
             self.error = Some(error.to_string());
             return;
         }
-        self.driver.disconnect(&id);
-        self.passwords.remove(&id);
-        self.servers.retain(|server| server.id != id);
+        self.client.remove_server(&id);
+        self.ui.remove(&id);
         self.form = None;
-        if !self.servers.is_empty() {
+        if !self.client.servers.is_empty() {
             self.browse_server(0, window, cx);
         }
         cx.notify();
@@ -1354,12 +1278,8 @@ impl Desktop {
         let Some((server, channel)) = self.selected_indices() else {
             return;
         };
-        if let TextTarget::Channel(id) = self.servers[server].channels[channel].target
-            && let Err(error) = self
-                .driver
-                .command(&self.servers[server].id, Command::Join(id))
-        {
-            self.servers[server].notice = Some(error);
+        if let TextTarget::Channel(id) = self.client.servers[server].channels[channel].target {
+            self.client.join(server, id);
         }
     }
     /// Change preferences, persist them and apply them to live connections.
@@ -1422,7 +1342,7 @@ impl Desktop {
             return;
         }
         let now = nuschel_session::connection::now_ms();
-        for server in &self.servers {
+        for server in &self.client.servers {
             let bookmark = &server.bookmark;
             let wait = if bookmark.icon.is_some() { 30 } else { 7 } * DAY_MS;
             if now - bookmark.icon_checked_ms >= wait {
@@ -1465,6 +1385,7 @@ impl Desktop {
             self.error = Some(format!("Could not save settings: {error}"));
         }
         self.driver.apply_settings(settings.clone());
+        self.client.preferences = nuschel_client::native::preferences(&settings);
         self.settings = settings;
         self.sync_global_shortcuts();
     }
@@ -1569,7 +1490,7 @@ impl Desktop {
         use crate::shortcuts::Effect;
         let connected = self
             .selected_indices()
-            .is_some_and(|(server, _)| self.servers[server].status == Status::Connected);
+            .is_some_and(|(server, _)| self.client.servers[server].status == Status::Connected);
         match effect {
             Effect::PushToTalk(active) => self.set_push_to_talk(active),
             Effect::PushToMute(active) => {
@@ -1582,37 +1503,16 @@ impl Desktop {
         }
     }
     pub fn set_mute(&mut self, deafen: bool) {
-        let Some((index, _)) = self.selected_indices() else {
-            return;
-        };
-        let server = &mut self.servers[index];
-        if deafen {
-            server.deafened = !server.deafened;
-            if server.deafened {
-                server.muted = true;
-            }
-        } else {
-            server.muted = !server.muted;
-            if !server.muted {
-                server.deafened = false;
-            }
-        }
-        if let Err(error) = self.driver.command(
-            &server.id,
-            Command::SetSelf {
-                muted: server.muted,
-                deafened: server.deafened,
-            },
-        ) {
-            server.notice = Some(error);
+        if let Some((index, _)) = self.selected_indices() {
+            self.client.set_mute(index, deafen);
         }
     }
     pub fn sending(&self) -> bool {
-        self.sending.is_some()
+        self.client.sending()
     }
     pub fn apply_composer_acks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for (conversation, body) in self.acknowledged.drain(..) {
-            if self.navigation.selection() == Some(&conversation)
+            if self.client.navigation.selection() == Some(&conversation)
                 && self.composer.read(cx).value().as_ref() == body
             {
                 self.composer
@@ -1628,61 +1528,27 @@ impl Desktop {
         if self.editing.is_some() {
             return self.submit_edit(window, cx);
         }
-        let Some((server, channel)) = self.selected_indices() else {
+        let Some((server, _)) = self.selected_indices() else {
             return;
         };
         // Text waits behind attachments still being prepared for this server.
-        let server_id = &self.servers[server].id;
-        if self.sending.is_some() || self.outgoing.iter().any(|batch| &batch.key.0 == server_id) {
+        let server_id = &self.client.servers[server].id;
+        if self.client.sending() || self.outgoing.iter().any(|batch| &batch.key.0 == server_id) {
             return;
         }
         if !self.attachments().is_empty() {
             return self.send_attachments(window, cx);
         }
         let body = self.composer.read(cx).value().to_string();
-        if body.trim().is_empty() {
-            return;
-        }
-        if body.len() > MAX_CONTENT_BYTES {
+        if let Err(nuschel_client::SendError::TooLong) = self.client.send_text(body) {
             self.error = Some("Message exceeds 256 KiB.".into());
-            return;
-        }
-        let server = &mut self.servers[server];
-        if server.status != Status::Connected {
-            server.notice = Some("Connect before sending a message.".into());
-            return;
-        }
-        let channel = &server.channels[channel];
-        let expected_peer = channel.direct_peer.as_ref().map(|peer| peer.instance);
-        let target = channel.target.clone();
-        let pending = PendingSend {
-            conversation: Conversation {
-                server: server.id.clone(),
-                channel: channel.id,
-            },
-            target: target.clone(),
-            body: body.clone(),
-        };
-        match self.driver.command(
-            &server.id,
-            Command::SendText {
-                target,
-                body,
-                expected_peer,
-            },
-        ) {
-            Ok(()) => {
-                self.sending = Some(pending);
-                // Sent: we are no longer typing it.
-                self.typing_sent = None;
-            }
-            Err(error) => server.notice = Some(error),
         }
         cx.notify();
     }
     /// What the open conversation's composer has attached.
     pub fn attachments(&self) -> &[Attachment] {
-        self.navigation
+        self.client
+            .navigation
             .selection()
             .and_then(|selected| {
                 self.attachments
@@ -1701,7 +1567,7 @@ impl Desktop {
             .flat_map(|batch| &batch.attachments)
             .filter(|attachment| !attachment.ready())
             .count();
-        match self.servers[server].outbox {
+        match self.client.servers[server].outbox {
             Some((sent, total)) => Some(format!("Sending {} of {total}…", sent + 1)),
             None if preparing == 1 => Some("Preparing the image…".into()),
             None if preparing > 1 => Some(format!("Preparing {preparing} images…")),
@@ -1806,7 +1672,7 @@ impl Desktop {
         .detach();
     }
     fn selected_key(&self) -> Option<(String, u32)> {
-        let selected = self.navigation.selection()?;
+        let selected = self.client.navigation.selection()?;
         Some((selected.server.clone(), selected.channel))
     }
     fn next_attachment(&mut self) -> u64 {
@@ -1823,7 +1689,7 @@ impl Desktop {
         source: Source,
         file: Option<(std::path::PathBuf, u64)>,
     ) -> Result<(), String> {
-        let server = self.servers.iter().find(|server| server.id == key.0);
+        let server = self.client.servers.iter().find(|server| server.id == key.0);
         let (allow_html, limit) = server
             .and_then(|server| server.limits.as_ref())
             .map_or((true, 131_072), |limits| {
@@ -1982,7 +1848,7 @@ impl Desktop {
             return;
         };
         let text = self.composer.read(cx).value().to_string();
-        let server = &mut self.servers[server];
+        let server = &mut self.client.servers[server];
         let limits = server
             .limits
             .as_ref()
@@ -2094,11 +1960,11 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let server = &mut self.servers[index];
+        let server = &self.client.servers[index];
         if server.own_session == Some(session) {
             return;
         }
-        let Some(peer) = server.users.get(&session).cloned() else {
+        let Some(user_id) = server.users.get(&session).map(|peer| peer.user_id) else {
             return;
         };
         // A direct conversation checks the peer's identity (and its history), and on
@@ -2106,7 +1972,7 @@ impl Desktop {
         // End-to-end direct messages are experimental and opt-in until the client
         // sends and shows them (Settings: `e2ee_direct_messages`).
         let mls = server.mls && self.settings.e2ee_direct_messages;
-        if let Some(user_id) = peer.user_id {
+        if let Some(user_id) = user_id {
             crate::identity::check(self, index, user_id, true);
             if mls {
                 self.run(
@@ -2117,73 +1983,18 @@ impl Desktop {
                 );
             }
         }
-        // On a Nuschel server, between registered accounts: the server's
-        // conversation (it opens once the server names it).
-        if self.open_durable_direct(index, &peer) {
-            cx.notify();
-            return;
+        // On a Nuschel server, between registered accounts, the server's
+        // conversation opens once the server names it; otherwise the stock
+        // path's opens now.
+        if let Some(id) = self.client.open_direct(index, session) {
+            self.browse_channel(index, id, window, cx);
         }
-        let id = self.stock_direct_view(index, &peer);
-        self.browse_channel(index, id, window, cx);
         cx.notify();
     }
-    /// The timeline of direct messages with `peer` over the stock path (a
-    /// `TextMessage` to their session), created if needed; returns its id.
-    pub fn stock_direct_view(&mut self, index: usize, peer: &User) -> u32 {
-        let name = crate::names::display_name(peer, &self.settings).to_string();
-        self.servers[index].stock_direct_view(peer, &name)
-    }
+    /// Load a page of the open conversation's history before `before` (the
+    /// latest for None); a failure waits for the reader before a retry.
     pub fn load_history(&mut self, before: Option<i64>) {
-        let Some((index, channel)) = self.selected_indices() else {
-            return;
-        };
-        let Some(identity) = self.servers[index].history_identity() else {
-            return;
-        };
-        let server = &mut self.servers[index].state;
-        // Stock direct messages on a Nuschel server are local observations.
-        let archive = server.archived(&server.channels[channel]);
-        let cache = Some(nuschel_client::native::CacheKey {
-            identity: identity.clone(),
-            channel: server.channels[channel].storage_key.clone(),
-        });
-        let channel = &mut server.channels[channel];
-        channel.timeline.loading = true;
-        if before.is_none() {
-            channel.new_messages = 0;
-        }
-        let ticket = self.navigation.browse(
-            Conversation {
-                server: server.id.clone(),
-                channel: channel.id,
-            },
-            server.history_source,
-        );
-        let requested = match channel.conversation.filter(|_| archive) {
-            // A Nuschel server's history: everything this member may read.
-            Some(conversation) => self.driver.server_history(
-                server.id.clone(),
-                conversation,
-                (ticket, cache),
-                nuschel_client::timeline::Page::Before(before),
-            ),
-            // Until the server names the conversation, nothing loads.
-            None if server.history_source == HistorySource::ServerArchive
-                && matches!(channel.target, TextTarget::Channel(_)) =>
-            {
-                channel.timeline.loading = false;
-                return;
-            }
-            None => self.driver.history(
-                server.id.clone(),
-                identity,
-                channel.storage_key.clone(),
-                ticket,
-                before,
-            ),
-        };
-        if let Err(error) = requested {
-            channel.timeline.loading = false;
+        if let Err(error) = self.client.load_history(before) {
             self.older_paused = true;
             self.error = Some(error);
         }
@@ -2193,8 +2004,12 @@ impl Desktop {
     pub fn load_older(&mut self) -> bool {
         if let Some((server, channel)) = self.selected_indices()
             && !self.older_paused
-            && !self.servers[server].channels[channel].timeline.loading
-            && let Some(before) = self.servers[server].channels[channel].timeline.next_before
+            && !self.client.servers[server].channels[channel]
+                .timeline
+                .loading
+            && let Some(before) = self.client.servers[server].channels[channel]
+                .timeline
+                .next_before
         {
             self.load_history(Some(before));
             return true;
@@ -2216,10 +2031,11 @@ impl Desktop {
                 // The reader is scrolling again: a failed page may be retried.
                 self.older_paused = false;
             }
-            self.following = crate::scrolling::follows(self.following, painted, now, max);
+            self.client.focus.following =
+                crate::scrolling::follows(self.client.focus.following, painted, now, max);
         }
-        if self.following {
-            let channel = &mut self.servers[server].channels[channel];
+        if self.client.focus.following {
+            let channel = &mut self.client.servers[server].channels[channel];
             channel.new_messages = 0;
             // Out of sight above while at the bottom; they load again on scrolling up.
             channel.timeline.trim_oldest(MAX_TIMELINE);
@@ -2228,10 +2044,10 @@ impl Desktop {
     }
     pub fn jump_to_latest(&mut self) {
         self.chat_motion.cancel();
-        self.following = true;
+        self.client.focus.following = true;
         self.scroll.scroll_to_bottom();
         if let Some((server, channel)) = self.selected_indices() {
-            self.servers[server].channels[channel].new_messages = 0;
+            self.client.servers[server].channels[channel].new_messages = 0;
         }
     }
     /// Apply system-wide shortcut events; false while none are wanted.
@@ -2244,46 +2060,83 @@ impl Desktop {
         }
         self.shortcuts.polling()
     }
+    /// Apply what the driver reported: the client decides, the desktop
+    /// follows its updates.
     fn apply_events(&mut self, events: impl IntoIterator<Item = Event>, cx: &mut Context<Self>) {
+        self.client.set_time(monotonic_ms());
         for event in events {
-            match event {
-                Event::Sent {
+            match event.into_input() {
+                Ok(input) => self.client.handle(input),
+                Err(Native::OwnIdentity(result)) => self.own_identity.apply(*result),
+                Err(Native::Identity {
                     server,
                     generation,
-                    target,
-                    body,
-                } => {
-                    if self
+                    event,
+                }) => self.identity_event(&server, generation, *event),
+                Err(Native::Mls {
+                    server,
+                    generation,
+                    event,
+                }) => self.mls_event(&server, generation, *event),
+                Err(Native::Ignored) => {}
+            }
+        }
+        // Channels sorted once a batch is applied, and edits and deletions
+        // that came before their message's page.
+        self.client.settle();
+        self.apply_updates(cx);
+        self.expire_typing(cx);
+    }
+    /// Follow what the client says changed.
+    pub fn apply_updates(&mut self, cx: &mut Context<Self>) {
+        for update in self.client.take_updates() {
+            match update {
+                Update::BookmarksChanged => self.cache_dirty = true,
+                Update::BookmarksChangedNow => {
+                    let bookmarks = self
+                        .client
                         .servers
                         .iter()
-                        .any(|entry| entry.id == server && entry.generation == generation)
-                        && self.sending.as_ref().is_some_and(|pending| {
-                            pending.conversation.server == server
-                                && pending.target == target
-                                && pending.body == body
-                        })
-                        && let Some(pending) = self.sending.take()
-                    {
-                        self.acknowledged.push((pending.conversation, pending.body));
+                        .map(|server| server.bookmark.clone())
+                        .collect::<Vec<_>>();
+                    if let Err(error) = self.write_servers(&bookmarks) {
+                        self.error = Some(error.to_string());
                     }
                 }
-                Event::SearchResults { request, result } => {
-                    self.apply_search_results(request, result, cx);
-                }
-                Event::HistoryWindow {
+                Update::Browse { server, channel } => self.pending_browse = Some((server, channel)),
+                Update::LoginRefused {
                     server,
-                    ticket,
-                    page,
-                    messages,
-                    next_before,
-                    next_after,
-                } => self.apply_history_window(
-                    (server, ticket, page),
-                    messages,
-                    (next_before, next_after),
-                    cx,
-                ),
-                Event::HistoryRecovered => {
+                    kind,
+                    reason,
+                } => {
+                    if let Some(index) = self.client.server_index(&server) {
+                        self.pending_retry = Some((index, kind, reason));
+                    }
+                }
+                Update::Sent { conversation, body } => {
+                    self.acknowledged.push((conversation, body));
+                }
+                Update::PageShown { page, used } => {
+                    self.older_paused = false;
+                    match page {
+                        // A conversation opens at its newest message.
+                        nuschel_client::timeline::Page::Before(None) => {
+                            self.anchor.reset();
+                            self.scroll.scroll_to_bottom();
+                        }
+                        // A search result's message, highlighted.
+                        nuschel_client::timeline::Page::Around(_) if used => {
+                            self.anchor.reset();
+                            self.reveal_jumped(cx);
+                        }
+                        _ => {}
+                    }
+                }
+                Update::HistoryFailed(error) => {
+                    self.older_paused = true;
+                    self.error = Some(error);
+                }
+                Update::HistoryRecovered => {
                     self.older_paused = false;
                     if self
                         .error
@@ -2293,598 +2146,167 @@ impl Desktop {
                         self.error = None;
                     }
                 }
-                Event::Edited {
-                    server,
-                    conversation,
-                    seq,
-                    source,
-                    document,
-                    edited_ms,
-                } => self.apply_change(
-                    &server,
-                    conversation,
-                    seq,
-                    nuschel_client::timeline::Change::Edited {
-                        source,
-                        document,
-                        edited_ms,
-                    },
-                ),
-                Event::Deleted {
-                    server,
-                    conversation,
-                    seq,
-                    deletion,
-                } => self.apply_change(
-                    &server,
-                    conversation,
-                    seq,
-                    nuschel_client::timeline::Change::Deleted(deletion),
-                ),
-                Event::ChangeFailed {
-                    server,
-                    delete,
-                    reason,
-                } => {
-                    if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server) {
-                        server.notice = Some(format!(
-                            "The message was not {}: {reason}",
-                            if delete { "deleted" } else { "edited" }
-                        ));
-                    }
+                Update::OwnMessage => self.chat_motion.cancel(),
+                Update::Notify(note) => {
+                    let image = note.image.and_then(|(width, height, rgba)| {
+                        crate::notify::thumbnail(width, height, &rgba)
+                    });
+                    let _ = self.notes.try_send(crate::notify::Note {
+                        key: note.key,
+                        summary: note.summary,
+                        body: note.body,
+                        image,
+                    });
                 }
-                Event::HistoryFailed {
-                    server,
-                    ticket,
-                    reason,
-                } => {
-                    if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server)
-                        && let Some(channel) = server
-                            .channels
-                            .iter_mut()
-                            .find(|entry| entry.id == ticket.conversation.channel)
+                Update::Negotiated { server } => {
+                    if let Some(index) = self.client.server_index(&server)
+                        && let Some(ui) = self.ui.get_mut(&server)
                     {
-                        channel.timeline.loading = false;
+                        ui.version
+                            .negotiated(self.client.servers[index].policy.as_ref());
                     }
-                    self.older_paused = true;
-                    self.error = Some(format!("Server history: {reason}"));
                 }
-                Event::Downgrade {
+                Update::Gap {
                     server,
-                    generation,
-                    reason,
-                } => {
-                    if let Some(index) = self
-                        .servers
-                        .iter()
-                        .position(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        self.disconnect(index);
-                        self.servers[index].downgrade = Some(reason);
-                    }
-                }
-                Event::HistoryError(error) => {
-                    self.error = Some(format!("Local history: {error}"));
-                    self.older_paused = true;
-                    for server in &mut self.servers {
-                        for channel in &mut server.channels {
-                            channel.timeline.loading = false;
-                        }
-                    }
-                }
-                Event::History {
-                    server,
-                    ticket,
-                    before,
-                    messages,
-                    next_before,
-                } => {
-                    if !self.navigation.accepts(&ticket) {
-                        continue;
-                    }
-                    if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server)
-                        && let Some(channel) = server
-                            .channels
-                            .iter_mut()
-                            .find(|entry| entry.id == ticket.conversation.channel)
-                    {
-                        channel.timeline.loading = false;
-                        self.older_paused = false;
-                        tracing::debug!(?before, count = messages.len(), "history page");
-                        channel.timeline.take_page(before, messages, next_before);
-                        if before.is_none() {
-                            // A conversation opens at its newest message.
-                            self.anchor.reset();
-                            self.following = true;
-                            self.scroll.scroll_to_bottom();
-                        }
-                    }
-                }
-                Event::OwnIdentity(result) => self.own_identity.apply(result),
-                Event::Protocol {
-                    server,
-                    generation,
-                    event,
-                } => {
-                    let Some(index) = self
-                        .servers
-                        .iter()
-                        .position(|entry| entry.id == server && entry.generation == generation)
-                    else {
-                        continue;
-                    };
-                    self.apply_protocol(index, event);
-                }
-                Event::Certificate {
-                    server,
-                    generation,
-                    sha256,
-                    changed,
-                    reason,
-                } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        server.status = Status::Disconnected;
-                        server.security = SessionSecurity::Unknown;
-                        server.certificate = Some(CertificatePrompt {
-                            sha256,
-                            changed,
-                            reason,
-                        });
-                    }
-                }
-                Event::Disconnected {
-                    server,
-                    generation,
-                    reason,
-                    reject,
-                } => {
-                    if let Some(index) = self
-                        .servers
-                        .iter()
-                        .position(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        let lost = lost_messages(&mut self.servers[index]);
-                        self.disconnect(index);
-                        self.servers[index].notice = Some(
-                            lost.map_or_else(|| reason.clone(), |lost| format!("{reason} {lost}")),
-                        );
-                        if let Some(kind) =
-                            reject.filter(|kind| kind.needs_password() || kind.needs_username())
-                        {
-                            self.pending_retry = Some((index, kind, reason));
-                        }
-                    }
-                }
-                Event::Reconnecting {
-                    server,
-                    generation,
-                    attempt,
-                    delay_secs,
-                    reason,
-                } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        if server.status == Status::Connected && !server.deafened {
-                            self.driver.chime(nuschel_core::audio::Sound::Disconnected);
-                        }
-                        server.status = Status::Connecting;
-                        server.own_session = None;
-                        if let Some(lost) = lost_messages(server) {
-                            server.notice = Some(lost);
-                        }
-                        server.users.clear();
-                        server.talking.clear();
-                        server.transport = None;
-                        server.permissions.clear();
-                        server.reconnecting = Some(format!(
-                            "Connection lost: {reason}. Reconnecting in {delay_secs} s (attempt {attempt})…"
-                        ));
-                    }
-                }
-                Event::Gap {
-                    server,
-                    generation,
                     from_ms,
                     to_ms,
+                } => self
+                    .client
+                    .log_gap(&server, gap_text(from_ms, to_ms), to_ms),
+                Update::MessageDeleted {
+                    server,
+                    conversation,
+                    seq,
                 } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        server.reconnecting = None;
-                        let text = gap_text(from_ms, to_ms);
-                        for channel in &mut server.channels {
-                            channel.log(text.clone(), to_ms, true);
-                        }
+                    if self.editing.as_ref().is_some_and(|editing| {
+                        editing.server == server
+                            && editing.seq == seq
+                            && editing.channel_conversation == Some(conversation)
+                    }) {
+                        // The composer keeps the text; there is nothing left to edit.
+                        self.editing = None;
                     }
                 }
-                Event::Rendered {
+                Update::SearchResults { request, result } => {
+                    self.apply_search_results(request, result, cx);
+                }
+                Update::Rendered {
                     server,
-                    generation,
                     key,
                     source,
                     document,
                 } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        match key {
-                            RenderKey::Description(id) => {
-                                if server
-                                    .channel_view(id)
-                                    .is_some_and(|channel| channel.description_raw == source)
-                                {
-                                    server.descriptions.insert(id, document.into());
-                                }
-                            }
-                            RenderKey::Comment(session) => {
-                                if server.users.get(&session).is_some_and(|user| {
-                                    user.comment.as_deref() == Some(source.as_str())
-                                }) {
-                                    server.comments.insert(session, (source, document.into()));
-                                }
-                            }
+                    let Some(ui) = self.ui.get_mut(&server) else {
+                        continue;
+                    };
+                    match key {
+                        RenderKey::Description(id) => {
+                            ui.descriptions.insert(id, (source, document.into()));
+                        }
+                        RenderKey::Comment(session) => {
+                            ui.comments.insert(session, (source, document.into()));
                         }
                     }
                 }
-                Event::Talking {
+                Update::Avatar {
                     server,
-                    generation,
-                    session,
-                    talking,
-                } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        if talking {
-                            server.talking.insert(session);
-                        } else {
-                            server.talking.remove(&session);
-                        }
-                    }
-                }
-                Event::Avatar {
-                    server,
-                    generation,
                     hash,
                     document,
                 } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                        && let Some(image) = Document::from(document).first_image()
-                    {
-                        // A server cycling texture hashes must not grow the cache
-                        // without bound: past 1024, keep only avatars in use.
-                        if server.avatars.len() >= 1024 {
-                            let used: BTreeSet<_> = server
-                                .users
-                                .values()
-                                .filter_map(|user| user.texture_hash.clone())
-                                .collect();
-                            server.avatars.retain(|hash, _| used.contains(hash));
-                            server.avatar_requests.clear();
-                        }
-                        server.avatars.insert(hash, image);
-                    }
-                }
-                Event::AudioDevices {
-                    server,
-                    generation,
-                    inputs,
-                    outputs,
-                    input,
-                    output,
-                    echo,
-                    noise,
-                    reference,
-                } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        server.audio.inputs = inputs;
-                        server.audio.outputs = outputs;
-                        server.audio.input = input;
-                        server.audio.output = output;
-                        server.audio.echo = echo;
-                        server.audio.noise = noise;
-                        server.audio.reference = reference;
-                    }
-                }
-                Event::Echo {
-                    server,
-                    generation,
-                    erle_db,
-                    residual_likelihood,
-                } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        server.audio.erle_db = erle_db;
-                        server.audio.residual_echo = residual_likelihood;
-                    }
-                }
-                Event::AudioHealth {
-                    server,
-                    generation,
-                    health,
-                } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        server.audio.health = health;
-                    }
-                }
-                Event::AudioStatus {
-                    server,
-                    generation,
-                    message,
-                } => {
-                    if let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                    {
-                        server.audio_status = message;
-                    }
-                }
-                Event::Message {
-                    server,
-                    generation,
-                    target,
-                    storage_key,
-                    peer,
-                    mut message,
-                } => {
-                    let Some(server) = self
-                        .servers
-                        .iter_mut()
-                        .find(|entry| entry.id == server && entry.generation == generation)
-                        .map(|view| &mut view.state)
-                    else {
+                    let (Some(index), Some(image)) = (
+                        self.client.server_index(&server),
+                        Document::from(document).first_image(),
+                    ) else {
                         continue;
                     };
-                    // Acknowledged before it was shown.
-                    if let Some(key) = message.pending
-                        && let Some(seq) = server.acked.remove(&key)
-                    {
-                        message.pending = None;
-                        message.id = seq.map(|seq| seq as i64);
-                        message.seq = seq;
-                    }
-                    // A stock direct message from someone we have a durable
-                    // direct conversation with (an image, or from a stock
-                    // client) shows there; it is not in the server's history.
-                    let durable = match (&target, &peer) {
-                        (TextTarget::Direct(_), Some(peer))
-                            if peer.user_id.is_some_and(|id| id != 0) =>
-                        {
-                            server.channels.iter().position(|channel| {
-                                matches!(channel.target, TextTarget::DirectConversation(_))
-                                    && channel.direct_peer.as_ref().and_then(|known| known.user_id)
-                                        == peer.user_id
-                            })
-                        }
-                        _ => None,
-                    };
-                    if durable.is_some() {
-                        message.id = None;
-                    }
-                    let index = if let Some(index) = durable {
-                        index
-                    } else if let Some(index) = server.channels.iter().position(|channel| {
-                        channel.storage_key == storage_key
-                            || (channel.target == target
-                                && channel.storage_key.starts_with("direct:pending:")
-                                && channel.direct_peer.as_ref().zip(peer.as_ref()).is_some_and(
-                                    |(old, new)| {
-                                        old.instance == new.instance && old.session == new.session
-                                    },
-                                ))
-                    }) {
-                        index
-                    } else if let TextTarget::Direct(_) = target {
-                        let name = peer
-                            .as_ref()
-                            .map(|peer| crate::names::display_name(peer, &self.settings))
-                            .unwrap_or("Direct message");
-                        server.received_direct(
-                            name,
-                            target.clone(),
-                            peer.clone(),
-                            storage_key.clone(),
-                        )
-                    } else if let TextTarget::DirectConversation(id) = target {
-                        // A durable direct conversation (directs.rs), perhaps new.
-                        let name = match &peer {
-                            Some(peer) => {
-                                crate::names::display_name(peer, &self.settings).to_string()
-                            }
-                            None if message.outgoing => server
-                                .directs
-                                .get(&id)
-                                .map(|direct| direct.name.clone())
-                                .unwrap_or_else(|| "Direct message".into()),
-                            None => message.message.author.clone(),
-                        };
-                        server.direct_view(id, &name, peer.clone())
-                    } else {
+                    let Some(ui) = self.ui.get_mut(&server) else {
                         continue;
                     };
-                    // A desktop notification for what arrives out of sight.
-                    if !message.outgoing && self.settings.notifications {
-                        let voice = server.voice_channel();
-                        let channel = &server.channels[index];
-                        let shown = self.window_active
-                            && self.navigation.selection().is_some_and(|selected| {
-                                selected.server == server.id && selected.channel == channel.id
-                            });
-                        let direct = matches!(
-                            target,
-                            TextTarget::Direct(_) | TextTarget::DirectConversation(_)
-                        );
-                        let in_voice =
-                            matches!(channel.target, TextTarget::Channel(id) if Some(id) == voice);
-                        let mut text = String::new();
-                        let mut image = None;
-                        for block in &message.document.blocks {
-                            match block {
-                                nuschel_core::ContentBlock::Text { text: part, .. } => {
-                                    text.push_str(part)
-                                }
-                                nuschel_core::ContentBlock::Code { runs, .. } => {
-                                    runs.iter().for_each(|run| text.push_str(&run.text))
-                                }
-                                nuschel_core::ContentBlock::Image {
-                                    width,
-                                    height,
-                                    rgba,
-                                    ..
-                                } if image.is_none() => {
-                                    image = crate::notify::thumbnail(*width, *height, rgba);
-                                }
-                                _ => {}
-                            }
-                        }
-                        let mentioned = crate::notify::mentions(&text, &server.bookmark.username);
-                        tracing::debug!(
-                            shown,
-                            direct,
-                            in_voice,
-                            mentioned,
-                            "message notification check"
-                        );
-                        if !shown && (direct || in_voice || mentioned) {
-                            let name = &message.message.author;
-                            let author =
-                                crate::names::author(name, server.users.values(), peer.as_ref());
-                            let author =
-                                crate::names::author_name(name, author, &self.settings).to_string();
-                            let preview = crate::notify::preview(&text);
-                            let _ = self.notes.try_send(crate::notify::Note {
-                                key: format!("{}:{}", server.id, channel.id),
-                                summary: if direct {
-                                    author
-                                } else {
-                                    format!("{author} in {}", channel.name)
-                                },
-                                body: match (preview.is_empty(), image.is_some()) {
-                                    (true, true) => "Sent an image".into(),
-                                    _ => preview,
-                                },
-                                image,
-                            });
-                        }
+                    // A server cycling texture hashes must not grow the cache
+                    // without bound: past 1024, keep only avatars in use.
+                    if ui.avatar_images.len() >= 1024 {
+                        let used: BTreeSet<_> = self.client.servers[index]
+                            .users
+                            .values()
+                            .filter_map(|user| user.texture_hash.clone())
+                            .collect();
+                        ui.avatar_images.retain(|hash, _| used.contains(hash));
                     }
-                    if !message.outgoing {
-                        let shown = self.window_active
-                            && self.navigation.selection().is_some_and(|selected| {
-                                selected.server == server.id
-                                    && selected.channel == server.channels[index].id
-                            });
-                        let direct = matches!(
-                            target,
-                            TextTarget::Direct(_) | TextTarget::DirectConversation(_)
-                        );
-                        let mentioned = crate::notify::mentions(
-                            &message.message.body,
-                            &server.bookmark.username,
-                        );
-                        if let Some(sound) =
-                            nuschel_client::sounds::message(shown, direct, mentioned)
-                        {
-                            self.driver.play_sound(&server.id, sound);
-                        }
-                    }
-                    let channel = &mut server.channels[index];
-                    // Their message is here: they stopped typing it.
-                    let users = &server.users;
-                    channel.typing.retain(|session, _| {
-                        users
-                            .get(session)
-                            .is_none_or(|user| user.name != message.message.author)
-                    });
-                    if matches!(target, TextTarget::Direct(_))
-                        && !matches!(channel.target, TextTarget::DirectConversation(_))
-                    {
-                        channel.target = target;
-                        channel.direct_peer = peer;
-                        channel.storage_key = storage_key;
-                    } else if matches!(target, TextTarget::DirectConversation(_)) && peer.is_some()
-                    {
-                        channel.direct_peer = peer;
-                    }
-                    let outgoing = message.outgoing;
-                    let mention = !outgoing
-                        && (matches!(
-                            channel.target,
-                            TextTarget::Direct(_) | TextTarget::DirectConversation(_)
-                        ) || message.document.blocks.iter().any(|block| {
-                            matches!(block, nuschel_core::ContentBlock::Text { text, .. }
-                                    if crate::notify::mentions(text, &server.bookmark.username))
-                        }));
-                    // Older history shown apart from the newest gets the
-                    // message with the newer pages.
-                    let added = channel.timeline.receive(message);
-                    let in_sight = self.window_active
-                        && self.following
-                        && self.navigation.selection().is_some_and(|selected| {
-                            selected.server == server.id && selected.channel == channel.id
-                        });
-                    if added && !outgoing && !in_sight {
-                        channel.unread += 1;
-                        channel.unread_mention |= mention;
-                    }
-                    if self.navigation.selection().is_some_and(|selected| {
-                        selected.server == server.id && selected.channel == channel.id
-                    }) {
-                        // Following keeps the newest in view (see settle_timeline);
-                        // sending something of one's own jumps there too.
-                        if outgoing {
-                            self.chat_motion.cancel();
-                            self.following = true;
-                        } else if added && !self.following {
-                            channel.new_messages += 1;
-                        }
-                    } else {
-                        channel.timeline.trim_oldest(MAX_TIMELINE);
-                    }
+                    ui.avatar_images.insert(hash, image);
                 }
-            }
-        }
-        for server in &mut self.servers {
-            if std::mem::take(&mut server.unsorted) {
-                server.sort_channels();
             }
         }
         if std::mem::take(&mut self.cache_dirty) {
             self.save_servers_soon(cx);
         }
-        self.expire_typing(cx);
-        // Edits and deletions that came before their message's page.
-        for server in 0..self.servers.len() {
-            if !self.servers[server].waiting_changes.is_empty() {
-                self.apply_waiting_changes(server);
+    }
+    /// End-to-end conversations on a server, as the session reports them
+    /// (docs/e2ee.md §7.4): their lock state, and what went wrong.
+    fn mls_event(&mut self, server: &str, generation: u64, event: nuschel_session::mls::MlsEvent) {
+        let Some(index) = self
+            .client
+            .servers
+            .iter()
+            .position(|entry| entry.id == server && entry.generation == generation)
+        else {
+            return;
+        };
+        match event {
+            nuschel_session::mls::MlsEvent::Conversation {
+                view,
+                peer: Some(peer),
+            } => {
+                if let Some(notice) = view.notices.last() {
+                    self.client.servers[index].notice = Some(notice.clone());
+                }
+                if let Some(ui) = self.ui.get_mut(server) {
+                    ui.e2ee.insert(peer, view);
+                }
             }
+            nuschel_session::mls::MlsEvent::Failed(reason)
+            | nuschel_session::mls::MlsEvent::NotSent { reason, .. } => {
+                self.client.servers[index].notice = Some(reason);
+            }
+            _ => {}
+        }
+    }
+    /// Identity and key transparency on a server, as the crypto worker
+    /// reports them (identity.rs).
+    fn identity_event(
+        &mut self,
+        server: &str,
+        generation: u64,
+        event: nuschel_session::identity::IdentityEvent,
+    ) {
+        let Some(index) = self
+            .client
+            .servers
+            .iter()
+            .position(|entry| entry.id == server && entry.generation == generation)
+        else {
+            return;
+        };
+        if let nuschel_session::identity::IdentityEvent::Own(view) = &event {
+            self.own_identity.view = Some(view.clone());
+        }
+        let Some(ui) = self.ui.get_mut(server) else {
+            return;
+        };
+        let state = &mut self.client.servers[index];
+        let users = &state.users;
+        let name = |user_id: u32| {
+            users
+                .values()
+                .find(|user| user.user_id == Some(user_id))
+                .map(|user| user.name.clone())
+        };
+        let alarmed = ui.identity.alarm.is_some();
+        if let Some(notice) = ui.identity.apply_named(event, name) {
+            state.notice = Some(notice);
+        }
+        // A new alarm interrupts: it is shown as a dialog until acknowledged.
+        if !alarmed && ui.identity.alarm.is_some() && self.panel.is_none() {
+            self.panel = Some(crate::panels::Panel::IdentityAlarm { server: index });
         }
     }
     /// What the desktop's own services report (services.rs).
@@ -2892,7 +2314,12 @@ impl Desktop {
         match event {
             ServiceEvent::Prepared { id, result } => self.prepared(id, result, cx),
             ServiceEvent::ServerIcon { server, icon } => {
-                if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server) {
+                if let Some(server) = self
+                    .client
+                    .servers
+                    .iter_mut()
+                    .find(|entry| entry.id == server)
+                {
                     server.bookmark.icon_checked_ms = nuschel_session::connection::now_ms();
                     if let Some(nuschel_core::ContentBlock::Image {
                         width,
@@ -2901,7 +2328,9 @@ impl Desktop {
                         ..
                     }) = icon
                     {
-                        server.icon = crate::document::render_image(width, height, &rgba);
+                        if let Some(ui) = self.ui.get_mut(&server.id) {
+                            ui.icon = crate::document::render_image(width, height, &rgba);
+                        }
                         server.bookmark.icon = Some(nuschel_session::config::ServerIcon {
                             width,
                             height,
@@ -2995,6 +2424,7 @@ impl Desktop {
         self.servers_generation += 1;
         let generation = self.servers_generation;
         let servers = self
+            .client
             .servers
             .iter()
             .map(|server| server.bookmark.clone())
@@ -3004,7 +2434,7 @@ impl Desktop {
     }
     pub fn reconcile_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((index, kind, reason)) = self.pending_retry.take()
-            && index < self.servers.len()
+            && index < self.client.servers.len()
         {
             self.open_form(Some(index), window, cx);
             if let Some(form) = &mut self.form {
@@ -3025,16 +2455,22 @@ impl Desktop {
             }
         }
         if let Some((server, channel)) = self.pending_browse.take()
-            && let Some(index) = self.servers.iter().position(|entry| entry.id == server)
+            && let Some(index) = self
+                .client
+                .servers
+                .iter()
+                .position(|entry| entry.id == server)
         {
             self.browse_channel(index, channel, window, cx);
         }
-        if self.selected_indices().is_none() && !self.servers.is_empty() {
+        if self.selected_indices().is_none() && !self.client.servers.is_empty() {
             let index = self
+                .client
                 .navigation
                 .selection()
                 .and_then(|selection| {
-                    self.servers
+                    self.client
+                        .servers
                         .iter()
                         .position(|server| server.id == selection.server)
                 })
@@ -3042,501 +2478,6 @@ impl Desktop {
             self.browse_server(index, window, cx);
         }
     }
-    fn apply_protocol(&mut self, index: usize, event: SessionEvent) {
-        let server = &mut self.servers[index];
-        match event {
-            // The backend keeps the sticky record. With history, the timeline
-            // pages from the server (seqs), not from local observations.
-            SessionEvent::Negotiated(negotiated) => {
-                server.version.negotiated(&negotiated);
-                server.mls = negotiated
-                    .capabilities
-                    .iter()
-                    .any(|capability| capability == "mls/1");
-                let history = negotiated
-                    .capabilities
-                    .iter()
-                    .any(|capability| capability == "history/1");
-                server.capabilities = negotiated.capabilities.clone();
-                server.policy = negotiated.policy;
-                if history && server.history_source != HistorySource::ServerArchive {
-                    server.history_source = HistorySource::ServerArchive;
-                    for channel in &mut server.channels {
-                        channel.timeline.reset();
-                    }
-                }
-            }
-            SessionEvent::ChannelInfo { channel, info } => {
-                let selected = self.navigation.selection().is_some_and(|selected| {
-                    selected.server == server.id && selected.channel == channel
-                });
-                if let Some(view) = server.channel_view(channel) {
-                    view.conversation = info.conversation.as_slice().try_into().ok();
-                    if selected && !view.timeline.loaded && !view.timeline.loading {
-                        self.load_history(None);
-                    }
-                }
-            }
-            SessionEvent::ChatAcked { key, seq } => {
-                if !settle_pending(server, key, Some(seq)) {
-                    server.acked.insert(key, Some(seq));
-                }
-            }
-            SessionEvent::ChatFailed { key, reason } => {
-                server.notice = Some(format!("A message was not sent: {reason}"));
-                if !settle_pending(server, key, None) {
-                    server.acked.insert(key, None);
-                }
-            }
-            SessionEvent::ConversationState {
-                channel,
-                head,
-                read,
-            } => {
-                let selected = self.navigation.selection().is_some_and(|selected| {
-                    selected.server == server.id && selected.channel == channel
-                });
-                if let Some(view) = server.channel_view(channel)
-                    && !selected
-                {
-                    view.unread = usize::try_from(head.saturating_sub(read))
-                        .unwrap_or(usize::MAX)
-                        .min(999);
-                }
-            }
-            SessionEvent::Nuschel(NuschelEvent::Typing(typing)) => {
-                server.someone_typing(&typing.conversation, typing.session, monotonic_ms());
-            }
-            SessionEvent::Nuschel(NuschelEvent::DirectList(list)) => {
-                self.directs_listed(index, list.directs);
-            }
-            SessionEvent::Nuschel(NuschelEvent::DirectOpened(opened)) => {
-                self.direct_opened(index, opened);
-            }
-            SessionEvent::Nuschel(NuschelEvent::Error(error)) => {
-                self.direct_failed(index, error);
-            }
-            SessionEvent::Nuschel(NuschelEvent::ReadMarker(marker)) => {
-                // Read on our account's other device.
-                if let Some(channel) = server.channels.iter_mut().find(|channel| {
-                    channel
-                        .conversation
-                        .is_some_and(|id| id.as_slice() == marker.conversation.as_slice())
-                }) {
-                    channel.read_seq = channel.read_seq.max(marker.seq as i64);
-                    channel.unread = 0;
-                    channel.unread_mention = false;
-                }
-            }
-            SessionEvent::ChatPending(_) | SessionEvent::Nuschel(_) => {}
-            SessionEvent::Mls(event) => match event {
-                nuschel_session::mls::MlsEvent::Conversation {
-                    view,
-                    peer: Some(peer),
-                } => {
-                    if let Some(notice) = view.notices.last() {
-                        server.notice = Some(notice.clone());
-                    }
-                    server.e2ee.insert(peer, view);
-                }
-                nuschel_session::mls::MlsEvent::Failed(reason)
-                | nuschel_session::mls::MlsEvent::NotSent { reason, .. } => {
-                    server.notice = Some(reason);
-                }
-                _ => {}
-            },
-            SessionEvent::Identity(event) => {
-                if let nuschel_session::identity::IdentityEvent::Own(view) = &event {
-                    self.own_identity.view = Some(view.clone());
-                }
-                let ServerView {
-                    state, identity, ..
-                } = &mut *server;
-                let users = &state.users;
-                let name = |user_id: u32| {
-                    users
-                        .values()
-                        .find(|user| user.user_id == Some(user_id))
-                        .map(|user| user.name.clone())
-                };
-                let alarmed = identity.alarm.is_some();
-                if let Some(notice) = identity.apply_named(event, name) {
-                    state.notice = Some(notice);
-                }
-                // A new alarm interrupts: it is shown as a dialog until acknowledged.
-                if !alarmed && identity.alarm.is_some() && self.panel.is_none() {
-                    self.panel = Some(crate::panels::Panel::IdentityAlarm { server: index });
-                }
-            }
-            SessionEvent::PeerCertificate(pin) => {
-                let identity = server.history_identity();
-                server.peer_sha256 = Some(pin.clone());
-                server.security = SessionSecurity::TransportOnly;
-                if server.bookmark.certificate_sha256.is_none() {
-                    server.bookmark.certificate_sha256 = Some(pin);
-                    if let Err(error) = self.write_servers(
-                        &self
-                            .servers
-                            .iter()
-                            .map(|server| server.bookmark.clone())
-                            .collect::<Vec<_>>(),
-                    ) {
-                        self.error = Some(error.to_string());
-                    }
-                }
-                // Reconnecting to the same server leaves the timeline (and where
-                // the reader is in it) alone; a new identity has other history.
-                let server = &mut self.servers[index];
-                if server.history_identity() != identity {
-                    for channel in &mut server.channels {
-                        channel.timeline.loaded = false;
-                    }
-                    if self
-                        .navigation
-                        .selection()
-                        .is_some_and(|selected| selected.server == server.id)
-                    {
-                        self.load_history(None);
-                    }
-                }
-            }
-            SessionEvent::Connected { session, .. } => {
-                let server = &mut server.state;
-                server.channels.retain(|channel| match channel.target {
-                    TextTarget::Channel(id) => server.seen_channels.contains(&id),
-                    TextTarget::Direct(_) | TextTarget::DirectConversation(_) => true,
-                });
-                let cached = server.bookmark.cached_channels.len();
-                server
-                    .bookmark
-                    .cached_channels
-                    .retain(|channel| server.seen_channels.contains(&channel.id));
-                self.cache_dirty |= server.bookmark.cached_channels.len() != cached;
-                server.status = Status::Connected;
-                server.reconnecting = None;
-                server.own_session = Some(session);
-                server.expand_occupied();
-                self.passwords.remove(&server.id);
-                let path = std::mem::take(&mut server.pending_channel);
-                if !path.is_empty() {
-                    let mut current = 0;
-                    let mut found = true;
-                    for name in &path {
-                        match server.channels.iter().find(|channel| {
-                            channel.parent == Some(current)
-                                && channel.name == *name
-                                && matches!(channel.target, TextTarget::Channel(_))
-                        }) {
-                            Some(channel) => current = channel.id,
-                            None => {
-                                found = false;
-                                break;
-                            }
-                        }
-                    }
-                    if found {
-                        let _ = self.driver.command(&server.id, Command::Join(current));
-                        self.pending_browse = Some((server.id.clone(), current));
-                    } else {
-                        server.notice = Some(format!("Channel /{} was not found.", path.join("/")));
-                    }
-                }
-            }
-            SessionEvent::Channel(update) => {
-                server.seen_channels.insert(update.id);
-                let previous = server
-                    .bookmark
-                    .cached_channels
-                    .iter_mut()
-                    .find(|channel| channel.id == update.id);
-                // Most updates (descriptions, links, a resent tree) leave the cache as it is.
-                if !previous.as_ref().is_some_and(|cached| {
-                    cached.parent == update.parent
-                        && cached.position == update.position
-                        && cached.name == update.name
-                }) {
-                    let cached = CachedChannel {
-                        id: update.id,
-                        parent: update.parent,
-                        name: update.name.clone(),
-                        position: update.position,
-                    };
-                    match previous {
-                        Some(previous) => *previous = cached,
-                        None => server.bookmark.cached_channels.push(cached),
-                    }
-                    self.cache_dirty = true;
-                }
-                if let Some(channel) = server
-                    .channels
-                    .iter_mut()
-                    .find(|channel| channel.target == TextTarget::Channel(update.id))
-                {
-                    channel.name = update.name.clone();
-                    channel.parent = update.parent;
-                    channel.position = update.position;
-                    channel.topic = "Channel chat · select Join voice to move here".into();
-                    channel.links = update.links.clone();
-                    channel.temporary = update.temporary;
-                    channel.max_users = update.max_users;
-                    if channel.description_raw != update.description {
-                        channel.description_raw = update.description.clone();
-                        server.descriptions.remove(&update.id);
-                        if !update.description.is_empty() {
-                            self.driver.render_html(
-                                server.id.clone(),
-                                server.generation,
-                                RenderKey::Description(update.id),
-                                update.description.clone(),
-                            );
-                        }
-                    }
-                } else {
-                    if !update.description.is_empty() {
-                        self.driver.render_html(
-                            server.id.clone(),
-                            server.generation,
-                            RenderKey::Description(update.id),
-                            update.description.clone(),
-                        );
-                    }
-                    server.descriptions.remove(&update.id);
-                    server.channels.push(ChannelView {
-                        topic: "Channel chat · select Join voice to move here".into(),
-                        links: update.links,
-                        temporary: update.temporary,
-                        max_users: update.max_users,
-                        description_raw: update.description,
-                        ..ChannelView::channel(
-                            update.id,
-                            update.parent,
-                            update.name,
-                            update.position,
-                        )
-                    });
-                }
-                // Sorted once the batch of events is applied, not per channel.
-                server.unsorted = true;
-            }
-            SessionEvent::Permissions {
-                channel,
-                permissions,
-                flush,
-            } => {
-                if flush {
-                    server.permissions.clear();
-                }
-                if channel != u32::MAX {
-                    server.permissions.insert(channel, permissions);
-                }
-            }
-            SessionEvent::Activity(activity) => {
-                let mut targets = activity.channels.clone();
-                // A friend's arrival, departure or new name shows server-wide,
-                // as in Mumble's log.
-                let friend = activity.presence.is_some()
-                    && crate::names::about_friend(&activity, &self.settings);
-                if targets.is_empty() || friend {
-                    targets.push(0);
-                    targets.extend(server.voice_channel());
-                }
-                targets.sort_unstable();
-                targets.dedup();
-                let text = crate::names::activity_text(&activity, &self.settings);
-                for id in targets {
-                    if let Some(channel) = server.channel_view(id) {
-                        channel.log(text.clone(), activity.observed_at_ms, false);
-                    }
-                }
-                if friend
-                    && activity.presence == Some(nuschel_session::model::Presence::Connected)
-                    && self.settings.friend_notifications
-                    && !self.window_active
-                {
-                    let _ = self.notes.try_send(crate::notify::Note {
-                        key: format!("{}:friends", server.id),
-                        summary: text,
-                        body: server.name.clone(),
-                        image: None,
-                    });
-                }
-            }
-            SessionEvent::Limits(limits) => server.limits = Some(limits),
-            SessionEvent::Stats(stats) => {
-                server.stats.insert(stats.session, stats);
-            }
-            SessionEvent::Suggest {
-                push_to_talk,
-                minimum_version,
-                ..
-            } => {
-                let mut tips = Vec::new();
-                if push_to_talk == Some(true)
-                    && self.settings.audio.transmit != nuschel_core::audio::TransmitMode::PushToTalk
-                {
-                    tips.push("This server recommends push-to-talk.".to_string());
-                }
-                if let Some(version) = minimum_version {
-                    tips.push(format!("This server recommends Mumble {version} or newer; some features may be missing."));
-                }
-                server.suggestion = (!tips.is_empty()).then(|| tips.join(" "));
-            }
-            SessionEvent::ContextActions(actions) => server.context_actions = actions,
-            SessionEvent::RegisteredUsers(users) => server.registered_users = Some(users),
-            SessionEvent::Bans(bans) => server.bans = Some(bans),
-            SessionEvent::Acl(acl) => {
-                let unknown: Vec<u32> = acl
-                    .entries
-                    .iter()
-                    .filter_map(|entry| entry.user_id)
-                    .chain(
-                        acl.groups
-                            .iter()
-                            .flat_map(|group| group.add.iter().copied()),
-                    )
-                    .filter(|id| !server.user_names.contains_key(id))
-                    .collect();
-                if !unknown.is_empty() {
-                    let _ = self
-                        .driver
-                        .command(&server.id, Command::QueryUserNames(unknown));
-                }
-                server.acl = Some(acl);
-            }
-            SessionEvent::UserNames(names) => server.user_names.extend(names),
-            SessionEvent::Outbox { sent, total } => {
-                server.outbox = (sent < total).then_some((sent, total));
-            }
-            SessionEvent::UnsupportedCodec { session } => {
-                server.legacy_voice.insert(session);
-                if let Some(user) = server.users.get(&session).cloned()
-                    && let Some(channel) = server.channel_view(user.channel)
-                {
-                    channel.log(
-                        format!(
-                            "{} uses a legacy voice codec (CELT/Speex) that Nuschel cannot play.",
-                            crate::names::display_name(&user, &self.settings)
-                        ),
-                        nuschel_session::connection::now_ms(),
-                        true,
-                    );
-                }
-            }
-            SessionEvent::ChannelRemoved(id) => {
-                server.expansion.remove(&id);
-                server.permissions.remove(&id);
-                server.descriptions.remove(&id);
-                server.expanded_runs.remove(&id);
-                let cached = server.bookmark.cached_channels.len();
-                server
-                    .bookmark
-                    .cached_channels
-                    .retain(|channel| channel.id != id);
-                self.cache_dirty |= server.bookmark.cached_channels.len() != cached;
-                server
-                    .channels
-                    .retain(|channel| channel.target != TextTarget::Channel(id));
-                if server.channels.is_empty() {
-                    server.channels.push(ChannelView::root());
-                }
-            }
-            SessionEvent::User(user) => {
-                if let Some(hash) = user.texture_hash.clone()
-                    && !server.avatars.contains_key(&hash)
-                {
-                    if let Some(texture) = user.texture.clone() {
-                        if server.avatar_requests.insert(format!("decode:{hash}")) {
-                            self.driver.decode_avatar(
-                                server.id.clone(),
-                                server.generation,
-                                hash,
-                                texture,
-                            );
-                        }
-                    } else if server.voice_channel() == Some(user.channel)
-                        && server.avatar_requests.insert(hash)
-                    {
-                        let _ = self.driver.command(
-                            &server.id,
-                            Command::RequestBlobs {
-                                textures: vec![user.session],
-                                comments: vec![],
-                                descriptions: vec![],
-                            },
-                        );
-                    }
-                }
-                if server.status == Status::Connected && Some(user.session) != server.own_session {
-                    let from = server.users.get(&user.session).map(|old| old.channel);
-                    if let Some(sound) = nuschel_client::sounds::movement(
-                        server.voice_channel(),
-                        from,
-                        Some(user.channel),
-                    ) {
-                        self.driver.play_sound(&server.id, sound);
-                    }
-                }
-                if Some(user.session) == server.own_session {
-                    server.muted = user.self_muted;
-                    server.deafened = user.self_deafened;
-                    // Remembered for the next start (the root channel is where
-                    // a server puts you anyway).
-                    let last = (user.channel != 0).then_some(user.channel);
-                    if server.bookmark.last_channel != last {
-                        server.bookmark.last_channel = last;
-                        self.cache_dirty = true;
-                    }
-                    self.navigation.set_voice(Some(Conversation {
-                        server: server.id.clone(),
-                        channel: user.channel,
-                    }));
-                }
-                server.users.insert(user.session, user);
-            }
-            SessionEvent::UserRemoved(session) => {
-                let from = server.users.get(&session).map(|old| old.channel);
-                if server.status == Status::Connected
-                    && Some(session) != server.own_session
-                    && let Some(sound) =
-                        nuschel_client::sounds::movement(server.voice_channel(), from, None)
-                {
-                    self.driver.play_sound(&server.id, sound);
-                }
-                server.users.remove(&session);
-                server.talking.remove(&session);
-                server.legacy_voice.remove(&session);
-            }
-            SessionEvent::Notice(message) | SessionEvent::PermissionDenied(message) => {
-                server.notice = Some(message);
-                if self
-                    .sending
-                    .as_ref()
-                    .is_some_and(|pending| pending.conversation.server == server.id)
-                {
-                    self.sending = None;
-                }
-            }
-            SessionEvent::Welcome(text) => server.welcome = Some(text),
-            SessionEvent::Transport(stats) => server.transport = Some(stats),
-            SessionEvent::Text(_) | SessionEvent::Audio(_) => {}
-        }
-    }
-}
-/// Text still waiting for the rate limit when the connection ends is lost.
-fn lost_messages(server: &mut ServerView) -> Option<String> {
-    let (sent, total) = server.outbox.take()?;
-    Some(match total - sent {
-        1 => "1 message waiting to be sent was not sent.".into(),
-        lost => format!("{lost} messages waiting to be sent were not sent."),
-    })
-}
-/// Our message on a Nuschel server was acknowledged as `seq` (or refused):
-/// returns whether it is shown yet.
-fn settle_pending(server: &mut ServerView, key: [u8; 16], seq: Option<u64>) -> bool {
-    server
-        .channels
-        .iter_mut()
-        .any(|channel| channel.timeline.settle(key, seq))
 }
 
 #[cfg(test)]

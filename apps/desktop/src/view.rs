@@ -30,6 +30,8 @@ impl Render for Desktop {
         // Which dialog the last frame showed (see dialogs::modal).
         self.modal_seen.set(self.modal_shown.take());
         self.keep_dialog_focus(window, cx);
+        // What commands since the last frame changed (events apply theirs).
+        self.apply_updates(cx);
         self.apply_composer_acks(window, cx);
         self.reconcile_selection(window, cx);
         self.settle_timeline();
@@ -38,7 +40,7 @@ impl Render for Desktop {
         let selected = self.selected_indices();
         let title = selected
             .map(|(server, channel)| {
-                let server = &self.servers[server];
+                let server = &self.client.servers[server];
                 format!("{} — {}", server.name, server.channels[channel].name)
             })
             .unwrap_or_default();
@@ -130,7 +132,7 @@ impl Render for Desktop {
             .when(self.settings_open, |view| {
                 view.child(crate::settings::dialog(
                     self,
-                    selected.map(|(server, _)| &self.servers[server]),
+                    selected.map(|(server, _)| &self.client.servers[server]),
                     cx,
                 ))
             })
@@ -161,6 +163,7 @@ impl Render for Desktop {
 
 fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop>) -> AnyElement {
     let servers = this
+        .client
         .servers
         .iter()
         .enumerate()
@@ -240,7 +243,8 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                             }
                         }))
                         .map(|tile| {
-                            match server.icon.clone().filter(|_| this.settings.server_icons) {
+                            let icon = this.ui.get(&server.id).and_then(|ui| ui.icon.clone());
+                            match icon.filter(|_| this.settings.server_icons) {
                                 Some(icon) => {
                                     tile.child(img(icon).size(px(48.)).rounded(px(if active {
                                         16.
@@ -399,7 +403,7 @@ fn sidebar(
     selected_channel: usize,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
-    let server = &this.servers[server_index];
+    let server = &this.client.servers[server_index];
     let voice_channel = server.voice_channel();
     let rows = server
         .tree_rows()
@@ -659,7 +663,7 @@ fn channel_row(
     voice_channel: Option<u32>,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
-    let server = &this.servers[server_index];
+    let server = &this.client.servers[server_index];
     let entry = &server.channels[index];
     let id = entry.id;
     let collapsed = !expanded;
@@ -732,13 +736,13 @@ fn channel_row(
                         .aria_label(format!("Toggle {}", entry.name))
                         .hover(|style| style.bg(color(BORDER_STRONG)).text_color(color(TEXT)))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.servers[server_index].set_expanded(id, !expanded);
+                            this.client.servers[server_index].set_expanded(id, !expanded);
                             cx.stop_propagation();
                             cx.notify();
                         }))
                         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                             if activation_key(event) {
-                                this.servers[server_index].set_expanded(id, !expanded);
+                                this.client.servers[server_index].set_expanded(id, !expanded);
                                 cx.stop_propagation();
                                 cx.notify();
                             }
@@ -929,7 +933,7 @@ fn user_row(
             22.,
             talking,
             ("user-avatar", session as usize),
-            avatar_image(server, Some(user)),
+            avatar_image(this, server, Some(user)),
         ))
         .child(
             div()
@@ -999,11 +1003,13 @@ fn user_row(
 
 /// The decoded avatar for a user's texture hash, if we have one.
 pub fn avatar_image(
+    this: &Desktop,
     server: &ServerView,
     user: Option<&User>,
 ) -> Option<std::sync::Arc<RenderImage>> {
+    let images = &this.ui.get(&server.id)?.avatar_images;
     user.and_then(|user| user.texture_hash.as_ref())
-        .and_then(|hash| server.avatars.get(hash))
+        .and_then(|hash| images.get(hash))
         .cloned()
 }
 
@@ -1205,7 +1211,7 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
             34.,
             talking,
             ("own-avatar", 0),
-            avatar_image(server, own),
+            avatar_image(this, server, own),
         ))
         .child(
             div()
@@ -1323,10 +1329,15 @@ fn eased(ease: &Option<crate::motion::Ease>, on: bool) -> f32 {
 impl Desktop {
     /// Expand or collapse a run of activity lines (see `activity_run`).
     fn toggle_run(&mut self, server: usize, channel: usize, key: i64) {
-        if let Some(server) = self.servers.get_mut(server)
-            && let Some(id) = server.channels.get(channel).map(|channel| channel.id)
+        if let Some(id) = self
+            .client
+            .servers
+            .get(server)
+            .and_then(|server| server.channels.get(channel))
+            .map(|channel| channel.id)
+            && let Some(ui) = self.ui_of_mut(server)
         {
-            let runs = server.expanded_runs.entry(id).or_default();
+            let runs = ui.expanded_runs.entry(id).or_default();
             if !runs.remove(&key) {
                 runs.insert(key);
             }
@@ -1360,7 +1371,7 @@ impl Desktop {
         if to + 1 == keys.len() {
             self.jump_to_latest();
         } else {
-            self.following = false;
+            self.client.focus.following = false;
             self.anchor.show(keys[to]);
         }
         true
@@ -1370,7 +1381,7 @@ impl Desktop {
         let Some((server, index)) = self.selected_indices() else {
             return false;
         };
-        let channel = &self.servers[server].channels[index];
+        let channel = &self.client.servers[server].channels[index];
         match key {
             Key::Message(serial) => {
                 let shown = channel
@@ -1397,48 +1408,7 @@ impl Desktop {
     /// The conversation in sight is read: selected, the window in front and
     /// scrolled to the newest message.
     fn mark_read(&mut self) {
-        if !(self.window_active && self.following) {
-            return;
-        }
-        if let Some((server, channel)) = self.selected_indices() {
-            let archive = self.servers[server].history_source == HistorySource::ServerArchive;
-            let channel = &mut self.servers[server].channels[channel];
-            channel.unread = 0;
-            channel.unread_mention = false;
-            // A Nuschel server keeps the read marker (synced to the account's
-            // other devices; unread counts come from it).
-            let newest = channel
-                .timeline
-                .newest_seq()
-                .and_then(|seq| i64::try_from(seq).ok());
-            if archive
-                && let Some(newest) = newest
-                && newest > channel.read_seq
-            {
-                let seq = u64::try_from(newest).unwrap_or(0);
-                let command = match channel.target.clone() {
-                    TextTarget::Channel(id) => {
-                        Some(nuschel_session::connection::Command::MarkRead { channel: id, seq })
-                    }
-                    // Direct conversations by id (directs.rs).
-                    TextTarget::DirectConversation(conversation) => {
-                        Some(nuschel_session::connection::Command::Nuschel(
-                            nuschel_session::connection::NuschelRequest::ReadMarker(
-                                nuschel_protocol::nuschel::v1::ReadMarker {
-                                    conversation: conversation.to_vec(),
-                                    seq,
-                                },
-                            ),
-                        ))
-                    }
-                    TextTarget::Direct(_) => None,
-                };
-                if let Some(command) = command {
-                    channel.read_seq = newest;
-                    let _ = self.driver.command(&self.servers[server].id, command);
-                }
-            }
-        }
+        self.client.mark_read();
     }
 
     /// The open dialogs as a set, to notice when one opens or closes.
@@ -1486,7 +1456,10 @@ impl Desktop {
         let Some((server, _)) = self.selected_indices() else {
             return;
         };
-        let (muted, deafened) = (self.servers[server].muted, self.servers[server].deafened);
+        let (muted, deafened) = (
+            self.client.servers[server].muted,
+            self.client.servers[server].deafened,
+        );
         let reduce = cx.reduce_motion();
         let mute = self
             .mute_ease
@@ -1511,7 +1484,7 @@ fn conversation(
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let server_index = index;
-    let server = &this.servers[index];
+    let server = &this.client.servers[index];
     let channel = &server.channels[channel_index];
     let is_channel = matches!(channel.target, TextTarget::Channel(_));
     let connected = server.status == Status::Connected;
@@ -1521,7 +1494,10 @@ fn conversation(
     let anchor = this.anchor.frame();
     // The timeline in order: activity lines among the messages, by time.
     let messages = &channel.timeline.messages;
-    let expanded = server.expanded_runs.get(&channel.id);
+    let expanded = this
+        .ui
+        .get(&server.id)
+        .and_then(|ui| ui.expanded_runs.get(&channel.id));
     let entries = channel.entries(|first| expanded.is_some_and(|runs| runs.contains(&first)));
     // Only what is near the viewport is laid out, the welcome first.
     let height = |entry: &Entry| match *entry {
@@ -1567,7 +1543,7 @@ fn conversation(
     let top = -this.scroll.offset().y - px(16.);
     let focus = match revealing {
         Some(index) => Focus::Entry(index),
-        None if this.following => Focus::Newest,
+        None if this.client.focus.following => Focus::Newest,
         None => Focus::Offset(top),
     };
     let viewport = window.viewport_size().height;
@@ -1578,7 +1554,7 @@ fn conversation(
         .cursor()
         .and_then(|key| keys.iter().position(|entry| *entry == key))
         .unwrap_or_else(|| {
-            if this.following {
+            if this.client.focus.following {
                 keys.len() - 1
             } else {
                 crate::scrolling::at(&heights, top)
@@ -1794,7 +1770,7 @@ fn conversation(
                         },
                         Tone::Primary,
                         move |this, _, cx| {
-                            if this.servers[index].status == Status::Disconnected {
+                            if this.client.servers[index].status == Status::Disconnected {
                                 this.connect(index, None);
                             }
                             cx.notify();
@@ -1827,7 +1803,7 @@ fn conversation(
                         .child(security_icon_labelled(
                             security,
                             label,
-                            this.servers.len() + index,
+                            this.client.servers.len() + index,
                             18.,
                         ))
                 }),
@@ -1878,7 +1854,7 @@ fn conversation(
                                         settings.audio.transmit =
                                             nuschel_core::audio::TransmitMode::PushToTalk
                                     });
-                                    this.servers[index].suggestion = None;
+                                    this.client.servers[index].suggestion = None;
                                     if !this.settings.shortcuts.contains_key(
                                         &nuschel_session::config::ShortcutAction::PushToTalk,
                                     ) {
@@ -1894,7 +1870,7 @@ fn conversation(
                             "Dismiss",
                             Tone::Ghost,
                             move |this, _, cx| {
-                                this.servers[index].suggestion = None;
+                                this.client.servers[index].suggestion = None;
                                 cx.notify();
                             },
                             cx,
@@ -1945,7 +1921,7 @@ fn conversation(
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .child(anchor.keeper(&this.scroll, !this.following, older))
+                    .child(anchor.keeper(&this.scroll, !this.client.focus.following, older))
                     .when_some(this.text.selection, |view, selection| {
                         view.child(selection::timeline_handlers(cx.weak_entity(), selection))
                     })
@@ -2122,7 +2098,12 @@ fn timeline_intro(
             ),
         )
         .when_some(
-            server.descriptions.get(&channel.id).filter(|_| is_channel),
+            this.ui
+                .get(&server.id)
+                .and_then(|ui| ui.descriptions.get(&channel.id))
+                // Rendered from the description shown now, not an older one.
+                .filter(|(source, _)| is_channel && *source == channel.description_raw)
+                .map(|(_, document)| document),
             |view, description| {
                 view.child(
                     div()
@@ -2200,7 +2181,7 @@ fn jump_pill(
 ) -> Option<AnyElement> {
     let below = this.scroll.max_offset().y + this.scroll.offset().y;
     let far = below > this.scroll.bounds().size.height * 2.;
-    if this.following || !(channel.new_messages > 0 || far) {
+    if this.client.focus.following || !(channel.new_messages > 0 || far) {
         return None;
     }
     let label = match channel.new_messages {
@@ -2295,7 +2276,7 @@ fn entry_action(cx: &mut Context<Desktop>) -> EntryAction {
     let desktop = cx.weak_entity();
     Rc::new(move |key, action, window, cx| {
         let _ = desktop.update(cx, |this, cx| {
-            this.following = false;
+            this.client.focus.following = false;
             this.anchor.show(key);
             if action == AccessibleAction::Focus {
                 this.anchor.set_cursor(key);
@@ -2700,7 +2681,7 @@ fn message_row(
                     40.,
                     false,
                     ("avatar", index),
-                    avatar_image(server, author),
+                    avatar_image(this, server, author),
                 ))
                 .into_any_element()
         })
@@ -2960,6 +2941,7 @@ fn composer(
         .filter(|((id, channel), _)| {
             *id == server.id
                 && this
+                    .client
                     .navigation
                     .selection()
                     .is_some_and(|selected| selected.channel == *channel)

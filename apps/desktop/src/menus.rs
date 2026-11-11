@@ -121,7 +121,7 @@ fn danger(
 
 impl Desktop {
     pub fn open_menu(&mut self, server: usize, target: MenuTarget, position: Point<Pixels>) {
-        let Some(view) = self.servers.get(server) else {
+        let Some(view) = self.client.servers.get(server) else {
             return;
         };
         if view.status == Status::Connected {
@@ -147,7 +147,7 @@ impl Desktop {
     }
 
     pub fn run(&mut self, server: usize, command: Command) {
-        if let Some(view) = self.servers.get_mut(server)
+        if let Some(view) = self.client.servers.get_mut(server)
             && let Err(error) = self.driver.command(&view.id, command)
         {
             view.notice = Some(error);
@@ -274,6 +274,7 @@ impl Desktop {
                     return;
                 }
                 let temporary = self
+                    .client
                     .servers
                     .get(prompt.server)
                     .is_some_and(|server| !server.may(parent, perm::MAKE_CHANNEL));
@@ -301,10 +302,11 @@ impl Desktop {
                     .filter(|token| !token.is_empty())
                     .take(64)
                     .collect();
-                if let Some(server) = self.servers.get_mut(prompt.server) {
+                if let Some(server) = self.client.servers.get_mut(prompt.server) {
                     server.bookmark.tokens = tokens.clone();
                 }
                 let bookmarks: Vec<_> = self
+                    .client
                     .servers
                     .iter()
                     .map(|server| server.bookmark.clone())
@@ -351,7 +353,7 @@ impl Desktop {
     /// Direct conversations are named after the other person: follow a
     /// nickname change.
     fn rename_directs(&mut self) {
-        for server in &mut self.servers {
+        for server in &mut self.client.servers {
             for channel in &mut server.channels {
                 if let Some(peer) = &channel.direct_peer {
                     channel.name = format!("@ {}", display_name(peer, &self.settings));
@@ -369,21 +371,21 @@ impl Desktop {
             },
         );
         self.run(server, Command::SelectVoiceTarget(WHISPER_TARGET));
-        if let Some(view) = self.servers.get_mut(server) {
+        if let Some(view) = self.client.servers.get_mut(server) {
             view.whisper = Some(label);
         }
     }
 
     pub fn stop_whisper(&mut self, server: usize) {
         self.run(server, Command::SelectVoiceTarget(0));
-        if let Some(view) = self.servers.get_mut(server) {
+        if let Some(view) = self.client.servers.get_mut(server) {
             view.whisper = None;
         }
     }
 
     fn menu_entries(&self, menu: &Menu) -> Vec<Entry> {
         let index = menu.server;
-        let Some(server) = self.servers.get(index) else {
+        let Some(server) = self.client.servers.get(index) else {
             return Vec::new();
         };
         let connected = server.status == Status::Connected;
@@ -429,7 +431,7 @@ impl Desktop {
                     let (edit, delete) = self
                         .selected_indices()
                         .and_then(|(server, channel)| {
-                            let view = &self.servers[server];
+                            let view = &self.client.servers[server];
                             let channel = &view.channels[channel];
                             let message = channel
                                 .timeline
@@ -480,7 +482,7 @@ impl Desktop {
                 }));
                 if mine {
                     entries.push(item("Edit comment…", "pencil", move |this, window, cx| {
-                        let current = this.servers[index].users.get(&session).and_then(|user| user.comment.clone()).unwrap_or_default();
+                        let current = this.client.servers[index].users.get(&session).and_then(|user| user.comment.clone()).unwrap_or_default();
                         this.open_prompt(index, PromptAction::Comment, "Your comment", "Shown to others in your profile. Plain text; line breaks are kept.", strip_tags(&current), window, cx);
                     }));
                     if user.user_id.is_none() && server.may_try(0, perm::SELF_REGISTER) {
@@ -820,7 +822,7 @@ impl Desktop {
                 }
                 if connected && create {
                     entries.push(item("Create sub-channel…", "plus", move |this, window, cx| {
-                        let temporary = !this.servers[index].may(channel, perm::MAKE_CHANNEL);
+                        let temporary = !this.client.servers[index].may(channel, perm::MAKE_CHANNEL);
                         this.open_prompt(
                             index,
                             PromptAction::CreateChannel { parent: channel },
@@ -841,7 +843,7 @@ impl Desktop {
                         },
                     ));
                     entries.push(item("Edit permissions…", "shield", move |this, _, _| {
-                        this.servers[index].acl = None;
+                        this.client.servers[index].acl = None;
                         this.run(index, Command::QueryAcl(channel));
                         this.panel = Some(Panel::Acl {
                             server: index,
@@ -889,14 +891,14 @@ impl Desktop {
                     }
                     if server.may(0, perm::REGISTER) {
                         entries.push(item("Registered users…", "user", move |this, _, _| {
-                            this.servers[index].registered_users = None;
+                            this.client.servers[index].registered_users = None;
                             this.run(index, Command::QueryRegisteredUsers);
                             this.panel = Some(Panel::RegisteredUsers { server: index });
                         }));
                     }
                     if server.may(0, perm::BAN) {
                         entries.push(item("Ban list…", "shield", move |this, _, _| {
-                            this.servers[index].bans = None;
+                            this.client.servers[index].bans = None;
                             this.run(index, Command::QueryBans);
                             this.panel = Some(Panel::Bans { server: index });
                         }));
@@ -924,7 +926,7 @@ impl Desktop {
     }
 
     pub fn channel_url(&self, server: usize, channel: u32) -> Option<String> {
-        let server = self.servers.get(server)?;
+        let server = self.client.servers.get(server)?;
         let mut path = Vec::new();
         let mut current = Some(channel);
         while let Some(id) = current.filter(|id| *id != 0) {
@@ -958,7 +960,7 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(view) = self.servers.get(server).and_then(|server| {
+        let Some(view) = self.client.servers.get(server).and_then(|server| {
             server
                 .channels
                 .iter()
@@ -999,9 +1001,11 @@ impl Desktop {
             )
         });
         if !view.description_raw.is_empty()
-            || !self.servers[server].descriptions.contains_key(&channel)
+            || !self
+                .ui_of(server)
+                .is_some_and(|ui| ui.descriptions.contains_key(&channel))
         {
-            let id = self.servers[server].id.clone();
+            let id = self.client.servers[server].id.clone();
             let _ = self.driver.command(
                 &id,
                 Command::RequestBlobs {
@@ -1045,7 +1049,7 @@ impl Desktop {
     }
 
     pub fn render_comment(&mut self, server: usize, session: u32) {
-        let Some(view) = self.servers.get(server) else {
+        let Some(view) = self.client.servers.get(server) else {
             return;
         };
         let Some(user) = view.users.get(&session) else {
@@ -1053,15 +1057,15 @@ impl Desktop {
         };
         match (&user.comment, &user.comment_hash) {
             (Some(comment), _) => {
-                if view
-                    .comments
-                    .get(&session)
+                if self
+                    .ui_of(server)
+                    .and_then(|ui| ui.comments.get(&session))
                     .is_none_or(|(source, _)| source != comment)
                 {
                     self.driver.render_html(
                         view.id.clone(),
                         view.generation,
-                        nuschel_client::native::RenderKey::Comment(session),
+                        nuschel_client::platform::RenderKey::Comment(session),
                         comment.clone(),
                     );
                 }

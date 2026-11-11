@@ -153,8 +153,10 @@ pub struct ServerState {
     pub reconnecting: Option<String>,
     /// Sent and total messages of the text waiting for the server's rate limit.
     pub outbox: Option<(usize, usize)>,
-    /// Avatar texture hashes already asked for (or being decoded).
+    /// Avatar texture hashes already asked for (or being decoded), and those
+    /// decoded (a UI keeps the images).
     pub avatar_requests: BTreeSet<String>,
+    pub avatars: BTreeSet<String>,
     /// Active whisper/shout target label while one is selected.
     pub whisper: Option<String>,
     /// Channel path from a `mumble://` link, joined once the tree has loaded.
@@ -226,6 +228,7 @@ impl ServerState {
             reconnecting: None,
             outbox: None,
             avatar_requests: BTreeSet::new(),
+            avatars: BTreeSet::new(),
             whisper: None,
             pending_channel: Vec::new(),
             expansion: BTreeMap::new(),

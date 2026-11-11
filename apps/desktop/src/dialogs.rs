@@ -325,7 +325,7 @@ pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {
     let online = form
         .editing
         .as_ref()
-        .and_then(|id| this.servers.iter().find(|server| &server.id == id))
+        .and_then(|id| this.client.servers.iter().find(|server| &server.id == id))
         .is_some_and(|server| server.status != crate::state::Status::Disconnected);
     let save = match (editing, online) {
         (false, _) => "Add and connect",

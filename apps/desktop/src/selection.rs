@@ -181,7 +181,7 @@ impl Desktop {
     /// A message of the open conversation.
     fn message(&self, serial: u64) -> Option<&Message> {
         let (server, channel) = self.selected_indices()?;
-        self.servers[server].channels[channel]
+        self.client.servers[server].channels[channel]
             .timeline
             .messages
             .iter()
@@ -193,7 +193,7 @@ impl Desktop {
     pub fn selected_text(&self) -> Option<String> {
         let selection = self.text.selection?;
         let (server, channel) = self.selected_indices()?;
-        let parts: Vec<String> = self.servers[server].channels[channel]
+        let parts: Vec<String> = self.client.servers[server].channels[channel]
             .timeline
             .messages
             .iter()
@@ -326,13 +326,13 @@ impl Desktop {
                 return;
             }
         };
-        let saved = self.servers.iter().position(|server| {
+        let saved = self.client.servers.iter().position(|server| {
             server.bookmark.host == url.host && server.bookmark.port == url.port
         });
-        match saved.map(|index| (index, self.servers[index].status)) {
+        match saved.map(|index| (index, self.client.servers[index].status)) {
             // Already there: go to the channel without connecting again.
             Some((index, Status::Connected)) => {
-                let server = &self.servers[index];
+                let server = &self.client.servers[index];
                 let channel = url.channel.iter().try_fold(0, |parent, name| {
                     server
                         .channels
@@ -350,13 +350,13 @@ impl Desktop {
                         self.run(index, Command::Join(channel));
                     }
                     None => {
-                        self.servers[index].notice =
+                        self.client.servers[index].notice =
                             Some(format!("Channel /{} was not found.", url.channel.join("/")))
                     }
                 }
             }
             Some((index, Status::Connecting)) => {
-                self.servers[index].pending_channel = url.channel;
+                self.client.servers[index].pending_channel = url.channel;
                 self.browse_server(index, window, cx);
             }
             Some(_) => self.open_url(url, window, cx),
@@ -399,13 +399,14 @@ impl Desktop {
         // A moderator's Delete depends on Write here (editing.rs); it
         // appears once the server has said.
         if let Some((_, channel)) = self.selected_indices()
-            && let TextTarget::Channel(id) = self.servers[server].channels[channel].target
-            && self.servers[server].status == Status::Connected
-            && !self.servers[server].permissions.contains_key(&id)
+            && let TextTarget::Channel(id) = self.client.servers[server].channels[channel].target
+            && self.client.servers[server].status == Status::Connected
+            && !self.client.servers[server].permissions.contains_key(&id)
         {
-            let _ = self
-                .driver
-                .command(&self.servers[server].id, Command::RequestPermissions(id));
+            let _ = self.driver.command(
+                &self.client.servers[server].id,
+                Command::RequestPermissions(id),
+            );
         }
         self.text.menu = Some(MessageMenu {
             serial: message,

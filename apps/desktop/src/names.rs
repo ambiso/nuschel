@@ -3,78 +3,20 @@
 //! as in Mumble, replaces the name someone has on the server, only for you;
 //! their real name stays in a tooltip and in their profile. Friends, also
 //! kept by certificate hash, get a marker.
-use nuschel_session::{config::ClientSettings, connection::User, model::Activity};
+pub use nuschel_client::names::{author, author_name, display_name, full_name};
 
 /// The friend marker's colour.
 pub use crate::theme::FRIEND;
 
-/// The name to show for a user: your nickname for them, else their own.
-pub fn display_name<'a>(user: &'a User, settings: &'a ClientSettings) -> &'a str {
-    settings
-        .nickname(user.certificate_hash.as_deref())
-        .unwrap_or(&user.name)
-}
-
-/// "Nickname (real name)" while a nickname is shown, else the name: for
-/// tooltips and screen readers.
-pub fn full_name(user: &User, settings: &ClientSettings) -> String {
-    match settings.nickname(user.certificate_hash.as_deref()) {
-        Some(nickname) => format!("{nickname} ({})", user.name),
-        None => user.name.clone(),
-    }
-}
-
-/// Who wrote a message under `name`, if that is someone online now (or the
-/// other side of a direct conversation). History keeps only the author's
-/// name, so messages from anyone else keep the name they were sent under.
-pub fn author<'a>(
-    name: &str,
-    users: impl IntoIterator<Item = &'a User>,
-    peer: Option<&'a User>,
-) -> Option<&'a User> {
-    users.into_iter().chain(peer).find(|user| user.name == name)
-}
-
-/// A message author's shown name (see [`author`]).
-pub fn author_name<'a>(
-    name: &'a str,
-    author: Option<&'a User>,
-    settings: &'a ClientSettings,
-) -> &'a str {
-    author.map_or(name, |user| display_name(user, settings))
-}
-
-/// An activity line with your nicknames in place of the names it gives.
-pub fn activity_text(activity: &Activity, settings: &ClientSettings) -> String {
-    let text = &activity.text;
-    let mut out = String::with_capacity(text.len());
-    let mut at = 0;
-    for span in &activity.names {
-        if let Some(nickname) = settings.nickname(span.certificate_hash.as_deref())
-            && let Some(before) = text.get(at..span.start)
-            && text.get(span.start..span.end).is_some()
-        {
-            out.push_str(before);
-            out.push_str(nickname);
-            at = span.end;
-        }
-    }
-    out.push_str(&text[at..]);
-    out
-}
-
-/// Whether an activity line is about a friend.
-pub fn about_friend(activity: &Activity, settings: &ClientSettings) -> bool {
-    activity
-        .names
-        .first()
-        .is_some_and(|name| settings.friend(name.certificate_hash.as_deref()).is_some())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nuschel_session::model::NameSpan;
+    use nuschel_client::names::{about_friend, activity_text};
+    use nuschel_session::{
+        config::ClientSettings,
+        connection::User,
+        model::{Activity, NameSpan},
+    };
 
     fn user(name: &str, hash: Option<&str>) -> User {
         User {

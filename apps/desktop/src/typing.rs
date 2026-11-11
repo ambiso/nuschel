@@ -11,11 +11,7 @@
 //! Settings → Privacy turns sending off; others' indicators still show.
 use crate::state::{ChannelView, Desktop, ServerView};
 use gpui_kit::*;
-use nuschel_session::connection::{Command, NuschelRequest};
-use std::time::{Duration, Instant};
-
-/// How often we say we are typing: the server's limit per conversation.
-pub const TYPING_EVERY: Duration = Duration::from_secs(3);
+use std::time::Duration;
 
 /// The line under the composer: who is typing here, or nothing.
 pub fn typing_line(
@@ -40,38 +36,12 @@ pub fn typing_line(
 }
 
 impl Desktop {
-    /// The composer changed: say we are typing, now and then.
+    /// The composer changed: say we are typing, now and then (the client
+    /// decides where and how often).
     pub fn composer_changed(&mut self, cx: &mut Context<Self>) {
         let empty = self.composer.read(cx).value().trim().is_empty();
-        if empty || self.editing.is_some() || !self.settings.send_typing {
-            self.typing_sent = None;
-            return;
-        }
-        let Some((server, channel)) = self.selected_indices() else {
-            return;
-        };
-        let view = &self.servers[server];
-        let channel = &view.channels[channel];
-        let Some(conversation) = view.typing_conversation(channel) else {
-            return;
-        };
-        let key = (view.id.clone(), channel.id);
-        let now = Instant::now();
-        if self
-            .typing_sent
-            .as_ref()
-            .is_some_and(|(sent, at)| *sent == key && now.duration_since(*at) < TYPING_EVERY)
-        {
-            return;
-        }
-        let typing = nuschel_protocol::nuschel::v1::Typing {
-            conversation: conversation.to_vec(),
-            session: 0,
-        };
-        let command = Command::Nuschel(NuschelRequest::Typing(typing));
-        if self.driver.command(&view.id, command).is_ok() {
-            self.typing_sent = Some((key, now));
-        }
+        self.client.set_time(crate::state::monotonic_ms());
+        self.client.composing(!empty && self.editing.is_none());
     }
 
     /// Indicators fade on their own: while any is shown, look again each
@@ -81,7 +51,7 @@ impl Desktop {
             return;
         }
         let any = |this: &Self| {
-            this.servers.iter().any(|server| {
+            this.client.servers.iter().any(|server| {
                 server
                     .channels
                     .iter()
@@ -96,17 +66,11 @@ impl Desktop {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let more = this.update(cx, |this, cx| {
-                    let now = crate::state::monotonic_ms();
-                    let mut changed = false;
-                    for server in &mut this.servers {
-                        for channel in &mut server.channels {
-                            changed |= channel.expire_typing(now);
-                        }
-                    }
+                    this.client.set_time(crate::state::monotonic_ms());
+                    let (changed, more) = this.client.expire_typing();
                     if changed {
                         cx.notify();
                     }
-                    let more = any(this);
                     this.typing_timer = more;
                     more
                 });
@@ -205,7 +169,10 @@ mod tests {
 
     #[test]
     fn the_line_names_one_or_two_people_and_counts_more() {
-        let mut server = ServerView::new_for_tests();
+        let mut server = ServerView::new(
+            nuschel_session::config::ServerBookmark::new("Test", "localhost", 64738, "andi")
+                .unwrap(),
+        );
         server.own_session = Some(1);
         for (session, name) in [(1, "Me"), (2, "Bob"), (3, "ada"), (4, "Cy")] {
             server.users.insert(

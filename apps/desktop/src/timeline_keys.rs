@@ -78,7 +78,7 @@ impl Desktop {
             return None;
         };
         let (server, channel) = self.selected_indices()?;
-        self.servers[server].channels[channel]
+        self.client.servers[server].channels[channel]
             .timeline
             .messages
             .iter()

@@ -204,6 +204,7 @@ impl Desktop {
         };
         self.close_finder();
         let Some(server) = self
+            .client
             .servers
             .iter()
             .position(|server| server.id == item.server)
@@ -218,7 +219,7 @@ impl Desktop {
                 }
             }
             Target::Person(session) if secondary => {
-                if let Some(channel) = self.servers[server]
+                if let Some(channel) = self.client.servers[server]
                     .users
                     .get(&session)
                     .map(|user| user.channel)
@@ -235,9 +236,9 @@ impl Desktop {
     /// Everything the switcher can go to, best match for `query` first.
     fn finder_items(&self, query: &str) -> Vec<Item> {
         let query: Vec<char> = query.trim().chars().map(fold).collect();
-        let selected = self.navigation.selection();
+        let selected = self.client.navigation.selection();
         let mut items = Vec::new();
-        for server in &self.servers {
+        for server in &self.client.servers {
             let connected = server.status == Status::Connected;
             let voice = server.voice_channel();
             let places = Places::new(server);
@@ -550,7 +551,11 @@ fn row(
     count: usize,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
-    let server = this.servers.iter().find(|server| server.id == item.server);
+    let server = this
+        .client
+        .servers
+        .iter()
+        .find(|server| server.id == item.server);
     let server_name = server.map_or("", |server| server.name.as_str()).to_string();
     let place = match &item.target {
         Target::Channel(_) if !item.path.is_empty() => format!(" in {}", item.path),
@@ -572,7 +577,7 @@ fn row(
         Target::Direct(_) => icon("message", 18., color(TEXT_FAINT)).into_any_element(),
         Target::Person(session) => {
             let user = server.and_then(|server| server.users.get(session));
-            let image = server.and_then(|server| crate::view::avatar_image(server, user));
+            let image = server.and_then(|server| crate::view::avatar_image(this, server, user));
             let talking = server.is_some_and(|server| server.talking.contains(session));
             crate::view::avatar(&item.name, 24., talking, ("finder-avatar", index), image)
         }
@@ -602,22 +607,24 @@ fn row(
         .gap(px(6.))
         .text_xs()
         .text_color(color(TEXT_FAINT))
-        .child(match server.and_then(|server| server.icon.clone()) {
-            Some(image) => img(image).size(px(16.)).rounded(px(4.)).into_any_element(),
-            None => div()
-                .size(px(16.))
-                .flex_shrink_0()
-                .rounded(px(4.))
-                .bg(theme::avatar(&server_name))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(8.))
-                .font_weight(FontWeight::BOLD)
-                .text_color(color(WHITE))
-                .child(Text::new_inaccessible(theme::initials(&server_name).into()))
-                .into_any_element(),
-        })
+        .child(
+            match server.and_then(|server| this.ui.get(&server.id)?.icon.clone()) {
+                Some(image) => img(image).size(px(16.)).rounded(px(4.)).into_any_element(),
+                None => div()
+                    .size(px(16.))
+                    .flex_shrink_0()
+                    .rounded(px(4.))
+                    .bg(theme::avatar(&server_name))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(8.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(color(WHITE))
+                    .child(Text::new_inaccessible(theme::initials(&server_name).into()))
+                    .into_any_element(),
+            },
+        )
         .child(
             div()
                 .min_w_0()

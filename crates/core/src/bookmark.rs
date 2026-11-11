@@ -106,6 +106,33 @@ impl ServerBookmark {
         })
     }
 
+    /// Keep `channel` in the cached tree; returns whether the cache changed
+    /// (most channel updates, of descriptions or links or a resent tree,
+    /// leave it as it is).
+    pub fn cache_channel(&mut self, channel: CachedChannel) -> bool {
+        match self
+            .cached_channels
+            .iter_mut()
+            .find(|cached| cached.id == channel.id)
+        {
+            Some(cached)
+                if cached.parent == channel.parent
+                    && cached.position == channel.position
+                    && cached.name == channel.name =>
+            {
+                false
+            }
+            Some(cached) => {
+                *cached = channel;
+                true
+            }
+            None => {
+                self.cached_channels.push(channel);
+                true
+            }
+        }
+    }
+
     /// Certificate-bound history identity. A different certificate cannot inherit
     /// another server's local history just by reusing a display name or endpoint.
     pub fn history_identity(&self, peer_sha256: &str) -> String {

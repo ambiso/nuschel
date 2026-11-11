@@ -59,7 +59,7 @@ impl Desktop {
 
     pub fn open_image_menu(&mut self, image: ViewerImage, position: Point<Pixels>) {
         let server = self.selected_indices().map_or(0, |(server, _)| server);
-        if self.servers.is_empty() {
+        if self.client.servers.is_empty() {
             return;
         }
         self.menu_image = Some(image);

@@ -11,8 +11,8 @@ use crate::{
     update::UpdateState,
 };
 use gpui_kit::{AnyElement, Context, div, prelude::*};
+use nuschel_protocol::nuschel::v1::Policy;
 use nuschel_protocol::nuschel::version::{Standing, Version};
-use nuschel_session::connection::Negotiated;
 
 /// What the server's last hello said about this client's version.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -24,9 +24,14 @@ pub struct VersionNotice {
 }
 
 impl VersionNotice {
-    /// From the server's hello; a server without the extension asks nothing.
-    pub fn negotiated(&mut self, negotiated: &Negotiated) {
-        self.standing = Some(negotiated.standing(nuschel_session::connection::now_ms()));
+    /// From the server's hello (its policy); a server without the
+    /// extension asks nothing.
+    pub fn negotiated(&mut self, policy: Option<&Policy>) {
+        let now_ms = nuschel_session::connection::now_ms();
+        let current = nuschel_session::connection::client_version();
+        self.standing = Some(policy.map_or(Standing::Current, |policy| {
+            Standing::of(policy, Some(&current), now_ms.div_euclid(1000))
+        }));
     }
 
     pub fn dismiss(&mut self) {
@@ -118,8 +123,8 @@ fn update_button(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement
 
 /// The banner for the server at `index`, if its policy asks for an update.
 pub fn banner(this: &Desktop, index: usize, cx: &mut Context<Desktop>) -> Option<AnyElement> {
-    let server = this.servers.get(index)?;
-    let (tone, icon, text, dismissible) = server.version.shown()?;
+    let server = this.client.servers.get(index)?;
+    let (tone, icon, text, dismissible) = this.ui.get(&server.id)?.version.shown()?;
     // Once refused, the connection notice already says it; this adds the updater.
     let update = update_button(this, cx);
     if tone == DANGER && update.is_none() {
@@ -131,8 +136,8 @@ pub fn banner(this: &Desktop, index: usize, cx: &mut Context<Desktop>) -> Option
             "Dismiss",
             Tone::Ghost,
             move |this, _, cx| {
-                if let Some(server) = this.servers.get_mut(index) {
-                    server.version.dismiss();
+                if let Some(ui) = this.ui_of_mut(index) {
+                    ui.version.dismiss();
                 }
                 cx.notify();
             },
@@ -163,12 +168,7 @@ mod tests {
 
     fn notice(policy: v1::Policy) -> VersionNotice {
         let mut notice = VersionNotice::default();
-        notice.negotiated(&Negotiated {
-            nuschel: true,
-            capabilities: Vec::new(),
-            policy: Some(policy),
-            kt_log: Vec::new(),
-        });
+        notice.negotiated(Some(&policy));
         notice
     }
 
@@ -186,15 +186,10 @@ mod tests {
         recommended.dismiss();
         assert!(recommended.shown().is_none());
         // A higher recommendation shows again.
-        recommended.negotiated(&Negotiated {
-            nuschel: true,
-            capabilities: Vec::new(),
-            policy: Some(v1::Policy {
-                recommended_client: version::to_wire(&Version::new(99, 1, 0)).unwrap(),
-                ..Default::default()
-            }),
-            kt_log: Vec::new(),
-        });
+        recommended.negotiated(Some(&v1::Policy {
+            recommended_client: version::to_wire(&Version::new(99, 1, 0)).unwrap(),
+            ..Default::default()
+        }));
         assert!(recommended.shown().is_some());
 
         let mut required = notice(v1::Policy {

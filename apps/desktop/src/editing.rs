@@ -7,13 +7,10 @@
 //! server checks every request again; its refusals show like a failed send.
 use crate::{
     menus::PromptAction,
-    state::{ChannelView, Desktop, ServerView, Status},
+    state::{Desktop, Status},
 };
 use gpui_kit::*;
-use nuschel_client::{
-    native::{CacheKey, ChangeRequest},
-    timeline::Change,
-};
+use nuschel_client::{Client, platform::ChangeRequest};
 
 /// The message the composer is editing, and what it held before.
 pub struct Editing {
@@ -26,20 +23,11 @@ pub struct Editing {
     pub draft: String,
 }
 
-impl ServerView {
-    fn cache_key(&self, channel: &ChannelView) -> Option<CacheKey> {
-        Some(CacheKey {
-            identity: self.history_identity()?,
-            channel: channel.storage_key.clone(),
-        })
-    }
-}
-
 impl Desktop {
     /// The open conversation's message with this serial, and its indices.
     fn located(&self, serial: u64) -> Option<(usize, usize, usize)> {
         let (server, channel) = self.selected_indices()?;
-        let position = self.servers[server].channels[channel]
+        let position = self.client.servers[server].channels[channel]
             .timeline
             .messages
             .iter()
@@ -52,7 +40,7 @@ impl Desktop {
         let Some((server, channel, position)) = self.located(serial) else {
             return;
         };
-        let view = &self.servers[server];
+        let view = &self.client.servers[server];
         let (channel_view, message) = (
             &view.channels[channel],
             &view.channels[channel].timeline.messages[position],
@@ -92,7 +80,7 @@ impl Desktop {
         let Some((server, channel)) = self.selected_indices() else {
             return false;
         };
-        let view = &self.servers[server];
+        let view = &self.client.servers[server];
         let channel_view = &view.channels[channel];
         let Some(serial) = channel_view
             .timeline
@@ -134,13 +122,13 @@ impl Desktop {
         };
         let text = self.composer.read(cx).value().to_string();
         let Some((server, channel)) = self.selected_indices().filter(|(server, channel)| {
-            self.servers[*server].id == editing.server
-                && self.servers[*server].channels[*channel].id == editing.channel
+            self.client.servers[*server].id == editing.server
+                && self.client.servers[*server].channels[*channel].id == editing.channel
         }) else {
             return;
         };
         let seq = editing.seq;
-        let view = &self.servers[server];
+        let view = &self.client.servers[server];
         let channel_view = &view.channels[channel];
         // By seq: a reloaded timeline has new serials.
         let message = channel_view
@@ -163,7 +151,7 @@ impl Desktop {
                 return;
             }
         }
-        let view = &self.servers[server];
+        let view = &self.client.servers[server];
         let channel_view = &view.channels[channel];
         let editable = match message {
             Some(message) => view.may_edit(channel_view, message),
@@ -171,8 +159,8 @@ impl Desktop {
             None => view.changeable(channel_view).is_some() && view.own_user_id().is_some(),
         };
         if !editable {
-            self.servers[server].notice =
-                Some(if self.servers[server].status == Status::Connected {
+            self.client.servers[server].notice =
+                Some(if self.client.servers[server].status == Status::Connected {
                     "This message can no longer be edited.".into()
                 } else {
                     "Connect again to save your edit; Escape discards it.".into()
@@ -184,7 +172,7 @@ impl Desktop {
             return;
         }
         if text.len() > nuschel_protocol::nuschel::MAX_CONTENT_BYTES {
-            self.servers[server].notice = Some("The edited message exceeds 64 KiB.".into());
+            self.client.servers[server].notice = Some("The edited message exceeds 64 KiB.".into());
             return;
         }
         let Some(conversation) = channel_view.conversation else {
@@ -195,14 +183,14 @@ impl Desktop {
             conversation,
             seq,
             content: Some(text),
-            cache: view.cache_key(channel_view),
+            cache: Client::cache_key(view, channel_view),
             moderator: false,
         };
-        match self.driver.change_message(change) {
+        match self.client.change_message(change) {
             Ok(()) => {
                 self.cancel_edit(window, cx);
             }
-            Err(error) => self.servers[server].notice = Some(error),
+            Err(error) => self.client.servers[server].notice = Some(error),
         }
         cx.notify();
     }
@@ -212,7 +200,7 @@ impl Desktop {
         let Some((server, channel, position)) = self.located(serial) else {
             return;
         };
-        let view = &self.servers[server];
+        let view = &self.client.servers[server];
         let channel_view = &view.channels[channel];
         let message = &channel_view.timeline.messages[position];
         if !view.may_delete(channel_view, message) {
@@ -246,7 +234,7 @@ impl Desktop {
         let Some((server, channel, position)) = self.located(serial) else {
             return;
         };
-        let view = &self.servers[server];
+        let view = &self.client.servers[server];
         let channel_view = &view.channels[channel];
         let message = &channel_view.timeline.messages[position];
         if !view.may_delete(channel_view, message) {
@@ -260,62 +248,11 @@ impl Desktop {
             conversation,
             seq,
             content: None,
-            cache: view.cache_key(channel_view),
+            cache: Client::cache_key(view, channel_view),
             moderator: view.moderates(channel_view),
         };
-        if let Err(error) = self.driver.change_message(change) {
-            self.servers[server].notice = Some(error);
+        if let Err(error) = self.client.change_message(change) {
+            self.client.servers[server].notice = Some(error);
         }
-    }
-
-    /// A message changed on the server: show its new text, or its tombstone.
-    /// A message not shown yet (a page still on its way) gets it when it is.
-    pub fn apply_change(&mut self, server: &str, conversation: [u8; 16], seq: u64, change: Change) {
-        let Some(index) = self.servers.iter().position(|view| view.id == server) else {
-            return;
-        };
-        if let Err(change) = self.change_message(index, conversation, seq, change) {
-            self.servers[index].waiting_changes.push(
-                conversation,
-                seq,
-                change,
-                crate::state::monotonic_ms(),
-            );
-        }
-    }
-
-    /// Changes that came before their message: apply those it now shows.
-    /// A page on its way takes seconds; older ones were for messages that
-    /// are not loaded, and go.
-    pub fn apply_waiting_changes(&mut self, server: usize) {
-        let mut waiting = std::mem::take(&mut self.servers[server].waiting_changes);
-        waiting.retry(crate::state::monotonic_ms(), |conversation, seq, change| {
-            self.change_message(server, conversation, seq, change)
-        });
-        self.servers[server].waiting_changes = waiting;
-    }
-
-    /// Apply `change` to message `seq` of `conversation`, or hand it back if
-    /// that message is not in the timeline.
-    fn change_message(
-        &mut self,
-        server: usize,
-        conversation: [u8; 16],
-        seq: u64,
-        change: Change,
-    ) -> Result<(), Change> {
-        let view = &mut self.servers[server];
-        if view.change_message(conversation, seq, change)? {
-            let id = &view.id;
-            if self.editing.as_ref().is_some_and(|editing| {
-                editing.server == *id
-                    && editing.seq == seq
-                    && editing.channel_conversation == Some(conversation)
-            }) {
-                // The composer keeps the text; there is nothing left to edit.
-                self.editing = None;
-            }
-        }
-        Ok(())
     }
 }
