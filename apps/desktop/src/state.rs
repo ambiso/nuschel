@@ -16,7 +16,7 @@ use nuschel_session::{
     model::{Acl, Ban, ContextAction, RegisteredUser, RejectKind, UserStats},
     udp::TransportStats,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub use crate::panels::Panel;
 
@@ -123,15 +123,7 @@ pub fn local_time(milliseconds: i64) -> String {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TreeRow {
-    Channel {
-        index: usize,
-        depth: usize,
-        has_children: bool,
-        /// Users hidden inside a collapsed branch, shown as a count.
-        hidden_users: usize,
-        /// Someone in that collapsed branch is talking.
-        hidden_talking: bool,
-    },
+    Channel(ChannelRow),
     User {
         session: u32,
         depth: usize,
@@ -141,6 +133,18 @@ pub enum TreeRow {
         session: u32,
         depth: usize,
     },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChannelRow {
+    /// Into `ServerView::channels`.
+    pub index: usize,
+    pub depth: usize,
+    pub has_children: bool,
+    pub expanded: bool,
+    /// Users hidden inside a collapsed branch, shown as a count.
+    pub hidden_users: usize,
+    /// Someone in that collapsed branch is talking.
+    pub hidden_talking: bool,
 }
 pub struct ChannelView {
     pub id: u32,
@@ -342,6 +346,8 @@ pub struct ServerView {
     pub pending_channel: Vec<String>,
     /// Branches opened or closed by hand this session, by channel id.
     pub expansion: BTreeMap<u32, bool>,
+    /// Channel updates arrived since `channels` was last sorted.
+    unsorted: bool,
 }
 impl ServerView {
     fn new(bookmark: ServerBookmark) -> Self {
@@ -406,6 +412,7 @@ impl ServerView {
             whisper: None,
             pending_channel: Vec::new(),
             expansion: BTreeMap::new(),
+            unsorted: false,
         }
     }
     pub fn status_label(&self) -> String {
@@ -453,166 +460,152 @@ impl ServerView {
             .or(self.bookmark.certificate_sha256.as_ref())
             .map(|pin| self.bookmark.history_identity(pin))
     }
-    pub fn channel_rows(&self) -> Vec<(usize, usize, bool)> {
-        let server = self;
-        let mut pending = server
-            .channels
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|(_, channel)| channel.parent.is_none())
-            .map(|(index, _)| (index, 0))
-            .collect::<Vec<_>>();
-        let mut visited = BTreeSet::new();
-        let mut rows = Vec::new();
-        while let Some((index, depth)) = pending.pop() {
-            let channel = &server.channels[index];
-            if !visited.insert(channel.id) {
-                continue;
-            }
-            let children = server
-                .channels
-                .iter()
-                .enumerate()
-                .filter(|(_, child)| child.parent == Some(channel.id))
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            rows.push((index, depth, !children.is_empty()));
-            if self.channel_expanded(channel.id) {
-                pending.extend(children.into_iter().rev().map(|index| (index, depth + 1)));
-            }
-        }
-        rows
-    }
-    /// Channels in tree order with each expanded channel's users beneath it.
+    /// Channels in tree order, each followed by its people and listeners;
+    /// a closed branch counts the people inside it. One pass over channels
+    /// and users, so it is cheap enough to run every frame.
     pub fn tree_rows(&self) -> Vec<TreeRow> {
-        let server = self;
-        let mut users_by_channel = BTreeMap::<u32, Vec<&User>>::new();
-        for user in server.users.values() {
-            users_by_channel.entry(user.channel).or_default().push(user);
+        // One entry per channel id; direct conversations are listed apart.
+        let mut index_of = HashMap::with_capacity(self.channels.len());
+        for (index, channel) in self.channels.iter().enumerate() {
+            if let TextTarget::Channel(id) = channel.target {
+                index_of.entry(id).or_insert(index);
+            }
         }
-        let mut rows = Vec::new();
-        for (index, depth, has_children) in self.channel_rows() {
-            let channel = &server.channels[index];
-            let TextTarget::Channel(id) = channel.target else {
+        // Families by parent (roots under `None`), each in display order.
+        let mut children = index_of
+            .values()
+            .map(|&index| (self.channels[index].parent, index))
+            .collect::<Vec<_>>();
+        children.sort_unstable();
+        let family = |parent| run(&children, parent, |&(parent, _)| parent);
+        let mut people = self.users.values().collect::<Vec<_>>();
+        people.sort_by_cached_key(|user| (user.channel, user.name.to_lowercase(), user.session));
+        let mut listeners = self
+            .users
+            .values()
+            .flat_map(|user| user.listening.iter().map(|&id| (id, user.session)))
+            .collect::<Vec<_>>();
+        listeners.sort_unstable();
+        // The branch holding our voice channel starts open.
+        let parent_of = |index: usize| {
+            let parent = self.channels[index].parent?;
+            index_of.get(&parent).copied()
+        };
+        let mut holds_voice = vec![false; self.channels.len()];
+        let mut voice = self
+            .voice_channel()
+            .and_then(|id| index_of.get(&id).copied());
+        while let Some(parent) = voice.and_then(parent_of)
+            && !holds_voice[parent]
+        {
+            holds_voice[parent] = true;
+            voice = Some(parent);
+        }
+
+        // Depth first through every branch, closed ones too: they count
+        // their people. A child always follows its parent. With one entry
+        // per id each channel is in one family, so a cycle is unreachable.
+        struct Node<'a> {
+            row: ChannelRow,
+            parent: Option<usize>,
+            visible: bool,
+            people: &'a [&'a User],
+        }
+        let mut nodes = Vec::<Node>::with_capacity(index_of.len());
+        let mut pending = family(None)
+            .iter()
+            .rev()
+            .map(|&(_, index)| (index, 0, None, true))
+            .collect::<Vec<_>>();
+        while let Some((index, depth, parent, visible)) = pending.pop() {
+            let channel = &self.channels[index];
+            let expanded = self
+                .expansion
+                .get(&channel.id)
+                .copied()
+                .unwrap_or(channel.parent.is_none() || holds_voice[index]);
+            let children = family(Some(channel.id));
+            let slot = nodes.len();
+            pending.extend(
+                children
+                    .iter()
+                    .rev()
+                    .map(|&(_, child)| (child, depth + 1, Some(slot), visible && expanded)),
+            );
+            nodes.push(Node {
+                row: ChannelRow {
+                    index,
+                    depth,
+                    has_children: !children.is_empty(),
+                    expanded,
+                    hidden_users: 0,
+                    hidden_talking: false,
+                },
+                parent,
+                visible,
+                people: run(&people, channel.id, |user| user.channel),
+            });
+        }
+        // Children before parents: everyone inside adds up towards the roots.
+        for slot in (0..nodes.len()).rev() {
+            let node = &nodes[slot];
+            let Some(parent) = node.parent else {
                 continue;
             };
-            let expanded = self.channel_expanded(id);
-            let hidden = if has_children && !expanded {
-                self.subtree(id)
-                    .into_iter()
-                    .filter(|child| *child != id)
-                    .flat_map(|child| users_by_channel.get(&child).cloned().unwrap_or_default())
-                    .collect::<Vec<_>>()
-            } else {
-                Vec::new()
-            };
-            rows.push(TreeRow::Channel {
-                index,
-                depth,
-                has_children,
-                hidden_users: hidden.len(),
-                hidden_talking: hidden
+            let inside = node.row.hidden_users + node.people.len();
+            let talking = node.row.hidden_talking
+                || node
+                    .people
                     .iter()
-                    .any(|user| server.talking.contains(&user.session)),
-            });
-            if let Some(users) = users_by_channel.get_mut(&id) {
-                users.sort_by(|a, b| {
-                    a.name
-                        .to_lowercase()
-                        .cmp(&b.name.to_lowercase())
-                        .then(a.session.cmp(&b.session))
-                });
-                rows.extend(users.iter().map(|user| TreeRow::User {
-                    session: user.session,
-                    depth: depth + 1,
-                }));
+                    .any(|user| self.talking.contains(&user.session));
+            let parent = &mut nodes[parent].row;
+            parent.hidden_users += inside;
+            parent.hidden_talking |= talking;
+        }
+
+        let mut rows = Vec::new();
+        for Node {
+            mut row, people, ..
+        } in nodes.into_iter().filter(|node| node.visible)
+        {
+            if row.expanded {
+                (row.hidden_users, row.hidden_talking) = (0, false);
             }
+            let id = self.channels[row.index].id;
+            let depth = row.depth + 1;
+            rows.push(TreeRow::Channel(row));
+            rows.extend(people.iter().map(|user| TreeRow::User {
+                session: user.session,
+                depth,
+            }));
             rows.extend(
-                server
-                    .users
-                    .values()
-                    .filter(|user| user.listening.contains(&id))
-                    .map(|user| TreeRow::Listener {
-                        session: user.session,
-                        depth: depth + 1,
-                    }),
+                run(&listeners, id, |&(channel, _)| channel)
+                    .iter()
+                    .map(|&(_, session)| TreeRow::Listener { session, depth }),
             );
         }
         rows
     }
-    fn subtree(&self, root: u32) -> Vec<u32> {
-        let server = self;
-        let mut found = vec![root];
-        let mut index = 0;
-        while index < found.len() && found.len() <= server.channels.len() {
-            let parent = found[index];
-            found.extend(
-                server
-                    .channels
-                    .iter()
-                    .filter(|channel| channel.parent == Some(parent) && channel.id != parent)
-                    .filter_map(|channel| match channel.target {
-                        TextTarget::Channel(id) if !found.contains(&id) => Some(id),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-            );
-            index += 1;
-        }
-        found
-    }
-    /// Roots and the branch holding our own voice channel start expanded;
-    /// explicit choices made during the session take precedence.
-    pub fn channel_expanded(&self, id: u32) -> bool {
-        let server = self;
-        self.expansion.get(&id).copied().unwrap_or_else(|| {
-            server
-                .channels
-                .iter()
-                .any(|channel| channel.id == id && channel.parent.is_none())
-                || self.holds_voice(id)
-        })
-    }
-    fn holds_voice(&self, id: u32) -> bool {
-        let server = self;
-        let Some(mut current) = server.voice_channel() else {
-            return false;
-        };
-        for _ in 0..server.channels.len() {
-            let Some(parent) = server
-                .channels
-                .iter()
-                .find(|channel| channel.target == TextTarget::Channel(current))
-                .and_then(|channel| channel.parent)
-            else {
-                return false;
-            };
-            if parent == id {
-                return true;
-            }
-            current = parent;
-        }
-        false
-    }
-    pub fn toggle_channel(&mut self, id: u32) {
-        let expanded = self.channel_expanded(id);
-        self.expansion.insert(id, !expanded);
+    /// Open or close a branch by hand; the choice outlasts the defaults.
+    pub fn set_expanded(&mut self, id: u32, expanded: bool) {
+        self.expansion.insert(id, expanded);
     }
     /// Branches where people are open on every connect; anyone who arrives
     /// later in a collapsed branch shows as a count on it.
     fn expand_occupied(&mut self) {
+        let mut parents = HashMap::with_capacity(self.channels.len());
+        for channel in &self.channels {
+            if let TextTarget::Channel(id) = channel.target {
+                parents.entry(id).or_insert(channel.parent);
+            }
+        }
+        // Each channel's ancestors are walked once.
+        let mut walked = HashSet::new();
         for user in self.users.values() {
             let mut current = user.channel;
-            for _ in 0..self.channels.len() {
-                let Some(parent) = self
-                    .channels
-                    .iter()
-                    .find(|channel| channel.target == TextTarget::Channel(current))
-                    .and_then(|channel| channel.parent)
-                else {
-                    break;
-                };
+            while walked.insert(current)
+                && let Some(&Some(parent)) = parents.get(&current)
+            {
                 self.expansion.insert(parent, true);
                 current = parent;
             }
@@ -626,6 +619,13 @@ impl ServerView {
                 .then_with(|| a.name.cmp(&b.name))
         });
     }
+}
+
+/// The run of `sorted` (ascending by `key`) whose key is `wanted`.
+fn run<T, K: Ord>(sorted: &[T], wanted: K, key: impl Fn(&T) -> K) -> &[T] {
+    let start = sorted.partition_point(|item| key(item) < wanted);
+    let len = sorted[start..].partition_point(|item| key(item) == wanted);
+    &sorted[start..start + len]
 }
 
 pub struct SearchView {
@@ -2484,6 +2484,11 @@ impl Desktop {
                 }
             }
         }
+        for server in &mut self.servers {
+            if std::mem::take(&mut server.unsorted) {
+                server.sort_channels();
+            }
+        }
         if self.cache_dirty {
             self.cache_dirty = false;
             if let Err(error) = self.profile.save_servers(
@@ -2685,7 +2690,8 @@ impl Desktop {
                         ..Default::default()
                     });
                 }
-                server.sort_channels();
+                // Sorted once the batch of events is applied, not per channel.
+                server.unsorted = true;
             }
             SessionEvent::Permissions {
                 channel,
@@ -2997,7 +3003,7 @@ mod tests {
 #[cfg(test)]
 mod tree_tests {
     // Not `super::*`: that glob includes GPUI's `test` macro, which shadows `#[test]`.
-    use super::{ChannelView, ServerView, TreeRow};
+    use super::{ChannelRow, ChannelView, ServerView, TreeRow};
     use nuschel_session::{
         config::ServerBookmark,
         connection::{TextTarget, User},
@@ -3081,15 +3087,16 @@ mod tree_tests {
             .tree_rows()
             .into_iter()
             .map(|row| match row {
-                TreeRow::Channel {
+                TreeRow::Channel(ChannelRow {
                     index,
                     depth,
                     has_children,
+                    expanded,
                     hidden_users,
                     hidden_talking,
-                } => {
+                }) => {
                     let channel = &server.channels[index];
-                    let branch = match (has_children, server.channel_expanded(channel.id)) {
+                    let branch = match (has_children, expanded) {
                         (false, _) => " ",
                         (true, true) => "v",
                         (true, false) => ">",
@@ -3136,7 +3143,7 @@ mod tree_tests {
     #[test]
     fn closed_branches_count_who_is_inside_and_keep_their_own_people() {
         let mut server = sample();
-        server.toggle_channel(4);
+        server.set_expanded(4, true);
         assert_eq!(
             describe(&server)[12..],
             [
@@ -3147,9 +3154,9 @@ mod tree_tests {
             ]
         );
         server.talking.insert(4);
-        server.toggle_channel(2);
+        server.set_expanded(2, false);
         assert_eq!(describe(&server)[5..], ["  > Lobby [5 talking]"]);
-        server.toggle_channel(0);
+        server.set_expanded(0, false);
         assert_eq!(describe(&server), ["> Root [7 talking]", "  @Zed"]);
     }
 
@@ -3160,7 +3167,7 @@ mod tree_tests {
         let rows = describe(&server);
         assert!(rows.contains(&"    v Gaming".to_string()), "{rows:#?}");
         assert!(rows.contains(&"        @andi".to_string()), "{rows:#?}");
-        server.toggle_channel(2);
+        server.set_expanded(2, false);
         assert_eq!(describe(&server)[5..], ["  > Lobby [5]"]);
         server.own_session = None;
         server.expansion.clear();
@@ -3170,7 +3177,7 @@ mod tree_tests {
     #[test]
     fn connecting_opens_every_branch_with_people() {
         let mut server = sample();
-        server.toggle_channel(2);
+        server.set_expanded(2, false);
         server.expand_occupied();
         assert_eq!(
             describe(&server),
@@ -3211,5 +3218,70 @@ mod tree_tests {
         server.channels.push(channel(2, Some(5), "Lobby again", 0));
         server.expand_occupied();
         describe(&server);
+    }
+
+    /// 2,000 channels eight to a parent and 5,000 people:
+    /// `cargo test --release -p nuschel large_tree -- --ignored --nocapture`
+    #[test]
+    #[ignore = "timing; run in release"]
+    fn large_tree_timing() {
+        use std::{hint::black_box, time::Instant};
+        let channels = || {
+            (0..2000u32).map(|id| {
+                let name = format!("Channel {}", id * 7919 % 2000);
+                channel(
+                    id,
+                    id.checked_sub(1).map(|id| id / 8),
+                    &name,
+                    (id % 3) as i32,
+                )
+            })
+        };
+        let mut server =
+            ServerView::new(ServerBookmark::new("Test", "localhost", 64738, "andi").unwrap());
+        server.channels = channels().collect();
+        server.sort_channels();
+        for session in 0..5000u32 {
+            let name = ["ada", "Bob", "carol", "Dave"][session as usize % 4];
+            let mut user = user(session, &format!("{name} {session}"), session * 31 % 2000);
+            if session % 50 == 0 {
+                user.listening
+                    .extend([session * 7 % 2000, session * 13 % 2000]);
+            }
+            server.users.insert(session, user);
+        }
+        server.own_session = Some(4999);
+        server.talking.extend((0..5000).step_by(100));
+        let rows = |label: &str, server: &ServerView| {
+            let rounds = 20;
+            let start = Instant::now();
+            let mut rows = 0;
+            for _ in 0..rounds {
+                rows = black_box(server.tree_rows()).len();
+            }
+            println!(
+                "tree_rows, {label}: {rows} rows, {:?}",
+                start.elapsed() / rounds
+            );
+        };
+        rows("default expansion", &server);
+        let start = Instant::now();
+        server.expand_occupied();
+        println!("expand_occupied: {:?}", start.elapsed());
+        rows("occupied branches open", &server);
+
+        // Joining: every channel arrives, sorted after each or once at the end.
+        let start = Instant::now();
+        server.channels.clear();
+        for channel in channels() {
+            server.channels.push(channel);
+            server.sort_channels();
+        }
+        println!("2,000 arrivals, sorting after each: {:?}", start.elapsed());
+        let start = Instant::now();
+        server.channels.clear();
+        server.channels.extend(channels());
+        server.sort_channels();
+        println!("2,000 arrivals, sorting once: {:?}", start.elapsed());
     }
 }

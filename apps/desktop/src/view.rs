@@ -5,7 +5,7 @@ use crate::{
     chrome,
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
     menus::MenuTarget,
-    state::{COLLAPSED_HEIGHT, Desktop, ServerView, Status, TreeRow},
+    state::{COLLAPSED_HEIGHT, ChannelRow, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
 };
 use gpui_kit::{
@@ -324,20 +324,11 @@ fn sidebar(
         .tree_rows()
         .into_iter()
         .map(|row| match row {
-            TreeRow::Channel {
-                index,
-                depth,
-                has_children,
-                hidden_users,
-                hidden_talking,
-            } => channel_row(
+            TreeRow::Channel(row) => channel_row(
                 this,
                 server_index,
-                index,
-                depth,
-                has_children,
-                (hidden_users, hidden_talking),
-                index == selected_channel,
+                row,
+                row.index == selected_channel,
                 voice_channel,
                 cx,
             ),
@@ -556,14 +547,17 @@ fn section_label(id: &'static str, label: &'static str) -> AnyElement {
         .into_any_element()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn channel_row(
     this: &Desktop,
     server_index: usize,
-    index: usize,
-    depth: usize,
-    has_children: bool,
-    (hidden_users, hidden_talking): (usize, bool),
+    ChannelRow {
+        index,
+        depth,
+        has_children,
+        expanded,
+        hidden_users,
+        hidden_talking,
+    }: ChannelRow,
     selected: bool,
     voice_channel: Option<u32>,
     cx: &mut Context<Desktop>,
@@ -571,7 +565,7 @@ fn channel_row(
     let server = &this.servers[server_index];
     let entry = &server.channels[index];
     let id = entry.id;
-    let collapsed = !server.channel_expanded(id);
+    let collapsed = !expanded;
     let in_voice = voice_channel == Some(id);
     let full_name = entry.name.clone();
     div()
@@ -641,13 +635,13 @@ fn channel_row(
                         .aria_label(format!("Toggle {}", entry.name))
                         .hover(|style| style.bg(color(BORDER_STRONG)).text_color(color(TEXT)))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.servers[server_index].toggle_channel(id);
+                            this.servers[server_index].set_expanded(id, !expanded);
                             cx.stop_propagation();
                             cx.notify();
                         }))
                         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                             if activation_key(event) {
-                                this.servers[server_index].toggle_channel(id);
+                                this.servers[server_index].set_expanded(id, !expanded);
                                 cx.stop_propagation();
                                 cx.notify();
                             }
