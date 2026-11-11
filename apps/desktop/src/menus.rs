@@ -270,7 +270,7 @@ impl Desktop {
                     .iter()
                     .map(|server| server.bookmark.clone())
                     .collect();
-                if let Err(error) = self.profile.save_servers(&bookmarks) {
+                if let Err(error) = self.write_servers(&bookmarks) {
                     self.error = Some(error.to_string());
                 }
                 Command::SetTokens(tokens)

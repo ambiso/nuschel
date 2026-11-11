@@ -16,7 +16,10 @@ use nuschel_session::{
     model::{Acl, Ban, ContextAction, RegisteredUser, RejectKind, UserStats},
     udp::TransportStats,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    sync::{Arc, Mutex, PoisonError},
+};
 
 pub use crate::panels::Panel;
 
@@ -628,6 +631,31 @@ fn run<T, K: Ord>(sorted: &[T], wanted: K, key: impl Fn(&T) -> K) -> &[T] {
     &sorted[start..start + len]
 }
 
+/// How long changes to the saved servers gather before they are written.
+const SAVE_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+/// Serializes writes of the saved servers and remembers the newest one on
+/// disk, so a snapshot taken earlier never overwrites a later one.
+#[derive(Clone, Default)]
+struct ServerWrites(Arc<Mutex<u64>>);
+impl ServerWrites {
+    fn write(
+        &self,
+        profile: &Profile,
+        generation: u64,
+        servers: &[ServerBookmark],
+    ) -> std::io::Result<()> {
+        let mut written = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if *written < generation {
+            profile.save_servers(servers)?;
+            *written = generation;
+        }
+        Ok(())
+    }
+    fn written(&self) -> u64 {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 pub struct SearchView {
     pub server: String,
     pub input: Entity<InputState>,
@@ -724,13 +752,29 @@ pub struct Desktop {
     pending_browse: Option<(String, u32)>,
     /// A rejected login waiting to reopen the server form for a retry.
     pending_retry: Option<(usize, RejectKind, String)>,
+    /// A server's cached channels changed while applying events.
     cache_dirty: bool,
+    /// A delayed write of the saved servers is due.
+    servers_unsaved: bool,
+    servers_generation: u64,
+    server_writes: ServerWrites,
     sending: Option<PendingSend>,
     acknowledged: Vec<(Conversation, String)>,
     passwords: BTreeMap<String, String>,
     drafts: BTreeMap<(String, u32), String>,
     _subscriptions: Vec<Subscription>,
     _poll: Task<()>,
+}
+impl Drop for Desktop {
+    /// The latest saved servers reach disk even when a delayed write is
+    /// pending, still running, or failed.
+    fn drop(&mut self) {
+        if (self.servers_unsaved || self.server_writes.written() < self.servers_generation)
+            && let Err(error) = self.servers_snapshot()()
+        {
+            tracing::warn!(%error, "could not save the servers on exit");
+        }
+    }
 }
 impl Desktop {
     pub fn new(
@@ -784,7 +828,7 @@ impl Desktop {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        if this.drain_events() {
+                        if this.drain_events(cx) {
                             cx.notify();
                         }
                     })
@@ -842,6 +886,9 @@ impl Desktop {
             pending_browse: None,
             pending_retry: None,
             cache_dirty: false,
+            servers_unsaved: false,
+            servers_generation: 0,
+            server_writes: ServerWrites::default(),
             sending: None,
             acknowledged: Vec::new(),
             passwords: BTreeMap::new(),
@@ -941,7 +988,7 @@ impl Desktop {
                     .map(|server| server.bookmark.clone())
                     .collect::<Vec<_>>();
                 bookmarks.push(bookmark.clone());
-                if let Err(error) = self.profile.save_servers(&bookmarks) {
+                if let Err(error) = self.write_servers(&bookmarks) {
                     self.error = Some(error.to_string());
                     return;
                 }
@@ -1308,7 +1355,7 @@ impl Desktop {
                     .iter()
                     .map(|server| server.bookmark.clone())
                     .collect::<Vec<_>>();
-                if let Err(error) = self.profile.save_servers(&bookmarks) {
+                if let Err(error) = self.write_servers(&bookmarks) {
                     if let Some(form) = &mut self.form {
                         form.error = Some(error.to_string());
                     }
@@ -1333,7 +1380,7 @@ impl Desktop {
                 bookmarks.push(bookmark.clone());
                 bookmarks.len() - 1
             };
-        if let Err(error) = self.profile.save_servers(&bookmarks) {
+        if let Err(error) = self.write_servers(&bookmarks) {
             if let Some(form) = &mut self.form {
                 form.error = Some(error.to_string());
             }
@@ -1395,7 +1442,7 @@ impl Desktop {
             return;
         };
         let old = server.bookmark.certificate_sha256.replace(prompt.sha256);
-        if let Err(error) = self.profile.save_servers(
+        if let Err(error) = self.write_servers(
             &self
                 .servers
                 .iter()
@@ -1446,7 +1493,7 @@ impl Desktop {
             .filter(|server| server.id != id)
             .map(|server| server.bookmark.clone())
             .collect::<Vec<_>>();
-        if let Err(error) = self.profile.save_servers(&bookmarks) {
+        if let Err(error) = self.write_servers(&bookmarks) {
             self.error = Some(error.to_string());
             return;
         }
@@ -1910,7 +1957,7 @@ impl Desktop {
             self.servers[server].channels[channel].new_messages = 0;
         }
     }
-    fn drain_events(&mut self) -> bool {
+    fn drain_events(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         while let Some(event) = self
             .global_ptt
@@ -2489,19 +2536,53 @@ impl Desktop {
                 server.sort_channels();
             }
         }
-        if self.cache_dirty {
-            self.cache_dirty = false;
-            if let Err(error) = self.profile.save_servers(
-                &self
-                    .servers
-                    .iter()
-                    .map(|server| server.bookmark.clone())
-                    .collect::<Vec<_>>(),
-            ) {
-                self.error = Some(error.to_string());
-            }
+        if std::mem::take(&mut self.cache_dirty) {
+            self.save_servers_soon(cx);
         }
         changed
+    }
+    /// Write `servers` now, for an action the user waits on; a delayed write
+    /// of an older state never lands after it.
+    pub fn write_servers(&mut self, servers: &[ServerBookmark]) -> std::io::Result<()> {
+        self.servers_generation += 1;
+        self.server_writes
+            .write(&self.profile, self.servers_generation, servers)
+    }
+    /// Save the servers shortly, off the UI thread: a burst of channel
+    /// updates (joining a server) becomes one write.
+    fn save_servers_soon(&mut self, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.servers_unsaved, true) {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SAVE_DELAY).await;
+            let Ok(Some(write)) = this.update(cx, |this, _| {
+                this.servers_unsaved.then(|| this.servers_snapshot())
+            }) else {
+                return;
+            };
+            if let Err(error) = cx.background_spawn(async move { write() }).await {
+                this.update(cx, |this, cx| {
+                    this.error = Some(error.to_string());
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+    /// The saved servers as they are now, written by the returned closure on any thread.
+    fn servers_snapshot(&mut self) -> impl FnOnce() -> std::io::Result<()> + Send + use<> {
+        self.servers_unsaved = false;
+        self.servers_generation += 1;
+        let generation = self.servers_generation;
+        let servers = self
+            .servers
+            .iter()
+            .map(|server| server.bookmark.clone())
+            .collect::<Vec<_>>();
+        let (profile, writes) = (self.profile.clone(), self.server_writes.clone());
+        move || writes.write(&profile, generation, &servers)
     }
     pub fn reconcile_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((index, kind, reason)) = self.pending_retry.take()
@@ -2552,7 +2633,7 @@ impl Desktop {
                 server.security = SessionSecurity::TransportOnly;
                 if server.bookmark.certificate_sha256.is_none() {
                     server.bookmark.certificate_sha256 = Some(pin);
-                    if let Err(error) = self.profile.save_servers(
+                    if let Err(error) = self.write_servers(
                         &self
                             .servers
                             .iter()
@@ -2583,11 +2664,12 @@ impl Desktop {
                     TextTarget::Channel(id) => server.seen_channels.contains(&id),
                     TextTarget::Direct(_) => true,
                 });
+                let cached = server.bookmark.cached_channels.len();
                 server
                     .bookmark
                     .cached_channels
                     .retain(|channel| server.seen_channels.contains(&channel.id));
-                self.cache_dirty = true;
+                self.cache_dirty |= server.bookmark.cached_channels.len() != cached;
                 server.status = Status::Connected;
                 server.reconnecting = None;
                 server.own_session = Some(session);
@@ -2620,23 +2702,29 @@ impl Desktop {
             }
             SessionEvent::Channel(update) => {
                 server.seen_channels.insert(update.id);
-                let cached = CachedChannel {
-                    id: update.id,
-                    parent: update.parent,
-                    name: update.name.clone(),
-                    position: update.position,
-                };
-                if let Some(previous) = server
+                let previous = server
                     .bookmark
                     .cached_channels
                     .iter_mut()
-                    .find(|channel| channel.id == update.id)
-                {
-                    *previous = cached;
-                } else {
-                    server.bookmark.cached_channels.push(cached);
+                    .find(|channel| channel.id == update.id);
+                // Most updates (descriptions, links, a resent tree) leave the cache as it is.
+                if !previous.as_ref().is_some_and(|cached| {
+                    cached.parent == update.parent
+                        && cached.position == update.position
+                        && cached.name == update.name
+                }) {
+                    let cached = CachedChannel {
+                        id: update.id,
+                        parent: update.parent,
+                        name: update.name.clone(),
+                        position: update.position,
+                    };
+                    match previous {
+                        Some(previous) => *previous = cached,
+                        None => server.bookmark.cached_channels.push(cached),
+                    }
+                    self.cache_dirty = true;
                 }
-                self.cache_dirty = true;
                 if let Some(channel) = server
                     .channels
                     .iter_mut()
@@ -2779,11 +2867,12 @@ impl Desktop {
             }
             SessionEvent::ChannelRemoved(id) => {
                 server.expansion.remove(&id);
+                let cached = server.bookmark.cached_channels.len();
                 server
                     .bookmark
                     .cached_channels
                     .retain(|channel| channel.id != id);
-                self.cache_dirty = true;
+                self.cache_dirty |= server.bookmark.cached_channels.len() != cached;
                 server
                     .channels
                     .retain(|channel| channel.target != TextTarget::Channel(id));
@@ -3283,5 +3372,28 @@ mod tree_tests {
         server.channels.extend(channels());
         server.sort_channels();
         println!("2,000 arrivals, sorting once: {:?}", start.elapsed());
+    }
+}
+
+#[cfg(test)]
+mod server_writes_tests {
+    use super::ServerWrites;
+    use nuschel_session::config::{Profile, ServerBookmark};
+
+    #[test]
+    fn an_older_snapshot_never_overwrites_a_newer_one() {
+        let root = std::env::temp_dir().join(format!("nuschel-writes-{}", std::process::id()));
+        let profile = Profile::open(Some(root.clone())).unwrap();
+        let server = |name| ServerBookmark::new(name, "localhost", 64738, "andi").unwrap();
+        let writes = ServerWrites::default();
+        writes
+            .write(&profile, 2, &[server("a"), server("b")])
+            .unwrap();
+        writes.write(&profile, 1, &[server("a")]).unwrap();
+        assert_eq!(profile.load_servers().unwrap().len(), 2);
+        assert_eq!(writes.written(), 2);
+        writes.write(&profile, 3, &[]).unwrap();
+        assert!(profile.load_servers().unwrap().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
