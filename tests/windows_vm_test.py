@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: EUPL-1.2
 """Host-only HTTP boundary regressions; no Windows, QEMU or Nix required."""
-import contextlib
+import fcntl
 import http.client
 import json
 import os
@@ -195,6 +195,50 @@ class HarnessTests(unittest.TestCase):
                 vm.daemon(object())
             nix.assert_not_called()
         self.assertEqual(disk.read_bytes(), b"irreplaceable image")
+
+    def test_seed_rotates_privately_for_existing_guests(self):
+        def build(command):
+            source = Path(command[-1])
+            credential = source / "control.token"
+            self.assertEqual(credential.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(source.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((source / "agent.ps1").read_bytes(), (vm.HERE / "agent.ps1").read_bytes())
+            Path(command[command.index("-o") + 1]).write_bytes(credential.read_bytes())
+
+        with patch.object(vm, "nix_file", return_value=Path("/fake/xorriso")), patch.object(vm.subprocess, "check_call", side_effect=build):
+            vm.build_seed(self.root, self.token)
+            self.assertEqual((self.root / "seed.iso").read_text(), self.token)
+            vm.build_seed(self.root, "ef" * 32)
+            self.assertEqual((self.root / "seed.iso").read_text(), "ef" * 32)
+        self.assertEqual((self.root / "seed.iso").stat().st_mode & 0o777, 0o600)
+        self.assertFalse((self.root / "seed.next.iso").exists())
+        self.assertEqual(list(self.root.glob("seed-*")), [])
+
+    def test_second_daemon_cannot_rotate_seed_while_locked(self):
+        with (self.root / "daemon.lock").open("a") as guard:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with patch.object(vm, "STATE", self.root), patch.object(vm, "daemon_locked") as boot:
+                with self.assertRaisesRegex(SystemExit, "another harness owns"):
+                    vm.daemon(object())
+                boot.assert_not_called()
+
+    def test_connection_concurrency_is_bounded(self):
+        held = 0
+        try:
+            while self.server.slots.acquire(blocking=False):
+                held += 1
+            self.assertEqual(held, 16)
+            with socket.create_connection(self.server.server_address, timeout=3) as connection:
+                connection.sendall(b"GET /next HTTP/1.1\r\n\r\n")
+                try:
+                    self.assertEqual(connection.recv(1024), b"")
+                except ConnectionResetError:
+                    pass
+            self.assertEqual(self.jobs.last_seen, 0)
+        finally:
+            for _ in range(held):
+                self.server.slots.release()
+        self.assertEqual(self.request("GET", "/files/fixture.txt", headers=self.headers())[0], 200)
 
     def test_bootstrap_contains_no_credential_and_uses_refresh_only(self):
         command = vm.bootstrap_command()

@@ -52,7 +52,7 @@ REPO = Path(__file__).resolve().parents[1]
 def nix_file(attr: str, relative: str) -> Path:
     """A file from a nixpkgs package pinned by the repository's flake."""
     out = subprocess.check_output(
-        ["nix", "build", "--inputs-from", str(REPO), attr, "--no-link", "--print-out-paths", "--cores", "2"],
+        ["nix", "build", "--inputs-from", str(REPO), attr, "--no-link", "--print-out-paths", "--cores", "2", "--max-jobs", "2"],
         text=True,
     )
     for path in map(Path, out.split()):
@@ -367,7 +367,9 @@ def build_seed(state: Path, token: str) -> None:
         staging = Path(directory)
         for name in ["autounattend.xml", "firstlogon.ps1", "agent.ps1"]:
             shutil.copyfile(HERE / name, staging / name)
-        (staging / "control.token").write_text(token, encoding="ascii")
+        credential = staging / "control.token"
+        credential.write_text(token, encoding="ascii")
+        credential.chmod(0o600)
         # Output must sit outside the source tree, or xorriso may include itself.
         output = state / "seed.next.iso"
         try:
@@ -383,7 +385,7 @@ def bootstrap_command() -> str:
     # No secret in QMP, process arguments or logs. Old installations need no reinstall:
     # their existing auto-login session runs the trusted refresh script from new media.
     return ('powershell -NoProfile -ExecutionPolicy Bypass -Command "'
-            '& ((Get-Volume -FileSystemLabel NUSCHLVM).DriveLetter + ' + "':\\firstlogon.ps1') -RefreshOnly" + '"')
+            r"& ((Get-Volume -FileSystemLabel NUSCHLVM).DriveLetter + ':\firstlogon.ps1') -RefreshOnly" + '"')
 
 
 def refresh_agent(qmp: Qmp, jobs: Jobs, qemu: subprocess.Popen) -> None:

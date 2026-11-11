@@ -44,6 +44,8 @@ $global:NuschlUpdateFixture = Start-Job -ArgumentList $fixture,__PORT__ -ScriptB
   $listener.Start()
   try {
     while ($true) {
+      # A blocking AcceptTcpClient prevents PowerShell Stop-Job from finishing.
+      if (-not $listener.Pending()) { Start-Sleep -Milliseconds 50; continue }
       $client = $listener.AcceptTcpClient()
       $client.ReceiveTimeout = 5000
       $client.SendTimeout = 5000
@@ -82,9 +84,11 @@ $global:NuschlUpdateFixture = Start-Job -ArgumentList $fixture,__PORT__ -ScriptB
 }
 Start-Sleep -Seconds 2
 # Fail before starting Nuschl if the fixture did not bind or publish its files.
-$probe = New-Object Net.WebClient
+$probe = [Net.HttpWebRequest]::Create('http://127.0.0.1:__PORT__/update.json')
 $probe.Proxy = $null
-try { [void]$probe.DownloadData('http://127.0.0.1:__PORT__/update.json') } finally { $probe.Dispose() }
+$probe.Timeout = 5000
+$response = $probe.GetResponse()
+$response.Dispose()
 '''
 
 
@@ -93,7 +97,10 @@ def vm(*arguments, timeout=600):
 
 
 def guest(script, timeout=600):
-    return vm("run", script, "--timeout", str(timeout), timeout=timeout + 60)
+    output = vm("run", script, "--timeout", str(timeout), timeout=timeout + 60)
+    if "ERROR: control job failed:" in output:
+        raise RuntimeError("Windows fixture job failed; see its bounded agent result")
+    return output
 
 
 def main():
@@ -107,7 +114,7 @@ def main():
     finally:
         try:
             guest("if ($global:NuschlUpdateFixture) { Stop-Job $global:NuschlUpdateFixture; Remove-Job $global:NuschlUpdateFixture -Force; $global:NuschlUpdateFixture = $null }", timeout=30)
-        except (subprocess.SubprocessError, OSError):
+        except (subprocess.SubprocessError, OSError, RuntimeError):
             pass
 
 

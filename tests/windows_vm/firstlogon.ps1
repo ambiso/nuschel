@@ -13,6 +13,12 @@ if (-not $RefreshOnly) {
 }
 $agent = 'C:\nuschl-agent'
 $cd = (Get-Volume -FileSystemLabel NUSCHLVM -ErrorAction Stop).DriveLetter + ':\'
+# A late bootstrap retry must not kill an already refreshed agent's active job.
+$current = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object {
+    $_.CommandLine -match '(?i)-File\s+"?C:\\nuschl-agent\\agent\.ps1(?:"|\s|$)'
+}
+if ($current -and (Test-Path "$agent\agent.ps1") -and
+    (Get-FileHash "$agent\agent.ps1").Hash -eq (Get-FileHash ($cd + 'agent.ps1')).Hash) { return }
 # Stop only this harness's old/new agent, never unrelated PowerShell processes.
 Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object {
     $_.ProcessId -ne $PID -and $_.CommandLine -match '(?i)-File\s+"?C:\\(?:nuschel|nuschl)-agent\\agent\.ps1(?:"|\s|$)'
