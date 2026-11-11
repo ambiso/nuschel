@@ -44,3 +44,5 @@ small dependency substitution. Additive Kitty image_id/encoded_len accessors
 permit bounded caller caches to account for retained terminal payloads and
 delete only their owned image IDs on eviction. Tests use generated fixtures; upstream tests
 expecting unpublished assets are outside the focused vendor-safety filter.
+Keep queried capabilities when the terminal omits its font size, so block-raster
+fallback can retain an OSC 11 background response (notably in GNOME Console).

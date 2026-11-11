@@ -150,6 +150,7 @@ impl Picker {
                 } else {
                     let mut p = DEFAULT_PICKER.clone();
                     p.is_tmux = is_tmux;
+                    p.capabilities = caps;
                     Ok(p)
                 }
             }
