@@ -143,7 +143,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,links,rich,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,maximize")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
@@ -309,6 +309,52 @@ def main():
                 copy_shortcut()
                 copied = clipboard()
                 assert copied == "Ship", copied
+                click(width // 2, 140)  # clears the selection
+                time.sleep(0.4)
+            if want("multiline"):
+                # A paragraph that wraps over three rows, and three lines in one message.
+                words = " ".join(f"wrap{n:02}" for n in range(36))
+                bots[1].send(kind="text", channel=2, body=words)
+                time.sleep(0.4)
+                bots[0].send(kind="text", channel=2, body="first line\nsecond line\nthird line")
+                time.sleep(3.0)  # both rendered and the timeline at its bottom
+                shot("37-multiline")
+
+                def selects(start, end, expected=None, begins=None, finishes=None, hold=0.0):
+                    # Press where the pointer has settled, drag, and (held past an edge,
+                    # where the timeline scrolls itself) stay a while before releasing.
+                    window = shell.window("Nuschel")
+                    origin = (window["x"] - 12, window["y"] - 12)
+                    pointer = "global._nuschelPointer.notify_button(imports.gi.GLib.get_monotonic_time(), 1, "
+                    shell.move(origin[0] + start[0], origin[1] + start[1])
+                    time.sleep(0.15)
+                    shell.eval(pointer + "imports.gi.Clutter.ButtonState.PRESSED); 'ok'")
+                    for step in range(1, 13):
+                        shell.move(origin[0] + start[0] + (end[0] - start[0]) * step / 12,
+                                   origin[1] + start[1] + (end[1] - start[1]) * step / 12)
+                        time.sleep(0.02)
+                    time.sleep(hold + 0.1)
+                    shell.eval(pointer + "imports.gi.Clutter.ButtonState.RELEASED); 'ok'")
+                    time.sleep(0.5)
+                    copy_shortcut()
+                    copied = clipboard()
+                    assert expected is None or copied == expected, copied
+                    assert begins is None or copied.startswith(begins), copied
+                    assert finishes is None or copied.endswith(finishes), copied
+                    return copied
+
+                three = "first line\nsecond line\nthird line"
+                selects((426, 635), (490, 683), three)  # three lines of one message
+                selects((426, 635), (480, 760), three)  # on below the message, over the composer
+                selects((426, 635), (950, 659), "first line\nsecond line")  # past a line's end
+                selects((426, 521), (950, 569), words)  # a paragraph's three wrapped rows
+                # Three lines over two messages, then up into earlier messages.
+                selects((426, 222), (590, 312), "Looks good to me.\nShip it!\nHere is a screenshot:")
+                selects((470, 659), (430, 145), begins="}\nLooks good", finishes="first line\nsecon")
+                time.sleep(0.4)
+                shot("38-selected-across-messages")
+                # Held above the timeline, it scrolls up to the first message.
+                selects((490, 683), (600, 90), begins="Hi! Here is the patch:", finishes=three, hold=2.0)
                 click(width // 2, 140)  # clears the selection
                 time.sleep(0.4)
             if want("links"):

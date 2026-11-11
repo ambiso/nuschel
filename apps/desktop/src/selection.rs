@@ -3,9 +3,12 @@
 //! lays a block's text out like `StyledText`, with the selection as a
 //! background highlight under the glyphs, and exposes it to screen readers
 //! like `text!`. [`SelectionArea`] wraps a message's blocks and turns presses
-//! and drags into carets across them, and clicks on links into opening them.
-//! The selection lives in [`Desktop`], so Ctrl+C and the message menu can
-//! copy it.
+//! and drags into carets, and clicks on links into opening them. A selection
+//! runs from one message to another: while the button is down, every message
+//! on screen offers the caret nearest the pointer and the nearest message's
+//! wins, so a drag reaches past the message it started in, past line ends and
+//! beyond the timeline's edges (which then scroll). The selection lives in
+//! [`Desktop`], so Ctrl+C and the message menu can copy it.
 use crate::{
     document::{Document, Links},
     menus::{Menu, MenuTarget},
@@ -17,7 +20,7 @@ use nuschel_session::{
     config::MumbleUrl,
     connection::{Command, TextTarget},
 };
-use std::{ops::Range, rc::Rc, time::Duration};
+use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
 
 /// A place in a message: a block and a byte offset into its text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -26,37 +29,100 @@ pub struct Caret {
     pub offset: usize,
 }
 
-/// Text selected in one message.
+impl Caret {
+    /// Past the last block of a message.
+    const END: Caret = Caret {
+        block: usize::MAX,
+        offset: usize::MAX,
+    };
+}
+
+/// Where a message is in the timeline: by when it was seen, then by which
+/// was made first. Older history arrives after newer messages, so the serial
+/// alone is not reading order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Order {
+    pub observed_at_ms: i64,
+    pub serial: u64,
+}
+
+pub fn order(message: &MessageView) -> Order {
+    Order {
+        observed_at_ms: message.observed_at_ms,
+        serial: message.serial,
+    }
+}
+
+/// A caret in a message of the timeline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Place {
+    message: Order,
+    caret: Caret,
+}
+
+/// Selected text, from a place in one message to one in the same or another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextSelection {
-    /// The message's [`MessageView::serial`].
-    pub message: u64,
     /// What the press took in: a caret, or the word or line of a double or
     /// triple click. Dragging extends it and never drops it.
-    origin: (Caret, Caret),
-    head: Caret,
+    origin: (Place, Place),
+    head: Place,
+    /// The button is still down: the head follows the pointer.
+    dragging: bool,
 }
 
 impl TextSelection {
     /// Start and end, in reading order.
-    pub fn range(&self) -> (Caret, Caret) {
+    pub fn range(&self) -> (Place, Place) {
         (self.origin.0.min(self.head), self.origin.1.max(self.head))
     }
 
-    /// The selected bytes of block `block`, whose text is `len` bytes long.
-    pub fn block_range(&self, block: usize, len: usize) -> Option<Range<usize>> {
+    /// The selected part of one message, if any of it is selected.
+    pub fn carets(&self, message: Order) -> Option<(Caret, Caret)> {
         let (start, end) = self.range();
-        if !(start.block..=end.block).contains(&block) {
+        if message < start.message || message > end.message {
             return None;
         }
-        let from = if block == start.block {
-            start.offset
+        let from = if message == start.message {
+            start.caret
         } else {
-            0
+            Caret::default()
         };
-        let to = if block == end.block { end.offset } else { len };
-        (from < to).then_some(from..to)
+        let to = if message == end.message {
+            end.caret
+        } else {
+            Caret::END
+        };
+        (from < to).then_some((from, to))
     }
+}
+
+/// The selected bytes of block `block`, whose text is `len` bytes long, of
+/// the part of a message from `start` to `end`.
+pub fn block_range((start, end): (Caret, Caret), block: usize, len: usize) -> Option<Range<usize>> {
+    if !(start.block..=end.block).contains(&block) {
+        return None;
+    }
+    let from = if block == start.block {
+        start.offset
+    } else {
+        0
+    };
+    let to = if block == end.block {
+        end.offset.min(len)
+    } else {
+        len
+    };
+    (from < to).then_some(from..to)
+}
+
+/// The best caret for the pointer offered so far in one mouse move: each
+/// message offers its nearest, with how far the pointer is from the message.
+#[derive(Clone, Copy)]
+pub struct Candidate {
+    position: Point<Pixels>,
+    distance: Pixels,
+    place: Place,
 }
 
 /// What a message's context menu copies, taken when it opens.
@@ -80,14 +146,17 @@ pub struct HoveredLink {
 
 /// Message text state: the selection, the hovered link, the message a context
 /// menu is for, the code last copied with a code block's button (shown as a
-/// check for a moment), and the focus target that takes Ctrl+C while text is
-/// selected.
+/// check for a moment), the focus target that takes Ctrl+C while text is
+/// selected, and while dragging, the caret offered for the pointer and the
+/// timeline scrolling past its edge.
 pub struct TextState {
     pub selection: Option<TextSelection>,
     pub hovered: Option<HoveredLink>,
     pub menu: Option<MessageMenu>,
     pub copied: Option<SharedString>,
     pub focus: FocusHandle,
+    candidate: Rc<Cell<Option<Candidate>>>,
+    scrolling: Option<Task<()>>,
 }
 
 impl TextState {
@@ -98,6 +167,8 @@ impl TextState {
             menu: None,
             copied: None,
             focus: cx.focus_handle(),
+            candidate: Rc::default(),
+            scrolling: None,
         }
     }
 }
@@ -112,12 +183,93 @@ impl Desktop {
             .find(|message| message.serial == serial)
     }
 
-    /// The selected text, when some is selected in the open conversation.
+    /// The selected text, when some is selected in the open conversation:
+    /// the selected part of each message, one message per line.
     pub fn selected_text(&self) -> Option<String> {
         let selection = self.text.selection?;
-        let (start, end) = selection.range();
-        let text = selected_text(&self.message(selection.message)?.document, start, end);
+        let (server, channel) = self.selected_indices()?;
+        let parts: Vec<String> = self.servers[server].channels[channel]
+            .messages
+            .iter()
+            .filter_map(|message| {
+                let (start, end) = selection.carets(order(message))?;
+                Some(selected_text(&message.document, start, end))
+            })
+            .filter(|part| !part.is_empty())
+            .collect();
+        let text = parts.join("\n");
         (!text.is_empty()).then_some(text)
+    }
+
+    /// The pointer moved with the button down: the head goes to `place`, and
+    /// past the timeline's top or bottom the timeline scrolls on its own.
+    fn drag_to(
+        &mut self,
+        place: Place,
+        pointer: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(selection) = self
+            .text
+            .selection
+            .as_mut()
+            .filter(|selection| selection.dragging)
+        else {
+            return;
+        };
+        if selection.head != place {
+            selection.head = place;
+            cx.notify();
+        }
+        if self.text.scrolling.is_none() && overshoot(self.scroll.bounds(), pointer.y) != 0. {
+            self.text.scrolling = Some(cx.spawn_in(window, async move |this, cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(16))
+                        .await;
+                    let Ok(Some(position)) =
+                        this.update_in(cx, |this, window, cx| this.scroll_step(window, cx))
+                    else {
+                        break;
+                    };
+                    // The text moved under the pointer: move the head as if
+                    // the pointer had moved over it.
+                    let moved = PlatformInput::MouseMove(MouseMoveEvent {
+                        position,
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::default(),
+                    });
+                    if cx
+                        .update(|window, cx| window.dispatch_event(moved, cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                let _ = this.update(cx, |this, _| this.text.scrolling = None);
+            }));
+        }
+    }
+
+    /// Scroll the timeline toward a pointer dragged past its edge; returns
+    /// where the pointer is while it is still there.
+    fn scroll_step(&mut self, window: &Window, cx: &mut Context<Self>) -> Option<Point<Pixels>> {
+        let dragging = self
+            .text
+            .selection
+            .is_some_and(|selection| selection.dragging);
+        let pointer = window.mouse_position();
+        let over = overshoot(self.scroll.bounds(), pointer.y);
+        if !dragging || over == 0. {
+            return None;
+        }
+        let mut offset = self.scroll.offset();
+        let lowest = -f32::from(self.scroll.max_offset().y);
+        offset.y = px((f32::from(offset.y) + (over / 2.).clamp(-40., 40.)).clamp(lowest, 0.));
+        self.scroll.set_offset(offset);
+        cx.notify();
+        Some(pointer)
     }
 
     /// Copy the selection; returns whether there was one.
@@ -223,7 +375,7 @@ impl Desktop {
         let selection = self
             .text
             .selection
-            .filter(|selection| selection.message == message)
+            .filter(|selection| selection.carets(order(view)).is_some())
             .and_then(|_| self.selected_text())
             .map(SharedString::from);
         let link = self
@@ -251,7 +403,7 @@ pub fn selected_text(document: &Document, start: Caret, end: Caret) -> String {
         .blocks
         .iter()
         .enumerate()
-        .take(end.block + 1)
+        .take(end.block.saturating_add(1))
         .skip(start.block)
         .filter_map(|(index, block)| {
             let text = block.text()?;
@@ -523,32 +675,57 @@ pub struct TextBox {
 /// A message's text blocks as laid out this frame.
 pub type Texts = Vec<TextBox>;
 
-/// The caret nearest to a position: in the text beside or under it, or at the
-/// start of the next text below.
+/// The offset in laid-out text for a position, the nearest one beside glyphs.
+fn offset_at(layout: &TextLayout, position: Point<Pixels>) -> usize {
+    // Half a pixel down: exactly on a line's bottom edge GPUI answers with the
+    // start of that line rather than a place in it.
+    let probe = point(position.x, position.y + px(0.5));
+    layout.index_for_position(probe).unwrap_or_else(|near| near)
+}
+
+/// The caret nearest to a position among a message's texts.
 fn caret_near(texts: &[TextBox], position: Point<Pixels>) -> Option<Caret> {
-    for text in texts {
-        let bounds = text.layout.bounds();
-        if position.y < bounds.top() {
-            return Some(Caret {
-                block: text.block,
-                offset: 0,
-            });
-        }
-        if position.y <= bounds.bottom() {
-            return Some(Caret {
-                block: text.block,
-                offset: text
-                    .layout
-                    .index_for_position(position)
-                    .unwrap_or_else(|near| near),
-            });
-        }
-    }
-    let text = texts.last()?;
-    Some(Caret {
-        block: text.block,
-        offset: text.text.len(),
+    let laid_out = texts
+        .iter()
+        .map(|text| (text.block, text.text.len(), text.layout.bounds()));
+    nearest_caret(laid_out, position.y, |index| {
+        offset_at(&texts[index].layout, position)
     })
+}
+
+/// The caret for height `y` among texts laid out top to bottom, given as
+/// (block, length, bounds): in the text at that height (`index` finds the
+/// offset in it, the nearest one beside the glyphs), at the start of the next
+/// text when `y` falls between texts or above them, or at the end of the last
+/// text below them.
+fn nearest_caret(
+    texts: impl IntoIterator<Item = (usize, usize, Bounds<Pixels>)>,
+    y: Pixels,
+    index: impl Fn(usize) -> usize,
+) -> Option<Caret> {
+    let mut last = None;
+    for (at, (block, len, bounds)) in texts.into_iter().enumerate() {
+        if y < bounds.top() {
+            return Some(Caret { block, offset: 0 });
+        }
+        if y <= bounds.bottom() {
+            let offset = index(at).min(len);
+            return Some(Caret { block, offset });
+        }
+        last = Some(Caret { block, offset: len });
+    }
+    last
+}
+
+/// How far `y` is above (positive) or below (negative) `bounds`; 0 inside.
+fn overshoot(bounds: Bounds<Pixels>, y: Pixels) -> f32 {
+    if y < bounds.top() {
+        f32::from(bounds.top() - y)
+    } else if y > bounds.bottom() {
+        f32::from(bounds.bottom() - y)
+    } else {
+        0.
+    }
 }
 
 /// The text (by index) and link under the pointer.
@@ -587,13 +764,18 @@ fn names_target(text: &str, url: &str) -> bool {
 }
 
 /// Wraps a message's blocks: a press on its text starts a selection (a double
-/// click takes a word, a triple click a line), dragging extends it, and any
-/// other press clears it. A click on a link without dragging opens it.
+/// click takes a word, a triple click a line), dragging extends it, into
+/// other messages too, and any other press clears it. A click on a link
+/// without dragging opens it.
 pub struct SelectionArea {
     desktop: WeakEntity<Desktop>,
-    message: u64,
-    /// Whether the selection is in this message.
+    message: Order,
+    /// Whether some of the selection is in this message, whether the
+    /// selection starts or ends in it, and whether its button is down.
     selected: bool,
+    end: bool,
+    dragging: bool,
+    candidate: Rc<Cell<Option<Candidate>>>,
     /// The block and link under the pointer, if in this message.
     hovered: Option<(usize, usize)>,
     texts: Rc<[TextBox]>,
@@ -603,16 +785,22 @@ pub struct SelectionArea {
 impl SelectionArea {
     pub fn new(
         desktop: WeakEntity<Desktop>,
-        message: u64,
-        selected: bool,
+        state: &TextState,
+        message: Order,
         hovered: Option<(usize, usize)>,
         texts: Texts,
         child: impl IntoElement,
     ) -> Self {
+        let selection = state.selection.as_ref();
         Self {
             desktop,
             message,
-            selected,
+            selected: selection.is_some_and(|selection| selection.carets(message).is_some()),
+            end: selection.is_some_and(|selection| {
+                selection.origin.0.message == message || selection.head.message == message
+            }),
+            dragging: selection.is_some_and(|selection| selection.dragging),
+            candidate: state.candidate.clone(),
             hovered,
             texts: texts.into(),
             child: child.into_any_element(),
@@ -623,7 +811,7 @@ impl SelectionArea {
     /// show where a link that does not say so leads.
     fn track_links(&self, boxes: &Rc<[Hitbox]>, window: &mut Window) {
         let (desktop, texts, hitboxes) = (self.desktop.clone(), self.texts.clone(), boxes.clone());
-        let (message, shown) = (self.message, self.hovered);
+        let (message, shown) = (self.message.serial, self.hovered);
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble {
                 return;
@@ -654,6 +842,7 @@ impl SelectionArea {
             });
         });
         let (desktop, texts, hitboxes) = (self.desktop.clone(), self.texts.clone(), boxes.clone());
+        let message = self.message;
         window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                 return;
@@ -669,10 +858,10 @@ impl SelectionArea {
                 // Only a click: pressed on this link and released unmoved.
                 let pressed = this.text.selection.is_some_and(|selection| {
                     let (start, end) = selection.range();
-                    selection.message == message
-                        && start == end
-                        && start.block == text.block
-                        && range.contains(&start.offset)
+                    start == end
+                        && start.message == message
+                        && start.caret.block == text.block
+                        && range.contains(&start.caret.offset)
                 });
                 if pressed {
                     // The link may take the conversation away from under the pointer.
@@ -736,7 +925,7 @@ impl Element for SelectionArea {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _: &mut (),
         hitboxes: &mut Rc<[Hitbox]>,
         window: &mut Window,
@@ -756,7 +945,7 @@ impl Element for SelectionArea {
             self.track_links(hitboxes, window);
         }
         let message = self.message;
-        if self.selected {
+        if self.selected || self.end {
             // Any press clears the selection; one on text starts another below.
             let desktop = self.desktop.clone();
             window.on_mouse_event(move |event: &MouseDownEvent, phase, _, cx| {
@@ -768,38 +957,71 @@ impl Element for SelectionArea {
                     });
                 }
             });
-            let (desktop, texts) = (self.desktop.clone(), self.texts.clone());
-            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                if phase != DispatchPhase::Bubble || event.pressed_button != Some(MouseButton::Left)
+        }
+        if self.dragging {
+            // This message offers its caret nearest the pointer; the nearest
+            // message's wins, and the head moves there once per move.
+            let (texts, candidate) = (self.texts.clone(), self.candidate.clone());
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, _| {
+                if phase != DispatchPhase::Capture
+                    || event.pressed_button != Some(MouseButton::Left)
                 {
                     return;
                 }
-                let Some(head) = caret_near(&texts, event.position) else {
+                let distance = px(overshoot(bounds, event.position.y).abs());
+                let better = candidate
+                    .get()
+                    .is_none_or(|best| best.position != event.position || distance < best.distance);
+                if better && let Some(caret) = caret_near(&texts, event.position) {
+                    candidate.set(Some(Candidate {
+                        position: event.position,
+                        distance,
+                        place: Place { message, caret },
+                    }));
+                }
+            });
+            let (desktop, candidate) = (self.desktop.clone(), self.candidate.clone());
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble {
+                    return;
+                }
+                let Some(best) = candidate
+                    .take()
+                    .filter(|best| best.position == event.position)
+                else {
                     return;
                 };
                 let _ = desktop.update(cx, |this, cx| {
-                    if let Some(selection) = &mut this.text.selection
-                        && selection.message == message
-                        && selection.head != head
-                    {
-                        selection.head = head;
-                        cx.notify();
-                    }
+                    this.drag_to(best.place, event.position, window, cx)
                 });
             });
-            // What is selected is also the primary selection, for middle-click paste.
-            #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-            {
-                let desktop = self.desktop.clone();
-                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
-                        let text = desktop.read_with(cx, |this, _| this.selected_text());
-                        if let Ok(Some(text)) = text {
-                            cx.write_to_primary(ClipboardItem::new_string(text));
-                        }
+        }
+        if self.end {
+            // The drag ends; what is selected is also the primary selection,
+            // for middle-click paste.
+            let desktop = self.desktop.clone();
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                    return;
+                }
+                let _ = desktop.update(cx, |this, cx| {
+                    let Some(selection) = this
+                        .text
+                        .selection
+                        .as_mut()
+                        .filter(|selection| selection.dragging)
+                    else {
+                        return;
+                    };
+                    selection.dragging = false;
+                    this.text.scrolling = None;
+                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                    if let Some(text) = this.selected_text() {
+                        cx.write_to_primary(ClipboardItem::new_string(text));
                     }
+                    cx.notify();
                 });
-            }
+            });
         }
         let (desktop, texts, hitboxes) =
             (self.desktop.clone(), self.texts.clone(), hitboxes.clone());
@@ -814,10 +1036,7 @@ impl Element for SelectionArea {
             else {
                 return;
             };
-            let offset = text
-                .layout
-                .index_for_position(event.position)
-                .unwrap_or_else(|near| near);
+            let offset = offset_at(&text.layout, event.position).min(text.text.len());
             let taken = match event.click_count {
                 0 | 1 => offset..offset,
                 2 => word_at(&text.text, offset),
@@ -827,12 +1046,16 @@ impl Element for SelectionArea {
                 block: text.block,
                 offset,
             };
-            let origin = (caret(taken.start), caret(taken.end));
+            let place = |offset| Place {
+                message,
+                caret: caret(offset),
+            };
+            let origin = (place(taken.start), place(taken.end));
             let _ = desktop.update(cx, |this, cx| {
                 this.text.selection = Some(TextSelection {
-                    message,
                     origin,
                     head: origin.1,
+                    dragging: true,
                 });
                 // Like a page in a browser, the conversation takes the keyboard
                 // (Ctrl+C) from the composer.
@@ -848,36 +1071,150 @@ impl Element for SelectionArea {
 mod tests {
     // Not `super::*`: GPUI's glob would replace the standard `#[test]`.
     use super::{
-        Caret, TextSelection, line_at, names_target, overlay, select, selected_text, word_at,
+        Caret, Order, Place, TextSelection, block_range, line_at, names_target, nearest_caret,
+        overlay, overshoot, select, selected_text, word_at,
     };
     use crate::document::{Block, Document, Kind};
+    use gpui_kit::{Bounds, point, px};
     use gpui_kit::{HighlightStyle, rgb};
 
     #[test]
     fn selections_extend_what_the_press_took_in() {
-        let caret = |block, offset| Caret { block, offset };
-        let word = (caret(1, 4), caret(1, 9));
+        let message = Order {
+            observed_at_ms: 10,
+            serial: 7,
+        };
+        let place = |block, offset| Place {
+            message,
+            caret: Caret { block, offset },
+        };
+        let word = (place(1, 4), place(1, 9));
         let selection = |head| TextSelection {
-            message: 7,
             origin: word,
             head,
+            dragging: false,
         };
-        assert_eq!(selection(caret(1, 9)).range(), word);
-        assert_eq!(selection(caret(1, 6)).range(), word);
-        assert_eq!(selection(caret(0, 2)).range(), (caret(0, 2), caret(1, 9)));
-        assert_eq!(selection(caret(3, 1)).range(), (caret(1, 4), caret(3, 1)));
-        let across = selection(caret(3, 1));
-        assert_eq!(across.block_range(0, 10), None);
-        assert_eq!(across.block_range(1, 10), Some(4..10));
-        assert_eq!(across.block_range(2, 5), Some(0..5));
-        assert_eq!(across.block_range(3, 5), Some(0..1));
-        assert_eq!(selection(caret(1, 4)).block_range(1, 10), Some(4..9));
-        let empty = TextSelection {
-            message: 7,
-            origin: (caret(1, 4), caret(1, 4)),
-            head: caret(1, 4),
+        assert_eq!(selection(place(1, 9)).range(), word);
+        assert_eq!(selection(place(1, 6)).range(), word);
+        assert_eq!(selection(place(0, 2)).range(), (place(0, 2), place(1, 9)));
+        assert_eq!(selection(place(3, 1)).range(), (place(1, 4), place(3, 1)));
+        let carets = selection(place(3, 1)).carets(message).unwrap();
+        assert_eq!(block_range(carets, 0, 10), None);
+        assert_eq!(block_range(carets, 1, 10), Some(4..10));
+        assert_eq!(block_range(carets, 2, 5), Some(0..5));
+        assert_eq!(block_range(carets, 3, 5), Some(0..1));
+        let carets = selection(place(1, 4)).carets(message).unwrap();
+        assert_eq!(block_range(carets, 1, 10), Some(4..9));
+        let click = TextSelection {
+            origin: (place(1, 4), place(1, 4)),
+            head: place(1, 4),
+            dragging: true,
         };
-        assert_eq!(empty.block_range(1, 10), None);
+        assert_eq!(click.carets(message), None);
+    }
+
+    #[test]
+    fn a_drag_selects_across_messages_in_timeline_order() {
+        // Older history loaded later has newer serials but earlier times.
+        let (older, first, second, third) = (
+            Order {
+                observed_at_ms: 1,
+                serial: 90,
+            },
+            Order {
+                observed_at_ms: 5,
+                serial: 3,
+            },
+            Order {
+                observed_at_ms: 5,
+                serial: 4,
+            },
+            Order {
+                observed_at_ms: 9,
+                serial: 5,
+            },
+        );
+        assert!(older < first && first < second && second < third);
+        let place = |message, block, offset| Place {
+            message,
+            caret: Caret { block, offset },
+        };
+        // Pressed in the second line of `first`, dragged up into `older`.
+        let pressed = place(first, 0, 6);
+        let selection = TextSelection {
+            origin: (pressed, pressed),
+            head: place(older, 1, 2),
+            dragging: true,
+        };
+        assert_eq!(
+            selection.carets(older),
+            Some((
+                Caret {
+                    block: 1,
+                    offset: 2
+                },
+                Caret::END
+            ))
+        );
+        assert_eq!(
+            selection.carets(first),
+            Some((
+                Caret::default(),
+                Caret {
+                    block: 0,
+                    offset: 6
+                }
+            ))
+        );
+        assert_eq!(selection.carets(second), None);
+        // Down into `third`: everything of `second` in between.
+        let selection = TextSelection {
+            head: place(third, 0, 3),
+            ..selection
+        };
+        assert_eq!(selection.carets(older), None);
+        assert_eq!(
+            selection.carets(first),
+            Some((
+                Caret {
+                    block: 0,
+                    offset: 6
+                },
+                Caret::END
+            ))
+        );
+        assert_eq!(
+            selection.carets(second),
+            Some((Caret::default(), Caret::END))
+        );
+        let all = selection.carets(second).unwrap();
+        assert_eq!(block_range(all, 0, 8), Some(0..8));
+        assert_eq!(block_range(all, 4, 2), Some(0..2));
+    }
+
+    #[test]
+    fn positions_map_to_the_nearest_caret() {
+        // Two texts, block 0 at 100–148 (two lines), block 2 at 160–184.
+        let bounds = |top: f32, bottom: f32| {
+            Bounds::from_corners(point(px(0.), px(top)), point(px(300.), px(bottom)))
+        };
+        let texts = [(0, 30, bounds(100., 148.)), (2, 12, bounds(160., 184.))];
+        // What GPUI finds in the text the height falls in: line 2 of block 0
+        // starts at 15; beside the glyphs it answers the line's end.
+        let index = |at: usize| if at == 0 { 20 } else { 99 };
+        let caret = |y: f32| nearest_caret(texts, px(y), index);
+        let at = |block, offset| Some(Caret { block, offset });
+        assert_eq!(caret(40.), at(0, 0), "above: the start");
+        assert_eq!(caret(130.), at(0, 20), "within, on the second line");
+        assert_eq!(caret(148.), at(0, 20), "on the bottom edge, still in it");
+        assert_eq!(caret(152.), at(2, 0), "between texts: the next one's start");
+        assert_eq!(caret(170.), at(2, 12), "an offset past the end is clamped");
+        assert_eq!(caret(400.), at(2, 12), "below: the end of the last");
+        assert_eq!(nearest_caret([], px(1.), index), None);
+        // How far the pointer is past a message (or the timeline), and which way.
+        assert_eq!(overshoot(bounds(100., 148.), px(90.)), 10.);
+        assert_eq!(overshoot(bounds(100., 148.), px(120.)), 0.);
+        assert_eq!(overshoot(bounds(100., 148.), px(150.)), -2.);
     }
 
     #[test]

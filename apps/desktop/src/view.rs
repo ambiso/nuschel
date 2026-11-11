@@ -5,7 +5,7 @@ use crate::{
     chrome,
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
     menus::MenuTarget,
-    selection::{BlockText, HoveredLink, SelectionArea, TextBox, TextSelection, Texts},
+    selection::{self, BlockText, Caret, HoveredLink, SelectionArea, TextBox, Texts},
     state::{COLLAPSED_HEIGHT, ChannelRow, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
 };
@@ -2144,18 +2144,18 @@ fn message_row(
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let serial = message.serial;
-    let selection = this
+    let order = selection::order(message);
+    let selected = this
         .text
         .selection
-        .as_ref()
-        .filter(|selection| selection.message == serial);
+        .and_then(|selection| selection.carets(order));
     let hovered = this
         .text
         .hovered
         .as_ref()
         .filter(|hovered| hovered.message == serial);
     let mut texts = Vec::new();
-    let blocks = blocks(this, &message.document, selection, hovered, &mut texts, cx);
+    let blocks = blocks(this, &message.document, selected, hovered, &mut texts, cx);
     div()
         .id(("message", index))
         .when_some(
@@ -2252,8 +2252,8 @@ fn message_row(
                         })
                         .child(SelectionArea::new(
                             cx.weak_entity(),
-                            serial,
-                            selection.is_some(),
+                            &this.text,
+                            order,
                             hovered.map(|hovered| (hovered.block, hovered.link)),
                             texts,
                             div()
@@ -2741,12 +2741,12 @@ pub fn document_blocks(
     blocks(this, document, None, None, &mut Vec::new(), cx)
 }
 
-/// A document's blocks with `selection` and the `hovered` link highlighted;
-/// their laid-out text is collected into `texts` for selecting.
+/// A document's blocks with the `selected` part and the `hovered` link
+/// highlighted; their laid-out text is collected into `texts` for selecting.
 fn blocks(
     this: &Desktop,
     document: &Document,
-    selection: Option<&TextSelection>,
+    selected: Option<(Caret, Caret)>,
     hovered: Option<&HoveredLink>,
     texts: &mut Texts,
     cx: &mut Context<Desktop>,
@@ -2771,7 +2771,7 @@ fn blocks(
                 kind,
             } => {
                 let selected =
-                    selection.and_then(|selection| selection.block_range(index, text.len()));
+                    selected.and_then(|carets| selection::block_range(carets, index, text.len()));
                 let underlined = hovered
                     .filter(|hovered| hovered.block == index)
                     .and_then(|hovered| Some(links.get(hovered.link)?.0.clone()));
@@ -2883,7 +2883,7 @@ fn blocks(
                 highlights,
             } => {
                 let selected =
-                    selection.and_then(|selection| selection.block_range(index, text.len()));
+                    selected.and_then(|carets| selection::block_range(carets, index, text.len()));
                 let id = Some(("code-text", index).into());
                 let content =
                     BlockText::new(id, text.clone(), highlights, &[], selected, None, None);
