@@ -96,3 +96,29 @@ test("late decoder replies are discarded while a current realtime frame reaches 
   assert.equal(output.length,1);assert.equal(audio.decodeJobs.size,0);
   audio.ctx=null;await audio.dispose();
 });
+
+test("explicit undeafen restores acknowledged playback while microphone capture stays closed",async()=>{
+  const originals=new Map(["isSecureContext","AudioContext","AudioWorkletNode"].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  Object.defineProperty(globalThis,"isSecureContext",{value:true,configurable:true});
+  Object.defineProperty(globalThis,"AudioContext",{value:class{},configurable:true});
+  Object.defineProperty(globalThis,"AudioWorkletNode",{value:class{},configurable:true});
+  const ready=[];const audio=new BrowserAudio({onReady:value=>ready.push(value)});
+  try {
+    audio.syncVoice({...voice(),muted:true,deafened:true,can_transmit:false});
+    audio.ctx={state:"running",currentTime:0,resume:()=>Promise.resolve(),close:()=>Promise.resolve()};
+    audio.workerReady=true;audio.nodesReady=true;audio.initializing=Promise.resolve();
+    audio.worker={postMessage:()=>{},terminate:()=>{}};
+    audio.captureNode={port:{postMessage:()=>{}},disconnect:()=>{}};
+    audio.playbackNode={port:{postMessage:()=>{}},disconnect:()=>{}};
+    audio.setLocalPolicy({muted:true,deafened:true});
+    assert.equal(audio.playbackEnabled(),false);
+    await audio.activateGesture();
+    assert.equal(audio.playbackEnabled(),false,"SDK deafen acknowledgment still gates playback");
+    audio.syncVoice({...voice(),voice_generation:"9007199254740994",muted:true,deafened:false,can_transmit:false});
+    assert.equal(audio.playbackEnabled(),true);assert.equal(audio.captureEnabled(),false);
+    assert.equal(audio.consent,null);assert.equal(ready.at(-1).capture,false);assert.equal(ready.at(-1).playback,true);
+  } finally {
+    await audio.dispose();
+    for(const [key,descriptor] of originals)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];
+  }
+});

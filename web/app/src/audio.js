@@ -16,7 +16,7 @@ export class BrowserAudio {
   }
   status(phase,message="") {
     this.phase=phase;
-    this.onState({phase,message,processing:{...this.applied},microphone:Boolean(this.stream&&this.captureEnabled()),
+    this.onState({phase,message,processing:{...this.applied},microphone:Boolean(this.stream&&this.captureRunning),
       playback:Boolean(this.playbackEnabled()),contextState:this.ctx?.state||"closed"});
   }
   captureEnabled() {
@@ -47,6 +47,10 @@ export class BrowserAudio {
       }
       // Keep this call synchronous with the gesture for Safari/mobile autoplay.
       const resumed=this.ctx.resume();
+      // Explicit playback consent can reopen the local deafen gate. The SDK's
+      // authoritative deafened flag still blocks sound until its acknowledgment.
+      // This never reopens capture or restores a microphone permission intent.
+      this.localDeaf=false;
       if(microphone&&this.voice?.joined) {
         this.transportStalled=false;
         this.intent++;this.captureFailed=-1;this.consent=context(this.voice);
@@ -156,6 +160,7 @@ export class BrowserAudio {
     this.source?.disconnect();this.source=null;
     if(this.stream)for(const track of this.stream.getTracks()){track.onended=null;track.onmute=null;track.onunmute=null;track.stop();}
     this.stream=null;
+    this.captureRunning=false;
     if(this.captureNode)this.captureNode.port.postMessage({kind:"configure",epoch:this.epoch,enabled:false});
   }
   resetMedia() {
@@ -186,14 +191,20 @@ export class BrowserAudio {
     if(this.output)this.output.gain.setValueAtTime(playback?1:0,this.ctx.currentTime);
     this.reportReady();
     if(this.consent&&!this.stream&&!this.pendingCapture&&!this.awaitingUnmute)this.acquireCapture();
+    if(capture)this.status("capturing");
+    else if(this.voice?.deafened||this.localDeaf)this.status("deafened");
+    else if(this.pendingCapture)this.status("permission-pending","Allow microphone access to speak.");
+    else if(!["denied","unavailable","error","transport-error","device-ended"].includes(this.phase)&&this.voice?.joined)
+      this.status(this.voice.muted||this.localBlocked?"muted":"listening");
   }
   reportReady() {
     if(!this.voice)return;
     const ready={server_id:this.voice.server_id,connection_generation:this.voice.connection_generation,
       voice_generation:this.voice.voice_generation,capture:Boolean(this.captureRunning),playback:this.playbackEnabled()};
     const encoded=JSON.stringify(ready);if(encoded===this.lastReady)return;this.lastReady=encoded;
+    const epoch=this.epoch,expected={...this.voice};
     let result;try{result=this.onReady(ready);}catch(error){result=Promise.reject(error);}
-    Promise.resolve(result).catch(()=>this.status("transport-error","The voice connection is unavailable."));
+    Promise.resolve(result).catch(()=>{if(this.epoch===epoch&&sameContext(expected,this.voice))this.status("transport-error","The voice connection is unavailable.");});
   }
   captureFrame(data) {
     if(data?.kind!=="capture"||data.epoch!==this.epoch)return;
