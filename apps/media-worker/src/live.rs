@@ -10,6 +10,7 @@ use crate::{
     jitter::{JitterBuffer, Pull},
     probe::EchoProbe,
     reference::{self, Clock, Played, ReferenceConverter, Stamper, Step, Timeline},
+    sounds::Effects,
 };
 use cpal::{
     FromSample, Sample, SampleFormat, SizedSample,
@@ -242,6 +243,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut far_mono = [0_f32; FRAME];
     // A noise suppressor upstream of the microphone (e.g. RNNoise) replaces ours.
     let mut upstream_noise = false;
+    let mut effects = Effects::new();
     loop {
         if devices.is_none() && state_known && !deafened && Instant::now() >= retry_at {
             let labels = if preview { &CHECK } else { &CALL };
@@ -435,6 +437,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Some(Event::Request(LiveMediaRequest::PushToTalk { active })) => push_to_talk = active,
+            Some(Event::Request(LiveMediaRequest::PlaySound { sound, volume })) => {
+                effects.play(sound, volume, Instant::now());
+            }
             Some(Event::Request(LiveMediaRequest::Playback {
                 sender,
                 sequence,
@@ -496,6 +501,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(probe) = probe.as_mut() {
                 probe.render(&mut mix);
             }
+            // Effects join the output here, so the canceller's reference (a
+            // recording of the device, or what this ring hands it) has them.
+            effects.mix(&mut mix, Instant::now());
             for sample in &mut mix {
                 *sample = sample.clamp(-1., 1.);
             }

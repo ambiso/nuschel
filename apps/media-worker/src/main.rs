@@ -6,6 +6,7 @@ mod jitter;
 mod live;
 mod probe;
 mod reference;
+mod sounds;
 
 use std::io;
 

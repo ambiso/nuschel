@@ -126,6 +126,45 @@ pub struct AudioDevice {
     pub name: String,
 }
 
+/// The sound effects the media worker plays. Pitch rises for on, joined and
+/// connected, and falls for their opposites.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Sound {
+    Connected,
+    Disconnected,
+    /// Someone entered or left your voice channel.
+    UserJoined,
+    UserLeft,
+    Muted,
+    Unmuted,
+    Deafened,
+    Undeafened,
+    /// Push-to-talk pressed and released.
+    TalkOn,
+    TalkOff,
+    Message,
+    /// A mention of your name or a direct message.
+    Mention,
+}
+
+impl Sound {
+    pub const ALL: [Sound; 12] = [
+        Sound::Connected,
+        Sound::Disconnected,
+        Sound::UserJoined,
+        Sound::UserLeft,
+        Sound::Muted,
+        Sound::Unmuted,
+        Sound::Deafened,
+        Sound::Undeafened,
+        Sound::TalkOn,
+        Sound::TalkOff,
+        Sound::Message,
+        Sound::Mention,
+    ];
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -313,6 +313,12 @@ pub enum LiveMediaRequest {
     /// Play a speech-like signal and measure how much of it the microphone
     /// path would transmit. Answered by [`LiveMediaEvent::EchoTest`].
     EchoTest,
+    /// Mix a sound effect into the playback output at `volume` (0 to 1). A
+    /// worker without open devices drops it after a short wait.
+    PlaySound {
+        sound: nuschel_core::audio::Sound,
+        volume: f32,
+    },
     Shutdown,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

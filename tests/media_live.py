@@ -15,6 +15,9 @@
    the echo would be sent.
 5. Double talk: while the far end plays, the user's own speech must not be
    ducked by more than 3 dB nor cut by the voice gate.
+6. Sound effects: a requested sound reaches the speakers at its loudness and
+   volume, and stays out of the transmitted voice (the microphone is silent:
+   what is sent stays below -60 dBFS, as while voice plays).
 """
 import argparse
 import json
@@ -329,6 +332,59 @@ def check_double_talk(binary, pulse, root):
         pulse.ctl("unload-module", module)
 
 
+def loudest_400ms(samples):
+    """The loudest 400 ms in LUFS, K-weighted as in ITU-R BS.1770 (48 kHz)."""
+    stages = [(1.53512485958697, -2.69169618940638, 1.19839281085285, -1.69065929318241, 0.73248077421585),
+              (1.0, -2.0, 1.0, -1.99004745483398, 0.99007225036621)]
+    for b0, b1, b2, a1, a2 in stages:
+        out, s1, s2 = [], 0.0, 0.0
+        for x in samples:
+            y = b0 * x + s1
+            s1, s2 = b1 * x - a1 * y + s2, b2 * x - a2 * y
+            out.append(y)
+        samples = out
+    window, total, loudest = 19200, 0.0, 0.0
+    power = [value * value for value in samples] + [0.0] * window
+    for index, value in enumerate(power):
+        total += value - (power[index - window] if index >= window else 0.0)
+        loudest = max(loudest, total)
+    return -0.691 + 10 * math.log10(max(loudest / window, 1e-20))
+
+
+def check_sounds(binary, pulse, reference, output):
+    """Sound effects play at their loudness and volume, and are not transmitted."""
+    pulse.ctl("set-default-source", "mic.monitor")  # silent: nothing couples the speakers into it
+    worker = start(binary, pulse, muted=False, settings={"transmit": "continuous"})
+    worker.wait(lambda e: e["kind"] == "status" and e["ready"], "audio did not start")
+    recording = output / "sounds.pcm"
+    with recording.open("wb") as sink:
+        recorder = subprocess.Popen([str(pulse.bin / "parec"), f"--server=unix:{pulse.socket}", "--device=speakers.monitor",
+                                     "--raw", "--format=float32le", "--rate=48000", "--channels=1", "--latency-msec=20"],
+                                    stdout=sink, start_new_session=True)
+        deadline = time.monotonic() + 10
+        while recording.stat().st_size < 48000 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        mark = len(worker.events)
+        offsets = []
+        for volume in (1.0, 0.5):
+            offsets.append(recording.stat().st_size // 4)
+            worker.send({"kind": "play_sound", "sound": "message", "volume": volume})
+            time.sleep(1.0)
+        os.killpg(recorder.pid, signal.SIGTERM)
+        recorder.wait(timeout=5)
+    packets = [event["opus"] for event in worker.events[mark:] if event["kind"] == "packet"]
+    worker.stop()
+    data = recording.read_bytes()
+    samples = struct.unpack("<%df" % (len(data) // 4), data)
+    full, half = loudest_400ms(samples[offsets[0]:offsets[1]]), loudest_400ms(samples[offsets[1]:])
+    sent = math.sqrt(sum(s * s for s in reference.decode(packets)) / max(1, 960 * len(packets)))
+    print(f"Sound effects: {full:.1f} LUFS at full volume, {full - half:.1f} dB quieter at half; "
+          f"{len(packets)} packets sent meanwhile at {20 * math.log10(max(sent, 1e-10)):.0f} dBFS", flush=True)
+    assert abs(full - -25) < 1.5, "the message sound did not play at its loudness"
+    assert abs(full - half - 6.02) < 0.5, "the volume was not applied"
+    assert len(packets) > 50 and sent < 1e-3, "a sound effect reached the transmitted voice"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
@@ -353,6 +409,8 @@ def main():
                 check_double_talk(worker, pulse, Path(temporary))
             if only in (None, "clipping"):
                 check_clipping(worker, pulse, Path(temporary))
+            if only in (None, "sounds"):
+                check_sounds(worker, pulse, reference, Path(temporary))
         finally:
             pulse.stop()
 
