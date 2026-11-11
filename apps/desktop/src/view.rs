@@ -2100,6 +2100,25 @@ fn composer(
         .flex()
         .flex_col()
         .gap(px(6.))
+        // Ahead of the text input's own paste, which ignores images.
+        .capture_action(
+            cx.listener(|this, _: &gpui_kit::base::input::Paste, _, cx| {
+                let Some(item) = cx.read_from_clipboard() else {
+                    return;
+                };
+                if item.text().is_some_and(|text| !text.is_empty()) {
+                    return;
+                }
+                let image = item.into_entries().find_map(|entry| match entry {
+                    ClipboardEntry::Image(image) => Some(image),
+                    _ => None,
+                });
+                if let Some(image) = image {
+                    cx.stop_propagation();
+                    this.paste_image(image.id, image.bytes, cx);
+                }
+            }),
+        )
         .child(
             div()
                 .pl_4()

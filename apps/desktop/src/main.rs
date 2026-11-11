@@ -90,9 +90,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
     }
 
-    let worker = sibling_worker()?;
     if let Some(Action::Render { text }) = arguments.command {
-        let document = runtime.block_on(nuschel_ipc::host::render_content(&worker, &text))?;
+        let worker = backend::content_worker().ok_or("cannot locate the content worker")?;
+        let document = runtime.block_on(nuschel_ipc::host::render_content(worker, &text))?;
         println!("{}", serde_json::to_string(&document)?);
         return Ok(());
     }
@@ -176,15 +176,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(error.into());
     }
     Ok(())
-}
-
-fn sibling_worker() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let executable = std::env::current_exe()?;
-    let directory = executable
-        .parent()
-        .ok_or("executable has no parent directory")?;
-    Ok(directory.join(format!(
-        "nuschel-content-worker{}",
-        std::env::consts::EXE_SUFFIX
-    )))
 }

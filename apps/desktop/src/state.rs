@@ -760,6 +760,8 @@ pub struct Desktop {
     server_writes: ServerWrites,
     sending: Option<PendingSend>,
     acknowledged: Vec<(Conversation, String)>,
+    /// The clipboard image pasted last, and when it was last pasted.
+    pasted_image: Option<(u64, std::time::Instant)>,
     passwords: BTreeMap<String, String>,
     drafts: BTreeMap<(String, u32), String>,
     _subscriptions: Vec<Subscription>,
@@ -917,6 +919,7 @@ impl Desktop {
             server_writes: ServerWrites::default(),
             sending: None,
             acknowledged: Vec::new(),
+            pasted_image: None,
             passwords: BTreeMap::new(),
             drafts: BTreeMap::new(),
             _subscriptions: vec![subscription, activation],
@@ -1851,6 +1854,43 @@ impl Desktop {
         ) {
             Ok(()) => self.sending = Some(pending),
             Err(error) => server.notice = Some(error),
+        }
+        cx.notify();
+    }
+    /// Ctrl+V with only an image on the clipboard sends that image to the open
+    /// conversation at once (the composer holds text only). Holding the keys
+    /// repeats the paste: the same image again within two seconds is ignored.
+    pub fn paste_image(&mut self, id: u64, image: Vec<u8>, cx: &mut Context<Self>) {
+        let now = std::time::Instant::now();
+        let last = self.pasted_image.replace((id, now));
+        if last.is_some_and(|(last, at)| last == id && now - at < std::time::Duration::from_secs(2))
+        {
+            return;
+        }
+        let Some((server, channel)) = self.selected_indices() else {
+            return;
+        };
+        let server = &mut self.servers[server];
+        let (allow_html, limit) = server.limits.as_ref().map_or((true, 131_072), |limits| {
+            (limits.allow_html, limits.image_message_length)
+        });
+        if server.status != Status::Connected {
+            server.notice = Some("Connect before sending an image.".into());
+        } else if !allow_html {
+            server.notice = Some("This server does not accept images.".into());
+        } else {
+            let channel = &server.channels[channel];
+            let target = (
+                channel.target.clone(),
+                channel.direct_peer.as_ref().map(|peer| peer.instance),
+            );
+            let limit = limit.min(MAX_CONTENT_BYTES);
+            if let Err(error) =
+                self.backend
+                    .send_image(&server.id, server.generation, target, image, limit)
+            {
+                server.notice = Some(error);
+            }
         }
         cx.notify();
     }

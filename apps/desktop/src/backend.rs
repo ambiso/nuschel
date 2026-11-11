@@ -2,7 +2,7 @@
 //! The desktop sees typed events; transport, parsing, audio and history run off its thread.
 use nuschel_client::HistoryTicket;
 use nuschel_core::audio::{AudioDevice, EchoSource};
-use nuschel_core::{ChatMessage, ContentBlock, MessageDocument};
+use nuschel_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
 use nuschel_ipc::{LiveMediaEvent, LiveMediaRequest};
 use nuschel_session::{
     Error,
@@ -267,9 +267,9 @@ impl Backend {
     pub fn decode_view(&self, request: u64, uri: String) {
         let events = self.sender.clone();
         self.handle.spawn(async move {
-            let document = match workers::sibling("nuschel-content-worker") {
-                Ok(worker) => nuschel_ipc::host::decode_view(&worker, &uri).await.ok(),
-                Err(_) => None,
+            let document = match content_worker() {
+                Some(worker) => nuschel_ipc::host::decode_view(worker, &uri).await.ok(),
+                None => None,
             };
             let _ = events.send(Event::Viewed { request, document }).await;
         });
@@ -393,6 +393,62 @@ impl Backend {
                 .await;
         });
     }
+    /// Send a pasted image as stock Mumble does: re-encoded in the sandboxed
+    /// content worker into an `<img>` of at most `limit` bytes. Our own copy
+    /// comes back through the connection like any sent message.
+    pub fn send_image(
+        &self,
+        server: &str,
+        generation: u64,
+        (target, expected_peer): (TextTarget, Option<u64>),
+        image: Vec<u8>,
+        limit: usize,
+    ) -> Result<(), String> {
+        // Base64 in one worker frame (nuschel_ipc::MAX_FRAME_BYTES).
+        if image.len() > 8 * 1024 * 1024 {
+            return Err("The image is too large to send (8 MB at most).".into());
+        }
+        if content_worker().is_none() {
+            return Err("Images need the content worker, which is missing.".into());
+        }
+        let commands = self
+            .connections
+            .get(server)
+            .ok_or("Server is not connected.")?
+            .commands
+            .clone();
+        let events = self.sender.clone();
+        let server = server.to_owned();
+        self.handle.spawn(async move {
+            let Some(worker) = content_worker() else {
+                return;
+            };
+            let notice = match nuschel_ipc::host::encode_image(worker, &image, limit as u32).await {
+                Ok(html) => {
+                    let command = Command::SendHtml {
+                        target,
+                        html,
+                        expected_peer,
+                    };
+                    if commands.send(command).await.is_ok() {
+                        return;
+                    }
+                    "the connection has ended".to_owned()
+                }
+                Err(nuschel_ipc::host::Error::Rejected(reason)) => reason,
+                Err(error) => error.to_string(),
+            };
+            let event = SessionEvent::Notice(format!("Could not send the image: {notice}."));
+            let _ = events
+                .send(Event::Protocol {
+                    server,
+                    generation,
+                    event,
+                })
+                .await;
+        });
+        Ok(())
+    }
     pub fn search(&self, server: String, identity: String, query: String) -> Result<(), String> {
         self.storage
             .try_send(StorageCommand::Search {
@@ -413,10 +469,10 @@ impl Backend {
             let Ok(_permit) = permits.acquire().await else {
                 return;
             };
-            let Ok(worker) = workers::sibling("nuschel-content-worker") else {
+            let Some(worker) = content_worker() else {
                 return;
             };
-            if let Ok(document) = nuschel_ipc::host::decode_avatar(&worker, &encoded).await {
+            if let Ok(document) = nuschel_ipc::host::decode_avatar(worker, &encoded).await {
                 let _ = events
                     .send(Event::Avatar {
                         server,
@@ -867,24 +923,32 @@ async fn mark_talking(
     }
 }
 
+/// The content worker next to this executable, looked up once.
+pub fn content_worker() -> Option<&'static std::path::Path> {
+    static WORKER: std::sync::LazyLock<Option<PathBuf>> =
+        std::sync::LazyLock::new(|| workers::sibling("nuschel-content-worker").ok());
+    WORKER.as_deref()
+}
+
+/// What is shown when the content worker cannot render a message.
+fn plain(source: &str) -> MessageDocument {
+    MessageDocument {
+        blocks: vec![ContentBlock::Text {
+            text: source.into(),
+        }],
+    }
+}
+
 async fn prepare(source: &str, html: bool) -> (String, MessageDocument) {
-    let prepared = match workers::sibling("nuschel-content-worker") {
-        Ok(worker) => nuschel_ipc::host::prepare_content(&worker, source, html)
+    let prepared = match content_worker() {
+        Some(worker) => nuschel_ipc::host::prepare_content(worker, source, html)
             .await
             .ok(),
-        Err(_) => None,
+        None => None,
     };
-    if let Some(prepared) = prepared {
-        (prepared.source, prepared.document)
-    } else {
-        (
-            source.into(),
-            MessageDocument {
-                blocks: vec![ContentBlock::Text {
-                    text: source.into(),
-                }],
-            },
-        )
+    match prepared {
+        Some(prepared) => (prepared.source, prepared.document),
+        None => (source.into(), plain(source)),
     }
 }
 async fn content_loop(
@@ -918,6 +982,10 @@ async fn storage_loop(
     events: mpsc::Sender<Event>,
 ) {
     let mut storage: Option<Storage> = None;
+    // Pages render in their own task, so appends of new messages never wait
+    // for one; they arrive in the order they were loaded.
+    let (pages, rendering) = mpsc::channel(16);
+    tokio::spawn(history_loop(rendering, events.clone()));
     while let Some(job) = jobs.recv().await {
         if storage.is_none() {
             match Storage::start(&directory) {
@@ -1039,25 +1107,7 @@ async fn storage_loop(
                 };
                 match result {
                     Ok(page) => {
-                        let mut messages = Vec::new();
-                        for entry in page.messages {
-                            let (_, document) = prepare(&entry.message.body, false).await;
-                            messages.push(RenderedMessage {
-                                id: Some(entry.id),
-                                message: entry.message,
-                                document,
-                                outgoing: false,
-                            });
-                        }
-                        let _ = events
-                            .send(Event::History {
-                                server,
-                                ticket,
-                                before,
-                                messages,
-                                next_before: page.next_before,
-                            })
-                            .await;
+                        let _ = pages.send((server, ticket, before, page)).await;
                     }
                     Err(error) => {
                         storage.take();
@@ -1069,6 +1119,45 @@ async fn storage_loop(
     }
     if let Some(worker) = storage {
         worker.stop().await;
+    }
+}
+
+/// Render loaded history pages, each in one content worker.
+async fn history_loop(
+    mut pages: mpsc::Receiver<(String, HistoryTicket, Option<i64>, HistoryPage)>,
+    events: mpsc::Sender<Event>,
+) {
+    while let Some((server, ticket, before, page)) = pages.recv().await {
+        let sources: Vec<String> = page
+            .messages
+            .iter()
+            .map(|entry| entry.message.body.clone())
+            .collect();
+        let documents = match content_worker() {
+            Some(worker) => nuschel_ipc::host::render_many(worker, &sources).await,
+            None => vec![None; sources.len()],
+        };
+        let messages = page
+            .messages
+            .into_iter()
+            .zip(documents)
+            .map(|(entry, document)| RenderedMessage {
+                id: Some(entry.id),
+                document: document.unwrap_or_else(|| plain(&entry.message.body)),
+                message: entry.message,
+                outgoing: false,
+            })
+            .collect();
+        let history = Event::History {
+            server,
+            ticket,
+            before,
+            messages,
+            next_before: page.next_before,
+        };
+        if events.send(history).await.is_err() {
+            break;
+        }
     }
 }
 

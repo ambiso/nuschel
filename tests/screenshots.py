@@ -61,6 +61,39 @@ imports.gi.Gio.bus_own_name_on_connection(imports.gi.Gio.DBus.session,
 """
 
 
+# The message box, and a clipboard holding a file's PNG (as screenshot tools leave it).
+COMPOSER = (700, 735)
+SET_CLIPBOARD = """
+const [, data] = imports.gi.GLib.file_get_contents(%s);
+imports.gi.St.Clipboard.get_default().set_content(imports.gi.St.ClipboardType.CLIPBOARD,
+    'image/png', new imports.gi.GLib.Bytes(data)); 'ok'
+"""
+PASTE = """
+const k = global._nuschelKeyboard, C = imports.gi.Clutter, t = imports.gi.GLib.get_monotonic_time();
+k.notify_keyval(t, C.KEY_Control_L, C.KeyState.PRESSED);
+k.notify_keyval(t + 10000, C.KEY_v, C.KeyState.PRESSED);
+k.notify_keyval(t + 20000, C.KEY_v, C.KeyState.RELEASED);
+k.notify_keyval(t + 30000, C.KEY_Control_L, C.KeyState.RELEASED); 'ok'
+"""
+
+
+def make_photo(path, width, height):
+    """A detailed picture that PNG cannot squeeze into an image message."""
+    noise = os.urandom(width * 3)
+    rows = b"".join(
+        b"\x00" + bytes((x * 255 // width ^ noise[(x * 3 + y * 7) % len(noise)] & 0x1f) % 256
+                        if channel == 0 else (y * 255 // height + noise[(x + y) % len(noise)] % 24) % 256
+                        if channel == 1 else 140
+                        for x in range(width) for channel in range(3))
+        for y in range(height)
+    )
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+    return path
+
+
 def make_png(path, width, seed, height=None):
     """A small gradient PNG written with the standard library only."""
     height = height or width
@@ -88,7 +121,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,emoji,clipping,viewer,notify,scroll,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: dialog,settings,server,menus,long,search,emoji,clipping,viewer,notify,scroll,paste,maximize")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -370,8 +403,8 @@ def main():
                 # Up the latest page, short of a screen below its top: nothing loads yet.
                 wheel(*timeline, -5)
                 time.sleep(0.8)
-                # Then to its top: the previous page is on its way (a debug
-                # build takes a moment, rendering each message anew)…
+                # Then to its top: the previous page is on its way (one
+                # content worker renders it, so it may already be there)…
                 wheel(*timeline, -12)
                 time.sleep(0.4)
                 shot("22-scroll-loading")
@@ -391,6 +424,23 @@ def main():
                 click(*JUMP_TO_LATEST(width, height))
                 time.sleep(1.0)
                 shot("26-scroll-jumped")
+            if want("paste"):
+                click(228, 268)  # #Development
+                time.sleep(0.6)
+                photo = make_photo(root / "paste.png", 1920, 1080)
+                shell.eval(SET_CLIPBOARD % json.dumps(str(photo)))
+                click(*COMPOSER)
+                time.sleep(0.4)
+                started = time.monotonic()
+                shell.eval(PASTE)
+                sent = bots[0].wait(lambda e: e["kind"] == "text" and e["author"] == "Andi", timeout=60)
+                print(f"pasted image sent after {time.monotonic() - started:.1f} s: "
+                      f"{len(sent['body'])} bytes, {sent['body'][:40]}", flush=True)
+                # Stock Mumble's format, within the stock image message limit.
+                assert sent["html"] and sent["body"].startswith('<img src="data:image/jpeg;base64,'), sent["body"][:80]
+                assert len(sent["body"]) <= 131072 and ("%2B" in sent["body"] or "%2F" in sent["body"])
+                time.sleep(2.0)
+                shot("27-pasted-image")
             if want("maximize"):
                 click(width // 2, 41, count=2)
                 time.sleep(1.5)
