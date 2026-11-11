@@ -795,8 +795,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Developer account); until then first start needs "Open Anyway".
 - [ ] Third-party notices and attribution; walk through the release gates in `SECURITY.md`.
 - [ ] Mobile, web and terminal clients (user, 2026-11-11): decided, see
-      docs/clients.md. First a headless client SDK in `crates/client` (commands in,
-      events out) with the GPUI desktop moved onto it. Then:
+      docs/clients.md. Then:
+  - [x] The headless client SDK in `crates/client` (commands in, updates out; the
+        core builds for wasm32) with the GPUI desktop moved onto it, and a headless
+        client proving it (`examples/headless.rs`).
+  - [ ] What the SDK does not model yet (docs/clients.md, "Status"): identity, key
+        transparency and trust; administration requests; transfers and
+        attachments; split `native.rs`; UniFFI and wasm-bindgen wrappers.
   - [ ] **TUI** (ratatui), the SDK's second consumer; full protocol and voice.
   - [ ] **Android**: Kotlin + Compose over UniFFI; full protocol natively; workers as
         `isolatedProcess` services; platform echo cancellation; foreground service.

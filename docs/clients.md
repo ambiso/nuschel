@@ -33,92 +33,148 @@ desktop (GPUI) exists; the terminal, Android, iOS and web clients are queued.
 ## The SDK (`crates/client`)
 
 The SDK is `nuschel-client`. It owns every decision that is not drawing; each client
-(GPUI desktop, ratatui, Compose, SwiftUI, Svelte) is a view over it. Decided while
-extracting it (2026-11-11); "Status" below says what has moved so far.
+(GPUI desktop, ratatui, Compose, SwiftUI, Svelte) is a view over it. Extracted from
+the desktop on 2026-11-11; "Status" says what moved and what is left.
 
 ### Layers
 
 | Layer | Where | Builds for | Holds |
 |---|---|---|---|
-| Session values | `nuschel-core::model` | everything, `wasm32-unknown-unknown` | channels, users, text targets, activity lines, ACLs, bans, limits: plain data the session reports |
-| SDK core | `nuschel-client` (no features) | everything, `wasm32-unknown-unknown` | timelines, conversations, servers, the channel tree, unread counts, typing, direct conversations, the rules for editing and deleting; the inputs it takes and the updates it reports |
-| Native platform | `nuschel-client`, feature `native` (default) | Linux, Windows, macOS; later Android, iOS | the driver on tokio: connection supervision and reconnects (over `nuschel-session`), the content and storage workers, the media worker per connection, history paging and the local cache |
-| Platform services the app provides | the app | per platform | notifications, update checks, the audio check in Settings, website icons, image decoding for a viewer, files the user picks |
+| Plain data | `nuschel-core` (`model`, `bookmark`) | everything, `wasm32-unknown-unknown` | what a session reports (channels, users, text targets, activity, administration, limits, transport statistics) and saved servers |
+| SDK core | `nuschel-client` without features | everything, `wasm32-unknown-unknown` | the `Client`; timelines, conversations, servers, the channel tree; unread, mentions, read markers, typing, direct conversations; the rules for editing, deleting, typing and sounds; the `Platform` trait with its requests and inputs |
+| Native platform | `nuschel-client`, feature `native` (default) | Linux, Windows, macOS; later Android and iOS | `native::Driver`, the `Platform` on tokio: one supervised connection per server over `nuschel-session` with reconnects and backoff, its media worker, the content and storage workers, server history pages, edits and deletions kept in order |
+| The app's own services | the app | per platform | Desktop: notifications, updates, the Settings audio check, website icons, the image viewer, attached images (`apps/desktop/src/services.rs`) |
 
-`just wasm` checks that the core builds for `wasm32-unknown-unknown` (it is part of
-`just check`). The core depends only on `nuschel-core`, `nuschel-protocol` and serde.
+`just wasm` (part of `just check`) lints `nuschel-core` and `nuschel-client` without
+features for `wasm32-unknown-unknown`. The core depends on `nuschel-core`,
+`nuschel-protocol` and serde only; no runtime, no clock, no I/O.
 
 ### Modules
 
-- `model` — the session values (re-exported from `nuschel-core::model`).
+- `client` — `Client`, `Focus`, `Update`, `Notification`, `SendError`.
+- `platform` — the `Platform` trait the platform implements; `Request` (to one
+  server's connection), `ChangeRequest`, `CacheKey`, `RenderKey`.
+- `input` — `Input`, what a platform reports (connection lifecycle, rendered
+  messages, history pages, edits, audio), and `ServerEvent`, what a server said.
 - `timeline` — one conversation's messages: `Timeline`, `Message`, `MessageStatus`,
-  `IncomingMessage`, `Change`, `Deletion`, `Page`. Merging the local cache and server
-  pages by id (seq on Nuschel servers) and observation time; the latest page starting
-  over while keeping what arrived since; older pages only if they continue the
-  timeline; windows around a search result; trimming the oldest; our pending sends
-  until the server acknowledges their idempotency key; edits and deletions that wait
-  for their message and never overtake it, undo a deletion or a newer edit.
-- `conversation` — a channel or direct conversation: names, target, timeline, unread
-  count and mention, the read marker, who is typing, activity lines, the collapsed runs
-  of activity as data.
-- `server` — one server's state: connection status, users, permissions, capabilities
-  and policy, direct conversations, limits, the channel tree (`tree_rows`), and the
-  rules (`may_edit`, `may_delete`, `typing_conversation`, `durable_directs_with`, …).
-- `navigation` — which conversation is browsed and the tickets that drop late pages.
-- `client` — the `Client` (below).
-- `native` (feature) — `Driver`, today's backend: connections, workers, storage.
+  `IncomingMessage`, `Change`, `Deletion`, `Page`, `WaitingChanges`. Merging the
+  local cache and server pages by id (seq on Nuschel servers) and observation time;
+  the latest page starting over while keeping what arrived since; older pages only
+  if they continue the timeline; windows around a search result and the newer pages
+  after them; trimming the oldest; pending sends settled by their idempotency key;
+  edits and deletions that wait for their message and never overtake it, undo a
+  deletion or a newer edit.
+- `conversation` — a channel's or direct conversation's state: timeline, unread
+  count and mention, "new below the fold", read marker, typing, activity lines, and
+  its entries in order (activity folded into runs, messages grouped by author).
+- `server` — `ServerState`: status, users, permissions, capabilities and policy,
+  direct conversations, limits, audio route; the rules (`may_edit`, `may_delete`,
+  `typing_conversation`, `durable_directs_with`, …).
+- `tree` — the channel tree as rows, closed branches counting who is inside.
+- `names` — nicknames and friends (`Names`, `Preferences`), mentions.
+- `sounds` — when a sound effect plays.
+- `navigation` — the open conversation, voice, and tickets that drop late pages.
+- `native` (feature) — `Driver`, its `Event`s and their conversion to `Input`.
 
 ### API
 
-```text
-Client                      commands in             events in (from the driver)
-  ├─ servers() / server(id) / conversation(ref)     read access, cheap, no copies
-  ├─ connect, disconnect, open, load_older, jump_to, send, edit, delete,
-  │  mark_read, typing, open_direct, search, set_focus     commands
-  ├─ handle(Input)                                   driver events
-  └─ take_updates() -> Vec<Update>                   what changed, per entity
+```rust
+// Native wiring (crates/client/examples/headless.rs is a whole client):
+let (driver, mut events) = Driver::new(runtime, profile, settings);
+let driver = Arc::new(driver);
+let mut client = Client::new(Box::new(driver.clone()), bookmarks, native::preferences(&settings));
+client.connect(0, None, false);
+while let Some(event) = events.recv().await {
+    client.set_time(monotonic_ms);
+    if let Ok(input) = event.into_input() { client.handle(input) }  // else: identity events
+    client.settle();                         // once per batch: sort channels, apply waiting edits
+    for update in client.take_updates() { /* redraw, scroll, notify, save bookmarks… */ }
+}
 ```
 
-- **Commands in**: methods on `Client`. None blocks: anything slow is a request to the
-  driver, whose answer comes back as an `Input`. Failures a caller must show at once
-  (not connected, too long) are returned as `Result<_, String>`.
-- **Events out**: `Update` names what changed: a server, a conversation's timeline,
-  unread counts, typing, a notice, an alert (sound, notification) for the platform to
-  play or show, a send acknowledged. A UI marks itself dirty on updates and reads state
-  through the getters (GPUI: `cx.notify()`; ratatui: redraw; UniFFI: a callback that
-  Kotlin and Swift turn into flows; WASM: `postMessage` of the update and a snapshot).
-- **Plain data only** in the public surface: owned strings, enums with data, no
-  generics or lifetimes, no GPUI types, ids as values (`server: String`, channel ids,
-  16-byte conversation ids, message serials). Rendered content is
-  `nuschel_core::MessageDocument`; each UI converts it to its own representation and
-  caches that by message serial (the desktop: GPU images and laid-out text).
-- **Time is passed in**: the core never reads a clock (`std::time::Instant` panics on
-  `wasm32-unknown-unknown`). Inputs carry wall-clock milliseconds; expiring typing
-  indicators and waiting edits take the platform's monotonic milliseconds.
-- **No runtime in the core**: it is a state machine. The native driver runs on tokio,
-  as `nuschel-session` does; a browser driver will run on `wasm-bindgen-futures` and
-  talk to the same core.
+- **State is read in place**: `client.servers` (each a `ServerState` with its
+  conversations and their timelines), `client.navigation`, `client.focus`. Cheap: no
+  copies; a UI redraws what an update names.
+- **Commands** are methods: `connect`, `disconnect`, `add_server`,
+  `replace_server`, `remove_server`, `open` (browse a conversation; loads its latest
+  page), `load_history`, `load_page`, `send_text`, `edit`, `delete`,
+  `change_message`, `composing` (typing), `mark_read`, `set_mute`, `join`,
+  `open_direct`, `search`, `request` (to a server, for what is not modelled yet),
+  `log_gap`. None blocks: slow work is a `Platform` call answered later as an
+  `Input`. Failures to show at once (not connected, too long, a full queue) come back
+  as `Result`s; the rest as the server's `notice` or an `Update`.
+- **Inputs** (`Client::handle`): what the platform reports, each with the server and
+  the connection generation it belongs to; a stale generation's reports are dropped,
+  as are history pages whose ticket is no longer current.
+- **Updates** (`Client::take_updates`): `BookmarksChanged`/`…Now` (save),
+  `Browse` (open this conversation), `LoginRefused`, `Sent` (a composer can clear),
+  `PageShown` (scroll to the newest, or to a search result), `HistoryFailed`,
+  `HistoryRecovered`, `OwnMessage`, `Notify`, `Negotiated`, `Gap`,
+  `MessageDeleted`, `SearchResults`, `Rendered` and `Avatar` (content for the UI's
+  own images). GPUI: apply, then `cx.notify()`; ratatui: redraw; UniFFI: a callback
+  per update that Kotlin and Swift turn into flows; WASM: `postMessage` of the update.
+- **Plain data**: owned strings, enums with data, ids as values (server ids, channel
+  ids, 16-byte conversation ids, message serials); no generics or lifetimes on the
+  `Client`'s methods, no GPUI types. Rendered content is
+  `nuschel_core::MessageDocument`; a UI converts it once per message serial and
+  revision (the desktop: `presentation.rs`).
+- **Time is passed in**: `set_time` with the platform's monotonic milliseconds
+  (`std::time::Instant` panics on `wasm32-unknown-unknown`); inputs carry wall-clock
+  milliseconds.
+- **No runtime in the core**: `Client` is a state machine behind a `Platform` trait
+  object. The native driver runs on tokio; a browser platform will run on
+  `wasm-bindgen-futures` and talk to the same core.
 
 ### What stays in each UI
 
 Views, input states, focus, scrolling and virtualisation, animations, images in the
-GPU atlas, menus, dialogs, theme; per-message presentation (laid-out document, height,
-"Show more"), the expansion of collapsed activity runs, drafts and attachments being
-composed, "new messages" below the fold.
+GPU atlas, menus, dialogs, theme; per-message presentation (laid-out document,
+height, "Show more"), which activity runs are open, drafts and attachments being
+composed, where the reader is scrolled (it tells the client through `Focus`).
 
 ### Status
 
-1. Session values moved to `nuschel-core::model` (re-exported by `nuschel-session`).
+Moved, in this order, each step leaving the desktop working:
+
+1. Session values and saved servers to `nuschel-core` (`model`, `bookmark`), re-exported
+   by `nuschel-session`.
 2. Timelines.
 3. Conversations, servers and the channel tree.
-4. The native driver.
-5. `Client` applies driver events and takes the commands.
-6. A headless client (`crates/client/examples/headless.rs`) proves the API.
+4. The native driver (the desktop's former `backend.rs`) and the sound policy.
+5. `Client`: applying what the driver reports, and the commands. The desktop is a
+   view over it.
+6. `examples/headless.rs` with `tests/sdk_headless.py`: three clients without a UI
+   connect to a loopback nuscheld, register, meet in a channel, send, receive, edit,
+   and load the server's history through the SDK alone.
 
-Remaining after these: identity, key transparency and trust state (`identity.rs`) and
-the version notice still live in the desktop; settings and bookmarks stay in
-`nuschel-session::config` until the core needs them on the web; search requests and
-transfer offers are issued by the desktop.
+Left, in the order they should move:
+
+- **Identity, key transparency and trust** (`apps/desktop/src/identity.rs`): the
+  driver reports them as `native::Native` events outside `Input`, because their
+  types live in `nuschel-ipc::crypto`, which needs tokio. Move the crypto worker's
+  message types to a crate that builds for the browser, then the state to the SDK.
+  The version notice (`version_notice.rs`) goes with it.
+- **End-to-end direct conversations** (`mls/1`, opt-in): the driver reports
+  `nuschel_session::mls::MlsEvent`s as `native::Native::Mls`; the desktop keeps each
+  conversation's lock (`ServerUi::e2ee`) and opens groups with `MlsCommand`s. In the
+  SDK they become a conversation's lock state in `ConversationState`, sends through
+  the crypto worker as a `Request` settled like pending sends (by key, then seq), and
+  decrypted rows as `IncomingMessage`s into the same timeline (plaintext the server
+  pushes into a pinned conversation stays out). The `mls` capability is already
+  `ServerState::mls`.
+- **Administration** (ACLs, bans, registered users, channel edits, user actions,
+  comments and avatars, listening, whisper targets, context actions): the desktop
+  still sends `nuschel_session::connection::Command`s to the driver itself; each
+  becomes a `Request`.
+- **Settings**: `ClientSettings` stays in `nuschel-session::config` (its recovery
+  policy is an `nuschel-ipc` type); the client sees `names::Preferences`.
+- **Transfers** (wormhole offers, `transfer.rs`) and **attachments**: a platform
+  service and SDK state each.
+- **Search**: requests go through the client; results are shown by the desktop.
+- **The driver** is one file (`native.rs`); split it into connection, content and
+  storage before the mobile work.
+- **Bindings**: UniFFI and wasm-bindgen are not adopted yet; a thin crate per
+  binding will wrap `Client` (snapshots and updates as records).
 
 ## Reuse by layer
 

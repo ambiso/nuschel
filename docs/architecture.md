@@ -9,8 +9,8 @@ platform decisions reversible without duplicating the session model.
 
 | Package | Responsibility | Dependencies it must not acquire |
 | --- | --- | --- |
-| `nuschel-core` | Domain values, typed content, non-destructive message previews | UI, network runtime, database, native FFI |
-| `nuschel-client` | Client preferences, state transitions, audio policy | GPUI, SQLite, codecs, platform device handles |
+| `nuschel-core` | Domain values, session values, saved servers, typed content, non-destructive message previews | UI, network runtime, database, native FFI |
+| `nuschel-client` | The client SDK (docs/clients.md): timelines, conversations, servers and their rules, the `Client` with its platform trait; with `native`, the driver over sessions and workers | GPUI, SQLite, codecs, platform device handles; without `native`: tokio, I/O, a clock |
 | `nuschel-protocol` | Mumble protobuf schemas and bounded control framing | UI, audio decoding, sockets |
 | `nuschel-rtc` | str0m WebRTC state machine, bounded SDP and encoded audio/video | UI, sockets, codecs, device handles, database |
 | `nuschel-session` | Native TLS/control sessions, identities, bookmarks and worker supervision | GPUI, SQLite implementation, content parser, codecs |
@@ -37,12 +37,13 @@ needs: commands, events, message values, route observations, and effect plans.
 
 ```mermaid
 flowchart LR
-    UI[GPUI shell] --> Client[Portable client state]
-    Client --> Session[Native session adapter]
+    UI[GPUI shell] --> Client[Client SDK]
+    Client --> Driver[Native driver]
+    Driver --> Session[Native session adapter]
     Session --> Server[Mumble or Nuschel server]
-    UI --> Content[Content worker]
-    UI --> Storage[Storage worker]
-    Session --> Media[Media worker]
+    Driver --> Content[Content worker]
+    Driver --> Storage[Storage worker]
+    Driver --> Media[Media worker]
     Media --> Devices[Platform audio services]
 ```
 
