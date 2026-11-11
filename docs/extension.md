@@ -50,10 +50,12 @@ close the remaining gaps:
 1. *No fallback.* The client offers `nuschel/1` and `mumble` together in one
    handshake and lets the server choose. It never reconnects with fewer options after
    a failure (that is how POODLE-style downgrades worked).
-2. *Sticky policy.* A server that negotiated `nuschel/1` (or a capability such as
-   `mls/1`) is remembered with its pin, like HSTS. If it later answers as plain
-   Mumble or drops a capability, the client warns loudly and does not silently
-   continue in the weaker mode. An end-to-end encrypted conversation is never sent
+2. *Sticky policy, never downgrade.* A server that negotiated `nuschel/1` (or a
+   capability such as `mls/1`) is remembered with its pin, like HSTS. If it later
+   answers as plain Mumble or without that capability, the connection fails with an
+   error the user can act on; the client never continues in the weaker mode (failing
+   is fine: an attacker can always cut the connection anyway). Only the user can
+   reset this, explicitly, per server. An end-to-end encrypted conversation is never sent
    plaintext, whatever the server announces: the client's own MLS state decides,
    not the server's advertisement, and MLS groups declare required capabilities in
    their group context.

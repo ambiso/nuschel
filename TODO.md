@@ -101,6 +101,14 @@ Later (reported):
       must say which servers vouch for it. Nuschel servers with end-to-end
       identities can do better.
 - [ ] Wire Ctrl+K (finder) and Ctrl+F (search) into the configurable shortcuts.
+- [x] Friends and local nicknames by certificate hash (heart marker, nickname shown
+      everywhere with the real name in tooltips, friends' presence server-wide,
+      optional "friend connected" notification).
+- [ ] Store the author's certificate hash in history so nicknames apply to offline
+      authors; sort the tree by shown name; a friends list/filter, "Restrict
+      whispers to friends" and whisper-to-friends.
+- [ ] Screenshot harness: the `menus` scene breaks after `server` in `--scenes all`
+      (collapsed tree coordinates).
 - [ ] Proper Windows sandboxing for the workers (AppContainer or a restricted
       token with a low integrity level, no network for content and storage);
       today they only run in a kill-on-close job object.
