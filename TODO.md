@@ -481,9 +481,12 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          (docs/server.md), both layouts (`ServerDB.cpp` of 1.2.4–1.5 and 1.6's),
          read-only by the storage worker and validated by the server's rules;
          PBKDF2-SHA384 and SHA-1 passwords become argon2id at the next login;
-         settings to `murmur-import.toml`; `services.nuschel.importMurmur`. Left
-         out: Murmur on MySQL/PostgreSQL (export to SQLite), murmur.ini, e-mail
-         addresses, disabled listeners, the log table.
+         settings to `murmur-import.toml`; `services.nuschel.importMurmur` (its own
+         oneshot unit). The reader runs confined by Landlock (best effort; bwrap is
+         unavailable under the unit's `RestrictNamespaces`). Left out: Murmur on
+         MySQL/PostgreSQL (export to SQLite), murmur.ini, e-mail addresses, disabled
+         listeners, the log table; a test that runs the reader process itself (the
+         VM check does).
    - [x] Persist channel listeners for registered users (2026-11-11): stored with
          their volume, restored after `ServerSync` with Listen and the limits checked
          again (Murmur does not check), removed with the user or channel.

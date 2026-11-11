@@ -1289,6 +1289,16 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
                 Some(nuscheld::tls::sha1_hex(carol.certificate.as_ref()).to_uppercase());
         }
     }
+    // Two channels that are each other's parent.
+    for (id, parent) in [(20, 21), (21, 20)] {
+        dump.channels.push(nuschel_ipc::murmur::MurmurChannel {
+            id,
+            parent: Some(parent),
+            name: format!("Loop {id}"),
+            inherit_acl: true,
+            ..Default::default()
+        });
+    }
     let directory = tempfile::tempdir().unwrap();
     let store = MemoryStore::shared();
     let report = import_murmur(directory.path(), &store, dump.clone(), false)
@@ -1321,6 +1331,8 @@ async fn a_murmur_database_imports_with_its_passwords_and_acls() {
         "user 6: malformed certificate hash",
         "channel 4 and its subchannels",
         "channel 5: its parent 99",
+        "channel 20: its parent 21 does not exist, or the parents form a cycle",
+        "channel 21: its parent 20",
         "ACL 2 of channel 1: user 999 was not imported",
         "member 999 was not imported",
         "link 1–99",
@@ -1929,4 +1941,48 @@ async fn statistics_count_connections_messages_and_voice() {
     assert_eq!(delta.voice_packets_in, 1);
     assert_eq!(delta.voice_packets_out, 1);
     assert!(delta.voice_bytes_out > 0);
+}
+
+/// Murmur 1.6's root is its own parent; permissions may be negative (Murmur
+/// stores a signed int); a database without a root for the virtual server
+/// fails before anything is replaced.
+#[tokio::test]
+async fn murmur_16_details_and_failures_before_any_change() {
+    let mut dump =
+        nuschel_ipc::murmur::MurmurDump::from_json(&fixture_text("murmur-1.5.json")).unwrap();
+    dump.header.layout = "1.6".into();
+    dump.channels[0].parent = Some(0);
+    dump.acls.push(nuschel_ipc::murmur::MurmurAcl {
+        channel: 3,
+        priority: 1,
+        user_id: None,
+        group: Some("all".into()),
+        apply_here: true,
+        apply_subs: true,
+        grant: 0,
+        deny: -1,
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let store = MemoryStore::shared();
+    let report = import_murmur(directory.path(), &store, dump.clone(), false)
+        .await
+        .unwrap();
+    assert_eq!(report.imported.get("channels"), Some(&3));
+    assert_eq!(report.imported.get("ACL entries"), Some(&7));
+    // No root for this virtual server: refused, and nothing is replaced.
+    let mut rootless = dump.clone();
+    rootless.channels.retain(|channel| channel.id != 0);
+    let error = import_murmur(directory.path(), &store, rootless, true)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no root channel"), "{error}");
+    let error = import_murmur(directory.path(), &store, dump, false)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("3 channels, 5 registered users and 1 bans"),
+        "{error}"
+    );
 }

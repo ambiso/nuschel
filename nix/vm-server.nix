@@ -173,7 +173,8 @@ pkgs.testers.runNixOSTest {
     server.wait_for_open_port(64738)
     server.succeed("test ! -e /var/lib/nuschel/murmur-import.sqlite")
     server.succeed("test \"$(stat -c %a /var/lib/nuschel/murmur-server-password)\" = 600")
-    print(server.succeed("journalctl -u nuschel.service --no-pager | grep -A40 'imported from Murmur'"))
+    # The report (with whether Landlock confined the reader) is in the import unit's journal.
+    print(server.succeed("journalctl -u nuschel-import-murmur.service --no-pager | grep -A45 'imported from Murmur'"))
     as_tester(f"python3 {tests}/murmur_import.py {bins} --host server")
     print(server.succeed("journalctl -u nuschel.service --no-pager | tail -n 40"))
   '';

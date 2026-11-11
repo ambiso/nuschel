@@ -13,6 +13,10 @@ nuschel-ipc.workspace = true
 clap = { version = "4.6.7", features = ["derive"] }
 tokio = { version = "1.54.1", features = ["macros", "rt", "io-std", "io-util"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Confines --read-murmur (an untrusted file) to reading that one file.
+landlock = "0.4.4"
+
 [dev-dependencies]
 tempfile = "3.27.0"
 

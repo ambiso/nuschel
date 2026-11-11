@@ -96,16 +96,27 @@ runs as. It prints a report and exits.
 - **Into what.** The import writes through the storage worker like the running
   server, so the target may be SQLite or PostgreSQL. It refuses a server that already
   has channels, registered users or bans (besides the root channel and SuperUser)
-  and changes nothing. `--replace-existing` deletes those first: deleted channels'
+  and changes nothing; a Murmur database without a root channel for the chosen
+  virtual server (Murmur creates it on that server's first start) is refused the same
+  way. `--replace-existing` deletes those first: deleted channels'
   history becomes an archive only SuperUser reads, deleted accounts' messages show as
   a deleted user's, as when they are removed by hand. Ids are kept (ACLs, groups and
   `default_channel` refer to them); registration ids continue above the highest
-  imported one.
-- **Untrusted input.** The storage worker opens the file read-only
-  (`--read-murmur`: `query_only`, `trusted_schema = OFF`, cell size checks, a heap
-  limit, `quick_check` first), reads fixed statements page by page and decodes every
-  value by its actual type, so a malformed row is reported, not fatal; values over
-  1.5 MiB, and blobs beyond 256 MiB in total, are dropped. `nuscheld` then applies its
+  imported one. If any write fails (the log says which), the import exits with an
+  error, so it can be run again with `--replace-existing` once the cause is fixed.
+- **Untrusted input.** The storage worker reads the file (`--read-murmur`)
+  confined by Landlock to reading that one file (no other file, no TCP, no abstract
+  Unix sockets; the report says whether the kernel enforced it). It opens it
+  read-only and immutable (a `-wal` or journal next to it is never looked at), with
+  `query_only`, `trusted_schema = OFF`, cell size checks, a 1 GiB heap limit and
+  `quick_check` first. Files in WAL mode (Murmur's `sqlite_wal`) are refused with the
+  command that converts them, so SQLite's WAL code never runs on the file; only
+  ordinary tables without hidden or generated columns are read (by the parsed schema,
+  not its text). Fixed statements read 32 rows at a time, every column capped in SQL
+  (names 4 KiB, hashes and salts 256 bytes, numbers and dates 64 bytes, comments,
+  descriptions, avatars and settings 1 MiB), and every value is decoded by its actual
+  type, so a malformed row is reported, not fatal; values over their cap, and blobs
+  beyond 256 MiB in total, are dropped and reported. `nuscheld` then applies its
   own rules: `username_pattern` and `channel_name_pattern`, unique names (users
   regardless of case, siblings exactly), the text limits for comments and
   descriptions, `image_message_length` for avatars (Mumble's pre-1.2.3 raw avatars are
@@ -136,11 +147,13 @@ runs as. It prints a report and exits.
   (Murmur keeps their volume), Murmur's log table, and settings without an
   equivalent (listed in the report).
 
-On NixOS, `services.nuschel.importMurmur.databaseFile` runs the import once, before
-the first start: the file is copied into the state directory for the service's
-dynamic user, imported, and removed; `murmur-imported` in the state directory
-records that it ran. If the import refuses (the database already has state), the
-service does not start and the journal says why.
+On NixOS, `services.nuschel.importMurmur.databaseFile` runs the import once, in its
+own unit (`nuschel-import-murmur.service`, without a start timeout) before the
+server: the file is copied into the state directory for the dynamic user, imported,
+and removed; `murmur-imported` in the state directory records that it ran. If the
+import fails or refuses (the server already has state; `importMurmur.replaceExisting`
+replaces it), `nuschel.service` does not start and the journal says why; nothing
+retries in a loop.
 
 ## Administration
 
@@ -418,13 +431,14 @@ descriptor exhaustion.
 
 | Command | What it covers |
 | --- | --- |
-| `cargo test -p nuscheld` | ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames |
+| `cargo test -p nuscheld` | ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames; the Murmur import (tests/fixtures/murmur-1.5.json: both password formats over loopback, the upgrade to argon2id, malformed rows reported, a non-empty server refused, `--replace-existing`, the ACLs in effect), listeners kept across reconnects and restarts, certificate reload (a broken one keeps the old) and `minimum_tls_version`, the temporary-channel cap and the whisper budget, clients before 1.2.2, the statistics counters; tests/obfuscation.rs: no client address in the log with `obfuscate` |
 | `cargo test -p nuscheld --test admin` | `nuscheld admin` on a stopped server's state: users (list, show, rename, set a password, remove with its ACL entries), channel retention (refused without `--yes` when it removes messages), bans, exporting a channel (0600, nothing past the retention), erasing a user |
 | `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends |
 | `cargo test -p nuschel-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |
-| `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase, retention batches and live-only heads; the key-transparency table |
+| `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase, retention batches and live-only heads; the key-transparency table; channel listeners and their cascades |
+| `cargo test -p nuschel-storage murmur` | the Murmur reader on Murmur 1.5's own schema (tests/fixtures/murmur-1.5.sql, which also produces the import test's input) and 1.6's layout, malformed rows as notes, other virtual servers, files that are not Murmur databases or are damaged |
 | `just test-postgres` (`cargo test -p nuschel-storage-worker --test postgres`) | the storage worker as `nuscheld` drives it, on SQLite and on a throwaway PostgreSQL from nixpkgs (`initdb` in a temporary directory, a unix socket only, no TCP): migrations, users, history pages, idempotency, edits, deletions, retention, live-only heads, erasure, purging, a second worker on the same database, and the operator lock (one holder; the others answer `Held` without opening the database). Without `initdb`/`postgres` on `PATH` (or in `NUSCHEL_POSTGRES_BIN`) the PostgreSQL half says SKIPPED and passes |
 | `cargo test -p nuschel-crypto-worker` | key transparency end to end: nuscheld, the session and the crypto worker in its sandbox (publish and look up, TOFU and verification, key changes, the self-monitoring alarm, a forked and a replaced log), and the worker against a malicious directory in process |
 | `python3 tests/with_local_nuscheld.py <bins> tests/<suite>.py <bins> --port PORT …` | `mumble_client.py`, `udp_voice.py`, `protocol_features.py` against nuscheld; `with_local_murmur.py` runs the same scripts against stock Murmur |
-| `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), key transparency (`tests/key_transparency.py`, keys as credentials and generated), and the stock Mumble GUI (login with a Nuschel-exported certificate, voice both ways) |
+| `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), key transparency (`tests/key_transparency.py`, keys as credentials and generated), and the stock Mumble GUI (login with a Nuschel-exported certificate, voice both ways); the statistics line, SIGHUP, and `services.nuschel.importMurmur` importing the Murmur fixture into a fresh database, then logins with its PBKDF2 and SHA-1 passwords (tests/murmur_import.py) |
 | `just fuzz server_messages [seconds]` (SECURITY.md, "Fuzzing") | also `control_frames`, `relay`, `crypt`, `extension_messages`, `kt_messages` |

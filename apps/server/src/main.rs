@@ -140,6 +140,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         let password = password.trim_end_matches(['\r', '\n']).to_owned();
         let mut settings = settings;
         settings.config.bind.clear();
+        server::prepare_files(&settings, &backend)?;
         let storage = storage::start_locked(backend);
         server::hold_operator_lock(&storage).await?;
         let counters = Default::default();
@@ -163,6 +164,7 @@ async fn run(arguments: Arguments) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if let Some(user) = &arguments.erase_user {
+        server::prepare_files(&settings, &backend)?;
         let storage = storage::start_locked(backend);
         server::hold_operator_lock(&storage).await?;
         let counters = Default::default();

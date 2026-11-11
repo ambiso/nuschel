@@ -18,7 +18,7 @@ ignore = [
   { id = "RUSTSEC-2026-0371", reason = "GPUI's accessibility/portal stack depends on zbus 5; upstream migration to zbus 6 is required" },
   { id = "RUSTSEC-2026-0370", reason = "GPUI's accessibility/portal stack depends on zbus 5 and its zvariant wire types" },
   { id = "RUSTSEC-2026-0372", reason = "The zvariant derive macros migrate together with the GPUI/accessibility zbus 6 upgrade" },
-  { id = "RUSTSEC-2026-0459", reason = "Bundled SQLite (via sqlx 0.9, which caps libsqlite3-sys below the fixed 0.39) opens only Nuschel's own profile database, in the sandboxed storage worker; the flaw needs an attacker-written database and WAL. Remove with an sqlx release that allows 0.39" },
+  { id = "RUSTSEC-2026-0459", reason = "Bundled SQLite (via sqlx 0.9, which caps libsqlite3-sys below the fixed 0.39) opens Nuschel's own databases in the sandboxed storage worker, and an operator-supplied Murmur database read-only and immutable for nuscheld --import-murmur, which refuses WAL-mode files and never opens a -wal; the flaw needs an attacker-written database and WAL. Remove with an sqlx release that allows 0.39" },
   { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is reachable only through hax-lib-macros 0.3.7 under cfg(hax), libcrux's formal-verification builds (libcrux-intrinsics -> core-models -> hax-lib); it is never compiled into Nuschel (cargo tree shows it for no real target). nuschel-identity uses the libcrux crates" },
   { id = "RUSTSEC-2023-0071", reason ="rsa (Marvin timing side channel in private-key operations) only generates the local Mumble client key; TLS signing uses ring, and no RSA decryption or signing runs on untrusted input" },
 ]

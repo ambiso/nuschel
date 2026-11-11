@@ -42,6 +42,8 @@ enum Job {
 #[derive(Clone)]
 pub struct StorageHandle {
     jobs: mpsc::UnboundedSender<Job>,
+    /// Requests the storage rejected or could not answer (each is logged).
+    failures: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl StorageHandle {
@@ -214,7 +216,15 @@ impl StorageHandle {
     /// A handle whose writes go nowhere (fuzzing and unit tests of the state).
     pub fn detached() -> Self {
         let (jobs, _) = mpsc::unbounded_channel();
-        Self { jobs }
+        Self {
+            jobs,
+            failures: Default::default(),
+        }
+    }
+
+    /// How many requests have failed so far (rejected or unanswered).
+    pub fn failures(&self) -> u64 {
+        self.failures.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Everything but the registered users.
@@ -288,11 +298,17 @@ pub fn start_locked(backend: Backend) -> StorageHandle {
 
 fn start_with(backend: Backend, lock: bool) -> StorageHandle {
     let (jobs, receiver) = mpsc::unbounded_channel();
-    tokio::spawn(run(backend, receiver, lock));
-    StorageHandle { jobs }
+    let failures: Arc<std::sync::atomic::AtomicU64> = Default::default();
+    tokio::spawn(run(backend, receiver, lock, failures.clone()));
+    StorageHandle { jobs, failures }
 }
 
-async fn run(backend: Backend, mut jobs: mpsc::UnboundedReceiver<Job>, lock: bool) {
+async fn run(
+    backend: Backend,
+    mut jobs: mpsc::UnboundedReceiver<Job>,
+    lock: bool,
+    failures: Arc<std::sync::atomic::AtomicU64>,
+) {
     let mut worker: Option<Worker> = None;
     let mut request_id = 0_u64;
     while let Some(job) = jobs.recv().await {
@@ -353,12 +369,14 @@ async fn run(backend: Backend, mut jobs: mpsc::UnboundedReceiver<Job>, lock: boo
             }
         };
         if let Some(Response::Rejected(error)) = &response {
+            failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::error!(%error, "storage request was rejected; this change is not persisted");
         } else if let Some(Response::Held) = &response
             && !probe
         {
             tracing::error!("another process holds the database; this change is not persisted");
         } else if response.is_none() {
+            failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::error!("storage is unavailable; this change is not persisted");
         }
         if let Some(reply) = reply {

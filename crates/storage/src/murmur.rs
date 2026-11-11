@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Reads a Murmur (mumble-server) SQLite database for `nuscheld
-//! --import-murmur`. The file is untrusted: it is opened read-only with
-//! `query_only`, `trusted_schema = OFF`, cell size checks and a heap limit,
-//! checked with `quick_check`, and read with fixed statements in pages by
-//! rowid. Every value is decoded by its actual SQLite type, so a malformed row
-//! (text where Murmur writes integers, invalid UTF-8, an oversized blob) is
-//! skipped and reported instead of failing the import. Interpretation and
-//! validation happen in `nuscheld` (apps/server/src/murmur.rs).
+//! --import-murmur`. The file is untrusted: it is opened read-only and
+//! immutable (no journal, WAL or shared-memory files are looked at, and WAL
+//! files are refused), with `query_only`, `trusted_schema = OFF`, cell size
+//! checks and a heap limit, checked with `quick_check`, and read only from
+//! ordinary tables without hidden or generated columns, with fixed statements
+//! in small pages by rowid. Every column is capped in SQL (`octet_length`
+//! reads no content) and every value decoded by its actual SQLite type, so a
+//! malformed row (text where Murmur writes integers, invalid UTF-8, an
+//! oversized blob) is skipped and reported instead of failing the import.
+//! Interpretation and validation happen in `nuscheld` (apps/server/src/murmur.rs).
 //!
 //! Two layouts exist. `ServerDB.cpp` (Murmur 1.2.4 to 1.5, schema versions 6
 //! to 9) and the database layer of Murmur 1.6 (schema 10 and later, other
@@ -27,8 +30,12 @@ use std::{
     path::Path,
 };
 
-/// Rows per statement.
-const PAGE: i64 = 256;
+/// Rows per statement: with four 1 MiB columns, a page stays far below the
+/// SQLite heap limit.
+const PAGE: i64 = 32;
+/// Caps for names and short values (hashes, salts, addresses).
+const NAME_BYTES: usize = 4096;
+const SHORT_BYTES: usize = 256;
 /// Blob and text bytes held at once (comments, descriptions, textures).
 const BUDGET: usize = 256 * 1024 * 1024;
 
@@ -139,12 +146,22 @@ fn flag(row: &SqliteRow, index: usize) -> Value<bool> {
     int(row, index).map(|value| value.map(|value| value != 0))
 }
 
-/// A column that may be large: selected only up to the byte limit, with its
-/// size alongside (`octet_length` does not read the content).
-fn capped(column: &str) -> String {
-    format!(
-        "CASE WHEN octet_length({column}) <= {MAX_BLOB_BYTES} THEN {column} END, octet_length({column})"
-    )
+/// A column that may be large: selected only up to `limit` bytes, with its
+/// size alongside (`octet_length` does not read the content). Read with
+/// [`Reader::capped_text`] or [`Reader::capped_bytes`].
+fn capped(column: &str, limit: usize) -> String {
+    format!("CASE WHEN octet_length({column}) <= {limit} THEN {column} END, octet_length({column})")
+}
+
+/// A column Murmur fills with a number or a flag: anything longer than 64
+/// bytes is read as NULL (SQLite would store any text there).
+fn small(column: &str) -> String {
+    format!("CASE WHEN octet_length({column}) <= 64 THEN {column} END")
+}
+
+/// A short value read as text (dates); the length is checked before the cast.
+fn small_text(column: &str) -> String {
+    format!("CASE WHEN octet_length({column}) <= 64 THEN CAST({column} AS TEXT) END")
 }
 
 struct Reader<'a, 'b> {
@@ -197,9 +214,10 @@ impl Reader<'_, '_> {
         index: usize,
         what: impl Fn() -> String,
     ) -> Option<String> {
-        let size = int(row, index + 1).ok().flatten().unwrap_or(0);
+        let size = int(row, index + 1).ok().flatten();
         let value = text(row, index);
-        if matches!(value, Ok(None)) && size > MAX_BLOB_BYTES as i64 {
+        // NULL with a size: the value was over its cap.
+        if let (Ok(None), Some(size)) = (&value, size) {
             self.note(format!("{}: {size} bytes, over the limit; ignored", what()));
             return None;
         }
@@ -214,9 +232,9 @@ impl Reader<'_, '_> {
         index: usize,
         what: impl Fn() -> String,
     ) -> Option<Vec<u8>> {
-        let size = int(row, index + 1).ok().flatten().unwrap_or(0);
+        let size = int(row, index + 1).ok().flatten();
         let value = bytes(row, index);
-        if matches!(value, Ok(None)) && size > MAX_BLOB_BYTES as i64 {
+        if let (Ok(None), Some(size)) = (&value, size) {
             self.note(format!("{}: {size} bytes, over the limit; ignored", what()));
             return None;
         }
@@ -239,11 +257,17 @@ impl Reader<'_, '_> {
         Some(())
     }
 
-    /// Every row of `statement` (which selects `rowid` first and filters
-    /// `rowid > $2`, with `$1` the server id), page by page.
-    async fn rows(&mut self, table: &str, statement: &str) -> Result<Vec<SqliteRow>, String> {
-        let mut out = Vec::new();
+    /// Visit every row of `statement` (which selects `rowid` first and
+    /// filters `rowid > $2`, with `$1` the server id) a page at a time, so
+    /// only one page and the values kept within the budget are in memory.
+    async fn each(
+        &mut self,
+        table: &str,
+        statement: &str,
+        mut visit: impl FnMut(&mut Self, &SqliteRow),
+    ) -> Result<(), String> {
         let mut after = i64::MIN;
+        let mut count = 0_usize;
         loop {
             // Statements are built from this file's table and column names only.
             let page: Vec<SqliteRow> = sqlx::query(sqlx::AssertSqlSafe(statement.to_owned()))
@@ -254,21 +278,22 @@ impl Reader<'_, '_> {
                 .await
                 .map_err(|error| format!("reading {table}: {error}"))?;
             let full = page.len() as i64 >= PAGE;
-            for row in page {
-                after = int(&row, 0)
+            for row in &page {
+                after = int(row, 0)
                     .ok()
                     .flatten()
                     .ok_or_else(|| format!("reading {table}: no rowid"))?;
-                if out.len() >= MAX_ROWS {
+                if count >= MAX_ROWS {
                     self.note(format!(
                         "{table}: more than {MAX_ROWS} rows; the rest is ignored"
                     ));
-                    return Ok(out);
+                    return Ok(());
                 }
-                out.push(row);
+                count += 1;
+                visit(self, row);
             }
             if !full {
-                return Ok(out);
+                return Ok(());
             }
         }
     }
@@ -379,40 +404,57 @@ fn meta_group(id: i64) -> Option<&'static str> {
 }
 
 /// 1.6's `getLegacyGroupData`: prefix modifiers are prepended in order, the
-/// `sub` metagroup's `,a,b,c` parameters appended.
+/// `sub` metagroup's `,a,b,c` parameters appended. The statement caps the
+/// modifiers at 31 bytes, their column's size in 1.6.
 fn legacy_group_string(base: String, modifiers: Option<&str>) -> String {
-    let mut group = base;
+    let mut prefix = String::new();
+    let mut suffix = String::new();
     for modifier in modifiers.unwrap_or_default().split(';') {
         if modifier.is_empty() {
             continue;
         }
         if modifier.starts_with(',') {
-            group.push_str(modifier);
+            suffix.push_str(modifier);
         } else {
-            group.insert_str(0, modifier);
+            prefix.insert_str(0, modifier);
         }
     }
-    group
+    prefix + &base + &suffix
 }
 
 /// Read the database at `path` for virtual server `server`, emitting frames.
 pub async fn read(path: &Path, server: i64, emit: &mut Emit<'_>) -> Result<(), String> {
-    let mut header = [0_u8; 16];
+    let mut header = Vec::with_capacity(100);
     std::fs::File::open(path)
-        .and_then(|mut file| file.read_exact(&mut header))
+        .and_then(|file| file.take(100).read_to_end(&mut header))
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    if &header != b"SQLite format 3\0" {
+    if header.len() < 100 || header.get(..16) != Some(b"SQLite format 3\0".as_slice()) {
         return Err(format!("{} is not an SQLite database", path.display()));
+    }
+    // Bytes 18 and 19 are the read and write format versions: 1 for a rollback
+    // journal, 2 for WAL. WAL files are refused and the file is opened
+    // immutable (a `-wal` next to it is never read), so SQLite's WAL code never
+    // runs on an untrusted file (deny.toml, RUSTSEC-2026-0459). Murmur uses a
+    // rollback journal unless `sqlite_wal` is set.
+    if header.get(18..20) != Some([1, 1].as_slice()) {
+        return Err(format!(
+            "{} uses SQLite's write-ahead log (Murmur's sqlite_wal); with Murmur stopped, run \
+             sqlite3 {} 'PRAGMA journal_mode=DELETE' and import again",
+            path.display(),
+            path.display()
+        ));
     }
     let options = SqliteConnectOptions::new()
         .filename(path)
         .read_only(true)
+        .immutable(true)
         .create_if_missing(false)
         .foreign_keys(false)
         .pragma("query_only", "ON")
         .pragma("trusted_schema", "OFF")
         .pragma("cell_size_check", "ON")
         .pragma("mmap_size", "0")
+        .pragma("temp_store", "MEMORY")
         .pragma("hard_heap_limit", "1073741824");
     let connection = SqliteConnection::connect_with(&options)
         .await
@@ -434,21 +476,34 @@ pub async fn read(path: &Path, server: i64, emit: &mut Emit<'_>) -> Result<(), S
             check.join("; ").chars().take(200).collect::<String>()
         ));
     }
-    let tables: HashSet<String> =
-        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
-            .fetch_all(&mut reader.connection)
-            .await
-            .map_err(|error| error.to_string())?
-            .into_iter()
-            .collect();
+    // Ordinary tables only, by the parsed schema (not its text): a virtual
+    // table would run its module (FTS and the like) on the file's data.
+    const TABLES: &str =
+        "SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table'";
+    let tables: HashSet<String> = sqlx::query_scalar(TABLES)
+        .fetch_all(&mut reader.connection)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .collect();
+    // Column names, and whether a table has hidden or generated columns,
+    // which Murmur never creates and which would compute values on read.
     let mut columns: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut computed: HashSet<String> = HashSet::new();
     for table in &tables {
-        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info($1)")
-            .bind(table)
-            .fetch_all(&mut reader.connection)
-            .await
-            .map_err(|error| error.to_string())?;
-        columns.insert(table.clone(), names.into_iter().collect());
+        let rows: Vec<(String, i64)> =
+            sqlx::query_as("SELECT name, hidden FROM pragma_table_xinfo($1)")
+                .bind(table)
+                .fetch_all(&mut reader.connection)
+                .await
+                .map_err(|error| error.to_string())?;
+        if rows.iter().any(|(_, hidden)| *hidden != 0) {
+            computed.insert(table.clone());
+        }
+        columns.insert(
+            table.clone(),
+            rows.into_iter().map(|(name, _)| name).collect(),
+        );
     }
     let has =
         |table: &str, column: &str| columns.get(table).is_some_and(|set| set.contains(column));
@@ -465,10 +520,45 @@ pub async fn read(path: &Path, server: i64, emit: &mut Emit<'_>) -> Result<(), S
     } else {
         return Err("this is not a Murmur database (no users table)".into());
     };
+    let acl_table = if layout.name == "legacy" {
+        "acl"
+    } else {
+        "access_control_lists"
+    };
+    let required = [
+        layout.servers,
+        layout.channels,
+        layout.users,
+        layout.config.0,
+        layout.channel_info.0,
+        layout.user_info.0,
+        "groups",
+        "group_members",
+        acl_table,
+        layout.links.0,
+        "bans",
+    ];
+    for table in required
+        .iter()
+        .copied()
+        .chain(["channel_listeners", layout.meta])
+    {
+        if computed.contains(table) {
+            return Err(format!(
+                "the table {table} has hidden or generated columns; this is not a database \
+                 Murmur wrote"
+            ));
+        }
+    }
+    for table in required {
+        if !tables.contains(table) {
+            return Err(format!("the table {table} is missing"));
+        }
+    }
     let version: Option<String> = if has(layout.meta, layout.meta_key) {
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT CAST({value} AS TEXT) FROM {meta} WHERE {key} = $1",
-            value = layout.meta_value,
+            "SELECT {} FROM {meta} WHERE {key} = $1",
+            small_text(layout.meta_value),
             meta = layout.meta,
             key = layout.meta_key
         )))
@@ -484,20 +574,18 @@ pub async fn read(path: &Path, server: i64, emit: &mut Emit<'_>) -> Result<(), S
         .as_deref()
         .and_then(|version| version.trim().parse().ok())
         .unwrap_or(0);
-    let mut server_ids = Vec::new();
-    if tables.contains(layout.servers) {
-        let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT server_id FROM {} ORDER BY server_id LIMIT 1000",
-            layout.servers
-        )))
-        .fetch_all(&mut reader.connection)
-        .await
-        .map_err(|error| error.to_string())?;
-        server_ids = rows
-            .iter()
-            .filter_map(|row| int(row, 0).ok().flatten())
-            .collect();
-    }
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {} FROM {} ORDER BY server_id LIMIT 1000",
+        small("server_id"),
+        layout.servers
+    )))
+    .fetch_all(&mut reader.connection)
+    .await
+    .map_err(|error| error.to_string())?;
+    let server_ids: Vec<i64> = rows
+        .iter()
+        .filter_map(|row| int(row, 0).ok().flatten())
+        .collect();
     if !server_ids.contains(&server) {
         return Err(format!(
             "virtual server {server} is not in this database (it has {server_ids:?})"
@@ -508,22 +596,6 @@ pub async fn read(path: &Path, server: i64, emit: &mut Emit<'_>) -> Result<(), S
         schema_version,
         server_ids,
     }))?;
-    let required = [
-        layout.channels,
-        layout.users,
-        layout.config.0,
-        layout.channel_info.0,
-        layout.user_info.0,
-        "groups",
-        "group_members",
-        layout.links.0,
-        "bans",
-    ];
-    for table in required {
-        if !tables.contains(table) {
-            return Err(format!("the table {table} is missing"));
-        }
-    }
     let optional = |table: &str, column: &str| {
         if has(table, column) {
             column.to_owned()
@@ -532,403 +604,457 @@ pub async fn read(path: &Path, server: i64, emit: &mut Emit<'_>) -> Result<(), S
         }
     };
 
-    // Configuration.
+    // Configuration; keys are Murmur's (ASCII letters, digits, underscores).
     let (config, key, value) = layout.config;
     let statement = format!(
-        "SELECT rowid, {key}, {} FROM {config} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-        capped(value)
+        "SELECT rowid, {}, {} FROM {config} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+        capped(key, 128),
+        capped(value, MAX_BLOB_BYTES)
     );
-    let rows = reader.rows(config, &statement).await?;
     let mut settings = Vec::new();
-    for row in rows {
-        let Some(name) = reader.require(text(&row, 1), || "config: a key".into()) else {
-            continue;
-        };
-        if name.len() > 128 {
-            reader.note("config: a key over 128 bytes; ignored".into());
-            continue;
-        }
-        if let Some(value) = reader.capped_text(&row, 2, || format!("config {name}")) {
-            settings.push((name, value));
-        }
-    }
+    reader
+        .each(config, &statement, |reader, row| {
+            let Some(name) = reader.capped_text(row, 1, || "config: a key".into()) else {
+                return;
+            };
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            {
+                reader.note("config: a key with characters Murmur does not use; ignored".into());
+                return;
+            }
+            if let Some(value) = reader.capped_text(row, 3, || format!("config {name}")) {
+                settings.push((name, value));
+            }
+        })
+        .await?;
     reader.send(MurmurFrame::Config(settings))?;
 
     // Channels with their properties.
     let (info, info_key, info_value) = layout.channel_info;
     let statement = format!(
-        "SELECT rowid, channel_id, {key}, {} FROM {info} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-        capped(info_value),
-        key = info_key
+        "SELECT rowid, {}, {}, {} FROM {info} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+        small("channel_id"),
+        small(info_key),
+        capped(info_value, MAX_BLOB_BYTES)
     );
     let mut properties: HashMap<(i64, i64), String> = HashMap::new();
-    for row in reader.rows(info, &statement).await? {
-        let what = || format!("{info}: a row");
-        let (Some(channel), Some(key)) = (
-            reader.require(int(&row, 1), what),
-            reader.require(int(&row, 2), what),
-        ) else {
-            continue;
-        };
-        if ![CHANNEL_DESCRIPTION, CHANNEL_POSITION, CHANNEL_MAX_USERS].contains(&key) {
-            continue;
-        }
-        if let Some(value) =
-            reader.capped_text(&row, 3, || format!("channel {channel} property {key}"))
-        {
-            properties.insert((channel, key), value);
-        }
-    }
+    reader
+        .each(info, &statement, |reader, row| {
+            let what = || format!("{info}: a row");
+            let (Some(channel), Some(key)) = (
+                reader.require(int(row, 1), what),
+                reader.require(int(row, 2), what),
+            ) else {
+                return;
+            };
+            if ![CHANNEL_DESCRIPTION, CHANNEL_POSITION, CHANNEL_MAX_USERS].contains(&key) {
+                return;
+            }
+            if let Some(value) =
+                reader.capped_text(row, 3, || format!("channel {channel} property {key}"))
+            {
+                properties.insert((channel, key), value);
+            }
+        })
+        .await?;
     let statement = format!(
-        "SELECT rowid, channel_id, parent_id, {}, {} FROM {} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-        capped(layout.channel_name),
-        layout.inherit_acl,
+        "SELECT rowid, {}, {}, {}, {} FROM {} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+        small("channel_id"),
+        small("parent_id"),
+        capped(layout.channel_name, NAME_BYTES),
+        small(layout.inherit_acl),
         layout.channels
     );
     let mut channels = Vec::new();
-    for row in reader.rows(layout.channels, &statement).await? {
-        let Some(id) = reader.require(int(&row, 1), || "channels: channel_id".into()) else {
-            continue;
-        };
-        let parent = reader.optional(int(&row, 2), || format!("channel {id}: parent"));
-        if parent.is_none() && id != 0 {
-            reader.note(format!("channel {id}: no parent and not the root; skipped"));
-            continue;
-        }
-        let Some(name) = reader.capped_text(&row, 3, || format!("channel {id}: name")) else {
-            reader.note(format!("channel {id}: no usable name; skipped"));
-            continue;
-        };
-        let inherit_acl = reader
-            .optional(flag(&row, 5), || format!("channel {id}: inherit_acl"))
-            .unwrap_or(true);
-        channels.push(MurmurChannel {
-            id,
-            parent,
-            name,
-            inherit_acl,
-            description: properties.remove(&(id, CHANNEL_DESCRIPTION)),
-            position: properties.remove(&(id, CHANNEL_POSITION)),
-            max_users: properties.remove(&(id, CHANNEL_MAX_USERS)),
-        });
-    }
+    reader
+        .each(layout.channels, &statement, |reader, row| {
+            let Some(id) = reader.require(int(row, 1), || "channels: channel_id".into()) else {
+                return;
+            };
+            let parent = reader.optional(int(row, 2), || format!("channel {id}: parent"));
+            if parent.is_none() && id != 0 {
+                reader.note(format!("channel {id}: no parent and not the root; skipped"));
+                return;
+            }
+            let Some(name) = reader.capped_text(row, 3, || format!("channel {id}: name")) else {
+                reader.note(format!("channel {id}: no usable name; skipped"));
+                return;
+            };
+            let inherit_acl = reader
+                .optional(flag(row, 5), || format!("channel {id}: inherit_acl"))
+                .unwrap_or(true);
+            channels.push(MurmurChannel {
+                id,
+                parent,
+                name,
+                inherit_acl,
+                description: properties.remove(&(id, CHANNEL_DESCRIPTION)),
+                position: properties.remove(&(id, CHANNEL_POSITION)),
+                max_users: properties.remove(&(id, CHANNEL_MAX_USERS)),
+            });
+        })
+        .await?;
     drop(properties);
     reader.send(MurmurFrame::Channels(channels))?;
 
     // Groups and their members.
     let statement = format!(
-        "SELECT rowid, group_id, channel_id, {}, inherit, {} FROM groups WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-        capped(layout.group_name),
-        layout.inheritable
+        "SELECT rowid, {}, {}, {}, {}, {} FROM groups WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+        small("group_id"),
+        small("channel_id"),
+        capped(layout.group_name, NAME_BYTES),
+        small("inherit"),
+        small(layout.inheritable)
     );
     let mut groups: BTreeMap<i64, MurmurGroup> = BTreeMap::new();
-    for row in reader.rows("groups", &statement).await? {
-        let what = || "groups: a row".to_owned();
-        let (Some(group), Some(channel)) = (
-            reader.require(int(&row, 1), what),
-            reader.require(int(&row, 2), what),
-        ) else {
-            continue;
-        };
-        let Some(name) = reader.capped_text(&row, 3, || format!("group {group}: name")) else {
-            continue;
-        };
-        let inherit = reader
-            .optional(flag(&row, 5), || format!("group {group}: inherit"))
-            .unwrap_or(true);
-        let inheritable = reader
-            .optional(flag(&row, 6), || format!("group {group}: inheritable"))
-            .unwrap_or(true);
-        groups.insert(
-            group,
-            MurmurGroup {
-                channel,
-                name,
-                inherit,
-                inheritable,
-                add: Vec::new(),
-                remove: Vec::new(),
-            },
-        );
-    }
+    reader
+        .each("groups", &statement, |reader, row| {
+            let what = || "groups: a row".to_owned();
+            let (Some(group), Some(channel)) = (
+                reader.require(int(row, 1), what),
+                reader.require(int(row, 2), what),
+            ) else {
+                return;
+            };
+            let Some(name) = reader.capped_text(row, 3, || format!("group {group}: name")) else {
+                return;
+            };
+            let inherit = reader
+                .optional(flag(row, 5), || format!("group {group}: inherit"))
+                .unwrap_or(true);
+            let inheritable = reader
+                .optional(flag(row, 6), || format!("group {group}: inheritable"))
+                .unwrap_or(true);
+            groups.insert(
+                group,
+                MurmurGroup {
+                    channel,
+                    name,
+                    inherit,
+                    inheritable,
+                    add: Vec::new(),
+                    remove: Vec::new(),
+                },
+            );
+        })
+        .await?;
     let statement = format!(
-        "SELECT rowid, group_id, user_id, {} FROM group_members WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-        layout.member_added
+        "SELECT rowid, {}, {}, {} FROM group_members WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+        small("group_id"),
+        small("user_id"),
+        small(layout.member_added)
     );
-    for row in reader.rows("group_members", &statement).await? {
-        let what = || "group_members: a row".to_owned();
-        let (Some(group), Some(user), Some(added)) = (
-            reader.require(int(&row, 1), what),
-            reader.require(int(&row, 2), what),
-            reader.require(flag(&row, 3), what),
-        ) else {
-            continue;
-        };
-        match groups.get_mut(&group) {
-            Some(entry) if added => entry.add.push(user),
-            Some(entry) => entry.remove.push(user),
-            None => reader.note(format!(
-                "group_members: group {group} does not exist; skipped"
-            )),
-        }
-    }
+    reader
+        .each("group_members", &statement, |reader, row| {
+            let what = || "group_members: a row".to_owned();
+            let (Some(group), Some(user), Some(added)) = (
+                reader.require(int(row, 1), what),
+                reader.require(int(row, 2), what),
+                reader.require(flag(row, 3), what),
+            ) else {
+                return;
+            };
+            match groups.get_mut(&group) {
+                Some(entry) if added => entry.add.push(user),
+                Some(entry) => entry.remove.push(user),
+                None => reader.note(format!(
+                    "group_members: group {group} does not exist; skipped"
+                )),
+            }
+        })
+        .await?;
 
     // ACLs; 1.6 refers to groups by id and splits off tokens and modifiers.
     let acl_statement = if layout.name == "legacy" {
         format!(
-            "SELECT rowid, channel_id, priority, user_id, {}, apply_here, apply_sub, grantpriv, revokepriv FROM acl WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-            capped("group_name")
+            "SELECT rowid, {}, {}, {}, {}, {}, {}, {}, {} FROM acl WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+            small("channel_id"),
+            small("priority"),
+            small("user_id"),
+            capped("group_name", NAME_BYTES),
+            small("apply_here"),
+            small("apply_sub"),
+            small("grantpriv"),
+            small("revokepriv")
         )
     } else {
         format!(
-            "SELECT rowid, channel_id, priority, affected_user_id, affected_group_id, affected_meta_group_id, {}, {}, apply_in_current_channel, apply_in_sub_channels, granted_privilege_flags, revoked_privilege_flags FROM access_control_lists WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-            capped("access_token"),
-            capped("group_modifiers")
+            "SELECT rowid, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {} FROM access_control_lists WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+            small("channel_id"),
+            small("priority"),
+            small("affected_user_id"),
+            small("affected_group_id"),
+            small("affected_meta_group_id"),
+            capped("access_token", 255),
+            capped("group_modifiers", 31),
+            small("apply_in_current_channel"),
+            small("apply_in_sub_channels"),
+            small("granted_privilege_flags"),
+            small("revoked_privilege_flags")
         )
     };
-    let acl_table = if layout.name == "legacy" {
-        "acl"
-    } else {
-        "access_control_lists"
-    };
-    if !tables.contains(acl_table) {
-        return Err(format!("the table {acl_table} is missing"));
-    }
+    let legacy = layout.name == "legacy";
     let mut acls = Vec::new();
-    for row in reader.rows(acl_table, &acl_statement).await? {
-        let what = || format!("{acl_table}: a row");
-        let (Some(channel), Some(priority)) = (
-            reader.require(int(&row, 1), what),
-            reader.require(int(&row, 2), what),
-        ) else {
-            continue;
-        };
-        let at = || format!("ACL {priority} in channel {channel}");
-        let user_id = reader.optional(int(&row, 3), at);
-        let (group, rest) = if layout.name == "legacy" {
-            (reader.capped_text(&row, 4, at), 6)
-        } else {
-            let group_id = reader.optional(int(&row, 4), at);
-            let meta = reader.optional(int(&row, 5), at);
-            let token = reader.capped_text(&row, 6, at);
-            let modifiers = reader.capped_text(&row, 8, at);
-            let base = if let Some(id) = group_id {
-                match groups.get(&id) {
-                    Some(group) => Some(group.name.clone()),
-                    None => {
-                        reader.note(format!("{}: group {id} does not exist; skipped", at()));
-                        continue;
-                    }
-                }
-            } else if let Some(meta) = meta {
-                match meta_group(meta) {
-                    Some(name) => Some(name.to_owned()),
-                    None => {
-                        reader.note(format!("{}: unknown meta group {meta}; skipped", at()));
-                        continue;
-                    }
-                }
-            } else {
-                token.map(|token| format!("#{token}"))
+    reader
+        .each(acl_table, &acl_statement, |reader, row| {
+            let what = || format!("{acl_table}: a row");
+            let (Some(channel), Some(priority)) = (
+                reader.require(int(row, 1), what),
+                reader.require(int(row, 2), what),
+            ) else {
+                return;
             };
-            (
-                base.map(|base| legacy_group_string(base, modifiers.as_deref())),
-                10,
-            )
-        };
-        let apply_here = reader.optional(flag(&row, rest), at).unwrap_or(true);
-        let apply_subs = reader.optional(flag(&row, rest + 1), at).unwrap_or(true);
-        let grant = reader.optional(int(&row, rest + 2), at).unwrap_or(0);
-        let deny = reader.optional(int(&row, rest + 3), at).unwrap_or(0);
-        acls.push(MurmurAcl {
-            channel,
-            priority,
-            user_id,
-            group,
-            apply_here,
-            apply_subs,
-            grant,
-            deny,
-        });
-    }
+            let at = || format!("ACL {priority} in channel {channel}");
+            let user_id = reader.optional(int(row, 3), at);
+            let (group, rest) = if legacy {
+                (reader.capped_text(row, 4, at), 6)
+            } else {
+                let group_id = reader.optional(int(row, 4), at);
+                let meta = reader.optional(int(row, 5), at);
+                let token = reader.capped_text(row, 6, at);
+                let modifiers = reader.capped_text(row, 8, at);
+                let base = if let Some(id) = group_id {
+                    match groups.get(&id) {
+                        Some(group) => Some(group.name.clone()),
+                        None => {
+                            reader.note(format!("{}: group {id} does not exist; skipped", at()));
+                            return;
+                        }
+                    }
+                } else if let Some(meta) = meta {
+                    match meta_group(meta) {
+                        Some(name) => Some(name.to_owned()),
+                        None => {
+                            reader.note(format!("{}: unknown meta group {meta}; skipped", at()));
+                            return;
+                        }
+                    }
+                } else {
+                    token.map(|token| format!("#{token}"))
+                };
+                (
+                    base.map(|base| legacy_group_string(base, modifiers.as_deref())),
+                    10,
+                )
+            };
+            let apply_here = reader.optional(flag(row, rest), at).unwrap_or(true);
+            let apply_subs = reader.optional(flag(row, rest + 1), at).unwrap_or(true);
+            let grant = reader.optional(int(row, rest + 2), at).unwrap_or(0);
+            let deny = reader.optional(int(row, rest + 3), at).unwrap_or(0);
+            acls.push(MurmurAcl {
+                channel,
+                priority,
+                user_id,
+                group,
+                apply_here,
+                apply_subs,
+                grant,
+                deny,
+            });
+        })
+        .await?;
     reader.send(MurmurFrame::Acls(acls))?;
     reader.send(MurmurFrame::Groups(groups.into_values().collect()))?;
 
     // Links.
     let (links_table, first, second) = layout.links;
     let statement = format!(
-        "SELECT rowid, {first}, {second} FROM {links_table} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3"
+        "SELECT rowid, {}, {} FROM {links_table} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+        small(first),
+        small(second)
     );
     let mut links = Vec::new();
-    for row in reader.rows(links_table, &statement).await? {
-        let what = || format!("{links_table}: a row");
-        if let (Some(a), Some(b)) = (
-            reader.require(int(&row, 1), what),
-            reader.require(int(&row, 2), what),
-        ) {
-            links.push((a, b));
-        }
-    }
+    reader
+        .each(links_table, &statement, |reader, row| {
+            let what = || format!("{links_table}: a row");
+            if let (Some(a), Some(b)) = (
+                reader.require(int(row, 1), what),
+                reader.require(int(row, 2), what),
+            ) {
+                links.push((a, b));
+            }
+        })
+        .await?;
     reader.send(MurmurFrame::Links(links))?;
 
     // Bans: a 16-byte blob (legacy) or eight groups of hex digits (1.6).
-    let statement = if layout.name == "legacy" {
+    let statement = if legacy {
         format!(
-            "SELECT rowid, base, mask, {}, {}, {}, CAST(start AS TEXT), duration FROM bans WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-            capped("name"),
-            capped("hash"),
-            capped("reason")
+            "SELECT rowid, {}, {}, {}, {}, {}, {}, {} FROM bans WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+            capped("base", 16),
+            small("mask"),
+            capped("name", NAME_BYTES),
+            capped("hash", SHORT_BYTES),
+            capped("reason", NAME_BYTES),
+            small_text("start"),
+            small("duration")
         )
     } else {
         format!(
-            "SELECT rowid, ipv6_base_address, prefix_length, {}, {}, {}, CAST(start_date AS TEXT), duration FROM bans WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-            capped("banned_user_name"),
-            capped("banned_user_cert_hash"),
-            capped("reason")
+            "SELECT rowid, {}, {}, {}, {}, {}, {}, {} FROM bans WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+            capped("ipv6_base_address", 64),
+            small("prefix_length"),
+            capped("banned_user_name", NAME_BYTES),
+            capped("banned_user_cert_hash", SHORT_BYTES),
+            capped("reason", NAME_BYTES),
+            small_text("start_date"),
+            small("duration")
         )
     };
     let mut bans = Vec::new();
-    for (index, row) in reader
-        .rows("bans", &statement)
-        .await?
-        .into_iter()
-        .enumerate()
-    {
-        let at = || format!("ban {}", index + 1);
-        let address = if layout.name == "legacy" {
-            match reader.optional(bytes(&row, 1), at) {
-                Some(bytes) => match <[u8; 16]>::try_from(bytes.as_slice()) {
-                    Ok(octets) => Some(Ipv6Addr::from(octets).to_string()),
-                    Err(_) => {
-                        reader.note(format!(
-                            "{}: address of {} bytes; ignored",
-                            at(),
-                            bytes.len()
-                        ));
-                        None
-                    }
-                },
-                None => None,
-            }
-        } else {
-            reader.optional(text(&row, 1), at)
-        };
-        bans.push(MurmurBan {
-            address,
-            mask: reader.optional(int(&row, 2), at),
-            name: reader.capped_text(&row, 3, at),
-            hash: reader.capped_text(&row, 5, at),
-            reason: reader.capped_text(&row, 7, at),
-            start: reader.optional(text(&row, 9), at),
-            duration: reader.optional(int(&row, 10), at),
-        });
-    }
+    let mut index = 0_usize;
+    reader
+        .each("bans", &statement, |reader, row| {
+            index += 1;
+            let at = || format!("ban {index}");
+            let address = if legacy {
+                match reader.capped_bytes(row, 1, at) {
+                    Some(bytes) => match <[u8; 16]>::try_from(bytes.as_slice()) {
+                        Ok(octets) => Some(Ipv6Addr::from(octets).to_string()),
+                        Err(_) => {
+                            reader.note(format!(
+                                "{}: address of {} bytes; ignored",
+                                at(),
+                                bytes.len()
+                            ));
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            } else {
+                reader.capped_text(row, 1, at)
+            };
+            bans.push(MurmurBan {
+                address,
+                mask: reader.optional(int(row, 3), at),
+                name: reader.capped_text(row, 4, at),
+                hash: reader.capped_text(row, 6, at),
+                reason: reader.capped_text(row, 8, at),
+                start: reader.optional(text(row, 10), at),
+                duration: reader.optional(int(row, 11), at),
+            });
+        })
+        .await?;
     reader.send(MurmurFrame::Bans(bans))?;
 
     // Channel listeners (Murmur 1.4 and later).
     if tables.contains("channel_listeners") {
         let statement = format!(
-            "SELECT rowid, user_id, channel_id, {}, {} FROM channel_listeners WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-            optional("channel_listeners", "volume_adjustment"),
-            optional("channel_listeners", "enabled")
+            "SELECT rowid, {}, {}, {}, {} FROM channel_listeners WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+            small("user_id"),
+            small("channel_id"),
+            small(&optional("channel_listeners", "volume_adjustment")),
+            small(&optional("channel_listeners", "enabled"))
         );
         let mut listeners = Vec::new();
-        for row in reader.rows("channel_listeners", &statement).await? {
-            let what = || "channel_listeners: a row".to_owned();
-            let (Some(user_id), Some(channel)) = (
-                reader.require(int(&row, 1), what),
-                reader.require(int(&row, 2), what),
-            ) else {
-                continue;
-            };
-            let at = || format!("listener of user {user_id} in channel {channel}");
-            let volume = reader.optional(real(&row, 3), at);
-            let enabled = reader.optional(flag(&row, 4), at).unwrap_or(true);
-            listeners.push(MurmurListener {
-                user_id,
-                channel,
-                volume,
-                enabled,
-            });
-        }
+        reader
+            .each("channel_listeners", &statement, |reader, row| {
+                let what = || "channel_listeners: a row".to_owned();
+                let (Some(user_id), Some(channel)) = (
+                    reader.require(int(row, 1), what),
+                    reader.require(int(row, 2), what),
+                ) else {
+                    return;
+                };
+                let at = || format!("listener of user {user_id} in channel {channel}");
+                let volume = reader.optional(real(row, 3), at);
+                let enabled = reader.optional(flag(row, 4), at).unwrap_or(true);
+                listeners.push(MurmurListener {
+                    user_id,
+                    channel,
+                    volume,
+                    enabled,
+                });
+            })
+            .await?;
         reader.send(MurmurFrame::Listeners(listeners))?;
     }
 
     // Registered users, their properties and textures.
     let (info, info_key, info_value) = layout.user_info;
     let statement = format!(
-        "SELECT rowid, user_id, {key}, {} FROM {info} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-        capped(info_value),
-        key = info_key
+        "SELECT rowid, {}, {}, {} FROM {info} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+        small("user_id"),
+        small(info_key),
+        capped(info_value, MAX_BLOB_BYTES)
     );
     let mut user_properties: HashMap<(i64, i64), String> = HashMap::new();
     let mut emails = HashSet::new();
-    for row in reader.rows(info, &statement).await? {
-        let what = || format!("{info}: a row");
-        let (Some(user), Some(key)) = (
-            reader.require(int(&row, 1), what),
-            reader.require(int(&row, 2), what),
-        ) else {
-            continue;
-        };
-        match key {
-            USER_EMAIL => {
-                emails.insert(user);
-            }
-            USER_COMMENT | USER_HASH => {
-                if let Some(value) =
-                    reader.capped_text(&row, 3, || format!("user {user} property {key}"))
-                {
-                    user_properties.insert((user, key), value);
+    reader
+        .each(info, &statement, |reader, row| {
+            let what = || format!("{info}: a row");
+            let (Some(user), Some(key)) = (
+                reader.require(int(row, 1), what),
+                reader.require(int(row, 2), what),
+            ) else {
+                return;
+            };
+            match key {
+                USER_EMAIL => {
+                    emails.insert(user);
                 }
+                USER_COMMENT | USER_HASH => {
+                    if let Some(value) =
+                        reader.capped_text(row, 3, || format!("user {user} property {key}"))
+                    {
+                        user_properties.insert((user, key), value);
+                    }
+                }
+                _ => {}
             }
-            _ => {}
-        }
-    }
+        })
+        .await?;
     let users_table = layout.users;
     let statement = format!(
-        "SELECT rowid, user_id, {}, {}, {}, {}, {}, CAST({} AS TEXT), {} FROM {users_table} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
-        capped(layout.user_name),
-        capped(layout.password),
-        capped(&optional(users_table, "salt")),
-        optional(users_table, layout.kdf_iterations),
-        optional(users_table, layout.last_channel),
-        optional(users_table, "last_active"),
-        capped(&optional(users_table, "texture")),
+        "SELECT rowid, {}, {}, {}, {}, {}, {}, {}, {} FROM {users_table} WHERE server_id = $1 AND rowid > $2 ORDER BY rowid LIMIT $3",
+        small("user_id"),
+        capped(layout.user_name, NAME_BYTES),
+        capped(layout.password, SHORT_BYTES),
+        capped(&optional(users_table, "salt"), SHORT_BYTES),
+        small(&optional(users_table, layout.kdf_iterations)),
+        small(&optional(users_table, layout.last_channel)),
+        small_text(&optional(users_table, "last_active")),
+        capped(&optional(users_table, "texture"), MAX_BLOB_BYTES),
     );
     let mut users = Vec::new();
-    for row in reader.rows(users_table, &statement).await? {
-        let Some(id) = reader.require(int(&row, 1), || "users: user_id".into()) else {
-            continue;
-        };
-        let Some(name) = reader.capped_text(&row, 2, || format!("user {id}: name")) else {
-            reader.note(format!("user {id}: no usable name; skipped"));
-            continue;
-        };
-        let at = || format!("user {id}");
-        let password = reader.capped_text(&row, 4, at);
-        let salt = reader.capped_text(&row, 6, at);
-        let kdf_iterations = reader.optional(int(&row, 8), at);
-        let last_channel = reader.optional(int(&row, 9), at);
-        let last_active = reader.optional(text(&row, 10), at);
-        let texture = reader
-            .capped_bytes(&row, 11, || format!("user {id}: texture"))
-            .filter(|texture| !texture.is_empty())
-            .map(|texture| encode_blob(&texture));
-        users.push(MurmurUser {
-            id,
-            name,
-            password,
-            salt,
-            kdf_iterations,
-            last_channel,
-            last_active,
-            certificate_hash: user_properties.remove(&(id, USER_HASH)),
-            comment: user_properties.remove(&(id, USER_COMMENT)),
-            texture,
-            email: emails.contains(&id),
-        });
-    }
+    reader
+        .each(users_table, &statement, |reader, row| {
+            let Some(id) = reader.require(int(row, 1), || "users: user_id".into()) else {
+                return;
+            };
+            let Some(name) = reader.capped_text(row, 2, || format!("user {id}: name")) else {
+                reader.note(format!("user {id}: no usable name; skipped"));
+                return;
+            };
+            let at = || format!("user {id}");
+            let password = reader.capped_text(row, 4, at);
+            let salt = reader.capped_text(row, 6, at);
+            let kdf_iterations = reader.optional(int(row, 8), at);
+            let last_channel = reader.optional(int(row, 9), at);
+            let last_active = reader.optional(text(row, 10), at);
+            let texture = reader
+                .capped_bytes(row, 11, || format!("user {id}: texture"))
+                .filter(|texture| !texture.is_empty())
+                .map(|texture| encode_blob(&texture));
+            users.push(MurmurUser {
+                id,
+                name,
+                password,
+                salt,
+                kdf_iterations,
+                last_channel,
+                last_active,
+                certificate_hash: user_properties.remove(&(id, USER_HASH)),
+                comment: user_properties.remove(&(id, USER_COMMENT)),
+                texture,
+                email: emails.contains(&id),
+            });
+        })
+        .await?;
     reader.send(MurmurFrame::Users(users))?;
     let notes = std::mem::take(&mut reader.notes);
     reader.send(MurmurFrame::Notes(notes))?;
@@ -1100,7 +1226,7 @@ mod tests {
 CREATE TABLE "meta" ("meta_key" VARCHAR(100) PRIMARY KEY, "meta_value" TEXT);
 CREATE TABLE "virtual_servers" ("server_id" INTEGER PRIMARY KEY);
 CREATE TABLE "config" ("server_id" INTEGER NOT NULL, "config_name" VARCHAR(100), "config_value" TEXT);
-CREATE TABLE "channels" ("server_id" INTEGER NOT NULL, "channel_id" INTEGER NOT NULL, "parent_id" INTEGER, "channel_name" VARCHAR(255), "inherit_acl" SMALLINT);
+CREATE TABLE "channels" ("server_id" INTEGER NOT NULL, "channel_id" INTEGER NOT NULL, "parent_id" INTEGER NOT NULL, "channel_name" VARCHAR(255), "inherit_acl" SMALLINT);
 CREATE TABLE "channel_properties" ("server_id" INTEGER NOT NULL, "channel_id" INTEGER NOT NULL, "property_key" INTEGER, "property_value" TEXT);
 CREATE TABLE "users" ("server_id" INTEGER NOT NULL, "user_id" INTEGER NOT NULL, "user_name" VARCHAR(255), "password_hash" VARCHAR(255), "salt" VARCHAR(128), "kdf_iterations" INTEGER, "last_channel_id" INTEGER, "texture" BLOB, "last_active" BIGINT, "last_disconnect" BIGINT);
 CREATE TABLE "user_properties" ("server_id" INTEGER NOT NULL, "user_id" INTEGER NOT NULL, "property_key" INTEGER, "property_value" TEXT);
@@ -1112,7 +1238,7 @@ CREATE TABLE "bans" ("server_id" INTEGER NOT NULL, "ipv6_base_address" VARCHAR(4
 CREATE TABLE "channel_listeners" ("server_id" INTEGER NOT NULL, "user_id" INTEGER NOT NULL, "channel_id" INTEGER NOT NULL, "volume_adjustment" FLOAT, "enabled" SMALLINT);
 INSERT INTO meta VALUES ('schema_version', '11');
 INSERT INTO virtual_servers VALUES (1);
-INSERT INTO channels VALUES (1, 0, NULL, 'Root', 1);
+INSERT INTO channels VALUES (1, 0, 0, 'Root', 1);
 INSERT INTO channels VALUES (1, 1, 0, 'Lobby', 1);
 INSERT INTO users VALUES (1, 0, 'SuperUser', NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 INSERT INTO users VALUES (1, 1, 'alice', 'c2fa5023e808bd1adafccf5f995d5147a0d17e0113e9bda3fa8380faa58088467346ba1eb6bbf7e6374da78caa9b784c', '0011223344556677', 1000, 1, NULL, 1762819200, NULL);
@@ -1133,7 +1259,9 @@ INSERT INTO channel_listeners VALUES (1, 1, 0, 2.0, 1);
         let dump = dump(&path, 1).await.unwrap();
         assert_eq!(dump.header.layout, "1.6");
         assert_eq!(dump.header.schema_version, 11);
+        // The root is its own parent in 1.6.
         assert_eq!(dump.channels.len(), 2);
+        assert_eq!(dump.channels[0].parent, Some(0));
         let groups: Vec<Option<&str>> = dump.acls.iter().map(|acl| acl.group.as_deref()).collect();
         assert_eq!(
             groups,
@@ -1159,12 +1287,82 @@ INSERT INTO channel_listeners VALUES (1, 1, 0, 2.0, 1);
         assert_eq!(dump.listeners[0].volume, Some(2.0));
     }
 
+    /// What a hostile file could try: a `-wal` next to it, a virtual table,
+    /// generated columns, odd config keys, oversized values.
+    #[tokio::test]
+    async fn hostile_files_are_contained() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = std::fs::read_to_string(fixture_path("murmur-1.5.sql")).unwrap()
+            + "INSERT INTO config VALUES (1, 'bad\u{1b}[2Jkey', 'x');\n\
+               INSERT INTO config VALUES (1, 'big', zeroblob(2000000));\n\
+               INSERT INTO user_info VALUES (1, 7, 3, hex(zeroblob(200)));\n";
+        let path = fixture(directory.path(), "murmur.sqlite", &script).await;
+        // A sibling write-ahead log is never read (the file is opened immutable).
+        let wal = directory.path().join("murmur.sqlite-wal");
+        std::fs::write(&wal, vec![0xa5; 4096]).unwrap();
+        let read = dump(&path, 1).await.unwrap();
+        assert!(!directory.path().join("murmur.sqlite-shm").exists());
+        assert_eq!(std::fs::read(&wal).unwrap(), vec![0xa5; 4096]);
+        assert!(
+            !read
+                .config
+                .iter()
+                .any(|(key, _)| key.contains('\u{1b}') || key == "big")
+        );
+        for expected in [
+            "config: a key with characters Murmur does not use",
+            "config big: 2000000 bytes, over the limit",
+        ] {
+            assert!(
+                read.notes.iter().any(|note| note.contains(expected)),
+                "{expected} in {:?}",
+                read.notes
+            );
+        }
+        // Not a Murmur database: the users table is virtual, or computes values.
+        let virtual_table = fixture(
+            directory.path(),
+            "virtual.sqlite",
+            "CREATE VIRTUAL TABLE users USING fts4(user_id, name, pw);",
+        )
+        .await;
+        assert!(
+            dump(&virtual_table, 1)
+                .await
+                .unwrap_err()
+                .contains("not a Murmur database")
+        );
+        let generated = fixture(
+            directory.path(),
+            "generated.sqlite",
+            "CREATE TABLE users (server_id, user_id, name, pw, x GENERATED ALWAYS AS (upper(name)));",
+        )
+        .await;
+        assert!(
+            dump(&generated, 1)
+                .await
+                .unwrap_err()
+                .contains("hidden or generated columns")
+        );
+    }
+
     #[tokio::test]
     async fn refuses_files_that_are_not_murmur_databases() {
         let directory = tempfile::tempdir().unwrap();
         let text = directory.path().join("notes.txt");
+        assert!(
+            dump(&directory.path().join("missing"), 1)
+                .await
+                .unwrap_err()
+                .contains("cannot read")
+        );
         std::fs::write(&text, "hello").unwrap();
-        assert!(dump(&text, 1).await.unwrap_err().contains("cannot read"));
+        assert!(
+            dump(&text, 1)
+                .await
+                .unwrap_err()
+                .contains("not an SQLite database")
+        );
         std::fs::write(&text, "definitely not SQLite at all").unwrap();
         assert!(
             dump(&text, 1)
@@ -1172,6 +1370,13 @@ INSERT INTO channel_listeners VALUES (1, 1, 0, 2.0, 1);
                 .unwrap_err()
                 .contains("not an SQLite database")
         );
+        let wal = fixture(
+            directory.path(),
+            "wal.sqlite",
+            "PRAGMA journal_mode=WAL; CREATE TABLE users (user_id, name, pw);",
+        )
+        .await;
+        assert!(dump(&wal, 1).await.unwrap_err().contains("write-ahead log"));
         let empty = fixture(directory.path(), "empty.sqlite", "CREATE TABLE t (x);").await;
         assert!(
             dump(&empty, 1)

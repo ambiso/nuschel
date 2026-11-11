@@ -70,6 +70,48 @@ let
       "%d/kt-vrf-secret"
     ];
   notInStore = path: path == null || !(lib.hasPrefix builtins.storeDir (toString path));
+  credentials =
+    lib.optional (databaseUrlFile != null) "database-url:${databaseUrlFile}"
+    ++ lib.optional (cfg.tls.certificateFile != null) "tls-certificate:${cfg.tls.certificateFile}"
+    ++ lib.optional (cfg.tls.keyFile != null) "tls-key:${cfg.tls.keyFile}";
+  # The sandbox of the server and of the one-time Murmur import.
+  hardening = {
+    NoNewPrivileges = true;
+    PrivateTmp = true;
+    PrivateDevices = true;
+    PrivateIPC = true;
+    ProtectSystem = "strict";
+    ProtectHome = true;
+    ProtectClock = true;
+    ProtectHostname = true;
+    ProtectKernelLogs = true;
+    ProtectKernelTunables = true;
+    ProtectKernelModules = true;
+    ProtectControlGroups = true;
+    ProtectProc = "invisible";
+    ProcSubset = "pid";
+    RestrictAddressFamilies = [
+      "AF_UNIX"
+      "AF_INET"
+      "AF_INET6"
+    ];
+    RestrictNamespaces = true;
+    RestrictRealtime = true;
+    RestrictSUIDSGID = true;
+    LockPersonality = true;
+    MemoryDenyWriteExecute = true;
+    CapabilityBoundingSet = "";
+    SocketBindAllow = [
+      "tcp:${toString cfg.port}"
+      "udp:${toString cfg.port}"
+    ];
+    SocketBindDeny = "any";
+    SystemCallArchitectures = "native";
+    SystemCallFilter = [
+      "@system-service"
+      "~@privileged"
+    ];
+  };
   # A Murmur database imported once before the first start (docs/server.md):
   # root copies it in for the dynamic user, the service imports it; the
   # marker keeps later starts from trying again.
@@ -86,7 +128,8 @@ let
     set -eu
     if [ -e ${murmurCopy} ] && [ ! -e ${murmurMarker} ]; then
       ${cfg.package}/bin/nuscheld --config ${configFile} --state-directory ${stateDirectory} "$@" \
-        --import-murmur ${murmurCopy} --murmur-server-id ${toString cfg.importMurmur.serverId}
+        --import-murmur ${murmurCopy} --murmur-server-id ${toString cfg.importMurmur.serverId} \
+        ${lib.optionalString cfg.importMurmur.replaceExisting "--replace-existing"}
       ${pkgs.coreutils}/bin/touch ${murmurMarker}
       ${pkgs.coreutils}/bin/rm -f ${murmurCopy}
     fi
@@ -209,7 +252,9 @@ in
           start (`nuscheld --import-murmur`, docs/server.md): users with their
           passwords, channels, ACLs, groups, links, listeners and bans. Stop Murmur
           first. The import refuses a database that already has channels, users or
-          bans; then the service does not start and the journal says why.
+          bans (see replaceExisting); then nuschel-import-murmur.service fails,
+          nuschel.service does not start, and the journal says why. It runs as its
+          own unit before the server, without a start timeout.
           Settings found in it are written to murmur-import.toml in the state
           directory, for `settings`.
         '';
@@ -219,6 +264,10 @@ in
         default = 1;
         description = "The Murmur virtual server to import.";
       };
+      replaceExisting = lib.mkEnableOption ''
+        replacing this server's channels, registered users and bans with the import
+        (`--replace-existing`); without it, a server with state refuses the import
+      '';
     };
     tls = {
       certificateFile = lib.mkOption {
@@ -315,20 +364,14 @@ in
           ++ lib.optional (cfg.kt.signingKeyFile != null) "kt-signing-key:${cfg.kt.signingKeyFile}"
           ++ lib.optional (cfg.kt.vrfSecretFile != null) "kt-vrf-secret:${cfg.kt.vrfSecretFile}";
         # Migrations and a connection check before the server takes traffic.
-        ExecStartPre = [
-          (lib.escapeShellArgs (
-            [
-              "${cfg.package}/bin/nuschel-storage-worker"
-              "--server"
-              "--check-database"
-            ]
-            ++ databaseArguments
-          ))
-        ]
-        ++ lib.optionals (cfg.importMurmur.databaseFile != null) [
-          "+${copyMurmur}"
-          (lib.escapeShellArgs ([ "${importMurmur}" ] ++ serverDatabaseArguments ++ tlsArguments))
-        ];
+        ExecStartPre = lib.escapeShellArgs (
+          [
+            "${cfg.package}/bin/nuschel-storage-worker"
+            "--server"
+            "--check-database"
+          ]
+          ++ databaseArguments
+        );
         ExecStart = lib.escapeShellArgs (
           [
             "${cfg.package}/bin/nuscheld"
@@ -344,39 +387,39 @@ in
         Restart = "on-failure";
         RestartSec = "5s";
         LimitNOFILE = 65536;
-        NoNewPrivileges = true;
-        PrivateTmp = true;
-        PrivateDevices = true;
-        PrivateIPC = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        ProtectClock = true;
-        ProtectHostname = true;
-        ProtectKernelLogs = true;
-        ProtectKernelTunables = true;
-        ProtectKernelModules = true;
-        ProtectControlGroups = true;
-        ProtectProc = "invisible";
-        ProcSubset = "pid";
-        RestrictAddressFamilies = [
-          "AF_UNIX"
-          "AF_INET"
-          "AF_INET6"
-        ];
-        RestrictNamespaces = true;
-        RestrictRealtime = true;
-        RestrictSUIDSGID = true;
-        LockPersonality = true;
-        MemoryDenyWriteExecute = true;
-        CapabilityBoundingSet = "";
-        SocketBindAllow = [
-          "tcp:${toString cfg.port}"
-          "udp:${toString cfg.port}"
-        ];
-        SocketBindDeny = "any";
-        SystemCallArchitectures = "native";
+      }
+      // hardening;
+    };
+    # The one-time Murmur import, before the server's first start (docs/server.md).
+    systemd.services.nuschel-import-murmur = lib.mkIf (cfg.importMurmur.databaseFile != null) {
+      description = "Import a Murmur database into the Nuschel server, once";
+      requiredBy = [ "nuschel.service" ];
+      before = [ "nuschel.service" ];
+      after = [ "network.target" ] ++ lib.optional localPostgres "postgresql.target";
+      requires = lib.optional localPostgres "postgresql.target";
+      unitConfig.ConditionPathExists = "!${murmurMarker}";
+      serviceConfig = {
+        Type = "oneshot";
+        DynamicUser = true;
+        User = "nuschel";
+        StateDirectory = "nuschel";
+        StateDirectoryMode = "0700";
+        WorkingDirectory = stateDirectory;
+        UMask = "0077";
+        LoadCredential = credentials;
+        # Reading and writing a large server can take a while.
+        TimeoutStartSec = "infinity";
+        ExecStartPre = "+${copyMurmur}";
+        ExecStart = lib.escapeShellArgs (
+          [ "${importMurmur}" ] ++ serverDatabaseArguments ++ tlsArguments
+        );
+      }
+      // hardening
+      // {
+        # The reader confines itself with Landlock (@sandbox).
         SystemCallFilter = [
           "@system-service"
+          "@sandbox"
           "~@privileged"
         ];
       };

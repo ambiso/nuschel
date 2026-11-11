@@ -20,7 +20,7 @@ use crate::{
     acl::{AclEntry, Group, perm},
     config::Settings,
     conversations::hex,
-    handlers::truncate_chars,
+    handlers::{MAX_STORED_NAME, truncate_bytes, truncate_chars},
     password,
     server::{self, StartError},
     state::{Ban, Channel, Registered, State, now_unix, random},
@@ -69,6 +69,11 @@ pub struct Options {
 pub enum ImportError {
     #[error("reading the Murmur database failed: {0}")]
     Reader(String),
+    #[error(
+        "{0} writes to this server's storage failed (see the log above); the import is \
+         incomplete. Fix the cause, then import again with --replace-existing"
+    )]
+    Storage(u64),
     #[error("{0}")]
     NotEmpty(String),
     #[error(transparent)]
@@ -93,6 +98,15 @@ pub struct Report {
 impl Report {
     fn count(&mut self, what: &'static str) {
         *self.imported.entry(what).or_default() += 1;
+    }
+
+    /// An imported Murmur hash, by kind.
+    fn count_password(&mut self, hash: Option<&str>) {
+        match hash {
+            Some(hash) if hash.starts_with(password::MURMUR_SHA1) => self.sha1_passwords += 1,
+            Some(_) => self.pbkdf2_passwords += 1,
+            None => {}
+        }
     }
 
     fn skip(&mut self, reason: String) {
@@ -121,7 +135,7 @@ impl Report {
         if !self.notes.is_empty() {
             let _ = writeln!(
                 out,
-                "not readable in the Murmur database ({}):",
+                "from reading the Murmur database ({}):",
                 self.notes.len()
             );
             for line in &self.notes {
@@ -210,6 +224,15 @@ fn to_u32(value: i64) -> Option<u32> {
     u32::try_from(value).ok()
 }
 
+/// Murmur stores permissions as a signed int (`static_cast<int>`), so -1
+/// (every bit, as Ice may set it) is valid.
+fn permission_bits(value: i64) -> Option<u32> {
+    match i32::try_from(value) {
+        Ok(signed) => Some(signed as u32),
+        Err(_) => u32::try_from(value).ok(),
+    }
+}
+
 /// Murmur's channel and user ids are signed 32-bit; temporary channels here
 /// count down from `i32::MAX`.
 fn to_id(value: i64) -> Option<u32> {
@@ -283,6 +306,15 @@ pub fn apply(
         notes: dump.notes.clone(),
         ..Report::default()
     };
+    // Whole-import failures come before anything is changed.
+    // (Murmur 1.6 gives the root itself as its parent, earlier versions NULL.)
+    if !dump.channels.iter().any(|channel| channel.id == 0) {
+        return Err(ImportError::Reader(
+            "the Murmur database has no root channel for this virtual server (Murmur creates \
+             it when the server first starts); nothing was changed"
+                .into(),
+        ));
+    }
     let (channels, users, bans) = existing(state);
     if !channels.is_empty() || !users.is_empty() || bans > 0 {
         if !replace_existing {
@@ -359,6 +391,7 @@ pub fn apply(
         }
     }
     let mut order = Vec::new();
+    let mut skipped = HashSet::new();
     let mut queue = VecDeque::from([(0_u32, 0_usize)]);
     let mut deepest = 0;
     while let Some((parent, depth)) = queue.pop_front() {
@@ -370,22 +403,28 @@ pub fn apply(
             let channel = by_id[&id];
             let name = channel.name.as_str();
             if order.len() >= MAX_CHANNELS {
-                report.skip(format!("channel {id}: more than {MAX_CHANNELS} channels"));
+                report.skip(format!(
+                    "channel {id} and its subchannels: more than {MAX_CHANNELS} channels"
+                ));
+                skipped.insert(id);
                 continue;
             }
             if name.is_empty()
                 || name.chars().count() > 512
+                || name.len() > MAX_STORED_NAME
                 || !settings.channel_name.is_match(name)
             {
                 report.skip(format!(
                     "channel {id} and its subchannels: the name does not match channel_name_pattern"
                 ));
+                skipped.insert(id);
                 continue;
             }
             if !names.insert(name.to_owned()) {
                 report.skip(format!(
                     "channel {id} and its subchannels: a sibling has the same name"
                 ));
+                skipped.insert(id);
                 continue;
             }
             imported_channels.insert(id);
@@ -396,13 +435,29 @@ pub fn apply(
     }
     // Whatever was not reached hangs off a skipped channel or is in a cycle.
     for (parent, kids) in children {
-        for id in kids {
-            if !imported_channels.contains(&parent) && by_id.contains_key(&parent) {
-                // Already reported with its skipped ancestor.
-                continue;
+        // Below a skipped channel: reported with it.
+        let mut current = parent;
+        let mut below_skipped = false;
+        for _ in 0..=by_id.len() {
+            if skipped.contains(&current) {
+                below_skipped = true;
+                break;
             }
+            match by_id
+                .get(&current)
+                .and_then(|channel| channel.parent)
+                .and_then(to_id)
+            {
+                Some(next) if current != 0 => current = next,
+                _ => break,
+            }
+        }
+        if below_skipped {
+            continue;
+        }
+        for id in kids {
             report.skip(format!(
-                "channel {id}: its parent {parent} does not exist or forms a cycle"
+                "channel {id}: its parent {parent} does not exist, or the parents form a cycle"
             ));
         }
     }
@@ -441,9 +496,7 @@ pub fn apply(
             (Some(hash), Some(iterations)) if iterations > 0 => {
                 let stored =
                     password::murmur_pbkdf2(iterations, user.salt.as_deref().unwrap_or(""), hash);
-                if stored.is_some() {
-                    report.pbkdf2_passwords += 1;
-                } else {
+                if stored.is_none() {
                     report.skip(format!(
                         "user {id}: malformed PBKDF2 password or more than {} iterations; \
                          imported without a password",
@@ -454,9 +507,7 @@ pub fn apply(
             }
             (Some(hash), _) => {
                 let stored = password::murmur_sha1(hash);
-                if stored.is_some() {
-                    report.sha1_passwords += 1;
-                } else {
+                if stored.is_none() {
                     report.skip(format!(
                         "user {id}: malformed SHA-1 password; imported without a password"
                     ));
@@ -469,6 +520,7 @@ pub fn apply(
             let ours = state.registry.users.get(&0).cloned();
             if let Some(mut superuser) = ours {
                 if superuser.password_hash.is_none() && password_hash.is_some() {
+                    report.count_password(password_hash.as_deref());
                     superuser.password_hash = password_hash;
                     report
                         .advice
@@ -546,6 +598,7 @@ pub fn apply(
             .and_then(to_id)
             .filter(|channel| imported_channels.contains(channel));
         let last_active = user.last_active.as_deref().and_then(parse_time);
+        report.count_password(password_hash.as_deref());
         state.registry.insert(Registered {
             id,
             account: random(),
@@ -604,7 +657,8 @@ pub fn apply(
                 report.skip(format!("{at}: more than {MAX_ACL_ENTRIES} entries"));
                 continue;
             }
-            let (Some(grant), Some(deny)) = (to_u32(acl.grant), to_u32(acl.deny)) else {
+            let (Some(grant), Some(deny)) = (permission_bits(acl.grant), permission_bits(acl.deny))
+            else {
                 report.skip(format!("{at}: invalid permission bits"));
                 continue;
             };
@@ -815,9 +869,11 @@ pub fn apply(
                 now
             }
         };
+        // The storage refuses texts over 1024 bytes, and with them every ban.
         let clip = |text: &Option<String>| {
             let mut text = text.clone().unwrap_or_default();
             truncate_chars(&mut text, 1000);
+            truncate_bytes(&mut text, 1000);
             text
         };
         let ban = Ban {
@@ -1161,14 +1217,26 @@ pub async fn import(
     let dump = read_dump(&worker, options).await?;
     let mut settings = settings.clone();
     settings.config.bind.clear();
+    // The state directory 0700 and a new SQLite database 0600, as at startup.
+    server::prepare_files(&settings, &backend)?;
     let storage = storage::start(backend);
     let counters = Default::default();
     let mut state = server::load_state_for_admin(&settings, &storage, &counters).await?;
     let config = dump.config.clone();
-    let mut report = apply(&mut state, dump, options.replace_existing)?;
-    let outputs = config_outputs(&config, &mut report);
-    write_outputs(&outputs, &settings, &mut report)?;
+    let result = apply(&mut state, dump, options.replace_existing);
+    // Whatever was queued is written (or has failed) before anything else.
     storage.flush().await;
+    let mut report = result?;
+    if storage.failures() > 0 {
+        return Err(ImportError::Storage(storage.failures()));
+    }
+    let outputs = config_outputs(&config, &mut report);
+    if let Err(error) = write_outputs(&outputs, &settings, &mut report) {
+        report.skip(format!(
+            "writing Murmur's settings, server password or certificate next to the state \
+             failed ({error}); the users, channels and bans are imported"
+        ));
+    }
     Ok(report)
 }
 

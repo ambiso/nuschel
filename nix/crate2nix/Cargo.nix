@@ -15198,6 +15198,27 @@ rec {
         };
         resolvedDefaultFeatures = [ "default" "std" ];
       };
+      "landlock" = rec {
+        crateName = "landlock";
+        version = "0.4.7";
+        edition = "2021";
+        sha256 = "1c8a6bn380wvx6h4bxs0cqiwkklndx675rmdkm39vcimbzlrijjc";
+        dependencies = [
+          {
+            name = "enumflags2";
+            packageId = "enumflags2";
+          }
+          {
+            name = "libc";
+            packageId = "libc";
+          }
+          {
+            name = "thiserror";
+            packageId = "thiserror 2.0.21";
+          }
+        ];
+
+      };
       "lazy_static" = rec {
         crateName = "lazy_static";
         version = "1.5.1";
@@ -19555,6 +19576,11 @@ rec {
             name = "clap";
             packageId = "clap";
             features = [ "derive" ];
+          }
+          {
+            name = "landlock";
+            packageId = "landlock";
+            target = { target, features }: ("linux" == target."os" or null);
           }
           {
             name = "nuschel-ipc";
