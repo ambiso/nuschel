@@ -26,14 +26,26 @@ Every configuration key is optional; names and defaults follow murmur.ini
   end-to-end encryption. `"e2ee"` will become the default once MLS exists; until
   then the server refuses to start with it, so nobody believes they have E2EE.
 - **Secrets** come from files: `password_file`, `superuser_password_file`,
-  `database_url_file`, `private_key`. The NixOS module passes them through
-  systemd `LoadCredential` and refuses Nix store paths.
+  `database_url_file`, `private_key`, `kt.signing_key_file`, `kt.vrf_secret_file`.
+  The NixOS module passes them through systemd `LoadCredential`
+  (`services.nuschel.kt.signingKeyFile`, `vrfSecretFile`, …) and refuses Nix store
+  paths.
 - **Certificate.** Without `certificate`/`private_key`, a self-signed ECDSA
   certificate is generated once in `state_directory` (key file 0600). Clients pin
   the server certificate, so keep that directory.
 - **SuperUser** (user 0) has no password until one is set; without one it cannot
   log in.
 
+- **Key transparency** (`[kt]`, docs/e2ee.md §5): on by default; the server runs a
+  verifiable key directory and offers `kt/1`. Its head-signing key (the server
+  identity key, which clients pin) and VRF secret come from `kt.signing_key_file` and
+  `kt.vrf_secret_file` (32 bytes or 64 hex digits; never Nix store paths;
+  `--kt-signing-key-file`, `--kt-vrf-secret-file`), or are generated once in
+  `state_directory` (`kt-signing.key`, `kt-vrf.key`, 0600). Keep them: a log can
+  never change its VRF secret, and clients treat a changed key as a replaced log.
+  `publish_interval` (10 s) and `refresh_interval` (an hour) pace epochs and re-signed
+  heads; `history = "contacts"` (default) or `"members"` says who may fetch an
+  account's history besides its owner.
 - **History** (`[history]`): kept forever by default (`retention_days`); guests read
   none (`guests = "none"`); stock clients are told in the welcome text and when they
   enter a channel with history (`notify_stock_clients`); stock senders' direct
@@ -186,6 +198,14 @@ descriptor exhaustion.
   messages are stored as `legacy_html` (`State::text_message`).
 - **Pages** go to the history reader through a bounded queue; the result is clipped
   again if `authz_epoch` moved and dropped if `can_read` no longer holds.
+- **Key transparency** (kt.rs): `kt/1` requests are authorised under the lock (own
+  account for publications, registered targets for lookups, the owner and contacts
+  for histories, per-type rate limits) and queued to one task, which owns nuschel-kt's
+  `AkdDirectory` on the `kt_records` table through a fourth storage worker. It checks
+  each publication (the root's device-signing certificate, the devices, revocations
+  and the identity's statement for this account and log), keeps the record behind
+  each binding beside the log, publishes waiting bindings every `publish_interval`
+  and re-signs the head every `refresh_interval`.
 
 ## Tests
 
@@ -194,7 +214,8 @@ descriptor exhaustion.
 | `cargo test -p nuscheld` | ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames |
 | `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends |
 | `cargo test -p nuschel-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |
-| `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase |
+| `cargo test -p nuschel-storage server` | the server schema on SQLite, reopening, cascades, the registration high mark; history pages, idempotency, edits, tombstones, read markers, intervals, erase; the key-transparency table |
+| `cargo test -p nuschel-crypto-worker` | key transparency end to end: nuscheld, the session and the crypto worker in its sandbox (publish and look up, TOFU and verification, key changes, the self-monitoring alarm, a forked and a replaced log), and the worker against a malicious directory in process |
 | `python3 tests/with_local_nuscheld.py <bins> tests/<suite>.py <bins> --port PORT …` | `mumble_client.py`, `udp_voice.py`, `protocol_features.py` against nuscheld; `with_local_murmur.py` runs the same scripts against stock Murmur |
-| `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), and the stock Mumble GUI (login with a Nuschel-exported certificate, voice both ways) |
-| `cargo +nightly fuzz run server_messages` (in `fuzz/`) | also `control_frames`, `relay`, `crypt`, `extension_messages` |
+| `nix build .#checks.x86_64-linux.vm-server --cores 2` | the module with SQLite and PostgreSQL, restarts, the client suites (with loss and blocked UDP), key transparency (`tests/key_transparency.py`, keys as credentials and generated), and the stock Mumble GUI (login with a Nuschel-exported certificate, voice both ways) |
+| `cargo +nightly fuzz run server_messages` (in `fuzz/`) | also `control_frames`, `relay`, `crypt`, `extension_messages`, `kt_messages` |

@@ -1,6 +1,10 @@
 # End-to-end encryption, identity and key transparency
 
-Status: design for review (2026-11-11), not implemented. It covers roadmap phases 3
+Status: design for review (2026-11-11). Phase 3 (identity and key transparency, without
+MLS) is implemented: `nuschel-identity`, `nuschel-kt`, the crypto worker
+(`apps/crypto-worker`), the `kt/1` directory in `nuscheld` and the client flow in
+`nuschel-session` and the desktop; "Phase 3 as implemented" at the end lists what the
+implementation settled. Phase 4 (MLS) is design only. It covers roadmap phases 3
 (identity, key transparency) and 4 (MLS) in TODO.md, "Nuschel server", and builds on
 the framing, identifiers and policies of [docs/extension.md](extension.md). Claims
 marked *(spike)* are checked by tests in [`spikes/mls`](../spikes/mls), a standalone
@@ -382,6 +386,11 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
 - **Device-signing private key**: on linked devices the user marked "can link devices"
   (default: every desktop; open question 2), in the crypto worker's store.
 - **Device keys**: in the crypto worker's store, never exported.
+- **As implemented** (open question 1 undecided, so a setting: `offer` by default,
+  `require`, `never`): at creation the root is sealed under a fresh recovery key, and
+  the key itself waits, sealed under the store key, until the user writes it down
+  ("saved": the key is forgotten) or skips it (the recovery blob, and with it the
+  root, is deleted). `require` refuses to skip; `never` deletes the root at once.
 - **Recovery** when all devices are lost: with the recovery key, a new device restores
   the root, rotates the device-signing key, revokes the old devices; the identity and
   every contact's verification survive. Without it: a new identity, shown to contacts
@@ -410,7 +419,10 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
 
 - The crypto worker owns an encrypted store (§8.3). Its store key is in the OS
   credential store: Secret Service on Linux, Keychain on macOS, DPAPI on Windows;
-  never in the history database, never on a server.
+  never in the history database, never on a server. **For now** the key is a 0600
+  file in the worker's own directory (`store.key`); moving it to the credential store
+  changes only where the worker gets it (`KeySource`: the supervisor hands it over),
+  not the sealed files.
 - A **device-sync key** (symmetric, shared by the user's devices at linking, rotated on
   revocation by sealing the new key to each remaining device's X-Wing key) encrypts
   per-user blobs on servers: read markers in end-to-end conversations, pins and verified
@@ -434,6 +446,14 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
   identity key, `account` the immutable 128-bit account id (extension.md §3), never
   Murmur's reusable registration number *(spike: `Statement::Account`)*. The server
   publishes the binding in its KT log (§5).
+- **As implemented:** `AccountStatement` (kind 0x06, 3467 bytes, context
+  `nuschel/account-statement/v1`) names the server by its KT **log id**, which hashes
+  the head-signing key (the server identity key) and the VRF key. The `acct:` value
+  commits to the statement's hash (format 3, §5.1), the server checks the statement
+  before publishing, and clients check it with every lookup
+  (`verify_account_record`). So a server cannot present someone's identity as one of
+  its accounts: without the identity's signature for that account and log, a copied
+  binding verifies nowhere, and "same identity as on X" cannot be faked.
 - A server only *claims* that account A is identity I; KT makes the claim the same for
   everyone and lets the user see it. Out-of-band verification (§4) is over the root,
   so verifying someone once holds on every server where their account is bound to
@@ -1133,7 +1153,7 @@ on flash become unreadable once the old key is gone from the OS credential store
 
 1. **Recovery key**: required at identity creation (as Matrix pushes it), or offered and
    skippable? Without one, losing all devices that hold the device-signing key means a
-   new identity.
+   new identity. *(Implemented as a setting, offered and skippable by default.)*
 2. **Device-signing key placement**: on every linked desktop (default here), or only on
    devices the user marks? Phones later?
 3. **Key transparency backend**: `akd` now (recommended), or wait for KEYTRANS and
@@ -1157,3 +1177,77 @@ on flash become unreadable once the old key is gone from the OS credential store
 12. **Guests**: unregistered users cannot join end-to-end conversations, so on an
     end-to-end server they read no text. Accept, or give guests ephemeral identities
     shown as "guest, unverified"?
+
+## Phase 3 as implemented (2026-11-11)
+
+Identity and key transparency work end to end without MLS. What the implementation
+settled, beyond the refinements marked "as implemented" above:
+
+- **Processes.** `apps/crypto-worker` (`nuschel-crypto-worker`) owns every identity
+  secret and key-transparency decision. It runs in the shared bubblewrap sandbox
+  (`crypto_sandbox_command`: its own directory at `/data`, no network), one per
+  profile, shared by all connections; the session (`nuschel_session::identity`) only
+  moves bytes between it and the server and never links `nuschel-kt` (cargo-deny
+  confines `nuschel-kt` to the worker and `nuscheld`, `nuschel-identity` to them and
+  `nuschel-kt`). The IPC is `nuschel_ipc::crypto`: typed JSON with base64 binaries,
+  every field bounded (§8.1). `nuschel-e2ee` (§8.1) is not needed yet:
+  `nuschel-identity` carries the identity formats.
+- **The worker's store** (§8.3, for phase 3): the sealed `DeviceKeystore`, a JSON state
+  sealed under the store key (purpose 5: pinned logs, `KnownHeads`, our bindings and
+  monitoring checkpoint, contacts' `ContactTrust`, verified identities), and the
+  pending recovery key; each file written atomically (synced temporary file,
+  rename). The log-structured store for MLS state comes with phase 4.
+- **Signing.** The worker signs account statements (one per server and account,
+  reused while valid) and renews this device's certificate 30 days before it expires
+  (validity one year). Devices without the device-signing key cannot bind accounts yet
+  (multi-device publishing comes with linking).
+- **The server** (`nuscheld`, docs/server.md): the directory on its `kt_records` table
+  through its own storage worker; records behind each binding (`R ‖ account ‖
+  SHA-256(value)`, and `C ‖ account` for the current one) in the same table; one task
+  serves every request in order, so a lookup never pairs a new value with an old
+  record. Publications must verify under the root and carry the identity's statement
+  for this account and log; epochs every `publish_interval` (10 s) while bindings
+  wait, heads re-signed every `refresh_interval` (an hour). Keys from credential files
+  (`LoadCredential`), or generated once in the state directory.
+- **Who may ask** (§5.7, the review's guidance): lookups by any connection for any
+  registered account of the server (by registration number or account id); histories
+  only for the owner and contacts, which the server knows as direct-conversation
+  partners and users in the same channel right now (`[kt] history = "members"` opens
+  them to everyone); audits and heads for anyone; each with a per-minute rate limit.
+  A verified contact without a direct conversation is checked by lookup only, with
+  the version check of `ContactTrust` (a transient binding between two lookups is not
+  seen then).
+- **The schedule** (§5.4): on every connection and hourly, the server's head (audited
+  from the last accepted one; a span the server finds too large is halved, with
+  `KtHead` for the epoch in between). On connect: publish our binding (the server
+  skips an unchanged value), self-monitor (again after 2, 4, 8 … s while the binding
+  waits for its epoch), and histories of direct and verified contacts; then daily.
+  Contacts are looked up when their profile or a direct conversation with them opens.
+- **Self-monitoring baseline.** The first check starts at the newest version of our
+  account's history that carries a value this device made; earlier versions (another
+  identity of the same person, or whoever held the account before) are not judged.
+  Every later version must be ours, or the blocking own-key alarm is raised and kept
+  until the user acknowledges it.
+- **Pins.** The worker pins each server's log descriptor (by the sticky record's
+  `host:port` key) on first contact; a different descriptor later is misbehaviour
+  ("the log changed"), never accepted, and only an explicit reset (`ForgetServer`)
+  clears it. `kt/1` itself is sticky like every capability (§7.1).
+- **Key changes** (§4, §5.5): a verified contact's new identity is
+  `KeyChanged { blocking: true }` with the old pin kept until the user accepts; an
+  unverified contact's is re-pinned and shown as changed until acknowledged. The
+  desktop shows both in the profile and as the server's notice; MLS-level blocking of
+  sends comes with phase 4.
+- **Cross-server identity.** Verification is stored per identity fingerprint with the
+  server (and its label) where it was made; on another server whose log binds the same
+  identity (with the identity's statement for that account), the contact shows
+  "verified (same identity as on X)", by server label, never by name.
+- **Gossip** (§5.3) is ready: `MakeGossip` and `CheckGossip` produce and check
+  `HeadGossip` against the worker's `KnownHeads` and keep `Evidence`; carrying it in
+  MLS application messages comes with phase 4.
+
+**MLS integration points** for phase 4: the crypto worker gains the OpenMLS state (and
+the log-structured store of §8.3); credential verification uses the device roster that
+`verify_account_record` already returns; the KT check of new devices in a roster
+(§5.4) reuses the contact lookup; head gossip rides in application messages; key-change
+blocking moves from the profile into the conversation's send path; and device linking
+publishes the new roster with the existing `KtPublish`.

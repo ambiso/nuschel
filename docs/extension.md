@@ -1,8 +1,8 @@
 # The Nuschel protocol extension
 
 Status: design (2026-11-11), revised after the security review of the same day;
-implemented in `nuscheld`, `nuschel-session` and the desktop except files (§8), MLS
-and key transparency. Where the implementation refined the design, the text says so
+implemented in `nuscheld`, `nuschel-session` and the desktop except files (§8) and
+MLS; key transparency (`kt/1`) is implemented as listed in "Implementation notes". Where the implementation refined the design, the text says so
 and "Implementation notes" at the end lists the refinements. It covers roadmap phase
 2 (TODO.md, "Nuschel server"): negotiation, durable conversations, persistent
 history, subscriptions. Identity, key transparency
@@ -369,3 +369,22 @@ the wire definition):
   account's conversations are frozen and its messages show no name.
 - **Storage**: three storage-worker processes on one database (server state,
   history writes in order, history reads), so a page never waits behind a write.
+- **Key transparency** (`kt/1`, docs/e2ee.md §5): sticky like the other
+  capabilities; the server's hello carries its log descriptor (`kt_log`, at most 512
+  bytes), which the client's crypto worker pins, and `kt/1` without a descriptor fails
+  the connection. Messages `0x4E14`–`0x4E1F`: `KtStatus`/`KtStatusReply` (the
+  requester's account id and the newest head), `KtPublish`/`KtPublished` (bind one's
+  own account: the root, a `KtRecord` with the device-signing certificate, at most 16
+  device certificates and 32 revocations, and the identity's account statement for
+  this account and log; registered users only), `KtLookup`/`KtLookupReply` (by
+  registration number or account id, any registered account; the proof and the record
+  the binding commits to), `KtHistory`/`KtHistoryReply` (the owner and contacts only),
+  `KtAudit`/`KtAuditReply` (at most 4096 epochs; `too_large` above 6 MiB, and the
+  client audits shorter spans) and `KtHead`/`KtHeadReply` (an earlier epoch's head).
+  Proofs, heads and certificates are nuschel-kt's and nuschel-identity's own strict
+  encodings in `bytes` fields. Limits: `KtPublish` ≤ 256 KiB from clients, other
+  requests 64 bytes; lookup replies ≤ 512 KiB, histories and audits ≤ 6 MiB; per
+  connection and minute `kt.lookups_per_minute` (120), `kt.histories_per_minute` (60,
+  also audits and heads) and `kt.publishes_per_minute` (6). A missing account, one
+  without a binding, and a history the requester may not see are the same
+  `not_found`.
