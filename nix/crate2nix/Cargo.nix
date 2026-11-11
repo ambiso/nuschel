@@ -15820,7 +15820,7 @@ rec {
             name = "image";
             packageId = "image";
             usesDefaultFeatures = false;
-            features = [ "png" "jpeg" "gif" ];
+            features = [ "png" "jpeg" "gif" "bmp" ];
           }
           {
             name = "markup5ever_rcdom";
@@ -15878,6 +15878,13 @@ rec {
             packageId = "nuschel-ipc";
           }
         ];
+        devDependencies = [
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "macros" "rt" ];
+          }
+        ];
 
       };
       "nuschel-core" = rec {
@@ -15932,7 +15939,7 @@ rec {
           {
             name = "tokio";
             packageId = "tokio";
-            features = [ "io-util" "process" "time" "rt" ];
+            features = [ "io-util" "macros" "process" "time" "rt" ];
           }
           {
             name = "win32job";
