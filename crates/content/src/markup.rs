@@ -18,7 +18,10 @@
 
 use crate::math::Token as Formula;
 #[cfg(feature = "images")]
-use crate::{MAX_DOCUMENT_PIXELS_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_IMAGES, data_uri, decode_image};
+use crate::{
+    MAX_DOCUMENT_PIXELS_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_IMAGES, data_uri,
+    decode_image,
+};
 use html5ever::{
     Attribute,
     tendril::{StrTendril, TendrilSink},

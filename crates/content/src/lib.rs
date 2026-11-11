@@ -486,10 +486,17 @@ mod tests {
         let html = "one<br>two<img src='data:image/png;base64,iVBORw0KGgo='><img src='https://tracker.invalid/x'>";
         let source = renderer.legacy_plain_text(html).unwrap();
         let document = renderer.render(&source).unwrap();
-        assert!(document.blocks.iter().all(|block| !matches!(block, nuschl_core::ContentBlock::Image { .. })));
+        assert!(
+            document
+                .blocks
+                .iter()
+                .all(|block| !matches!(block, nuschl_core::ContentBlock::Image { .. }))
+        );
         assert!(document.blocks.iter().any(|block| matches!(block, nuschl_core::ContentBlock::Text { text, .. } if text.contains("one\ntwo") && text.contains("[image]"))));
         let code = renderer.render("```rust\nfn main() {}\n```").unwrap();
-        assert!(matches!(code.blocks.first(), Some(nuschl_core::ContentBlock::Code { runs, .. }) if !runs.is_empty()));
+        assert!(
+            matches!(code.blocks.first(), Some(nuschl_core::ContentBlock::Code { runs, .. }) if !runs.is_empty())
+        );
     }
 
     /// A file offer sent as HTML (servers that allow it) is recognised from the

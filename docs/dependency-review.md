@@ -27,14 +27,16 @@ absent. Native Windows/macOS effect detection and validation on real hardware re
 open, with per-device overrides available.
 
 str0m is confined to `nuschl-rtc`, with examples and native WebRTC bindings disabled.
-Its `rust-crypto` feature selects the RustCrypto SRTP/hash provider, but its dimpl 0.9
-DTLS dependency also enables AWS-LC through the `rcgen` feature. dimpl's default
-provider prefers AWS-LC when both backends are enabled. Consequently DTLS and
-certificate generation still use native crypto under the existing crypto exception;
-this is not a fully memory-safe dependency graph. No OpenSSL or C++/Go WebRTC engine
-is introduced. Review the actual Cargo feature graph on updates rather than relying
-on a feature's name. The trial accepts bounded signaling/datagrams and encoded media;
-it must never load a codec or open a microphone in the network process.
+The reviewed `str0m-rust-crypto` adapter now selects dimpl's RustCrypto DTLS provider
+explicitly. Its certificate generator signs through rcgen's external-key interface
+using P-256, without dimpl's `rcgen` feature. This removed an accidental AWS-LC
+provider selection as well as the certificate dependency; the locked native RTC
+normal/build graph contains neither AWS-LC nor ring. Two certificate tests and six
+actual DTLS/SRTP transport tests passed. This is not a claim that every cryptographic
+dependency is free of unsafe code. No OpenSSL or C++/Go WebRTC engine is introduced.
+Review the actual Cargo feature graph on updates rather than relying on a feature's
+name. The trial accepts bounded signaling/datagrams and encoded media; it must never
+load a codec or open a microphone in the network process.
 
 The native session crate uses rustls/tokio-rustls with the explicitly selected ring
 provider (the existing crypto exception), WebPKI roots, and rcgen for a persistent
