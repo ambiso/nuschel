@@ -56,16 +56,20 @@ pub fn cleanup() {
     }
 }
 
-/// The newest update manifest seen, remembered next to the settings.
+/// Where the newest update manifest seen is remembered (in the state folder).
 static STATE: OnceLock<PathBuf> = OnceLock::new();
 
-/// Set once at start, with the profile's configuration folder.
-pub fn remember_state_in(config_dir: &Path) {
-    let _ = STATE.set(config_dir.join("update-state.json"));
+/// Set once at start, from `Profile::update_state_path`.
+pub fn remember_state(path: &Path) {
+    let _ = STATE.set(path.to_owned());
 }
 
 pub fn check() -> Result<Option<Update>, String> {
     let state = STATE.get().ok_or("the update state location is not set")?;
+    // The state folder is created when first needed.
+    if let Some(folder) = state.parent() {
+        nuschel_session::layout::create_private_dir(folder).map_err(|e| e.to_string())?;
+    }
     nuschel_update::check(root().as_deref(), env!("CARGO_PKG_VERSION"), state)
         .map_err(|e| e.to_string())
 }

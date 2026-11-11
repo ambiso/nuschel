@@ -607,7 +607,9 @@ impl Desktop {
         // An invite's policy=nuschel holds from the very first connection
         // (it only ever raises the server's record).
         if url.require_nuschel
-            && let Err(error) = nuschel_session::sticky::PolicyStore::load(&self.profile.config_dir)
+            && let Err(error) = self
+                .profile
+                .policy()
                 .and_then(|mut store| store.raise(&url.host, url.port, true, &[]))
         {
             self.error = Some(format!(
@@ -1209,7 +1211,9 @@ impl Desktop {
             return;
         };
         let (host, port) = (server.bookmark.host.clone(), server.bookmark.port);
-        match nuschel_session::sticky::PolicyStore::load(&self.profile.config_dir)
+        match self
+            .profile
+            .policy()
             .and_then(|mut store| store.reset(&host, port))
         {
             Ok(()) => {

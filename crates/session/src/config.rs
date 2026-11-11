@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
+use crate::layout::{Layout, Migration, Places, SplitServers};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -719,37 +720,52 @@ fn system_managed() -> Option<PathBuf> {
     if !cfg!(all(unix, not(target_os = "macos"))) {
         return None;
     }
-    let directories = std::env::var_os("XDG_CONFIG_DIRS")
-        .filter(|directories| !directories.is_empty())
-        .unwrap_or_else(|| "/etc/xdg".into());
-    std::env::split_paths(&directories)
-        .filter(|directory| directory.is_absolute())
+    crate::layout::xdg_config_dirs(|name| std::env::var_os(name))
+        .into_iter()
         .map(|directory| directory.join("nuschel").join(MANAGED_FILE))
         .find(|path| path.exists())
 }
 
+/// One profile's files ([`crate::layout`] says which folder holds what).
+/// The SDK and the desktop ask it for folders and never build paths
+/// themselves: what earlier versions kept elsewhere may still be there.
 #[derive(Clone)]
 pub struct Profile {
-    pub config_dir: PathBuf,
-    /// The local history folder, the storage worker's only writable directory.
-    /// It never holds configuration, the identity or other credentials.
-    pub data_dir: PathBuf,
+    /// settings.json, servers.json and managed.json. Not public: nothing
+    /// else belongs beside them.
+    pub(crate) config_dir: PathBuf,
+    layout: Layout,
+    /// Where each thing is: its place in `layout`, or an earlier version's
+    /// while it could not be moved.
+    places: Places,
     /// System-wide managed configuration, under the configuration folder's own.
     system_managed: Option<PathBuf>,
     /// Files that could be neither read nor renamed: never written over.
     kept: Arc<Mutex<BTreeSet<&'static str>>>,
+    /// What [`Profile::open`] moved from earlier versions' places.
+    migration: Arc<Migration>,
 }
 
-const HISTORY_FILE: &str = "history.sqlite3";
+const HISTORY_FILE: &str = crate::layout::HISTORY_FILE;
 const SETTINGS_FILE: &str = "settings.json";
 const SERVERS_FILE: &str = "servers.json";
 /// Written by Home Manager or an administrator; Nuschel only reads it.
 const MANAGED_FILE: &str = "managed.json";
+/// In the cache folder: the channel trees, by bookmark id.
+const CHANNELS_FILE: &str = "channels.json";
+/// In the cache folder: the server icons and when each was looked for.
+const ICONS_FILE: &str = "icons.json";
+/// In the state folder: the channel last joined on each server.
+const LAST_CHANNELS_FILE: &str = "last-channels.json";
 const MAX_SETTINGS_FILE: u64 = 1024 * 1024;
 const MAX_SERVERS: usize = 100;
 const MAX_SERVERS_FILE: usize = 8 * 1024 * 1024;
+const MAX_CACHE_FILE: usize = 8 * 1024 * 1024;
 const MAX_CACHED_CHANNELS: usize = 4096;
 const MAX_CHANNEL_NAME: usize = 512;
+/// What servers.json held besides the bookmarks before the cache and state
+/// folders took them.
+const SERVER_CACHE_KEYS: [&str; 4] = ["cached_channels", "icon", "icon_checked_ms", "last_channel"];
 
 /// Everything Nuschel reads at start (see [`Profile::load`]).
 pub struct Loaded {
@@ -760,52 +776,318 @@ pub struct Loaded {
     pub problems: Vec<String>,
 }
 
+/// What servers.json keeps of a bookmark: what the user chose, and the
+/// certificate they accepted. The pin stays with its bookmark: it is public
+/// (a hash of the server's certificate), keyed by the bookmark, declared with
+/// it in managed.json, and worthless without it.
+#[derive(Serialize)]
+struct SavedBookmark<'a> {
+    id: &'a str,
+    name: &'a str,
+    host: &'a str,
+    port: u16,
+    username: &'a str,
+    certificate_sha256: &'a Option<String>,
+    tokens: &'a [String],
+    auto_connect: bool,
+    managed: bool,
+}
+
+impl<'a> From<&'a ServerBookmark> for SavedBookmark<'a> {
+    fn from(server: &'a ServerBookmark) -> Self {
+        Self {
+            id: &server.id,
+            name: &server.name,
+            host: &server.host,
+            port: server.port,
+            username: &server.username,
+            certificate_sha256: &server.certificate_sha256,
+            tokens: &server.tokens,
+            auto_connect: server.auto_connect,
+            managed: server.managed,
+        }
+    }
+}
+
+/// A server's icon in the cache, or only when Nuschel last looked for one.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CachedIcon {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    icon: Option<ServerIcon>,
+    #[serde(default)]
+    checked_ms: i64,
+}
+
+/// What Nuschel learns about saved servers, kept apart from the bookmarks:
+/// channel trees and icons in the cache, the last channels in the state folder.
+#[derive(Default)]
+struct ServerFiles {
+    channels: BTreeMap<String, Vec<CachedChannel>>,
+    icons: BTreeMap<String, CachedIcon>,
+    last_channels: BTreeMap<String, u32>,
+}
+
+impl ServerFiles {
+    /// What `servers` carry, with the channel trees trimmed to what loading accepts.
+    fn of(servers: &[ServerBookmark]) -> Self {
+        let mut files = Self::default();
+        for server in servers {
+            let mut cache = server.cached_channels.clone();
+            cache.retain(|channel| channel.name.len() <= MAX_CHANNEL_NAME);
+            cache.truncate(MAX_CACHED_CHANNELS);
+            if !cache.is_empty() {
+                files.channels.insert(server.id.clone(), cache);
+            }
+            if server.icon.is_some() || server.icon_checked_ms != 0 {
+                files.icons.insert(
+                    server.id.clone(),
+                    CachedIcon {
+                        icon: server.icon.clone(),
+                        checked_ms: server.icon_checked_ms,
+                    },
+                );
+            }
+            if let Some(channel) = server.last_channel {
+                files.last_channels.insert(server.id.clone(), channel);
+            }
+        }
+        files
+    }
+
+    /// The files in `layout`. Missing or unreadable ones hold nothing: the
+    /// cache may be deleted at any time, and the state only resumes.
+    fn load(layout: &Layout) -> Self {
+        fn read<T: serde::de::DeserializeOwned>(path: &Path) -> BTreeMap<String, T> {
+            read_bounded(path, MAX_CACHE_FILE as u64)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default()
+        }
+        Self {
+            channels: read(&layout.cache.join(CHANNELS_FILE)),
+            icons: read(&layout.cache.join(ICONS_FILE)),
+            last_channels: read(&layout.state.join(LAST_CHANNELS_FILE)),
+        }
+    }
+
+    /// Give `servers` what the files hold for them.
+    fn fill(mut self, servers: &mut [ServerBookmark]) {
+        for server in servers {
+            if let Some(cache) = self.channels.remove(&server.id) {
+                server.cached_channels = cache;
+            }
+            if let Some(cached) = self.icons.remove(&server.id) {
+                server.icon = cached.icon;
+                server.icon_checked_ms = cached.checked_ms;
+            }
+            if let Some(&channel) = self.last_channels.get(&server.id) {
+                server.last_channel = Some(channel);
+            }
+        }
+    }
+
+    /// Write the cache and the state, each only if it changed. The channel
+    /// trees are the only part a server controls, and JSON escapes a control
+    /// character to six bytes, so 4,096 such names would overflow the file:
+    /// the largest trees are dropped until it fits.
+    fn save(mut self, layout: &Layout) -> io::Result<()> {
+        let channels = fitting(&mut self.channels, |cache| {
+            serde_json::to_vec(cache).map_or(0, |bytes| bytes.len())
+        })?;
+        let icons = fitting(&mut self.icons, |cached| {
+            cached.icon.as_ref().map_or(0, |icon| icon.rgba.len())
+        })?;
+        let cache = write_changed(&layout.cache, CHANNELS_FILE, &channels)
+            .and_then(|()| write_changed(&layout.cache, ICONS_FILE, &icons))
+            .map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "the channel and icon cache in {}: {error}",
+                        layout.cache.display()
+                    ),
+                )
+            });
+        let state = serde_json::to_vec_pretty(&self.last_channels)
+            .map_err(io::Error::from)
+            .and_then(|bytes| write_changed(&layout.state, LAST_CHANNELS_FILE, &bytes))
+            .map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("the last channels in {}: {error}", layout.state.display()),
+                )
+            });
+        cache.and(state)
+    }
+}
+
+/// `map` as JSON within [`MAX_CACHE_FILE`], dropping the largest entries
+/// (by `size`) until it fits.
+fn fitting<T: Serialize>(
+    map: &mut BTreeMap<String, T>,
+    size: impl Fn(&T) -> usize,
+) -> io::Result<Vec<u8>> {
+    loop {
+        let bytes = serde_json::to_vec_pretty(map)?;
+        if bytes.len() <= MAX_CACHE_FILE {
+            return Ok(bytes);
+        }
+        let largest = map
+            .iter()
+            .max_by_key(|(_, value)| size(value))
+            .map(|(id, _)| id.clone())
+            .ok_or_else(|| io::Error::other("the cache exceeds its size limit"))?;
+        map.remove(&largest);
+    }
+}
+
+/// Write `name` in `directory` (created when first needed) unless it holds
+/// `bytes` already, or would hold nothing and does not exist.
+fn write_changed(directory: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+    let path = directory.join(name);
+    match read_bounded(&path, bytes.len() as u64) {
+        Ok(current) if current == bytes => return Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && bytes == b"{}" => return Ok(()),
+        _ => {}
+    }
+    crate::layout::create_private_dir(directory)?;
+    atomic_private_write(&path, bytes)
+}
+
+/// Earlier versions kept the channel trees, icons and last channels in
+/// servers.json. They move to the cache and state folders, where entries
+/// already there win, and only then does servers.json lose them: an
+/// interrupted split is finished on the next start.
+impl SplitServers for Profile {
+    fn pending(&self) -> bool {
+        read_bounded(&self.config_dir.join(SERVERS_FILE), MAX_SERVERS_FILE as u64)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Vec<Map<String, Value>>>(&bytes).ok())
+            .is_some_and(|servers| {
+                servers.iter().any(|server| {
+                    SERVER_CACHE_KEYS
+                        .iter()
+                        .any(|key| server.contains_key(*key))
+                })
+            })
+    }
+
+    fn split(&self, report: &mut Migration) -> bool {
+        // One that cannot be read is set aside by `load`: nothing to keep in it.
+        let Ok(servers) = self.read_servers() else {
+            return true;
+        };
+        let mut files = ServerFiles::of(&servers);
+        let existing = ServerFiles::load(&self.layout);
+        files.channels.extend(existing.channels);
+        files.icons.extend(existing.icons);
+        files.last_channels.extend(existing.last_channels);
+        if let Err(error) = files.save(&self.layout) {
+            report.problems.push(format!(
+                "servers.json keeps its channel trees, icons and last channels for now: could \
+                 not write {error}."
+            ));
+            return false;
+        }
+        let bookmarks: Vec<SavedBookmark> = servers.iter().map(SavedBookmark::from).collect();
+        let written = serde_json::to_vec_pretty(&bookmarks)
+            .map_err(io::Error::from)
+            .and_then(|bytes| self.write(SERVERS_FILE, &bytes));
+        match written {
+            Ok(()) => {
+                report.moved.push(format!(
+                    "The channel trees and server icons moved from servers.json to {}, the \
+                     last channels to {}.",
+                    self.layout.cache.display(),
+                    self.layout.state.display()
+                ));
+                true
+            }
+            Err(error) => {
+                report.problems.push(format!(
+                    "servers.json keeps its channel trees, icons and last channels for now: it \
+                     could not be rewritten ({error})."
+                ));
+                false
+            }
+        }
+    }
+}
+
 impl Profile {
     /// With `override_dir` (tests, separate profiles) the system-wide managed
-    /// configuration is not read either.
+    /// configuration is not read either, and the four folders are its
+    /// `config`, `data`, `state` and `cache`.
     pub fn open(override_dir: Option<PathBuf>) -> io::Result<Self> {
-        if let Some(root) = override_dir {
-            return Self::at(root.join("config"), root.join("data"));
+        match override_dir {
+            Some(root) => Self::at(Layout::under(&root), None),
+            None => Self::at(Layout::system()?, system_managed()),
         }
-        let paths = directories::ProjectDirs::from("org", "Nuschel", "Nuschel")
-            .ok_or_else(|| io::Error::other("could not find the application data directory"))?;
-        let mut profile = Self::at(paths.config_dir().into(), paths.data_local_dir().into())?;
-        profile.system_managed = system_managed();
+    }
+
+    /// Open `layout`, after moving what earlier versions kept elsewhere into it.
+    fn at(layout: Layout, system_managed: Option<PathBuf>) -> io::Result<Self> {
+        layout.check()?;
+        crate::layout::create_private_dir(&layout.config)?;
+        crate::layout::create_private_dir(&layout.data)?;
+        let mut profile = Self {
+            config_dir: layout.config.clone(),
+            places: Places::new(&layout),
+            layout,
+            system_managed,
+            kept: Default::default(),
+            migration: Default::default(),
+        };
+        let (places, migration) = crate::layout::migrate(&profile.layout, &profile);
+        profile.places = places;
+        profile.migration = Arc::new(migration);
+        // The storage worker's sandbox binds it, so it must exist.
+        crate::layout::create_private_dir(&profile.places.history)?;
         Ok(profile)
     }
 
-    /// macOS keeps configuration and data in one folder (Application Support),
-    /// and XDG variables can nest them elsewhere. The storage worker may write
-    /// anywhere in its directory, so history then gets a subfolder of its own.
-    fn at(config_dir: PathBuf, data_dir: PathBuf) -> io::Result<Self> {
-        let profile = Self {
-            data_dir: if config_dir.starts_with(&data_dir) {
-                data_dir.join("history")
-            } else {
-                data_dir.clone()
-            },
-            config_dir,
-            system_managed: None,
-            kept: Default::default(),
-        };
-        for directory in [&profile.config_dir, &profile.data_dir] {
-            fs::create_dir_all(directory)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
-            }
-        }
-        migrate_history(&data_dir, &profile.data_dir)?;
-        Ok(profile)
+    /// The profile's folders.
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    /// The storage worker's folder: the local history and nothing else.
+    pub fn history_dir(&self) -> &Path {
+        &self.places.history
+    }
+
+    /// The crypto worker's folder: its sealed keystore, state and store key,
+    /// and nothing else. Created by the worker's supervisor when first needed.
+    pub fn keys_dir(&self) -> &Path {
+        &self.places.keys
+    }
+
+    /// Where the update check remembers the newest release it saw. Its folder
+    /// may not exist yet (see [`crate::layout::create_private_dir`]).
+    pub fn update_state_path(&self) -> &Path {
+        &self.places.update_state
+    }
+
+    /// The servers' security records (the sticky extension policy).
+    pub fn policy(&self) -> io::Result<crate::sticky::PolicyStore> {
+        crate::sticky::PolicyStore::load(&self.places.policy)
+    }
+
+    /// What opening the profile moved from earlier versions' places, in
+    /// sentences for the log. What could not be moved is among
+    /// [`Loaded::problems`].
+    pub fn moved(&self) -> &[String] {
+        &self.migration.moved
     }
 
     /// Settings, managed configuration and servers. A settings.json or
     /// servers.json that cannot be read is renamed to `<name>.invalid` (or
     /// `.invalid.N`) and Nuschel goes on without it; an invalid managed.json
-    /// is ignored and left alone. Either way the problem is reported.
+    /// is ignored and left alone. Either way the problem is reported, as is
+    /// anything that could not be moved to its new place.
     pub fn load(&self) -> Loaded {
-        let mut problems = Vec::new();
+        let mut problems = self.migration.problems.clone();
         let managed = match self.load_managed() {
             Ok(managed) => Some(managed),
             Err(error) => {
@@ -879,26 +1161,19 @@ impl Profile {
         Ok(managed.settings_over(own))
     }
 
-    /// servers.json, with the bookmarks `managed` declares over it. Without
+    /// servers.json, with what the cache and state folders hold for each
+    /// bookmark and the bookmarks `managed` declares over it. Without
     /// `managed` (an invalid managed.json) the saved ones stay as they are.
     pub fn load_servers(&self, managed: Option<&Managed>) -> io::Result<Vec<ServerBookmark>> {
-        let bytes = match read_bounded(&self.config_dir.join(SERVERS_FILE), MAX_SERVERS_FILE as u64)
-        {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => b"[]".to_vec(),
-            bytes => bytes?,
-        };
-        let mut servers: Vec<ServerBookmark> = serde_json::from_slice(&bytes)?;
-        if too_many(&servers) {
-            return Err(io::Error::other("too many saved servers"));
+        let mut servers = self.read_servers()?;
+        // Earlier versions' fields in servers.json count where the cache and
+        // state folders hold nothing for a server.
+        if !self.places.servers_hold_caches {
+            ServerFiles::load(&self.layout).fill(&mut servers);
         }
-        let mut ids = BTreeSet::new();
         for server in &mut servers {
-            check_bookmark(server)?;
-            if !ids.insert(&server.id) {
-                return Err(io::Error::other("two saved servers have the same id"));
-            }
-            // Only a cache, written by earlier versions without limits: drop it
-            // rather than refuse every bookmark.
+            // Only a cache, perhaps written without limits: drop it rather
+            // than refuse every bookmark.
             if server.cached_channels.len() > MAX_CACHED_CHANNELS
                 || server
                     .cached_channels
@@ -914,16 +1189,51 @@ impl Profile {
         })
     }
 
-    /// The cached channel trees are the only part a server controls, and JSON
-    /// escapes a control character to six bytes, so 4,096 such names overflow
-    /// the file. The caches are only an offline convenience: they are trimmed
-    /// to what loading accepts, and the largest are dropped until the file
-    /// fits, so a server can never stop bookmarks or certificate pins from
-    /// being saved.
+    /// servers.json as saved, checked.
+    fn read_servers(&self) -> io::Result<Vec<ServerBookmark>> {
+        let bytes = match read_bounded(&self.config_dir.join(SERVERS_FILE), MAX_SERVERS_FILE as u64)
+        {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => b"[]".to_vec(),
+            bytes => bytes?,
+        };
+        let servers: Vec<ServerBookmark> = serde_json::from_slice(&bytes)?;
+        if too_many(&servers) {
+            return Err(io::Error::other("too many saved servers"));
+        }
+        let mut ids = BTreeSet::new();
+        for server in &servers {
+            check_bookmark(server)?;
+            if !ids.insert(&server.id) {
+                return Err(io::Error::other("two saved servers have the same id"));
+            }
+        }
+        Ok(servers)
+    }
+
+    /// The bookmarks go to servers.json, and only when they changed; the
+    /// channel trees and icons to the cache, the last channels to the state
+    /// folder. Those can fail without keeping the bookmarks or certificate
+    /// pins from being saved: they are written first.
     pub fn save_servers(&self, servers: &[ServerBookmark]) -> io::Result<()> {
         if too_many(servers) {
             return Err(io::Error::other("at most 100 servers may be saved"));
         }
+        if self.places.servers_hold_caches {
+            return self.save_servers_with_caches(servers);
+        }
+        let bookmarks: Vec<SavedBookmark> = servers.iter().map(SavedBookmark::from).collect();
+        let bytes = serde_json::to_vec_pretty(&bookmarks)?;
+        if bytes.len() > MAX_SERVERS_FILE {
+            return Err(io::Error::other("the bookmarks exceed 8 MiB"));
+        }
+        self.write(SERVERS_FILE, &bytes)?;
+        ServerFiles::of(servers).save(&self.layout)
+    }
+
+    /// servers.json as earlier versions wrote it, caches included, while
+    /// those could not be moved out of it. The caches are trimmed to what
+    /// loading accepts, and the largest are dropped until the file fits.
+    fn save_servers_with_caches(&self, servers: &[ServerBookmark]) -> io::Result<()> {
         let mut servers = servers.to_vec();
         for server in &mut servers {
             let cache = &mut server.cached_channels;
@@ -960,6 +1270,8 @@ impl Profile {
         )
     }
 
+    /// Write a configuration file, unless it holds `bytes` already: files
+    /// people keep with their dotfiles change only when what they say does.
     fn write(&self, name: &'static str, bytes: &[u8]) -> io::Result<()> {
         if self
             .kept
@@ -971,7 +1283,11 @@ impl Profile {
                 "{name} could not be read, so Nuschel does not overwrite it"
             )));
         }
-        atomic_private_write(&self.config_dir.join(name), bytes)
+        let path = self.config_dir.join(name);
+        if read_bounded(&path, bytes.len() as u64).is_ok_and(|current| current == bytes) {
+            return Ok(());
+        }
+        atomic_private_write(&path, bytes)
     }
 
     /// Rename a file that could not be read to `<name>.invalid` (`.invalid.N`
@@ -1005,10 +1321,13 @@ impl Profile {
     }
 
     pub fn history_path(&self) -> PathBuf {
-        self.data_dir.join(HISTORY_FILE)
+        self.places.history.join(HISTORY_FILE)
     }
 
-    pub fn identity(&self) -> Result<ClientIdentity, Box<dyn std::error::Error + Send + Sync>> {
+    /// The identity's lock, held while it is read, created or replaced, so
+    /// that two instances never create two.
+    fn lock_identity(&self) -> io::Result<fs::File> {
+        crate::layout::create_private_dir(&self.places.identity)?;
         let mut options = fs::OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -1016,9 +1335,15 @@ impl Profile {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let identity_lock = options.open(self.config_dir.join("identity.lock"))?;
-        identity_lock.lock()?;
-        let path = self.config_dir.join("identity.json");
+        let lock = options.open(self.places.identity.join(crate::layout::IDENTITY_LOCK))?;
+        lock.lock()?;
+        Ok(lock)
+    }
+
+    /// The Mumble identity, created on first use.
+    pub fn identity(&self) -> Result<ClientIdentity, Box<dyn std::error::Error + Send + Sync>> {
+        let _lock = self.lock_identity()?;
+        let path = self.places.identity.join(crate::layout::IDENTITY_FILE);
         if path.exists() {
             return Ok(serde_json::from_slice(&read_bounded(&path, 64 * 1024)?)?);
         }
@@ -1033,12 +1358,13 @@ pub const MAX_PKCS12_BYTES: usize = 256 * 1024;
 
 impl Profile {
     /// Replace the client identity with one exported by Mumble (or another client).
-    /// The previous identity is kept as a timestamped backup.
+    /// The previous identity is kept as a timestamped backup beside it.
     pub fn import_identity(&self, pkcs12: &[u8], password: &str) -> Result<ClientIdentity, String> {
         let identity = ClientIdentity::from_pkcs12(pkcs12, password)?;
-        let current = self.config_dir.join("identity.json");
+        let _lock = self.lock_identity().map_err(|error| error.to_string())?;
+        let current = self.places.identity.join(crate::layout::IDENTITY_FILE);
         if current.exists() {
-            let backup = self.config_dir.join(format!(
+            let backup = self.places.identity.join(format!(
                 "identity.{}.json.bak",
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1198,24 +1524,6 @@ impl ClientIdentity {
     }
 }
 
-/// Move a database that earlier versions kept beside the configuration (macOS)
-/// into the history folder. Sidecars move first and the database last, so an
-/// interrupted move resumes on the next start. A failure is an error: the
-/// worker would otherwise start an empty database and strand the old one.
-fn migrate_history(old: &Path, new: &Path) -> io::Result<()> {
-    if old == new || new.join(HISTORY_FILE).exists() || !old.join(HISTORY_FILE).exists() {
-        return Ok(());
-    }
-    for suffix in ["-wal", "-shm", ""] {
-        let name = format!("{HISTORY_FILE}{suffix}");
-        match fs::rename(old.join(&name), new.join(&name)) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            result => result?,
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     use std::io::Read;
     let file = fs::File::open(path)?;
@@ -1309,30 +1617,539 @@ mod tests {
         assert!(ClientIdentity::from_pkcs12(b"not a pkcs12 file", "").is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
+    /// An earlier version's profile: everything in the configuration folder
+    /// but the history, which lay directly in the data folder.
+    struct OldProfile {
+        root: PathBuf,
+        identity: Vec<u8>,
+        servers: Vec<ServerBookmark>,
+    }
+
+    impl OldProfile {
+        fn new(name: &str) -> Self {
+            let root = std::env::temp_dir().join(format!("nuschel-old-{name}-{}", Uuid::new_v4()));
+            let (config, data) = (root.join("config"), root.join("data"));
+            fs::create_dir_all(config.join("nuschel-identity")).unwrap();
+            fs::create_dir_all(&data).unwrap();
+            let identity = br#"{"certificate":[1,2,3],"private_key":[4,5,6]}"#.to_vec();
+            fs::write(config.join("identity.json"), &identity).unwrap();
+            fs::write(config.join("identity.lock"), b"").unwrap();
+            fs::write(config.join("identity.1700000000.json.bak"), b"earlier").unwrap();
+            fs::write(config.join("nuschel-identity/store.key"), [7; 32]).unwrap();
+            fs::write(config.join("nuschel-identity/keystore"), b"sealed").unwrap();
+            fs::write(config.join("nuschel-identity/state"), b"sealed state").unwrap();
+            fs::write(
+                config.join("nuschel-policy.json"),
+                br#"{"voice.example.org:64738": {"nuschel": true}}"#,
+            )
+            .unwrap();
+            fs::write(config.join("update-state.json"), b"{}").unwrap();
+            fs::write(config.join("settings.json"), br#"{"enter_sends": false}"#).unwrap();
+            fs::write(
+                config.join("managed.json"),
+                br#"{"settings": {"force_tcp": true}}"#,
+            )
+            .unwrap();
+            let mut server =
+                ServerBookmark::new("Team", "voice.example.org", 64738, "ada").unwrap();
+            server.certificate_sha256 = Some("ab".repeat(32));
+            server.cached_channels = vec![CachedChannel {
+                id: 0,
+                parent: None,
+                name: "Root".into(),
+                position: 0,
+            }];
+            server.icon = Some(ServerIcon {
+                width: 1,
+                height: 1,
+                rgba: "AAAAAA==".into(),
+            });
+            server.icon_checked_ms = 1234;
+            server.last_channel = Some(7);
+            let servers = vec![
+                server,
+                ServerBookmark::new("", "other.example.org", 64738, "ada").unwrap(),
+            ];
+            // Earlier versions wrote the whole bookmark, caches included.
+            fs::write(
+                config.join("servers.json"),
+                serde_json::to_vec_pretty(&servers).unwrap(),
+            )
+            .unwrap();
+            for (suffix, contents) in [("", "database"), ("-wal", "log"), ("-shm", "index")] {
+                fs::write(data.join(format!("{HISTORY_FILE}{suffix}")), contents).unwrap();
+            }
+            Self {
+                root,
+                identity,
+                servers,
+            }
+        }
+
+        fn config(&self, name: &str) -> PathBuf {
+            self.root.join("config").join(name)
+        }
+
+        fn data(&self, name: &str) -> PathBuf {
+            self.root.join("data").join(name)
+        }
+    }
+
+    impl Drop for OldProfile {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn names(directory: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The first start after the change moves everything to its new place
+    /// and splits servers.json; the second has nothing left to move.
     #[test]
-    fn history_never_shares_the_configuration_folder() {
-        let root = std::env::temp_dir().join(format!("nuschel-layout-{}", Uuid::new_v4()));
-        // Linux and Windows: separate folders stay as they are.
-        let separate = Profile::at(root.join("config"), root.join("data")).unwrap();
-        assert_eq!(separate.data_dir, root.join("data"));
-        // macOS: one folder for both. A database (and its WAL) that an earlier
-        // version kept beside the configuration moves into the history folder.
-        let shared = root.join("Application Support");
-        fs::create_dir_all(&shared).unwrap();
-        fs::write(shared.join(HISTORY_FILE), b"database").unwrap();
-        fs::write(shared.join(format!("{HISTORY_FILE}-wal")), b"log").unwrap();
-        let profile = Profile::at(shared.clone(), shared.clone()).unwrap();
-        assert_eq!(profile.data_dir, shared.join("history"));
+    fn an_earlier_profile_moves_to_the_new_layout() {
+        let old = OldProfile::new("full");
+        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let layout = profile.layout().clone();
+        assert_eq!(layout, Layout::under(&old.root));
+        // Only what a user edits stays in the configuration folder.
+        assert_eq!(
+            names(&layout.config),
+            ["managed.json", "servers.json", "settings.json"]
+        );
+        let saved = fs::read_to_string(layout.config.join("servers.json")).unwrap();
+        for key in SERVER_CACHE_KEYS {
+            assert!(!saved.contains(key), "{key} in {saved}");
+        }
+        assert!(saved.contains(&"ab".repeat(32)), "the pin stays: {saved}");
+        // The data folder: three folders of their own, and the security records.
+        assert_eq!(
+            names(&layout.data),
+            ["history", "identity", "keys", "nuschel-policy.json"]
+        );
+        assert_eq!(profile.history_dir(), layout.history());
+        assert_eq!(
+            names(profile.history_dir()),
+            [HISTORY_FILE, "history.sqlite3-shm", "history.sqlite3-wal"]
+        );
         assert_eq!(fs::read(profile.history_path()).unwrap(), b"database");
         assert_eq!(
-            fs::read(profile.data_dir.join(format!("{HISTORY_FILE}-wal"))).unwrap(),
+            names(&layout.identity()),
+            [
+                "identity.1700000000.json.bak",
+                "identity.json",
+                "identity.lock"
+            ]
+        );
+        assert_eq!(
+            fs::read(layout.identity().join("identity.json")).unwrap(),
+            old.identity
+        );
+        assert_eq!(profile.keys_dir(), layout.keys());
+        assert_eq!(
+            names(profile.keys_dir()),
+            ["keystore", "state", "store.key"]
+        );
+        assert!(
+            profile
+                .policy()
+                .unwrap()
+                .get("voice.example.org", 64738)
+                .nuschel
+        );
+        assert_eq!(
+            profile.update_state_path(),
+            layout.state.join("update-state.json")
+        );
+        assert!(profile.update_state_path().exists());
+        assert_eq!(names(&layout.cache), ["channels.json", "icons.json"]);
+        assert_eq!(
+            names(&layout.state),
+            ["last-channels.json", "update-state.json"]
+        );
+        #[cfg(unix)]
+        for directory in [
+            layout.config.clone(),
+            layout.data.clone(),
+            layout.history(),
+            layout.identity(),
+            layout.keys(),
+            layout.state.clone(),
+            layout.cache.clone(),
+        ] {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&directory).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", directory.display());
+        }
+        // Nothing is lost: bookmarks, caches, icon and last channel load as before.
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert!(!loaded.settings.enter_sends && loaded.settings.force_tcp);
+        let team = &loaded.servers[0];
+        assert_eq!(team.id, old.servers[0].id);
+        assert_eq!(team.certificate_sha256, Some("ab".repeat(32)));
+        assert_eq!(team.cached_channels[0].name, "Root");
+        assert_eq!(team.icon, old.servers[0].icon);
+        assert_eq!(team.icon_checked_ms, 1234);
+        assert_eq!(team.last_channel, Some(7));
+        assert!(loaded.servers[1].cached_channels.is_empty());
+        let moved = profile.moved().join("\n");
+        for what in [
+            "history",
+            "identity",
+            "end-to-end keys",
+            "security records",
+            "update check",
+            "channel trees",
+        ] {
+            assert!(moved.contains(what), "{what} in {moved}");
+        }
+        // A second start finds nothing to move.
+        let again = Profile::open(Some(old.root.clone())).unwrap();
+        assert!(again.moved().is_empty(), "{:?}", again.moved());
+        assert!(again.load().problems.is_empty());
+        assert_eq!(again.load_servers(None).unwrap()[0].last_channel, Some(7));
+    }
+
+    /// Unchanged bookmarks are not written again when only the cache changes.
+    #[test]
+    fn bookmarks_are_rewritten_only_when_they_change() {
+        let (root, profile) = temporary_profile("rewrite");
+        let mut server = ServerBookmark::new("", "voice.example.org", 64738, "me").unwrap();
+        profile.save_servers(std::slice::from_ref(&server)).unwrap();
+        let servers = profile.config_dir.join("servers.json");
+        fs::write(&servers, fs::read(&servers).unwrap()).unwrap();
+        let before = fs::metadata(&servers).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        server.last_channel = Some(3);
+        server.cached_channels = vec![CachedChannel {
+            id: 0,
+            parent: None,
+            name: "Root".into(),
+            position: 0,
+        }];
+        profile.save_servers(std::slice::from_ref(&server)).unwrap();
+        assert_eq!(fs::metadata(&servers).unwrap().modified().unwrap(), before);
+        assert_eq!(profile.load_servers(None).unwrap()[0].last_channel, Some(3));
+        // An empty or deleted cache is no problem.
+        fs::remove_dir_all(&profile.layout().cache).unwrap();
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty());
+        assert!(loaded.servers[0].cached_channels.is_empty());
+        assert_eq!(loaded.servers[0].last_channel, Some(3));
+        fs::write(
+            profile.layout().state.join("last-channels.json"),
+            b"{broken",
+        )
+        .unwrap();
+        assert_eq!(profile.load().servers[0].last_channel, None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Starts interrupted at each step finish the move without losing or
+    /// replacing anything.
+    #[test]
+    fn interrupted_moves_finish_on_the_next_start() {
+        let old = OldProfile::new("interrupted");
+        let layout = Layout::under(&old.root);
+        // The identity was linked into its new place but its old name not yet removed.
+        fs::create_dir_all(layout.identity()).unwrap();
+        fs::copy(
+            old.config("identity.json"),
+            layout.identity().join("identity.json"),
+        )
+        .unwrap();
+        // The history's sidecars moved, its database not.
+        fs::create_dir_all(layout.history()).unwrap();
+        for suffix in ["-wal", "-shm"] {
+            let name = format!("{HISTORY_FILE}{suffix}");
+            fs::rename(old.data(&name), layout.history().join(name)).unwrap();
+        }
+        // A copy of the keys to another file system stopped halfway.
+        let leftover = layout.data.join(".keys.0123.moving");
+        fs::create_dir_all(&leftover).unwrap();
+        fs::write(leftover.join("store.key"), [7; 16]).unwrap();
+        // The cache was written (with a newer tree for the first server) but
+        // servers.json not yet rewritten.
+        let newer = vec![CachedChannel {
+            id: 0,
+            parent: None,
+            name: "Newer root".into(),
+            position: 0,
+        }];
+        fs::create_dir_all(&layout.cache).unwrap();
+        fs::write(
+            layout.cache.join("channels.json"),
+            serde_json::to_vec(&BTreeMap::from([(old.servers[0].id.clone(), newer)])).unwrap(),
+        )
+        .unwrap();
+        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert_eq!(
+            names(&layout.config),
+            ["managed.json", "servers.json", "settings.json"]
+        );
+        assert_eq!(
+            names(&layout.data),
+            ["history", "identity", "keys", "nuschel-policy.json"]
+        );
+        assert_eq!(fs::read(profile.history_path()).unwrap(), b"database");
+        assert_eq!(
+            fs::read(layout.history().join("history.sqlite3-wal")).unwrap(),
             b"log"
         );
-        assert!(!shared.join(HISTORY_FILE).exists());
-        // Configuration nested inside the data folder gets the same treatment.
-        let nested = Profile::at(root.join("data/config"), root.join("data")).unwrap();
-        assert_eq!(nested.data_dir, root.join("data/history"));
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            names(profile.keys_dir()),
+            ["keystore", "state", "store.key"]
+        );
+        assert_eq!(
+            fs::read(profile.keys_dir().join("store.key")).unwrap(),
+            [7; 32]
+        );
+        // What the cache held already wins over what servers.json carried.
+        assert_eq!(loaded.servers[0].cached_channels[0].name, "Newer root");
+        assert_eq!(loaded.servers[0].last_channel, Some(7));
+    }
+
+    /// Something at both places that differs is never replaced: the new
+    /// place is used, the old one left alone, and the user told.
+    #[test]
+    fn differing_copies_are_left_alone_and_reported() {
+        let old = OldProfile::new("conflict");
+        let layout = Layout::under(&old.root);
+        fs::create_dir_all(layout.identity()).unwrap();
+        let newer = br#"{"certificate":[9],"private_key":[9]}"#;
+        fs::write(layout.identity().join("identity.json"), newer).unwrap();
+        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let problems = profile.load().problems.join("\n");
+        assert!(
+            problems.contains("The identity (certificate and private key) is in")
+                && problems.contains("leaves the other alone"),
+            "{problems}"
+        );
+        assert_eq!(profile.identity().unwrap().certificate, [9]);
+        assert_eq!(fs::read(old.config("identity.json")).unwrap(), old.identity);
+        // The old lock stays with the old identity; the rest moved.
+        assert!(old.config("identity.lock").exists());
+        assert_eq!(
+            names(profile.keys_dir()),
+            ["keystore", "state", "store.key"]
+        );
+        // An earlier version started meanwhile and created the identity anew
+        // in its old place: the same report, nothing replaced.
+        let again = Profile::open(Some(old.root.clone())).unwrap();
+        assert_eq!(again.load().problems.len(), 1);
+        assert_eq!(again.identity().unwrap().certificate, [9]);
+    }
+
+    /// While the history cannot leave the data folder, the storage worker
+    /// gets that folder: nothing else moves into it, and everything is used
+    /// where it was.
+    #[test]
+    fn a_history_that_cannot_move_keeps_everything_in_place() {
+        let old = OldProfile::new("stuck");
+        let layout = Layout::under(&old.root);
+        // A different log already in the new place stops the history's move.
+        fs::create_dir_all(layout.history()).unwrap();
+        fs::write(layout.history().join("history.sqlite3-wal"), b"other log").unwrap();
+        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        assert_eq!(profile.history_dir(), layout.data);
+        assert_eq!(
+            names(&layout.data),
+            [
+                "history",
+                HISTORY_FILE,
+                "history.sqlite3-shm",
+                "history.sqlite3-wal"
+            ]
+        );
+        assert_eq!(profile.keys_dir(), old.config("nuschel-identity"));
+        assert_eq!(profile.update_state_path(), old.config("update-state.json"));
+        assert!(
+            profile
+                .policy()
+                .unwrap()
+                .get("voice.example.org", 64738)
+                .nuschel
+        );
+        assert_eq!(profile.identity().unwrap().certificate, [1, 2, 3]);
+        assert!(old.config("identity.json").exists());
+        assert!(!layout.identity().exists());
+        let problems = profile.load().problems.join("\n");
+        assert!(problems.contains("differs from"), "{problems}");
+        assert!(problems.contains("everything else stays"), "{problems}");
+        // Caches stay in servers.json too, and are saved there.
+        let mut servers = profile.load_servers(None).unwrap();
+        assert_eq!(servers[0].last_channel, Some(7));
+        servers[0].last_channel = Some(8);
+        profile.save_servers(&servers).unwrap();
+        assert!(!layout.state.exists() && !layout.cache.exists());
+        assert!(
+            fs::read_to_string(old.config("servers.json"))
+                .unwrap()
+                .contains("\"last_channel\": 8")
+        );
+        // Once the obstacle is gone, everything moves.
+        fs::remove_file(layout.history().join("history.sqlite3-wal")).unwrap();
+        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        assert!(
+            profile.load().problems.is_empty(),
+            "{:?}",
+            profile.load().problems
+        );
+        assert_eq!(profile.history_dir(), layout.history());
+        assert_eq!(
+            names(&layout.config),
+            ["managed.json", "servers.json", "settings.json"]
+        );
+        assert_eq!(profile.load_servers(None).unwrap()[0].last_channel, Some(8));
+    }
+
+    /// The storage worker never gets a data folder that holds more than the
+    /// history, even when an earlier version's database there cannot move.
+    #[test]
+    fn the_storage_worker_never_gets_a_data_folder_with_secrets() {
+        let old = OldProfile::new("guarded");
+        let layout = Layout::under(&old.root);
+        fs::create_dir_all(layout.identity()).unwrap();
+        fs::write(layout.identity().join("identity.json"), b"newer").unwrap();
+        fs::create_dir_all(layout.history()).unwrap();
+        fs::write(layout.history().join("history.sqlite3-wal"), b"other log").unwrap();
+        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        assert_eq!(profile.history_dir(), layout.history());
+        let problems = profile.load().problems.join("\n");
+        assert!(
+            problems.contains("holds more than the history"),
+            "{problems}"
+        );
+        assert_eq!(fs::read(old.data(HISTORY_FILE)).unwrap(), b"database");
+    }
+
+    /// A dotfiles manager's link to the identity: the key is copied to the
+    /// data folder, the link removed, and the user told where the original is.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_identity_is_copied_and_reported() {
+        let old = OldProfile::new("linked");
+        let dotfiles = old.root.join("dotfiles/identity.json");
+        fs::create_dir_all(dotfiles.parent().unwrap()).unwrap();
+        fs::rename(old.config("identity.json"), &dotfiles).unwrap();
+        std::os::unix::fs::symlink(&dotfiles, old.config("identity.json")).unwrap();
+        let profile = Profile::open(Some(old.root.clone())).unwrap();
+        let identity = profile.layout().identity().join("identity.json");
+        assert_eq!(fs::read(&identity).unwrap(), old.identity);
+        assert!(!fs::symlink_metadata(&identity).unwrap().is_symlink());
+        assert!(fs::symlink_metadata(old.config("identity.json")).is_err());
+        assert!(dotfiles.exists());
+        let problems = profile.load().problems.join("\n");
+        assert!(
+            problems.contains(&dotfiles.display().to_string()),
+            "{problems}"
+        );
+    }
+
+    /// A fresh profile creates only what it needs: the configuration folder
+    /// and the history's, but no identity, keys, state or cache until used.
+    #[test]
+    fn a_new_profile_creates_folders_when_first_needed() {
+        let (root, profile) = temporary_profile("fresh");
+        let layout = profile.layout().clone();
+        assert!(profile.moved().is_empty());
+        assert_eq!(names(&root), ["config", "data"]);
+        assert_eq!(names(&layout.data), ["history"]);
+        profile.save_servers(&[]).unwrap();
+        assert!(!layout.cache.exists() && !layout.state.exists());
+        profile.identity().unwrap();
+        assert_eq!(
+            names(&layout.identity()),
+            ["identity.json", "identity.lock"]
+        );
+        assert_eq!(names(&layout.config), ["servers.json"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The real XDG variables, in a child process (changing the environment
+    /// of this one would take unsafe code): set, empty and relative values.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn the_system_profile_follows_the_xdg_variables() {
+        let root = std::env::temp_dir().join(format!("nuschel-xdg-{}", Uuid::new_v4()));
+        let home = root.join("home");
+        let system = root.join("etc/nuschel/managed.json");
+        fs::create_dir_all(system.parent().unwrap()).unwrap();
+        fs::write(&system, br#"{"settings": {"force_tcp": true}}"#).unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "config::tests::system_profile_child",
+                "--include-ignored",
+            ])
+            .env_clear()
+            .env("NUSCHEL_TEST_XDG_CHILD", "1")
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", root.join("config"))
+            .env("XDG_DATA_HOME", "relative/data")
+            .env("XDG_STATE_HOME", "")
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .env(
+                "XDG_CONFIG_DIRS",
+                format!("relative:{}", root.join("etc").display()),
+            )
+            .output()
+            .unwrap();
+        let output = String::from_utf8_lossy(&child.stdout);
+        assert!(child.status.success(), "{output}");
+        assert!(output.contains("1 passed"), "{output}");
+        for file in [
+            root.join("config/nuschel/servers.json"),
+            home.join(".local/share/nuschel/history"),
+            home.join(".local/share/nuschel/identity/identity.json"),
+            home.join(".local/share/nuschel/nuschel-policy.json"),
+            home.join(".local/state/nuschel/last-channels.json"),
+            root.join("cache/nuschel/channels.json"),
+        ] {
+            assert!(file.exists(), "{}", file.display());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Run by `the_system_profile_follows_the_xdg_variables`, in an
+    /// environment of temporary folders only.
+    #[test]
+    #[ignore = "a child of the_system_profile_follows_the_xdg_variables"]
+    fn system_profile_child() {
+        if std::env::var_os("NUSCHEL_TEST_XDG_CHILD").is_none() {
+            return;
+        }
+        let profile = Profile::open(None).unwrap();
+        let loaded = profile.load();
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        assert!(
+            loaded.settings.force_tcp,
+            "managed.json from $XDG_CONFIG_DIRS"
+        );
+        let mut server = ServerBookmark::new("", "voice.example.org", 64738, "me").unwrap();
+        server.last_channel = Some(1);
+        server.cached_channels = vec![CachedChannel {
+            id: 0,
+            parent: None,
+            name: "Root".into(),
+            position: 0,
+        }];
+        profile.save_servers(&[server]).unwrap();
+        profile.identity().unwrap();
+        profile
+            .policy()
+            .unwrap()
+            .raise("voice.example.org", 64738, true, &[])
+            .unwrap();
     }
     #[test]
     fn a_hostile_channel_cache_cannot_block_saving_bookmarks() {
@@ -1363,10 +2180,17 @@ mod tests {
         assert!(loaded[0].cached_channels.is_empty());
         assert_eq!(loaded[1].cached_channels[0].name, "Root\u{7}");
         assert_eq!(loaded[1].certificate_sha256, Some("ab".repeat(32)));
-        // A cache beyond the limits from an earlier version no longer refuses
-        // every bookmark.
+        // A cache beyond the limits (edited, or from an earlier version inside
+        // servers.json) no longer refuses every bookmark.
         let mut old = loaded;
         old[1].cached_channels = vec![old[1].cached_channels[0].clone(); 5000];
+        let cache = profile.layout().cache.join(CHANNELS_FILE);
+        let channels = BTreeMap::from([(old[1].id.clone(), old[1].cached_channels.clone())]);
+        atomic_private_write(&cache, &serde_json::to_vec(&channels).unwrap()).unwrap();
+        let loaded = profile.load_servers(None).unwrap();
+        assert!(loaded[1].cached_channels.is_empty());
+        assert_eq!(loaded[1].certificate_sha256, Some("ab".repeat(32)));
+        fs::remove_file(cache).unwrap();
         atomic_private_write(
             &profile.config_dir.join("servers.json"),
             &serde_json::to_vec(&old).unwrap(),

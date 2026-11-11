@@ -413,19 +413,19 @@ impl Driver {
         let (storage, storage_rx) = mpsc::channel(128);
         let (content, content_rx) = mpsc::channel(64);
         let storage_task = handle.spawn(storage_loop(
-            profile.data_dir.clone(),
+            profile.history_dir().to_owned(),
             storage_rx,
             sender.clone(),
         ));
         let content_task = handle.spawn(content_loop(content_rx, storage.clone(), sender.clone()));
-        // Started on first use, in its sandbox, on its own directory beside the
-        // configuration (docs/e2ee.md §3.7).
+        // Started on first use, in its sandbox, on its own folder in the data
+        // folder (docs/e2ee.md §3.7).
         let crypto = {
             let _runtime = handle.enter();
             nuschel_session::identity::CryptoHandle::start(
                 nuschel_session::workers::sibling("nuschel-crypto-worker")
                     .unwrap_or_else(|_| "nuschel-crypto-worker".into()),
-                profile.config_dir.join("nuschel-identity"),
+                profile.keys_dir().to_owned(),
             )
         };
         let backend = Self {
@@ -913,7 +913,8 @@ async fn connect_once(
 ) -> Outcome {
     let id = server.id.clone();
     // The sticky policy: an unreadable record fails closed, never empty.
-    let required = nuschel_session::sticky::PolicyStore::load(&profile.config_dir)
+    let required = profile
+        .policy()
         .map(|store| store.get(&server.host, server.port))
         .map_err(|error| format!("Nuschel's server security records could not be read: {error}"));
     let options = match profile
@@ -1144,7 +1145,7 @@ async fn connect_once(
                 SessionEvent::Negotiated(negotiated) => {
                     server_history = negotiated.capabilities.iter().any(|capability| capability == "history/1");
                     // Remember what this server offers: a weaker answer later fails.
-                    let raised = nuschel_session::sticky::PolicyStore::load(&profile.config_dir)
+                    let raised = profile.policy()
                         .and_then(|mut store| store.raise(&server.host, server.port, negotiated.nuschel, &negotiated.capabilities));
                     if let Err(error) = raised { let _ = events.send(Event::HistoryError(format!("Could not save this server's security record: {error}"))).await; }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Negotiated(negotiated) }).await;

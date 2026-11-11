@@ -5,8 +5,10 @@
 //! back to the weaker mode, and only an explicit reset (per server, in its
 //! settings) clears the record. Records are kept per server address, not per
 //! certificate: certificates rotate, and a rotation must not reset them. They
-//! live in their own file beside the configuration, so a managed or replaced
-//! bookmark cannot drop them.
+//! live in their own file in the data folder (`Profile::policy`), apart from
+//! the bookmarks, so a managed or replaced bookmark cannot drop them, and
+//! apart from the configuration, which people keep with their dotfiles and
+//! may reset.
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -14,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const FILE: &str = "nuschel-policy.json";
+pub(crate) const FILE: &str = "nuschel-policy.json";
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_RECORDS: usize = 4096;
 const MAX_CAPABILITIES: usize = 32;
@@ -89,10 +91,11 @@ pub fn key(host: &str, port: u16) -> String {
 }
 
 impl PolicyStore {
-    /// Load the records in `config_dir`. A missing file is empty; an unreadable
-    /// one is an error (silently starting empty would drop every record).
-    pub fn load(config_dir: &Path) -> io::Result<Self> {
-        let path = config_dir.join(FILE);
+    /// Load the records in `directory` (`Profile::policy` knows which). A
+    /// missing file is empty; an unreadable one is an error (silently
+    /// starting empty would drop every record).
+    pub fn load(directory: &Path) -> io::Result<Self> {
+        let path = directory.join(FILE);
         let records = if path.exists() {
             let records: BTreeMap<String, Requirement> =
                 serde_json::from_slice(&crate::config::read_bounded(&path, MAX_FILE_BYTES)?)?;

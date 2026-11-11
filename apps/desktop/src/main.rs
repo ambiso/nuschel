@@ -151,7 +151,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let profile = Profile::open(arguments.profile_dir)?;
-    update::remember_state_in(&profile.config_dir);
+    for moved in profile.moved() {
+        tracing::info!("{moved}");
+    }
+    update::remember_state(profile.update_state_path());
     let loaded = profile.load();
     for problem in &loaded.problems {
         tracing::warn!("{problem}");

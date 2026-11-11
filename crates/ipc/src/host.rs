@@ -317,8 +317,10 @@ pub fn contain(_: &tokio::process::Child) -> Result<Containment, Error> {
     Ok(Containment {})
 }
 
-/// Long-lived SQLite helper: its database directory is writable; network and the
-/// rest of the home directory are absent. The trusted supervisor chooses the path.
+/// Long-lived SQLite helper: its history folder (`Profile::history_dir`,
+/// `$XDG_DATA_HOME/nuschel/history`, which holds nothing else) is writable at
+/// `/data`; network and the rest of the home directory are absent. The trusted
+/// supervisor chooses the path.
 #[cfg(target_os = "linux")]
 pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Command, Error> {
     let mut sandbox = Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?;
@@ -330,9 +332,11 @@ pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Co
     Ok(sandbox.run(["--database", "/data/history.sqlite3"]))
 }
 
-/// The crypto worker: its own directory (the encrypted keystore, its state and,
-/// for now, the store key file) is writable at `/data`; no network, no home, no
-/// D-Bus. The trusted supervisor chooses the directory.
+/// The crypto worker: its own folder (`Profile::keys_dir`,
+/// `$XDG_DATA_HOME/nuschel/keys`: the sealed keystore, its state and, for now,
+/// the store key file) is writable at `/data`; no network, no home, no D-Bus,
+/// and not the history or the Mumble identity beside it. The trusted
+/// supervisor chooses the folder.
 #[cfg(target_os = "linux")]
 pub fn crypto_sandbox_command(executable: &Path, directory: &Path) -> Result<Command, Error> {
     let mut sandbox = Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?;
@@ -677,7 +681,7 @@ mod windows_policies {
         }
     }
 
-    /// Only the history directory, read and write.
+    /// Only the history folder (`Profile::history_dir`), read and write.
     pub fn storage(directory: &Path) -> Policy {
         Policy {
             profile: scoped_profile("nuschel.storage", directory),
@@ -688,7 +692,8 @@ mod windows_policies {
         }
     }
 
-    /// Only the crypto directory (keystore, state, store key), read and write.
+    /// Only the crypto worker's folder (`Profile::keys_dir`: keystore, state,
+    /// store key), read and write.
     pub fn crypto(directory: &Path) -> Policy {
         Policy {
             profile: scoped_profile("nuschel.crypto", directory),
@@ -860,6 +865,30 @@ mod tests {
             let network = std::ptr::eq(command, &offer) || std::ptr::eq(command, &receive);
             assert_eq!(position("--share-net").is_some(), network, "{options:?}");
         }
+        // Storage and crypto each get exactly the folder they are given,
+        // writable, and nothing else is writable from outside.
+        let history = std::env::temp_dir().canonicalize().unwrap();
+        let history = history.to_string_lossy();
+        for (command, writable) in [
+            (&content, None),
+            (&storage, Some(&*history)),
+            (&media, None),
+            (&crypto, Some(&*history)),
+            (&offer, None),
+            (&receive, None),
+        ] {
+            let binds: Vec<&str> = command
+                .windows(3)
+                .filter(|option| option[0] == "--bind" || option[0] == "--dev-bind")
+                .filter(|option| option[1] != "/dev/snd")
+                .map(|option| option[1].as_str())
+                .collect();
+            assert_eq!(
+                binds,
+                writable.into_iter().collect::<Vec<_>>(),
+                "{command:?}"
+            );
+        }
         // The offered file is the only path bound from outside the system.
         let input = offer.iter().position(|a| a == "/input").unwrap();
         assert_eq!(offer[input - 2], "--ro-bind");
@@ -870,8 +899,10 @@ mod tests {
     fn windows_policies_grant_only_what_each_worker_needs() {
         use super::{windows_limits, windows_policies as policy};
         use std::path::Path;
-        let history = Path::new(r"C:\Users\a\AppData\Roaming\nuschel\history");
-        let crypto = Path::new(r"C:\Users\a\AppData\Roaming\nuschel\crypto");
+        // Profile::history_dir and keys_dir on Windows: siblings in the
+        // local data folder.
+        let history = Path::new(r"C:\Users\a\AppData\Local\Nuschel\Nuschel\data\history");
+        let crypto = Path::new(r"C:\Users\a\AppData\Local\Nuschel\Nuschel\data\keys");
         let offer = Path::new(r"C:\Users\a\Documents\offer.zip");
         let content = policy::content(7);
         assert_eq!(content.profile, "nuschel.content");
@@ -888,6 +919,11 @@ mod tests {
         assert_eq!(keys.writable, [crypto]);
         assert!(keys.profile.starts_with("nuschel.crypto."));
         assert_ne!(keys.profile, policy::crypto(history).profile);
+        // Not the container earlier versions granted the whole data folder.
+        assert_ne!(
+            storage.profile,
+            policy::storage(history.parent().unwrap()).profile
+        );
         let media = policy::media();
         assert_eq!(media.capabilities, ["microphone"]);
         let send = policy::transfer(Some(offer));
