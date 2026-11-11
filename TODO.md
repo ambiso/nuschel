@@ -137,6 +137,12 @@ Later (reported):
       scales the whole window; drop it once upstream has a window scale).
 - [ ] The dark palette's faint text is about 3.6:1 on the main background (below
       AA); Ctrl+scroll / pinch zoom; IME placement at zoom ≠ 100 % untested.
+- [x] Smooth resizing: only messages near the viewport are laid out (1000-message
+      resize: 113 ms → 7 ms per frame), full frame rate during drag-resizes.
+- [ ] Off-screen messages are missing from the accessibility tree (virtualised
+      timeline); the channel tree is now the largest per-frame cost (~2.4 ms for 80
+      rows); report upstream: wgpu/Mesa capability queries on every reconfigure, and
+      GPUI's 30 fps cap for windows without focus during compositor grabs.
 - [ ] Proper Windows sandboxing for the workers (AppContainer or a restricted
       token with a low integrity level, no network for content and storage);
       today they only run in a kill-on-close job object.
@@ -430,7 +436,19 @@ Nuschel-only servers and a minimum client version.
 Security review of the server plan and first code: docs/reviews/2026-11-11-server-security.md
 (P0 requirements must be met before the server listens beyond loopback).
 
-1. **Server for stock Mumble clients** (the base everything else extends)
+1. **Server for stock Mumble clients** (the base everything else extends) — done
+   (2026-11-11): see docs/server.md; the `vm-server` check runs the protocol suites
+   and the stock GUI against it. Open phase-1 items:
+   - [ ] Persist channel listeners for registered users; CA-verified ("strong")
+         certificates; IP obfuscation in logs; TLS reload on SIGHUP; a minimum
+         TLS 1.3 option; import of a Murmur database (PBKDF2/SHA-1 passwords).
+   - [ ] A per-user cap on temporary channels and a global budget for shout fan-out;
+         rolling statistics; clients older than 1.2.2.
+   - [ ] Chat in the stock-client VM check (needs typing into the stock window); run
+         the libFuzzer targets (cargo-fuzz + nightly not in the environment); the
+         `html` fuzz target no longer compiles (`ContentRenderer` is not `Sync`).
+   - [ ] Review deviations: permission checks inline per handler (one engine) rather
+         than one `authorize()` module; one mutex instead of an actor.
    - [ ] TLS listener (rustls), certificate and password authentication, user
          registration, server and channel passwords, ban list.
    - [ ] Channels (create, move, links, temporary channels), user state, ACLs and

@@ -10078,6 +10078,12 @@ rec {
             rename = "gpui_util";
           }
           {
+            name = "hdrhistogram";
+            packageId = "hdrhistogram";
+            optional = true;
+            usesDefaultFeatures = false;
+          }
+          {
             name = "heapless";
             packageId = "heapless";
           }
@@ -10303,7 +10309,7 @@ rec {
           "windows-manifest" = [ "dep:embed-resource" ];
           "x11" = [ "scap?/x11" ];
         };
-        resolvedDefaultFeatures = [ "default" "font-kit" "wayland" "windows-manifest" "x11" ];
+        resolvedDefaultFeatures = [ "default" "font-kit" "profiler" "wayland" "windows-manifest" "x11" ];
       };
       "gpui-pre-apple" = rec {
         crateName = "gpui-pre-apple";
@@ -12187,6 +12193,35 @@ rec {
         features = {
           "serde" = [ "dep:serde" ];
           "serde_impl" = [ "serde" ];
+        };
+      };
+      "hdrhistogram" = rec {
+        crateName = "hdrhistogram";
+        version = "7.5.4";
+        edition = "2018";
+        sha256 = "07ai0r66l1n53f2757gv07za1l5g1bprb7zz4v75kpbky6c92p3n";
+        authors = [
+          "Jon Gjengset <jon@thesquareplanet.com>"
+          "Marshall Pierce <marshall@mpierce.org>"
+        ];
+        dependencies = [
+          {
+            name = "byteorder";
+            packageId = "byteorder";
+          }
+          {
+            name = "num-traits";
+            packageId = "num-traits";
+          }
+        ];
+        features = {
+          "base64" = [ "dep:base64" ];
+          "crossbeam-channel" = [ "dep:crossbeam-channel" ];
+          "default" = [ "serialization" "sync" ];
+          "flate2" = [ "dep:flate2" ];
+          "nom" = [ "dep:nom" ];
+          "serialization" = [ "flate2" "nom" "base64" ];
+          "sync" = [ "crossbeam-channel" ];
         };
       };
       "heapless" = rec {
@@ -16986,6 +17021,13 @@ rec {
             usesDefaultFeatures = false;
           }
           {
+            name = "gpui-pre";
+            packageId = "gpui-pre";
+            rename = "gpui-profiler";
+            optional = true;
+            features = [ "profiler" ];
+          }
+          {
             name = "image";
             packageId = "image";
             usesDefaultFeatures = false;
@@ -17052,7 +17094,10 @@ rec {
             features = [ "async-io" ];
           }
         ];
-
+        features = {
+          "frame-timing" = [ "dep:gpui-profiler" ];
+        };
+        resolvedDefaultFeatures = [ "frame-timing" ];
       };
       "nuschel-cli" = rec {
         crateName = "nuschel-cli";

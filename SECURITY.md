@@ -73,6 +73,16 @@ dedicated `history/` subfolder. The updater refuses a signed manifest whose rele
 time or version is older than the newest it has accepted; a client that never saw a
 newer manifest can still be offered an older one, and withheld releases go unnoticed.
 
+`nuscheld` is the network-facing process: it holds the TLS key (ring) and hashes
+passwords with argon2id (RustCrypto), under a concurrency limit and a per-account
+limit on failed guesses. Client certificates are accepted self-signed (Mumble's
+identity is the certificate hash) but the TLS signature proving possession of the key
+is always verified. Unauthenticated UDP pings are answered no larger than the request
+by default (`allow_ping_amplification` permits up to 2×, rate-limited). Its state
+lives in the storage worker, which then also holds the database credential; under
+`nuscheld` that worker runs without bwrap, confined by the systemd unit. Secrets
+reach the service only through `LoadCredential`; the module refuses store paths.
+
 The transfer worker (magic-wormhole file offers) is the one worker with network
 access: rendezvous and transit relay, plus only the offered file read-only. The
 peer's transit hints decide where it connects (inherent to magic-wormhole), and the

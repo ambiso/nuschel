@@ -182,15 +182,21 @@ or local peer authentication:
 imports = [ inputs.nuschel.nixosModules.default ];
 services.nuschel = {
   enable = true;
+  security = "compatible"; # stock Mumble clients, no end-to-end encryption (yet)
   database.type = "postgresql";
   database.createLocally = true;
 };
 ```
 
-The module is a development interface: its database preflight is implemented, but
-`nuscheld` deliberately refuses to start a listener until Mumble sessions exist.
-Enabling it is not yet a deployable voice server. The VM smoke test substitutes a
-configuration-only command while retaining the real hardened unit and migrations.
+`nuscheld` is a Mumble 1.5 server (with the legacy UDP format for 1.4/1.3 clients)
+that stock Mumble clients and Nuschel use: certificates and passwords, channels,
+ACLs and groups with Murmur's semantics, text, whisper and shout, listeners, and
+voice routing over UDP and the TCP tunnel, with state in SQLite or PostgreSQL behind
+the storage worker. The `vm-server` check runs Nuschel's protocol suites and the
+stock Mumble GUI against it. `security = "e2ee"` (the planned default) refuses to
+start until end-to-end encryption exists. Design, configuration and deviations
+from Murmur: [docs/server.md](docs/server.md). Options include `listenAddresses`,
+`settings`, `passwordFile` and `superUserPasswordFile`.
 
 External PostgreSQL URLs and TLS keys come from runtime credential files, not inline
 Nix values. `openFirewall` is off by default. The service uses DynamicUser, a private
