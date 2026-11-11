@@ -58,7 +58,15 @@ impl Shared {
     fn pump(&self, server: &str, generation: u64, socket: &WebSocket, session: &RefCell<Session>) {
         let (outgoing, events) = {
             let mut session = session.borrow_mut();
-            (session.take_outgoing(), session.take_events())
+            // A timer can run while DNS/TLS/WebSocket setup is still pending.
+            // Keep the initial Open (and any later queued records) until the
+            // transport is actually writable instead of silently dropping it.
+            let outgoing = if socket.ready_state() == WebSocket::OPEN {
+                session.take_outgoing()
+            } else {
+                Vec::new()
+            };
+            (outgoing, session.take_events())
         };
         if socket.ready_state() == WebSocket::OPEN {
             for message in outgoing {
@@ -148,8 +156,13 @@ impl Platform for BrowserPlatform {
             );
             Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
                 if let Ok(buffer) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
-                    let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
-                    session.borrow_mut().receive(&bytes);
+                    // Check before copying a relay-controlled buffer into WASM.
+                    if buffer.byte_length() as usize > tunnel::MAX_FRAME {
+                        session.borrow_mut().disconnected();
+                    } else {
+                        let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
+                        session.borrow_mut().receive(&bytes);
+                    }
                 } else {
                     session.borrow_mut().disconnected();
                 }

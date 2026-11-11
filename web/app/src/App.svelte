@@ -5,23 +5,13 @@
 <script>
   import { onMount } from "svelte";
   import init, { WebClient } from "./sdk/nuschel_client_wasm.js";
+  import { inviteFragment } from "./invite.js";
 
-  const MUMBLE_PORT = 64738;
   const scheme = location.protocol === "https:" ? "wss" : "ws";
 
   // "Join in the browser" from a share link: #t=<token>&s=<host>[:<port>]&fp=sha256:<hex>…
   function fromLink() {
-    const params = new URLSearchParams(location.hash.replace(/^#/, ""));
-    const server = params.get("s") || "";
-    const match = /^\[?([^\]]*?)\]?(?::(\d{1,5}))?$/.exec(server);
-    const fp = /^sha256:([0-9a-fA-F]{64})$/.exec(params.get("fp") || "");
-    return {
-      host: match ? match[1] : "",
-      port: match && match[2] ? Number(match[2]) : MUMBLE_PORT,
-      pin: fp ? fp[1].toLowerCase() : "",
-      // With a name, a link connects at once (tests use it, as mumble:// links with a user do).
-      username: (params.get("u") || "").slice(0, 128),
-    };
+    return inviteFragment(location.hash);
   }
 
   const link = fromLink();
@@ -31,7 +21,7 @@
   let username = $state(link.username);
   let pin = $state(link.pin);
   let loaded = $state(false);
-  let error = $state("");
+  let error = $state(link.error);
   let servers = $state([]);
   let client = null;
 
@@ -45,7 +35,7 @@
     init()
       .then(() => {
         loaded = true;
-        if (link.host && link.username) connect();
+        if (link.host && link.username && !link.error) connect();
       })
       .catch((reason) => (error = `The client could not load: ${reason}`));
     // Mumble servers drop clients that are silent for 30 seconds.
@@ -60,6 +50,10 @@
 
   function connect(event) {
     event?.preventDefault();
+    if (link.error) {
+      error = link.error;
+      return;
+    }
     error = "";
     try {
       if (!client) {
@@ -100,7 +94,7 @@
       <summary>Relay</summary>
       <label>Relay address <input bind:value={relay} required></label>
     </details>
-    <button type="submit" disabled={!loaded}>Connect</button>
+    <button type="submit" disabled={!loaded || !!link.error}>Connect</button>
   </form>
 
   {#if error}

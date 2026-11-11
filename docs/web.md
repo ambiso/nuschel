@@ -196,6 +196,10 @@ DOM, so a Web Worker can host it.
   relay's address (the same origin by default), "Connected" or "Not connected" as a
   live status, a certificate prompt and the channels with their users. A share link's
   "Join in the browser" fills in the server; with a name (`u=`) it connects at once.
+  Certificate pins are preserved. Invites requiring `policy=nuschel` are refused
+  with an app-opening explanation until the browser implements that negotiation;
+  they must never silently fall back to legacy Mumble. Malformed or ambiguous
+  security options also fail closed. `npm test` covers these fragment rules.
 - Tests: `cargo test -p nuschel-client-wasm` runs the Session through the real relay
   to a TLS server (and to Murmur with `NUSCHEL_TEST_MURMUR`); `tests/web_client.py
   <binaries> --murmur <mumble-server>` runs the WebAssembly build in Node.js (the

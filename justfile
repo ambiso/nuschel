@@ -27,7 +27,7 @@ wasm-client profile="release":
 
 # The Svelte client (web/app) with the SDK, into web/app/dist.
 web: wasm-client
-    cd web/app && npm ci --no-audit --no-fund && npm run build
+    cd web/app && npm ci --no-audit --no-fund && npm test && npm run build
 
 workers:
     cargo build --workspace

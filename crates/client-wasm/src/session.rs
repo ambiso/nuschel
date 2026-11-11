@@ -30,7 +30,10 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
     io::{Read, Write},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 /// Where to log in.
@@ -63,6 +66,11 @@ pub enum Event {
 const PING_MS: f64 = 10_000.0;
 /// Plaintext waiting to be framed; a server sending more is cut off.
 const MAX_BUFFER: usize = 16 * 1024 * 1024;
+
+fn next_user_instance() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug)]
 struct Verifier {
@@ -474,6 +482,7 @@ impl Session {
                 }
                 let user = self.users.entry(session).or_insert_with(|| User {
                     session,
+                    instance: next_user_instance(),
                     ..User::default()
                 });
                 if let Some(name) = state.name {
@@ -485,12 +494,24 @@ impl Session {
                 if let Some(user_id) = state.user_id {
                     user.user_id = Some(user_id);
                 }
+                if let Some(hash) = state.hash {
+                    if user
+                        .certificate_hash
+                        .as_deref()
+                        .filter(|old| !old.is_empty())
+                        .is_some_and(|old| !old.eq_ignore_ascii_case(&hash))
+                    {
+                        user.instance = next_user_instance();
+                    }
+                    user.certificate_hash = Some(bounded(hash));
+                }
                 if let Some(muted) = state.self_mute {
                     user.self_muted = muted;
                 }
                 if let Some(deafened) = state.self_deaf {
                     user.self_deafened = deafened;
                 }
+                user.self_muted |= user.self_deafened;
                 let user = user.clone();
                 self.events
                     .push_back(Event::Server(ServerEvent::User(user)));
@@ -515,4 +536,60 @@ fn bounded(text: String) -> String {
 
 fn webpki_roots() -> impl Iterator<Item = rustls::pki_types::TrustAnchor<'static>> {
     webpki_roots::TLS_SERVER_ROOTS.iter().cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session() -> Session {
+        Session::new(Login {
+            host: "localhost".into(),
+            port: 64738,
+            username: "test".into(),
+            password: None,
+            tokens: vec![],
+            pin: None,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn presence_tokens_are_stable_for_updates_and_unique_across_connections() {
+        let mut first = session();
+        let mut second = session();
+        let update = |hash: &str| {
+            proto::UserState {
+                session: Some(7),
+                hash: Some(hash.into()),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into()
+        };
+        first.control(kind::USER_STATE, update("abc"));
+        let before = first.users[&7].instance;
+        first.control(kind::USER_STATE, update("abc"));
+        assert_eq!(before, first.users[&7].instance);
+        second.control(kind::USER_STATE, update("abc"));
+        assert_ne!(before, second.users[&7].instance);
+        first.control(kind::USER_STATE, update("different"));
+        assert_ne!(before, first.users[&7].instance);
+    }
+
+    #[test]
+    fn a_sparse_deafen_snapshot_also_means_muted() {
+        let mut session = session();
+        session.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(7),
+                self_deaf: Some(true),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert!(session.users[&7].self_muted && session.users[&7].self_deafened);
+    }
 }

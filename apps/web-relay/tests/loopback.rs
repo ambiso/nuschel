@@ -540,6 +540,26 @@ async fn logs_in_to_murmur_through_the_relay() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    // Murmur starts accepting TCP before its UDP worker is necessarily ready
+    // (notably while generating its initial certificate). Wait for both sides
+    // of the fixture instead of measuring server startup with relay timeouts.
+    let udp = UdpSocket::bind("127.0.0.1:0").await.expect("UDP probe");
+    udp.connect(("127.0.0.1", port)).await.expect("UDP target");
+    let ident = 0x6e75_7363_6865_6c31;
+    let mut reply = [0_u8; 64];
+    let mut ready = false;
+    for _ in 0..100 {
+        let _ = udp.send(&tunnel::mumble_ping(ident)).await;
+        if let Ok(Ok(size)) =
+            tokio::time::timeout(Duration::from_millis(100), udp.recv(&mut reply)).await
+            && tunnel::is_ping_reply(&reply[..size], ident)
+        {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(ready, "local Murmur did not become UDP ready");
     let (url, _) = relay(|_| {}).await;
     let outcome = probe::run(Probe {
         relay: url,

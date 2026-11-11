@@ -19,9 +19,11 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(unix)]
+use tokio::net::UnixListener;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::{TcpListener, TcpStream, UdpSocket, UnixListener},
+    net::{TcpListener, TcpStream, UdpSocket},
     time::timeout,
 };
 use tokio_tungstenite::{
@@ -76,16 +78,27 @@ impl Relay {
         match self.config.listen.clone() {
             Listen::Tcp(address) => self.serve_tcp(TcpListener::bind(address).await?).await,
             Listen::Unix(path) => {
-                // A socket left by an earlier run.
-                let _ = std::fs::remove_file(&path);
-                let listener = UnixListener::bind(&path)?;
+                #[cfg(not(unix))]
                 {
-                    use std::os::unix::fs::PermissionsExt;
-                    // The directory decides who may connect (the module gives it
-                    // to the web server's group).
-                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))?;
+                    let _ = path;
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "Unix relay sockets are not supported on this platform; use a TCP listen address",
+                    ))
                 }
-                self.serve_unix(listener).await
+                #[cfg(unix)]
+                {
+                    // A socket left by an earlier run.
+                    let _ = std::fs::remove_file(&path);
+                    let listener = UnixListener::bind(&path)?;
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        // The directory decides who may connect (the module gives it
+                        // to the web server's group).
+                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660))?;
+                    }
+                    self.serve_unix(listener).await
+                }
             }
         }
     }
@@ -118,6 +131,7 @@ impl Relay {
         }
     }
 
+    #[cfg(unix)]
     pub async fn serve_unix(self: Arc<Self>, listener: UnixListener) -> std::io::Result<()> {
         loop {
             let (stream, _) = match listener.accept().await {
