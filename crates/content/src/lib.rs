@@ -461,6 +461,33 @@ impl ContentRenderer {
 
 #[cfg(test)]
 mod tests {
+    /// A file offer sent as HTML (servers that allow it) is recognised from the
+    /// document the worker renders, though its prepared source keeps markers.
+    #[test]
+    fn html_file_offers_are_recognised_after_rendering() -> Result<(), super::Error> {
+        use nuschel_core::transfer::{Offer, format_offer, offer_in};
+        let renderer = super::ContentRenderer::new()?;
+        let offer = Offer {
+            name: "frost.pdf".into(),
+            size: 5_000_000,
+            code: Some("2-disruptive-crumpled".into()),
+            rendezvous: None,
+        };
+        let html = format_offer(&offer).html;
+        let document = renderer.render(&renderer.legacy_plain_text(&html)?)?;
+        assert_eq!(offer_in(&document), Some(offer.clone()));
+        // The end of the offer names the same file, so it replaces the card.
+        let ended = Offer {
+            code: None,
+            ..offer
+        };
+        let html = format_offer(&ended).html;
+        let source = renderer.legacy_plain_text(&html)?;
+        assert_eq!(nuschel_core::transfer::parse_offer(&source), None);
+        assert_eq!(offer_in(&renderer.render(&source)?), Some(ended));
+        Ok(())
+    }
+
     use super::*;
 
     #[test]

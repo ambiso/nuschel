@@ -85,7 +85,9 @@ pub fn format_offer(offer: &Offer) -> Formatted {
 
 /// The offer a message makes, if it is one.
 pub fn parse_offer(text: &str) -> Option<Offer> {
-    if text.len() > MAX_MESSAGE {
+    // The content worker's formatting markers never belong to an offer's text:
+    // such a source is read from its rendered document instead (`offer_in`).
+    if text.len() > MAX_MESSAGE || text.contains(crate::EMBED) {
         return None;
     }
     let rest = text.trim().strip_prefix(MARK)?;
@@ -130,6 +132,17 @@ pub fn parse_offer(text: &str) -> Option<Offer> {
         code: Some(code.to_owned()),
         rendezvous,
     })
+}
+
+/// The offer a rendered message makes: its visible text, when the message is
+/// exactly one paragraph. HTML offers (as Nuschel sends them where servers
+/// allow HTML) reach the client as the content worker's document, never as
+/// HTML, and their raw source carries the worker's formatting markers.
+pub fn offer_in(document: &crate::MessageDocument) -> Option<Offer> {
+    match document.blocks.as_slice() {
+        [crate::ContentBlock::Text { text, .. }] => parse_offer(text),
+        _ => None,
+    }
 }
 
 /// "report.pdf (2.1 MB)": the last parenthesis holds the size.
@@ -265,6 +278,36 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rendered_offers_are_offers_and_only_as_one_paragraph() {
+        let text = format_offer(&offer("report.pdf", 2_100_000, Some("7-guitarist-revenge"))).text;
+        let one = crate::MessageDocument {
+            blocks: vec![crate::ContentBlock::text(text.clone())],
+        };
+        assert_eq!(
+            offer_in(&one),
+            Some(offer("report.pdf", 2_100_000, Some("7-guitarist-revenge")))
+        );
+        let two = crate::MessageDocument {
+            blocks: vec![
+                crate::ContentBlock::text(text),
+                crate::ContentBlock::text("more"),
+            ],
+        };
+        assert_eq!(offer_in(&two), None);
+        assert_eq!(
+            offer_in(&crate::MessageDocument { blocks: Vec::new() }),
+            None
+        );
+        // The worker's prepared source of an HTML offer keeps its markers.
+        assert_eq!(
+            parse_offer(
+                "📎 \u{FFFC}b\u{FFFC}a.txt\u{FFFC}/b\u{FFFC} (3 bytes) — no longer available."
+            ),
+            None
+        );
+    }
 
     fn offer(name: &str, size: u64, code: Option<&str>) -> Offer {
         Offer {

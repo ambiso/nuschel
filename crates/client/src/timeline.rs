@@ -132,7 +132,8 @@ impl Message {
 impl From<IncomingMessage> for Message {
     fn from(message: IncomingMessage) -> Self {
         static SERIALS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let offer = nuschel_core::transfer::parse_offer(&message.message.body);
+        let offer = nuschel_core::transfer::parse_offer(&message.message.body)
+            .or_else(|| nuschel_core::transfer::offer_in(&message.document));
         let status = if message.deleted.is_some() {
             MessageStatus::Plain
         } else if message.pending.is_some() {
@@ -389,7 +390,8 @@ impl Timeline {
                 {
                     return Ok(false);
                 }
-                message.offer = nuschel_core::transfer::parse_offer(&source);
+                message.offer = nuschel_core::transfer::parse_offer(&source)
+                    .or_else(|| nuschel_core::transfer::offer_in(&document));
                 message.source = source;
                 message.document = document;
                 message.edited_ms = Some(edited_ms);
