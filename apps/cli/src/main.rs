@@ -69,6 +69,11 @@ struct Arguments {
     /// key transparency (`kt/1`). The worker runs in its sandbox, beside this binary.
     #[arg(long)]
     identity_dir: Option<PathBuf>,
+    /// Do not connect: serve device-linking commands (`link_offer`, `link_join`,
+    /// `link_approve`, `link_complete`) with the crypto worker of `--identity-dir`
+    /// only. `--host` and `--username` are not used.
+    #[arg(long)]
+    offline: bool,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -254,6 +259,24 @@ enum Input {
     E2eeSync {
         conversation: String,
     },
+    /// Device linking (`--offline` only; docs/e2ee.md §3.4): on a device with the
+    /// identity, a code to show and the first message for the new device.
+    LinkOffer,
+    /// On the new device: the code and the existing device's message (hex).
+    LinkJoin {
+        code: String,
+        pake: String,
+        device_name: Option<String>,
+    },
+    /// On the existing device: the new device's messages (hex).
+    LinkApprove {
+        pake: String,
+        device_keys: String,
+    },
+    /// On the new device: the sealed bundle (hex).
+    LinkComplete {
+        bundle: String,
+    },
     Disconnect,
 }
 fn hex(bytes: &[u8]) -> String {
@@ -356,6 +379,81 @@ fn mls_json(event: &MlsEvent) -> serde_json::Value {
         MlsEvent::Failed(reason) => json!({"kind":"e2ee_failed", "reason":reason}),
     }
 }
+/// `--offline`: device linking with the crypto worker only (docs/e2ee.md §3.4). The
+/// caller relays the messages between the two devices' CLIs.
+async fn offline(
+    crypto: CryptoHandle,
+    username: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use nuschel_ipc::crypto::{CryptoRequest, CryptoResponse};
+    let (lines, mut input) = mpsc::channel::<Vec<u8>>(8);
+    std::thread::spawn(move || {
+        let mut stdin = io::stdin().lock();
+        loop {
+            let mut line = Vec::new();
+            match Read::by_ref(&mut stdin)
+                .take(4 * 1024 * 1024)
+                .read_until(b'\n', &mut line)
+            {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if lines.blocking_send(line).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    output(json!({"kind":"offline"}))?;
+    while let Some(line) = input.recv().await {
+        let request = match serde_json::from_slice::<Input>(&line) {
+            Ok(Input::LinkOffer) => CryptoRequest::LinkOffer,
+            Ok(Input::LinkJoin {
+                code,
+                pake,
+                device_name,
+            }) => CryptoRequest::LinkJoin {
+                code,
+                pake: unhex(&pake),
+                device_name: device_name.unwrap_or_else(|| format!("{username} (nuschel-cli)")),
+            },
+            Ok(Input::LinkApprove { pake, device_keys }) => CryptoRequest::LinkApprove {
+                pake: unhex(&pake),
+                device_keys: unhex(&device_keys),
+            },
+            Ok(Input::LinkComplete { bundle }) => CryptoRequest::LinkComplete {
+                bundle: unhex(&bundle),
+            },
+            Ok(Input::IdentityOwn) => CryptoRequest::Identity,
+            Ok(Input::Disconnect) => break,
+            Ok(_) => {
+                output(json!({"kind":"error", "message":"not available with --offline"}))?;
+                continue;
+            }
+            Err(error) => {
+                output(json!({"kind":"error", "message":format!("bad command: {error}")}))?;
+                continue;
+            }
+        };
+        let event = match crypto.request(request).await {
+            Ok(CryptoResponse::LinkOffer { code, pake }) => {
+                json!({"kind":"link_offer", "code":code, "pake":hex(&pake)})
+            }
+            Ok(CryptoResponse::LinkJoin { pake, device_keys }) => {
+                json!({"kind":"link_join", "pake":hex(&pake), "device_keys":hex(&device_keys)})
+            }
+            Ok(CryptoResponse::LinkBundle(bundle)) => {
+                json!({"kind":"link_bundle", "bundle":hex(&bundle)})
+            }
+            Ok(CryptoResponse::Identity(view)) => json!({"kind":"identity_own", "view":view}),
+            Ok(other) => json!({"kind":"error", "message":format!("unexpected answer {other:?}")}),
+            Err(error) => json!({"kind":"link_failed", "reason":error.to_string()}),
+        };
+        output(event)?;
+    }
+    output(json!({"kind":"disconnected", "message":"Disconnected"}))?;
+    Ok(())
+}
 fn account(text: &str) -> Option<[u8; 16]> {
     unhex(text).try_into().ok()
 }
@@ -371,6 +469,18 @@ fn output(value: serde_json::Value) -> io::Result<()> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Arguments::parse();
+    if args.offline {
+        let directory = args
+            .identity_dir
+            .clone()
+            .ok_or("--offline needs --identity-dir")?;
+        let crypto = CryptoHandle::start(
+            nuschel_session::workers::sibling("nuschel-crypto-worker")
+                .unwrap_or_else(|_| "nuschel-crypto-worker".into()),
+            directory,
+        );
+        return offline(crypto, &args.username).await;
+    }
     let profile = Profile::open(args.profile_dir.clone())?;
     if let Some(path) = &args.export_certificate {
         profile
@@ -514,6 +624,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         continue;
                     }
                 },
+                Ok(
+                    Input::LinkOffer
+                    | Input::LinkJoin { .. }
+                    | Input::LinkApprove { .. }
+                    | Input::LinkComplete { .. },
+                ) => {
+                    let _ = output(json!({"kind":"error", "message":"linking needs --offline"}));
+                    continue;
+                }
                 Ok(Input::Html { channel, html }) => Command::SendHtml {
                     target: TextTarget::Channel(channel),
                     html: vec![html],

@@ -25,6 +25,10 @@ pub struct State {
     /// Identities compared out of band, by fingerprint (hex): verification belongs to
     /// the identity and holds on every server (docs/e2ee.md §4).
     pub verified: BTreeMap<String, Verified>,
+    /// The identity's other devices (device certificates), from linking and verified
+    /// lookups of our own account; published with this one (crate::link).
+    #[serde(default, with = "base64_list")]
+    pub own_devices: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

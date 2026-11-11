@@ -543,6 +543,40 @@ impl Context {
         }
     }
 
+    /// Looks up our own account and hands it to the worker, which learns our other
+    /// devices from it; nothing is shown (a failure, such as nothing published yet,
+    /// is the monitor's to report).
+    async fn own_lookup(&mut self) -> Result<(), Error> {
+        let Ok(account) = <[u8; 16]>::try_from(self.account.as_slice()) else {
+            return Ok(());
+        };
+        let reply = self
+            .ask(kind::KT_LOOKUP, move |request_id| {
+                v1::KtLookup {
+                    request_id,
+                    target: Some(v1::kt_lookup::Target::Account(account.to_vec())),
+                }
+                .encode_to_vec()
+            })
+            .await?;
+        if let Reply::Frame(kind::KT_LOOKUP_REPLY, payload) = reply
+            && let Ok(reply) = v1::KtLookupReply::decode(payload)
+            && reply.account == account
+        {
+            let _ = self
+                .checked(CryptoRequest::Contact {
+                    server: self.server.key.clone(),
+                    account: account.to_vec(),
+                    lookup: reply.response,
+                    record: reply.record.map(record_bytes),
+                    direct: false,
+                    user_id: None,
+                })
+                .await;
+        }
+        Ok(())
+    }
+
     async fn monitor(&mut self) -> Result<(), Error> {
         if self.account.len() != 16 {
             return Ok(());
@@ -693,6 +727,11 @@ impl Context {
             CryptoResponse::Due(due) => due,
             _ => return Err(Error::Worker("unexpected worker answer".into())),
         };
+        if due.monitor || due.publish {
+            // Our own account first: the identity's other devices and the binding they
+            // published (self-monitoring accepts it, and a publication keeps them).
+            self.own_lookup().await?;
+        }
         if due.publish {
             self.publish().await?;
         }
@@ -916,6 +955,12 @@ pub async fn drive(driver: Driver) {
                         // End-to-end conversations start once the log is healthy.
                         Ok(()) if mls_commands.is_some() && context.mls.is_none() => {
                             context.mls_start().await
+                        }
+                        Ok(()) => {
+                            if let Some(mls) = context.mls.as_mut() {
+                                mls.hourly();
+                            }
+                            Ok(())
                         }
                         result => result,
                     },

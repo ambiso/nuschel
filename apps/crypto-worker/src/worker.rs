@@ -19,9 +19,9 @@ use nuschel_ipc::crypto::{
 use nuschel_kt::{
     AccountBinding, AccountId, Assessment, AuditResponse, ContactTrust, DirectoryValue, ErrorClass,
     GossipOutcome, HeadGossip, HistoryResponse, IdentityRecord, KnownHeads, KtError, Label,
-    LogDescriptor, LookupResponse, MonitorCheckpoint, Observation, Relation, RosterCommitment,
-    SignedHead, VerifiedHead, check_freshness, check_gossip, monitor_own, should_gossip,
-    verify_account_record, verify_audit, verify_head, verify_history, verify_lookup,
+    LogDescriptor, LookupResponse, MonitorCheckpoint, Observation, Relation, SignedHead,
+    VerifiedHead, check_freshness, check_gossip, monitor_own, should_gossip, verify_account_record,
+    verify_audit, verify_head, verify_history, verify_lookup,
 };
 use std::io;
 use zeroize::Zeroizing;
@@ -91,6 +91,8 @@ pub struct Worker {
     clock: Box<dyn Fn() -> u64 + Send>,
     /// MLS groups and conversations (crate::mls).
     pub(crate) mls: crate::mls::Mls,
+    /// A device link in progress (crate::link), in memory only.
+    pub(crate) link: crate::link::Pending,
 }
 
 fn now_ms() -> u64 {
@@ -125,6 +127,7 @@ impl Worker {
             recovery,
             clock: Box::new(now_ms),
             mls,
+            link: crate::link::Pending::default(),
         })
     }
 
@@ -320,13 +323,23 @@ impl Worker {
                 self.save()?;
                 CryptoResponse::Done
             }
+            CryptoRequest::LinkOffer => self.link_offer()?,
+            CryptoRequest::LinkJoin {
+                code,
+                pake,
+                device_name,
+            } => self.link_join(&code, &pake, &device_name)?,
+            CryptoRequest::LinkApprove { pake, device_keys } => {
+                self.link_approve(&pake, &device_keys)?
+            }
+            CryptoRequest::LinkComplete { bundle } => self.link_complete(&bundle)?,
             request => return self.mls_request(request),
         })
     }
 
     // ---- identity ----
 
-    fn identity_view(&self, created: bool) -> IdentityView {
+    pub(crate) fn identity_view(&self, created: bool) -> IdentityView {
         let mut view = match &self.keystore {
             Some(keystore) => IdentityView {
                 fingerprint: Some(keystore.identity().fingerprint().to_hex()),
@@ -425,7 +438,7 @@ impl Worker {
             .ok_or_else(|| "not connected to this server's key-transparency log".to_owned())
     }
 
-    fn server_mut(&mut self, key: &str) -> Result<&mut ServerState, String> {
+    pub(crate) fn server_mut(&mut self, key: &str) -> Result<&mut ServerState, String> {
         self.state
             .servers
             .get_mut(key)
@@ -657,12 +670,10 @@ impl Worker {
                 .map_err(|error| error.to_string())?,
         };
         let signing = identity.device_signing_certificate();
-        let devices = vec![keystore.device_certificate().clone()];
-        let roster =
-            RosterCommitment::compute(signing, &devices, &[]).map_err(|error| error.to_string())?;
-        let value = AccountBinding::with_statement(identity.root_key().clone(), roster, &statement)
-            .to_value()
-            .encode();
+        // Every device of the identity this device knows (crate::link): a
+        // publication never drops the others from the roster.
+        let devices = self.own_device_certificates();
+        let value = crate::link::binding_value(identity, &devices, &statement)?;
         let bundle = PublishBundle {
             root: identity.root_key().encode(),
             record: KtRecordBytes {
@@ -893,6 +904,7 @@ impl Worker {
             .map_err(KtError::from)
             .and_then(|response| verify_lookup(&descriptor, &label, &response));
         let mut roster = None;
+        let mut value = Vec::new();
         let observation = match verified {
             Ok((head, entry)) => match self.accept_head(key, &mut known, &head) {
                 Ok(()) => {
@@ -900,6 +912,7 @@ impl Worker {
                     match check_record(&descriptor, account, &entry.value, record) {
                         Ok((root, root_key)) => {
                             roster = Some((root, root_key));
+                            value = entry.value.encode();
                             Observation::Lookup {
                                 root,
                                 version: entry.version,
@@ -918,6 +931,11 @@ impl Worker {
         // checked against; another identity's (a key change waiting for the user)
         // is not kept.
         if let (Some((root, root_key)), Some(record)) = (roster, record) {
+            // Our own account, bound to our identity: the identity's other devices
+            // and their binding (crate::link).
+            if self.server(key)?.account == account && self.own_fingerprint() == Some(root) {
+                self.learn_own_record(key, record, value)?;
+            }
             let now = self.now();
             let contact = self.contact_entry(key, &account)?;
             if contact.pinned.as_deref() == Some(root.to_hex().as_str()) {

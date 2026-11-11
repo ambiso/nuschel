@@ -344,7 +344,44 @@ pub enum CryptoRequest {
         idempotency_key: Vec<u8>,
         seq: u64,
     },
+
+    // ---- Device linking (docs/e2ee.md §3.4) ----
+    // nuschel-identity's protocol; the caller relays the messages between the two
+    // devices (out of band for now; the server's linking mailbox comes later). The
+    // state between steps lives in the worker's memory only.
+    /// On a device with the device-signing key: a fresh code to show and the first
+    /// SPAKE2 message (`LinkOffer`).
+    LinkOffer,
+    /// On the new device, which has no identity yet: the code the user typed and the
+    /// existing device's message; makes this device's keys (`LinkJoin`).
+    LinkJoin {
+        code: String,
+        #[serde(with = "base64_bytes")]
+        pake: Vec<u8>,
+        device_name: String,
+    },
+    /// On the existing device: the new device's messages. Checks the key
+    /// confirmation, certifies the new device and seals its provisioning bundle
+    /// (`LinkBundle`).
+    LinkApprove {
+        #[serde(with = "base64_bytes")]
+        pake: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        device_keys: Vec<u8>,
+    },
+    /// On the new device: the bundle; stores the identity (`Identity`).
+    LinkComplete {
+        #[serde(with = "base64_bytes")]
+        bundle: Vec<u8>,
+    },
 }
+
+/// A link code (`<nameplate>-dddd-dddd`), a SPAKE2 message, the new device's keys
+/// message, and a sealed provisioning bundle.
+pub const MAX_LINK_CODE: usize = 32;
+pub const MAX_LINK_PAKE: usize = 64;
+pub const MAX_LINK_DEVICE_KEYS: usize = 2048;
+pub const MAX_LINK_BUNDLE: usize = 2 * 1024 * 1024;
 
 impl CryptoRequest {
     /// The bounds of every field; `Err` names the first violation.
@@ -589,6 +626,21 @@ impl CryptoRequest {
                 conversation(c)?;
                 key(idempotency_key)
             }
+            Self::LinkOffer => Ok(()),
+            Self::LinkJoin {
+                code,
+                pake,
+                device_name,
+            } => {
+                at_most(code.len(), MAX_LINK_CODE, "link code")?;
+                at_most(pake.len(), MAX_LINK_PAKE, "link message")?;
+                at_most(device_name.len(), MAX_DEVICE_NAME, "device name")
+            }
+            Self::LinkApprove { pake, device_keys } => {
+                at_most(pake.len(), MAX_LINK_PAKE, "link message")?;
+                at_most(device_keys.len(), MAX_LINK_DEVICE_KEYS, "device keys")
+            }
+            Self::LinkComplete { bundle } => at_most(bundle.len(), MAX_LINK_BUNDLE, "bundle"),
         }
     }
 }
@@ -766,6 +818,21 @@ pub enum CryptoResponse {
         message: Vec<u8>,
         epoch: u64,
     },
+    /// Show `code` to the user; relay `pake` to the new device.
+    LinkOffer {
+        code: String,
+        #[serde(with = "base64_bytes")]
+        pake: Vec<u8>,
+    },
+    /// Relay both to the existing device.
+    LinkJoin {
+        #[serde(with = "base64_bytes")]
+        pake: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        device_keys: Vec<u8>,
+    },
+    /// Relay to the new device.
+    LinkBundle(#[serde(with = "base64_bytes")] Vec<u8>),
 }
 
 // ---- MLS views (docs/e2ee.md §6, §7.4) ----
