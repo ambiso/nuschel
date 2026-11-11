@@ -135,6 +135,7 @@ let
     "auto_reconnect"
     "user_volumes"
     "local_mutes"
+    "server_volumes"
     "shortcuts"
     "push_to_talk_key"
     "enter_sends"
@@ -153,6 +154,7 @@ let
     "appearance"
     "recovery_key"
     "key_transparency"
+    "share_web_host"
   ];
   unknownSettings = lib.subtractLists settingNames (lib.attrNames cfg.settings);
   # `programs.nuschel.keyTransparency`, in the format of `key_transparency`.
