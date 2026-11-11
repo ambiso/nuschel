@@ -8352,7 +8352,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.59.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_UI_Shell" "Win32_Foundation" "Win32_Globalization" "Win32_System_Com" ];
           }
@@ -9514,7 +9514,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Diagnostics_Debug" ];
           }
@@ -10299,31 +10299,11 @@ rec {
         };
         resolvedDefaultFeatures = [ "std" ];
       };
-      "font-types 0.11.3" = rec {
+      "font-types" = rec {
         crateName = "font-types";
         version = "0.11.3";
         edition = "2021";
         sha256 = "1mygnhm4xrnm803w2ax63ka3nm0s56l4h26mrs9xkbbdby8ssf2v";
-        libName = "font_types";
-        dependencies = [
-          {
-            name = "bytemuck";
-            packageId = "bytemuck";
-            optional = true;
-            features = [ "derive" "min_const_generics" ];
-          }
-        ];
-        features = {
-          "bytemuck" = [ "dep:bytemuck" ];
-          "serde" = [ "dep:serde" ];
-        };
-        resolvedDefaultFeatures = [ "bytemuck" "std" ];
-      };
-      "font-types 0.12.7" = rec {
-        crateName = "font-types";
-        version = "0.12.7";
-        edition = "2021";
-        sha256 = "0pgks8skqzhjidjpxkyp154rl335pjf7yf6ydh17jjj6h7byjnl3";
         libName = "font_types";
         dependencies = [
           {
@@ -11633,7 +11613,7 @@ rec {
           }
           {
             name = "windows";
-            packageId = "windows 0.62.2";
+            packageId = "windows 0.58.0";
             optional = true;
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Graphics_Direct3D12" "Win32_Graphics_Dxgi_Common" ];
@@ -11648,7 +11628,7 @@ rec {
           }
           {
             name = "windows";
-            packageId = "windows 0.62.2";
+            packageId = "windows 0.58.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Graphics_Direct3D" "Win32_Graphics_Direct3D12" "Win32_Graphics_Dxgi_Common" ];
           }
@@ -12694,7 +12674,7 @@ rec {
         crateName = "gpui-pre-linux";
         version = "0.3.11";
         edition = "2024";
-        sha256 = "097nhsiyywppdaa4d653n1f8y60rj335vzgap0yiwp28sg5wbjkr";
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../vendor/gpui-pre-linux; };
         libName = "gpui_linux";
         libPath = "src/gpui_linux.rs";
         dependencies = [
@@ -15808,7 +15788,7 @@ rec {
           }
           {
             name = "windows-core";
-            packageId = "windows-core 0.62.2";
+            packageId = "windows-core 0.58.0";
             target = { target, features }: ("windows" == target."os" or null);
           }
         ];
@@ -21930,7 +21910,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.59.0";
             rename = "windows";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_System_Console" "Win32_Storage_FileSystem" "Win32_Security" ];
@@ -28259,7 +28239,7 @@ rec {
         features = {
         };
       };
-      "ordered-float 4.6.0" = rec {
+      "ordered-float" = rec {
         crateName = "ordered-float";
         version = "4.6.0";
         edition = "2021";
@@ -28298,52 +28278,6 @@ rec {
           "std" = [ "num-traits/std" ];
         };
         resolvedDefaultFeatures = [ "default" "std" ];
-      };
-      "ordered-float 5.5.1" = rec {
-        crateName = "ordered-float";
-        version = "5.5.1";
-        edition = "2021";
-        sha256 = "1aq0yvv3fk65mvgmd4vv8ycwlyri9nvkb1b3aq4w6172w5n00nbz";
-        libName = "ordered_float";
-        authors = [
-          "Jonathan Reem <jonathan.reem@gmail.com>"
-          "Matt Brubeck <mbrubeck@limpet.net>"
-        ];
-        dependencies = [
-          {
-            name = "num-traits";
-            packageId = "num-traits";
-            usesDefaultFeatures = false;
-          }
-        ];
-        features = {
-          "arbitrary" = [ "dep:arbitrary" ];
-          "borsh" = [ "dep:borsh" ];
-          "bytemuck" = [ "dep:bytemuck" ];
-          "default" = [ "std" ];
-          "derive-visitor" = [ "dep:derive-visitor" ];
-          "facet" = [ "dep:facet" ];
-          "libm" = [ "num-traits/libm" ];
-          "num-cmp" = [ "dep:num-cmp" ];
-          "proptest" = [ "dep:proptest" ];
-          "rand" = [ "dep:rand" ];
-          "randtest" = [ "rand/std" "rand/std_rng" ];
-          "rkyv" = [ "rkyv_32" ];
-          "rkyv_08" = [ "rkyv_08_32" ];
-          "rkyv_08_16" = [ "dep:rkyv_08" "rkyv_08?/pointer_width_16" ];
-          "rkyv_08_32" = [ "dep:rkyv_08" "rkyv_08?/pointer_width_32" ];
-          "rkyv_08_64" = [ "dep:rkyv_08" "rkyv_08?/pointer_width_64" ];
-          "rkyv_08_ck" = [ "dep:rkyv_08" "rkyv_08?/bytecheck" ];
-          "rkyv_16" = [ "dep:rkyv" "rkyv?/size_16" ];
-          "rkyv_32" = [ "dep:rkyv" "rkyv?/size_32" ];
-          "rkyv_64" = [ "dep:rkyv" "rkyv?/size_64" ];
-          "rkyv_ck" = [ "rkyv?/validation" ];
-          "schemars" = [ "dep:schemars" ];
-          "schemars1" = [ "dep:schemars1" ];
-          "serde" = [ "dep:serde" "rand?/serde1" ];
-          "speedy" = [ "dep:speedy" ];
-          "std" = [ "num-traits/std" ];
-        };
       };
       "ordered-stream" = rec {
         crateName = "ordered-stream";
@@ -31232,11 +31166,11 @@ rec {
         dependencies = [
           {
             name = "heck";
-            packageId = "heck 0.5.0";
+            packageId = "heck 0.4.1";
           }
           {
             name = "itertools";
-            packageId = "itertools 0.14.0";
+            packageId = "itertools 0.13.0";
             usesDefaultFeatures = false;
             features = [ "use_alloc" ];
           }
@@ -31315,7 +31249,7 @@ rec {
           }
           {
             name = "itertools";
-            packageId = "itertools 0.14.0";
+            packageId = "itertools 0.13.0";
           }
           {
             name = "proc-macro2";
@@ -32935,7 +32869,7 @@ rec {
           }
           {
             name = "font-types";
-            packageId = "font-types 0.11.3";
+            packageId = "font-types";
             features = [ "bytemuck" ];
           }
         ];
@@ -32961,40 +32895,8 @@ rec {
           }
           {
             name = "font-types";
-            packageId = "font-types 0.11.3";
+            packageId = "font-types";
             features = [ "bytemuck" ];
-          }
-        ];
-        features = {
-          "default" = [ "std" ];
-          "experimental_traverse" = [ "std" ];
-          "libm" = [ "dep:core_maths" ];
-          "serde" = [ "dep:serde" "font-types/serde" ];
-          "std" = [ "font-types/std" ];
-        };
-        resolvedDefaultFeatures = [ "std" ];
-      };
-      "read-fonts 0.41.0" = rec {
-        crateName = "read-fonts";
-        version = "0.41.0";
-        edition = "2021";
-        sha256 = "02c7q458gz6cfsyryiss5w6xp0k8dl2n4l1gncjrhidg9mkpssh4";
-        libName = "read_fonts";
-        dependencies = [
-          {
-            name = "bytemuck";
-            packageId = "bytemuck";
-          }
-          {
-            name = "font-types";
-            packageId = "font-types 0.12.7";
-            features = [ "bytemuck" ];
-          }
-          {
-            name = "once_cell";
-            packageId = "once_cell";
-            usesDefaultFeatures = false;
-            features = [ "alloc" "race" ];
           }
         ];
         features = {
@@ -34448,7 +34350,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Networking_WinSock" ];
           }
@@ -36387,39 +36289,6 @@ rec {
           "traversal" = [ "std" "read-fonts/experimental_traverse" ];
         };
         resolvedDefaultFeatures = [ "autohint_shaping" "default" "std" ];
-      };
-      "skrifa 0.44.0" = rec {
-        crateName = "skrifa";
-        version = "0.44.0";
-        edition = "2021";
-        sha256 = "0s5a3fnyrxfv514vjjrn268lyhihmh5nb9fyv7cp4ghx5gbbg6l1";
-        dependencies = [
-          {
-            name = "bytemuck";
-            packageId = "bytemuck";
-          }
-          {
-            name = "read-fonts";
-            packageId = "read-fonts 0.41.0";
-            usesDefaultFeatures = false;
-          }
-        ];
-        devDependencies = [
-          {
-            name = "read-fonts";
-            packageId = "read-fonts 0.41.0";
-            usesDefaultFeatures = false;
-            features = [ "scaler_test" "serde" ];
-          }
-        ];
-        features = {
-          "default" = [ "std" "autohint_shaping" ];
-          "libm" = [ "dep:core_maths" "read-fonts/libm" ];
-          "spec_next" = [ "read-fonts/spec_next" ];
-          "std" = [ "read-fonts/std" ];
-          "traversal" = [ "std" "read-fonts/experimental_traverse" ];
-        };
-        resolvedDefaultFeatures = [ "std" ];
       };
       "slab" = rec {
         crateName = "slab";
@@ -38528,7 +38397,7 @@ rec {
         dependencies = [
           {
             name = "skrifa";
-            packageId = "skrifa 0.44.0";
+            packageId = "skrifa 0.42.1";
             usesDefaultFeatures = false;
           }
           {
@@ -39128,7 +38997,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Storage_FileSystem" "Win32_Foundation" ];
           }
@@ -39369,7 +39238,7 @@ rec {
           }
           {
             name = "ordered-float";
-            packageId = "ordered-float 4.6.0";
+            packageId = "ordered-float";
           }
           {
             name = "pest";
@@ -44983,7 +44852,7 @@ rec {
           }
           {
             name = "ordered-float";
-            packageId = "ordered-float 4.6.0";
+            packageId = "ordered-float";
           }
           {
             name = "strsim";
@@ -45732,7 +45601,7 @@ rec {
           }
           {
             name = "ordered-float";
-            packageId = "ordered-float 5.5.1";
+            packageId = "ordered-float";
             optional = true;
             usesDefaultFeatures = false;
           }
@@ -46102,7 +45971,7 @@ rec {
         dependencies = [
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.52.0";
             target = { target, features }: (target."windows" or false);
             features = [ "Win32_Foundation" "Win32_Storage_FileSystem" "Win32_System_Console" "Win32_System_SystemInformation" ];
           }
@@ -47532,7 +47401,7 @@ rec {
           "default" = [ "std" ];
           "std" = [ "windows-core/std" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_System" "Wdk_System_SystemServices" "Win32" "Win32_Foundation" "Win32_UI" "Win32_UI_WindowsAndMessaging" "default" "std" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_System" "Wdk_System_SystemServices" "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Direct3D12" "Win32_Graphics_Dxgi" "Win32_Graphics_Dxgi_Common" "Win32_UI" "Win32_UI_WindowsAndMessaging" "default" "std" ];
       };
       "windows 0.61.3" = rec {
         crateName = "windows";
@@ -50187,7 +50056,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_System" "Win32_System_Threading" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_SystemInformation" "Win32_System_Threading" "default" ];
       };
       "windows-sys 0.59.0" = rec {
         crateName = "windows-sys";
@@ -50446,7 +50315,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Console" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_LibraryLoader" "Win32_System_Performance" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "Win32_UI_WindowsAndMessaging" "default" ];
+        resolvedDefaultFeatures = [ "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_Graphics" "Win32_Graphics_Gdi" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_Ioctl" "Win32_System_LibraryLoader" "Win32_System_Performance" "Win32_System_Registry" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_UI" "Win32_UI_Input" "Win32_UI_Input_KeyboardAndMouse" "Win32_UI_Shell" "Win32_UI_WindowsAndMessaging" "default" ];
       };
       "windows-sys 0.61.2" = rec {
         crateName = "windows-sys";
@@ -50708,7 +50577,7 @@ rec {
           "Win32_Web" = [ "Win32" ];
           "Win32_Web_InternetExplorer" = [ "Win32_Web" ];
         };
-        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Win32" "Win32_Foundation" "Win32_Globalization" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_NetworkManagement_Ndis" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authorization" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_Diagnostics" "Win32_System_Diagnostics_Debug" "Win32_System_IO" "Win32_System_JobObjects" "Win32_System_Kernel" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_ProcessStatus" "Win32_System_Registry" "Win32_System_SystemInformation" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_Time" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
+        resolvedDefaultFeatures = [ "Wdk" "Wdk_Foundation" "Wdk_Storage" "Wdk_Storage_FileSystem" "Wdk_System" "Wdk_System_IO" "Win32" "Win32_Foundation" "Win32_NetworkManagement" "Win32_NetworkManagement_IpHelper" "Win32_NetworkManagement_Ndis" "Win32_Networking" "Win32_Networking_WinSock" "Win32_Security" "Win32_Security_Authorization" "Win32_Security_Isolation" "Win32_Storage" "Win32_Storage_FileSystem" "Win32_System" "Win32_System_Com" "Win32_System_Console" "Win32_System_DataExchange" "Win32_System_IO" "Win32_System_JobObjects" "Win32_System_Kernel" "Win32_System_LibraryLoader" "Win32_System_Memory" "Win32_System_Pipes" "Win32_System_ProcessStatus" "Win32_System_Registry" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_WindowsProgramming" "Win32_UI" "Win32_UI_Shell" "default" ];
       };
       "windows-targets 0.48.5" = rec {
         crateName = "windows-targets";
@@ -51071,7 +50940,7 @@ rec {
           }
           {
             name = "windows-sys";
-            packageId = "windows-sys 0.61.2";
+            packageId = "windows-sys 0.59.0";
             features = [ "Win32_Foundation" "Win32_System_Time" "Win32_System_Registry" "Win32_Security" "Win32_Storage_FileSystem" "Win32_System_Diagnostics_Debug" ];
           }
         ];
