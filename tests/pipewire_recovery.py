@@ -503,6 +503,7 @@ def check_room_echo(binary, pipewire, output):
     subprocess.run([str(pipewire.pipewire / "bin/pw-cli"), "s", str(room), "Props", "{ volume: 0.03 }"],
                    env=env, check=True, capture_output=True, timeout=10)
     time.sleep(1)
+    removed = []
     for run in range(3):
         worker = Worker(binary, pipewire, muted=False)
         devices = worker.wait(lambda e: e["kind"] == "devices", "no device report")
@@ -513,6 +514,7 @@ def check_room_echo(binary, pipewire, output):
         worker.stop()
         assert report["echo_db"] is not None and report["reduction_db"] >= 30 and report["transmitted"] <= 0.02, \
             f"run {run}: the canceller did not remove its own playback: {report}"
+        removed.append(f"{report['reduction_db']:.0f}")
     # Another application plays into the speakers; Nuschel plays nothing.
     music = output / "other-app.wav"
     with wave.open(str(music), "wb") as file:
@@ -544,8 +546,9 @@ def check_room_echo(binary, pipewire, output):
         levels[mode] = (sum(loud) / max(1, len(loud)), sum(e["transmitting"] for e in window) / max(1, len(window)))
     assert levels["off"][0] - levels["on"][0] >= 20 and levels["on"][1] <= 0.05, \
         f"another application's sound was not removed: {levels}"
-    print(f"Room on one clock: Nuschel's canceller removed its own playback (30 dB or more, 3 of 3 runs) and "
-          f"another application's stereo sound ({levels['off'][0] - levels['on'][0]:.0f} dB).", flush=True)
+    print(f"Room on one clock: Nuschel's canceller removed its own playback ({', '.join(removed)} dB; 30 dB or "
+          f"more in every run) and another application's stereo sound "
+          f"({levels['off'][0] - levels['on'][0]:.0f} dB).", flush=True)
 
 
 def main():
