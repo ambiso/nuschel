@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Shared client state and policies; platform adapters execute the resulting commands.
 
+pub mod favicon;
 mod navigation;
 pub use navigation::*;
 
