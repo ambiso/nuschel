@@ -1670,13 +1670,11 @@ libcrux-kem and libcrux-hmac-drbg):
   implemented. A binding value another own device published and replaced before this
   device looked again is unknown to it and would raise the own-key alarm if it falls
   after this device's monitoring checkpoint.
-- **Client SDK**: sending through `MlsCommand::Send` and showing decrypted messages
-  (`MlsEvent::Received`) in the timeline and local history, in `crates/client`; then
-  `e2ee_direct_messages` can default to on. The desktop shows the lock and, with the
-  setting on, opens the group.
+- **Client SDK send/display** is now implemented; see the 4c completion below.
+  Negotiated server mode selects encryption automatically.
 - Self-updates (§6.5), removing revoked and inactive devices (§3.6), key-transparency
   head gossip inside MLS (§5.3), typing and read markers as MLS messages (§6.3 items
-  4–5), external proposals and every channel feature (4c).
+  4–5); channel external joins and server-driven removals are implemented in 4c.
 - The log-structured worker store of §8.3 (forward secrecy on disk), and a binary
   column for MLS rows instead of base64 in `content`.
 - A KT-`Unavailable` contact turns the lock amber but does not block sending (§5.5 says
@@ -1725,10 +1723,10 @@ The user's answers to §10 (above), and what the code does with them.
   refused in every conversation; text travels only as MLS application messages, in
   channels too (below). `typing/1` is not offered: typing indicators are protected
   content (§2) and become MLS messages later.
-- **Not end-to-end encrypted yet** on such a server, said in the server's log at start,
-  in docs/server.md and in the client's labels: voice, whispers and shouts (SFrame
-  with MLS exporter keys, 4e; the voice badge stays "transport only"), read markers
-  (still `ReadMarker` seqs; self blobs, §3.7), and files are not offered.
+- **Voice, whispers and shouts are blocked** on such a server until SFrame with MLS
+  exporter keys (4e). The client also disables audio for this connection. Read markers
+  are still visible `ReadMarker` sequence numbers until self blobs (§3.7); files
+  are not offered.
 - **Compatible servers.** Nuschel clients keep the extension's extras (server history,
   edits, typing, durable direct messages) and label them "not end-to-end encrypted".
 - The client follows the server: `ClientSettings.e2ee_direct_messages` and
@@ -1809,3 +1807,35 @@ Implemented across `nuschel-e2ee`, the crypto worker, `nuscheld` and the session
   failed on a 24-CPU machine and panicked mid-commit. The worker now sizes the pool to
   two threads first (`nuschel_e2ee::limit_threads`), and a contained panic carries
   its message (`Error::Panicked`).
+
+### Channel history and native SDK completion
+
+The portable SDK opens encrypted channels and direct conversations automatically
+on `e2ee/1`, sends text through the crypto worker, and displays authenticated
+messages and local history through the content/storage workers. Conversation locks
+come from the worker; a pending or blocked group never falls back to plaintext.
+Same-connection registration refreshes the identity driver and key-package upload.
+
+Each durable chat message includes a signed AEAD archive record alongside its live
+MLS ciphertext. A domain-separated MLS exporter derives the archive application key
+for the current epoch, bound to the complete conversation context. The worker retains
+these application keys in its sealed store, never old MLS epoch/exporter secrets.
+The live envelope commits to the archive hash; readers check its canonical content,
+sender signature, conversation and key index. Observed archive hashes are bound to
+stream sequence numbers across restarts, so replay into a different row is refused.
+
+When a reader lazily joins a `members` channel, an existing member sends retained
+keys through MLS history grants. Each grant contains at most 256 keys, including the
+current key; continuation pages have no total archive-key cap. History pages wait
+for those grants and pass through the crypto worker before reaching the UI. Control
+rows keep their stream cursor but are hidden; invalid or unavailable archives show
+an explicit decryption gap. `since_join` rejects old-key grants. Removing a device
+changes the epoch and application key, preventing access to subsequent archives.
+The server cannot supply plaintext as a substitute for an encrypted message/page.
+
+This implements the history required for usable 4c channels. Later 4d still includes
+periodic archive-key/self-update rotation independent of membership changes, own-device
+self blobs (including historical keys for `since_join` conversations), files, and the
+log-structured encrypted worker store. Encrypted edits, deletes, typing/read markers
+and SFrame media remain separate work. A new reader waits while every possible
+granting member is offline; the server cannot recover keys itself.

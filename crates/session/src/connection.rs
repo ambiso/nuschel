@@ -1154,7 +1154,9 @@ impl Default for State {
 }
 impl State {
     fn encrypted_server(&self) -> bool {
-        self.extension.as_ref().is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::E2EE))
+        self.extension
+            .as_ref()
+            .is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::E2EE))
     }
 
     fn transport(&self) -> TransportStats {
@@ -2288,7 +2290,9 @@ impl State {
                 });
             }
             kind::UDP_TUNNEL => match voice::decode_udp(&frame.payload) {
-                Ok(UdpMessage::Audio(packet)) if !self.local_deafened && !self.encrypted_server() => {
+                Ok(UdpMessage::Audio(packet))
+                    if !self.local_deafened && !self.encrypted_server() =>
+                {
                     emit(events, SessionEvent::Audio(packet)).await?
                 }
                 Err(voice::VoiceError::Unsupported) => {
@@ -3599,8 +3603,19 @@ mod tests {
 
     #[test]
     fn end_to_end_mode_never_sends_plaintext_voice_even_a_terminator() {
-        let state = State { own_session: Some(7), opus: true, extension: Some(vec![nuschel::capability::E2EE.into()]), ..State::default() };
-        let packet = VoicePacket { sender: 0, sequence: 0, opus: vec![1,2,3], end: true, volume: 1.0 };
+        let state = State {
+            own_session: Some(7),
+            opus: true,
+            extension: Some(vec![nuschel::capability::E2EE.into()]),
+            ..State::default()
+        };
+        let packet = VoicePacket {
+            sender: 0,
+            sequence: 0,
+            opus: vec![1, 2, 3],
+            end: true,
+            volume: 1.0,
+        };
         assert!(state.outgoing_voice(packet).is_none());
     }
 

@@ -862,12 +862,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Delivery service in the server: `PublicGroup` per group, epoch fencing,
          one `seq` stream with commits, key package directory, Welcome mailboxes,
          join info, crash-consistent commits, permissions through authz.rs.
-   - [ ] Client SDK (`crates/client`): send through the crypto worker and show
-         decrypted messages in the timeline (`MlsCommand::Send`, `MlsEvent::Received`;
-         the desktop today shows only the lock), then turn `e2ee_direct_messages` on
-         by default.
-   - [ ] One MLS group per conversation; membership follows ACL changes (channels,
-         4c); direct messages as two-party groups are done.
+   - [x] Client SDK (`crates/client`): automatic encrypted send/display and
+         authenticated conversation locks on `e2ee/1`, with local history.
+   - [x] One MLS group per conversation; lazy channel external joins, server-driven
+         ACL/inactive-device removals, and direct conversations.
    - [ ] Device linking over the server's mailbox (`DeviceLink*`, §3.4) and its UI;
          the worker links devices and publishes multi-device rosters today, with the
          messages relayed by the caller. Device revocation and inactive-device
@@ -875,8 +873,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [ ] Self-updates (§6.5), key-transparency head gossip in MLS, typing and read
          markers as MLS messages, the log-structured worker store (§8.3), a binary
          column for MLS rows, eviction of idle groups on the server.
-   - [ ] Encrypted messages, files (the file-transfer design for Nuschel servers) and
-         history archive with an explicit historical-access policy.
+   - [x] Encrypted text and authenticated channel history, with bounded grant pages
+         covering all retained authorized keys and explicit historical-access policy.
+   - [ ] 4d: periodic key rotation/self-updates, own-device self blobs, and files.
    - [ ] Strict mode: no legacy clients in end-to-end channels, no downgrades; a
          green lock only after authenticated MLS establishment (pins, plaintext
          refusal and the lock exist for direct conversations).

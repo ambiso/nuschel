@@ -1344,7 +1344,7 @@ impl Context {
             }
             self.events
                 .send(crate::connection::SessionEvent::Nuschel(
-                    crate::connection::NuschelEvent::Page(page),
+                    crate::connection::NuschelEvent::DecryptedPage(page),
                 ))
                 .await
                 .ok();

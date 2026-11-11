@@ -291,6 +291,7 @@ pub(crate) struct Context {
     next_request: u64,
     pub(crate) account: Vec<u8>,
     descriptor: Vec<u8>,
+    mls_enabled: bool,
     /// Self-monitoring found our newest binding not published yet.
     publication_pending: bool,
     /// Our identity exists (created on first need).
@@ -859,7 +860,7 @@ impl Context {
             IdentityCommand::Refresh => {
                 if self.connect(self.descriptor.clone()).await? {
                     self.run_due(true).await?;
-                    if self.mls.is_some() {
+                    if self.mls_enabled {
                         self.mls_start().await?;
                     }
                 }
@@ -970,6 +971,7 @@ pub async fn drive(driver: Driver) {
         next_request: 0,
         account: Vec::new(),
         descriptor: descriptor.clone(),
+        mls_enabled: mls_commands.is_some(),
         publication_pending: false,
         identity_ready: false,
         mls: None,

@@ -86,17 +86,22 @@ impl Person {
             match event.into_input() {
                 Ok(input) => self.client.handle(input),
                 Err(native::Native::Identity { event, .. }) => {
-                    if let nuschel_session::identity::IdentityEvent::Failed(reason) = *event { self.say(format!("identity: {reason}")); }
+                    if let nuschel_session::identity::IdentityEvent::Failed(reason) = *event {
+                        self.say(format!("identity: {reason}"));
+                    }
                 }
-                Err(native::Native::OwnIdentity(result)) => { if let Err(reason) = *result { self.say(format!("identity worker: {reason}")); } }
-                _ => {},
+                Err(native::Native::OwnIdentity(result)) => {
+                    if let Err(reason) = *result {
+                        self.say(format!("identity worker: {reason}"));
+                    }
+                }
+                _ => {}
             }
             self.client.settle();
             for update in self.client.take_updates() {
                 self.follow(update)?;
             }
             let server = &self.client.servers[0];
-            if let Some(notice) = &server.notice { self.say(format!("notice: {notice}")); }
             if server.status == Status::Disconnected && server.certificate.is_none() {
                 return Err(format!(
                     "{}: disconnected: {}",
@@ -307,6 +312,38 @@ async fn scenario(host: &str, port: u16, root: &Path) -> Result<(), String> {
             "s"
         },
     );
+    if encrypted {
+        // The same native SDK path must also establish and display a private group.
+        let peer = andi.client.servers[0]
+            .own_session
+            .ok_or("Andi has no session")?;
+        ada.client.open_direct(0, peer);
+        ada.until("opened the private conversation", |client| {
+            client.servers[0].channels.iter().any(|entry| {
+                matches!(entry.target, TextTarget::DirectConversation(_))
+                    && entry.encryption.as_ref().is_some_and(|state| {
+                        state.security == nuschel_client::SessionSecurity::MlsEstablished
+                    })
+            })
+        })
+        .await?;
+        ada.client
+            .send_text("Private from the SDK".into())
+            .map_err(|error| format!("private not sent: {error:?}"))?;
+        ada.until("sent the private message", |client| !client.sending())
+            .await?;
+        andi.until("received the private message", |client| {
+            client.servers[0].channels.iter().any(|entry| {
+                matches!(entry.target, TextTarget::DirectConversation(_))
+                    && entry
+                        .timeline
+                        .messages
+                        .iter()
+                        .any(|message| message.source == "Private from the SDK")
+            })
+        })
+        .await?;
+    }
     Ok(())
 }
 

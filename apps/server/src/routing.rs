@@ -129,7 +129,9 @@ impl State {
     pub fn route(&mut self, speaker: u32, audio: &Audio, out: &mut Datagrams) {
         // Until SFrame (4e), end-to-end mode has no voice fallback. In particular,
         // never forward ordinary Mumble voice while advertising an E2EE server.
-        if self.end_to_end() { return; }
+        if self.end_to_end() {
+            return;
+        }
 
         self.counters
             .voice_packets_in

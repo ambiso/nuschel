@@ -95,6 +95,21 @@ def first_phase(args, pin, root, token):
     send(bob, conversation, "hello from bob")
     received(alice, "hello from bob")
 
+    # A channel is joined lazily; the new reader receives all retained history
+    # keys and reads text sent before joining, through the actual crypto worker.
+    channel = next(event["conversation"] for event in alice.events
+                   if event["kind"] == "channel_info" and event["channel"] == 0)
+    alice.send(kind="e2ee_open_channel", conversation=channel)
+    established(alice, channel)
+    send(alice, channel, "channel before bob joined")
+    bob.send(kind="e2ee_open_channel", conversation=channel)
+    established(bob, channel)
+    bob.send(kind="e2ee_history", conversation=channel)
+    page = bob.wait(lambda event: event["kind"] == "history_page"
+                    and event["conversation"] == channel, timeout=60)
+    assert any(message["content"] == "channel before bob joined"
+               for message in page["messages"]), page
+
     # Offline delivery: the stream keeps it for Bob's device.
     leave(bob)
     send(alice, conversation, "while bob was away")

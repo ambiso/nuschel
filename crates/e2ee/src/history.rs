@@ -30,7 +30,8 @@
 //!
 //! ```text
 //! struct {
-//!   uint8  version = 1;
+//!   uint8  version = 2;
+//!   uint8  more;                 // more bounded grant pages follow
 //!   uint32 current;              // the key to seal with from now on
 //!   uint16 count;                // at most MAX_KEYS
 //!   struct { uint32 index; opaque key[32]; } keys[count];

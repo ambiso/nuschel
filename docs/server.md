@@ -42,9 +42,9 @@ Every configuration key is optional; names and defaults follow murmur.ini
   - admits unregistered connections only to register: they read, write, speak and
     hear nothing (ACLs apply to everyone as usual).
 
-  **Not end-to-end encrypted yet in this mode**, as the server logs at start: voice,
-  whispers and shouts (SFrame with MLS keys, phase 4e); read markers (they become
-  self blobs); files are not offered. Switching a server between the modes keeps its
+  Voice, whispers and shouts are blocked in this mode until SFrame with MLS keys
+  (phase 4e); clients also disable their audio worker. Read-marker sequence numbers
+  remain visible to the server until self blobs; files are not offered. Switching a server between the modes keeps its
   state; clients remember `e2ee/1` (sticky), so a server that drops back to
   compatible mode is refused by clients that knew it as end-to-end.
 - **Secrets** come from files: `password_file`, `superuser_password_file`,

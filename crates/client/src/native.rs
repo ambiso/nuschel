@@ -1005,6 +1005,7 @@ async fn connect_once(
     // A channel can be opened before registration/key publication completes.
     // Retry the latest visible conversation when the worker uploads its keys.
     let mut pending_encrypted_open = None;
+    let mut mls_keys_ready = false;
     let mut hashes = BTreeMap::<u32, Option<String>>::new();
     let mut loss_percent = 5_u8;
     // Our own voice is on the air (no terminator sent yet).
@@ -1052,6 +1053,7 @@ async fn connect_once(
             Some(command) = commands.recv() => {
                 if let Command::Mls(command @ (nuschel_session::mls::MlsCommand::OpenChannel { .. } | nuschel_session::mls::MlsCommand::OpenDirect { .. })) = &command {
                     pending_encrypted_open = Some(command.clone());
+                    if !mls_keys_ready { continue; }
                 }
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
                     voice_revision = voice_revision.wrapping_add(1);
@@ -1246,6 +1248,7 @@ async fn connect_once(
                     use nuschel_ipc::crypto::Received;
                     match &event {
                         MlsEvent::KeyPackages { .. } => {
+                            mls_keys_ready = true;
                             if let Some(open) = pending_encrypted_open.clone() { let _ = session_commands.send(Command::Mls(open)).await; }
                         }
                         MlsEvent::Conversation { view, peer } => {
@@ -1270,8 +1273,9 @@ async fn connect_once(
                         }
                         MlsEvent::Received { conversation, received, author } => {
                             let visible = match received {
-                                Received::Message { seq, text, sent_at, .. } => Some((*seq, text.clone(), *sent_at as i64, false)),
+                                Received::Message { seq, text, sent_at, .. } => Some((*seq, text.clone(), (*sent_at).min(i64::MAX as u64) as i64, false)),
                                 Received::Own { seq, text, .. } => Some((*seq, text.clone(), connection::now_ms(), true)),
+                                Received::Undecryptable { seq, reason } | Received::Refused { seq, reason, .. } => Some((*seq, format!("Unable to decrypt this message: {reason}"), connection::now_ms(), false)),
                                 _ => None,
                             };
                             if let (Some((seq, body, observed_at_ms, outgoing)), Some(peer)) = (visible, peer.as_ref()) {
