@@ -360,7 +360,7 @@ fn pane_block(title: String, focused: bool) -> Block<'static> {
     };
     let block = Block::bordered().title(title);
     if focused {
-        block.border_style(Style::new().add_modifier(Modifier::BOLD))
+        block.border_style(Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD))
     } else {
         block.border_style(Style::new().add_modifier(Modifier::DIM))
     }
@@ -386,7 +386,13 @@ fn draw_tree(frame: &mut Frame, app: &App, area: Rect, cursor: &mut Option<Posit
             let selected = focused && index == at;
             let text = format!("{}{}", if selected { ">" } else { " " }, row_text(app, row));
             let mut style = match row {
-                Row::Server(_) => Style::new().add_modifier(Modifier::BOLD),
+                Row::Server(server) => Style::new()
+                    .fg(if app.client.servers[*server].status == Status::Connected {
+                        Color::Cyan
+                    } else {
+                        Color::DarkGray
+                    })
+                    .add_modifier(Modifier::BOLD),
                 Row::User {
                     server, session, ..
                 } if app.client.servers[*server].talking.contains(session) => {
@@ -395,8 +401,9 @@ fn draw_tree(frame: &mut Frame, app: &App, area: Rect, cursor: &mut Option<Posit
                 Row::Channel { server, row }
                     if app.client.servers[*server].channels[row.index].unread > 0 =>
                 {
-                    Style::new().add_modifier(Modifier::BOLD)
+                    Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 }
+                Row::Channel { .. } | Row::Direct { .. } => Style::new().fg(Color::Blue),
                 Row::Direct { server, index }
                     if app.client.servers[*server].channels[*index].unread > 0 =>
                 {
@@ -596,9 +603,9 @@ fn draw_status(frame: &mut Frame, app: &App, note_area: Rect, state_area: Rect) 
         now.saturating_sub(note.at_ms) < if note.warning { NOTE_MS * 4 } else { NOTE_MS }
     }) {
         let style = if note.warning {
-            Style::new().add_modifier(Modifier::BOLD)
+            Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
-            Style::new()
+            Style::new().fg(Color::Cyan)
         };
         let text = note.text.replace('\n', " ");
         frame.render_widget(
@@ -647,7 +654,7 @@ fn draw_status(frame: &mut Frame, app: &App, note_area: Rect, state_area: Rect) 
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::raw(state),
+            Span::styled(state, Style::new().fg(Color::Cyan)),
             Span::styled(hints, Style::new().add_modifier(Modifier::DIM)),
         ])),
         state_area,

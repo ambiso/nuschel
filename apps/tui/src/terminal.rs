@@ -34,9 +34,13 @@ pub async fn run(
     execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
     // Query before the event reader owns stdin. Unsupported terminals keep
     // text descriptions, and --plain never emits graphics queries.
-    if let Ok(picker) = ratatui_image::picker::Picker::from_query_stdio() {
-        app.graphics.borrow_mut().configure(picker);
-    }
+    let picker = ratatui_image::picker::Picker::from_query_stdio()
+        .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
+    app.say(format!(
+        "Terminal pictures: {:?}. Formula source stays available; --plain uses text.",
+        picker.protocol_type()
+    ));
+    app.graphics.borrow_mut().configure(picker);
     let (keys, mut input) = tokio::sync::mpsc::unbounded_channel::<Event>();
     // crossterm reads blocking; its own thread forwards what it reads.
     std::thread::spawn(move || {
@@ -50,6 +54,9 @@ pub async fn run(
     let mut media_tick = tokio::time::interval(std::time::Duration::from_millis(100));
     let result = loop {
         if let Err(error) = terminal.draw(|frame| view::draw(frame, &mut app)) {
+            break Err(error);
+        }
+        if let Err(error) = app.graphics.borrow_mut().flush_deleted() {
             break Err(error);
         }
         if app.quit {
@@ -75,6 +82,9 @@ pub async fn run(
         }
     };
     app.tick();
+    app.graphics.borrow_mut().shutdown();
+    let cleanup = app.graphics.borrow_mut().flush_deleted();
     restore();
+    cleanup?;
     result
 }

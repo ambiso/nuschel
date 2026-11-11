@@ -8,7 +8,7 @@
 //! control characters or direction overrides reach the terminal.
 use nuschl_core::{ContentBlock, MessageDocument, TextRole};
 use ratatui::{
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthChar;
@@ -131,10 +131,38 @@ pub fn lines(
                     },
                     Style::default().add_modifier(Modifier::DIM),
                 ));
-                let code: String = runs.iter().map(|run| run.text.as_str()).collect();
-                for line in clean_with(&code, true).trim_end_matches('\n').split('\n') {
-                    out.push(Line::from(format!("  {line}")));
+                let mut code = Vec::new();
+                let mut line = vec![Span::raw("  ")];
+                for run in runs {
+                    let [r, g, b, _] = run.foreground;
+                    let mut style = Style::new().fg(Color::Rgb(r, g, b));
+                    if run.bold {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    if run.italic {
+                        style = style.add_modifier(Modifier::ITALIC);
+                    }
+                    for (index, piece) in clean_with(&run.text, true).split('\n').enumerate() {
+                        if index > 0 {
+                            code.push(Line::from(std::mem::replace(
+                                &mut line,
+                                vec![Span::raw("  ")],
+                            )));
+                        }
+                        if !piece.is_empty() {
+                            line.push(Span::styled(piece.to_string(), style));
+                        }
+                    }
                 }
+                code.push(Line::from(line));
+                while code.len() > 1
+                    && code
+                        .last()
+                        .is_some_and(|line| plain(line).trim().is_empty())
+                {
+                    code.pop();
+                }
+                out.extend(code);
             }
             ContentBlock::Image { width, height, .. } => out.push(Line::styled(
                 format!("[image, {width}×{height}]"),
