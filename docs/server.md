@@ -96,7 +96,8 @@ nuscheld --config nuscheld.toml admin history erase-user Alice --yes   # GDPR re
   statement, not per process lifetime), a session advisory lock on PostgreSQL.
   Whoever comes second gets "another process … is using this database" and
   changes nothing; `check-config` only reports it. A second server on the same
-  database is refused the same way. If the state worker crashes, the server
+  database is refused the same way, after retrying for ten seconds (a previous
+  instance's workers may still be exiting when a script restarts it). If the state worker crashes, the server
   restarts it, which takes the lock again (or, if an admin command took it in
   between, every write fails and is logged rather than interleaved). A lock file
   that cannot be opened or locked at all (an unusual file system) is warned

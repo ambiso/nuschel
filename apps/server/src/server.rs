@@ -394,6 +394,27 @@ pub async fn hold_operator_lock(storage: &StorageHandle) -> Result<(), StartErro
     }
 }
 
+/// The server's state worker, holding the operator lock. A previous instance's
+/// workers may take a moment to exit after it did, so a held lock is retried
+/// for a few seconds before the server gives up.
+async fn locked_storage(backend: &Backend) -> Result<StorageHandle, StartError> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut waiting = false;
+    loop {
+        let storage = storage::start_locked(backend.clone());
+        match hold_operator_lock(&storage).await {
+            Err(StartError::Held) if Instant::now() < deadline => {
+                if !std::mem::replace(&mut waiting, true) {
+                    tracing::info!("waiting for another process to release the database");
+                }
+                drop(storage);
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            result => return result.map(|()| storage),
+        }
+    }
+}
+
 /// The persisted state for administrative commands, without starting the server.
 pub async fn load_state_for_admin(
     settings: &Settings,
@@ -592,8 +613,7 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     // channel save.
     // The state worker holds the operator lock (taken before it opens the
     // database) for as long as the server runs.
-    let storage = storage::start_locked(backend.clone());
-    hold_operator_lock(&storage).await?;
+    let storage = locked_storage(&backend).await?;
     let history_writer = storage::start(backend.clone());
     let history_reads = storage::start(backend.clone());
     let counters = Arc::new(Counters::default());
