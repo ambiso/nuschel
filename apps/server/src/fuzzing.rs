@@ -5,14 +5,18 @@
 //! in `fuzz/` and by a deterministic test on stable Rust. No network, no runtime.
 use crate::{
     auth::new_user,
-    config::Config,
+    config::{Config, Settings},
     routing::Datagrams,
     state::{ClientInfo, Counters, Link, Peer, Registered, State},
     storage::StorageHandle,
 };
 use bytes::Bytes;
 use nuschel_protocol::{ControlFrame, control as proto, crypt::CryptState};
-use std::{net::SocketAddr, sync::Arc, time::Instant};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+    time::Instant,
+};
 
 pub struct Harness {
     pub state: State,
@@ -22,19 +26,24 @@ pub struct Harness {
 
 impl Harness {
     pub fn new() -> Self {
-        let config = Config {
-            message_limit: 1000,
-            message_burst: 1000,
-            listeners_per_user: Some(4),
-            ..Config::default()
-        };
-        let settings = Arc::new(
-            config
-                .settings()
-                .unwrap_or_else(|_| unreachable!("default settings are valid")),
-        );
+        // Compiling the name patterns took most of each fuzzing run; the
+        // settings never change, so every harness shares them.
+        static SETTINGS: OnceLock<Arc<Settings>> = OnceLock::new();
+        let settings = SETTINGS.get_or_init(|| {
+            let config = Config {
+                message_limit: 1000,
+                message_burst: 1000,
+                listeners_per_user: Some(4),
+                ..Config::default()
+            };
+            Arc::new(
+                config
+                    .settings()
+                    .unwrap_or_else(|_| unreachable!("default settings are valid")),
+            )
+        });
         let mut state = State::new(
-            settings,
+            settings.clone(),
             StorageHandle::detached(),
             Arc::new(Counters::default()),
         );
