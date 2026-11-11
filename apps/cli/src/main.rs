@@ -9,6 +9,7 @@ use nuschel_session::{
         self, Command, ConnectOptions, MessageRate, NuschelEvent, NuschelRequest, SessionEvent,
         TextTarget,
     },
+    identity::{CryptoHandle, IdentityCommand, IdentityEvent, IdentitySetup},
     model::{UserAction, VoiceTargetSpec},
 };
 use serde::Deserialize;
@@ -63,6 +64,10 @@ struct Arguments {
     /// invite's `policy=nuschel` or an earlier connection would require).
     #[arg(long)]
     require_nuschel: bool,
+    /// The crypto worker's directory: publish and check identities on servers with
+    /// key transparency (`kt/1`). The worker runs in its sandbox, beside this binary.
+    #[arg(long)]
+    identity_dir: Option<PathBuf>,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -177,6 +182,20 @@ enum Input {
         request_id: u64,
         conversations: Vec<String>,
     },
+    /// Key transparency (with `--identity-dir`): check a registered user.
+    IdentityCheck {
+        user_id: u32,
+        #[serde(default)]
+        direct: bool,
+    },
+    /// Mark an account (32 hex digits) verified, or accept its new identity.
+    IdentityVerify {
+        account: String,
+    },
+    IdentityAccept {
+        account: String,
+    },
+    IdentityOwn,
     Disconnect,
 }
 fn hex(bytes: &[u8]) -> String {
@@ -219,6 +238,24 @@ fn nuschel_json(event: &NuschelEvent) -> serde_json::Value {
         other => json!({"kind":"nuschel", "event":format!("{other:?}")}),
     }
 }
+fn identity_json(event: &IdentityEvent) -> serde_json::Value {
+    match event {
+        IdentityEvent::Own(view) => json!({"kind":"identity_own", "view":view}),
+        IdentityEvent::RecoveryKey(_) => json!({"kind":"identity_recovery_key"}),
+        IdentityEvent::Log(outcome) => json!({"kind":"identity_log", "outcome":outcome}),
+        IdentityEvent::Published { current } => {
+            json!({"kind":"identity_published", "current":current})
+        }
+        IdentityEvent::Monitor(outcome) => json!({"kind":"identity_monitor", "outcome":outcome}),
+        IdentityEvent::Contact { user_id, view } => json!({"kind":"identity_contact",
+            "user_id":user_id, "account":hex(&view.account), "state":view.state,
+            "identity":view.identity, "safety_number":view.safety_number, "notice":view.notice}),
+        IdentityEvent::Failed(reason) => json!({"kind":"identity_failed", "reason":reason}),
+    }
+}
+fn account(text: &str) -> Option<[u8; 16]> {
+    unhex(text).try_into().ok()
+}
 fn yes() -> bool {
     true
 }
@@ -231,7 +268,7 @@ fn output(value: serde_json::Value) -> io::Result<()> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Arguments::parse();
-    let profile = Profile::open(args.profile_dir)?;
+    let profile = Profile::open(args.profile_dir.clone())?;
     if let Some(path) = &args.export_certificate {
         profile
             .export_identity_to(path, &args.certificate_password)
@@ -277,7 +314,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             nuschel: args.require_nuschel,
             ..Default::default()
         },
-        crypto: None,
+        crypto: args.identity_dir.clone().map(|directory| IdentitySetup {
+            crypto: CryptoHandle::start(
+                nuschel_session::workers::sibling("nuschel-crypto-worker")
+                    .unwrap_or_else(|_| "nuschel-crypto-worker".into()),
+                directory,
+            ),
+            device_name: format!("{} (nuschel-cli)", args.username),
+            recovery: nuschel_ipc::crypto::RecoveryPolicy::Never,
+        }),
     };
     let (tx, rx) = mpsc::channel(32);
     let (events_tx, mut events) = mpsc::channel(64);
@@ -308,6 +353,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     temporary,
                 },
                 Ok(Input::Register) => Command::RegisterSelf,
+                Ok(Input::IdentityCheck { user_id, direct }) => {
+                    Command::Identity(IdentityCommand::Check {
+                        user_id: Some(user_id),
+                        account: None,
+                        direct,
+                    })
+                }
+                Ok(Input::IdentityVerify { account: id }) => match account(&id) {
+                    Some(account) => Command::Identity(IdentityCommand::MarkVerified { account }),
+                    None => {
+                        let _ = output(json!({"kind":"error", "message":"bad account id"}));
+                        continue;
+                    }
+                },
+                Ok(Input::IdentityAccept { account: id }) => match account(&id) {
+                    Some(account) => {
+                        Command::Identity(IdentityCommand::AcceptKeyChange { account })
+                    }
+                    None => {
+                        let _ = output(json!({"kind":"error", "message":"bad account id"}));
+                        continue;
+                    }
+                },
+                Ok(Input::IdentityOwn) => Command::Identity(IdentityCommand::Own),
                 Ok(Input::Html { channel, html }) => Command::SendHtml {
                     target: TextTarget::Channel(channel),
                     html: vec![html],
@@ -520,6 +589,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::ChatAcked { key, seq } => json!({"kind":"chat_acked", "key":hex(&key), "seq":seq}),
                 SessionEvent::ChatFailed { key, reason } => json!({"kind":"chat_failed", "key":hex(&key), "reason":reason}),
                 SessionEvent::ConversationState { channel, head, read } => json!({"kind":"conversation_state", "channel":channel, "head":head, "read":read}),
+                SessionEvent::Identity(event) => identity_json(&event),
             })?,
         }
     }
