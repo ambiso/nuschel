@@ -1095,17 +1095,28 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       output cannot be guessed). A new device signs in with the synced passkey,
       derives the key, decrypts the root and issues a new device-signing key; the
       identity and its verifications survive. Relying party: the project domain
-      (assetlinks.json / apple-app-site-association for the apps); desktop via the
-      browser with a loopback redirect (RFC 8252 style), since Linux has no platform
-      passkey API and macOS's needs a signed app. The recovery key stays as an
+      (assetlinks.json / apple-app-site-association for the apps). The recovery key stays as an
       optional fallback; the identity's safety becomes the passkey provider
       account's. Decided (user): the project domain is the passkey domain, and the
-      identity backup service runs there. Desktop: the browser by default, the one
-      route that reaches platform passkeys, phones (hybrid), security keys and
-      password managers on every desktop without signing; native CTAP2 for security
-      keys as a later option (macOS's native passkey API needs a signed app; the
-      Windows WebAuthn API would need `unsafe` FFI). Mobile apps use the native
-      passkey APIs (Android Credential Manager, iOS AuthenticationServices).
+      identity backup service runs there. Both browser and genuine native recovery
+      are intended (user, 2026-11-11): a shared encrypted backup format and key
+      derivation, with cross-route test vectors for each supported credential and
+      provider. Browser recovery uses WebAuthn PRF. Native recovery performs the
+      passkey operation and derivation outside page JavaScript (Windows WebAuthn,
+      macOS/iOS AuthenticationServices; Linux CTAP2 security keys, synced-provider
+      access still to investigate). Platform/provider PRF support must be detected
+      and tested, with no silent fallback between trust boundaries. Thin reviewed
+      OS adapters may need the existing system-service unsafe exception; identity
+      decryption stays in the crypto worker. Mobile uses native credential APIs
+      where PRF is supported.
+      The encrypted storage API can be untrusted, but the browser recovery code
+      cannot: a compromised host can serve JavaScript that captures a PRF result.
+      Opening that page from the desktop and returning through localhost does not
+      create the native boundary. Protect and separate recovery deployment/signing
+      infrastructure from chat/media hosting, and finalize the recovery origin/RP
+      ID before issuing real credentials (a shared parent RP ID also authorizes
+      qualifying subdomains). macOS signing/associated-domain prerequisites remain
+      deferred; browser recovery is still required.
 - [ ] Knocking (user, 2026-11-11): someone who may not enter a voice or chat channel
       knocks; online users with **Move and Enter** in that channel get a notice with
       Admit / Decline (knocks rate-limited). Admitting grants temporary Enter, Speak,
