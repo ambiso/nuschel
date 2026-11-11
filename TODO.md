@@ -157,9 +157,16 @@ Later (reported):
 - [ ] The channel tree is now the largest per-frame cost (~2.4 ms for 80
       rows); report upstream: wgpu/Mesa capability queries on every reconfigure, and
       GPUI's 30 fps cap for windows without focus during compositor grabs.
-- [ ] Proper Windows sandboxing for the workers (AppContainer or a restricted
-      token with a low integrity level, no network for content and storage);
-      today they only run in a kill-on-close job object.
+- [ ] Proper Windows sandboxing for the workers: **ready on the unmerged bookmark
+      `windows-sandbox`, waiting for the user's decision** (2026-11-11). Every worker
+      runs in an AppContainer (LPAC for content, storage and crypto), job limits,
+      explicit handle list; verified in the Windows 11 VM. It needs the first
+      first-party `unsafe` (crates/sandbox-windows, ~50 commented blocks over
+      windows-sys, only the workers may depend on it) because no maintained safe
+      wrapper fits (comparison in that branch's docs/windows-sandbox.md). Today on
+      main the workers only run in a kill-on-close job object.
+- [ ] The desktop shows Murmur's HTML welcome text as stripped source: tags vanish
+      and images become U+FFFC boxes (seen on Windows against a stock Murmur).
 
 Limits review (user, 2026-11-11): hard limits are themselves an availability risk
 when chosen too low or handled badly (cf. sshd skipping work for long passwords).
