@@ -188,6 +188,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     WindowDecorations::Server
                 }),
                 window_min_size: Some(size(px(860.), px(520.))),
+                // GPUI draws inactive windows at 30 fps at most, and GNOME takes the
+                // keyboard focus for the length of an interactive resize: every resize
+                // would run at half the display's rate. Nuschel draws only when
+                // something changed, so an inactive window costs nothing at rest.
+                inactive_frame_interval: None,
                 // The desktop entry's name: shells use it to find the icon.
                 app_id: Some("org.nuschel.Nuschel".into()),
                 // Only X11 takes the icon from the window. Windows loads it
