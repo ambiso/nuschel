@@ -2,6 +2,7 @@
 //! Deterministic ICE/DTLS/SRTP exchange: datagrams stay in memory, no public STUN.
 use nuschl_rtc::{
     Error, Event, Frame, Kind, MAX_DATAGRAM_BYTES, MAX_OPUS_BYTES, MAX_SDP_BYTES, Output, Peer,
+    Purpose, SignalingId, Track,
 };
 use std::{
     collections::VecDeque,
@@ -21,10 +22,28 @@ struct Pair {
     drop_video: bool,
     video_packets: usize,
     dropped: usize,
+    keyframes: [Vec<Track>; 2],
 }
 
 impl Pair {
     fn new(video: bool, corrupt_fingerprint: bool) -> Self {
+        Self::setup(video, corrupt_fingerprint, &[])
+    }
+
+    fn multi() -> Self {
+        Self::setup(
+            true,
+            false,
+            &[
+                Purpose::Microphone,
+                Purpose::SystemAudio,
+                Purpose::Camera,
+                Purpose::ScreenVideo,
+            ],
+        )
+    }
+
+    fn setup(video: bool, corrupt_fingerprint: bool, purposes: &[Purpose]) -> Self {
         let now = Instant::now();
         let addresses = [
             "127.0.0.1:41000".parse().unwrap(),
@@ -34,7 +53,15 @@ impl Pair {
             Peer::new(addresses[0], now).unwrap(),
             Peer::new(addresses[1], now).unwrap(),
         ];
-        let offer = peers[0].offer(video).unwrap();
+        let offer = if purposes.is_empty() {
+            peers[0].offer(video).unwrap()
+        } else {
+            let id = SignalingId::new([42; 16]).unwrap();
+            let offer = peers[0].offer_tracks(purposes, id).unwrap();
+            let answer = peers[1].accept_offer_tracks(&offer, id).unwrap();
+            peers[0].accept_answer_tracks(&answer, id).unwrap();
+            offer.sdp
+        };
         let video_pt = offer
             .lines()
             .find(|l| l.ends_with(" VP8/90000"))
@@ -47,7 +74,11 @@ impl Pair {
                     .unwrap()
             })
             .unwrap_or(0);
-        let answer = peers[1].accept_offer(&offer).unwrap();
+        let answer = if purposes.is_empty() {
+            peers[1].accept_offer(&offer).unwrap()
+        } else {
+            String::new()
+        };
         let answer = if corrupt_fingerprint {
             answer
                 .lines()
@@ -64,7 +95,9 @@ impl Pair {
         } else {
             answer
         };
-        peers[0].accept_answer(&answer).unwrap();
+        if purposes.is_empty() {
+            peers[0].accept_answer(&answer).unwrap();
+        }
         Self {
             peers,
             addresses,
@@ -76,6 +109,7 @@ impl Pair {
             drop_video: false,
             video_packets: 0,
             dropped: 0,
+            keyframes: [vec![], vec![]],
         }
     }
 
@@ -109,6 +143,7 @@ impl Pair {
                     self.wire.push_back((1 - from, source, data));
                 }
                 Output::Event(Event::Frame(frame)) => self.frames[from].push(frame),
+                Output::Event(Event::RequestKeyframe(track)) => self.keyframes[from].push(track),
                 _ => {}
             }
         }
@@ -360,4 +395,275 @@ fn rejects_unbounded_signaling_media_and_backwards_time() {
         pair.peers[0].write(track, 0, pair.now, Arc::from([0xf8, 0xff, 0xfe])),
         Err(Error::NotConnected)
     ));
+}
+
+#[test]
+fn four_bidirectional_tracks_preserve_independent_mids_roles_bytes_and_timestamps() {
+    let mut pair = Pair::multi();
+    pair.connect();
+    let purposes = [
+        Purpose::Microphone,
+        Purpose::SystemAudio,
+        Purpose::Camera,
+        Purpose::ScreenVideo,
+    ];
+    for peer in &pair.peers {
+        assert!(
+            peer.track(Kind::Audio).is_none(),
+            "ambiguous kind must not pick microphone"
+        );
+        assert!(
+            peer.track(Kind::Video).is_none(),
+            "ambiguous kind must not pick camera"
+        );
+        let mids: Vec<_> = purposes
+            .iter()
+            .map(|&p| peer.track_for(p).unwrap().mid())
+            .collect();
+        for (i, mid) in mids.iter().enumerate() {
+            assert!(!mids[..i].contains(mid));
+        }
+    }
+    for tick in 0..20 {
+        for from in 0..2 {
+            for (index, &purpose) in purposes.iter().enumerate() {
+                if purpose.kind() == Kind::Video && tick % 4 != 0 {
+                    continue;
+                }
+                let timestamp = if purpose.kind() == Kind::Audio {
+                    tick * 960
+                } else {
+                    tick * 1800
+                } + index as u64 * 90_000;
+                let data = if purpose.kind() == Kind::Audio {
+                    Arc::from([0xf8, 0xff, 0xfe])
+                } else {
+                    video()
+                };
+                let track = pair.peers[from].track_for(purpose).unwrap();
+                pair.peers[from]
+                    .write(track, timestamp, pair.now, data)
+                    .unwrap();
+            }
+        }
+        pair.advance(Duration::from_millis(20)).unwrap();
+    }
+    pair.advance(Duration::from_millis(500)).unwrap();
+    for to in 0..2 {
+        for (index, &purpose) in purposes.iter().enumerate() {
+            let frames: Vec<_> = pair.frames[to]
+                .iter()
+                .filter(|f| f.purpose == purpose)
+                .collect();
+            assert_eq!(
+                frames.len(),
+                if purpose.kind() == Kind::Audio { 20 } else { 5 }
+            );
+            for (n, frame) in frames.iter().enumerate() {
+                assert_eq!(frame.kind, purpose.kind());
+                assert_eq!(frame.track, pair.peers[to].track_for(purpose).unwrap());
+                assert_eq!(
+                    frame.track.mid(),
+                    pair.peers[1 - to].track_for(purpose).unwrap().mid()
+                );
+                let expected = index as u64 * 90_000
+                    + n as u64
+                        * if purpose.kind() == Kind::Audio {
+                            960
+                        } else {
+                            7200
+                        };
+                assert_eq!(frame.timestamp, expected);
+                if purpose.kind() == Kind::Audio {
+                    assert_eq!(frame.data.as_ref(), [0xf8, 0xff, 0xfe]);
+                } else {
+                    assert_eq!(frame.data, video());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn one_video_loss_does_not_block_either_audio_role_or_the_other_video() {
+    let mut pair = Pair::multi();
+    pair.connect();
+    pair.drop_video = true;
+    for tick in 0..24 {
+        for purpose in [
+            Purpose::Camera,
+            Purpose::ScreenVideo,
+            Purpose::Microphone,
+            Purpose::SystemAudio,
+        ] {
+            if purpose.kind() == Kind::Video && tick % 4 != 0 {
+                continue;
+            }
+            let track = pair.peers[0].track_for(purpose).unwrap();
+            pair.peers[0]
+                .write(
+                    track,
+                    tick * if purpose.kind() == Kind::Audio {
+                        960
+                    } else {
+                        1800
+                    },
+                    pair.now,
+                    if purpose.kind() == Kind::Audio {
+                        Arc::from([0xf8, 0xff, 0xfe])
+                    } else {
+                        video()
+                    },
+                )
+                .unwrap();
+        }
+        pair.advance(Duration::from_millis(20)).unwrap();
+        for purpose in [Purpose::Microphone, Purpose::SystemAudio] {
+            assert!(
+                pair.frames[1]
+                    .iter()
+                    .filter(|f| f.purpose == purpose)
+                    .count()
+                    >= tick.saturating_sub(2) as usize
+            );
+        }
+    }
+    pair.advance(Duration::from_secs(2)).unwrap();
+    assert_eq!(pair.dropped, 1);
+    for purpose in [
+        Purpose::Microphone,
+        Purpose::SystemAudio,
+        Purpose::Camera,
+        Purpose::ScreenVideo,
+    ] {
+        let frames: Vec<_> = pair.frames[1]
+            .iter()
+            .filter(|f| f.purpose == purpose)
+            .collect();
+        assert_eq!(
+            frames.len(),
+            if purpose.kind() == Kind::Audio { 24 } else { 6 }
+        );
+        if purpose.kind() == Kind::Video {
+            assert!(frames.iter().all(|f| f.data == video()));
+        }
+    }
+}
+
+#[test]
+fn greedy_camera_cannot_consume_screen_share_or_either_audio_reserve() {
+    let mut pair = Pair::multi();
+    pair.connect();
+    for tick in 0..16 {
+        let camera = pair.peers[0].track_for(Purpose::Camera).unwrap();
+        pair.peers[0]
+            .write(camera, tick * 7200, pair.now, video())
+            .unwrap();
+        for i in 1..100 {
+            assert!(matches!(
+                pair.peers[0].write(camera, tick * 7200 + i, pair.now, video()),
+                Err(Error::Backpressure)
+            ));
+        }
+        for purpose in [
+            Purpose::ScreenVideo,
+            Purpose::Microphone,
+            Purpose::SystemAudio,
+        ] {
+            let track = pair.peers[0].track_for(purpose).unwrap();
+            pair.peers[0]
+                .write(
+                    track,
+                    tick * if purpose.kind() == Kind::Audio {
+                        3840
+                    } else {
+                        7200
+                    },
+                    pair.now,
+                    if purpose.kind() == Kind::Audio {
+                        Arc::from([0xf8, 0xff, 0xfe])
+                    } else {
+                        video()
+                    },
+                )
+                .unwrap();
+        }
+        pair.advance(Duration::from_millis(80)).unwrap();
+    }
+    pair.advance(Duration::from_millis(500)).unwrap();
+    for purpose in [
+        Purpose::Microphone,
+        Purpose::SystemAudio,
+        Purpose::Camera,
+        Purpose::ScreenVideo,
+    ] {
+        assert_eq!(
+            pair.frames[1]
+                .iter()
+                .filter(|f| f.purpose == purpose)
+                .count(),
+            16
+        );
+    }
+}
+
+#[test]
+fn keyframe_requests_are_bound_to_the_requested_video_mid() {
+    let mut pair = Pair::multi();
+    pair.connect();
+    for purpose in [Purpose::Camera, Purpose::ScreenVideo] {
+        let track = pair.peers[0].track_for(purpose).unwrap();
+        pair.peers[0].write(track, 0, pair.now, video()).unwrap();
+    }
+    pair.advance(Duration::from_millis(150)).unwrap();
+    for purpose in [Purpose::Camera, Purpose::ScreenVideo] {
+        pair.keyframes[0].clear();
+        let requested = pair.peers[1].track_for(purpose).unwrap();
+        pair.peers[1].request_keyframe(requested).unwrap();
+        pair.advance(Duration::from_millis(500)).unwrap();
+        assert!(!pair.keyframes[0].is_empty());
+        assert!(
+            pair.keyframes[0]
+                .iter()
+                .all(|&t| pair.peers[0].purpose(t) == Some(purpose))
+        );
+    }
+    let audio = pair.peers[1].track_for(Purpose::SystemAudio).unwrap();
+    assert!(matches!(
+        pair.peers[1].request_keyframe(audio),
+        Err(Error::Frame)
+    ));
+}
+
+#[test]
+fn each_audio_mid_rejects_tampering_and_replay_independently() {
+    let mut pair = Pair::multi();
+    pair.connect();
+    for purpose in [Purpose::Microphone, Purpose::SystemAudio] {
+        pair.frames[1].clear();
+        let track = pair.peers[0].track_for(purpose).unwrap();
+        pair.peers[0]
+            .write(track, 0, pair.now, Arc::from([0xf8, 0xff, 0xfe]))
+            .unwrap();
+        pair.peers[0].timeout(pair.now).unwrap();
+        pair.drain(0).unwrap();
+        let index = pair
+            .wire
+            .iter()
+            .position(|(_, _, d)| d.len() > 12 && d[0] >> 6 == 2 && !(192..=223).contains(&d[1]))
+            .unwrap();
+        let (to, source, original) = pair.wire.remove(index).unwrap();
+        let mut tampered = original.clone();
+        *tampered.last_mut().unwrap() ^= 1;
+        let _ = pair.peers[to].receive(source, pair.now, &tampered);
+        pair.advance(Duration::from_millis(25)).unwrap();
+        assert!(pair.frames[to].is_empty());
+        pair.peers[to].receive(source, pair.now, &original).unwrap();
+        pair.advance(Duration::from_millis(25)).unwrap();
+        assert_eq!(pair.frames[to].len(), 1);
+        assert_eq!(pair.frames[to][0].purpose, purpose);
+        let _ = pair.peers[to].receive(source, pair.now, &original);
+        pair.advance(Duration::from_millis(25)).unwrap();
+        assert_eq!(pair.frames[to].len(), 1);
+    }
 }

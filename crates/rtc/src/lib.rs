@@ -12,7 +12,7 @@ use std::{
 };
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::format::Codec;
-use str0m::media::{Direction, MediaKind, MediaTime, Mid};
+use str0m::media::{Direction, KeyframeRequestKind, MediaKind, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event as RtcEvent, Input, Output as RtcOutput, Rtc};
 use thiserror::Error;
@@ -22,8 +22,10 @@ pub const MAX_DATAGRAM_BYTES: usize = 2048;
 pub const MAX_OPUS_BYTES: usize = 1275;
 pub const MAX_VIDEO_BYTES: usize = 256 * 1024;
 const INITIAL_BITRATE: u64 = 2_000_000;
-const AUDIO_RESERVE_BPS: u64 = 96_000;
-const MAX_VIDEO_QUEUE_TIME: Duration = Duration::from_millis(120);
+mod pacing;
+mod signaling;
+use pacing::{Bucket, WINDOW};
+pub use signaling::{Description, Purpose, SignalingId, TrackBinding};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -50,10 +52,25 @@ impl Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Track(Mid);
 
+impl Track {
+    pub fn mid(self) -> String {
+        self.0.to_string()
+    }
+}
+
+struct TrackState {
+    track: Track,
+    purpose: Purpose,
+    bucket: Bucket,
+    next: Instant,
+    timestamp: Option<u64>,
+}
+
 #[derive(Debug)]
 pub struct Frame {
     pub track: Track,
     pub kind: Kind,
+    pub purpose: Purpose,
     /// Extended RTP clock ticks: 48 kHz audio, 90 kHz video.
     pub timestamp: u64,
     pub contiguous: bool,
@@ -88,6 +105,8 @@ pub enum Error {
     SignalingState,
     #[error("invalid, oversized, or unsupported SDP")]
     Sdp,
+    #[error("invalid, mismatched, or stale track description")]
+    Description,
     #[error("invalid local UDP address")]
     Address,
     #[error("invalid or oversized datagram")]
@@ -96,7 +115,7 @@ pub enum Error {
     Frame,
     #[error("media transport is not connected")]
     NotConnected,
-    #[error("drop this video frame: the bandwidth or latency budget is exhausted")]
+    #[error("drop or defer this frame: the bandwidth or latency budget is exhausted")]
     Backpressure,
     #[error("time must advance monotonically")]
     Clock,
@@ -106,7 +125,11 @@ pub enum Error {
 
 enum Signaling {
     New,
-    Offering(SdpPendingOffer),
+    Offering {
+        pending: SdpPendingOffer,
+        description: Description,
+        legacy: bool,
+    },
     Negotiated,
 }
 
@@ -115,11 +138,12 @@ pub struct Peer {
     rtc: Rtc,
     address: SocketAddr,
     signaling: Signaling,
-    tracks: Vec<(Track, Kind)>,
+    tracks: Vec<TrackState>,
     now: Instant,
     closed: bool,
     bandwidth_bps: u64,
-    next_video: Instant,
+    total_budget: Bucket,
+    video_budget: Bucket,
 }
 
 impl Peer {
@@ -149,50 +173,170 @@ impl Peer {
             rtc,
             address,
             signaling: Signaling::New,
-            tracks: Vec::with_capacity(2),
+            tracks: Vec::with_capacity(4),
             now,
             closed: false,
             bandwidth_bps: INITIAL_BITRATE,
-            next_video: now,
+            total_budget: Bucket::new(now),
+            video_budget: Bucket::new(now),
         })
     }
 
     pub fn offer(&mut self, video: bool) -> Result<String, Error> {
+        let purposes = if video {
+            &[Purpose::Microphone, Purpose::Camera][..]
+        } else {
+            &[Purpose::Microphone][..]
+        };
+        // Compatibility API has no semantic manifest on its wire. It is
+        // deliberately restricted to the original one-audio/one-video layout.
+        let description = self.make_offer(purposes, SignalingId::new([1; 16])?, true)?;
+        Ok(description.sdp)
+    }
+
+    /// Add up to two audio and two video tracks. Authenticate the returned
+    /// description as one value; assigning roles from bare SDP is forbidden.
+    pub fn offer_tracks(
+        &mut self,
+        purposes: &[Purpose],
+        id: SignalingId,
+    ) -> Result<Description, Error> {
+        self.make_offer(purposes, id, false)
+    }
+
+    fn make_offer(
+        &mut self,
+        purposes: &[Purpose],
+        id: SignalingId,
+        legacy: bool,
+    ) -> Result<Description, Error> {
         if self.closed || !matches!(self.signaling, Signaling::New) {
             return Err(Error::SignalingState);
         }
+        if purposes.is_empty()
+            || purposes.len() > 4
+            || purposes
+                .iter()
+                .enumerate()
+                .any(|(i, p)| purposes[..i].contains(p))
+        {
+            return Err(Error::Description);
+        }
         let mut api = self.rtc.sdp_api();
-        let audio = api.add_media(MediaKind::Audio, Direction::SendRecv, None, None, None);
-        self.tracks.push((Track(audio), Kind::Audio));
-        if video {
-            let video = api.add_media(MediaKind::Video, Direction::SendRecv, None, None, None);
-            self.tracks.push((Track(video), Kind::Video));
+        let mut bindings = Vec::with_capacity(purposes.len());
+        for &purpose in purposes {
+            let kind = match purpose.kind() {
+                Kind::Audio => MediaKind::Audio,
+                Kind::Video => MediaKind::Video,
+            };
+            let mid = api.add_media(kind, Direction::SendRecv, None, None, None);
+            bindings.push(TrackBinding {
+                mid: mid.to_string(),
+                purpose,
+            });
         }
         let (offer, pending) = api.apply().ok_or(Error::SignalingState)?;
-        self.signaling = Signaling::Offering(pending);
-        Ok(offer.to_sdp_string())
+        let description = Description {
+            id,
+            sdp: offer.to_sdp_string(),
+            bindings,
+        };
+        signaling::validate(&description, id)?;
+        self.bind_tracks(&description.bindings);
+        self.signaling = Signaling::Offering {
+            pending,
+            description: description.clone(),
+            legacy,
+        };
+        Ok(description)
     }
 
     /// SDP fingerprints must arrive over authenticated signaling before use in a
     /// real call. Successful DTLS verifies that fingerprint, not a user identity.
     pub fn accept_offer(&mut self, sdp: &str) -> Result<String, Error> {
+        let bindings = signaling::legacy_bindings(sdp)?;
+        let description = Description {
+            id: SignalingId::new([1; 16])?,
+            sdp: sdp.to_owned(),
+            bindings,
+        };
+        Ok(self.accept_offer_tracks(&description, description.id)?.sdp)
+    }
+
+    /// The caller MUST authenticate the entire description and compare the
+    /// expected fresh call ID before invoking this API. SDP labels carry no role.
+    pub fn accept_offer_tracks(
+        &mut self,
+        description: &Description,
+        expected: SignalingId,
+    ) -> Result<Description, Error> {
         if self.closed || !matches!(self.signaling, Signaling::New) {
             return Err(Error::SignalingState);
         }
-        validate_sdp(sdp)?;
-        let offer = SdpOffer::from_sdp_string(sdp).map_err(|_| Error::Sdp)?;
+        signaling::validate(description, expected)?;
+        let offer = SdpOffer::from_sdp_string(&description.sdp).map_err(|_| Error::Sdp)?;
         let answer = self.rtc.sdp_api().accept_offer(offer)?;
+        let answer = Description {
+            id: expected,
+            sdp: answer.to_sdp_string(),
+            bindings: description.bindings.clone(),
+        };
+        if let Err(error) = signaling::validate(&answer, expected) {
+            self.close();
+            return Err(error);
+        }
+        self.bind_tracks(&answer.bindings);
         self.signaling = Signaling::Negotiated;
-        Ok(answer.to_sdp_string())
+        Ok(answer)
     }
 
     pub fn accept_answer(&mut self, sdp: &str) -> Result<(), Error> {
-        if self.closed || !matches!(self.signaling, Signaling::Offering(_)) {
+        let Signaling::Offering {
+            description,
+            legacy: true,
+            ..
+        } = &self.signaling
+        else {
+            return Err(Error::SignalingState);
+        };
+        let bindings = signaling::legacy_bindings(sdp)?;
+        let answer = Description {
+            id: description.id,
+            sdp: sdp.to_owned(),
+            bindings,
+        };
+        self.accept_answer_tracks(&answer, answer.id)
+    }
+
+    /// As for `accept_offer_tracks`, authentication is the caller's obligation.
+    /// The answer must preserve the offered purpose for every MID and call ID.
+    pub fn accept_answer_tracks(
+        &mut self,
+        description: &Description,
+        expected: SignalingId,
+    ) -> Result<(), Error> {
+        if self.closed {
             return Err(Error::SignalingState);
         }
-        validate_sdp(sdp)?;
-        let answer = SdpAnswer::from_sdp_string(sdp).map_err(|_| Error::Sdp)?;
-        let Signaling::Offering(pending) =
+        let Signaling::Offering {
+            description: offered,
+            ..
+        } = &self.signaling
+        else {
+            return Err(Error::SignalingState);
+        };
+        signaling::validate(description, expected)?;
+        if offered.id != expected
+            || offered.bindings.len() != description.bindings.len()
+            || !offered
+                .bindings
+                .iter()
+                .all(|b| description.bindings.contains(b))
+        {
+            return Err(Error::Description);
+        }
+        let answer = SdpAnswer::from_sdp_string(&description.sdp).map_err(|_| Error::Sdp)?;
+        let Signaling::Offering { pending, .. } =
             std::mem::replace(&mut self.signaling, Signaling::Negotiated)
         else {
             return Err(Error::SignalingState);
@@ -205,10 +349,51 @@ impl Peer {
     }
 
     pub fn track(&self, kind: Kind) -> Option<Track> {
+        let mut tracks = self.tracks.iter().filter(|t| t.purpose.kind() == kind);
+        let track = tracks.next()?.track;
+        tracks.next().is_none().then_some(track)
+    }
+
+    pub fn track_for(&self, purpose: Purpose) -> Option<Track> {
         self.tracks
             .iter()
-            .find(|(_, k)| *k == kind)
-            .map(|(t, _)| *t)
+            .find(|t| t.purpose == purpose)
+            .map(|t| t.track)
+    }
+
+    pub fn purpose(&self, track: Track) -> Option<Purpose> {
+        self.tracks
+            .iter()
+            .find(|t| t.track == track)
+            .map(|t| t.purpose)
+    }
+
+    fn bind_tracks(&mut self, bindings: &[TrackBinding]) {
+        self.tracks = bindings
+            .iter()
+            .map(|b| TrackState {
+                track: Track(Mid::from(b.mid.as_str())),
+                purpose: b.purpose,
+                bucket: Bucket::new(self.now),
+                next: self.now,
+                timestamp: None,
+            })
+            .collect();
+    }
+
+    /// Request a keyframe for this video MID only; audio is never eligible.
+    pub fn request_keyframe(&mut self, track: Track) -> Result<(), Error> {
+        if !self.is_connected() {
+            return Err(Error::NotConnected);
+        }
+        if self.purpose(track).is_none_or(|p| p.kind() != Kind::Video) {
+            return Err(Error::Frame);
+        }
+        self.rtc
+            .writer(track.0)
+            .ok_or(Error::Frame)?
+            .request_keyframe(None, KeyframeRequestKind::Pli)?;
+        Ok(())
     }
 
     pub fn is_connected(&self) -> bool {
@@ -232,33 +417,41 @@ impl Peer {
         if !self.is_connected() {
             return Err(Error::NotConnected);
         }
-        let kind = self
+        let index = self
             .tracks
             .iter()
-            .find(|(t, _)| *t == track)
-            .map(|(_, k)| *k)
+            .position(|t| t.track == track)
             .ok_or(Error::Frame)?;
-        if data.is_empty() || data.len() > kind.limit() {
+        let kind = self.tracks[index].purpose.kind();
+        if data.is_empty()
+            || data.len() > kind.limit()
+            || self.tracks[index]
+                .timestamp
+                .is_some_and(|last| timestamp <= last)
+        {
             return Err(Error::Frame);
         }
         self.clock(now)?;
-        let video_interval = if kind == Kind::Video {
-            // Reserve audio and transport overhead before admitting video. Do
-            // not build a video queue while waiting for a slower network or a
-            // future encoder to react to the estimate.
-            let budget =
-                (self.bandwidth_bps.min(10_000_000) * 4 / 5).saturating_sub(AUDIO_RESERVE_BPS);
-            if budget == 0 || now < self.next_video {
-                return Err(Error::Backpressure);
-            }
-            let interval = Duration::from_secs_f64(data.len() as f64 * 8.0 / budget as f64);
-            if interval > MAX_VIDEO_QUEUE_TIME {
-                return Err(Error::Backpressure);
-            }
-            Some(interval)
+        let (total, video, rate) = self.rates(self.tracks[index].purpose);
+        // Include a conservative packet overhead estimate, on top of the 20%
+        // transport headroom. Small audio packets must not bypass the budget.
+        let bits = ((data.len() + data.len().div_ceil(1000) * 80) * 8) as f64;
+        if rate == 0
+            || now < self.tracks[index].next
+            || self.total_budget.available(now, total) < bits
+            || self.tracks[index].bucket.available(now, rate) < bits
+            || (kind == Kind::Video && self.video_budget.available(now, video) < bits)
+        {
+            return Err(Error::Backpressure);
+        }
+        let interval = Duration::from_secs_f64(bits / rate as f64).max(if kind == Kind::Audio {
+            Duration::from_micros(2500)
         } else {
-            None
-        };
+            Duration::from_millis(1)
+        });
+        if interval > WINDOW {
+            return Err(Error::Backpressure);
+        }
         let writer = self.rtc.writer(track.0).ok_or(Error::Frame)?;
         let params = *writer
             .payload_params()
@@ -270,10 +463,46 @@ impl Peer {
             MediaTime::new(timestamp, params.spec().clock_rate),
             data,
         )?;
-        if let Some(interval) = video_interval {
-            self.next_video = now + interval;
+        self.total_budget.spend(now, total, bits);
+        if kind == Kind::Video {
+            self.video_budget.spend(now, video, bits);
         }
+        let state = &mut self.tracks[index];
+        state.bucket.spend(now, rate, bits);
+        state.next = now + interval;
+        state.timestamp = Some(timestamp);
         Ok(())
+    }
+
+    fn rates(&self, purpose: Purpose) -> (u64, u64, u64) {
+        let total = self.bandwidth_bps.min(10_000_000) * 4 / 5;
+        let microphone = if self.track_for(Purpose::Microphone).is_some() {
+            128_000
+        } else {
+            0
+        };
+        let system = if self.track_for(Purpose::SystemAudio).is_some() {
+            256_000
+        } else {
+            0
+        };
+        let audio = microphone + system;
+        // Under severe congestion, both audio roles retain proportional shares;
+        // video is shut off rather than borrowing either audio allocation.
+        let video = total.saturating_sub(audio);
+        let role_rate = match purpose {
+            Purpose::Microphone => microphone * total.min(audio) / audio.max(1),
+            Purpose::SystemAudio => system * total.min(audio) / audio.max(1),
+            Purpose::Camera | Purpose::ScreenVideo => {
+                let count = self
+                    .tracks
+                    .iter()
+                    .filter(|t| t.purpose.kind() == Kind::Video)
+                    .count() as u64;
+                video / count.max(1)
+            }
+        };
+        (total, video, role_rate)
     }
 
     /// Malformed datagrams return an error; a socket adapter may discard them
@@ -327,8 +556,12 @@ impl Peer {
                         } else {
                             Kind::Video
                         };
-                        if !self.tracks.iter().any(|(t, _)| t.0 == media.mid) {
-                            self.tracks.push((Track(media.mid), kind));
+                        if self
+                            .purpose(Track(media.mid))
+                            .is_none_or(|p| p.kind() != kind)
+                        {
+                            self.close();
+                            return Err(Error::Frame);
                         }
                     }
                     RtcEvent::MediaData(media) => {
@@ -337,12 +570,17 @@ impl Peer {
                             Codec::Vp8 => Kind::Video,
                             _ => return Err(Error::Frame),
                         };
-                        if media.data.is_empty() || media.data.len() > kind.limit() {
+                        let purpose = self.purpose(Track(media.mid)).ok_or(Error::Frame)?;
+                        if purpose.kind() != kind
+                            || media.data.is_empty()
+                            || media.data.len() > kind.limit()
+                        {
                             return Err(Error::Frame);
                         }
                         return Ok(Output::Event(Event::Frame(Frame {
                             track: Track(media.mid),
                             kind,
+                            purpose,
                             timestamp: media.time.numer(),
                             contiguous: media.contiguous,
                             data: media.data,
@@ -358,6 +596,12 @@ impl Peer {
                         return Ok(Output::Event(Event::BandwidthEstimate(rate.as_u64())));
                     }
                     RtcEvent::KeyframeRequest(request) => {
+                        if self
+                            .purpose(Track(request.mid))
+                            .is_none_or(|p| p.kind() != Kind::Video)
+                        {
+                            return Err(Error::Frame);
+                        }
                         return Ok(Output::Event(Event::RequestKeyframe(Track(request.mid))));
                     }
                     _ => {}
@@ -374,23 +618,4 @@ impl Peer {
         self.now = now;
         Ok(())
     }
-}
-
-fn validate_sdp(sdp: &str) -> Result<(), Error> {
-    if sdp.is_empty() || sdp.len() > MAX_SDP_BYTES || sdp.lines().count() > 512 {
-        return Err(Error::Sdp);
-    }
-    let mut audio = 0;
-    let mut video = 0;
-    for line in sdp.lines().filter(|line| line.starts_with("m=")) {
-        match line.split_whitespace().next() {
-            Some("m=audio") => audio += 1,
-            Some("m=video") => video += 1,
-            _ => return Err(Error::Sdp),
-        }
-    }
-    if audio != 1 || video > 1 {
-        return Err(Error::Sdp);
-    }
-    Ok(())
 }
