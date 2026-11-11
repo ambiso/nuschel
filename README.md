@@ -38,7 +38,7 @@ programs.nuschel = {
 ```
 
 The module can also set settings and servers for you, which then show as read-only
-in the app. The package registers `mumble://` links and updates with your flake
+in the app. The package registers `mumble://` and `nuschel://` links and updates with your flake
 inputs, not by itself. Details, and what to do about `No GPU adapters found`:
 [docs/install.md](docs/install.md#nix-and-nixos).
 
@@ -77,7 +77,10 @@ screen readers, and F1 lists the keys.
 
 ### Android, iOS and the web
 
-Planned ([docs/clients.md](docs/clients.md)).
+Planned ([docs/clients.md](docs/clients.md)). The web client has its first parts:
+the relay through which browsers reach servers (TLS runs in the browser, so the relay
+sees only ciphertext) and a NixOS module that serves it from your domain with ACME,
+`nixosModules.web` ([docs/web.md](docs/web.md)).
 
 ## Getting started
 
@@ -88,7 +91,9 @@ backup. If a server's certificate is self-signed, Nuschel shows its fingerprint 
 asks before connecting, once.
 
 **Links.** A `mumble://` link (`mumble://voice.example.org/Games`) opens the server and
-joins that channel. Right-click a channel and choose **Copy link** to share one. With
+joins that channel. Right-click a channel and choose **Copy link** to share one, or
+**Copy share link** for a web link (`https://nuschl.eu/join/…`) that opens the channel
+in Nuschel ([docs/web.md](docs/web.md#share-links)). With
 the Linux package, links open in Nuschel from your browser too; on Windows and macOS,
 click them inside Nuschel for now. A link can also carry the server's certificate
 fingerprint (`?fp=sha256:…`), and then nobody needs to confirm it.

@@ -121,6 +121,7 @@ Message types are reserved in ranges, one per feature:
 | 0x4E40–0x4E5F | Files (`files/1`) |
 | 0x4E60–0x4E67 | Knocking |
 | 0x4E68–0x4E7F | Spam holds and moderation queue |
+| 0x4E90–0x4E97 | Share links (`share/1`, docs/web.md); 0x4E94–0x4E97 reserved |
 
 ## 3. Identifiers
 
@@ -509,6 +510,15 @@ the wire definition):
   `MLS_APPLICATION`/`MLS_HANDSHAKE` with the MLS message in `Message.mls`, so commits
   and application messages share the conversation's `seq` stream and history pages.
   A conversation with a group takes no plaintext sends, edits or deletions.
+- **Share links** (`share/1`, docs/web.md "Share links"): `ShareLinkCreate` (0x4E90)
+  and `ShareLinkResolve` (0x4E93) are answered with `ShareLink` (0x4E91: the 16-byte
+  token, channel, expiry, access token and the operator's `share_links.web_host`),
+  `ShareLinkRevoke` (0x4E92) with `Done`. Registered users who may enter a channel
+  create links; one with an access token needs Write there; the creator or Write
+  revokes; any connection resolves, within its request budget. Unknown, revoked and
+  expired tokens and removed channels are one `NOT_FOUND`; 64 links per channel and
+  256 per account give `LIMIT_REACHED`. Tokens and access tokens are redacted in
+  `Debug` output.
 
 ## Desktop client (2026-11-11)
 

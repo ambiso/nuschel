@@ -189,3 +189,8 @@ witness_refresh_interval = 3600
 # [[kt.witnesses]]
 # key = "witness.example.org/nuschel-kt+5d32ee69+BuajLAZT…"
 # url = "https://witness.example.org"
+
+[share_links]
+# Share links (`share/1`, docs/web.md): the web host this server's links point at,
+# one running services.nuschel-web. Empty: the one each client is set to use.
+# web_host = "web.example.org"

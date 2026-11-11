@@ -609,6 +609,11 @@ descriptor exhaustion.
   conversation's `seq` stream, Welcome mailboxes with push, join info; state in the
   key-value table under uppercase prefixes. A conversation with a group refuses
   plaintext. Details in docs/e2ee.md "Phase 4 prototype".
+- **Share links** (share.rs, `share/1`, docs/web.md): random 16-byte tokens that open
+  a channel, optionally with an access token for a private channel and an expiry,
+  issued, resolved and revoked under the lock and kept in the key-value table under
+  `S`. `[share_links] web_host` names the web host (`services.nuschel-web`) the
+  server's links point at.
 
 ## Tests
 

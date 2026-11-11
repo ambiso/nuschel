@@ -954,7 +954,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         client proving it (`examples/headless.rs`).
   - [ ] What the SDK does not model yet (docs/clients.md, "Status"): identity, key
         transparency and trust; administration requests; transfers and
-        attachments; split `native.rs`; UniFFI and wasm-bindgen wrappers.
+        attachments; split `native.rs`; UniFFI wrappers. The wasm-bindgen wrapper
+        exists (`crates/client-wasm`, 2026-11-11).
   - [x] **TUI** (ratatui), the SDK's second consumer: `apps/tui` (`nuschel-tui`),
         connections, certificate pins, the channel tree, timeline with paging,
         composer, voice through the media worker, edits, deletions, typing, unread,
@@ -970,14 +971,28 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         `isolatedProcess` services; platform echo cancellation; foreground service.
   - [ ] **iOS**: Swift + SwiftUI over UniFFI; workers in-process behind the same
         boundary (no subprocesses on iOS); CallKit, background audio, push extension.
-  - [ ] **Web** (Svelte, SDK in WASM in a Web Worker), served from one project-run
-        domain (others may host it), so one cross-server identity lives in the
+  - [ ] **Web** (Svelte, SDK in WASM in a Web Worker), served from one domain the
+        user hosts (others may host it), so one cross-server identity lives in the
         browser; Signal-like version requirements apply. Reaches Mumble and Nuschel
         servers through an untrusted WebSocket/WebTransport tunnel with TLS inside the
         browser, so legacy Mumble servers work too; the relay is no open proxy.
-  - [ ] NixOS module for the web host, share links and tunnel relay
-        (`services.nginx.virtualHosts` with `enableACME = true`, optionally a
-        subdomain).
+    - [x] The tunnel relay (`apps/web-relay`, 2026-11-11, docs/web.md): WebSocket
+          to TCP and UDP, TLS in the client, no open proxy (public addresses only,
+          Mumble-like ports, a ping or TLS handshake first, origins), limits per
+          client address and per tunnel, no payload logs; fuzz target `tunnel`,
+          loopback tests (ciphertext only, Murmur), `vm-web`.
+    - [x] The SDK in WebAssembly (`crates/client-wasm`, `just wasm-client`): TLS with
+          rustls/ring in wasm32, login, channels and users; a Svelte 5 skeleton in
+          `web/app` (`just web`) that shows whether it is connected;
+          `tests/web_client.py` runs it in Node.js through the relay to Murmur.
+    - [ ] The client itself: text, history and the extension through the browser
+          session; voice (WebAudio, getUserMedia, datagrams through the tunnel);
+          IndexedDB storage and identity in a Worker; its version requirement; the
+          Svelte build in the Nix site package; a real-browser test; WebTransport.
+  - [x] NixOS module for the web host, share links and tunnel relay
+        (`services.nuschel-web`, 2026-11-11: nginx with `enableACME`, optionally a
+        subdomain; static files, the landing page, app-link files, the relay over a
+        Unix socket with `IPAddressDeny`; `vm-web`).
   - [ ] Push for mobile: content-free pushes (Signal-style), UnifiedPush on Android.
 - [ ] **Voice on several servers at once** (user, 2026-11-11): every connected server
       that is not deafened starts its own media worker, so unmuted on two servers you
@@ -1051,12 +1066,14 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       leaves the channel or disconnects**; **no earlier history** (in end-to-end
       channels the device joins the group without a history grant). Stock admins admit
       by moving the person in; a stock client's refused Enter can knock for it.
-- [ ] Channel share links (user, 2026-11-11): a link you send to someone that opens
-      Nuschel if installed, else joins in the browser; on the optional project
-      domain or any web host (docs/clients.md). Proposal:
-      `https://<server>/join/<opaque token>#<client-only data>` served by nuscheld (token
-      revocable, expiring, optionally an access token; the fragment carries the
-      certificate pin and later an E2EE invite secret, never logged), App Links and
-      Universal Links for the apps, a `nuschel://` scheme for the desktop, "join in
-      browser" via the web client; for stock Murmur servers perhaps a static
-      project-run page with the target only in the fragment.
+- [x] Channel share links (user, 2026-11-11; built 2026-11-11, docs/web.md "Share
+      links"): `https://<web host>/join/<token>#<client-only data>`; nuscheld issues,
+      resolves and revokes tokens (`share/1`, 0x4E90–0x4E97: expiry, access token for
+      private channels); stock Murmur links carry the target in the fragment; the
+      landing page (open the app, join in the browser, get Nuschel), app-link files
+      in the web module, `nuschel://` on the Linux desktop, "Copy share link" in a
+      channel's menu; copied links use nuschl.eu unless the server or the user names
+      another web host. Open: deploy the web module on nuschl.eu (until then links
+      to it open only in Nuschel); register `nuschel://` on macOS
+      (GPUI's `on_open_urls`) and Windows; list and revoke links in the desktop; an
+      E2EE invite secret in the fragment; a Settings field for `share_web_host`.

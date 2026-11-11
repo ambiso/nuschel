@@ -190,8 +190,10 @@ Left, in the order they should move:
   highlight of a jumped-to message is each UI's.
 - **The driver** is one file (`native.rs`); split it into connection, content and
   storage before the mobile work.
-- **Bindings**: UniFFI and wasm-bindgen are not adopted yet; a thin crate per
-  binding will wrap `Client` (snapshots and updates as records).
+- **Bindings**: wasm-bindgen in `crates/client-wasm` (docs/web.md): `WebClient`
+  wraps `Client`, servers and updates come out as JSON, and a browser `Platform`
+  connects through the web relay with TLS in WebAssembly (login, channels and users
+  so far). UniFFI is not adopted yet; a thin crate will wrap `Client` the same way.
 
 ## The terminal client (`apps/tui`)
 
@@ -269,6 +271,11 @@ through a WebSocket (later WebTransport) tunnel, and keeps the tunnel untrusted:
   per client address.
 - Nuschel servers may offer the tunnel endpoint themselves, so the extra hop is
   optional, and video and group voice later use WebRTC to the server's SFU.
+
+Built (2026-11-11): the relay (`apps/web-relay`), the NixOS module for the web host
+(`services.nuschel-web`), share links (`share/1`, the landing page, the desktop's
+`nuschel://`) and the SDK in WebAssembly with a Svelte skeleton; docs/web.md has
+the details and what is left.
 
 ## Video (queued)
 
