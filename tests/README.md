@@ -43,7 +43,10 @@ a message's links, a letter typed into the composer). Against a loopback `nusche
 (edits, deletions and their authorisation, typing, direct conversations, with
 `nuschel-cli`) and `conversation_screenshots.py` (the desktop with edits, tombstones,
 the typing line, a direct conversation from server history, keyboard links, and the
-local cache it leaves, in a private headless GNOME Shell).
+local cache it leaves, in a private headless GNOME Shell). The client SDK without a
+UI: `with_local_nuscheld.py <binaries> sdk_headless.py <binaries> --port PORT` runs
+`crates/client/examples/headless.rs` (three people connect, register, meet in a
+channel, send, receive, edit, and load the server's history through the SDK alone).
 
 `windows_vm.py` installs Windows 11 Enterprise (evaluation ISO from Microsoft)
 unattended into a KVM guest with two vCPUs and drives it through a PowerShell agent

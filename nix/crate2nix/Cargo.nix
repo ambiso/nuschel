@@ -21935,6 +21935,11 @@ rec {
             name = "serde_json";
             packageId = "serde_json";
           }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "rt-multi-thread" "time" "macros" ];
+          }
         ];
         features = {
           "default" = [ "native" ];
