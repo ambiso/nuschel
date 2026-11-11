@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Bounded asynchronous adapters for persistent worker processes.
 use crate::Error;
-use nuschel_core::{ChatMessage, HistoryPage, SearchCursor, SearchPage};
+use nuschel_core::{ChatMessage, HistoryPage, SearchCursor, SearchPage, ServerRecord};
 use nuschel_ipc::{
     Envelope, LiveMediaEvent, LiveMediaRequest, MAX_FRAME_BYTES, PROTOCOL_VERSION, StorageRequest,
     StorageResponse, TransferEvent, TransferRequest, write_frame,
@@ -90,6 +90,87 @@ impl Storage {
     pub async fn append(&mut self, message: ChatMessage) -> Result<i64, Error> {
         match self.request(StorageRequest::Append { message }).await? {
             StorageResponse::Appended(id) => Ok(id),
+            _ => Err(Error::Worker("unexpected storage response".into())),
+        }
+    }
+    /// Store a Nuschel server's messages by seq, once each (a page, or a
+    /// live message): row IDs in order, 0 for one beyond the limits. Sent in
+    /// batches that stay well inside the IPC frame limit.
+    pub async fn store_server(&mut self, records: Vec<ServerRecord>) -> Result<Vec<i64>, Error> {
+        /// Text per request; a single larger record goes alone.
+        const BATCH_BYTES: usize = 2 * 1024 * 1024;
+        const BATCH_RECORDS: usize = 100;
+        let mut ids = Vec::with_capacity(records.len());
+        let mut batch = Vec::new();
+        let mut bytes = 0;
+        let mut records = records.into_iter().peekable();
+        while let Some(record) = records.next() {
+            bytes += record.message.body.len() + record.message.author.len();
+            batch.push(record);
+            let next = records.peek().map_or(0, |next| {
+                next.message.body.len() + next.message.author.len()
+            });
+            if records.peek().is_none()
+                || batch.len() >= BATCH_RECORDS
+                || bytes + next > BATCH_BYTES
+            {
+                let records = std::mem::take(&mut batch);
+                bytes = 0;
+                match self
+                    .request(StorageRequest::StoreServer { records })
+                    .await?
+                {
+                    StorageResponse::Stored(stored) => ids.extend(stored),
+                    _ => return Err(Error::Worker("unexpected storage response".into())),
+                }
+            }
+        }
+        Ok(ids)
+    }
+    /// Our own pending message (row `id`) was acknowledged as `seq`.
+    pub async fn set_seq(&mut self, id: i64, seq: i64) -> Result<(), Error> {
+        self.updated(StorageRequest::SetSeq { id, seq })
+            .await
+            .map(drop)
+    }
+    /// The cached message `seq` was edited; whether it was cached.
+    pub async fn edit(
+        &mut self,
+        server: String,
+        channel: String,
+        seq: i64,
+        body: String,
+        edited_ms: i64,
+    ) -> Result<bool, Error> {
+        self.updated(StorageRequest::Edit {
+            server,
+            channel,
+            seq,
+            body,
+            edited_ms,
+        })
+        .await
+    }
+    /// The cached message `seq` was deleted (a tombstone without text);
+    /// whether it was cached.
+    pub async fn delete(
+        &mut self,
+        server: String,
+        channel: String,
+        seq: i64,
+        deleted_ms: i64,
+    ) -> Result<bool, Error> {
+        self.updated(StorageRequest::Delete {
+            server,
+            channel,
+            seq,
+            deleted_ms,
+        })
+        .await
+    }
+    async fn updated(&mut self, request: StorageRequest) -> Result<bool, Error> {
+        match self.request(request).await? {
+            StorageResponse::Updated(found) => Ok(found),
             _ => Err(Error::Worker("unexpected storage response".into())),
         }
     }

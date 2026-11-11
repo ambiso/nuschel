@@ -4,6 +4,7 @@
 use nuschel_core::search::{MAX_QUERY_BYTES, Query};
 use nuschel_core::{
     ChatMessage, HistoryEntry, HistoryPage, MAX_CONTENT_BYTES, SearchCursor, SearchPage,
+    ServerRecord,
 };
 use sqlx::{
     PgPool, SqlitePool,
@@ -23,14 +24,38 @@ const BACKFILL_BATCH: i64 = 64;
 const INDEX_BATCH: i64 = 512;
 /// Servers one search may cover.
 pub const MAX_SEARCH_SERVERS: usize = 64;
+/// Records one `store_server` call may write (a server's page has at most 100).
+pub const MAX_STORE_RECORDS: usize = 128;
 
-type Row = (i64, String, String, String, i64, String);
+/// A message row: id, server, channel, author, time, body, and a Nuschel
+/// server's seq, edit and deletion times.
+type Row = (
+    i64,
+    String,
+    String,
+    String,
+    i64,
+    String,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+);
 type RankedRow = (i64, String, String, String, i64, String, i64);
 
-const PAGE: &str = "SELECT id, server, channel, author, observed_at_ms, body FROM messages WHERE server = $1 AND channel = $2 AND id < $3 ORDER BY id DESC LIMIT $4";
-const PAGE_AFTER: &str = "SELECT id, server, channel, author, observed_at_ms, body FROM messages WHERE server = $1 AND channel = $2 AND id > $3 ORDER BY id LIMIT $4";
+// Pages run in time order, then by row ID: a server's history page fetched
+// later stores older messages under higher IDs than live ones stored before.
+// $3 and $4 are the cursor row's time and ID; a row-value bound lets the
+// index seek to it.
+const PAGE: &str = "SELECT id, server, channel, author, observed_at_ms, body, seq, edited_ms, deleted_ms FROM messages WHERE server = $1 AND channel = $2 AND (observed_at_ms, id) < ($3, $4) ORDER BY observed_at_ms DESC, id DESC LIMIT $5";
+const PAGE_AFTER: &str = "SELECT id, server, channel, author, observed_at_ms, body, seq, edited_ms, deleted_ms FROM messages WHERE server = $1 AND channel = $2 AND (observed_at_ms, id) > ($3, $4) ORDER BY observed_at_ms, id LIMIT $5";
 const INSERT_SEARCH: &str =
     "INSERT INTO message_search (id, server, author, visible) VALUES ($1, $2, $3, $4)";
+const INSERT_MESSAGE: &str = "INSERT INTO messages (server, channel, author, observed_at_ms, body, seq, edited_ms, deleted_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id";
+/// Take a row out of SQLite's full-text index, with the text it was indexed with.
+const FTS_DELETE: &str =
+    "INSERT INTO message_fts (message_fts, rowid, visible) VALUES ('delete', $1, $2)";
+const FTS_INSERT: &str = "INSERT INTO message_fts (rowid, visible) VALUES ($1, $2)";
+const RESEARCH_POSTGRES: &str = "UPDATE message_search SET visible = $2, author = $3, document = CASE WHEN document IS NULL THEN NULL ELSE to_tsvector('simple', $2::text) END WHERE id = $1";
 /// Add the rows of message_search with `$1 <= id < $2` to the full-text index.
 const INDEX_SQLITE: &str = "INSERT INTO message_fts (rowid, visible) SELECT id, visible FROM message_search WHERE id >= $1 AND id < $2";
 const INDEX_POSTGRES: &str = "UPDATE message_search SET document = to_tsvector('simple', visible) WHERE id >= $1 AND id < $2";
@@ -101,6 +126,128 @@ macro_rules! with_pool {
     };
 }
 
+/// Store a message with its search text and index it, inside a transaction
+/// (`$transaction`); evaluates to its row ID. `$body` is what is stored,
+/// `$author` the search author, `$meta` the Nuschel seq, edit and deletion
+/// times.
+macro_rules! insert {
+    ($transaction:expr, $index:expr, $message:expr, $body:expr, $author:expr, $meta:expr) => {{
+        let (seq, edited_ms, deleted_ms): (Option<i64>, Option<i64>, Option<i64>) = $meta;
+        let id: i64 = sqlx::query_scalar(INSERT_MESSAGE)
+            .bind(&$message.server)
+            .bind(&$message.channel)
+            .bind(&$message.author)
+            .bind($message.observed_at_ms)
+            .bind($body)
+            .bind(seq)
+            .bind(edited_ms)
+            .bind(deleted_ms)
+            .fetch_one(&mut *$transaction)
+            .await?;
+        sqlx::query(INSERT_SEARCH)
+            .bind(id)
+            .bind(&$message.server)
+            .bind($author)
+            .bind(visible($body).to_lowercase())
+            .execute(&mut *$transaction)
+            .await?;
+        sqlx::query($index)
+            .bind(id)
+            .bind(id + 1)
+            .execute(&mut *$transaction)
+            .await?;
+        id
+    }};
+}
+
+/// Replace a message's search text and search author, inside a transaction.
+/// SQLite's full-text index has external content: a row that is indexed (at
+/// or above `search_backfill.below`) is taken out with the text it was
+/// indexed with before that text changes, and put back with the new text.
+/// PostgreSQL recomputes a document that is already there. A message without
+/// search text yet is left to the backfill, which reads its current body.
+macro_rules! research {
+    ($transaction:expr, $sqlite:expr, $id:expr, $visible:expr, $author:expr) => {{
+        let id: i64 = $id;
+        let (visible, author): (String, String) = ($visible, $author);
+        let old: Option<String> =
+            sqlx::query_scalar("SELECT visible FROM message_search WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut *$transaction)
+                .await?;
+        if let Some(old) = old {
+            if $sqlite {
+                let below: i64 = sqlx::query_scalar("SELECT below FROM search_backfill")
+                    .fetch_one(&mut *$transaction)
+                    .await?;
+                let indexed = id >= below;
+                if indexed {
+                    sqlx::query(FTS_DELETE)
+                        .bind(id)
+                        .bind(&old)
+                        .execute(&mut *$transaction)
+                        .await?;
+                }
+                sqlx::query("UPDATE message_search SET visible = $2, author = $3 WHERE id = $1")
+                    .bind(id)
+                    .bind(&visible)
+                    .bind(&author)
+                    .execute(&mut *$transaction)
+                    .await?;
+                if indexed {
+                    sqlx::query(FTS_INSERT)
+                        .bind(id)
+                        .bind(&visible)
+                        .execute(&mut *$transaction)
+                        .await?;
+                }
+            } else {
+                sqlx::query(RESEARCH_POSTGRES)
+                    .bind(id)
+                    .bind(&visible)
+                    .bind(&author)
+                    .execute(&mut *$transaction)
+                    .await?;
+            }
+        }
+    }};
+}
+
+/// Remove a message row with its search text and full-text entry, inside a
+/// transaction.
+macro_rules! remove {
+    ($transaction:expr, $sqlite:expr, $id:expr) => {{
+        let id: i64 = $id;
+        let old: Option<String> =
+            sqlx::query_scalar("SELECT visible FROM message_search WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&mut *$transaction)
+                .await?;
+        if let Some(old) = old {
+            if $sqlite {
+                let below: i64 = sqlx::query_scalar("SELECT below FROM search_backfill")
+                    .fetch_one(&mut *$transaction)
+                    .await?;
+                if id >= below {
+                    sqlx::query(FTS_DELETE)
+                        .bind(id)
+                        .bind(&old)
+                        .execute(&mut *$transaction)
+                        .await?;
+                }
+            }
+            sqlx::query("DELETE FROM message_search WHERE id = $1")
+                .bind(id)
+                .execute(&mut *$transaction)
+                .await?;
+        }
+        sqlx::query("DELETE FROM messages WHERE id = $1")
+            .bind(id)
+            .execute(&mut *$transaction)
+            .await?;
+    }};
+}
+
 pub mod murmur;
 pub mod server;
 
@@ -113,7 +260,9 @@ fn visible(body: &str) -> String {
         .join("\n")
 }
 
-fn entry((id, server, channel, author, observed_at_ms, body): Row) -> HistoryEntry {
+fn entry(
+    (id, server, channel, author, observed_at_ms, body, seq, edited_ms, deleted_ms): Row,
+) -> HistoryEntry {
     HistoryEntry {
         id,
         message: ChatMessage {
@@ -123,7 +272,18 @@ fn entry((id, server, channel, author, observed_at_ms, body): Row) -> HistoryEnt
             observed_at_ms,
             body,
         },
+        seq,
+        edited_ms,
+        deleted_ms,
     }
+}
+
+/// Whether a message fits what one row may hold.
+fn storable(message: &ChatMessage) -> bool {
+    message.body.len() <= MAX_CONTENT_BYTES
+        && [&message.server, &message.channel, &message.author]
+            .iter()
+            .all(|value| value.len() <= 512)
 }
 
 fn size(entry: &HistoryEntry) -> usize {
@@ -388,40 +548,239 @@ impl History {
     }
 
     pub async fn append(&self, message: &ChatMessage) -> Result<i64, Error> {
-        if message.body.len() > MAX_CONTENT_BYTES
-            || [&message.server, &message.channel, &message.author]
-                .iter()
-                .any(|value| value.len() > 512)
-        {
+        if !storable(message) {
             return Err(Error::InvalidMessage);
         }
         let index = self.index_statement();
         with_pool!(&self.pool, |pool| {
             let mut transaction = pool.begin().await?;
-            let id: i64 = sqlx::query_scalar(
-                "INSERT INTO messages (server, channel, author, observed_at_ms, body) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-            )
-            .bind(&message.server)
-            .bind(&message.channel)
-            .bind(&message.author)
-            .bind(message.observed_at_ms)
-            .bind(&message.body)
-            .fetch_one(&mut *transaction)
-            .await?;
-            sqlx::query(INSERT_SEARCH)
-                .bind(id)
-                .bind(&message.server)
-                .bind(message.author.to_lowercase())
-                .bind(visible(&message.body).to_lowercase())
-                .execute(&mut *transaction)
-                .await?;
-            sqlx::query(index)
-                .bind(id)
-                .bind(id + 1)
-                .execute(&mut *transaction)
-                .await?;
+            let id = insert!(
+                transaction,
+                index,
+                message,
+                message.body.as_str(),
+                message.author.to_lowercase(),
+                (None, None, None)
+            );
             transaction.commit().await?;
             Ok(id)
+        })
+    }
+
+    /// Store messages of a Nuschel server's conversations by their seq, in
+    /// one transaction: a message already stored under the same server,
+    /// channel (the local storage key) and seq is updated, so one seen live
+    /// and again in a history page is kept once. A row deleted before stays a
+    /// tombstone; text older than the stored edit is not written back.
+    /// Tombstones keep no text and no search entry. Returns each record's row
+    /// ID in order, or 0 for a record beyond the limits `append` enforces
+    /// (not stored).
+    pub async fn store_server(&self, records: &[ServerRecord]) -> Result<Vec<i64>, Error> {
+        if records.len() > MAX_STORE_RECORDS {
+            return Err(Error::InvalidMessage);
+        }
+        let index = self.index_statement();
+        let sqlite = matches!(self.pool, Pool::Sqlite(_));
+        with_pool!(&self.pool, |pool| {
+            let mut transaction = pool.begin().await?;
+            let mut ids = Vec::with_capacity(records.len());
+            for record in records {
+                let message = &record.message;
+                if !storable(message) {
+                    ids.push(0);
+                    continue;
+                }
+                let existing: Option<(i64, Option<i64>, Option<i64>)> = sqlx::query_as(
+                    "SELECT id, edited_ms, deleted_ms FROM messages WHERE server = $1 AND channel = $2 AND seq = $3",
+                )
+                .bind(&message.server)
+                .bind(&message.channel)
+                .bind(record.seq)
+                .fetch_optional(&mut *transaction)
+                .await?;
+                let id = match existing {
+                    Some((id, edited_ms, deleted_ms)) => {
+                        let deleted_ms = deleted_ms.or(record.deleted_ms);
+                        // A late copy from before the stored edit keeps the edit.
+                        let current = record.edited_ms >= edited_ms;
+                        let edited_ms = if current { record.edited_ms } else { edited_ms };
+                        let author = if deleted_ms.is_some() {
+                            String::new()
+                        } else {
+                            message.author.to_lowercase()
+                        };
+                        if deleted_ms.is_some() || current {
+                            let body = if deleted_ms.is_some() {
+                                ""
+                            } else {
+                                message.body.as_str()
+                            };
+                            sqlx::query(
+                                "UPDATE messages SET author = $2, observed_at_ms = $3, body = $4, edited_ms = $5, deleted_ms = $6 WHERE id = $1",
+                            )
+                            .bind(id)
+                            .bind(&message.author)
+                            .bind(message.observed_at_ms)
+                            .bind(body)
+                            .bind(edited_ms)
+                            .bind(deleted_ms)
+                            .execute(&mut *transaction)
+                            .await?;
+                            research!(
+                                transaction,
+                                sqlite,
+                                id,
+                                visible(body).to_lowercase(),
+                                author
+                            );
+                        }
+                        id
+                    }
+                    None => {
+                        let (body, author) = if record.deleted_ms.is_some() {
+                            ("", String::new())
+                        } else {
+                            (message.body.as_str(), message.author.to_lowercase())
+                        };
+                        insert!(
+                            transaction,
+                            index,
+                            message,
+                            body,
+                            author,
+                            (Some(record.seq), record.edited_ms, record.deleted_ms)
+                        )
+                    }
+                };
+                ids.push(id);
+            }
+            transaction.commit().await?;
+            Ok(ids)
+        })
+    }
+
+    /// Our own message, stored while it was pending, was acknowledged as
+    /// `seq`. If its conversation already has a row with that seq (a history
+    /// page stored it first), this pending row goes instead.
+    pub async fn set_seq(&self, id: i64, seq: i64) -> Result<(), Error> {
+        let sqlite = matches!(self.pool, Pool::Sqlite(_));
+        with_pool!(&self.pool, |pool| {
+            let mut transaction = pool.begin().await?;
+            let found: Option<(String, String)> =
+                sqlx::query_as("SELECT server, channel FROM messages WHERE id = $1")
+                    .bind(id)
+                    .fetch_optional(&mut *transaction)
+                    .await?;
+            if let Some((server, channel)) = found {
+                let taken: Option<i64> = sqlx::query_scalar(
+                    "SELECT id FROM messages WHERE server = $1 AND channel = $2 AND seq = $3 AND id <> $4",
+                )
+                .bind(&server)
+                .bind(&channel)
+                .bind(seq)
+                .bind(id)
+                .fetch_optional(&mut *transaction)
+                .await?;
+                if taken.is_some() {
+                    remove!(transaction, sqlite, id);
+                } else {
+                    sqlx::query("UPDATE messages SET seq = $2 WHERE id = $1")
+                        .bind(id)
+                        .bind(seq)
+                        .execute(&mut *transaction)
+                        .await?;
+                }
+            }
+            transaction.commit().await?;
+            Ok(())
+        })
+    }
+
+    /// The author edited the cached message `seq` of a Nuschel server's
+    /// conversation: its text is overwritten (earlier versions are not kept,
+    /// as on the server). Returns whether such a message, not deleted, was
+    /// cached.
+    pub async fn edit(
+        &self,
+        server: &str,
+        channel: &str,
+        seq: i64,
+        body: &str,
+        edited_ms: i64,
+    ) -> Result<bool, Error> {
+        if body.len() > MAX_CONTENT_BYTES || server.len() > 512 || channel.len() > 512 {
+            return Err(Error::InvalidMessage);
+        }
+        let sqlite = matches!(self.pool, Pool::Sqlite(_));
+        with_pool!(&self.pool, |pool| {
+            let mut transaction = pool.begin().await?;
+            let found: Option<(i64, String)> = sqlx::query_as(
+                "SELECT id, author FROM messages WHERE server = $1 AND channel = $2 AND seq = $3 AND deleted_ms IS NULL",
+            )
+            .bind(server)
+            .bind(channel)
+            .bind(seq)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            let Some((id, author)) = found else {
+                return Ok(false);
+            };
+            sqlx::query("UPDATE messages SET body = $2, edited_ms = $3 WHERE id = $1")
+                .bind(id)
+                .bind(body)
+                .bind(edited_ms)
+                .execute(&mut *transaction)
+                .await?;
+            research!(
+                transaction,
+                sqlite,
+                id,
+                visible(body).to_lowercase(),
+                author.to_lowercase()
+            );
+            transaction.commit().await?;
+            Ok(true)
+        })
+    }
+
+    /// The cached message `seq` of a Nuschel server's conversation was
+    /// deleted: it becomes a tombstone, its text gone from the row, the
+    /// search text and the full-text index (as the server's `secure_delete`
+    /// removes it). Returns whether such a message was cached.
+    pub async fn delete(
+        &self,
+        server: &str,
+        channel: &str,
+        seq: i64,
+        deleted_ms: i64,
+    ) -> Result<bool, Error> {
+        if server.len() > 512 || channel.len() > 512 {
+            return Err(Error::InvalidMessage);
+        }
+        let sqlite = matches!(self.pool, Pool::Sqlite(_));
+        with_pool!(&self.pool, |pool| {
+            let mut transaction = pool.begin().await?;
+            let found: Option<i64> = sqlx::query_scalar(
+                "SELECT id FROM messages WHERE server = $1 AND channel = $2 AND seq = $3",
+            )
+            .bind(server)
+            .bind(channel)
+            .bind(seq)
+            .fetch_optional(&mut *transaction)
+            .await?;
+            let Some(id) = found else {
+                return Ok(false);
+            };
+            sqlx::query(
+                "UPDATE messages SET body = '', deleted_ms = COALESCE(deleted_ms, $2) WHERE id = $1",
+            )
+            .bind(id)
+            .bind(deleted_ms)
+            .execute(&mut *transaction)
+            .await?;
+            research!(transaction, sqlite, id, String::new(), String::new());
+            transaction.commit().await?;
+            Ok(true)
         })
     }
 
@@ -528,7 +887,17 @@ impl History {
         for (id, server, channel, author, observed_at_ms, body, score) in
             rows.into_iter().take(limit)
         {
-            let hit = entry((id, server, channel, author, observed_at_ms, visible(&body)));
+            let hit = entry((
+                id,
+                server,
+                channel,
+                author,
+                observed_at_ms,
+                visible(&body),
+                None,
+                None,
+                None,
+            ));
             if !budget.admits(&hit, hits.is_empty()) {
                 break;
             }
@@ -565,23 +934,53 @@ impl History {
         &self,
         statement: &'static str,
         (server, channel): (&str, &str),
-        cursor: i64,
+        (time, id): (i64, i64),
         limit: usize,
     ) -> Result<Vec<Row>, Error> {
         Ok(with_pool!(&self.pool, |pool| {
             sqlx::query_as(statement)
                 .bind(server)
                 .bind(channel)
-                .bind(cursor)
+                .bind(time)
+                .bind(id)
                 .bind(limit as i64)
                 .fetch_all(pool)
                 .await?
         }))
     }
 
-    /// Walk the entire archive through bounded pages. The exclusive ID cursor is
-    /// stable under concurrent appends; timestamps and message bodies are not IDs.
-    /// A trusted session adapter must authorize the server/channel on every request.
+    /// Where row `id` lies in a conversation's time order: its time, or, if
+    /// it is not in this conversation, that of the closest older row by ID;
+    /// None if there is none.
+    async fn position(&self, server: &str, channel: &str, id: i64) -> Result<Option<i64>, Error> {
+        with_pool!(&self.pool, |pool| {
+            let own: Option<i64> = sqlx::query_scalar(
+                "SELECT observed_at_ms FROM messages WHERE id = $1 AND server = $2 AND channel = $3",
+            )
+            .bind(id)
+            .bind(server)
+            .bind(channel)
+            .fetch_optional(pool)
+            .await?;
+            if own.is_some() {
+                return Ok(own);
+            }
+            let older: Option<i64> = sqlx::query_scalar(
+                "SELECT observed_at_ms FROM messages WHERE server = $1 AND channel = $2 AND id < $3 ORDER BY id DESC LIMIT 1",
+            )
+            .bind(server)
+            .bind(channel)
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+            Ok(older)
+        })
+    }
+
+    /// Walk the entire archive through bounded pages, in time order (ties by
+    /// row ID). The exclusive cursor is a row ID, stable under concurrent
+    /// appends; message bodies are not IDs. A trusted session adapter must
+    /// authorize the server/channel on every request.
     pub async fn page(
         &self,
         server: &str,
@@ -590,11 +989,21 @@ impl History {
         limit: usize,
     ) -> Result<HistoryPage, Error> {
         let limit = limit.clamp(1, MAX_PAGE_MESSAGES);
-        // A plain bound, not `$3 IS NULL OR id < $3`, lets the index seek to it.
-        let before = before.unwrap_or(i64::MAX);
-        let rows = self
-            .rows(PAGE, (server, channel), before, limit + 1)
-            .await?;
+        let bound = match before {
+            None => (i64::MAX, i64::MAX),
+            Some(id) => match self.position(server, channel, id).await? {
+                Some(time) => (time, id),
+                // Nothing at or before the cursor: nothing older.
+                None => {
+                    return Ok(HistoryPage {
+                        messages: Vec::new(),
+                        next_before: None,
+                        next_after: None,
+                    });
+                }
+            },
+        };
+        let rows = self.rows(PAGE, (server, channel), bound, limit + 1).await?;
         let (mut messages, more) = bounded(rows, limit);
         let next_before = more
             .then(|| messages.last().map(|entry| entry.id))
@@ -617,8 +1026,12 @@ impl History {
         limit: usize,
     ) -> Result<HistoryPage, Error> {
         let limit = limit.clamp(1, MAX_PAGE_MESSAGES);
+        let bound = match self.position(server, channel, after).await? {
+            Some(time) => (time, after),
+            None => (i64::MIN, i64::MIN),
+        };
         let rows = self
-            .rows(PAGE_AFTER, (server, channel), after, limit + 1)
+            .rows(PAGE_AFTER, (server, channel), bound, limit + 1)
             .await?;
         let (messages, more) = bounded(rows, limit);
         let next_after = more
@@ -643,12 +1056,30 @@ impl History {
         limit: usize,
     ) -> Result<HistoryPage, Error> {
         let half = limit.clamp(2, MAX_PAGE_MESSAGES) / 2;
-        let older = self
-            .rows(PAGE, (server, channel), id.saturating_add(1), half + 1)
-            .await?;
-        let newer = self
-            .rows(PAGE_AFTER, (server, channel), id, half + 1)
-            .await?;
+        let (older, newer) = match self.position(server, channel, id).await? {
+            // The message itself (or the closest older one) and what is older.
+            Some(time) => (
+                self.rows(
+                    PAGE,
+                    (server, channel),
+                    (time, id.saturating_add(1)),
+                    half + 1,
+                )
+                .await?,
+                self.rows(PAGE_AFTER, (server, channel), (time, id), half + 1)
+                    .await?,
+            ),
+            None => (
+                Vec::new(),
+                self.rows(
+                    PAGE_AFTER,
+                    (server, channel),
+                    (i64::MIN, i64::MIN),
+                    half + 1,
+                )
+                .await?,
+            ),
+        };
         let (older_fetched, newer_fetched) = (older.len(), newer.len());
         let mut older = older.into_iter().take(half).map(entry).peekable();
         let mut newer = newer.into_iter().take(half).map(entry).peekable();
@@ -729,19 +1160,20 @@ mod tests {
         let Pool::Sqlite(pool) = &history.pool else {
             unreachable!()
         };
-        // The old page query, `(?3 IS NULL OR id < ?3)`, sought only the
-        // server and channel, then filtered every newer message by ID.
+        // An early page query, `(?3 IS NULL OR id < ?3)`, sought only the
+        // server and channel, then filtered every newer message by ID. Pages
+        // seek to the cursor's time (ties by ID are filtered within it).
         for (query, seek) in [
             (
                 PAGE,
-                "INDEX messages_channel (server=? AND channel=? AND id<?)",
+                "INDEX messages_time (server=? AND channel=? AND observed_at_ms<?)",
             ),
             (
                 PAGE_AFTER,
-                "INDEX messages_channel (server=? AND channel=? AND id>?)",
+                "INDEX messages_time (server=? AND channel=? AND observed_at_ms>?)",
             ),
         ] {
-            let plan = plan(pool, query, &["server", "general", "1", "1"]).await?;
+            let plan = plan(pool, query, &["server", "general", "1", "1", "1"]).await?;
             assert!(
                 plan[0].starts_with("SEARCH") && plan[0].ends_with(seek),
                 "{plan:?}"
@@ -1172,6 +1604,7 @@ mod tests {
         let history = History::connect(&url).await?;
         an_older_database_becomes_searchable(&history, count).await?;
         search_checks(&history).await?;
+        server_message_checks(&history).await?;
         let page = history.page("crowd", "general", None, 100).await?;
         let older = history
             .page("crowd", "general", page.next_before, 100)
@@ -1304,6 +1737,217 @@ mod tests {
         assert_eq!(last.messages.len(), 1);
         assert_eq!(last.messages[0].id, oldest);
         assert_eq!(last.next_before, None);
+        Ok(())
+    }
+
+    fn record(seq: i64, at: i64, body: &str) -> ServerRecord {
+        ServerRecord {
+            message: ChatMessage {
+                server: "nuschel".into(),
+                channel: "3".into(),
+                author: "Ada".into(),
+                observed_at_ms: at,
+                body: body.into(),
+            },
+            seq,
+            edited_ms: None,
+            deleted_ms: None,
+        }
+    }
+
+    async fn seqs(history: &History) -> Result<Vec<Option<i64>>, Error> {
+        let page = history.page("nuschel", "3", None, 100).await?;
+        Ok(page.messages.iter().map(|entry| entry.seq).collect())
+    }
+
+    /// SQLite's external-content full-text index still matches its content.
+    async fn index_is_consistent(history: &History) -> Result<(), Error> {
+        if let Pool::Sqlite(pool) = &history.pool {
+            sqlx::query("INSERT INTO message_fts (message_fts) VALUES ('integrity-check')")
+                .execute(pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// A Nuschel server's messages in the cache, as both backends run them.
+    async fn server_message_checks(history: &History) -> Result<(), Error> {
+        // Live messages first, then an older history page: time order.
+        let live = history
+            .store_server(&[record(5, 500, "five"), record(6, 600, "six")])
+            .await?;
+        let page: Vec<ServerRecord> = (1..=6)
+            .map(|seq| record(seq, seq * 100, &format!("message {seq}")))
+            .collect();
+        let stored = history.store_server(&page).await?;
+        assert_eq!(
+            &stored[4..],
+            &live[..],
+            "seen live and in a page: stored once"
+        );
+        assert_eq!(seqs(history).await?, (1..=6).map(Some).collect::<Vec<_>>());
+        let newest = history.page("nuschel", "3", None, 2).await?;
+        assert_eq!(newest.messages[0].message.body, "message 5");
+        let older = history.page("nuschel", "3", newest.next_before, 2).await?;
+        assert_eq!(older.messages[1].seq, Some(4), "{older:?}");
+        let around = history.page_around("nuschel", "3", stored[2], 2).await?;
+        assert_eq!(
+            around.messages.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            [Some(3), Some(4)]
+        );
+        let after = history.page_after("nuschel", "3", stored[3], 100).await?;
+        assert_eq!(
+            after.messages.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            [Some(5), Some(6)]
+        );
+        let search = |query: &'static str| async move {
+            let page = history
+                .search(&["nuschel".to_string()], Some("3"), query, None, 100)
+                .await?;
+            Ok::<_, Error>(page.hits.iter().map(|hit| hit.id).collect::<Vec<_>>())
+        };
+        assert_eq!(search("message 2").await?, [stored[1]]);
+
+        // An edit overwrites the text and what search finds.
+        assert!(history.edit("nuschel", "3", 2, "edited words", 650).await?);
+        assert!(search("message 2").await?.is_empty());
+        assert_eq!(search("edited").await?, [stored[1]]);
+        // A late copy from before the edit does not undo it; a newer one wins.
+        history.store_server(&[record(2, 200, "message 2")]).await?;
+        let entry = |page: HistoryPage, seq| page.messages.into_iter().find(|e| e.seq == Some(seq));
+        let edited = entry(history.page("nuschel", "3", None, 100).await?, 2).expect("seq 2");
+        assert_eq!(
+            (edited.message.body.as_str(), edited.edited_ms),
+            ("edited words", Some(650))
+        );
+        let mut newer = record(2, 200, "edited again");
+        newer.edited_ms = Some(700);
+        history.store_server(&[newer]).await?;
+        assert_eq!(search("again").await?, [stored[1]]);
+
+        // A deletion leaves a tombstone without text, also in search.
+        assert!(history.delete("nuschel", "3", 2, 800).await?);
+        let tombstone = entry(history.page("nuschel", "3", None, 100).await?, 2).expect("seq 2");
+        assert_eq!(tombstone.message.body, "");
+        assert_eq!(tombstone.deleted_ms, Some(800));
+        assert!(search("again").await?.is_empty());
+        assert!(
+            !history.edit("nuschel", "3", 2, "back", 900).await?,
+            "a tombstone stays"
+        );
+        history
+            .store_server(&[record(2, 200, "resurrected")])
+            .await?;
+        let tombstone = entry(history.page("nuschel", "3", None, 100).await?, 2).expect("seq 2");
+        assert_eq!(
+            (tombstone.message.body.as_str(), tombstone.deleted_ms),
+            ("", Some(800))
+        );
+        // A page's tombstone for a message never seen keeps no text either.
+        let mut gone = record(7, 700, "secret");
+        gone.deleted_ms = Some(750);
+        history.store_server(&[gone]).await?;
+        assert!(search("secret").await?.is_empty());
+        assert!(!history.edit("nuschel", "3", 99, "x", 1).await?);
+        assert!(!history.delete("nuschel", "3", 99, 1).await?);
+
+        // Our own pending message gets its seq; if a page stored it first,
+        // the pending copy goes.
+        let pending = history
+            .append(&ChatMessage {
+                server: "nuschel".into(),
+                channel: "3".into(),
+                author: "Ada".into(),
+                observed_at_ms: 1000,
+                body: "mine".into(),
+            })
+            .await?;
+        history.set_seq(pending, 8).await?;
+        assert_eq!(
+            history.store_server(&[record(8, 1001, "mine")]).await?,
+            [pending]
+        );
+        let raced = history
+            .append(&ChatMessage {
+                server: "nuschel".into(),
+                channel: "3".into(),
+                author: "Ada".into(),
+                observed_at_ms: 1100,
+                body: "raced".into(),
+            })
+            .await?;
+        let first = history.store_server(&[record(9, 1101, "raced")]).await?;
+        history.set_seq(raced, 9).await?;
+        assert_eq!(search("raced").await?, first);
+        assert_eq!(seqs(history).await?, (1..=9).map(Some).collect::<Vec<_>>());
+        // Records beyond the limits are skipped, not the whole page.
+        let mut huge = record(10, 1200, "");
+        huge.message.body = "x".repeat(MAX_CONTENT_BYTES + 1);
+        assert_eq!(
+            history
+                .store_server(&[huge, record(11, 1300, "fine")])
+                .await?[0],
+            0
+        );
+        assert!(matches!(
+            history
+                .store_server(&vec![record(12, 1, "x"); MAX_STORE_RECORDS + 1])
+                .await,
+            Err(Error::InvalidMessage)
+        ));
+        index_is_consistent(history).await
+    }
+
+    #[tokio::test]
+    async fn server_messages_on_sqlite() -> Result<(), Error> {
+        let history = History::connect("sqlite::memory:").await?;
+        // Local observations in the same conversation keep their place by time.
+        history
+            .append(&ChatMessage {
+                server: "nuschel".into(),
+                channel: "other".into(),
+                author: "Bob".into(),
+                observed_at_ms: 0,
+                body: "elsewhere".into(),
+            })
+            .await?;
+        server_message_checks(&history).await
+    }
+
+    #[tokio::test]
+    async fn rows_stored_later_with_older_times_page_in_time_order() -> Result<(), Error> {
+        let history = History::connect("sqlite::memory:").await?;
+        let at = |observed_at_ms, body: &str| ChatMessage {
+            observed_at_ms,
+            ..message("one", "ada", body)
+        };
+        let newest = history.append(&at(300, "third")).await?;
+        let oldest = history.append(&at(100, "first")).await?;
+        let middle = history.append(&at(200, "second")).await?;
+        let tie = history.append(&at(200, "second, later")).await?;
+        let page = history.page("one", "general", None, 100).await?;
+        let ids = page
+            .messages
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, [oldest, middle, tie, newest]);
+        let first = history.page("one", "general", None, 2).await?;
+        assert_eq!(
+            first.messages.iter().map(|e| e.id).collect::<Vec<_>>(),
+            [tie, newest]
+        );
+        let rest = history.page("one", "general", first.next_before, 2).await?;
+        assert_eq!(
+            rest.messages.iter().map(|e| e.id).collect::<Vec<_>>(),
+            [oldest, middle]
+        );
+        assert_eq!(rest.next_before, None);
+        let after = history.page_after("one", "general", middle, 100).await?;
+        assert_eq!(
+            after.messages.iter().map(|e| e.id).collect::<Vec<_>>(),
+            [tie, newest]
+        );
         Ok(())
     }
 

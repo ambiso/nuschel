@@ -152,6 +152,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await
                 .map(StorageResponse::SearchResults),
+            StorageRequest::StoreServer { records } => history
+                .store_server(&records)
+                .await
+                .map(StorageResponse::Stored),
+            StorageRequest::SetSeq { id, seq } => history
+                .set_seq(id, seq)
+                .await
+                .map(|()| StorageResponse::Updated(true)),
+            StorageRequest::Edit {
+                server,
+                channel,
+                seq,
+                body,
+                edited_ms,
+            } => history
+                .edit(&server, &channel, seq, &body, edited_ms)
+                .await
+                .map(StorageResponse::Updated),
+            StorageRequest::Delete {
+                server,
+                channel,
+                seq,
+                deleted_ms,
+            } => history
+                .delete(&server, &channel, seq, deleted_ms)
+                .await
+                .map(StorageResponse::Updated),
         }
         .unwrap_or_else(|error| StorageResponse::Rejected(error.to_string()));
         write_frame(&mut output, &Envelope::new(request.request_id, payload))?;

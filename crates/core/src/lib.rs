@@ -35,6 +35,29 @@ pub struct ChatMessage {
 pub struct HistoryEntry {
     pub id: i64,
     pub message: ChatMessage,
+    /// On a Nuschel server: the message's sequence number in its conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<i64>,
+    /// When the author last edited it (Nuschel servers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_ms: Option<i64>,
+    /// When it was deleted: a tombstone, whose text is gone (Nuschel servers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_ms: Option<i64>,
+}
+
+/// A Nuschel server's message by its per-conversation sequence number, for
+/// the local cache (`message.channel` is the local storage key). A record
+/// with `deleted_ms` is a tombstone: its body is stored empty whatever it says.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServerRecord {
+    pub message: ChatMessage,
+    pub seq: i64,
+    #[serde(default)]
+    pub edited_ms: Option<i64>,
+    #[serde(default)]
+    pub deleted_ms: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

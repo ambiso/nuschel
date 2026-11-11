@@ -125,6 +125,31 @@ pub enum StorageRequest {
         after: Option<nuschel_core::SearchCursor>,
         limit: u16,
     },
+    /// Messages of a Nuschel server's conversations by seq, stored once
+    /// (see `History::store_server`); answered with `Stored`.
+    StoreServer {
+        records: Vec<nuschel_core::ServerRecord>,
+    },
+    /// Our own pending message (row `id`) was acknowledged as `seq`.
+    SetSeq {
+        id: i64,
+        seq: i64,
+    },
+    /// The cached message `seq` was edited; answered with `Updated`.
+    Edit {
+        server: String,
+        channel: String,
+        seq: i64,
+        body: String,
+        edited_ms: i64,
+    },
+    /// The cached message `seq` was deleted: a tombstone without text.
+    Delete {
+        server: String,
+        channel: String,
+        seq: i64,
+        deleted_ms: i64,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -139,6 +164,10 @@ pub enum StorageResponse {
     Messages(Vec<ChatMessage>),
     HistoryPage(HistoryPage),
     SearchResults(nuschel_core::SearchPage),
+    /// Row IDs of `StoreServer`'s records, in order (0: not stored).
+    Stored(Vec<i64>),
+    /// Whether an edit or deletion found its message (`SetSeq`: true).
+    Updated(bool),
     Rejected(String),
 }
 
