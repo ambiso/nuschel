@@ -13,6 +13,9 @@
 *.profraw
 .DS_Store
 
+# Locally supplied Apple SDK archives are inputs, never repository contents.
+/*.xip
+
 __pycache__/
 *.py[cod]
 
