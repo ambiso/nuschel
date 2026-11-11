@@ -1099,6 +1099,17 @@ impl Desktop {
     }
     /// Connect to a `mumble://` link, reusing a matching saved server.
     pub fn open_url(&mut self, url: MumbleUrl, window: &mut Window, cx: &mut Context<Self>) {
+        // An invite's policy=nuschel holds from the very first connection
+        // (it only ever raises the server's record).
+        if url.require_nuschel
+            && let Err(error) = nuschel_session::sticky::PolicyStore::load(&self.profile.config_dir)
+                .and_then(|mut store| store.raise(&url.host, url.port, true, &[]))
+        {
+            self.error = Some(format!(
+                "Could not save the invite's security policy: {error}"
+            ));
+            return;
+        }
         let existing = self.servers.iter().position(|server| {
             server.bookmark.host == url.host
                 && server.bookmark.port == url.port
@@ -1124,13 +1135,15 @@ impl Desktop {
                     }
                     return;
                 };
-                let bookmark = match ServerBookmark::new("", &url.host, url.port, &username) {
+                let mut bookmark = match ServerBookmark::new("", &url.host, url.port, &username) {
                     Ok(bookmark) => bookmark,
                     Err(error) => {
                         self.error = Some(error);
                         return;
                     }
                 };
+                // An invite's fp= pins the certificate before the first connection.
+                bookmark.certificate_sha256 = url.certificate_sha256.clone();
                 let mut bookmarks = self
                     .servers
                     .iter()
@@ -1146,6 +1159,20 @@ impl Desktop {
                 self.servers.len() - 1
             }
         };
+        // A link never replaces a pin; it only fills one in.
+        if self.servers[index].bookmark.certificate_sha256.is_none()
+            && let Some(pin) = url.certificate_sha256
+        {
+            self.servers[index].bookmark.certificate_sha256 = Some(pin);
+            let bookmarks = self
+                .servers
+                .iter()
+                .map(|server| server.bookmark.clone())
+                .collect::<Vec<_>>();
+            if let Err(error) = self.write_servers(&bookmarks) {
+                self.error = Some(error.to_string());
+            }
+        }
         self.servers[index].pending_channel = url.channel;
         self.browse_server(index, window, cx);
         self.connect(index, url.password);
