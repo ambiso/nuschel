@@ -21,7 +21,8 @@ pub mod server;
 pub mod sounds;
 pub mod timeline;
 pub mod tree;
-pub use client::{Client, Focus, Notification, SendError, Update};
+pub mod voice;
+pub use client::{Client, Focus, Notification, SecondServer, SendError, Update};
 pub use navigation::*;
 pub use nuschel_core::model;
 

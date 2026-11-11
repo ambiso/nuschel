@@ -255,6 +255,9 @@ pub struct ClientSettings {
     pub auto_reconnect: bool,
     pub user_volumes: std::collections::BTreeMap<String, f32>,
     pub local_mutes: std::collections::BTreeSet<String>,
+    /// Playback volume of each server's voice (0 to 4), by server id: every
+    /// server plays through one output.
+    pub server_volumes: std::collections::BTreeMap<String, f32>,
     /// Keyboard shortcuts in GPUI keystroke notation, e.g. "f13" or "ctrl-shift-m".
     pub shortcuts: std::collections::BTreeMap<ShortcutAction, String>,
     /// The push-to-talk key of older versions, read once into `shortcuts`.
@@ -377,6 +380,7 @@ impl Default for ClientSettings {
             auto_reconnect: true,
             user_volumes: Default::default(),
             local_mutes: Default::default(),
+            server_volumes: Default::default(),
             shortcuts: Default::default(),
             push_to_talk_key: None,
             enter_sends: true,
@@ -410,6 +414,14 @@ impl ClientSettings {
             *volume = volume.clamp(0., 4.);
         }
         self.local_mutes.retain(|hash| hash.len() <= 128);
+        self.server_volumes
+            .retain(|id, volume| id.len() <= 128 && volume.is_finite());
+        for volume in self.server_volumes.values_mut() {
+            *volume = volume.clamp(0., 4.);
+        }
+        while self.server_volumes.len() > 256 {
+            self.server_volumes.pop_first();
+        }
         while self.user_volumes.len() > 4096 {
             self.user_volumes.pop_first();
         }
@@ -470,6 +482,10 @@ impl ClientSettings {
         hash.and_then(|hash| self.user_volumes.get(hash))
             .copied()
             .unwrap_or(1.)
+    }
+    /// A server's playback volume (1: as sent).
+    pub fn server_volume(&self, server: &str) -> f32 {
+        self.server_volumes.get(server).copied().unwrap_or(1.)
     }
     pub fn locally_muted(&self, hash: Option<&str>) -> bool {
         hash.is_some_and(|hash| self.local_mutes.contains(hash))
@@ -2279,6 +2295,7 @@ mod tests {
         );
         let mut settings = ClientSettings::default();
         settings.user_volumes.insert("abc".into(), 9.);
+        settings.server_volumes.insert("server".into(), -1.);
         settings.local_mutes.insert("def".into());
         settings.sound_volume = 3.;
         profile
@@ -2289,6 +2306,8 @@ mod tests {
         assert_eq!(loaded.sound_volume, 1.);
         assert!(loaded.locally_muted(Some("def")));
         assert_eq!(loaded.volume_for(None), 1.);
+        assert_eq!(loaded.server_volume("server"), 0.);
+        assert_eq!(loaded.server_volume("other"), 1.);
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

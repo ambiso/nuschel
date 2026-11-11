@@ -277,7 +277,9 @@ impl Media {
             .stdout
             .take()
             .ok_or_else(|| Error::Worker("media stdout missing".into()))?;
-        let (tx, mut rx) = mpsc::channel(32);
+        // One worker plays every server's voice: room for a burst of packets
+        // from several talkers without crowding out control requests.
+        let (tx, mut rx) = mpsc::channel(256);
         let (events_tx, events) = mpsc::channel(32);
         let task = tokio::spawn(async move {
             // The worker lives exactly as long as this task holds its containment.

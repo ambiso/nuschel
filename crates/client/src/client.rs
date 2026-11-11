@@ -16,6 +16,7 @@ use crate::{
     platform::{CacheKey, ChangeRequest, Platform, RenderKey, Request, request_id},
     server::{CertificatePrompt, ServerState, Status},
     timeline::{Change, MAX_TIMELINE, Page},
+    voice::{self, Seat, Unmute, Voice},
 };
 use nuschel_core::{
     ContentBlock, MAX_CONTENT_BYTES, MessageDocument, SearchCursor, SearchPage,
@@ -149,10 +150,41 @@ pub enum SendError {
 
 mod share;
 
+/// Unmuting would make a second talk server: the user is asked "Speak on
+/// two servers?" first, and answers with [`Client::speak_here`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SecondServer {
+    /// The server you unmuted on.
+    pub server: usize,
+    /// Where you speak now.
+    pub talking: Vec<usize>,
+}
+
 struct PendingSend {
     conversation: Conversation,
     target: TextTarget,
     body: String,
+}
+
+/// What the voice policy needs of a server. One reconnecting still counts:
+/// it gets its mute state back when it returns.
+fn seat(server: &ServerState) -> Seat {
+    Seat {
+        connected: server.status != Status::Disconnected,
+        muted: server.muted,
+        deafened: server.deafened,
+    }
+}
+
+/// Every server's seat, by id.
+fn seats(servers: &[ServerState]) -> impl Fn(&str) -> Seat + '_ {
+    |id| {
+        servers
+            .iter()
+            .find(|server| server.id == id)
+            .map(seat)
+            .unwrap_or_default()
+    }
 }
 
 pub struct Client {
@@ -160,6 +192,9 @@ pub struct Client {
     pub servers: Vec<ServerState>,
     /// Which conversation is open, and where our voice is.
     pub navigation: Navigation,
+    /// Which servers get the microphone (the talk servers); the others
+    /// listen ([`voice`]).
+    pub voice: Voice,
     pub focus: Focus,
     pub preferences: Preferences,
     platform: Box<dyn Platform>,
@@ -186,6 +221,7 @@ impl Client {
         Self {
             servers: bookmarks.into_iter().map(ServerState::new).collect(),
             navigation: Navigation::default(),
+            voice: Voice::default(),
             focus: Focus::default(),
             preferences,
             platform,
@@ -261,11 +297,13 @@ impl Client {
     /// connection and what was known of it.
     pub fn replace_server(&mut self, index: usize, bookmark: ServerBookmark) {
         self.platform.disconnect(&self.servers[index].id);
+        self.voice.disconnected(&self.servers[index].id, None);
         self.servers[index] = ServerState::new(bookmark);
     }
 
     pub fn remove_server(&mut self, id: &str) {
         self.platform.disconnect(id);
+        self.voice.disconnected(id, None);
         self.passwords.remove(id);
         self.servers.retain(|server| server.id != id);
     }
@@ -291,6 +329,10 @@ impl Client {
                 server.security = SessionSecurity::Unknown;
                 server.certificate = None;
                 server.notice = None;
+                // It joins the channel you were last in there.
+                let id = server.id.clone();
+                let seats = seats(&self.servers);
+                self.voice.connecting(&id, &seats);
             }
             Err(error) => server.notice = Some(error),
         }
@@ -358,37 +400,149 @@ impl Client {
         {
             self.navigation.set_voice(None);
         }
+        let id = server.id.clone();
+        // The server in front takes the voice over, else another connected one.
+        let fallback = self
+            .selected_indices()
+            .map(|(selected, _)| selected)
+            .into_iter()
+            .chain(0..self.servers.len())
+            .map(|index| &self.servers[index])
+            .find(|server| server.id != id && server.status != Status::Disconnected)
+            .map(|server| server.id.clone());
+        self.voice.disconnected(&id, fallback.as_deref());
     }
 
-    /// Toggle our mute (or deafen) on server `index`.
-    pub fn set_mute(&mut self, index: usize, deafen: bool) {
-        let server = &mut self.servers[index];
-        if deafen {
-            server.deafened = !server.deafened;
-            if server.deafened {
-                server.muted = true;
+    /// Toggle our mute (or deafen) on server `index`. Unmuting where your
+    /// voice does not go yet while it goes elsewhere changes nothing and
+    /// returns the question to ask ([`SecondServer`]).
+    pub fn set_mute(&mut self, index: usize, deafen: bool) -> Option<SecondServer> {
+        let server = &self.servers[index];
+        let (id, muted, deafened) = (server.id.clone(), server.muted, server.deafened);
+        let changes = if deafen {
+            vec![voice::Change {
+                server: id,
+                muted: !deafened || muted,
+                deafened: !deafened,
+            }]
+        } else if muted || deafened {
+            let decision = self.voice.unmute(&id, &seats(&self.servers));
+            match decision {
+                Unmute::Now(changes) => changes,
+                Unmute::Ask => return Some(self.second_server(index)),
             }
         } else {
-            server.muted = !server.muted;
-            if !server.muted {
-                server.deafened = false;
-            }
-        }
-        let request = Request::SetSelf {
-            muted: server.muted,
-            deafened: server.deafened,
+            vec![voice::Change {
+                server: id,
+                muted: true,
+                deafened: false,
+            }]
         };
-        if let Err(error) = self.platform.request(&server.id, request) {
-            server.notice = Some(error);
+        self.apply_voice(changes);
+        None
+    }
+
+    /// The question for unmuting on server `index`.
+    fn second_server(&self, index: usize) -> SecondServer {
+        let seats = seats(&self.servers);
+        SecondServer {
+            server: index,
+            talking: self
+                .voice
+                .talk()
+                .iter()
+                .filter(|talk| seats(talk).speaking())
+                .filter_map(|talk| self.server_index(talk))
+                .collect(),
         }
     }
 
-    /// Move our voice to channel `channel` of server `index`.
+    /// The answer to "Speak on two servers?" for server `index`: there as
+    /// well (`both`), or only there.
+    pub fn speak_here(&mut self, index: usize, both: bool) {
+        let id = self.servers[index].id.clone();
+        let changes = self.voice.speak_here(&id, both, &seats(&self.servers));
+        self.apply_voice(changes);
+    }
+
+    /// "Use voice here": server `index` becomes the talk server, undeafened;
+    /// a live microphone moves along.
+    pub fn use_voice_here(&mut self, index: usize) {
+        let id = self.servers[index].id.clone();
+        let mut changes = self.voice.move_here(&id, &seats(&self.servers));
+        let server = &self.servers[index];
+        if server.deafened && !changes.iter().any(|change| change.server == id) {
+            changes.push(voice::Change {
+                server: id,
+                muted: server.muted,
+                deafened: false,
+            });
+        }
+        self.apply_voice(changes);
+    }
+
+    /// The mute or deafen shortcut: acts on the talk servers (without one,
+    /// on the server in front, which may ask first).
+    pub fn toggle_voice(&mut self, deafen: bool) -> Option<SecondServer> {
+        let fallback = self
+            .selected_indices()
+            .map(|(server, _)| self.servers[server].id.clone());
+        let decision = self
+            .voice
+            .toggle(deafen, fallback.as_deref(), &seats(&self.servers));
+        match decision {
+            Unmute::Now(changes) => {
+                self.apply_voice(changes);
+                None
+            }
+            Unmute::Ask => fallback
+                .and_then(|id| self.server_index(&id))
+                .map(|index| self.second_server(index)),
+        }
+    }
+
+    /// One server's part in your voice.
+    pub fn voice_role(&self, index: usize) -> voice::Role {
+        let server = &self.servers[index];
+        self.voice.role(&server.id, seat(server))
+    }
+
+    /// Send what the voice policy decided.
+    fn apply_voice(&mut self, changes: Vec<voice::Change>) {
+        for change in changes {
+            let Some(server) = self
+                .servers
+                .iter_mut()
+                .find(|server| server.id == change.server)
+            else {
+                continue;
+            };
+            if (server.muted, server.deafened) == (change.muted, change.deafened) {
+                continue;
+            }
+            server.muted = change.muted;
+            server.deafened = change.deafened;
+            let request = Request::SetSelf {
+                muted: change.muted,
+                deafened: change.deafened,
+            };
+            if let Err(error) = self.platform.request(&server.id, request) {
+                server.notice = Some(error);
+            }
+        }
+    }
+
+    /// Move our voice to channel `channel` of server `index`: the talk
+    /// server moves with you ([`Voice::move_here`]).
     pub fn join(&mut self, index: usize, channel: u32) {
         let server = &mut self.servers[index];
         if let Err(error) = self.platform.request(&server.id, Request::Join(channel)) {
             server.notice = Some(error);
+            return;
         }
+        let id = server.id.clone();
+        let changes = self.voice.move_here(&id, &seats(&self.servers));
+        self.apply_voice(changes);
     }
 
     /// Send a request the client does not model to server `index`.
@@ -2217,6 +2371,88 @@ mod tests {
                 false,
             ),
         }
+    }
+
+    /// What the client told each server about our mute and deafen, in order.
+    fn self_states(recorder: &Recorder) -> Vec<(String, bool, bool)> {
+        recorder
+            .requests
+            .lock()
+            .unwrap()
+            .drain(..)
+            .filter_map(|(server, request)| match request {
+                Request::SetSelf { muted, deafened } => Some((server, muted, deafened)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn your_voice_goes_to_one_server_and_a_second_one_asks_first() {
+        let recorder = Arc::new(Recorder::default());
+        let bookmarks: Vec<_> = ["alpha", "beta"]
+            .into_iter()
+            .map(|name| ServerBookmark::new(name, "localhost", 64738, "andi").unwrap())
+            .collect();
+        let (a, b) = (bookmarks[0].id.clone(), bookmarks[1].id.clone());
+        let mut client = Client::new(
+            Box::new(recorder.clone()),
+            bookmarks,
+            Preferences::default(),
+        );
+        client.connect(0, None, false);
+        client.connect(1, None, false);
+        for (index, id) in [(0, &a), (1, &b)] {
+            client.handle(Input::Server {
+                server: id.clone(),
+                generation: 1,
+                event: ServerEvent::Connected { session: 1 },
+            });
+            assert_eq!(client.servers[index].status, Status::Connected);
+        }
+        // The newest connection is the talk server; the first listens.
+        assert_eq!(client.voice.talk(), std::slice::from_ref(&b));
+        assert_eq!(client.voice_role(0), voice::Role::Listening);
+        assert_eq!(client.voice_role(1), voice::Role::Muted);
+        // Joining a channel on alpha moves the (muted) voice there.
+        client.join(0, 2);
+        assert_eq!(client.voice.talk(), std::slice::from_ref(&a));
+        assert!(
+            self_states(&recorder).is_empty(),
+            "a muted voice moved quietly"
+        );
+        assert_eq!(client.set_mute(0, false), None);
+        assert_eq!(self_states(&recorder), [(a.clone(), false, false)]);
+        assert_eq!(client.voice_role(0), voice::Role::Talking);
+        // Unmuting beta asks first, and sends nothing until answered.
+        assert_eq!(
+            client.set_mute(1, false),
+            Some(SecondServer {
+                server: 1,
+                talking: vec![0]
+            })
+        );
+        assert!(self_states(&recorder).is_empty());
+        assert!(client.servers[1].muted);
+        // "Only here": the microphone moves to beta.
+        client.speak_here(1, false);
+        assert_eq!(
+            self_states(&recorder),
+            [(a.clone(), true, false), (b.clone(), false, false)]
+        );
+        // The mute shortcut acts on beta alone; deafening alpha is its own.
+        assert_eq!(client.toggle_voice(false), None);
+        assert_eq!(self_states(&recorder), [(b.clone(), true, false)]);
+        assert_eq!(client.set_mute(0, true), None);
+        assert_eq!(self_states(&recorder), [(a.clone(), true, true)]);
+        assert_eq!(client.voice_role(0), voice::Role::Deafened);
+        // "Use voice here" on alpha: the talk server, undeafened, still muted.
+        client.use_voice_here(0);
+        assert_eq!(self_states(&recorder), [(a.clone(), true, false)]);
+        assert_eq!(client.voice.talk(), std::slice::from_ref(&a));
+        // Its disconnection hands the talk role to beta.
+        client.disconnect(0);
+        assert_eq!(client.voice.talk(), [b]);
     }
 
     #[test]
