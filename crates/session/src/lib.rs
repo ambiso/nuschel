@@ -3,6 +3,7 @@
 pub mod config;
 pub mod connection;
 pub mod model;
+pub mod sticky;
 mod tls;
 pub mod udp;
 pub mod workers;
@@ -41,6 +42,10 @@ pub enum Error {
     },
     #[error("worker failed: {0}")]
     Worker(String),
+    /// The server offers less than it did before (the sticky extension
+    /// policy); only the user can accept that, by resetting the record.
+    #[error("{0}")]
+    Downgrade(String),
 }
 
 fn removed_text(actor: Option<&str>, reason: Option<&str>, ban: bool) -> String {

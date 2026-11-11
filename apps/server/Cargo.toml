@@ -65,6 +65,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
+# Loopback tests between the real client session and this server.
+nuschel-session.workspace = true
 tempfile = "3.27.0"
 
 [lints]

@@ -56,6 +56,10 @@ struct Arguments {
     /// The server's text burst (murmur.ini `messageburst`).
     #[arg(long, default_value_t = MessageRate::default().burst)]
     message_burst: u32,
+    /// Refuse to log in unless the server speaks the Nuschel protocol (what an
+    /// invite's `policy=nuschel` or an earlier connection would require).
+    #[arg(long)]
+    require_nuschel: bool,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -202,6 +206,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         message_rate: MessageRate {
             burst: args.message_burst,
             per_second: args.message_limit,
+        },
+        required: nuschel_session::sticky::Requirement {
+            nuschel: args.require_nuschel,
+            ..Default::default()
         },
     };
     let (tx, rx) = mpsc::channel(32);
@@ -371,6 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             },
             Some(event) = events.recv() => output(match event {
                 SessionEvent::PeerCertificate(sha256) => json!({"kind":"peer_certificate", "sha256":sha256}),
+                SessionEvent::Negotiated(negotiated) => json!({"kind":"negotiated", "nuschel":negotiated.nuschel, "capabilities":negotiated.capabilities}),
                 SessionEvent::Channel(channel) => json!({"kind":"channel", "channel":channel}),
                 SessionEvent::ChannelRemoved(id) => json!({"kind":"channel_removed", "channel":id}),
                 SessionEvent::User(user) => json!({"kind":"user", "user":user}),

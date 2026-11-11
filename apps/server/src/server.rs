@@ -3,7 +3,7 @@
 //! UDP on every configured address, and run the accept and voice loops.
 use crate::{
     config::Settings,
-    connection,
+    connection, extension,
     limits::LeakyBucket,
     password,
     state::{Ban, Channel, Counters, Registered, State},
@@ -11,7 +11,7 @@ use crate::{
     tls, udp,
 };
 use bytes::Bytes;
-use nuschel_protocol::{control as proto, encode_control, kind};
+use nuschel_protocol::control as proto;
 use std::{
     collections::{HashMap, VecDeque},
     io,
@@ -73,8 +73,10 @@ pub struct Server {
     pub admission: Mutex<Admission>,
     /// Connections that have not authenticated yet (TLS included).
     pub pending: Arc<Semaphore>,
-    /// The server's `Version` message, sent first on every connection.
+    /// The server's `Version` message, sent first on every connection; the
+    /// second carries the Nuschel hello, for `nuschel/1` connections.
     pub version_frame: Bytes,
+    pub nuschel_version_frame: Bytes,
     pub shutdown: Notify,
     /// Failed password logins per registered account (ten, then one a second).
     pub login_failures: Mutex<HashMap<u32, LeakyBucket>>,
@@ -215,6 +217,8 @@ pub struct Running {
     pub server: Arc<Server>,
     /// The bound TCP addresses (UDP uses the same ones).
     pub addresses: Vec<SocketAddr>,
+    /// SHA-256 of the server certificate, lowercase hex (what clients pin).
+    pub fingerprint: String,
     tasks: Vec<JoinHandle<()>>,
 }
 
@@ -236,7 +240,7 @@ impl Running {
     }
 }
 
-fn server_version(settings: &Settings) -> Bytes {
+fn server_version(settings: &Settings) -> proto::Version {
     let mut message = proto::Version {
         version_v1: Some((1 << 16) | (5 << 8)),
         version_v2: Some(PROTOCOL_VERSION),
@@ -246,7 +250,7 @@ fn server_version(settings: &Settings) -> Bytes {
         message.release = Some(format!("Nuschel {}", env!("CARGO_PKG_VERSION")));
         message.os = Some(std::env::consts::OS.to_owned());
     }
-    encode_control(kind::VERSION, &message).unwrap_or_default()
+    message
 }
 
 /// Rebuild the channel tree from storage: children lists from parents, and
@@ -496,7 +500,8 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
             .zip(config.private_key.as_deref()),
         &config.state_directory,
     )?;
-    tracing::info!(sha256 = %identity.fingerprint(), "server certificate");
+    let fingerprint = identity.fingerprint();
+    tracing::info!(sha256 = %fingerprint, "server certificate");
     let acceptor = TlsAcceptor::from(tls::server_config(identity)?);
 
     // Bind everything first; with port 0 (tests) UDP takes the port TCP got.
@@ -532,7 +537,11 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         acceptor,
         admission: Mutex::new(Admission::default()),
         pending: Arc::new(Semaphore::new(config.max_pending_connections as usize)),
-        version_frame: server_version(&settings),
+        version_frame: extension::version_frame(&server_version(&settings), None),
+        nuschel_version_frame: extension::version_frame(
+            &server_version(&settings),
+            Some(&extension::server_hello(&settings)),
+        ),
         shutdown: Notify::new(),
         login_failures: Mutex::new(HashMap::new()),
     });
@@ -548,6 +557,7 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     Ok(Running {
         server,
         addresses,
+        fingerprint,
         tasks,
     })
 }

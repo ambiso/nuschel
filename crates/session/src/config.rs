@@ -126,6 +126,12 @@ pub struct MumbleUrl {
     pub password: Option<String>,
     /// Channel names from the root, e.g. `/Lobby/Games` → `["Lobby", "Games"]`.
     pub channel: Vec<String>,
+    /// From an invite (`?fp=sha256:…`): the server certificate's SHA-256, pinned
+    /// before the first connection.
+    pub certificate_sha256: Option<String>,
+    /// From an invite (`?policy=nuschel`): the server must speak the Nuschel
+    /// protocol, from the very first connection.
+    pub require_nuschel: bool,
 }
 impl std::fmt::Debug for MumbleUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -135,6 +141,8 @@ impl std::fmt::Debug for MumbleUrl {
             .field("username", &self.username)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .field("channel", &self.channel)
+            .field("certificate_sha256", &self.certificate_sha256)
+            .field("require_nuschel", &self.require_nuschel)
             .finish()
     }
 }
@@ -149,7 +157,25 @@ impl MumbleUrl {
             .strip_prefix("mumble://")
             .or_else(|| url.strip_prefix("MUMBLE://"))
             .ok_or_else(invalid)?;
-        let rest = rest.split(['?', '#']).next().unwrap_or_default();
+        let rest = rest.split('#').next().unwrap_or_default();
+        let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let mut certificate_sha256 = None;
+        let mut require_nuschel = false;
+        for (name, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
+            match name {
+                "fp" => {
+                    let hex = value
+                        .strip_prefix("sha256:")
+                        .filter(|hex| hex.len() == 64 && hex.bytes().all(|c| c.is_ascii_hexdigit()))
+                        .ok_or("the fp= parameter must be sha256: and 64 hex digits")?;
+                    certificate_sha256 = Some(hex.to_ascii_lowercase());
+                }
+                "policy" => {
+                    require_nuschel = value.split('+').any(|part| part == "nuschel");
+                }
+                _ => {}
+            }
+        }
         let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
         let (userinfo, endpoint) = match authority.rsplit_once('@') {
             Some((user, endpoint)) => (Some(user), endpoint),
@@ -195,6 +221,8 @@ impl MumbleUrl {
             username,
             password,
             channel,
+            certificate_sha256,
+            require_nuschel,
         })
     }
 }
@@ -1279,7 +1307,7 @@ fn migrate_history(old: &Path, new: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+pub(crate) fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     use std::io::Read;
     let file = fs::File::open(path)?;
     let mut bytes = Vec::new();
@@ -1290,7 +1318,7 @@ fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn atomic_private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temporary = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
     let result = (|| {
         let mut options = fs::OpenOptions::new();
@@ -1903,5 +1931,19 @@ mod tests {
         ] {
             assert!(MumbleUrl::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn invites_carry_the_certificate_pin_and_policy() {
+        let fp = "AB".repeat(32);
+        let url = MumbleUrl::parse(&format!(
+            "mumble://voice.example.org/?fp=sha256:{fp}&policy=nuschel#x"
+        ))
+        .unwrap();
+        assert_eq!(url.certificate_sha256, Some("ab".repeat(32)));
+        assert!(url.require_nuschel);
+        let plain = MumbleUrl::parse("mumble://voice.example.org/?version=1.2.0").unwrap();
+        assert!(!plain.require_nuschel && plain.certificate_sha256.is_none());
+        assert!(MumbleUrl::parse("mumble://h/?fp=sha1:00").is_err());
     }
 }

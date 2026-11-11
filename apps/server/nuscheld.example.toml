@@ -96,3 +96,22 @@ count_successful = true
 # argon2id cost for registered users' passwords.
 memory_kib = 19456
 passes = 2
+
+[history]
+# Persistent history for Nuschel clients (docs/extension.md). Unregistered users
+# read no history ("none") or the same as registered users ("full"); everyone
+# sees live messages.
+guests = "none"
+# Days messages are kept; 0 keeps them forever.
+retention_days = 0
+edit_limit = 20
+# Users with Write on a channel may delete other people's messages there.
+moderators_delete = true
+# Stock clients cannot know their messages are kept: their direct messages are
+# not stored unless this is on, and they are told about retention.
+archive_stock_direct_messages = false
+notify_stock_clients = true
+pages_per_minute = 120
+page_bytes_per_minute = 16777216
+# minimum_client = "0.1.0"
+# recommended_client = "0.1.0"

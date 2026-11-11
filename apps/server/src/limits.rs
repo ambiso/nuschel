@@ -54,6 +54,52 @@ impl LeakyBucket {
     }
 }
 
+/// A budget of bytes per minute, refilled continuously (history pages).
+#[derive(Clone, Debug)]
+pub struct ByteBucket {
+    per_minute: u64,
+    available: u64,
+    since: Instant,
+}
+
+impl ByteBucket {
+    pub fn new(per_minute: u64, now: Instant) -> Self {
+        Self {
+            per_minute: per_minute.max(1),
+            available: per_minute.max(1),
+            since: now,
+        }
+    }
+
+    fn refill(&mut self, now: Instant) {
+        let elapsed = now.saturating_duration_since(self.since).as_millis();
+        let refill = elapsed.saturating_mul(u128::from(self.per_minute)) / 60_000;
+        if refill > 0 {
+            self.since = now;
+            self.available = self
+                .available
+                .saturating_add(u64::try_from(refill).unwrap_or(u64::MAX))
+                .min(self.per_minute);
+        }
+    }
+
+    /// Whether anything is left; a request may overdraw what remains once.
+    pub fn exhausted(&mut self, now: Instant) -> bool {
+        self.refill(now);
+        self.available == 0
+    }
+
+    pub fn spend(&mut self, bytes: u64, now: Instant) {
+        self.refill(now);
+        self.available = self.available.saturating_sub(bytes);
+    }
+
+    /// Milliseconds until something is available again.
+    pub fn retry_after_ms(&self) -> u64 {
+        (60_000 / self.per_minute).max(1)
+    }
+}
+
 const SLOTS: usize = 360;
 
 /// Murmur's `BandwidthRecord`: the last 360 voice packets with their arrival

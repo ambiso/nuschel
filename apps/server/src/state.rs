@@ -192,8 +192,8 @@ pub struct Peer {
     /// Leaf first, DER.
     pub certificates: Vec<Vec<u8>>,
     pub certificate_hash: Option<String>,
-    /// The client negotiated the Nuschel extension's ALPN (`nuschel/1`).
-    pub nuschel: bool,
+    /// The Nuschel extension's negotiation (frozen at `Authenticate`).
+    pub negotiation: crate::extension::Negotiation,
     pub info: ClientInfo,
     pub link: Link,
 }
@@ -237,7 +237,8 @@ pub struct User {
     pub certificate_hash: Option<String>,
     pub certificates: Vec<Vec<u8>>,
     pub address: SocketAddr,
-    pub nuschel: bool,
+    /// The Nuschel extension, when negotiated (docs/extension.md).
+    pub extension: Option<Box<crate::extension::Extension>>,
     pub info: ClientInfo,
     pub opus: bool,
     pub celt_versions: Vec<i32>,

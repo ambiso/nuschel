@@ -10,11 +10,11 @@
 //! A writer task drains the connection's byte-bounded queue ([`Link`]).
 use crate::{
     auth,
-    config::Settings,
+    config::{Security, Settings},
+    extension::{Negotiation, server_capabilities},
     routing::Datagrams,
     server::Server,
     state::{Link, Peer},
-    tls,
 };
 use bytes::{Bytes, BytesMut};
 use nuschel_protocol::{ControlFrame, control as proto, decode_control_limited, kind, relay};
@@ -180,8 +180,8 @@ async fn serve(
         .peer_certificates()
         .map(|chain| chain.iter().take(8).map(|der| der.to_vec()).collect())
         .unwrap_or_default();
-    let nuschel = connection.alpn_protocol() == Some(tls::ALPN_NUSCHEL);
-    let certificate_hash = certificates.first().map(|der| tls::sha1_hex(der));
+    let negotiation = Negotiation::from_alpn(connection.alpn_protocol());
+    let certificate_hash = certificates.first().map(|der| crate::tls::sha1_hex(der));
     if certificate_hash
         .as_deref()
         .is_some_and(|hash| server.banned_certificate(hash))
@@ -193,12 +193,30 @@ async fn serve(
     let (link, frames, queued) = Link::new(config.max_queued_bytes);
     let signal = link.signal.clone();
     let writer = tokio::spawn(write_loop(writer, frames, queued));
-    link.send(server.version_frame.clone());
+    let stock = negotiation == Negotiation::Stock;
+    if stock && config.security == Security::E2ee {
+        // Stock clients show the reason; their Authenticate is never read.
+        link.message(
+            kind::REJECT,
+            &proto::Reject {
+                r#type: Some(proto::reject::RejectType::None as i32),
+                reason: Some("This server requires the Nuschel client".into()),
+            },
+        );
+        drop(link);
+        let _ = timeout(Duration::from_secs(5), writer).await;
+        return;
+    }
+    link.send(if stock {
+        server.version_frame.clone()
+    } else {
+        server.nuschel_version_frame.clone()
+    });
     let mut peer = Peer {
         address,
         certificates,
         certificate_hash,
-        nuschel,
+        negotiation,
         info: Default::default(),
         link,
     };
@@ -215,11 +233,24 @@ async fn serve(
         };
         match frame.kind {
             kind::VERSION => {
-                if let Ok(message) = proto::Version::decode(frame.payload) {
+                if let Ok(message) = proto::Version::decode(frame.payload.clone()) {
                     peer.info.apply(&message);
+                }
+                if let Err(error) = peer
+                    .negotiation
+                    .version(&frame.payload, server_capabilities())
+                {
+                    tracing::info!(%address, %error, "closed a nuschel/1 connection");
+                    break None;
                 }
             }
             kind::AUTHENTICATE => {
+                // ALPN `nuschel/1` without a hello fails closed, before the
+                // credentials are even decoded.
+                if peer.negotiation.freeze().is_err() {
+                    tracing::info!(%address, "closed a nuschel/1 connection without a hello");
+                    break None;
+                }
                 let Ok(message) = proto::Authenticate::decode(frame.payload) else {
                     break None;
                 };

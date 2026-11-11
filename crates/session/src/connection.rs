@@ -13,6 +13,7 @@ use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_protocol::{
     ControlFrame, MAX_CONTROL_BYTES, control as proto,
     crypt::CryptState,
+    nuschel::{self, v1},
     voice::{self, UdpMessage, VoicePacket},
 };
 use prost::Message;
@@ -107,6 +108,9 @@ pub struct ServerLimits {
 #[derive(Clone, Debug)]
 pub enum SessionEvent {
     PeerCertificate(String),
+    /// The extension negotiation succeeded (only for `nuschel/1` servers);
+    /// frontends raise the server's sticky record to it.
+    Negotiated(Negotiated),
     Channel(Channel),
     ChannelRemoved(u32),
     User(User),
@@ -251,6 +255,18 @@ pub struct ConnectOptions {
     pub channel: Option<u32>,
     /// The server's rate limit for text, which it does not announce.
     pub message_rate: MessageRate,
+    /// What this server negotiated before (the sticky policy, or an invite):
+    /// a weaker answer fails the connection before any credential is sent.
+    pub required: crate::sticky::Requirement,
+}
+
+/// What the Nuschel extension negotiation settled, before `Authenticate`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Negotiated {
+    pub nuschel: bool,
+    /// The capabilities both sides offered.
+    pub capabilities: Vec<String>,
+    pub policy: Option<v1::Policy>,
 }
 
 /// Murmur's per-user rate limit (murmur.ini `messageburst` and `messagelimit`):
@@ -373,6 +389,14 @@ pub async fn run(
     events: mpsc::Sender<SessionEvent>,
 ) -> Result<(), Error> {
     let (stream, peer, peer_addr) = crate::tls::connect(&options.server, options.identity).await?;
+    let nuschel = stream.get_ref().1.alpn_protocol() == Some(nuschel::ALPN);
+    // Nothing at all is sent to a server that answers weaker than required.
+    if !nuschel {
+        options
+            .required
+            .check(false, &[])
+            .map_err(Error::Downgrade)?;
+    }
     emit(&events, SessionEvent::PeerCertificate(peer)).await?;
     let udp = Udp::bind(peer_addr, options.force_tcp).await.ok();
     let mut datagram = vec![0; udp::MAX_DATAGRAM];
@@ -389,29 +413,22 @@ pub async fn run(
         }
     });
     let result = async {
-        send(&mut writer, kind::VERSION, &proto::Version {
+        let version = proto::Version {
             version_v1: Some(0x0001_0500),
             version_v2: Some(voice::PROTOBUF_VERSION),
             release: Some(format!("Nuschel {}", env!("CARGO_PKG_VERSION"))),
             os: Some(std::env::consts::OS.into()),
             ..Default::default()
-        })
-        .await?;
-        send(&mut writer, kind::AUTHENTICATE, &proto::Authenticate {
-            username: Some(options.server.username.clone()),
-            password: options.password,
-            tokens: options.server.tokens.clone(),
-            opus: Some(true),
-            ..Default::default()
-        })
-        .await?;
+        };
+        let hello = nuschel.then(|| v1::Hello {
+            protocol: nuschel::PROTOCOL,
+            capabilities: nuschel::capability::ALL.iter().map(|c| (*c).to_owned()).collect(),
+            policy: None,
+        });
+        let frame = nuschel::version_frame(&version, hello.as_ref())
+            .ok_or_else(|| Error::Protocol("outgoing version too large".into()))?;
+        write_control(&mut writer, kind::VERSION, &frame[nuschel_protocol::HEADER_BYTES..]).await?;
         let muted = options.muted || options.deafened;
-        send(&mut writer, kind::USER_STATE, &proto::UserState {
-            self_mute: Some(muted),
-            self_deaf: Some(options.deafened),
-            ..Default::default()
-        })
-        .await?;
         let mut state = State {
             udp,
             local_muted: muted,
@@ -420,6 +437,44 @@ pub async fn run(
             outbox: Outbox::new(options.message_rate),
             ..State::default()
         };
+        // With the extension (or a sticky record) the server's hello decides
+        // before any credential is sent.
+        if nuschel || !options.required.is_empty() {
+            let frame = loop {
+                let frame = timeout(Duration::from_secs(10), frames.recv())
+                    .await
+                    .map_err(|_| Error::Timeout("waiting for the server's version"))?
+                    .ok_or_else(|| Error::Protocol("connection reader stopped".into()))??;
+                if frame.kind == kind::VERSION {
+                    break frame;
+                }
+                state.handle(frame, &events).await?;
+            };
+            let negotiated = negotiate(nuschel, &frame.payload)?;
+            options
+                .required
+                .check(negotiated.nuschel, &negotiated.capabilities)
+                .map_err(Error::Downgrade)?;
+            state.handle(frame, &events).await?;
+            if negotiated.nuschel {
+                state.extension = Some(negotiated.capabilities.clone());
+                emit(&events, SessionEvent::Negotiated(negotiated)).await?;
+            }
+        }
+        send(&mut writer, kind::AUTHENTICATE, &proto::Authenticate {
+            username: Some(options.server.username.clone()),
+            password: options.password,
+            tokens: options.server.tokens.clone(),
+            opus: Some(true),
+            ..Default::default()
+        })
+        .await?;
+        send(&mut writer, kind::USER_STATE, &proto::UserState {
+            self_mute: Some(muted),
+            self_deaf: Some(options.deafened),
+            ..Default::default()
+        })
+        .await?;
         // The version and user state above count against the rate limit.
         state.outbox.level = 2.0;
         let mut ticks = 0_u64;
@@ -540,6 +595,8 @@ struct State {
     /// Budget notices already shown on this connection.
     notices: BTreeSet<&'static str>,
     outbox: Outbox,
+    /// The Nuschel extension's capabilities, when negotiated.
+    extension: Option<Vec<String>>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -566,6 +623,7 @@ impl Default for State {
             blob_bytes: 0,
             notices: BTreeSet::new(),
             outbox: Outbox::new(MessageRate::default()),
+            extension: None,
         }
     }
 }
@@ -2205,6 +2263,33 @@ pub fn now_ms() -> i64 {
         .as_millis()
         .min(i64::MAX as u128) as i64
 }
+/// Settle the extension from the server's `Version`: on if and only if ALPN
+/// selected `nuschel/1` and the server sent a hello (ours went out with our
+/// `Version`). Without ALPN the field is ignored; ALPN without a valid hello is
+/// a protocol error, never plain Mumble.
+fn negotiate(nuschel: bool, version: &[u8]) -> Result<Negotiated, Error> {
+    if !nuschel {
+        return Ok(Negotiated {
+            nuschel: false,
+            capabilities: Vec::new(),
+            policy: None,
+        });
+    }
+    let hello = nuschel::hello(version)
+        .map_err(|error| Error::Protocol(error.to_string()))?
+        .ok_or_else(|| {
+            Error::Protocol("the server selected the Nuschel protocol but sent no hello".into())
+        })?;
+    Ok(Negotiated {
+        nuschel: true,
+        capabilities: nuschel::intersect(&nuschel::capability::ALL, &hello.capabilities)
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        policy: hello.policy,
+    })
+}
+
 async fn send<M: Message>(
     writer: &mut (impl AsyncWrite + Unpin),
     kind: u16,

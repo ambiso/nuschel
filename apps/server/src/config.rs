@@ -61,6 +61,58 @@ impl Default for PasswordHashing {
     }
 }
 
+/// Who may read history without an account (docs/extension.md §5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuestHistory {
+    /// Unregistered users read no history; they see live messages.
+    #[default]
+    None,
+    /// The same rules as for registered users.
+    Full,
+}
+
+/// Persistent history for Nuschel clients (docs/extension.md §4–§9).
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct History {
+    pub guests: GuestHistory,
+    /// Days messages are kept; 0 keeps them forever.
+    pub retention_days: u32,
+    /// How often one message may be edited.
+    pub edit_limit: u32,
+    /// Users with Write on a channel may delete other people's messages there.
+    pub moderators_delete: bool,
+    /// Store direct messages from stock clients, who cannot know they are kept.
+    pub archive_stock_direct_messages: bool,
+    /// Tell stock clients that text is kept: in the welcome text and when
+    /// they enter a channel.
+    pub notify_stock_clients: bool,
+    /// History pages per minute per connection, and their bytes.
+    pub pages_per_minute: u32,
+    pub page_bytes_per_minute: u32,
+    /// Advisory client versions announced to Nuschel clients ("1.0.0").
+    pub minimum_client: Option<String>,
+    pub recommended_client: Option<String>,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            guests: GuestHistory::None,
+            retention_days: 0,
+            edit_limit: 20,
+            moderators_delete: true,
+            archive_stock_direct_messages: false,
+            notify_stock_clients: true,
+            pages_per_minute: 120,
+            page_bytes_per_minute: 16 * 1024 * 1024,
+            minimum_client: None,
+            recommended_client: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -148,6 +200,7 @@ pub struct Config {
     pub max_queued_bytes: usize,
     pub autoban: Autoban,
     pub password_hashing: PasswordHashing,
+    pub history: History,
 }
 
 impl Default for Config {
@@ -206,6 +259,7 @@ impl Default for Config {
             max_queued_bytes: 8 * 1024 * 1024,
             autoban: Autoban::default(),
             password_hashing: PasswordHashing::default(),
+            history: History::default(),
         }
     }
 }
@@ -238,6 +292,8 @@ pub struct Settings {
     pub welcome_text: String,
     pub password: String,
     pub suggest_version: Option<u64>,
+    pub minimum_client: Option<u64>,
+    pub recommended_client: Option<u64>,
 }
 
 fn read(path: &Path) -> Result<String, ConfigError> {
@@ -318,14 +374,18 @@ impl Config {
             Some(path) => read(path)?.trim_end_matches(['\r', '\n']).to_owned(),
             None => self.password.clone(),
         };
-        let suggest_version = match &self.suggest_version {
-            Some(text) => Some(parse_version(text).ok_or_else(|| {
-                ConfigError::Invalid(format!(
-                    "suggest_version {text:?} is not a version like 1.5.0"
-                ))
-            })?),
-            None => None,
+        let version = |name: &str, text: &Option<String>| match text {
+            Some(text) => parse_version(text).map(Some).ok_or_else(|| {
+                ConfigError::Invalid(format!("{name} {text:?} is not a version like 1.5.0"))
+            }),
+            None => Ok(None),
         };
+        let suggest_version = version("suggest_version", &self.suggest_version)?;
+        let minimum_client = version("history.minimum_client", &self.history.minimum_client)?;
+        let recommended_client = version(
+            "history.recommended_client",
+            &self.history.recommended_client,
+        )?;
         Ok(Settings {
             config: self,
             username,
@@ -333,6 +393,8 @@ impl Config {
             welcome_text,
             password,
             suggest_version,
+            minimum_client,
+            recommended_client,
         })
     }
 }

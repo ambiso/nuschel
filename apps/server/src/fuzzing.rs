@@ -72,7 +72,7 @@ impl Harness {
             address: SocketAddr::from(([10, 0, 0, session as u8], 50_000)),
             certificates: Vec::new(),
             certificate_hash: hash,
-            nuschel: false,
+            negotiation: Default::default(),
             info: ClientInfo {
                 version: (1 << 48) | (minor << 32),
                 ..Default::default()

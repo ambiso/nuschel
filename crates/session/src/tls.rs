@@ -124,6 +124,15 @@ pub async fn connect(
             PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(identity.private_key)),
         )
         .map_err(|e| Error::Tls(e.to_string()))?;
+    // Offer the Nuschel extension and plain Mumble in one handshake (stock
+    // servers ignore ALPN). The offer is covered by the handshake transcript,
+    // so it cannot be stripped without failing the connection.
+    let mut config = config;
+    config.alpn_protocols = vec![
+        nuschel_protocol::nuschel::ALPN.to_vec(),
+        nuschel_protocol::nuschel::ALPN_MUMBLE.to_vec(),
+    ];
+    config.resumption = rustls::client::Resumption::disabled();
     let socket = timeout(
         Duration::from_secs(10),
         TcpStream::connect((server.host.as_str(), server.port)),

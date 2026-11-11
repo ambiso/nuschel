@@ -752,8 +752,16 @@ async fn connect_once(
     restore: &mut Restore,
 ) -> Outcome {
     let id = server.id.clone();
-    let options = match profile.identity() {
-        Ok(identity) => ConnectOptions {
+    // The sticky policy: an unreadable record fails closed, never empty.
+    let required = nuschel_session::sticky::PolicyStore::load(&profile.config_dir)
+        .map(|store| store.get(&server.host, server.port))
+        .map_err(|error| format!("Nuschel's server security records could not be read: {error}"));
+    let options = match profile
+        .identity()
+        .map_err(|error| error.to_string())
+        .and_then(|identity| Ok((identity, required?)))
+    {
+        Ok((identity, required)) => ConnectOptions {
             server: server.clone(),
             identity,
             password,
@@ -762,13 +770,14 @@ async fn connect_once(
             deafened: restore.deafened,
             channel: restore.channel,
             message_rate: Default::default(),
+            required,
         },
         Err(error) => {
             let _ = events
                 .send(Event::Disconnected {
                     server: id,
                     generation,
-                    reason: error.to_string(),
+                    reason: error,
                     reject: None,
                 })
                 .await;
@@ -885,6 +894,13 @@ async fn connect_once(
                 if session_commands.send(command).await.is_err() { break; }
             },
             Some(event) = incoming.recv() => match event {
+                SessionEvent::Negotiated(negotiated) => {
+                    // Remember what this server offers: a weaker answer later fails.
+                    let raised = nuschel_session::sticky::PolicyStore::load(&profile.config_dir)
+                        .and_then(|mut store| store.raise(&server.host, server.port, negotiated.nuschel, &negotiated.capabilities));
+                    if let Err(error) = raised { let _ = events.send(Event::HistoryError(format!("Could not save this server's security record: {error}"))).await; }
+                    let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Negotiated(negotiated) }).await;
+                },
                 SessionEvent::PeerCertificate(sha256) => { peer = Some(sha256.clone()); let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::PeerCertificate(sha256) }).await; },
                 SessionEvent::Connected { session: connected_session, max_bandwidth } => {
                     restore.connected = true;

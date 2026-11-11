@@ -333,7 +333,7 @@ fn complete(
     tracing::info!(
         user = %state.log_name(session),
         address = %peer.address,
-        nuschel = peer.nuschel,
+        nuschel = peer.negotiation != crate::extension::Negotiation::Stock,
         "authenticated"
     );
     Ok(session)
@@ -539,7 +539,14 @@ pub(crate) fn new_user(
         certificate_hash: peer.certificate_hash.clone(),
         certificates: peer.certificates.clone(),
         address: peer.address,
-        nuschel: peer.nuschel,
+        extension: peer
+            .negotiation
+            .freeze()
+            .ok()
+            .flatten()
+            .map(|capabilities| {
+                Box::new(crate::extension::Extension::new(capabilities, config, now))
+            }),
         info: peer.info.clone(),
         opus: message.opus(),
         celt_versions: message.celt_versions.iter().copied().take(32).collect(),

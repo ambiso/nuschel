@@ -21,8 +21,7 @@ use std::{
 /// ALPN for the Nuschel extension (docs/extension.md); `mumble` is accepted too,
 /// because rustls refuses a client whose offer shares nothing with ours. Stock
 /// clients offer no ALPN at all.
-pub const ALPN_NUSCHEL: &[u8] = b"nuschel/1";
-pub const ALPN_MUMBLE: &[u8] = b"mumble";
+use nuschel_protocol::nuschel::{ALPN as ALPN_NUSCHEL, ALPN_MUMBLE};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {

@@ -5981,6 +5981,7 @@ dependencies = [
  "nuschel-ipc",
  "nuschel-legacy-html",
  "nuschel-protocol",
+ "nuschel-session",
  "prost",
  "rcgen",
  "regex",

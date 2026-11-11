@@ -3210,6 +3210,8 @@ impl Desktop {
     fn apply_protocol(&mut self, index: usize, event: SessionEvent) {
         let server = &mut self.servers[index];
         match event {
+            // The backend keeps the sticky record; server history comes later.
+            SessionEvent::Negotiated(_) => {}
             SessionEvent::PeerCertificate(pin) => {
                 let identity = server.history_identity();
                 server.peer_sha256 = Some(pin.clone());
