@@ -9,11 +9,18 @@
 //! The certificate can be replaced while the server runs ([`Certificates`],
 //! SIGHUP): new handshakes use the new one, established connections keep
 //! their session, and a certificate that does not load keeps the old one.
+//!
+//! A client certificate that chains to a configured authority is "strong"
+//! ([`Authorities`], Murmur's `bVerified`), which only adds to what a
+//! certificate gives: nothing is refused for not being strong.
 use rustls::{
     DigitallySignedStruct, DistinguishedName, SignatureScheme,
     client::danger::HandshakeSignatureValid,
     crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature},
-    pki_types::{CertificateDer, PrivateKeyDer, UnixTime, pem::PemObject},
+    pki_types::{
+        CertificateDer, PrivateKeyDer, SignatureVerificationAlgorithm, TrustAnchor, UnixTime,
+        pem::PemObject,
+    },
     server::{
         ClientHello, ResolvesServerCert,
         danger::{ClientCertVerified, ClientCertVerifier},
@@ -21,6 +28,7 @@ use rustls::{
     sign::CertifiedKey,
 };
 use std::{
+    fmt,
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
@@ -297,6 +305,138 @@ impl ClientCertVerifier for AnyClientCertificate {
     }
 }
 
+/// Which certificate authorities make a client certificate "strong" (Murmur's
+/// `bVerified`): the ACL group `strong` matches it and `UserStats` says so.
+/// Murmur verifies the chain against the system's authorities and murmur.ini's
+/// `sslCA`, and counts a certificate as strong unless the chain is self-signed,
+/// leads to no known authority, or is expired or not yet valid; any purpose
+/// is fine (an e-mail certificate, say). Here the authorities are configured
+/// (`strong_certificate_authorities`) and none by default, so nobody is strong
+/// unless the operator says whom to trust. The chain is the one the client
+/// presented in a handshake that proved it holds the leaf's key; strength is
+/// decided once, at login.
+#[derive(Clone)]
+pub struct Authorities {
+    roots: Arc<Vec<TrustAnchor<'static>>>,
+    algorithms: &'static [&'static dyn SignatureVerificationAlgorithm],
+}
+
+impl Default for Authorities {
+    fn default() -> Self {
+        Self {
+            roots: Arc::default(),
+            algorithms: rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms
+                .all,
+        }
+    }
+}
+
+impl fmt::Debug for Authorities {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Authorities({} roots)", self.roots.len())
+    }
+}
+
+/// Where systems keep their bundle of trusted authorities, after
+/// `SSL_CERT_FILE` (NixOS and Debian, Fedora, openSUSE, Alpine).
+const SYSTEM_BUNDLES: [&str; 5] = [
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+];
+
+impl Authorities {
+    /// `"webpki"` (Mozilla's roots, built in), `"system"` (`SSL_CERT_FILE` or
+    /// the system's bundle) or the path of a PEM file of authorities. A file
+    /// named explicitly must hold only usable certificates; entries of the
+    /// system bundle that cannot serve as an authority are skipped.
+    pub fn load(sources: &[String]) -> Result<Self, String> {
+        let mut roots = Vec::new();
+        for source in sources {
+            match source.as_str() {
+                "webpki" => roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned()),
+                "system" => {
+                    let bundle = std::env::var_os("SSL_CERT_FILE")
+                        .map(PathBuf::from)
+                        .into_iter()
+                        .chain(SYSTEM_BUNDLES.into_iter().map(PathBuf::from))
+                        .find(|path| path.is_file())
+                        .ok_or("no system certificate bundle (set SSL_CERT_FILE)")?;
+                    roots.extend(read_anchors(&bundle, false)?);
+                }
+                path => roots.extend(read_anchors(Path::new(path), true)?),
+            }
+        }
+        Ok(Self {
+            roots: Arc::new(roots),
+            ..Self::default()
+        })
+    }
+
+    /// Whether `chain` (leaf first, DER, as presented) leads from a valid leaf
+    /// to one of these authorities at `now`.
+    pub fn strong(&self, chain: &[Vec<u8>], now: UnixTime) -> bool {
+        let Some((leaf, intermediates)) = chain.split_first() else {
+            return false;
+        };
+        if self.roots.is_empty() {
+            return false;
+        }
+        let leaf = CertificateDer::from(leaf.as_slice());
+        let Ok(leaf) = webpki::EndEntityCert::try_from(&leaf) else {
+            return false;
+        };
+        let intermediates: Vec<CertificateDer<'_>> = intermediates
+            .iter()
+            .map(|der| CertificateDer::from(der.as_slice()))
+            .collect();
+        leaf.verify_for_usage(
+            self.algorithms,
+            &self.roots,
+            &intermediates,
+            now,
+            AnyPurpose,
+            None,
+            None,
+        )
+        .is_ok()
+    }
+}
+
+/// Murmur accepts a certificate issued for any purpose (Qt's
+/// `InvalidPurpose` does not clear `bVerified`: "allow email certificates").
+struct AnyPurpose;
+
+impl webpki::ExtendedKeyUsageValidator for AnyPurpose {
+    fn validate(&self, purposes: webpki::KeyPurposeIdIter<'_, '_>) -> Result<(), webpki::Error> {
+        for purpose in purposes {
+            purpose?;
+        }
+        Ok(())
+    }
+}
+
+/// The authorities in a PEM file; `strict`: every certificate must be one.
+fn read_anchors(path: &Path, strict: bool) -> Result<Vec<TrustAnchor<'static>>, String> {
+    let fail = |error: &dyn fmt::Display| format!("{}: {error}", path.display());
+    let mut anchors = Vec::new();
+    for certificate in CertificateDer::pem_file_iter(path).map_err(|error| fail(&error))? {
+        let certificate = certificate.map_err(|error| fail(&error))?;
+        match webpki::anchor_from_trusted_cert(&certificate) {
+            Ok(anchor) => anchors.push(anchor.to_owned()),
+            Err(error) if strict => return Err(fail(&error)),
+            Err(_) => {}
+        }
+    }
+    if anchors.is_empty() {
+        return Err(fail(&"no certificate authority in it"));
+    }
+    Ok(anchors)
+}
+
 /// The TLS configuration and its replaceable certificate. With
 /// `tls13_only`, TLS 1.2 handshakes are refused (in 1.2 the client
 /// certificate, a stable identity, crosses the network in the clear; stock
@@ -321,4 +461,102 @@ pub fn server_config(
     config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
     config.send_tls13_tickets = 0;
     Ok((Arc::new(config), certificates))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rcgen::{
+        BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose,
+        IsCa, Issuer, KeyPair, KeyUsagePurpose,
+    };
+
+    fn authority_params(name: &str) -> CertificateParams {
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.distinguished_name.push(DnType::CommonName, name);
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        params
+    }
+
+    fn root(name: &str) -> CertifiedIssuer<'static, KeyPair> {
+        CertifiedIssuer::self_signed(authority_params(name), KeyPair::generate().unwrap()).unwrap()
+    }
+
+    fn leaf(issuer: &Issuer<'_, KeyPair>, edit: impl FnOnce(&mut CertificateParams)) -> Vec<u8> {
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.distinguished_name.push(DnType::CommonName, "Alice");
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        edit(&mut params);
+        let key = KeyPair::generate().unwrap();
+        params.signed_by(&key, issuer).unwrap().der().to_vec()
+    }
+
+    #[test]
+    fn strong_certificates_chain_to_a_configured_authority() {
+        let ca = root("Test CA");
+        let other = root("Other CA");
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("ca.pem");
+        std::fs::write(&file, ca.pem()).unwrap();
+        let authorities = Authorities::load(&[file.display().to_string()]).unwrap();
+        let now = UnixTime::now();
+        let client = leaf(&ca, |_| {});
+        assert!(authorities.strong(std::slice::from_ref(&client), now));
+        // Any purpose, as in Murmur (an e-mail certificate, a server's).
+        for purpose in [
+            ExtendedKeyUsagePurpose::EmailProtection,
+            ExtendedKeyUsagePurpose::ServerAuth,
+        ] {
+            let certificate = leaf(&ca, |params| params.extended_key_usages = vec![purpose]);
+            assert!(authorities.strong(&[certificate], now));
+        }
+        // Self-signed (every Mumble identity), another authority's, expired.
+        let own = rcgen::generate_simple_self_signed(vec!["Mumble User".into()]).unwrap();
+        assert!(!authorities.strong(&[own.cert.der().to_vec()], now));
+        assert!(!authorities.strong(&[leaf(&other, |_| {})], now));
+        let expired = leaf(&ca, |params| {
+            params.not_before = rcgen::date_time_ymd(2000, 1, 1);
+            params.not_after = rcgen::date_time_ymd(2001, 1, 1);
+        });
+        assert!(!authorities.strong(&[expired], now));
+        // Through an intermediate the client presents, not without it.
+        let intermediate = CertifiedIssuer::signed_by(
+            authority_params("Intermediate"),
+            KeyPair::generate().unwrap(),
+            &ca,
+        )
+        .unwrap();
+        let through = leaf(&intermediate, |_| {});
+        assert!(authorities.strong(&[through.clone(), intermediate.der().to_vec()], now));
+        assert!(!authorities.strong(&[through], now));
+        // An intermediate as the leaf is not a client certificate.
+        assert!(!authorities.strong(&[intermediate.der().to_vec()], now));
+        // Nothing configured, nothing presented: nobody is strong.
+        assert!(!Authorities::default().strong(std::slice::from_ref(&client), now));
+        assert!(!Authorities::load(&[]).unwrap().strong(&[client], now));
+        assert!(!authorities.strong(&[], now));
+        assert!(!authorities.strong(&[b"not a certificate".to_vec()], now));
+    }
+
+    #[test]
+    fn authority_sources_are_checked() {
+        assert!(Authorities::load(&["webpki".into()]).unwrap().roots.len() > 50);
+        assert!(Authorities::load(&["/nonexistent/authorities.pem".into()]).is_err());
+        let directory = tempfile::tempdir().unwrap();
+        let empty = directory.path().join("empty.pem");
+        std::fs::write(&empty, "no certificate here\n").unwrap();
+        assert!(Authorities::load(&[empty.display().to_string()]).is_err());
+        // An explicit file must hold only authorities; a broken entry is an error.
+        let broken = directory.path().join("broken.pem");
+        std::fs::write(
+            &broken,
+            format!(
+                "{}-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+                root("Test CA").pem()
+            ),
+        )
+        .unwrap();
+        assert!(Authorities::load(&[broken.display().to_string()]).is_err());
+    }
 }

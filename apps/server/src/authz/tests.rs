@@ -1159,6 +1159,33 @@ fn reported_permissions_and_groups() {
     assert!(!f.state.in_group(f.actor("guest"), LOBBY, "auth"));
 }
 
+/// A strong certificate (tls::Authorities) matches the ACL group `strong`.
+#[test]
+fn strong_certificates_match_the_strong_group() {
+    let mut f = Fixture::new(Config::default());
+    if let Some(lobby) = f.state.channels.get_mut(LOBBY) {
+        lobby
+            .node
+            .acls
+            .push(entry("strong", None, perm::MAKE_CHANNEL, 0));
+    }
+    f.state.invalidate();
+    let guest = f.actor("guest");
+    let make = Action::MakeChannel {
+        parent: LOBBY,
+        temporary: false,
+    };
+    assert!(!f.state.allowed(guest, make));
+    assert!(!f.state.in_group(guest, LOBBY, "strong"));
+    if let Some(user) = f.state.users.get_mut(&guest) {
+        user.strong = true;
+    }
+    f.state.invalidate();
+    assert!(f.state.allowed(guest, make));
+    assert!(f.state.in_group(guest, LOBBY, "strong"));
+    assert!(!f.state.allowed(f.actor("registered"), make));
+}
+
 // ---- inconsistencies fixed when the checks moved here ----
 
 /// A temporary access token counts for one `UserState` only. Before, the

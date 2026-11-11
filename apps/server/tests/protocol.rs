@@ -555,6 +555,85 @@ async fn a_certificate_without_its_key_is_refused() {
     fixture.running.shutdown().await;
 }
 
+/// A client certificate issued by a configured authority is strong (Murmur's
+/// `bVerified`, `strong_certificate_authorities`); a self-signed one logs in as
+/// before and is not. R1 still holds for an issued certificate.
+#[tokio::test]
+async fn certificates_from_a_configured_authority_are_strong() {
+    let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "Test CA");
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    params.key_usages = vec![rcgen::KeyUsagePurpose::KeyCertSign];
+    let ca =
+        rcgen::CertifiedIssuer::self_signed(params, rcgen::KeyPair::generate().unwrap()).unwrap();
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "Carol");
+    let issued = Identity {
+        certificate: params.signed_by(&key, &ca).unwrap().der().clone(),
+        key: PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let authorities = directory.path().join("authorities.pem");
+    std::fs::write(&authorities, ca.pem()).unwrap();
+    let fixture = Fixture::start(&format!(
+        "strong_certificate_authorities = [{authorities:?}]\n"
+    ))
+    .await;
+    let plain = identity();
+    let mut carol = Client::connect(fixture.address(), Options::new("Carol", &issued))
+        .await
+        .unwrap();
+    let mut dave = Client::connect(fixture.address(), Options::new("Dave", &plain))
+        .await
+        .unwrap();
+    for (client, strong) in [(&mut carol, true), (&mut dave, false)] {
+        let session = client.session;
+        client
+            .send(
+                kind::USER_STATS,
+                &proto::UserStats {
+                    session: Some(session),
+                    ..Default::default()
+                },
+            )
+            .await;
+        let stats: proto::UserStats = client
+            .expect(kind::USER_STATS, |stats: &proto::UserStats| {
+                stats.session == Some(session)
+            })
+            .await;
+        assert_eq!(stats.strong_certificate, Some(strong));
+        assert_eq!(stats.certificates.len(), 1);
+    }
+    {
+        let server = fixture.running.server.lock();
+        assert!(server.users[&carol.session].strong);
+        assert!(!server.users[&dave.session].strong);
+    }
+    // The issued certificate with someone else's key is still refused.
+    let mut connected = false;
+    if let Ok(stream) = tls(
+        fixture.address(),
+        Some((issued.certificate.clone(), plain.key.clone_key())),
+    )
+    .await
+    {
+        let (mut reader, _writer) = tokio::io::split(stream);
+        let mut buffer = [0_u8; 64];
+        connected = matches!(timeout(WAIT, reader.read(&mut buffer)).await, Ok(Ok(n)) if n > 0);
+    }
+    assert!(
+        !connected,
+        "an issued certificate without its key logged in"
+    );
+    fixture.running.shutdown().await;
+}
+
 #[tokio::test]
 async fn unauthenticated_peers_cannot_send_large_or_unexpected_frames() {
     let fixture = Fixture::start("").await;

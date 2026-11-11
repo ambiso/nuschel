@@ -43,6 +43,28 @@ Every configuration key is optional; names and defaults follow murmur.ini
   TLS 1.2, which keeps client certificates (stable identities) off the wire in the
   clear. Stock clients built against OpenSSL 1.1.1 or later (Mumble 1.3.1 and later
   on current systems) speak 1.3; older builds cannot connect then.
+- **Strong certificates.** `strong_certificate_authorities` (empty by default, so
+  nobody is strong, as in Murmur without a CA store) lists the authorities whose
+  client certificates count as strong, Murmur's `bVerified`: `"webpki"`
+  (Mozilla's roots, built in), `"system"` (`SSL_CERT_FILE`, or the system's
+  bundle such as /etc/ssl/certs/ca-certificates.crt) or PEM files of trusted
+  authorities (murmur.ini's `sslCA`). A certificate is strong when the chain the
+  client presents leads from it to one of them and nothing in it is expired or
+  not yet valid, whatever the certificate's purpose (Murmur accepts e-mail
+  certificates too). That is decided once, at login, after the handshake proved
+  the client holds the key. A strong user matches the ACL group `strong`,
+  `UserStats.strong_certificate` says so, and the login's log line has `strong`.
+  Self-signed certificates log in as before (the identity is still the
+  certificate's hash), and `certificate_required` still asks for any
+  certificate; to require strong ones, deny Enter to `!strong` at the root.
+  Murmur also logs a strong certificate's name, e-mail addresses and issuer, and
+  logs a strong certificate with an e-mail address in to the account registered
+  under that address when its hash is unknown; neither happens here: logs carry
+  no names or addresses, and that login would hand an account to anyone an
+  authority issued a certificate for the same address (review P1-13; e-mail
+  addresses are not imported from Murmur either). An account that is offline
+  (`since_access` bookkeeping) is never strong; strength belongs to a
+  connection. The authorities are read at start.
 - **SuperUser** (user 0) has no password until one is set; without one it cannot
   log in.
 
@@ -400,9 +422,9 @@ Deliberate differences:
   turning them away with the reason is clearer than half a session. A client that
   reports no version is admitted, as Murmur does. 1.2.2 and 1.2.3 (no Opus either)
   are admitted and told about the codec, as before.
-- Not implemented: Ice/gRPC, external authenticators, `strong` certificates (no
-  CA store; the group never matches), email login, recording
-  notices for clients older than 1.2.3, the pre-1.4 Opus/CELT codec switching.
+- Not implemented: Ice/gRPC, external authenticators, e-mail login (also not
+  with strong certificates, see "Strong certificates"), recording notices for
+  clients older than 1.2.3, the pre-1.4 Opus/CELT codec switching.
 
 ## Security measures
 
@@ -412,7 +434,8 @@ compared as digests in constant time. Password guesses are limited per account:
 after ten failures (one more allowed per second) logins to that account are
 answered with `AuthenticatorFail` ("try again later"). The TLS verifier accepts any client
 certificate but rustls still checks the handshake signature, so presenting
-someone else's certificate fails (tested). TLS session resumption is off, TLS 1.2
+someone else's certificate fails (tested, also for a certificate a configured
+authority issued). TLS session resumption is off, TLS 1.2
 can be refused (`minimum_tls_version`). Debug
 output of protocol messages redacts passwords, tokens, keys, comments and
 message bodies; logs contain user names, session ids and addresses, never
@@ -494,7 +517,7 @@ descriptor exhaustion.
 
 | Command | What it covers |
 | --- | --- |
-| `cargo test -p nuscheld` | ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames; the Murmur import (tests/fixtures/murmur-1.5.json: both password formats over loopback, the upgrade to argon2id, malformed rows reported, a non-empty server refused, `--replace-existing`, the ACLs in effect), listeners kept across reconnects and restarts, certificate reload (a broken one keeps the old) and `minimum_tls_version`, the temporary-channel cap and the whisper budget, clients before 1.2.2, the statistics counters; tests/obfuscation.rs: no client address in the log with `obfuscate` |
+| `cargo test -p nuscheld` | authorisation (authz.rs: every action against seven kinds of actor, the three decisions that were made two ways, and a guard that no permission check lives elsewhere), strong certificates (chains to a configured authority, through intermediates, expired, other authorities, self-signed; and over loopback with `UserStats`), ACL engine (Murmur's cases), leaky bucket and bandwidth record, text limits, config, time format, argon2id; a fuzzing harness over the state (with Nuschel connections); loopback integration tests: login and initial state, every reject reason, a certificate without its key, oversized pre-authentication frames, channels, text, ACL denial, kick, temporary channels, voice over the tunnel and encrypted UDP to protobuf and legacy clients, whisper isolation, self-mute, restart persistence, hostile frames; the Murmur import (tests/fixtures/murmur-1.5.json: both password formats over loopback, the upgrade to argon2id, malformed rows reported, a non-empty server refused, `--replace-existing`, the ACLs in effect), listeners kept across reconnects and restarts, certificate reload (a broken one keeps the old) and `minimum_tls_version`, the temporary-channel cap and the whisper budget, clients before 1.2.2, the statistics counters; tests/obfuscation.rs: no client address in the log with `obfuscate` |
 | `cargo test -p nuscheld --test admin` | `nuscheld admin` on a stopped server's state: users (list, show, rename, set a password, remove with its ACL entries), channel retention (refused without `--yes` when it removes messages), bans, exporting a channel (0600, nothing past the retention), erasing a user |
 | `cargo test -p nuscheld --test extension` | the extension between `nuschel-session` and `nuscheld` on loopback: negotiation and every mismatch, downgrades against fake servers, sending and the stock copy, idempotent retries and conflicts across restarts, every history anchor and the byte cap, uniform errors, guests, revocation (subscriptions, fan-out, pages in flight), `since_access` intervals, edits and deletions, direct conversations and deleted accounts, read markers, typing, channel lifecycle, notices for stock clients, the operator's erase, the session's durable sends and resends |
 | `cargo test -p nuschel-protocol` | OCB2 role constructors, relay parse/encode, info-ping limits, per-type frame limits, redacted `Debug` |

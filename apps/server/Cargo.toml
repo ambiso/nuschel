@@ -43,6 +43,13 @@ rustls = { version = "0.23.46", default-features = false, features = [
   "std",
   "tls12",
 ] }
+# Whether a client's chain leads to a configured authority ("strong"
+# certificates, tls.rs); both already come with rustls and nuschel-session.
+rustls-webpki = { version = "0.103.16", default-features = false, features = [
+  "ring",
+  "std",
+] }
+webpki-roots = "1.0.11"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 socket2 = "0.6.5"

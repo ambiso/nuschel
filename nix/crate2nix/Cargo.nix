@@ -19787,6 +19787,12 @@ rec {
             features = [ "ring" "std" "tls12" ];
           }
           {
+            name = "rustls-webpki";
+            packageId = "rustls-webpki";
+            usesDefaultFeatures = false;
+            features = [ "ring" "std" ];
+          }
+          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -19828,6 +19834,10 @@ rec {
             name = "tracing-subscriber";
             packageId = "tracing-subscriber";
             features = [ "env-filter" ];
+          }
+          {
+            name = "webpki-roots";
+            packageId = "webpki-roots";
           }
           {
             name = "zeroize";

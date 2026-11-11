@@ -188,6 +188,12 @@ async fn serve(
         .unwrap_or_default();
     let negotiation = Negotiation::from_alpn(connection.alpn_protocol());
     let certificate_hash = certificates.first().map(|der| crate::tls::sha1_hex(der));
+    // The handshake proved the leaf's key; whether the chain leads to a
+    // configured authority is decided once, here (tls::Authorities).
+    let strong = server
+        .settings
+        .authorities
+        .strong(&certificates, rustls::pki_types::UnixTime::now());
     if certificate_hash
         .as_deref()
         .is_some_and(|hash| server.banned_certificate(hash))
@@ -222,7 +228,7 @@ async fn serve(
         address,
         certificates,
         certificate_hash,
-        strong: false,
+        strong,
         negotiation,
         info: Default::default(),
         link,

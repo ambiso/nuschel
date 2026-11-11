@@ -503,7 +503,12 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          still needs a restart.
    - [x] IP obfuscation in logs (2026-11-11): `obfuscate = true`, HMAC-SHA256 tokens
          under a per-start key (Murmur's 32-bit key is reversible).
-   - [ ] CA-verified ("strong") certificates.
+   - [x] CA-verified ("strong") certificates (2026-11-11):
+         `strong_certificate_authorities` ("webpki", "system" or PEM files; none by
+         default) as Murmur's `bVerified`: the client's chain verified with webpki
+         after the handshake (self-signed still log in; R1 unchanged), any purpose;
+         the `strong` group, `UserStats.strong_certificate`, the login log line. Not
+         done, deliberately: Murmur's e-mail login with strong certificates.
    - [x] A per-user cap on temporary channels and a global budget for shout fan-out
          (2026-11-11): `temporary_channels_per_user` (16), `whisper_fanout_per_second`
          (500,000); generous, configurable, failing only the request with a reason

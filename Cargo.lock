@@ -6021,6 +6021,7 @@ dependencies = [
  "regex",
  "ring",
  "rustls",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "socket2",
@@ -6031,6 +6032,7 @@ dependencies = [
  "toml 1.2.1+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "webpki-roots",
  "zeroize",
 ]
 

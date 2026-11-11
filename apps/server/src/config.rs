@@ -343,6 +343,11 @@ pub struct Config {
     /// 1.1.1 speak nothing newer) or "1.3", which keeps client certificates
     /// off the wire in the clear.
     pub minimum_tls_version: TlsVersion,
+    /// Certificate authorities whose client certificates are "strong"
+    /// (Murmur's `bVerified`: the ACL group `strong`, `UserStats`): `"webpki"`
+    /// (Mozilla's roots, built in), `"system"` (the system's bundle) or PEM
+    /// files (murmur.ini's `sslCA`). Empty, the default: nobody is strong.
+    pub strong_certificate_authorities: Vec<String>,
     /// Logs show a keyed hash of each client address instead of the address
     /// (murmur.ini `obfuscate`); the key is random per start.
     pub obfuscate: bool,
@@ -410,6 +415,7 @@ impl Default for Config {
             whisper_fanout_per_second: 500_000,
             statistics_interval: 300,
             minimum_tls_version: TlsVersion::Tls12,
+            strong_certificate_authorities: Vec::new(),
             obfuscate: false,
             autoban: Autoban::default(),
             password_hashing: PasswordHashing::default(),
@@ -451,6 +457,8 @@ pub struct Settings {
     pub recommended_client: Option<u64>,
     /// How client addresses appear in logs (`obfuscate`).
     pub addresses: crate::obfuscate::Addresses,
+    /// What makes a client certificate strong (`strong_certificate_authorities`).
+    pub authorities: crate::tls::Authorities,
 }
 
 fn read(path: &Path) -> Result<String, ConfigError> {
@@ -583,6 +591,10 @@ impl Config {
             &self.history.recommended_client,
         )?;
         let obfuscate = self.obfuscate;
+        let authorities = crate::tls::Authorities::load(&self.strong_certificate_authorities)
+            .map_err(|error| {
+                ConfigError::Invalid(format!("strong_certificate_authorities: {error}"))
+            })?;
         Ok(Settings {
             config: self,
             username,
@@ -593,6 +605,7 @@ impl Config {
             minimum_client,
             recommended_client,
             addresses: crate::obfuscate::Addresses::new(obfuscate),
+            authorities,
         })
     }
 }

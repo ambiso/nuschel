@@ -25,6 +25,12 @@ database = "nuscheld.sqlite3"
 # one stays. "1.3" refuses TLS 1.2, where client certificates travel in the clear;
 # Mumble clients built against OpenSSL before 1.1.1 cannot connect then.
 minimum_tls_version = "1.2"
+# Client certificates issued by these certificate authorities are "strong" (Murmur's
+# term): the ACL group `strong` matches them and user statistics say so. Every
+# certificate still logs in (Mumble identifies users by its hash). "webpki" (Mozilla's
+# roots, built in), "system" (SSL_CERT_FILE or the system's bundle) or PEM files of
+# trusted authorities, like murmur.ini's sslCA. Empty: nobody is strong.
+strong_certificate_authorities = []
 # Log a keyed hash of each client address instead of the address (murmur.ini's
 # obfuscate); the key is random per start, so tokens differ after a restart.
 obfuscate = false

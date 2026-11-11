@@ -426,6 +426,7 @@ fn complete(
         user = %state.log_name(session),
         address = %state.settings.addresses.socket(peer.address),
         nuschel = peer.negotiation != crate::extension::Negotiation::Stock,
+        strong = peer.strong,
         "authenticated"
     );
     Ok(session)
