@@ -245,11 +245,18 @@ metadata above; a coerced user.
 levels.**
 
 ```
-identity root key (hybrid Ed25519 + ML-DSA-65)       ← fingerprint = the identity
-  └─ certifies: device-signing key (hybrid), generation g
-        └─ certifies: device d = { device id, MLS leaf key (Ed25519), X-Wing key }
+identity root key (hybrid ML-DSA-65 + Ed25519)       ← fingerprint = the identity
+  └─ certifies: device-signing key (hybrid) + credential key (Ed25519), generation g
+        ├─ certifies: device d = { device id, key epoch, validity, MLS leaf key
+        │                          (Ed25519), X-Wing key, display name }   (hybrid)
+        ├─ credential key signs: d's compact MLS credential (§3.3)          (Ed25519)
         └─ signs: device revocations, account bindings, Mumble certificate bindings
 ```
+
+Implemented in [`crates/identity`](../crates/identity) (`nuschel-identity`): its module
+documentation gives every layout, and `test-vectors/identity-v1.txt` the known-answer
+vectors. The identity is
+`SHA-256(uint8 len || "nuschel/identity-fingerprint/v1" || root public key encoding)`.
 
 - The **root** names the person on every server. Safety numbers, pins and the
   "verified" state refer to it. It signs only device-signing keys, so it is used
@@ -276,7 +283,7 @@ Compared with the alternatives:
 
 | Use | Algorithm | Status |
 | --- | --- | --- |
-| Identity root, device-signing key | Ed25519 + ML-DSA-65 (libcrux), both must verify; the key, not the signature, decides which halves are required | Works today *(spike)* |
+| Identity root, device-signing key | Composite ML-DSA-65 + Ed25519, `id-MLDSA65-Ed25519-SHA512` of [RFC 10073](https://www.rfc-editor.org/rfc/rfc10073) (libcrux), both must verify; the key, not the signature, decides which halves are required | Implemented, checked against the RFC's test vector |
 | MLS leaf signatures | Ed25519; then ML-DSA-44 (draft suite 0x0020) | ML-DSA in OpenMLS's libcrux provider on `main` only |
 | MLS HPKE | X-Wing | 0.9.2, provisional code points |
 | Device linking, key delivery to a device | HPKE with X-Wing, HKDF-SHA-256, ChaCha20-Poly1305 (same libcrux code as MLS) | Works today *(spike)* |
@@ -290,24 +297,33 @@ replaceable.
 ### 3.3 The MLS credential
 
 A custom credential type (private-use 0xF4E1, listed in the group's required
-capabilities) carries a **compact device certificate**:
+capabilities) carries a **compact device credential**:
 
 ```
 struct {
-  opaque identity[32];        // SHA-256 of the root public key
-  uint32 signing_generation;  // which device-signing key signed this
+  uint8  kind = 0x03; uint8 version = 1;
+  opaque identity[32];               // the identity fingerprint
+  uint32 signing_generation;         // which device-signing key signed this
   opaque device_id[16];
-  opaque leaf_key<V>;         // must equal the MLS leaf signature key
-  uint64 not_before;
-  opaque signature<V>;        // device-signing key, algorithm matching the leaf:
-                              // Ed25519 now, Ed25519 + ML-DSA-65 with ML-DSA leaves
-} NuschelDeviceCredential;    // ~170 bytes today
+  uint32 key_epoch;                  // +1 when the device's keys rotate
+  uint64 not_before; uint64 not_after;
+  uint16 leaf_algorithm;             // 0x0807 Ed25519: decides key and signature type
+  opaque leaf_key[32];               // must equal the MLS leaf signature key
+  opaque signature[64];              // credential key, over a context label and the body
+} DeviceCredential;                  // 172 bytes
 ```
 
-The per-person part (root public key, ~2 KB, and the device-signing certificate,
-~7.4 KB) is fetched once per contact from the server's directory, checked against key
-transparency, and cached. The device's full hybrid certificate (with display name and
-X-Wing key) is in the directory too.
+**Correction from implementation:** the credential is not signed by the Ed25519 half
+of the hybrid device-signing key. RFC 10073 forbids using a component key outside the
+composite, so the device-signing certificate certifies a separate Ed25519 *credential
+key* that signs only compact credentials. With ML-DSA leaves, a new leaf algorithm
+value brings a hybrid credential signature.
+
+The per-person part (root public key, 1986 bytes, and the device-signing certificate,
+5439 bytes) is fetched once per contact from the server's directory, checked against
+key transparency, and cached. The device's full hybrid certificate (4700 bytes plus the
+display name, with the X-Wing key) is in the directory too; a credential is accepted
+only with a certificate for the same device and key epoch.
 
 Why not the whole chain in the leaf: the spike first did exactly that. The chain is
 16 KB per leaf, a key package 18.7 KB, and the ratchet tree of a 100-member group
@@ -327,20 +343,26 @@ camera, so QR alone is not enough.
 
 1. The new device creates its device keys and opens a linking mailbox on the server
    (a rendezvous id; extension message `DeviceLink*`).
-2. The existing device shows a short code (rendezvous id + a few words, like wormhole
-   codes), or a QR code with the same content for phones. The user types or scans it
-   on the new device.
+2. The existing device shows a short code (rendezvous id and 8 random digits,
+   `42-1234-5678`; a word list like wormhole's can replace the digits in the UI), or
+   a QR code with the same content for phones. The user types or scans it on the new
+   device.
 3. Both run SPAKE2 over the mailbox with the code
    ([`spake2`](https://crates.io/crates/spake2) 0.4.0, RustCrypto, pure Rust; the PAKE
    that magic-wormhole uses, which Nuschel already plans for file transfer on Mumble
-   servers). The PAKE
-   key authenticates the new device's X-Wing and leaf public keys (hash comparison). A
-   server that swaps keys is caught *(spike: QR variant, `device_linking_over_xwing`)*.
+   servers). The new device sends its leaf and X-Wing keys with an HMAC key
+   confirmation over the transcript (both SPAKE2 messages and the keys); a server that
+   swaps keys, or a wrong code, fails the existing device's check.
 4. The existing device certifies the new device (device-signing key) and seals a
-   provisioning bundle to the new device's X-Wing key: the identity's directory record,
-   the device-signing private key (if the user chose "this device can link others"),
-   the device-sync key (§3.7), pins and verified contacts, history keys (§6.6), account
-   bindings. The bundle travels through the mailbox.
+   provisioning bundle to the new device's X-Wing key with HPKE in PSK mode, the PSK
+   derived from the SPAKE2 key. **Correction from implementation:** the X-Wing key
+   alone does not authenticate the sender (it travels through the server, which could
+   seal its own bundle to it); the PSK shows the new device that the bundle comes
+   from the device that showed the code, in this session. The bundle holds the
+   identity's directory record, the device-signing private key (if the user chose
+   "this device can link others"), the device-sync key (§3.7), pins and verified
+   contacts, history keys (§6.6), account bindings. The bundle travels through the
+   mailbox.
 5. Both devices publish the change to every server's directory and KT. Other devices
    of the user add the new device to existing groups (§6.2).
 
@@ -351,7 +373,9 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
 ### 3.5 Where the keys live
 
 - **Root private key**: encrypted under a **recovery key** (256 bits, shown once as
-  24 words or a printable sheet), stored on each linked device and, optionally, as an
+  56 Crockford base32 characters in 14 groups of 4, with a 24-bit checksum that
+  catches typos, or as a printable sheet; 24 words would need a 2048-word list and are
+  left to the UI), stored on each linked device and, optionally, as an
   opaque backup blob on the user's servers. Decrypted only to rotate the device-signing
   key or recover. Without a recovery key the root exists only during setup and is then
   deleted; losing every device holding the device-signing key then means a new identity.
@@ -368,10 +392,16 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
 - Lost device: any remaining device with the device-signing key signs `RevokeDevice`,
   publishes it to every server's KT, and removes the device from every group (commits).
   If the lost device held the device-signing key, also rotate it with the recovery key.
+- A revocation names the device and the key epochs it covers (`through_key_epoch`;
+  all of them for a lost device). Device certificates, credentials and revocations are
+  valid only under the generation that signed them: after a rotation the remaining
+  devices are certified again, and revoked ones simply are not.
 - Contacts accept devices only if they are in the identity's current KT record (current
   generation, not revoked), so a revoked device cannot be added back.
 - Leaf keys rotate with MLS updates (§6.5); X-Wing device keys rotate yearly or on
-  suspicion (new device certificate, same device id).
+  suspicion (new device certificate, same device id, next key epoch, which supersedes
+  the older one). Certificates and credentials carry a validity window; how long is
+  the crypto worker's policy.
 - Inactive devices (not seen for 90 days, open question 8) are removed from groups by
   other members' clients ("Alice's phone was removed: inactive"), which bounds what a
   forgotten device can read.
@@ -389,6 +419,11 @@ safe against a future quantum computer. The spike's bundle with a full chain is 
 - **Export**: an encrypted identity file (root + device-signing key under the recovery
   key, plus pins and verified contacts under the device-sync key) for moving to a new
   device without another device online.
+- The device keystore holds seeds, never expanded keys: the root key (if present only
+  as the recovery blob), the device-signing secret, the device's leaf and X-Wing seeds,
+  the certificates and the device-sync key. Each blob is ChaCha20-Poly1305 under a key
+  derived (HKDF) from the caller's key, a fresh salt and its purpose; loading re-derives
+  every public key and checks it against the certificates.
 - No escrow. History is backed up only through history keys held by the user's devices,
   or exported locally.
 
@@ -438,11 +473,14 @@ identity, and the RSA key is never used for anything end-to-end.
   | Own identity seen with an unknown device or binding (KT self-monitoring) | Blocking alarm with "This wasn't me: revoke" |
 
 - **Safety numbers**: 60 digits, 12 groups of 5. For each person, 30 digits from
-  Signal's numeric fingerprint construction (5200 iterations of SHA-512 over version
-  and key) over the hybrid root public key, without a server identifier: the identity
-  is the same everywhere. The lower half comes first, so both sides see the same
-  number *(spike)*. The QR code holds `NSQ1 || fp_low || fp_high` (SHA-256 root
-  fingerprints, 68 bytes); scanning compares both and says which side differs.
+  Signal's numeric fingerprint construction (5200 iterations of SHA-512, version
+  0x0001) with the 32-byte identity fingerprint as the key and no stable identifier
+  (no server identifier: the identity is the same everywhere). Hashing the fingerprint
+  rather than the 1986-byte key costs nothing in strength and keeps the 5200 rounds
+  cheap. The lower half comes first, so both sides see the same number. A typed number
+  is compared exactly: 60 digits, either contiguous or as 12 groups separated by single
+  spaces. The QR code holds `NSQ1 || fp_low || fp_high` (the identity fingerprints in
+  byte order, 68 bytes); scanning compares both and says which side differs.
 - **Verified state** belongs to the identity: verified once, it shows on every server,
   in DMs and in member lists, until the root changes.
 - **Automatic verification** (§5) shows "verified automatically" when KT passes, as
