@@ -325,7 +325,7 @@ pub async fn page<S: SeqRows>(store: &mut S, query: &PageQuery) -> Result<Stored
     let size = |rows: &[StoredMessage]| rows.iter().map(|row| row.content.len()).sum::<usize>();
     let cap = query.max_bytes as usize;
     while size(&older) + size(&newer) > cap && older.len() + newer.len() > 1 {
-        if newer.len() > older.len() || (older.len() <= 1 && !newer.is_empty()) {
+        if !newer.is_empty() && (newer.len() >= older.len() || older.len() <= 1) {
             newer.pop();
             more_after = true;
         } else {
@@ -500,4 +500,92 @@ pub enum ServerStorageResponse {
     Access(Vec<StoredAccess>),
     ReadMarkers(Vec<(String, u64)>),
     Page(StoredPage),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Rows(Vec<StoredMessage>);
+
+    impl SeqRows for Rows {
+        type Error = ();
+        async fn rows(
+            &mut self,
+            _: &str,
+            (lo, hi): (u64, u64),
+            descending: bool,
+            limit: usize,
+        ) -> Result<Vec<StoredMessage>, ()> {
+            let rows = self
+                .0
+                .iter()
+                .filter(|row| (lo..=hi).contains(&row.seq))
+                .cloned();
+            Ok(if descending {
+                rows.rev().take(limit).collect()
+            } else {
+                rows.take(limit).collect()
+            })
+        }
+    }
+
+    fn run(query: &PageQuery, sizes: &[usize]) -> StoredPage {
+        let rows = sizes
+            .iter()
+            .enumerate()
+            .map(|(index, size)| StoredMessage {
+                seq: index as u64 + 1,
+                content: "x".repeat(*size),
+                idempotency_key: Some("secret".into()),
+                ..StoredMessage::default()
+            })
+            .collect();
+        let mut store = Rows(rows);
+        let mut future = std::pin::pin!(page(&mut store, query));
+        match future
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+        {
+            std::task::Poll::Ready(Ok(page)) => page,
+            _ => panic!("the page did not complete"),
+        }
+    }
+
+    fn query(anchor: Anchor, limit: u32, ranges: Vec<(u64, u64)>, max_bytes: u32) -> PageQuery {
+        PageQuery {
+            conversation: String::new(),
+            anchor,
+            limit,
+            ranges,
+            max_bytes,
+        }
+    }
+
+    fn seqs(page: &StoredPage) -> Vec<u64> {
+        page.rows.iter().map(|row| row.seq).collect()
+    }
+
+    #[test]
+    fn pages_trim_from_the_far_end_and_keep_the_nearest_row() {
+        let all = vec![(1, u64::MAX)];
+        // Around 5 with a cap of three rows of 10 bytes: the anchor stays.
+        let page = run(&query(Anchor::Around(5), 6, all.clone(), 30), &[10; 9]);
+        assert_eq!(seqs(&page), [4, 5, 6]);
+        assert!(page.more_before && page.more_after);
+        // A row larger than the cap comes alone.
+        let page = run(&query(Anchor::Latest, 5, all.clone(), 10), &[5, 5, 100]);
+        assert_eq!(seqs(&page), [3]);
+        assert!(page.more_before);
+        // Ranges clip every anchor; the keys never leave the store.
+        let page = run(
+            &query(Anchor::Around(4), 10, vec![(1, 2), (6, 6)], 1000),
+            &[1; 8],
+        );
+        assert_eq!(seqs(&page), [1, 2, 6]);
+        assert!(!page.more_before && !page.more_after);
+        assert!(page.rows.iter().all(|row| row.idempotency_key.is_none()));
+        let page = run(&query(Anchor::After(2), 10, vec![], 1000), &[1; 8]);
+        assert!(page.rows.is_empty() && !page.more_before && !page.more_after);
+    }
 }

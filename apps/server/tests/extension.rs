@@ -1379,3 +1379,394 @@ async fn since_access_shows_only_what_was_said_while_the_reader_had_access() {
         [1, 2, 5, 6]
     );
 }
+
+// ---- §6 edits and deletions ----
+
+impl Session {
+    async fn edit(&mut self, conversation: [u8; 16], target: u64, content: &str) -> NuschelEvent {
+        self.request(NuschelRequest::Edit(v1::ChatEdit {
+            request_id: request_id(),
+            conversation: conversation.to_vec(),
+            target,
+            format: v1::Format::Text as i32,
+            content: content.into(),
+        }))
+        .await
+    }
+
+    async fn delete(&mut self, conversation: [u8; 16], target: u64) -> NuschelEvent {
+        self.request(NuschelRequest::Delete(v1::ChatDelete {
+            request_id: request_id(),
+            conversation: conversation.to_vec(),
+            target,
+        }))
+        .await
+    }
+}
+
+#[tokio::test]
+async fn edits_replace_content_and_deletions_leave_tombstones() {
+    let fixture = Fixture::start("[history]\nedit_limit = 1").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let bob_id = bob.register().await;
+    let mut carol = Raw::login(fixture.address(), "Carol").await;
+    let root = alice.conversations[&0];
+    assert_eq!(alice.send(root, "a secret pasted by mistake").await, 1);
+    bob.chat().await;
+    carol.text().await;
+    let edited = alice.edit(root, 1, "fixed").await;
+    let NuschelEvent::Ack(ack) = edited else {
+        panic!("{edited:?}");
+    };
+    assert_eq!(ack.seq, 2, "an edit is an event with its own seq");
+    let event = bob.chat().await.message.unwrap();
+    assert_eq!(event.kind, v1::message::Kind::Edit as i32);
+    assert_eq!((event.target, event.content.as_str()), (1, "fixed"));
+    // Only the author edits, and only so often.
+    assert_eq!(
+        error_code(&bob.edit(root, 1, "mine now").await),
+        Some(v1::error::Code::NotFound)
+    );
+    assert_eq!(
+        error_code(&alice.edit(root, 1, "again").await),
+        Some(v1::error::Code::LimitReached)
+    );
+    let page = bob.page(root, latest(), 10).await;
+    let first = &page.messages[0];
+    assert_eq!((first.content.as_str(), first.edits), ("fixed", 1));
+    assert!(first.edited_ms > 0);
+    assert!(
+        page.messages
+            .iter()
+            .all(|message| !message.content.contains("secret")),
+        "earlier versions are never served"
+    );
+    assert!(
+        fixture
+            .store
+            .lock()
+            .unwrap()
+            .history
+            .messages
+            .values()
+            .all(|row| !row.content.contains("secret")),
+        "and not kept"
+    );
+    // Stock clients see neither edits nor deletions.
+    assert!(carol.next_text(QUIET).await.is_none());
+    // The author deletes; the tombstone keeps the seq.
+    assert!(matches!(alice.delete(root, 1).await, NuschelEvent::Ack(_)));
+    let event = bob.chat().await.message.unwrap();
+    assert_eq!(event.kind, v1::message::Kind::Delete as i32);
+    assert_eq!(event.target, 1);
+    // A moderator (Write) deletes someone else's message, with a reason.
+    let seq = bob.send(root, "spam").await;
+    fixture.edit_channel(0, |root| {
+        root.node.acls.push(entry("", Some(1), perm::WRITE, 0));
+    });
+    assert!(matches!(
+        alice.delete(root, seq).await,
+        NuschelEvent::Ack(_)
+    ));
+    assert_eq!(
+        error_code(&bob.delete(root, 1).await),
+        Some(v1::error::Code::NotFound),
+        "nobody else's"
+    );
+    let page = bob.page(root, latest(), 20).await;
+    let tombstone = page
+        .messages
+        .iter()
+        .find(|message| message.seq == 1)
+        .unwrap();
+    assert!(tombstone.deleted_ms > 0 && tombstone.content.is_empty());
+    assert_eq!(tombstone.delete_reason, 0);
+    let moderated = page
+        .messages
+        .iter()
+        .find(|message| message.seq == seq)
+        .unwrap();
+    assert_eq!(moderated.delete_reason, 1);
+    let _ = bob_id;
+}
+
+impl Raw {
+    async fn next_text(&mut self, wait: Duration) -> Option<proto::TextMessage> {
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            if let Ok(Some(frame)) = decode_control(&mut self.buffer) {
+                if frame.kind == kind::TEXT_MESSAGE {
+                    return Some(proto::TextMessage::decode(frame.payload).unwrap());
+                }
+                continue;
+            }
+            match tokio::time::timeout_at(deadline, self.reader.read_buf(&mut self.buffer)).await {
+                Ok(Ok(n)) if n > 0 => {}
+                _ => return None,
+            }
+        }
+    }
+}
+
+// ---- §3 direct conversations, accounts ----
+
+impl Session {
+    async fn open_direct(&mut self, user_id: u32) -> NuschelEvent {
+        self.request(NuschelRequest::OpenDirect(v1::OpenDirect {
+            request_id: request_id(),
+            user_id,
+        }))
+        .await
+    }
+}
+
+#[tokio::test]
+async fn direct_conversations_belong_to_two_accounts_for_good() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let bob_id = bob.register().await;
+    let mut carol = nuschel(&fixture, "Carol", 2).await;
+    carol.register().await;
+    let NuschelEvent::DirectOpened(opened) = alice.open_direct(bob_id).await else {
+        panic!("expected a direct conversation");
+    };
+    let direct = opened.direct.unwrap();
+    assert_eq!((direct.user_id, direct.name.as_str()), (bob_id, "Bob"));
+    let conversation: [u8; 16] = direct.conversation.clone().try_into().unwrap();
+    // The same pair always gets the same conversation.
+    let NuschelEvent::DirectOpened(again) = alice.open_direct(bob_id).await else {
+        panic!();
+    };
+    assert_eq!(again.direct.unwrap().conversation, direct.conversation);
+    assert_eq!(alice.send(conversation, "hi Bob").await, 1);
+    assert_eq!(bob.chat().await.message.unwrap().content, "hi Bob");
+    assert!(!carol.arrives(QUIET, is_chat).await);
+    assert_eq!(
+        error_code(&carol.history(conversation, latest(), 10).await),
+        Some(v1::error::Code::NotFound)
+    );
+    let NuschelEvent::DirectList(list) = bob
+        .request(NuschelRequest::ListDirect(v1::ListDirect {
+            request_id: request_id(),
+        }))
+        .await
+    else {
+        panic!();
+    };
+    assert_eq!(list.directs.len(), 1);
+    assert_eq!(list.directs[0].name, "Alice");
+    // Guests have no durable identity and no direct conversations.
+    let mut guest = nuschel(&fixture, "Guest", 3).await;
+    assert_eq!(
+        error_code(&guest.open_direct(bob_id).await),
+        Some(v1::error::Code::NotFound)
+    );
+    // Deleting Bob's account freezes the conversation; a new "Bob" (with a new
+    // account id) inherits nothing.
+    drop(bob);
+    {
+        let mut state = fixture.running.server.lock();
+        let bob = state.registry.by_name("Bob").unwrap().clone();
+        state.registry.remove(bob.id);
+        state.authz_changed(nuscheld::conversations::Scope::All);
+        state.finish();
+    }
+    let page = alice.page(conversation, latest(), 10).await;
+    assert_eq!(page.messages[0].content, "hi Bob");
+    assert_eq!(
+        error_code(
+            &alice
+                .send_keyed(conversation, connection::random_key(), "anyone?")
+                .await
+        ),
+        Some(v1::error::Code::NotFound)
+    );
+    let mut new_bob = nuschel(&fixture, "Bob", 1).await;
+    let new_id = new_bob.register().await;
+    assert_ne!(new_id, bob_id, "registration numbers are never reused");
+    assert_eq!(
+        error_code(&new_bob.history(conversation, latest(), 10).await),
+        Some(v1::error::Code::NotFound)
+    );
+}
+
+// ---- §7 read markers and typing ----
+
+#[tokio::test]
+async fn read_markers_sync_across_devices_and_typing_is_never_stored() {
+    let fixture = Fixture::start("").await;
+    let mut phone = nuschel(&fixture, "Alice", 0).await;
+    phone.register().await;
+    let root = phone.conversations[&0];
+    for n in 1..=3 {
+        phone.send(root, &format!("m{n}")).await;
+    }
+    // Another device of the same account (Mumble allows one connection per
+    // account at a time: this login replaces the first).
+    let mut laptop = nuschel(&fixture, "Alice", 0).await;
+    drop(phone);
+    let marker = |seq| {
+        NuschelRequest::ReadMarker(v1::ReadMarker {
+            conversation: root.to_vec(),
+            seq,
+        })
+    };
+    laptop.command(Command::Nuschel(marker(2))).await;
+    laptop.command(Command::Nuschel(marker(1))).await;
+    laptop.command(Command::Nuschel(marker(99))).await;
+    let state = laptop.subscribe(&[root]).await;
+    assert_eq!(
+        state.conversations[0].read, 2,
+        "monotonic and at most the head"
+    );
+    assert_eq!(state.conversations[0].head, 3);
+    // Durable: after a restart the marker is still there.
+    drop(laptop);
+    let fixture = fixture.restart("").await;
+    let mut laptop = nuschel(&fixture, "Alice", 0).await;
+    assert_eq!(laptop.subscribe(&[root]).await.conversations[0].read, 2);
+    // Typing reaches readers and is rate-limited, never stored.
+    let mut bob = nuschel(&fixture, "Bob", 1).await;
+    let typing = NuschelRequest::Typing(v1::Typing {
+        conversation: root.to_vec(),
+        session: 0,
+    });
+    laptop.command(Command::Nuschel(typing.clone())).await;
+    laptop.command(Command::Nuschel(typing)).await;
+    let typer = bob
+        .wait(|event| match event {
+            SessionEvent::Nuschel(NuschelEvent::Typing(typing)) => Some(typing.session),
+            _ => None,
+        })
+        .await;
+    assert_eq!(typer, laptop.session);
+    assert!(
+        !bob.arrives(QUIET, |event| matches!(
+            event,
+            SessionEvent::Nuschel(NuschelEvent::Typing(_))
+        ))
+        .await,
+        "one per three seconds"
+    );
+    assert_eq!(
+        laptop.page(root, latest(), 10).await.head,
+        3,
+        "nothing stored"
+    );
+}
+
+// ---- §3 channel lifecycle, §9 stock users ----
+
+#[tokio::test]
+async fn temporary_history_goes_with_its_channel_and_deleted_channels_are_archived() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    alice
+        .command(Command::CreateChannel {
+            parent: 0,
+            name: "Temp".into(),
+            temporary: true,
+        })
+        .await;
+    let (channel, conversation) = alice
+        .wait(|event| match event {
+            SessionEvent::ChannelInfo { channel, info } if *channel != 0 => {
+                Some((*channel, info.conversation.clone()))
+            }
+            _ => None,
+        })
+        .await;
+    let conversation: [u8; 16] = conversation.try_into().unwrap();
+    alice.send(conversation, "temporary words").await;
+    // Leaving empties and removes the temporary channel, and its history.
+    alice.command(Command::Join(0)).await;
+    alice
+        .wait(|event| match event {
+            SessionEvent::ChannelRemoved(id) if *id == channel => Some(()),
+            _ => None,
+        })
+        .await;
+    assert_eq!(
+        error_code(&alice.history(conversation, latest(), 10).await),
+        Some(v1::error::Code::NotFound)
+    );
+    // The purge was queued before this write, so it is done once acknowledged.
+    let flushed = alice.send(alice.conversations[&0], "sync").await;
+    assert_eq!(flushed, 1);
+    assert!(
+        fixture
+            .store
+            .lock()
+            .unwrap()
+            .history
+            .messages
+            .values()
+            .all(|row| row.content != "temporary words")
+    );
+    // A deleted permanent channel's history stays, for administrators only.
+    let (side, side_conversation) = fixture.add_channel("Side", vec![], vec![]);
+    alice.send(side_conversation, "kept").await;
+    {
+        let mut state = fixture.running.server.lock();
+        state.remove_channel(side, None);
+        state.finish();
+    }
+    assert_eq!(
+        error_code(&alice.history(side_conversation, latest(), 10).await),
+        Some(v1::error::Code::NotFound)
+    );
+    let state = fixture.running.server.lock();
+    assert_eq!(
+        state.conversations.kind(&side_conversation),
+        Some(nuscheld::conversations::Kind::Archived)
+    );
+}
+
+#[tokio::test]
+async fn stock_clients_are_told_that_text_is_kept() {
+    let fixture = Fixture::start("").await;
+    let mut alice = nuschel(&fixture, "Alice", 0).await;
+    alice.register().await;
+    let (side, side_conversation) = fixture.add_channel("Side", vec![], vec![]);
+    alice.send(side_conversation, "history here").await;
+    let mut carol = Raw::connect(fixture.address(), &[]).await;
+    carol.version(None).await;
+    carol.authenticate("Carol").await;
+    let sync =
+        proto::ServerSync::decode(carol.until(kind::SERVER_SYNC).await.unwrap().payload).unwrap();
+    assert!(
+        sync.welcome_text
+            .unwrap()
+            .contains("kept without a time limit")
+    );
+    carol
+        .send(
+            kind::USER_STATE,
+            &proto::UserState {
+                channel_id: Some(side),
+                ..Default::default()
+            },
+        )
+        .await;
+    let notice = carol.text().await;
+    assert!(
+        notice
+            .message
+            .contains("people who join a channel later can read it")
+    );
+    assert_eq!(notice.actor, None, "from the server");
+    // Nuschel clients are not told this way (their client knows).
+    assert!(
+        !alice
+            .arrives(
+                QUIET,
+                |event| matches!(event, SessionEvent::Welcome(text) if text.contains("kept"))
+            )
+            .await
+    );
+}

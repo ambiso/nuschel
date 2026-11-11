@@ -51,6 +51,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "extension_messages"
+path = "fuzz_targets/extension_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "crypt"
 path = "fuzz_targets/crypt.rs"
 test = false

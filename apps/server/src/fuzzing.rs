@@ -53,18 +53,25 @@ impl Harness {
             sessions: Vec::new(),
             out: Datagrams::default(),
         };
-        for (name, user_id, hash, version) in [
-            ("SuperUser", Some(0), None, 5),
-            ("Registered", Some(1), Some("ab".repeat(20)), 5),
-            ("Anonymous", None, Some("cd".repeat(20)), 5),
-            ("Legacy", None, None, 3),
+        for (name, user_id, hash, version, nuschel) in [
+            ("SuperUser", Some(0), None, 5, false),
+            ("Registered", Some(1), Some("ab".repeat(20)), 5, true),
+            ("Anonymous", None, Some("cd".repeat(20)), 5, true),
+            ("Legacy", None, None, 3, false),
         ] {
-            harness.add_user(name, user_id, hash, version);
+            harness.add_user(name, user_id, hash, version, nuschel);
         }
         harness
     }
 
-    fn add_user(&mut self, name: &str, user_id: Option<u32>, hash: Option<String>, minor: u64) {
+    fn add_user(
+        &mut self,
+        name: &str,
+        user_id: Option<u32>,
+        hash: Option<String>,
+        minor: u64,
+        nuschel: bool,
+    ) {
         let Some(session) = self.state.allocate_session() else {
             return;
         };
@@ -82,7 +89,7 @@ impl Harness {
         };
         let (crypt, _) = CryptState::generate_server([session as u8; 48]);
         let config = self.state.settings.config.clone();
-        let user = new_user(
+        let mut user = new_user(
             &config,
             session,
             name.into(),
@@ -92,6 +99,17 @@ impl Harness {
             crypt,
             Instant::now(),
         );
+        // Nuschel connections, so the extension's handlers are reached.
+        if nuschel {
+            user.extension = Some(Box::new(crate::extension::Extension::new(
+                crate::extension::server_capabilities(),
+                &config,
+                Instant::now(),
+            )));
+            user.account = user_id
+                .and_then(|id| self.state.registry.users.get(&id))
+                .map(|registered| registered.account);
+        }
         self.state.users.insert(session, user);
         if let Some(root) = self.state.channels.get_mut(0) {
             root.users.push(session);
@@ -112,7 +130,7 @@ impl Harness {
             let sender = self.sessions[usize::from(data[0]) % self.sessions.len()];
             let kind = match data[1] {
                 kind @ 0..=31 => u16::from(kind),
-                other => 0x4e00 | u16::from(other),
+                other => 0x4e00 | u16::from(other - 32),
             };
             let length = usize::from(data[2]).min(data.len() - 3);
             let payload = Bytes::copy_from_slice(&data[3..3 + length]);
@@ -127,8 +145,28 @@ impl Harness {
         self.check_invariants();
     }
 
-    /// The tree and memberships stay consistent whatever the input.
+    /// A root conversation id, for structured extension input.
+    pub fn root_conversation(&self) -> [u8; 16] {
+        self.state
+            .channels
+            .get(0)
+            .map_or([0; 16], |root| root.conversation_id)
+    }
+
+    /// The tree and memberships stay consistent whatever the input, and
+    /// nobody keeps a subscription they may not read.
     fn check_invariants(&self) {
+        for (session, user) in &self.state.users {
+            if let Some(extension) = &user.extension {
+                assert!(extension.outstanding.len() <= nuschel_protocol::nuschel::MAX_OUTSTANDING);
+                for id in &extension.subscriptions {
+                    assert!(
+                        self.state.can_read(*session, id),
+                        "session {session} kept a subscription it may not read"
+                    );
+                }
+            }
+        }
         for (id, channel) in &self.state.channels.0 {
             if let Some(parent) = channel.parent() {
                 assert!(
@@ -191,11 +229,53 @@ mod tests {
             ..Default::default()
         }
         .encode_to_vec();
-        for _ in 0..300 {
+        for round in 0..300 {
             let mut harness = Harness::new();
+            let root = harness.root_conversation().to_vec();
+            let structured = [
+                (
+                    0x01_u8,
+                    nuschel_protocol::nuschel::v1::ChatSend {
+                        request_id: round,
+                        conversation: root.clone(),
+                        idempotency_key: vec![7; 16],
+                        format: 1,
+                        content: "x".into(),
+                        reply_to: 0,
+                    }
+                    .encode_to_vec(),
+                ),
+                (
+                    0x06,
+                    nuschel_protocol::nuschel::v1::Subscribe {
+                        request_id: round + 1,
+                        conversations: vec![root.clone()],
+                    }
+                    .encode_to_vec(),
+                ),
+                (
+                    0x04,
+                    nuschel_protocol::nuschel::v1::HistoryRequest {
+                        request_id: round + 2,
+                        conversation: root.clone(),
+                        anchor: Some(
+                            nuschel_protocol::nuschel::v1::history_request::Anchor::Latest(true),
+                        ),
+                        limit: 5,
+                    }
+                    .encode_to_vec(),
+                ),
+            ];
             let mut data = Vec::new();
             for _ in 0..40 {
                 let sender = next() as u8;
+                if next() % 5 == 0 {
+                    let (kind, body) = &structured[(next() % 3) as usize];
+                    // The harness maps type bytes from 32 on into the extension block.
+                    data.extend_from_slice(&[sender, 32 + kind, body.len() as u8]);
+                    data.extend_from_slice(body);
+                    continue;
+                }
                 match next() % 4 {
                     0 => data.extend_from_slice(&[sender, 7, channel.len() as u8]),
                     1 => data.extend_from_slice(&[sender, 9, register.len() as u8]),

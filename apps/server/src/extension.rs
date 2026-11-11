@@ -243,5 +243,19 @@ mod tests {
         assert!(bad.version(&hello_body(&["BAD"]), server).is_err());
     }
 
+    #[test]
+    fn at_most_sixteen_requests_are_in_flight_and_ids_are_unique() {
+        let config = Config::default();
+        let mut extension = Extension::new(server_capabilities(), &config, Instant::now());
+        for id in 0..16 {
+            extension.begin(id).unwrap();
+        }
+        assert_eq!(extension.begin(3), Err(v1::error::Code::DuplicateRequest));
+        assert_eq!(extension.begin(16), Err(v1::error::Code::TooManyRequests));
+        extension.end(3);
+        extension.begin(16).unwrap();
+        assert_eq!(extension.begin(17), Err(v1::error::Code::TooManyRequests));
+    }
+
     use prost::Message as _;
 }
