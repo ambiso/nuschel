@@ -12,8 +12,10 @@
 
 State (disk, firmware variables, sockets) lives in $NUSCHEL_WINDOWS_VM_DIR,
 default ~/vms/nuschel-windows; keep it out of backups and off the RAM-backed
-/tmp. The guest has no network except two forwards into host loopback:
-10.0.2.100:80 (this harness) and 10.0.2.100:64738 (a test Murmur, --murmur-port).
+/tmp. The guest has no network except forwards into host loopback:
+10.0.2.100:80 (this harness), 10.0.2.100:64738 (a test Murmur, --murmur-port)
+and 10.0.2.100:PORT to 127.0.0.1:PORT for each --forward PORT (e.g. a
+magic-wormhole rendezvous and relay for the sandboxed transfer worker).
 """
 from __future__ import annotations
 
@@ -197,6 +199,8 @@ def daemon(args: argparse.Namespace) -> None:
     forwards = f"guestfwd=tcp:10.0.2.100:80-cmd:{socat} STDIO TCP:127.0.0.1:{port}"
     if args.murmur_port:
         forwards += f",guestfwd=tcp:10.0.2.100:64738-cmd:{socat} STDIO TCP:127.0.0.1:{args.murmur_port}"
+    for forward in args.forward:
+        forwards += f",guestfwd=tcp:10.0.2.100:{forward}-cmd:{socat} STDIO TCP:127.0.0.1:{forward}"
     qmp_path = STATE / "qmp.sock"
     qmp_path.unlink(missing_ok=True)
     command = [
@@ -362,6 +366,8 @@ def main() -> None:
     up.add_argument("--cpus", type=int, default=2)
     up.add_argument("--memory", type=int, default=6144)
     up.add_argument("--murmur-port", type=int)
+    up.add_argument("--forward", type=int, action="append", default=[],
+                    help="also forward 10.0.2.100:PORT to the host's 127.0.0.1:PORT (repeatable)")
     run = commands.add_parser("run")
     run.add_argument("script")
     run.add_argument("--timeout", type=float, default=600)
