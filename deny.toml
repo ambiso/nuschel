@@ -80,7 +80,6 @@ deny = [
   ], reason = "Only the terminal renderer consumes validated worker bitmaps; no source image decoding in the UI" },
   { name = "crossterm", wrappers = [
     "ratatui-crossterm",
-    "ratatui-image",
   ], reason = "The terminal client reaches the terminal only through ratatui" },
   { name = "cpal", wrappers = [
     "nuschl-media-worker",
