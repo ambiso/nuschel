@@ -17,11 +17,26 @@ Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 
 Reported while testing (2026-11-10/11):
 
-- [ ] Code blocks: a copy-to-clipboard button.
+- [ ] Code blocks: a copy-to-clipboard button. (In progress.)
 - [ ] Message text is selectable; right-click a message for Copy message (and Copy
-      image / Save image as for images).
-- [ ] Paste images into the composer: decode and re-encode in the content worker to
-      fit the server's image limit, send as a Mumble image message.
+      image / Save image as for images). (In progress.)
+- [ ] Clickable links, and Mumble's HTML formatting on par with stock Mumble (bold,
+      italic, lists, headings, colour, tables), safely: no remote resources, link
+      scheme allowlist, deceptive-anchor tooltip, libFuzzer targets. (In progress.)
+- [x] Paste images into the composer (Ctrl+V): re-encoded in the sandboxed content
+      worker to fit the server's image limit, sent like stock Mumble.
+- [ ] Drag and drop of image files; an attachment preview before sending.
+- [x] Emoji picker on Ctrl+. / Ctrl+; (GNOME's chooser is GTK-only), in colour on
+      Linux via a one-line GPUI patch (vendor/gpui-pre-wgpu).
+- [ ] Colour emoji in messages: text runs that are emoji should use the colour emoji
+      font (DejaVu Sans has black-and-white glyphs for the classic smileys).
+- [x] Sensitivity slider; dialogs scroll smoothly; echo test stops cleanly and fails
+      fast without a sound system; codec shown only when known.
+- [x] Add-server form: the name follows the address; Enter adds and connects. A
+      refused connection says no Mumble server listens on that port.
+- [ ] DNS SRV records (`_mumble._tcp.<host>`) like stock Mumble.
+- [x] Mixers (pavucontrol, PipeWire) show what each stream is for; Windows/macOS
+      session names are not set (cpal does not expose them).
 - [ ] Echo reference: Nuschel's canceller records one output device, everything it
       plays (all applications; more than two channels fold into left/right and AEC3
       switches between mono and stereo by itself). Sound on another output device
@@ -33,51 +48,77 @@ Reported while testing (2026-11-10/11):
 - [x] Settings said "Looking for audio devices…" / "The audio worker stopped" in a
       container whose sound sockets were deleted: the media sandbox now skips them,
       and binds PulseAudio's directory so its restarts show up inside.
-- [ ] The PipeWire/PulseAudio restart test drives the worker without its sandbox;
-      run it through the real sandbox command (PipeWire restarts rely on the worker
-      being replaced, about 2 s).
+- [x] The PipeWire/PulseAudio restart test also runs through the real sandbox
+      (`nuschel media-sandbox`; PipeWire restarts rely on the worker being replaced).
+- [ ] The room echo check flaked once under heavy load (gate open 43 % for another
+      application's sound while the level dropped 40 dB).
+
+Later (reported):
+
+- [ ] Typing indicators: stock Mumble has none; between Nuschel clients over
+      `PluginDataTransmission`.
+- [ ] LaTeX/math in messages: e.g. a Typst compiler in its own sandboxed worker
+      rendering to an image, with resource limits.
+- [ ] Large file transfers peer to peer, not stored on the server: the server only
+      relays (perhaps a small chunk cache, content-defined chunking); resumable
+      across restarts and lost connections; clearly shown while still uploading.
+
+Limits review (user, 2026-11-11): hard limits are themselves an availability risk
+when chosen too low or handled badly (cf. sshd skipping work for long passwords).
+Prefer process resource limits on the sandboxed workers (memory, CPU) and treating a
+worker that runs out as "this message cannot be shown" for that message only; where
+a limit stays, it must page or say so visibly, never silently drop.
+
+- [ ] Search returns one page within a 96 KiB budget: page it (cursor) like history.
+- [ ] Session budgets (4,096 channels, 16,384 users, 64 MiB of blobs): evict cached
+      blobs by use rather than refusing new ones; review the counts against the
+      largest real servers; keep the visible notice.
+- [ ] Content worker decode caps (4096×4096, 64 MiB, 8 images, 640 KiB): lean on the
+      worker's memory and CPU limits instead, and show a placeholder ("could not be
+      displayed") when the worker fails on a message.
 
 Security review (2026-11-11):
 
-- [ ] M1 macOS: the storage worker's data folder is the whole config folder; give it
-      a history subfolder.
+- [x] M1 macOS: history gets its own subfolder where data and config coincide.
 - [ ] M2 The media worker gets the PulseAudio socket on PipeWire hosts too.
 - [ ] M3 The macOS media Seatbelt profile allows by default (deny list).
-- [ ] L1 The notification thumbnail size check can overflow in u32 (`state.rs`).
-- [ ] L2 Voice end packets bypass mute (`backend.rs`, `connection.rs`).
-- [ ] L3 No total budgets against a malicious server (channels, users, blobs).
-- [ ] L4 Control characters in channel names block saving the bookmarks.
-- [ ] L5 History search has no byte budget.
-- [ ] L6 The updater has no freshness check (a replayed old manifest is accepted
-      until something newer is seen).
-- [ ] L7 Exported certificates' file permissions.
+- [x] L1 Notification thumbnails check their size without u32 overflow.
+- [x] L2 No microphone audio leaves after mute: the terminator carries silence.
+- [x] L3 Budgets for channels, users and server blobs (see the limits review).
+- [x] L4 A channel cache can no longer block saving the bookmarks.
+- [x] L5 Search over visible text (`message_search`), within a byte budget (see the
+      limits review); pages seek the index.
+- [x] L6 Signed release times; replayed older manifests are refused. Open: a client
+      that never saw the newer manifest can still be replayed to, and withheld
+      releases go unnoticed (needs expiring, regularly re-signed manifests).
+- [x] L7 Exported certificates are written 0600, atomically.
+- [ ] Sanitise control characters in names for display.
 - [ ] L8 The Windows VM harness's HTTP control has no authentication (test-only).
 
 Code quality and performance review (2026-11-11):
 
-- [ ] Content worker per message: load syntax highlighting lazily, and render a
-      history page in one worker exchange (a page costs about 1 s in debug builds and
-      blocks incoming messages behind it).
-- [ ] Settings changes and loss estimates rebuild the whole capture chain (the echo
-      canceller relearns): send Configure only when audio settings change, apply
-      bitrate/loss to the encoder only.
-- [ ] Undisplayed level events redraw the window 10 times a second while unmuted.
-- [ ] Channel tree rows are rebuilt in O(C²) with allocations every frame.
+- [x] Content worker: lazy syntax highlighting, one worker per history page (a
+      40-message page: 1.3 s → 10 ms in debug), pages off the storage loop.
+- [x] Settings changes keep the capture chain; bitrate/loss only touch the encoder.
+- [x] Level events only in the Settings check.
+- [x] Channel tree built in one pass (2,000 channels / 5,000 users: 74 ms → 1 ms).
+- [ ] Each `ChannelState` still does two linear searches; the "Linked with" tooltip
+      looks names up linearly every frame.
 - [ ] Message text and code highlights are copied every frame; avatar lookup per
       message scans all users.
-- [ ] Image decoding and bookmark saving (with fsync) run on the UI thread.
-- [ ] `img(Arc<RenderImage>)` sprites are never dropped from the GPU atlas
-      (`Window::drop_image`); confirm with the viewer and fix.
+- [ ] Image decoding runs on the UI thread. (Bookmark saving moved off it.)
+- [x] Decoded images leave GPUI's texture atlas once nothing uses them.
 - [ ] `server, generation` repeated in ~17 event types; `connect_once` and
       `drain_events` are too large.
-- [ ] The desktop polls events every 20 ms instead of awaiting them.
-- [ ] Media worker: idle 4 ms wakeups without devices, per-packet allocations, sample
-      format dispatch written three times, unused `JitterStats`.
-- [ ] Storage: `(?3 IS NULL OR id < ?3)` may defeat the index; search filters image
-      matches after `LIMIT` (FTS5 over visible text).
-- [ ] Smaller: `persistent_sandbox` picks the content sandbox's arguments apart by
-      position; `ContentRequest` flags as an enum; duplicated activate-key checks and
-      `data:` URI parsing; test-only worker modes in release binaries.
+- [x] Events are applied as they arrive (no 20 ms polling).
+- [x] Media worker cleanups (idle wakeups, per-packet allocations, duplicated
+      dispatch, unused `JitterStats`).
+- [x] Storage: pages seek the index; search no longer scans image data.
+- [x] One bwrap builder for all sandboxes; `ContentRequest` is an enum.
+- [ ] Smaller: duplicated activate-key checks and `data:` URI parsing; test-only
+      worker modes in release binaries.
+- [ ] Vendored crates to drop once upstream catches up: `vendor/cpal` (stream names,
+      RustAudio/cpal#1409), `vendor/gpui-pre-wgpu` (emoji fonts).
 
 From the timeline and icon work:
 

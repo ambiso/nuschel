@@ -47,7 +47,10 @@ Shift+Enter starts a new line (switchable in Settings). Drag the channel list's 
 to fit long names; collapsed branches show how many people are inside, and branches
 with people open on connect. Messages keep blank lines, highlight fenced
 code, show inline images (decoded in a sandboxed worker), and collapse by measured
-height behind **Show more**. Search finds messages saved on this device. History and
+height behind **Show more**. Ctrl+V pastes an image (re-encoded in the sandboxed
+worker to fit the server's limit and sent the way stock Mumble sends it), and Ctrl+.
+or Ctrl+; opens an emoji picker. Volume mixers name each stream (microphone, voice
+chat, echo reference). Search finds messages saved on this device. History and
 cached channel trees survive restarts, including offline browsing. Controls and
 text fields are exposed to screen readers (AT-SPI on Linux is tested).
 

@@ -63,7 +63,18 @@ and network namespaces do not restrict every operation an audio daemon exposes. 
 Nuschel code creates/changes only its own streams. The sandbox is not an audio-protocol
 firewall or a claim that a compromised audio daemon cannot act outside it.
 
-Muted clients do not open microphone streams. Capture generations invalidate queued
+Against a hostile server the session keeps budgets: 4,096 channels, 16,384 users and
+64 MiB of comments, descriptions and avatars per connection, 256 listened channels per
+user; past them new items are dropped with one visible notice. (These counts are under
+review: limits that drop data are an availability risk of their own; see TODO.md.)
+Exported PKCS#12 identities are written owner-only (0600) and atomically. On macOS,
+where data and config share a folder, the storage worker's writable folder is a
+dedicated `history/` subfolder. The updater refuses a signed manifest whose release
+time or version is older than the newest it has accepted; a client that never saw a
+newer manifest can still be offered an older one, and withheld releases go unnoticed.
+
+Muted clients do not open microphone streams. A mute mid-sentence ends the
+transmission with a constant packet of Opus silence, never captured audio. Capture generations invalidate queued
 PCM and encoded packets across mute/deafen changes and audio-worker restarts. The
 desktop replaces the media process on mute/deafen transitions: native stream teardown
 can block, so dropping a stream alone is insufficient to guarantee capture closes.
