@@ -115,6 +115,11 @@ Later (reported):
       whispers to friends" and whisper-to-friends.
 - [ ] Screenshot harness: the `menus` scene breaks after `server` in `--scenes all`
       (collapsed tree coordinates).
+- [x] Light mode, the system theme by default (live switching), interface and code
+      fonts, text size, and Ctrl+= / Ctrl+− / Ctrl+0 zoom (a vendored gpui-pre patch
+      scales the whole window; drop it once upstream has a window scale).
+- [ ] The dark palette's faint text is about 3.6:1 on the main background (below
+      AA); Ctrl+scroll / pinch zoom; IME placement at zoom ≠ 100 % untested.
 - [ ] Proper Windows sandboxing for the workers (AppContainer or a restricted
       token with a low integrity level, no network for content and storage);
       today they only run in a kill-on-close job object.
