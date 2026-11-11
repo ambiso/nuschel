@@ -479,6 +479,16 @@ pub struct Config {
     pub history: History,
     pub kt: Kt,
     pub mls: Mls,
+    pub share_links: ShareLinks,
+}
+
+/// Share links (`share/1`, docs/web.md).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ShareLinks {
+    /// The web host this server's links point at (`web.example.org`, running
+    /// `services.nuschel-web`); empty: the one the client is set to use.
+    pub web_host: String,
 }
 
 impl Default for Config {
@@ -546,6 +556,7 @@ impl Default for Config {
             history: History::default(),
             kt: Kt::default(),
             mls: Mls::default(),
+            share_links: ShareLinks::default(),
         }
     }
 }
@@ -642,6 +653,11 @@ impl Config {
         }
         if self.timeout == 0 || self.handshake_timeout == 0 {
             return Err(ConfigError::Invalid("timeouts must be nonzero".into()));
+        }
+        if !crate::share::valid_web_host(&self.share_links.web_host) {
+            return Err(ConfigError::Invalid(
+                "share_links.web_host must be a host name".into(),
+            ));
         }
         if self.max_users == 0 || self.connections_per_address == 0 {
             return Err(ConfigError::Invalid(

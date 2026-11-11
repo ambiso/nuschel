@@ -27,6 +27,7 @@ pub mod password;
 pub mod retention;
 pub mod routing;
 pub mod server;
+pub mod share;
 pub mod state;
 pub mod storage;
 pub mod text;

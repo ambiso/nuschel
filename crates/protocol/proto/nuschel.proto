@@ -658,3 +658,43 @@ message MlsJoinInfo {
   // The seq of the newest commit.
   uint64 commit_seq = 6;
 }
+
+// ---- share/1: share links (docs/web.md, "Share links"), 0x4E90-0x4E97 ----
+
+// 0x4E90 -> ShareLink or Error. A link that opens `channel`. Registered users
+// who may enter the channel; an access token needs Write on it.
+message ShareLinkCreate {
+  uint64 request_id = 1;
+  uint32 channel = 2;
+  // Unix seconds; 0 for a link that does not expire.
+  uint64 expires_at = 3;
+  // An access token (Mumble's #token ACL groups, at most 128 bytes) handed to
+  // whoever opens the link, so it can open a private channel.
+  string access_token = 4;
+}
+
+// 0x4E91: a created or resolved link.
+message ShareLink {
+  uint64 request_id = 1;
+  // 16 bytes; base64url in links.
+  bytes token = 2;
+  uint32 channel = 3;
+  uint64 expires_at = 4;
+  string access_token = 5;
+  // The web host the server's operator chose for its links; empty: the client's.
+  string web_host = 6;
+}
+
+// 0x4E92 -> Done or Error (NOT_FOUND). By the creator or someone with Write on
+// the link's channel.
+message ShareLinkRevoke {
+  uint64 request_id = 1;
+  bytes token = 2;
+}
+
+// 0x4E93 -> ShareLink or Error (NOT_FOUND: unknown, revoked, expired, or the
+// channel is gone). Any authenticated connection, rate-limited.
+message ShareLinkResolve {
+  uint64 request_id = 1;
+  bytes token = 2;
+}

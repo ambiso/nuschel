@@ -16,6 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ".nuschel.v1.ChatSend",
             ".nuschel.v1.ChatEdit",
             ".nuschel.v1.Message",
+            ".nuschel.v1.ShareLinkCreate",
+            ".nuschel.v1.ShareLink",
         ])
         .compile_protos(
             &[

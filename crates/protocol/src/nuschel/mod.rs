@@ -40,7 +40,9 @@ pub mod capability {
     /// server's epoch log with cosignatures attached to heads, and `reg:` and
     /// `name:` labels. Needs `kt/1`; sticky like every capability.
     pub const KT_WITNESS: &str = "kt-witness/1";
-    pub const ALL: [&str; 6] = [HISTORY, SUBSCRIBE, TYPING, KT, MLS, KT_WITNESS];
+    /// Share links (docs/web.md): tokens that open a channel.
+    pub const SHARE: &str = "share/1";
+    pub const ALL: [&str; 7] = [HISTORY, SUBSCRIBE, TYPING, KT, MLS, KT_WITNESS, SHARE];
 }
 
 /// Message types.
@@ -90,6 +92,11 @@ pub mod kind {
     pub const MLS_WELCOME_ACK: u16 = 0x4e2a;
     pub const MLS_JOIN_INFO_REQUEST: u16 = 0x4e2b;
     pub const MLS_JOIN_INFO: u16 = 0x4e2c;
+    /// `share/1`, 0x4E90–0x4E97 (0x4E94–0x4E97 reserved).
+    pub const SHARE_LINK_CREATE: u16 = 0x4e90;
+    pub const SHARE_LINK: u16 = 0x4e91;
+    pub const SHARE_LINK_REVOKE: u16 = 0x4e92;
+    pub const SHARE_LINK_RESOLVE: u16 = 0x4e93;
 }
 
 /// Requests in flight per connection.
@@ -108,6 +115,10 @@ pub const MAX_DIRECTS: usize = 1024;
 pub const MAX_CAPABILITIES: usize = 32;
 pub const MAX_CAPABILITY_BYTES: usize = 64;
 pub const MAX_NAME_BYTES: usize = 512;
+/// An access token in a share link (Mumble's own limit is the message size).
+pub const MAX_ACCESS_TOKEN_BYTES: usize = 128;
+/// A web host name in a `ShareLink`.
+pub const MAX_WEB_HOST_BYTES: usize = 253;
 /// A key-transparency log descriptor in the hello.
 pub const MAX_KT_LOG_BYTES: usize = 512;
 /// Device certificates and revocations in one `KtRecord`.
@@ -181,6 +192,7 @@ pub fn required_capability(kind: u16) -> Option<&'static str> {
         | MLS_WELCOME_FETCH
         | MLS_WELCOME_ACK
         | MLS_JOIN_INFO_REQUEST => Some(capability::MLS),
+        SHARE_LINK_CREATE | SHARE_LINK_REVOKE | SHARE_LINK_RESOLVE => Some(capability::SHARE),
         _ => None,
     }
 }
@@ -202,6 +214,7 @@ pub fn client_limit(kind: u16) -> usize {
         MLS_COMMIT => MAX_MLS_COMMIT_FRAME,
         MLS_SEND => MAX_MLS_APPLICATION_BYTES + 256,
         MLS_WELCOME_ACK => MAX_MLS_WELCOMES * 20 + 64,
+        SHARE_LINK_CREATE => MAX_ACCESS_TOKEN_BYTES + 64,
         _ => 64,
     }
 }

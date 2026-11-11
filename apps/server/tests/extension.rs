@@ -135,6 +135,7 @@ fn request_of(event: &NuschelEvent) -> Option<u64> {
         NuschelEvent::DirectOpened(opened) => Some(opened.request_id),
         NuschelEvent::DirectList(list) => Some(list.request_id),
         NuschelEvent::Done(done) => Some(done.request_id),
+        NuschelEvent::ShareLink(link) => Some(link.request_id),
         _ => None,
     }
 }
@@ -291,6 +292,9 @@ impl Session {
             NuschelRequest::OpenDirect(message) => message.request_id,
             NuschelRequest::ListDirect(message) => message.request_id,
             NuschelRequest::ChannelSettings(message) => message.request_id,
+            NuschelRequest::ShareLinkCreate(message) => message.request_id,
+            NuschelRequest::ShareLinkRevoke(message) => message.request_id,
+            NuschelRequest::ShareLinkResolve(message) => message.request_id,
             _ => 0,
         };
         self.command(Command::Nuschel(request)).await;
@@ -666,7 +670,8 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
             "typing/1",
             "kt/1",
             "mls/1",
-            "kt-witness/1"
+            "kt-witness/1",
+            "share/1"
         ]
     );
     // The key-transparency log comes with `kt/1`.
@@ -2600,4 +2605,118 @@ async fn the_session_sends_channel_text_durably_and_resends_after_a_reconnect() 
         .await;
     let marker = alice.subscribe(&[root]).await.conversations[0].read;
     assert_eq!(marker, 2);
+}
+
+// ---- share/1: share links (docs/web.md) ----
+
+fn create(channel: u32, expires_at: u64, access_token: &str) -> NuschelRequest {
+    NuschelRequest::ShareLinkCreate(v1::ShareLinkCreate {
+        request_id: request_id(),
+        channel,
+        expires_at,
+        access_token: access_token.into(),
+    })
+}
+
+fn resolve(token: &[u8]) -> NuschelRequest {
+    NuschelRequest::ShareLinkResolve(v1::ShareLinkResolve {
+        request_id: request_id(),
+        token: token.to_vec(),
+    })
+}
+
+fn revoke(token: &[u8]) -> NuschelRequest {
+    NuschelRequest::ShareLinkRevoke(v1::ShareLinkRevoke {
+        request_id: request_id(),
+        token: token.to_vec(),
+    })
+}
+
+fn share_link(event: NuschelEvent) -> v1::ShareLink {
+    match event {
+        NuschelEvent::ShareLink(link) => link,
+        other => panic!("expected a share link, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn share_links_open_channels_until_revoked_or_expired() {
+    let fixture = Fixture::start("[share_links]\nweb_host = \"web.example.org\"").await;
+    // A private channel: only the access token "door" may enter.
+    let (private, _) = fixture.add_channel(
+        "Private",
+        vec![
+            entry("all", None, 0, perm::ENTER),
+            entry("#door", None, perm::ENTER, 0),
+        ],
+        vec![],
+    );
+    let (open, _) = fixture.add_channel("Open", vec![], vec![]);
+    let mut owner = nuschel(&fixture, "owner", 0).await;
+    let owner_id = owner.register().await;
+    let mut guest = nuschel(&fixture, "guest", 1).await;
+
+    // Anyone registered who may enter makes a plain link; the guest may not
+    // (no durable identity), and nobody may for a channel they cannot enter.
+    let plain = share_link(owner.request(create(open, 0, "")).await);
+    assert_eq!(plain.channel, open);
+    assert_eq!(plain.token.len(), 16);
+    assert_eq!(plain.web_host, "web.example.org");
+    assert!(plain.access_token.is_empty());
+    let answer = guest.request(create(open, 0, "")).await;
+    assert_eq!(error_code(&answer), Some(v1::error::Code::NotFound));
+    for channel in [private, 9999] {
+        let answer = owner.request(create(channel, 0, "")).await;
+        assert_eq!(error_code(&answer), Some(v1::error::Code::NotFound));
+    }
+
+    // With Write on the channel, a link may carry its access token.
+    fixture.edit_channel(private, |channel| {
+        channel
+            .node
+            .acls
+            .push(entry("", Some(owner_id), perm::ENTER | perm::WRITE, 0));
+    });
+    let door = share_link(owner.request(create(private, 0, "door")).await);
+    assert_eq!(door.access_token, "door");
+    let past = owner.request(create(private, 1, "door")).await;
+    assert_eq!(error_code(&past), Some(v1::error::Code::Malformed));
+
+    // A guest resolves it: the channel and the token that lets them in.
+    let resolved = share_link(guest.request(resolve(&door.token)).await);
+    assert_eq!(
+        (resolved.channel, resolved.access_token.as_str()),
+        (private, "door")
+    );
+    let unknown = guest.request(resolve(&[0; 16])).await;
+    assert_eq!(error_code(&unknown), Some(v1::error::Code::NotFound));
+    let malformed = guest.request(resolve(&[0; 3])).await;
+    assert_eq!(error_code(&malformed), Some(v1::error::Code::Malformed));
+    // Only the creator (or Write on the channel) revokes.
+    let refused = guest.request(revoke(&door.token)).await;
+    assert_eq!(error_code(&refused), Some(v1::error::Code::NotFound));
+
+    // Links survive a restart; revoked ones do not resolve.
+    {
+        let state = fixture.running.server.lock();
+        state.persist_channel(private);
+        state.persist_channel(open);
+    }
+    drop(owner);
+    drop(guest);
+    let fixture = fixture.restart("").await;
+    let mut owner = nuschel(&fixture, "owner", 0).await;
+    let again = share_link(owner.request(resolve(&door.token)).await);
+    assert_eq!(again.channel, private);
+    assert!(
+        again.web_host.is_empty(),
+        "the web host is the configuration's"
+    );
+    let done = owner.request(revoke(&door.token)).await;
+    assert!(matches!(done, NuschelEvent::Done(_)), "{done:?}");
+    let gone = owner.request(resolve(&door.token)).await;
+    assert_eq!(error_code(&gone), Some(v1::error::Code::NotFound));
+    let plain = share_link(owner.request(resolve(&plain.token)).await);
+    assert_eq!(plain.channel, open);
+    let _ = fixture;
 }

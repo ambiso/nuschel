@@ -336,6 +336,10 @@ pub enum NuschelRequest {
     OpenDirect(v1::OpenDirect),
     ListDirect(v1::ListDirect),
     ChannelSettings(v1::ChannelSettings),
+    /// Share links (`share/1`, docs/web.md).
+    ShareLinkCreate(v1::ShareLinkCreate),
+    ShareLinkRevoke(v1::ShareLinkRevoke),
+    ShareLinkResolve(v1::ShareLinkResolve),
 }
 
 impl NuschelRequest {
@@ -353,6 +357,9 @@ impl NuschelRequest {
             Self::OpenDirect(message) => (kind::OPEN_DIRECT, message.encode_to_vec()),
             Self::ListDirect(message) => (kind::LIST_DIRECT, message.encode_to_vec()),
             Self::ChannelSettings(message) => (kind::CHANNEL_SETTINGS, message.encode_to_vec()),
+            Self::ShareLinkCreate(message) => (kind::SHARE_LINK_CREATE, message.encode_to_vec()),
+            Self::ShareLinkRevoke(message) => (kind::SHARE_LINK_REVOKE, message.encode_to_vec()),
+            Self::ShareLinkResolve(message) => (kind::SHARE_LINK_RESOLVE, message.encode_to_vec()),
         }
     }
 
@@ -366,6 +373,9 @@ impl NuschelRequest {
             Self::OpenDirect(message) => message.request_id,
             Self::ListDirect(message) => message.request_id,
             Self::ChannelSettings(message) => message.request_id,
+            Self::ShareLinkCreate(message) => message.request_id,
+            Self::ShareLinkRevoke(message) => message.request_id,
+            Self::ShareLinkResolve(message) => message.request_id,
             Self::Unsubscribe(_) | Self::ReadMarker(_) | Self::Typing(_) => 0,
         }
     }
@@ -390,6 +400,8 @@ pub enum NuschelEvent {
     DirectOpened(v1::DirectOpened),
     DirectList(v1::DirectList),
     Done(v1::Done),
+    /// A share link created or resolved (`share/1`).
+    ShareLink(v1::ShareLink),
 }
 
 /// Decode and bound an extension frame from the server (`None`: ignored).
@@ -458,6 +470,21 @@ fn nuschel_event(frame: &ControlFrame) -> Result<Option<NuschelEvent>, Error> {
             NuschelEvent::DirectList(list)
         }
         kind::DONE => NuschelEvent::Done(decode(frame)?),
+        kind::SHARE_LINK => {
+            let link: v1::ShareLink = decode(frame)?;
+            if link.token.len() != 16
+                || link.access_token.len() > nuschel::MAX_ACCESS_TOKEN_BYTES
+                || link.access_token.contains(char::is_control)
+                || link.web_host.len() > nuschel::MAX_WEB_HOST_BYTES
+                || !link
+                    .web_host
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b".-".contains(&byte))
+            {
+                return Err(invalid());
+            }
+            NuschelEvent::ShareLink(link)
+        }
         _ => return Ok(None),
     };
     Ok(Some(event))

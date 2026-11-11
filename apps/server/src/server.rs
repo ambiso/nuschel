@@ -639,6 +639,9 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     let history_reads = storage::start(backend.clone());
     let counters = Arc::new(Counters::default());
     let mut state = load_state(&settings, &storage, &history_reads, &counters).await?;
+    state.share_links = crate::share::Links::load(&storage)
+        .await
+        .ok_or_else(|| StartError::Storage("could not load share links".into()))?;
     let (queues, receivers) = history::queues();
     state.history = queues;
     // Key transparency on its own storage worker: a lookup never waits behind

@@ -323,6 +323,9 @@ impl State {
             | kind::MLS_WELCOME_FETCH
             | kind::MLS_WELCOME_ACK
             | kind::MLS_JOIN_INFO_REQUEST => self.mls_frame(session, frame),
+            kind::SHARE_LINK_CREATE | kind::SHARE_LINK_REVOKE | kind::SHARE_LINK_RESOLVE => {
+                self.share_frame(session, frame)
+            }
             _ => self.extension_error(session, request_id, fail(Code::Unsupported)),
         }
     }

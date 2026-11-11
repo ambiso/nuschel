@@ -803,6 +803,8 @@ pub struct State {
     /// The MLS delivery service's queue and each group's epoch, when `mls/1` is
     /// offered.
     pub mls: Option<crate::mls::MlsHandle>,
+    /// Share links by token (`share/1`).
+    pub share_links: crate::share::Links,
 }
 
 impl State {
@@ -834,6 +836,7 @@ impl State {
             fanout,
             kt: None,
             mls: None,
+            share_links: Default::default(),
         }
     }
 

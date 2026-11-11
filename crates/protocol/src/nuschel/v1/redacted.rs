@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! `Debug` for extension messages that carry message text or idempotency
 //! keys: only their lengths are shown.
-use super::{ChatEdit, ChatSend, Message};
+use super::{ChatEdit, ChatSend, Message, ShareLink, ShareLinkCreate};
 use std::fmt;
 
 struct Length(usize);
@@ -53,6 +53,31 @@ impl fmt::Debug for Message {
             .field("delete_reason", &self.delete_reason)
             .field("edits", &self.edits)
             .field("mls", &Length(self.mls.len()))
+            .finish()
+    }
+}
+
+// Share links: the token and the access token open channels.
+impl fmt::Debug for ShareLinkCreate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShareLinkCreate")
+            .field("request_id", &self.request_id)
+            .field("channel", &self.channel)
+            .field("expires_at", &self.expires_at)
+            .field("access_token", &Length(self.access_token.len()))
+            .finish()
+    }
+}
+
+impl fmt::Debug for ShareLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShareLink")
+            .field("request_id", &self.request_id)
+            .field("token", &Length(self.token.len()))
+            .field("channel", &self.channel)
+            .field("expires_at", &self.expires_at)
+            .field("access_token", &Length(self.access_token.len()))
+            .field("web_host", &self.web_host)
             .finish()
     }
 }
