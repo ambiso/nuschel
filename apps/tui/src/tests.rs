@@ -103,6 +103,7 @@ fn options() -> Options {
         audio: true,
         opener: None,
         plain: false,
+        ssh: false,
     }
 }
 

@@ -28,6 +28,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
 };
+use ratatui_image::sliced::{SlicedImage, SlicedProtocol};
+use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 
 /// How long a note stays in the status line (warnings longer).
@@ -214,14 +216,21 @@ pub fn message_lines(
 
 /// The open conversation as wrapped lines, each with the serial of the
 /// message it belongs to.
-fn timeline_lines(app: &App, width: usize) -> Vec<(Option<u64>, Line<'static>)> {
+type Picture = (usize, Arc<SlicedProtocol>);
+type TimelineLines = (Vec<(Option<u64>, Line<'static>)>, Vec<Picture>);
+
+fn timeline_lines(app: &App, width: usize) -> TimelineLines {
     let Some((server, channel)) = app.open_conversation() else {
-        return vec![(
-            None,
-            Line::from("Open a channel or conversation: Tab to the channels, or Ctrl+K."),
-        )];
+        return (
+            vec![(
+                None,
+                Line::from("Open a channel or conversation: Tab to the channels, or Ctrl+K."),
+            )],
+            Vec::new(),
+        );
     };
     let mut out = Vec::new();
+    let mut pictures = Vec::new();
     let timeline = &channel.timeline;
     let top = if timeline.loading {
         Some("Loading…")
@@ -293,10 +302,22 @@ fn timeline_lines(app: &App, width: usize) -> Vec<(Option<u64>, Line<'static>)> 
                         out.push((Some(message.serial), wrapped));
                     }
                 }
+                if message.deleted.is_none() {
+                    for picture in app.graphics.borrow_mut().pictures(
+                        &message.document,
+                        width.saturating_sub(4).min(120) as u16,
+                        false,
+                    ) {
+                        pictures.push((out.len(), picture.clone()));
+                        for _ in 0..picture.size().height {
+                            out.push((Some(message.serial), Line::default()));
+                        }
+                    }
+                }
             }
         }
     }
-    out
+    (out, pictures)
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -414,7 +435,7 @@ fn draw_timeline(frame: &mut Frame, app: &mut App, area: Rect, cursor: &mut Opti
     frame.render_widget(block, area);
     let width = usize::from(inner.width);
     let height = usize::from(inner.height);
-    let lines = timeline_lines(app, width);
+    let (lines, pictures) = timeline_lines(app, width);
     let total = lines.len();
     let max = total.saturating_sub(height);
     app.timeline.max = max;
@@ -454,6 +475,35 @@ fn draw_timeline(frame: &mut Frame, app: &mut App, area: Rect, cursor: &mut Opti
         .chain(lines[top..bottom].iter().map(|(_, line)| line.clone()))
         .collect();
     frame.render_widget(Paragraph::new(visible), inner);
+    // Request only messages actually in the viewport, preventing a long
+    // history from flooding the workers/cache with off-screen formulas.
+    if let Some((_, channel)) = app.open_conversation() {
+        let owners: std::collections::BTreeSet<_> = lines[top..bottom]
+            .iter()
+            .filter_map(|(owner, _)| *owner)
+            .collect();
+        for message in &channel.timeline.messages {
+            if owners.contains(&message.serial) && message.deleted.is_none() {
+                app.graphics.borrow_mut().pictures(
+                    &message.document,
+                    width.saturating_sub(4).min(120) as u16,
+                    true,
+                );
+            }
+        }
+    }
+    if inner.width > 4 && inner.height > 0 {
+        // A signed origin lets the library clip rows above/below the viewport.
+        // Every image is generated from validated worker pixels, never escapes
+        // received from a server. Widths are fitted before encoding.
+        let viewport = Rect::new(inner.x + 4, inner.y, inner.width - 4, inner.height);
+        for (at, picture) in pictures {
+            let y = at as i64 + padding as i64 - top as i64;
+            if y < i64::from(inner.height) && y + i64::from(picture.size().height) > 0 {
+                frame.render_widget(SlicedImage::new(&picture, (0, y as i16).into()), viewport);
+            }
+        }
+    }
 }
 
 fn draw_typing(frame: &mut Frame, app: &App, area: Rect) {
@@ -484,7 +534,9 @@ fn draw_typing(frame: &mut Frame, app: &App, area: Rect) {
 
 fn draw_composer(frame: &mut Frame, app: &App, area: Rect, cursor: &mut Option<Position>) {
     let focused = app.pane == Pane::Composer;
-    let title = if app.editing.is_some() {
+    let title = if let Some(label) = app.clipboard.label() {
+        label.to_string()
+    } else if app.editing.is_some() {
         "Editing your message: Enter saves, Esc cancels".to_string()
     } else {
         match app.open_conversation() {

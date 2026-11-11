@@ -39,6 +39,7 @@ pub const KEYS: &[&str] = &[
     "Composer",
     "  Enter            send; a line starting with / is a command",
     "  Alt+Enter        new line",
+    "  Ctrl+V           attach a PNG image from the local Linux clipboard",
     "  Up               (empty) edit your last message",
     "  Ctrl+A, Ctrl+E, Ctrl+W, Ctrl+U   start, end, delete word, delete to start",
 ];
@@ -64,6 +65,7 @@ pub const COMMANDS: &[&str] = &[
     "  /search WORDS            search this conversation (/searchserver, /searchall)",
     "  /result N, /more         open result N, more results",
     "  /older                   load older messages",
+    "  /paste-image, /discard-image   attach local clipboard PNG, remove it",
     "  /links, /open N          the newest messages' links, open link N",
     "  /quit",
 ];
@@ -182,6 +184,9 @@ impl App {
     fn composer_key(&mut self, key: KeyEvent) {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.paste_image()
+            }
             KeyCode::Enter if alt || key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.composer.insert("\n");
             }

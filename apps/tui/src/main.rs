@@ -5,7 +5,9 @@
 //! same media worker. A full screen by default; plain lines for screen
 //! readers and pipes (`--plain`). Over SSH voice is off unless asked for.
 mod app;
+mod clipboard;
 mod document;
+mod graphics;
 mod input;
 mod keys;
 mod plain;
@@ -85,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         audio,
         opener: arguments.opener.or_else(|| default_opener(ssh)),
         plain,
+        ssh,
     };
     let mut app = app::App::new(client, Some(profile), options);
     for problem in loaded.problems {

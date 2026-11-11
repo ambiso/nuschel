@@ -32,6 +32,11 @@ pub async fn run(
         hook(info);
     }));
     execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
+    // Query before the event reader owns stdin. Unsupported terminals keep
+    // text descriptions, and --plain never emits graphics queries.
+    if let Ok(picker) = ratatui_image::picker::Picker::from_query_stdio() {
+        app.graphics.borrow_mut().configure(picker);
+    }
     let (keys, mut input) = tokio::sync::mpsc::unbounded_channel::<Event>();
     // crossterm reads blocking; its own thread forwards what it reads.
     std::thread::spawn(move || {
@@ -42,6 +47,7 @@ pub async fn run(
         }
     });
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    let mut media_tick = tokio::time::interval(std::time::Duration::from_millis(100));
     let result = loop {
         if let Err(error) = terminal.draw(|frame| view::draw(frame, &mut app)) {
             break Err(error);
@@ -65,6 +71,7 @@ pub async fn run(
                 _ => {}
             },
             _ = tick.tick() => app.tick(),
+            _ = media_tick.tick() => app.poll_media(),
         }
     };
     app.tick();

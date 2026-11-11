@@ -42,6 +42,8 @@ pub struct Options {
     pub opener: Option<String>,
     /// Plain lines instead of the full screen: prompts are commands.
     pub plain: bool,
+    /// Never read the remote host's OS clipboard during an SSH session.
+    pub ssh: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,6 +162,8 @@ pub struct Note {
 
 pub struct App {
     pub client: Client,
+    pub graphics: std::cell::RefCell<crate::graphics::Graphics>,
+    pub clipboard: crate::clipboard::Clipboard,
     profile: Option<Profile>,
     pub options: Options,
     pub pane: Pane,
@@ -192,6 +196,8 @@ impl App {
     pub fn new(client: Client, profile: Option<Profile>, options: Options) -> Self {
         Self {
             client,
+            graphics: Default::default(),
+            clipboard: Default::default(),
             profile,
             options,
             pane: Pane::Composer,
@@ -381,11 +387,17 @@ impl App {
 
     /// Once a second: the clock, typing indicators, saved servers.
     pub fn tick(&mut self) {
+        self.poll_media();
         self.client.set_time(monotonic_ms());
         self.client.expire_typing();
         if std::mem::take(&mut self.servers_dirty) {
             self.save_servers();
         }
+    }
+
+    pub fn poll_media(&mut self) {
+        self.graphics.borrow_mut().poll();
+        self.poll_clipboard();
     }
 
     /// The reader is at the newest message: it is read.
@@ -786,6 +798,9 @@ impl App {
     }
 
     pub fn send(&mut self, body: String) {
+        if self.clipboard.attached() {
+            return self.send_image(&body);
+        }
         if self.client.sending() {
             return self.warn("The previous message is still on its way.");
         }
@@ -1463,6 +1478,11 @@ impl App {
             .unwrap_or((line.trim(), ""));
         let server = self.current_server();
         match name.to_ascii_lowercase().as_str() {
+            "paste-image" => self.paste_image(),
+            "discard-image" => {
+                self.clipboard.discard();
+                self.say("Image attachment discarded.");
+            }
             "help" | "h" | "?" => {
                 for line in crate::keys::COMMANDS {
                     self.say(*line);
