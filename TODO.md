@@ -940,8 +940,13 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       browser with a loopback redirect (RFC 8252 style), since Linux has no platform
       passkey API and macOS's needs a signed app. The recovery key stays as an
       optional fallback; the identity's safety becomes the passkey provider
-      account's. Questions for the user: the passkey domain, where blobs live, the
-      browser round trip on the desktop.
+      account's. Decided (user): the project domain is the passkey domain, and the
+      identity backup service runs there. Desktop: the browser by default, the one
+      route that reaches platform passkeys, phones (hybrid), security keys and
+      password managers on every desktop without signing; native CTAP2 for security
+      keys as a later option (macOS's native passkey API needs a signed app; the
+      Windows WebAuthn API would need `unsafe` FFI). Mobile apps use the native
+      passkey APIs (Android Credential Manager, iOS AuthenticationServices).
 - [ ] Knocking (user, 2026-11-11): someone who may not enter a voice or chat channel
       knocks; online users with **Move and Enter** in that channel get a notice with
       Admit / Decline (knocks rate-limited). Admitting grants temporary Enter, Speak,
