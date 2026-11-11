@@ -24,7 +24,7 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from accessibility import snapshot, start_registry  # noqa: E402
+from accessibility import items, snapshot, start_registry  # noqa: E402
 from gnome_session import GnomeSession  # noqa: E402
 from local_murmur import Murmur, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
@@ -176,6 +176,101 @@ def make_photo(path, width, height):
     return path
 
 
+def notice_zoom(args, root, shell, registry, bots, profile, port, pin, shot):
+    """Real Murmur failures at real page zoom: accessible text, hit bounds and dismissal."""
+    assert registry, "notice-zoom requires --at-spi"
+    application = eventually(lambda: next((node for node in registry.children()
+                                          if node.name.lower() == "nuschl"), None),
+                             "Nuschl is not in the accessibility registry")
+
+    def named(role, name, prefix=False):
+        return next((node for node, r, n, _ in items(application)
+                     if (r == role if role else True)
+                     and (n.startswith(name) if prefix else n == name)), None)
+
+    def inside(inner, outer):
+        x, y, w, h = inner
+        ox, oy, ow, oh = outer
+        return w > 0 and h > 0 and x >= ox - 1 and y >= oy - 1 and x + w <= ox + ow + 1 and y + h <= oy + oh + 1
+
+    password = root / "moderator-password"
+    password.write_text(Murmur.SUPERUSER_PASSWORD)
+    password.chmod(0o600)
+    moderator = Client(args.binaries, "127.0.0.1", port, pin, "SuperUser", root / "moderator",
+                       ["--password-file", str(password)])
+    bots.append(moderator)
+    # Mumble forwards this real moderation reason, and Nuschl renders its actual
+    # disconnected-session notice. No injected widget state or mocked rendering.
+    reason = "Please reconnect after checking this private server's channel access and certificate settings."
+    records = []
+    base_rail_width = None
+    report = args.output / "notice-zoom.json"
+    for size_name, width in [("normal", 1280), ("narrow", 900)]:
+        shell.chord("Control_L", "0")
+        shell.place("Nuschl", 40, 40, width, 800)
+        for percent, steps in [(100, 0), (125, 2), (150, 1), (200, 2)]:
+            for _ in range(steps):
+                shell.chord("Control_L", "equal")
+                time.sleep(0.2)
+            eventually(lambda: abs(json.loads((profile / "config/settings.json").read_text())
+                                   ["appearance"]["zoom"] - percent / 100) < 0.001,
+                       f"Ctrl++ did not reach {percent}%")
+            connect = named("push button", "Connect")
+            if connect:
+                connect.press()
+            rail = eventually(lambda: next((node for node, role, name, _ in items(application)
+                                            if role == "push button" and name.startswith("Screenshot server;")
+                                            and "voice here, muted" in name), None),
+                              "the server rail does not announce muted voice", timeout=30)
+            session = eventually(lambda: next((u["session"] for u in bots[0].users.values()
+                                               if u["name"] == "Andi"), None), "Andi did not reconnect")
+            time.sleep(0.6)
+            rail_bounds = rail.extents()
+            if base_rail_width is None:
+                base_rail_width = rail_bounds[2]
+            assert abs(rail_bounds[2] / base_rail_width - percent / 100) < 0.08, \
+                f"accessibility bounds did not follow real zoom: {rail_bounds} at {percent}%"
+            name = f"44-muted-{size_name}-{percent}"
+            shot(name)
+            rx, ry, rw, rh = rail_bounds
+            subprocess.run(["magick", str(args.output / f"{name}.png"), "-crop",
+                            f"{rw + 8}x{rh + 8}+{rx + 8}+{ry + 8}", "+repage",
+                            str(args.output / f"{name}-badge.png")], check=True)
+            moderator.send(kind="moderate", session=session, action="kick", reason=reason)
+            notice = eventually(lambda: named("status bar", "Connection notice"),
+                                "the actual Mumble failure has no accessible Connection notice status")
+            descendants = eventually(lambda: (rows if any(reason in n for _, _, _, n in rows) else None)
+                                     if (rows := snapshot(notice)) else None,
+                                     "the complete server failure reason is not accessible")
+            dismiss = next((node for _, node, role, name in descendants
+                            if role == "push button" and name == "Dismiss notice"), None)
+            assert dismiss, "the notice has no accessible Dismiss button"
+            toast_bounds, button_bounds = notice.extents(), dismiss.extents()
+            window = shell.window("Nuschl")
+            viewport = (0, 0, window["width"], window["height"])
+            entry = dict(width=size_name, requested_width=width, zoom=percent,
+                         window=window, rail_bounds=rail_bounds, toast_bounds=toast_bounds,
+                         dismiss_bounds=button_bounds, accessible_text=[name for _, _, _, name in descendants],
+                         button_inside_toast=inside(button_bounds, toast_bounds),
+                         button_inside_window=inside(button_bounds, viewport),
+                         toast_inside_window=inside(toast_bounds, viewport))
+            records.append(entry)
+            report.write_text(json.dumps(records, indent=2))
+            shot(f"45-notice-{size_name}-{percent}")
+            assert entry["button_inside_toast"], f"Dismiss escaped Connection notice: {entry}"
+            assert entry["button_inside_window"], f"Dismiss escaped the visible window: {entry}"
+            assert entry["toast_inside_window"], f"Connection notice escaped the visible window: {entry}"
+            dismiss.press()
+            eventually(lambda: named(None, "Connection notice") is None
+                       and named("push button", "Dismiss notice") is None,
+                       f"Dismiss did not close the actual notice at {percent}%")
+            entry["dismissed"] = True
+            report.write_text(json.dumps(records, indent=2))
+            print(f"Notice {size_name} {percent}%: full text accessible; Dismiss contained and activated.", flush=True)
+    shell.chord("Control_L", "0")
+    shell.place("Nuschl", 40, 40, *map(int, args.size.split("x")))
+
+
 def make_png(path, width, seed, height=None):
     """A small gradient PNG written with the standard library only."""
     height = height or width
@@ -203,7 +298,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too), devices (wheel over Settings' device lists, checked over AT-SPI; needs --pulse-bin and --at-spi)")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too), devices (wheel over Settings' device lists, checked over AT-SPI; needs --pulse-bin and --at-spi), notice-zoom (real Mumble failures and Dismiss bounds at 100–200%, needs --at-spi)")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
@@ -403,6 +498,9 @@ def main():
                            f" k.notify_keyval(t + 20000, {keyval}c, {state}RELEASED);"
                            f" k.notify_keyval(t + 30000, {keyval}Control_L, {state}RELEASED); 'ok'")
                 time.sleep(0.4)
+
+            if "notice-zoom" in scenes:
+                notice_zoom(args, root, shell, registry, bots, profile, port, pin, shot)
 
             if want("select"):
                 # Runs first, while the patch is where the coordinates expect it.
