@@ -65,7 +65,7 @@ separate from live media callbacks and the media worker, with verified model fil
 downloaded on demand. Vulkan, optional Nix ROCm, Metal and CPU are backend targets;
 model support and confinement must be validated per backend before shipping.
 
-Control IPC is a versioned, length-prefixed JSON protocol with a 4 MiB limit checked
+Control IPC is a versioned, length-prefixed JSON protocol with a 12 MiB limit checked
 before allocating a frame body (inline images make content and history replies the
 largest frames). Unknown versions, truncated frames, and oversized
 results fail explicitly. Helpers are selected by trusted executable paths and
