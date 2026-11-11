@@ -45,6 +45,8 @@ const BATCH: u32 = 8;
 const MAX_RESENDS: usize = 4;
 /// Pages fetched in one catch-up.
 const MAX_PAGES: usize = 64;
+/// Failed key package uploads in a row before waiting for the hourly round.
+const MAX_UPLOAD_ATTEMPTS: u32 = 8;
 
 /// What the frontend asks for in end-to-end conversations.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,6 +121,13 @@ impl MlsState {
     pub(crate) fn upload_due(&self) -> Option<Instant> {
         self.upload_at
     }
+
+    /// The hourly round: key packages again (the server reports how many are left).
+    pub(crate) fn hourly(&mut self) {
+        if self.device.len() == 16 {
+            self.upload_at.get_or_insert_with(Instant::now);
+        }
+    }
 }
 
 fn id16(bytes: &[u8]) -> Option<[u8; 16]> {
@@ -161,6 +170,11 @@ impl Context {
             && view.created
         {
             self.emit(crate::identity::IdentityEvent::Own(view)).await;
+        }
+        // Guests have no account: no key packages, no direct conversations.
+        if self.account.len() != 16 {
+            self.mls();
+            return Ok(());
         }
         self.mls().upload_at = Some(Instant::now());
         self.mls_upload().await?;
@@ -231,14 +245,27 @@ impl Context {
                     one_time = BATCH.min(16);
                     last_resort = !status.last_resort;
                 }
-                Reply::Error(_) | Reply::Frame(..) => {
+                Reply::Error(error) => {
                     // Usually: our identity is not published in this server's log yet.
+                    // Each attempt makes new key packages, so the attempts are bounded;
+                    // the hourly round tries again.
                     let state = self.mls();
-                    state.backoff = (state.backoff + 1).min(8);
-                    state.upload_at =
-                        Some(Instant::now() + Duration::from_secs(1 << state.backoff.min(6)));
+                    state.backoff += 1;
+                    if state.backoff > MAX_UPLOAD_ATTEMPTS {
+                        state.upload_at = None;
+                        state.backoff = 0;
+                        self.mls_emit(MlsEvent::Failed(format!(
+                            "The server did not take this device's key packages: {}",
+                            error.detail
+                        )))
+                        .await;
+                    } else {
+                        state.upload_at =
+                            Some(Instant::now() + Duration::from_secs(1 << state.backoff.min(6)));
+                    }
                     return Ok(());
                 }
+                Reply::Frame(..) => return Err(crate::Error::Protocol("unexpected reply".into())),
             }
         }
         self.mls().upload_at = None;
