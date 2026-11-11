@@ -2,20 +2,31 @@
 //! The `files/1` object format (docs/files.md).
 //!
 //! Every file attached on a Nuschel server is an *object*: the file, padded to a
-//! length from [`padme`], cut into chunks of 64 KiB and encrypted with a key of its
-//! own that travels in the message (inside MLS in end-to-end conversations). The same
-//! format serves files kept on the server and files relayed live from the sender's
-//! device. The server checks each ciphertext chunk against the object's [`Root`] and
-//! key [`Commitment`] as it arrives, before storing, caching or forwarding it, without
-//! the key.
+//! length from [`padme`], cut into chunks and encrypted with a key of its own that
+//! travels in the message (inside MLS in end-to-end conversations). Each sealed chunk
+//! is a 64 KiB *piece*, and the pieces are verified by the Merkle tree of BitTorrent v2
+//! (BEP 52). The same format serves files kept on the server and files relayed live
+//! from the sender's device. The server checks each piece against the object's
+//! [`Root`] and key [`Commitment`] as it arrives, before storing, caching or
+//! forwarding it, without the key.
 //!
-//! # Chunks
+//! # Chunks and pieces
 //!
-//! An object of `object_len` bytes has `n = max(1, ceil(object_len / 65536))` chunks,
-//! at most 2^32, so `object_len` is at most 2^48 bytes ([`MAX_OBJECT`]). Chunk `i`
-//! holds the plaintext bytes `[i * 65536, min((i + 1) * 65536, object_len))`. Only the
-//! last chunk may be shorter. An empty object has one empty chunk. [`Layout`] does
-//! this arithmetic.
+//! An object of `object_len` plaintext bytes (the file and its padding) has
+//! `n = max(1, ceil(object_len / 65520))` chunks, at most 2^32, so `object_len` is at
+//! most 65,520 × 2^32 bytes, just under 256 TiB ([`MAX_OBJECT`]). Chunk `i` holds the
+//! plaintext bytes `[i * 65520, min((i + 1) * 65520, object_len))`. Only the last chunk
+//! may be shorter. An empty object has one empty chunk.
+//!
+//! Chunk `i` is sealed into piece `i`: its ciphertext followed by the 16-byte tag. So
+//! every piece but the last has exactly 65,536 bytes ([`PIECE`]), and the last has 16
+//! to 65,536. The pieces in order are the *ciphertext object*, `object_len + 16 n`
+//! bytes and never empty. [`Layout`] does this arithmetic.
+//!
+//! A plaintext chunk is [`CHUNK`] = 65,536 − 16 bytes so that the pieces fall exactly on
+//! the 64 KiB pieces of a BitTorrent v2 torrent of the ciphertext object: each
+//! BitTorrent piece is one sealed chunk, which can be verified, stored, served and
+//! decrypted on its own.
 //!
 //! # Encryption
 //!
@@ -24,97 +35,156 @@
 //! Authenticated-Encryption and its Nonce-Reuse Misuse-Resistance", CRYPTO 2015) over
 //! ChaCha20-Poly1305 (RFC 8439), with empty associated data. The 12-byte nonce of
 //! chunk `i` is seven zero bytes, `i` as a big-endian `u32`, and a flag byte: 1 for
-//! the last chunk `n - 1`, otherwise 0. The ciphertext chunk `c_i` is the ciphertext
-//! followed by the 16-byte tag, so it is 16 bytes longer than the plaintext chunk.
+//! the last chunk `n - 1`, otherwise 0.
 //!
-//! The index in the nonce stops chunks from being moved. The flag stops the object
-//! from being cut short or extended at a chunk boundary. The nonce has no random part
+//! The index in the nonce stops pieces from being moved. The flag stops the object
+//! from being cut short or extended at a piece boundary. The nonce has no random part
 //! because a key encrypts one object only. A key must never encrypt a second object,
 //! and a chunk must never be sealed again with other plaintext. Sealing is
-//! deterministic, so an uploader may hash every chunk first and seal each one again
-//! while uploading, but it must compare the [`leaf`] of the second ciphertext with the
-//! tree before sending it: if the file changed in between, the two ciphertexts share
-//! a nonce.
+//! deterministic, so an uploader may hash every piece first and seal each chunk again
+//! while uploading, but it must compare the [`piece_hash`] of the second piece with
+//! the tree before sending it: if the file changed in between, the two ciphertexts
+//! share a nonce.
+//!
+//! # Tree
+//!
+//! The tree is BEP 52's Merkle tree of a file whose contents are the ciphertext
+//! object. The ciphertext object is cut into 16 KiB blocks ([`BLOCK`]), the last
+//! possibly shorter, never empty: `B = ceil(cipher_len / 16384)` blocks. The leaf of
+//! block `j` is `L_j = SHA-256(block_j)`. The leaves are padded with 32-byte all-zero
+//! values up to `P = B.next_power_of_two()`, and an inner node is
+//! `SHA-256(left || right)`. The root of this perfect tree is the *pieces root*
+//! ([`PiecesRoot`]); with one block it is `L_0`.
+//!
+//! A piece covers four blocks. With `n > 1` pieces (then `B >= 5` and `P >= 8`), the
+//! hash of piece `i` is the root of the subtree of four leaves over blocks `4i` to
+//! `4i + 3`, zero leaves beyond `B` included ([`piece_hash`]). These `n` hashes are
+//! BEP 52's *piece layer* for a piece length of 64 KiB ([`Tree::piece_layer`]). The
+//! level of the piece layer has `P / 4 = n.next_power_of_two()` nodes, and the tree
+//! above it is the perfect tree over them. The nodes from `n` on cover only padding and
+//! are `Z2 = SHA-256(Z1 || Z1)`, with `Z1 = SHA-256(0^32 || 0^32)`. With a single piece
+//! the tree has 1, 2 or 4 leaves, and the piece's hash is the pieces root.
+//!
+//! The [`Proof`] for piece `i` is the sibling hashes from the piece layer up to the
+//! pieces root: exactly `log2(P / 4) = ceil(log2 n)` hashes ([`Layout::proof_len`]),
+//! none for a single piece, at most 32 ([`MAX_PROOF`]). The number is fixed for the
+//! object and any other is rejected. A [`Tree`] keeps the piece layer and every level
+//! above it, about 64 bytes per piece, and answers a proof without hashing.
 //!
 //! # Root
 //!
 //! The key's [`Commitment`] is `C = SHA-256(0x03 || "nuschel files/1 key" || key)`,
 //! 32 bytes. It reveals nothing useful about a random 256-bit key, so the server may
-//! hold it. The leaf hash of chunk `i` is `L_i = SHA-256(0x00 || c_i)`. The leaves
-//! form the Merkle tree of RFC 9162 §2.1.1. The tree hash of one leaf is the leaf hash
-//! itself. For `n > 1` leaves, with `k` the largest power of two smaller than `n`,
-//! `MTH(L[0:n]) = SHA-256(0x01 || MTH(L[0:k]) || MTH(L[k:n]))`. The object's root is
+//! hold it. The object's root is
 //!
 //! ```text
-//! R = SHA-256(0x02 || "nuschel files/1 root" || u8(16) || u64_be(object_len) || C || MTH)
+//! R = SHA-256(0x02 || "nuschel files/1 root" || u8(16) || u64_be(object_len) || C || pieces_root)
 //! ```
 //!
-//! where 16 is [`CHUNK_LOG2`]. The root binds the chunk size and the object length,
-//! so it fixes the number of chunks and the length of every chunk.
+//! where 16 is [`PIECE_LOG2`]. The root binds the piece size and the object length,
+//! so it fixes the number of pieces, the length of every piece, the number of blocks
+//! and the shape of the tree.
 //!
 //! The root binds the key because ChaCha20-Poly1305 does not: one ciphertext can be
 //! crafted to decrypt under two keys (Len, Grubbs and Ristenpart, "Partitioning Oracle
 //! Attacks", USENIX Security 2021). An owner may reference one object from several
 //! messages, and without `C` it could give each recipient another key, and so another
-//! plaintext, for the same root. With `C` a root fixes the key and every ciphertext
-//! chunk, and so the plaintext. The sender puts the key, the root and the file's
-//! length into the same end-to-end encrypted message.
+//! plaintext, for the same root. With `C` a root fixes the key and every piece, and so
+//! the plaintext. The sender puts the key, the root and the file's length into the
+//! same end-to-end encrypted message.
 //!
-//! # Proofs
+//! [`Root::verify`] needs the commitment, not the key. It checks the length of the
+//! piece for its index, computes the piece's hash from its blocks, checks the number
+//! of hashes in the proof, folds the proof up to a pieces root (the bits of the index
+//! say on which side each sibling is), and recomputes the root with the object length
+//! and the commitment. [`PiecesRoot::verify`] checks a piece against a pieces root
+//! alone, as a BitTorrent v2 peer does.
 //!
-//! The [`Proof`] for chunk `i` is its RFC 9162 §2.1.3.1 inclusion path: the sibling
-//! hashes from the leaf upwards, at most 32 ([`MAX_PROOF`]). [`Root::verify`] needs
-//! the commitment, not the key. It checks the length of the ciphertext chunk for its
-//! index and the number of hashes in the proof for its index, walks the path as RFC
-//! 9162 §2.1.3.2 does, and recomputes the root with the object length and the
-//! commitment. A [`Tree`] keeps every level of the tree, about 64 bytes per chunk, and
-//! answers a proof without hashing.
+//! # No domain separation in the tree
+//!
+//! RFC 9162 prefixes leaves with 0x00 and inner nodes with 0x01, because without them
+//! the 64 bytes of two children hash to their parent: a verifier that let the prover
+//! choose the shape of the tree would accept those 64 bytes as a block in place of the
+//! parent. BEP 52 has no prefixes, and this format takes its tree unchanged so that
+//! BitTorrent v2 computes the same pieces root. Here the prover chooses nothing about
+//! the shape. The tree is perfect, padded to a power of two, so every leaf is at the
+//! same depth `log2 P`; the root binds `object_len`, which fixes `B` and `P`; a proof
+//! has one valid length; and the verifier hashes the blocks of a piece itself, at the
+//! positions its index and length give. Two children presented as a block hash to
+//! their parent, so they could pass only where the parent stands, a level above the
+//! leaves: that takes a proof one hash shorter, which is rejected. The zero leaves are
+//! no hash of anything; a block that hashed to zero would be a SHA-256 preimage. The root
+//! and the commitment keep their prefixes and labels, and with inputs of 94 and 52
+//! bytes neither is an inner node of 64.
+//!
+//! # BitTorrent v2
+//!
+//! A v2 torrent with a piece length of 65,536 bytes and one file whose contents are the
+//! ciphertext object has [`Tree::pieces_root`] as the file's "pieces root" and, when
+//! `n > 1`, the [`Tree::piece_layer`] hashes concatenated as its "piece layers" entry
+//! (BEP 52 leaves it out for a file no longer than one piece). A BitTorrent v2 client
+//! checks the piece layer against the pieces root and every piece it downloads
+//! against the piece layer, or against the pieces root with the sibling hashes of a
+//! hash request: the check of [`PiecesRoot::verify`]. So a swarm, the server and a
+//! recipient verify the same bytes against the same tree. The torrent's name, info
+//! dictionary and info hash are not part of this format; Nuschel names an object by
+//! its root, which adds the object length, the piece size and the key commitment. A
+//! pieces root learnt elsewhere is checked against a root with [`Root::new`].
 //!
 //! # Use
 //!
 //! - **Uploader:** [`Key::generate`]; [`Layout::new`] with the padded length; a
 //!   [`TreeBuilder`] for the layout and [`Key::commitment`]; [`seal`] every chunk and
-//!   push its [`leaf`]. The server gets the [`Tree::root`] and the
-//!   [`Tree::commitment`] when the upload starts and every chunk with its
+//!   push its [`piece_hash`]. The server gets the [`Tree::root`] and the
+//!   [`Tree::commitment`] when the upload starts and every piece with its
 //!   [`Tree::proof`]; the message gets the key, the root and the file's length.
 //! - **Server:** the [`Layout`] of the declared length, and [`Root::verify`] with the
-//!   commitment for every chunk it receives.
+//!   commitment for every piece it receives.
 //! - **Recipient:** [`Key::commitment`] of the key in the message, never a commitment
 //!   from the server; [`Root::verify`] with it, then [`open`]. A wrong key fails the
-//!   verification of the very first chunk.
+//!   verification of the very first piece.
+//! - **BitTorrent v2 peer:** the [`Tree::pieces_root`] and the ciphertext length of
+//!   [`Layout::ciphertext_len`]; [`PiecesRoot::verify`] for every piece. It needs
+//!   neither the key nor the commitment, but a length it trusts (a torrent's info
+//!   dictionary), because the pieces root does not bind the length.
 //!
 //! Nothing here does I/O.
 
 use std::fmt;
 
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
-use ring::digest::{Context, SHA256};
+use ring::digest::{Context, SHA256, digest};
 use ring::rand::{SecureRandom, SystemRandom};
 use thiserror::Error;
 use zeroize::Zeroize;
 
-/// The base-2 logarithm of [`CHUNK`]. Fixed in `files/1`; the root commits to it.
-pub const CHUNK_LOG2: u8 = 16;
-/// Plaintext bytes in every chunk but the last: 64 KiB.
-pub const CHUNK: usize = 1 << CHUNK_LOG2;
-/// Bytes of the Poly1305 tag at the end of every ciphertext chunk.
+/// The base-2 logarithm of [`PIECE`]. Fixed in `files/1`; the root commits to it.
+pub const PIECE_LOG2: u8 = 16;
+/// Bytes in every piece but the last: 64 KiB, the BitTorrent v2 piece length.
+pub const PIECE: usize = 1 << PIECE_LOG2;
+/// Bytes in a BEP 52 block, the data under one leaf of the tree: 16 KiB.
+pub const BLOCK: usize = 1 << 14;
+/// Bytes of the Poly1305 tag at the end of every piece.
 pub const TAG: usize = 16;
+/// Plaintext bytes in every chunk but the last: a piece without its tag, 65,520.
+pub const CHUNK: usize = PIECE - TAG;
 /// Bytes of a [`Key`].
 pub const KEY: usize = 32;
 /// Bytes of a SHA-256 [`Hash`](type@Hash).
 pub const HASH: usize = 32;
 /// The most chunks an object can have: the chunk index in the nonce is a `u32`.
 pub const MAX_CHUNKS: u64 = 1 << 32;
-/// The longest object: [`MAX_CHUNKS`] full chunks, 2^48 bytes (256 TiB).
-pub const MAX_OBJECT: u64 = MAX_CHUNKS << CHUNK_LOG2;
-/// The most hashes in a [`Proof`]: the height of a tree of [`MAX_CHUNKS`] leaves.
+/// The longest object: [`MAX_CHUNKS`] full chunks, 65,520 × 2^32 bytes. Its ciphertext
+/// object has 2^48 bytes (256 TiB).
+pub const MAX_OBJECT: u64 = MAX_CHUNKS * CHUNK as u64;
+/// The most hashes in a [`Proof`]: the height of the tree above [`MAX_CHUNKS`] pieces.
 pub const MAX_PROOF: usize = 32;
 
-/// A SHA-256 output: a leaf hash, an inner node, or a root.
+/// A SHA-256 output: a leaf, an inner node such as a piece hash, or a root.
 pub type Hash = [u8; HASH];
 
-const LEAF_PREFIX: u8 = 0x00;
-const NODE_PREFIX: u8 = 0x01;
+/// Blocks, and so leaves, under one piece.
+const BLOCKS_PER_PIECE: usize = PIECE / BLOCK;
 const ROOT_PREFIX: u8 = 0x02;
 const ROOT_LABEL: &[u8] = b"nuschel files/1 root";
 const COMMITMENT_PREFIX: u8 = 0x03;
@@ -129,22 +199,22 @@ pub enum Error {
     /// The chunk index is not below the number of chunks.
     #[error("chunk {index} does not exist in an object of {chunks} chunks")]
     BadIndex { index: u64, chunks: u64 },
-    /// A plaintext or ciphertext chunk has the wrong length for its index.
-    #[error("the chunk has {actual} bytes, expected {expected}")]
+    /// A plaintext chunk or a piece has the wrong length for its index.
+    #[error("the chunk or piece has {actual} bytes, expected {expected}")]
     WrongLength { expected: usize, actual: usize },
-    /// A [`TreeBuilder`] got another number of leaves than the object has chunks.
-    #[error("{actual} leaves for an object of {expected} chunks")]
-    LeafCount { expected: u64, actual: u64 },
+    /// A [`TreeBuilder`] got another number of piece hashes than the object has pieces.
+    #[error("{actual} piece hashes for an object of {expected} pieces")]
+    PieceCount { expected: u64, actual: u64 },
     /// Encoded proof bytes are not a whole number of hashes, or more than [`MAX_PROOF`].
     #[error("a proof is at most 32 hashes of 32 bytes, not {len} bytes")]
     ProofEncoding { len: usize },
-    /// The chunk and proof do not lead to the root: the chunk is not the one at this
+    /// The piece and proof do not lead to the root: the piece is not the one at this
     /// index of this object, the proof is wrong, or the commitment is not that of the
     /// object's key.
-    #[error("the chunk is not part of the object with this root at this index")]
+    #[error("the piece is not part of the object with this root at this index")]
     Proof,
-    /// The ciphertext does not decrypt with this key at this index.
-    #[error("the chunk does not decrypt with this key at this index")]
+    /// The piece does not decrypt with this key at this index.
+    #[error("the piece does not decrypt with this key at this index")]
     Authentication,
     /// ring failed where it should not: no system random source.
     #[error("the cryptographic library failed")]
@@ -208,7 +278,7 @@ impl fmt::Debug for Key {
 /// The commitment to an object's [`Key`], from [`Key::commitment`]. The root binds it,
 /// so that one root opens under one key only.
 ///
-/// It reveals nothing useful about the key, so the server holds it to verify chunks.
+/// It reveals nothing useful about the key, so the server holds it to verify pieces.
 /// A recipient computes it from the key it holds.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Commitment(Hash);
@@ -237,7 +307,7 @@ impl fmt::Debug for Commitment {
     }
 }
 
-/// How an object of a given length is cut into chunks.
+/// How an object of a given length is cut into chunks and pieces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Layout {
     object_len: u64,
@@ -259,7 +329,7 @@ impl Layout {
         self.object_len
     }
 
-    /// The number of chunks, from 1 to [`MAX_CHUNKS`].
+    /// The number of chunks, and so of pieces, from 1 to [`MAX_CHUNKS`].
     pub fn chunks(&self) -> u64 {
         self.chunks
     }
@@ -272,7 +342,7 @@ impl Layout {
     /// Where chunk `index` starts in the plaintext.
     pub fn offset(&self, index: u64) -> Result<u64, Error> {
         self.check(index)?;
-        Ok(index << CHUNK_LOG2)
+        Ok(index * CHUNK as u64)
     }
 
     /// Plaintext bytes in chunk `index`: [`CHUNK`], or fewer for the last chunk.
@@ -282,20 +352,35 @@ impl Layout {
         Ok(rest.min(CHUNK as u64) as usize)
     }
 
-    /// Bytes in ciphertext chunk `index`: its plaintext and the tag.
+    /// Bytes in piece `index`: its plaintext and the tag. [`PIECE`] for every piece but
+    /// the last.
     pub fn cipher_len(&self, index: u64) -> Result<usize, Error> {
         Ok(self.plain_len(index)? + TAG)
     }
 
-    /// Where ciphertext chunk `index` starts when all chunks are stored in order.
+    /// Where piece `index` starts in the ciphertext object.
     pub fn cipher_offset(&self, index: u64) -> Result<u64, Error> {
         self.check(index)?;
-        Ok(index * (CHUNK + TAG) as u64)
+        Ok(index << PIECE_LOG2)
     }
 
-    /// Bytes of all ciphertext chunks together: the object and one tag per chunk.
+    /// Bytes in the ciphertext object, all pieces in order: the object and one tag
+    /// per chunk. This is the file length a BitTorrent v2 torrent of it declares.
     pub fn ciphertext_len(&self) -> u64 {
         self.object_len + self.chunks * TAG as u64
+    }
+
+    /// The number of 16 KiB blocks in the ciphertext object: the leaves of the tree
+    /// before padding.
+    pub fn blocks(&self) -> u64 {
+        self.ciphertext_len().div_ceil(BLOCK as u64)
+    }
+
+    /// The number of hashes in the [`Proof`] of every piece: `log2(P / 4)` for `P`
+    /// leaves, which is `ceil(log2 n)` for `n` pieces, and 0 for a single piece.
+    pub fn proof_len(&self) -> usize {
+        // At most 32.
+        self.chunks.next_power_of_two().trailing_zeros() as usize
     }
 
     fn check(&self, index: u64) -> Result<(), Error> {
@@ -318,10 +403,22 @@ impl Layout {
         };
         Ok((u32::try_from(index).map_err(|_| bad)?, self.is_last(index)))
     }
+
+    fn check_piece(&self, index: u64, piece: &[u8]) -> Result<(), Error> {
+        let expected = self.cipher_len(index)?;
+        if piece.len() == expected {
+            Ok(())
+        } else {
+            Err(Error::WrongLength {
+                expected,
+                actual: piece.len(),
+            })
+        }
+    }
 }
 
 /// Encrypts the plaintext of chunk `index`, which must have exactly
-/// [`Layout::plain_len`] bytes, into its ciphertext chunk.
+/// [`Layout::plain_len`] bytes, into piece `index`.
 pub fn seal(key: &Key, layout: &Layout, index: u64, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
     let expected = layout.plain_len(index)?;
     if plaintext.len() != expected {
@@ -335,26 +432,20 @@ pub fn seal(key: &Key, layout: &Layout, index: u64, plaintext: &[u8]) -> Result<
 }
 
 fn seal_at(key: &Key, index: u32, last: bool, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
-    let mut chunk = Vec::with_capacity(plaintext.len() + TAG);
-    chunk.extend_from_slice(plaintext);
+    let mut piece = Vec::with_capacity(plaintext.len() + TAG);
+    piece.extend_from_slice(plaintext);
     key.aead()?
-        .seal_in_place_append_tag(nonce(index, last), Aad::empty(), &mut chunk)
+        .seal_in_place_append_tag(nonce(index, last), Aad::empty(), &mut piece)
         .map_err(|_| Error::Crypto)?;
-    Ok(chunk)
+    Ok(piece)
 }
 
-/// Decrypts ciphertext chunk `index`, which must have exactly [`Layout::cipher_len`]
-/// bytes, into its plaintext.
-pub fn open(key: &Key, layout: &Layout, index: u64, ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
-    let expected = layout.cipher_len(index)?;
-    if ciphertext.len() != expected {
-        return Err(Error::WrongLength {
-            expected,
-            actual: ciphertext.len(),
-        });
-    }
+/// Decrypts piece `index`, which must have exactly [`Layout::cipher_len`] bytes, into
+/// the plaintext of chunk `index`.
+pub fn open(key: &Key, layout: &Layout, index: u64, piece: &[u8]) -> Result<Vec<u8>, Error> {
+    layout.check_piece(index, piece)?;
     let (index, last) = layout.position(index)?;
-    let mut chunk = ciphertext.to_vec();
+    let mut chunk = piece.to_vec();
     let plain_len = key
         .aead()?
         .open_in_place(nonce(index, last), Aad::empty(), &mut chunk)
@@ -372,21 +463,50 @@ fn nonce(index: u32, last: bool) -> Nonce {
     Nonce::assume_unique_for_key(nonce)
 }
 
-/// The leaf hash of a ciphertext chunk: `SHA-256(0x00 || ciphertext)`.
-pub fn leaf(ciphertext: &[u8]) -> Hash {
-    let mut hash = Context::new(&SHA256);
-    hash.update(&[LEAF_PREFIX]);
-    hash.update(ciphertext);
-    finish(hash)
+/// The hash of piece `index`, which must have exactly [`Layout::cipher_len`] bytes:
+/// BEP 52's piece-layer hash for a piece length of 64 KiB.
+///
+/// The leaves are the SHA-256 of each 16 KiB block of the piece. In an object of
+/// several pieces they are padded with zero leaves to four, and the hash is the root
+/// of those four. A single piece is the whole tree: its leaves are padded to 1, 2 or 4,
+/// and its hash is the [`PiecesRoot`].
+pub fn piece_hash(layout: &Layout, index: u64, piece: &[u8]) -> Result<Hash, Error> {
+    layout.check_piece(index, piece)?;
+    let mut leaves = [[0; HASH]; BLOCKS_PER_PIECE];
+    for (leaf, block) in leaves.iter_mut().zip(piece.chunks(BLOCK)) {
+        *leaf = sha256(block);
+    }
+    let width = if layout.chunks() > 1 {
+        BLOCKS_PER_PIECE
+    } else {
+        piece.len().div_ceil(BLOCK).next_power_of_two()
+    };
+    let [a, b, c, d] = &leaves;
+    Ok(match width {
+        1 => *a,
+        2 => node(a, b),
+        _ => node(&node(a, b), &node(c, d)),
+    })
 }
 
-/// An inner node: `SHA-256(0x01 || left || right)`.
+fn sha256(data: &[u8]) -> Hash {
+    let mut out = [0; HASH];
+    out.copy_from_slice(digest(&SHA256, data).as_ref());
+    out
+}
+
+/// An inner node: `SHA-256(left || right)`, without a prefix, as in BEP 52.
 fn node(left: &Hash, right: &Hash) -> Hash {
     let mut hash = Context::new(&SHA256);
-    hash.update(&[NODE_PREFIX]);
     hash.update(left);
     hash.update(right);
     finish(hash)
+}
+
+/// The root of four zero leaves, which stands for a piece position beyond the object.
+fn piece_pad() -> Hash {
+    let zero = node(&[0; HASH], &[0; HASH]);
+    node(&zero, &zero)
 }
 
 fn finish(hash: Context) -> Hash {
@@ -395,57 +515,42 @@ fn finish(hash: Context) -> Hash {
     out
 }
 
-/// Lowercase hex, for [`Root`] and [`Commitment`].
+/// Lowercase hex, for [`Root`], [`PiecesRoot`] and [`Commitment`].
 fn hex(hash: &Hash, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     hash.iter().try_for_each(|byte| write!(f, "{byte:02x}"))
 }
 
-/// The number of hashes in the inclusion path of leaf `index` in a tree of `n` leaves.
-fn path_len(index: u64, n: u64) -> usize {
-    let (mut index, mut width, mut len) = (index, n, 0);
-    while width > 1 {
-        // A node without a right sibling moves up unchanged and adds no hash.
-        if index ^ 1 < width {
-            len += 1;
-        }
-        index >>= 1;
-        width = width.div_ceil(2);
+/// The pieces root from the hash of piece `index` and its proof.
+fn fold_proof(
+    layout: &Layout,
+    index: u64,
+    piece_hash: &Hash,
+    proof: &Proof,
+) -> Result<PiecesRoot, Error> {
+    layout.check(index)?;
+    if proof.0.len() != layout.proof_len() {
+        return Err(Error::Proof);
     }
-    len
-}
-
-/// The tree hash from a leaf and its inclusion path, by RFC 9162 §2.1.3.2.
-fn tree_hash_from_path(index: u64, n: u64, leaf: &Hash, path: &[Hash]) -> Option<Hash> {
-    if index >= n {
-        return None;
-    }
-    let (mut fnode, mut snode) = (index, n - 1);
-    let mut hash = *leaf;
-    for sibling in path {
-        if snode == 0 {
-            return None;
-        }
-        if fnode & 1 == 1 || fnode == snode {
-            hash = node(sibling, &hash);
-            while fnode & 1 == 0 && fnode != 0 {
-                fnode >>= 1;
-                snode >>= 1;
+    // A perfect tree over 2^proof_len piece positions: bit k of the index says whether
+    // the node at level k above the piece layer is a right child.
+    let hash = (0..)
+        .zip(&proof.0)
+        .fold(*piece_hash, |hash, (level, sibling)| {
+            if (index >> level) & 1 == 0 {
+                node(&hash, sibling)
+            } else {
+                node(sibling, &hash)
             }
-        } else {
-            hash = node(&hash, sibling);
-        }
-        fnode >>= 1;
-        snode >>= 1;
-    }
-    (snode == 0).then_some(hash)
+        });
+    Ok(PiecesRoot(hash))
 }
 
-/// Collects the leaf hashes of an object in chunk order.
+/// Collects the piece hashes of an object in piece order.
 #[derive(Debug)]
 pub struct TreeBuilder {
     layout: Layout,
     commitment: Commitment,
-    leaves: Vec<Hash>,
+    pieces: Vec<Hash>,
 }
 
 impl TreeBuilder {
@@ -457,57 +562,66 @@ impl TreeBuilder {
         Self {
             layout,
             commitment,
-            leaves: Vec::with_capacity(capacity),
+            pieces: Vec::with_capacity(capacity),
         }
     }
 
-    /// Adds the [`leaf`] hash of the next chunk.
-    pub fn push(&mut self, leaf: Hash) {
-        self.leaves.push(leaf);
+    /// Adds the [`piece_hash`] of the next piece.
+    pub fn push(&mut self, piece_hash: Hash) {
+        self.pieces.push(piece_hash);
     }
 
-    /// The tree, once every chunk has its leaf.
+    /// The tree, once every piece has its hash.
     pub fn finish(self) -> Result<Tree, Error> {
-        let actual = self.leaves.len() as u64;
+        let actual = self.pieces.len() as u64;
         if actual != self.layout.chunks() {
-            return Err(Error::LeafCount {
+            return Err(Error::PieceCount {
                 expected: self.layout.chunks(),
                 actual,
             });
         }
-        // Level by level from the leaves: pairs become their parent, and a last node
-        // without a sibling moves up unchanged. This gives the tree of RFC 9162 §2.1.1.
-        let mut levels = vec![self.leaves];
-        while let Some(level) = levels.last().filter(|level| level.len() > 1) {
+        // Level by level from the piece layer. A level of odd length gets the node of
+        // its padding: the root of an all-zero subtree of that height. No proof needs
+        // another padding node, because only the last real node of a level can have a
+        // sibling that covers nothing but padding.
+        let mut levels = vec![self.pieces];
+        let mut pad = piece_pad();
+        while let Some(level) = levels.last_mut().filter(|level| level.len() > 1) {
+            if level.len() % 2 == 1 {
+                level.push(pad);
+            }
             let parents = level
-                .chunks(2)
-                .map(|pair| match pair {
-                    [left, right] => node(left, right),
-                    _ => pair[0],
-                })
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|[left, right]| node(left, right))
                 .collect();
             levels.push(parents);
+            pad = node(&pad, &pad);
         }
-        let tree_hash = levels.last().and_then(|top| top.first()).copied();
-        let tree_hash = tree_hash.ok_or(Error::LeafCount {
+        let pieces_root = levels.last().and_then(|top| top.first()).copied();
+        let pieces_root = PiecesRoot(pieces_root.ok_or(Error::PieceCount {
             expected: self.layout.chunks(),
             actual,
-        })?;
+        })?);
         Ok(Tree {
             layout: self.layout,
             commitment: self.commitment,
-            root: Root::compute(&self.layout, &self.commitment, &tree_hash),
+            root: Root::new(&self.layout, &self.commitment, &pieces_root),
+            pieces_root,
             levels,
         })
     }
 }
 
-/// The Merkle tree of an object: its root and every inclusion proof.
+/// The BEP 52 tree of an object: its roots, its piece layer and every proof.
 pub struct Tree {
     layout: Layout,
     commitment: Commitment,
     root: Root,
-    /// `levels[0]` are the leaves; the last level is the tree hash alone.
+    pieces_root: PiecesRoot,
+    /// `levels[0]` is the piece layer; the last level is the pieces root alone. A level
+    /// of odd length below the top ends with one padding node.
     levels: Vec<Vec<Hash>>,
 }
 
@@ -527,23 +641,29 @@ impl Tree {
         self.root
     }
 
-    /// The leaf hashes in chunk order.
-    pub fn leaves(&self) -> &[Hash] {
-        &self.levels[0]
+    /// The BEP 52 pieces root of the ciphertext object.
+    pub fn pieces_root(&self) -> PiecesRoot {
+        self.pieces_root
     }
 
-    /// The inclusion proof of chunk `index`.
+    /// The piece hashes in piece order. With more than one piece, concatenated they
+    /// are the ciphertext object's entry in a v2 torrent's "piece layers"; a single
+    /// piece's hash is the pieces root, and BEP 52 has no entry for it.
+    pub fn piece_layer(&self) -> &[Hash] {
+        // The count was checked against the layout, so the cast does not truncate.
+        &self.levels[0][..self.layout.chunks() as usize]
+    }
+
+    /// The proof of piece `index`: [`Layout::proof_len`] sibling hashes from the piece
+    /// layer up.
     pub fn proof(&self, index: u64) -> Result<Proof, Error> {
         self.layout.check(index)?;
-        let mut position = usize::try_from(index).map_err(|_| Error::BadIndex {
-            index,
-            chunks: self.layout.chunks(),
-        })?;
-        let mut path = Vec::with_capacity(MAX_PROOF);
+        // Below the number of pieces, which fitted in memory.
+        let mut position = index as usize;
+        let mut path = Vec::with_capacity(self.layout.proof_len());
         for level in &self.levels[..self.levels.len() - 1] {
-            if let Some(sibling) = level.get(position ^ 1) {
-                path.push(*sibling);
-            }
+            // Every level below the top has even length.
+            path.push(level[position ^ 1]);
             position >>= 1;
         }
         Ok(Proof(path))
@@ -556,12 +676,13 @@ impl fmt::Debug for Tree {
             .field("layout", &self.layout)
             .field("commitment", &self.commitment)
             .field("root", &self.root)
+            .field("pieces_root", &self.pieces_root)
             .finish_non_exhaustive()
     }
 }
 
-/// The root of an object: a commitment to its length, its chunk size, its key and
-/// every ciphertext chunk.
+/// The root of an object: a commitment to its length, its piece size, its key and the
+/// pieces root, and so to every piece.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Root(Hash);
 
@@ -576,55 +697,47 @@ impl Root {
         &self.0
     }
 
-    fn compute(layout: &Layout, commitment: &Commitment, tree_hash: &Hash) -> Self {
+    /// The root of the object with this layout, key commitment and pieces root:
+    /// `SHA-256(0x02 || "nuschel files/1 root" || u8(16) || u64_be(object_len) || C ||
+    /// pieces_root)`.
+    pub fn new(layout: &Layout, commitment: &Commitment, pieces_root: &PiecesRoot) -> Self {
         let mut hash = Context::new(&SHA256);
         hash.update(&[ROOT_PREFIX]);
         hash.update(ROOT_LABEL);
-        hash.update(&[CHUNK_LOG2]);
+        hash.update(&[PIECE_LOG2]);
         hash.update(&layout.object_len().to_be_bytes());
         hash.update(commitment.as_bytes());
-        hash.update(tree_hash);
+        hash.update(pieces_root.as_bytes());
         Self(finish(hash))
     }
 
-    /// Checks that `ciphertext` is chunk `index` of the object with this root, layout
-    /// and key commitment. Needs no key; a recipient passes [`Key::commitment`] of the
-    /// key it holds.
+    /// Checks that `piece` is piece `index` of the object with this root, layout and
+    /// key commitment. Needs no key; a recipient passes [`Key::commitment`] of the key
+    /// it holds.
     pub fn verify(
         &self,
         layout: &Layout,
         commitment: &Commitment,
         index: u64,
-        ciphertext: &[u8],
+        piece: &[u8],
         proof: &Proof,
     ) -> Result<(), Error> {
-        let expected = layout.cipher_len(index)?;
-        if ciphertext.len() != expected {
-            return Err(Error::WrongLength {
-                expected,
-                actual: ciphertext.len(),
-            });
-        }
-        self.verify_leaf(layout, commitment, index, &leaf(ciphertext), proof)
+        let hash = piece_hash(layout, index, piece)?;
+        self.verify_piece_hash(layout, commitment, index, &hash, proof)
     }
 
-    /// Checks that `leaf` is the leaf hash of chunk `index`. [`Root::verify`] also
-    /// checks the length of the chunk; a caller of this must do that itself.
-    pub fn verify_leaf(
+    /// Checks that `piece_hash` is the [`piece_hash`] of piece `index`. [`Root::verify`]
+    /// also checks the length of the piece; a caller of this must do that itself.
+    pub fn verify_piece_hash(
         &self,
         layout: &Layout,
         commitment: &Commitment,
         index: u64,
-        leaf: &Hash,
+        piece_hash: &Hash,
         proof: &Proof,
     ) -> Result<(), Error> {
-        layout.check(index)?;
-        if proof.0.len() != path_len(index, layout.chunks()) {
-            return Err(Error::Proof);
-        }
-        let tree_hash =
-            tree_hash_from_path(index, layout.chunks(), leaf, &proof.0).ok_or(Error::Proof)?;
-        if Self::compute(layout, commitment, &tree_hash) == *self {
+        let pieces_root = fold_proof(layout, index, piece_hash, proof)?;
+        if Self::new(layout, commitment, &pieces_root) == *self {
             Ok(())
         } else {
             Err(Error::Proof)
@@ -644,12 +757,74 @@ impl fmt::Debug for Root {
     }
 }
 
-/// The inclusion proof of one chunk: sibling hashes from the leaf upwards.
+/// The BEP 52 pieces root of an object's ciphertext object: the root of the Merkle tree
+/// over its 16 KiB blocks, as a BitTorrent v2 torrent of it names it.
+///
+/// It binds every piece but not the object length or the key; the [`Root`] adds those.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PiecesRoot(Hash);
+
+impl PiecesRoot {
+    /// The pieces root with these bytes.
+    pub fn from_bytes(bytes: Hash) -> Self {
+        Self(bytes)
+    }
+
+    /// The pieces root's bytes.
+    pub fn as_bytes(&self) -> &Hash {
+        &self.0
+    }
+
+    /// Checks that `piece` is piece `index` of a ciphertext object with this pieces
+    /// root, cut by this layout: the check of a BitTorrent v2 peer. The layout must
+    /// come from a trusted length, because the pieces root does not bind it.
+    pub fn verify(
+        &self,
+        layout: &Layout,
+        index: u64,
+        piece: &[u8],
+        proof: &Proof,
+    ) -> Result<(), Error> {
+        let hash = piece_hash(layout, index, piece)?;
+        self.verify_piece_hash(layout, index, &hash, proof)
+    }
+
+    /// Checks that `piece_hash` is the [`piece_hash`] of piece `index`.
+    /// [`PiecesRoot::verify`] also checks the length of the piece; a caller of this must
+    /// do that itself.
+    pub fn verify_piece_hash(
+        &self,
+        layout: &Layout,
+        index: u64,
+        piece_hash: &Hash,
+        proof: &Proof,
+    ) -> Result<(), Error> {
+        if fold_proof(layout, index, piece_hash, proof)? == *self {
+            Ok(())
+        } else {
+            Err(Error::Proof)
+        }
+    }
+}
+
+impl fmt::Display for PiecesRoot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        hex(&self.0, f)
+    }
+}
+
+impl fmt::Debug for PiecesRoot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PiecesRoot({self})")
+    }
+}
+
+/// The proof of one piece: sibling hashes from the piece layer up to the pieces root.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Proof(Vec<Hash>);
 
 impl Proof {
-    /// The sibling hashes, from the leaf upwards.
+    /// The sibling hashes, from the piece layer upwards.
     pub fn hashes(&self) -> &[Hash] {
         &self.0
     }
@@ -660,7 +835,8 @@ impl Proof {
     }
 
     /// Parses concatenated hashes: a multiple of 32 bytes, at most [`MAX_PROOF`]
-    /// hashes. Whether the number fits the chunk is checked by [`Root::verify`].
+    /// hashes. Whether the number fits the object ([`Layout::proof_len`]) is checked by
+    /// [`Root::verify`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         let (hashes, rest) = bytes.as_chunks::<HASH>();
         if !rest.is_empty() || hashes.len() > MAX_PROOF {
@@ -670,24 +846,24 @@ impl Proof {
     }
 }
 
-/// Encrypts a whole object held in memory: every chunk and its tree.
+/// Encrypts a whole object held in memory: every piece and the tree.
 ///
-/// For tests and small objects; large files go chunk by chunk through [`seal`] and a
-/// [`TreeBuilder`].
+/// For tests and small objects; large files go chunk by chunk through [`seal`],
+/// [`piece_hash`] and a [`TreeBuilder`].
 pub fn encrypt_object(key: &Key, object: &[u8]) -> Result<(Tree, Vec<Vec<u8>>), Error> {
     let layout = Layout::new(object.len() as u64)?;
     let mut tree = TreeBuilder::new(layout, key.commitment());
-    let mut chunks = Vec::new();
+    let mut pieces = Vec::new();
     // An empty object still has one (empty) chunk.
-    let pieces = object
+    let chunks = object
         .chunks(CHUNK)
         .chain(object.is_empty().then_some(object));
-    for (index, piece) in (0..).zip(pieces) {
-        let chunk = seal(key, &layout, index, piece)?;
-        tree.push(leaf(&chunk));
-        chunks.push(chunk);
+    for (index, chunk) in (0..).zip(chunks) {
+        let piece = seal(key, &layout, index, chunk)?;
+        tree.push(piece_hash(&layout, index, &piece)?);
+        pieces.push(piece);
     }
-    Ok((tree.finish()?, chunks))
+    Ok((tree.finish()?, pieces))
 }
 
 /// The padded length of a file of `len` bytes: Padmé (Nikitin, Barman, Lueks, Underwood,
@@ -698,8 +874,10 @@ pub fn encrypt_object(key: &Key, object: &[u8]) -> Result<(Tree, Vec<Vec<u8>>), 
 /// a multiple of `2^(E - S)`. The padded length reveals `O(log log len)` bits of the
 /// length and adds less than 12 % (the most is 129 bytes padded to 144). Lengths
 /// below 2 stay as they are. The result is never smaller than `len`, never decreases
-/// as `len` grows, and is at most [`MAX_OBJECT`] when `len` is. Above `2^64 - 2^57`,
-/// where rounding up would overflow, the result is `u64::MAX`; no object is that long.
+/// as `len` grows, and is at most 2^48 when `len` is. It is at most [`MAX_OBJECT`] for
+/// `len` up to 2^48 − 2^41 (254 TiB); a longer file of at most 2^48 bytes pads to
+/// 2^48, which [`Layout::new`] rejects. Above `2^64 - 2^57`, where rounding up would overflow, the result is
+/// `u64::MAX`; no object is that long.
 pub fn padme(len: u64) -> u64 {
     if len < 2 {
         return len;
@@ -724,101 +902,204 @@ mod tests {
             .collect()
     }
 
-    /// RFC 9162 §2.1.1 MTH and §2.1.3.1 PATH, from the recursive definitions. Subtree
-    /// hashes are remembered, so that every path of 260 trees stays fast.
-    struct Naive {
+    /// SHA-256 of the parts concatenated, for the reference tree.
+    fn sha(parts: &[&[u8]]) -> Hash {
+        let mut hash = Context::new(&SHA256);
+        parts.iter().for_each(|part| hash.update(part));
+        finish(hash)
+    }
+
+    fn hex_of(hash: &Hash) -> String {
+        hash.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// The BEP 52 tree from its definition, written apart from the code above: SHA-256
+    /// leaves of 16 KiB blocks, zero leaves up to a power of two, nodes
+    /// `SHA-256(left || right)`, recursively. Subtree hashes are remembered, so that
+    /// every proof of 300 trees stays fast.
+    struct Bep52 {
         leaves: Vec<Hash>,
         subtrees: HashMap<(usize, usize), Hash>,
     }
 
-    impl Naive {
-        fn new(leaves: Vec<Hash>) -> Self {
+    impl Bep52 {
+        fn from_leaves(mut leaves: Vec<Hash>) -> Self {
+            leaves.resize(leaves.len().next_power_of_two(), [0; HASH]);
             let subtrees = HashMap::new();
             Self { leaves, subtrees }
         }
 
-        /// The largest power of two smaller than `n`.
-        fn split(n: usize) -> usize {
-            1 << (n - 1).ilog2()
+        fn from_file(file: &[u8]) -> Self {
+            Self::from_leaves(file.chunks(BLOCK).map(|block| sha(&[block])).collect())
         }
 
-        /// MTH(D[lo:hi]).
-        fn mth(&mut self, lo: usize, hi: usize) -> Hash {
-            if hi - lo == 1 {
+        /// The root over the `len` leaves from `lo`.
+        fn subtree(&mut self, lo: usize, len: usize) -> Hash {
+            if len == 1 {
                 return self.leaves[lo];
             }
-            if let Some(hash) = self.subtrees.get(&(lo, hi)) {
+            if let Some(hash) = self.subtrees.get(&(lo, len)) {
                 return *hash;
             }
-            let k = Self::split(hi - lo);
-            let hash = node(&self.mth(lo, lo + k), &self.mth(lo + k, hi));
-            self.subtrees.insert((lo, hi), hash);
+            let half = len / 2;
+            let left = self.subtree(lo, half);
+            let right = self.subtree(lo + half, half);
+            let hash = sha(&[&left, &right]);
+            self.subtrees.insert((lo, len), hash);
             hash
         }
 
-        /// PATH(m, D[lo:hi]).
-        fn path(&mut self, m: usize, lo: usize, hi: usize) -> Vec<Hash> {
-            if hi - lo == 1 {
-                return Vec::new();
-            }
-            let k = Self::split(hi - lo);
-            let (mut path, sibling) = if m < k {
-                (self.path(m, lo, lo + k), self.mth(lo + k, hi))
+        fn root(&mut self) -> Hash {
+            self.subtree(0, self.leaves.len())
+        }
+
+        /// The hash of piece `i`: the subtree of its four blocks, or the whole tree if
+        /// it has at most four leaves (a single piece).
+        fn piece(&mut self, i: usize) -> Hash {
+            if self.leaves.len() <= 4 {
+                self.root()
             } else {
-                (self.path(m - k, lo + k, hi), self.mth(lo, lo + k))
-            };
-            path.push(sibling);
-            path
+                self.subtree(4 * i, 4)
+            }
+        }
+
+        /// The siblings of piece `i` from the piece layer up to the root.
+        fn uncles(&mut self, i: usize) -> Vec<Hash> {
+            let mut uncles = Vec::new();
+            let mut size = 4;
+            while size < self.leaves.len() {
+                let sibling = (4 * i / size) ^ 1;
+                uncles.push(self.subtree(sibling * size, size));
+                size *= 2;
+            }
+            uncles
         }
     }
 
-    fn layout_of_chunks(n: u64) -> Layout {
-        Layout::new(n * CHUNK as u64).unwrap()
+    /// Plaintext lengths whose ciphertext object is one piece of one to four blocks,
+    /// just under, at and just over each block boundary.
+    fn single_piece_lengths() -> Vec<usize> {
+        (1..=4)
+            .flat_map(|k| [k * BLOCK - TAG - 1, k * BLOCK - TAG, k * BLOCK - TAG + 1])
+            .collect()
+    }
+
+    /// The layout of `n` pieces whose last piece has `last_blocks` blocks.
+    fn layout_of(n: u64, last_blocks: u64) -> Layout {
+        let last_piece = last_blocks * BLOCK as u64 - 7;
+        let layout = Layout::new((n - 1) * CHUNK as u64 + last_piece - TAG as u64).unwrap();
+        assert_eq!(layout.chunks(), n);
+        assert_eq!(layout.blocks(), 4 * (n - 1) + last_blocks);
+        layout
     }
 
     #[test]
     fn round_trip() {
         let key = Key::generate().unwrap();
-        for len in LENGTHS {
+        let mut lengths = LENGTHS.to_vec();
+        lengths.extend(single_piece_lengths());
+        for len in lengths {
             let data = object(len);
-            let (tree, chunks) = encrypt_object(&key, &data).unwrap();
+            let (tree, pieces) = encrypt_object(&key, &data).unwrap();
             let layout = *tree.layout();
             assert_eq!(layout, Layout::new(len as u64).unwrap());
-            assert_eq!(layout.chunks(), chunks.len() as u64);
+            assert_eq!(layout.chunks(), pieces.len() as u64);
             assert_eq!(layout.chunks(), len.div_ceil(CHUNK).max(1) as u64);
-            let total: usize = chunks.iter().map(Vec::len).sum();
-            assert_eq!(total as u64, layout.ciphertext_len());
+            let file = pieces.concat();
+            assert_eq!(file.len() as u64, layout.ciphertext_len());
+            assert_eq!(layout.blocks(), file.len().div_ceil(BLOCK) as u64);
+
+            // The tree is BEP 52's over the ciphertext object.
+            let mut reference = Bep52::from_file(&file);
+            assert_eq!(*tree.pieces_root().as_bytes(), reference.root());
+            assert_eq!(tree.piece_layer().len(), pieces.len());
+            for (i, hash) in tree.piece_layer().iter().enumerate() {
+                assert_eq!(
+                    *hash,
+                    reference.piece(i),
+                    "object of {len} bytes, piece {i}"
+                );
+            }
 
             let root = Root::from_bytes(*tree.root().as_bytes());
             let commitment = Commitment::from_bytes(*tree.commitment().as_bytes());
             assert_eq!(commitment, key.commitment());
+            assert_eq!(Root::new(&layout, &commitment, &tree.pieces_root()), root);
+            let pieces_root = PiecesRoot::from_bytes(*tree.pieces_root().as_bytes());
             let mut plaintext = Vec::new();
-            for (index, chunk) in (0..).zip(&chunks) {
-                assert_eq!(chunk.len(), layout.cipher_len(index).unwrap());
+            for (index, piece) in (0..).zip(&pieces) {
+                assert_eq!(piece.len(), layout.cipher_len(index).unwrap());
+                assert!(piece.len() == PIECE || layout.is_last(index));
+                let start = layout.cipher_offset(index).unwrap() as usize;
+                assert_eq!(&file[start..start + piece.len()], piece);
                 let proof = Proof::from_bytes(&tree.proof(index).unwrap().to_bytes()).unwrap();
-                root.verify(&layout, &commitment, index, chunk, &proof)
+                assert_eq!(proof.hashes().len(), layout.proof_len());
+                root.verify(&layout, &commitment, index, piece, &proof)
                     .unwrap();
-                let piece = open(&key, &layout, index, chunk).unwrap();
-                assert_eq!(piece.len(), layout.plain_len(index).unwrap());
+                pieces_root.verify(&layout, index, piece, &proof).unwrap();
+                let chunk = open(&key, &layout, index, piece).unwrap();
+                assert_eq!(chunk.len(), layout.plain_len(index).unwrap());
                 assert_eq!(plaintext.len() as u64, layout.offset(index).unwrap());
-                plaintext.extend(piece);
+                plaintext.extend(chunk);
             }
             assert_eq!(plaintext, data, "object of {len} bytes");
         }
     }
 
     #[test]
+    fn single_piece_is_the_whole_tree() {
+        let key = Key::from_bytes([9; KEY]);
+        // The last length, a byte over 64 KiB of ciphertext, is two pieces.
+        let blocks = [1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4];
+        for (len, blocks) in single_piece_lengths().into_iter().zip(blocks) {
+            let (tree, pieces) = encrypt_object(&key, &object(len)).unwrap();
+            let layout = *tree.layout();
+            assert_eq!(layout.chunks(), 1, "{len}");
+            assert_eq!(layout.blocks(), blocks, "{len}");
+            assert_eq!(layout.proof_len(), 0);
+            assert_eq!(tree.piece_layer(), [*tree.pieces_root().as_bytes()]);
+            let hash = piece_hash(&layout, 0, &pieces[0]).unwrap();
+            assert_eq!(hash, *tree.pieces_root().as_bytes());
+            // Leaves padded to 1, 2 or 4, not always to the four of a full piece.
+            let leaves: Vec<Hash> = pieces[0].chunks(BLOCK).map(|b| sha(&[b])).collect();
+            let expected = match leaves.as_slice() {
+                [a] => *a,
+                [a, b] => sha(&[a, b]),
+                [a, b, c] => sha(&[&sha(&[a, b]), &sha(&[c, &[0; HASH]])]),
+                [a, b, c, d] => sha(&[&sha(&[a, b]), &sha(&[c, d])]),
+                _ => unreachable!(),
+            };
+            assert_eq!(hash, expected, "{len}");
+            // Any proof but the empty one is refused.
+            let one = Proof(vec![[0; HASH]]);
+            assert_eq!(
+                tree.root()
+                    .verify(&layout, &key.commitment(), 0, &pieces[0], &one),
+                Err(Error::Proof)
+            );
+            assert_eq!(
+                tree.pieces_root().verify(&layout, 0, &pieces[0], &one),
+                Err(Error::Proof)
+            );
+        }
+    }
+
+    #[test]
     fn empty_object_is_one_tag() {
         let key = Key::from_bytes([7; KEY]);
-        let (tree, chunks) = encrypt_object(&key, &[]).unwrap();
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].len(), TAG);
+        let (tree, pieces) = encrypt_object(&key, &[]).unwrap();
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].len(), TAG);
+        assert_eq!(tree.layout().blocks(), 1);
         assert!(tree.proof(0).unwrap().hashes().is_empty());
-        assert_eq!(open(&key, tree.layout(), 0, &chunks[0]).unwrap(), b"");
+        assert_eq!(*tree.pieces_root().as_bytes(), sha(&[&pieces[0]]));
+        assert_eq!(open(&key, tree.layout(), 0, &pieces[0]).unwrap(), b"");
     }
 
     /// Any change to the format changes these values. All were recomputed when frozen
-    /// by a separate implementation (Python: RFC 8439 by hand, hashlib, RFC 9162).
+    /// by a separate implementation (Python: RFC 8439 by hand, hashlib, BEP 52), and
+    /// libtorrent 2.1.2 gave the same "pieces root" and "piece layers" for v2-only
+    /// torrents of the same ciphertext objects with a piece length of 64 KiB.
     #[test]
     fn frozen_vector() {
         let key = Key::from_bytes(std::array::from_fn(|i| i as u8));
@@ -826,20 +1107,66 @@ mod tests {
             key.commitment().to_string(),
             "375c22f2ecb5e9dd79610fe9d636315bc967300f8661508efd3fd51216e1b517"
         );
+        let data =
+            |len: usize| -> Vec<u8> { (0..len).map(|i| (i as u8).wrapping_mul(7)).collect() };
 
-        let data: Vec<u8> = (0..70_000).map(|i| (i as u8).wrapping_mul(7)).collect();
-        let (tree, chunks) = encrypt_object(&key, &data).unwrap();
-        assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[1].len(), 70_000 - CHUNK + TAG);
+        let (tree, pieces) = encrypt_object(&key, &data(70_000)).unwrap();
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(pieces[1].len(), 70_000 - CHUNK + TAG);
+        assert_eq!(tree.layout().ciphertext_len(), 70_032);
+        assert_eq!(
+            tree.pieces_root().to_string(),
+            "f5ec81805c832fe6e9f01bb4faa536d11092746a30a10a2a86138f2f056d35e5"
+        );
+        let layer: Vec<String> = tree.piece_layer().iter().map(hex_of).collect();
+        assert_eq!(
+            layer,
+            [
+                "1422bc1e21adb2401221fb0efa3e50e8de8219c028017998f8187213c1dcd38e",
+                "6ca02184a1d86393ca1c379dac3bfb6f7b4928a05e6a4ee4c700687478405e9a",
+            ]
+        );
         assert_eq!(
             tree.root().to_string(),
-            "77d05554ed33b44d5c2d9ffe5789dd6c5e9036cb2d0399caa2ec3e8261a75eb6"
+            "e6c6be9f5733c11036ecef80456ad8ce3973e2ae65b9be3084d2531fdb57dceb"
         );
 
         let (tree, _) = encrypt_object(&key, &[]).unwrap();
         assert_eq!(
+            tree.pieces_root().to_string(),
+            "98082ff61f1317c757770e0ee5ec26bbe8f1d4d7c3f91e4755eb0622f630b8a7"
+        );
+        assert_eq!(
             tree.root().to_string(),
-            "2dfdfaa1ef96182688a43097f2843445c605155e8644f7b7a87c2935937f2269"
+            "0158d3747380b712e9fd95da346be2f88659a4237eaad48966e6ac79a6ba7ee3"
+        );
+
+        // One piece of two blocks: two leaves, not four.
+        let (tree, _) = encrypt_object(&key, &data(20_000)).unwrap();
+        assert_eq!(
+            tree.pieces_root().to_string(),
+            "7637bc7a928237053f54eed6736ebd32f7671f15a09536854b8c00f601ff2579"
+        );
+        assert_eq!(
+            tree.root().to_string(),
+            "e769cc36b75e89965004ed65324b23ed5068c05a1f9fbf8a6b2c548cb59a4e8c"
+        );
+
+        // Five pieces: three padding nodes in the piece layer's level.
+        let (tree, _) = encrypt_object(&key, &data(300_000)).unwrap();
+        assert_eq!(tree.layout().chunks(), 5);
+        assert_eq!(tree.layout().proof_len(), 3);
+        assert_eq!(
+            tree.pieces_root().to_string(),
+            "babf8fac8beb11bc9c94087a99d14a264a3c73fd62d40e27d9346f5c31b39dd5"
+        );
+        assert_eq!(
+            hex_of(&sha(&[&tree.piece_layer().concat()])),
+            "554137285d65b3b9139e36622935a02f009e537e4373b5378fd6eca023d876f2"
+        );
+        assert_eq!(
+            tree.root().to_string(),
+            "62b1669faeb10959f564719a90fc015199d6d3f59c8216f06f8d2fb67f91aebb"
         );
     }
 
@@ -870,56 +1197,76 @@ mod tests {
     fn tampering() {
         let key = Key::generate().unwrap();
         let data = object(3 * CHUNK + 5);
-        let (tree, chunks) = encrypt_object(&key, &data).unwrap();
+        let (tree, pieces) = encrypt_object(&key, &data).unwrap();
         let layout = *tree.layout();
         let root = tree.root();
+        let pieces_root = tree.pieces_root();
         let commitment = key.commitment();
         let proofs: Vec<Proof> = (0..4).map(|i| tree.proof(i).unwrap()).collect();
+        assert_eq!(layout.proof_len(), 2);
 
-        // A flipped bit, in the ciphertext and in the tag.
-        for position in [0, 100, CHUNK + TAG - 1] {
-            let mut chunk = chunks[0].clone();
-            chunk[position] ^= 1;
+        // A flipped bit, in the ciphertext and in the tag, in every block.
+        for position in [0, 100, BLOCK, 2 * BLOCK + 1, PIECE - 1] {
+            let mut piece = pieces[0].clone();
+            piece[position] ^= 1;
             assert_eq!(
-                root.verify(&layout, &commitment, 0, &chunk, &proofs[0]),
+                root.verify(&layout, &commitment, 0, &piece, &proofs[0]),
                 Err(Error::Proof)
             );
-            assert_eq!(open(&key, &layout, 0, &chunk), Err(Error::Authentication));
+            assert_eq!(
+                pieces_root.verify(&layout, 0, &piece, &proofs[0]),
+                Err(Error::Proof)
+            );
+            assert_eq!(open(&key, &layout, 0, &piece), Err(Error::Authentication));
         }
 
-        // Swapped chunks.
+        // Swapped pieces.
         for proof in [&proofs[0], &proofs[1]] {
             assert_eq!(
-                root.verify(&layout, &commitment, 0, &chunks[1], proof),
+                root.verify(&layout, &commitment, 0, &pieces[1], proof),
+                Err(Error::Proof)
+            );
+            assert_eq!(
+                pieces_root.verify(&layout, 0, &pieces[1], proof),
                 Err(Error::Proof)
             );
         }
         assert_eq!(
-            open(&key, &layout, 0, &chunks[1]),
+            open(&key, &layout, 0, &pieces[1]),
             Err(Error::Authentication)
         );
         assert_eq!(
-            open(&key, &layout, 1, &chunks[0]),
+            open(&key, &layout, 1, &pieces[0]),
             Err(Error::Authentication)
         );
 
-        // A chunk at the wrong index, with its own proof or that of the index.
+        // A piece at the wrong index, with its own proof or that of the index.
         for (index, proof) in [(2, &proofs[1]), (2, &proofs[2]), (0, &proofs[1])] {
             assert_eq!(
-                root.verify(&layout, &commitment, index, &chunks[1], proof),
+                root.verify(&layout, &commitment, index, &pieces[1], proof),
+                Err(Error::Proof)
+            );
+            assert_eq!(
+                pieces_root.verify(&layout, index, &pieces[1], proof),
                 Err(Error::Proof)
             );
         }
+        let bad_index = Err(Error::BadIndex {
+            index: 4,
+            chunks: 4,
+        });
         assert_eq!(
-            root.verify(&layout, &commitment, 4, &chunks[1], &proofs[1]),
-            Err(Error::BadIndex {
-                index: 4,
-                chunks: 4
-            })
+            root.verify(&layout, &commitment, 4, &pieces[1], &proofs[1]),
+            bad_index
+        );
+        let hash = piece_hash(&layout, 1, &pieces[1]).unwrap();
+        assert_eq!(
+            pieces_root.verify_piece_hash(&layout, 4, &hash, &proofs[1]),
+            bad_index
         );
 
-        // A truncated last chunk.
-        let short = &chunks[3][..chunks[3].len() - 1];
+        // A truncated last piece, and a full piece where the last belongs.
+        let short = &pieces[3][..pieces[3].len() - 1];
         let wrong_length = Error::WrongLength {
             expected: 5 + TAG,
             actual: 4 + TAG,
@@ -928,47 +1275,81 @@ mod tests {
             root.verify(&layout, &commitment, 3, short, &proofs[3]),
             Err(wrong_length)
         );
+        assert_eq!(
+            pieces_root.verify(&layout, 3, short, &proofs[3]),
+            Err(wrong_length)
+        );
+        assert_eq!(piece_hash(&layout, 3, short), Err(wrong_length));
         assert_eq!(open(&key, &layout, 3, short), Err(wrong_length));
+        assert_eq!(
+            root.verify(&layout, &commitment, 3, &pieces[2], &proofs[3]),
+            Err(Error::WrongLength {
+                expected: 5 + TAG,
+                actual: PIECE
+            })
+        );
 
-        // An object cut short at a chunk boundary: chunk 2 was not sealed as the last.
+        // An object cut short at a piece boundary: chunk 2 was not sealed as the last.
         let cut = Layout::new(3 * CHUNK as u64).unwrap();
-        assert_eq!(open(&key, &cut, 2, &chunks[2]), Err(Error::Authentication));
+        assert_eq!(open(&key, &cut, 2, &pieces[2]), Err(Error::Authentication));
+        assert_eq!(
+            root.verify(&cut, &commitment, 2, &pieces[2], &proofs[2]),
+            Err(Error::Proof)
+        );
 
         // A proof one hash short or long.
         for index in 0..4 {
+            let piece = &pieces[index as usize];
             let mut hashes = proofs[index as usize].hashes().to_vec();
             hashes.pop();
             let short = Proof(hashes.clone());
             assert_eq!(
-                root.verify(&layout, &commitment, index, &chunks[index as usize], &short),
+                root.verify(&layout, &commitment, index, piece, &short),
+                Err(Error::Proof)
+            );
+            assert_eq!(
+                pieces_root.verify(&layout, index, piece, &short),
                 Err(Error::Proof)
             );
             hashes.extend([[0; HASH], [0; HASH]]);
             let long = Proof(hashes);
             assert_eq!(
-                root.verify(&layout, &commitment, index, &chunks[index as usize], &long),
+                root.verify(&layout, &commitment, index, piece, &long),
+                Err(Error::Proof)
+            );
+            assert_eq!(
+                pieces_root.verify(&layout, index, piece, &long),
                 Err(Error::Proof)
             );
         }
 
-        // The root of another object length (same chunk count, same leaves).
+        // The root of another object length (same piece count, same piece hashes).
         let other = Layout::new(3 * CHUNK as u64 + 6).unwrap();
         assert_eq!(other.chunks(), layout.chunks());
         assert_eq!(
-            root.verify(&other, &commitment, 0, &chunks[0], &proofs[0]),
+            root.verify(&other, &commitment, 0, &pieces[0], &proofs[0]),
             Err(Error::Proof)
         );
         let mut builder = TreeBuilder::new(other, commitment);
-        tree.leaves().iter().for_each(|leaf| builder.push(*leaf));
-        assert_ne!(builder.finish().unwrap().root(), root);
+        tree.piece_layer()
+            .iter()
+            .for_each(|hash| builder.push(*hash));
+        let other_tree = builder.finish().unwrap();
+        assert_eq!(other_tree.pieces_root(), pieces_root);
+        assert_ne!(other_tree.root(), root);
+        // The pieces root alone does not bind the length: the full pieces verify under
+        // the other layout. That is why the root does.
+        pieces_root
+            .verify(&other, 0, &pieces[0], &proofs[0])
+            .unwrap();
 
-        // Another key: it does not open the chunks, the same chunks and tree under its
-        // commitment have another root, and its commitment verifies no chunk.
+        // Another key: it does not open the pieces, the same pieces and tree under its
+        // commitment have another root, and its commitment verifies no piece.
         let other_key = Key::generate().unwrap();
         let other_commitment = other_key.commitment();
-        for (index, chunk) in (0..).zip(&chunks) {
+        for (index, piece) in (0..).zip(&pieces) {
             assert_eq!(
-                open(&other_key, &layout, index, chunk),
+                open(&other_key, &layout, index, piece),
                 Err(Error::Authentication)
             );
             assert_eq!(
@@ -976,39 +1357,43 @@ mod tests {
                     &layout,
                     &other_commitment,
                     index,
-                    chunk,
+                    piece,
                     &proofs[index as usize]
                 ),
                 Err(Error::Proof)
             );
         }
         let mut builder = TreeBuilder::new(layout, other_commitment);
-        tree.leaves().iter().for_each(|leaf| builder.push(*leaf));
+        tree.piece_layer()
+            .iter()
+            .for_each(|hash| builder.push(*hash));
         let other_tree = builder.finish().unwrap();
-        assert_eq!(other_tree.leaves(), tree.leaves());
-        assert_eq!(other_tree.levels.last(), tree.levels.last());
+        assert_eq!(other_tree.piece_layer(), tree.piece_layer());
+        assert_eq!(other_tree.pieces_root(), pieces_root);
         assert_ne!(other_tree.root(), root);
         let mut builder = TreeBuilder::new(layout, commitment);
-        tree.leaves().iter().for_each(|leaf| builder.push(*leaf));
+        tree.piece_layer()
+            .iter()
+            .for_each(|hash| builder.push(*hash));
         assert_eq!(builder.finish().unwrap().root(), root);
 
         // The last-chunk flag: the last chunk sealed as not last, an earlier one as last.
         let last_plain = &data[3 * CHUNK..];
-        let first_plain = &data[CHUNK..2 * CHUNK];
-        for (index, last, plain) in [(3, false, last_plain), (1, true, first_plain)] {
-            let chunk = seal_at(&key, index as u32, last, plain).unwrap();
-            assert_eq!(chunk.len(), chunks[index as usize].len());
+        let middle_plain = &data[CHUNK..2 * CHUNK];
+        for (index, last, plain) in [(3, false, last_plain), (1, true, middle_plain)] {
+            let piece = seal_at(&key, index as u32, last, plain).unwrap();
+            assert_eq!(piece.len(), pieces[index as usize].len());
             assert_eq!(
-                open(&key, &layout, index, &chunk),
+                open(&key, &layout, index, &piece),
                 Err(Error::Authentication)
             );
             assert_eq!(
-                root.verify(&layout, &commitment, index, &chunk, &proofs[index as usize]),
+                root.verify(&layout, &commitment, index, &piece, &proofs[index as usize]),
                 Err(Error::Proof)
             );
         }
         // The honest seal is reproducible.
-        assert_eq!(seal(&key, &layout, 3, last_plain).unwrap(), chunks[3]);
+        assert_eq!(seal(&key, &layout, 3, last_plain).unwrap(), pieces[3]);
     }
 
     #[test]
@@ -1030,60 +1415,88 @@ mod tests {
             })
         );
         assert_eq!(
-            seal(&key, &layout, 2, &[]),
-            Err(Error::BadIndex {
-                index: 2,
-                chunks: 2
+            seal(&key, &layout, 0, &[0; PIECE]),
+            Err(Error::WrongLength {
+                expected: CHUNK,
+                actual: PIECE
             })
         );
-        assert_eq!(
-            open(&key, &layout, 2, &[0; TAG]),
-            Err(Error::BadIndex {
-                index: 2,
-                chunks: 2
-            })
-        );
+        let bad = Error::BadIndex {
+            index: 2,
+            chunks: 2,
+        };
+        assert_eq!(seal(&key, &layout, 2, &[]), Err(bad));
+        assert_eq!(open(&key, &layout, 2, &[0; TAG]), Err(bad));
+        assert_eq!(piece_hash(&layout, 2, &[0; TAG]), Err(bad));
     }
 
     #[test]
     fn tree_shape() {
         let commitment = Key::from_bytes([3; KEY]).commitment();
         let other_commitment = Key::from_bytes([4; KEY]).commitment();
-        for n in 1..=260u64 {
-            let layout = layout_of_chunks(n);
-            let leaves: Vec<Hash> = (0..n).map(|i| leaf(&i.to_be_bytes())).collect();
+        let shapes = (1..=4)
+            .map(|last_blocks| (1, last_blocks))
+            .chain((2..=300).map(|n| (n, 1 + n % 4)));
+        for (n, last_blocks) in shapes {
+            let layout = layout_of(n, last_blocks);
+            let blocks = layout.blocks() as usize;
+            // Synthetic block leaves, all distinct: the tree above them does not look at
+            // the blocks.
+            let leaves: Vec<Hash> = (0..blocks as u64)
+                .map(|j| {
+                    let mut leaf = [0xa5; HASH];
+                    leaf[..8].copy_from_slice(&j.to_be_bytes());
+                    leaf[8..16].copy_from_slice(&n.to_be_bytes());
+                    leaf
+                })
+                .collect();
+            let mut reference = Bep52::from_leaves(leaves);
+            let hashes: Vec<Hash> = (0..n as usize).map(|i| reference.piece(i)).collect();
             let mut builder = TreeBuilder::new(layout, commitment);
-            leaves.iter().for_each(|leaf| builder.push(*leaf));
+            hashes.iter().for_each(|hash| builder.push(*hash));
             let tree = builder.finish().unwrap();
-            let mut naive = Naive::new(leaves.clone());
-            let mth = naive.mth(0, n as usize);
-            assert_eq!(tree.levels.last().unwrap(), &[mth]);
-            assert_eq!(tree.root(), Root::compute(&layout, &commitment, &mth));
-            assert_eq!(tree.commitment(), commitment);
-            assert_eq!(tree.leaves(), &leaves[..]);
 
-            let root = tree.root();
+            let pieces_root = PiecesRoot(reference.root());
+            assert_eq!(tree.pieces_root(), pieces_root, "n {n}");
+            assert_eq!(tree.piece_layer(), &hashes[..]);
+            assert_eq!(tree.commitment(), commitment);
+            let root = Root::new(&layout, &commitment, &pieces_root);
+            assert_eq!(tree.root(), root);
+            // log2(P / 4) hashes, P the leaves padded to a power of two.
+            let proof_len = if n == 1 {
+                0
+            } else {
+                (blocks.next_power_of_two() / 4).ilog2() as usize
+            };
+            assert_eq!(layout.proof_len(), proof_len, "n {n}");
+
             for index in 0..n {
                 let i = index as usize;
                 let proof = tree.proof(index).unwrap();
-                let expected = naive.path(i, 0, n as usize);
-                assert_eq!(proof.hashes(), expected, "n {n}, index {index}");
-                assert_eq!(proof.hashes().len(), path_len(index, n));
-                root.verify_leaf(&layout, &commitment, index, &leaves[i], &proof)
+                assert_eq!(proof.hashes(), reference.uncles(i), "n {n}, index {index}");
+                assert_eq!(proof.hashes().len(), proof_len);
+                root.verify_piece_hash(&layout, &commitment, index, &hashes[i], &proof)
+                    .unwrap();
+                // The other checks take a sample of the pieces, to keep the test fast.
+                if index % 8 != 0 && index != n - 1 {
+                    continue;
+                }
+                pieces_root
+                    .verify_piece_hash(&layout, index, &hashes[i], &proof)
                     .unwrap();
                 assert_eq!(
-                    root.verify_leaf(&layout, &other_commitment, index, &leaves[i], &proof),
+                    root.verify_piece_hash(&layout, &other_commitment, index, &hashes[i], &proof),
                     Err(Error::Proof)
                 );
                 if n > 1 {
                     let next = (index + 1) % n;
-                    let other_leaf = &leaves[next as usize];
+                    let other_hash = &hashes[next as usize];
                     assert_eq!(
-                        root.verify_leaf(&layout, &commitment, index, other_leaf, &proof),
+                        root.verify_piece_hash(&layout, &commitment, index, other_hash, &proof),
                         Err(Error::Proof)
                     );
                     assert_eq!(
-                        root.verify_leaf(&layout, &commitment, next, &leaves[i], &proof),
+                        pieces_root.verify_piece_hash(&layout, next, &hashes[i], &proof),
                         Err(Error::Proof)
                     );
                 }
@@ -1093,18 +1506,51 @@ mod tests {
     }
 
     #[test]
+    fn padding_nodes() {
+        // A piece position beyond the object is the root of four zero leaves, and the
+        // tree is the perfect tree over P / 4 such positions.
+        let z1 = sha(&[&[0; HASH], &[0; HASH]]);
+        assert_eq!(piece_pad(), sha(&[&z1, &z1]));
+        let commitment = Key::from_bytes([6; KEY]).commitment();
+        let layout = layout_of(5, 2);
+        let hashes: Vec<Hash> = (0..5u8).map(|i| [i; HASH]).collect();
+        let mut builder = TreeBuilder::new(layout, commitment);
+        hashes.iter().for_each(|hash| builder.push(*hash));
+        let tree = builder.finish().unwrap();
+        let z2 = piece_pad();
+        let z3 = sha(&[&z2, &z2]);
+        let h = |l: &Hash, r: &Hash| sha(&[l, r]);
+        let expected = h(
+            &h(&h(&hashes[0], &hashes[1]), &h(&hashes[2], &hashes[3])),
+            &h(&h(&hashes[4], &z2), &z3),
+        );
+        assert_eq!(*tree.pieces_root().as_bytes(), expected);
+        assert_eq!(
+            tree.proof(4).unwrap().hashes(),
+            [
+                z2,
+                z3,
+                h(&h(&hashes[0], &hashes[1]), &h(&hashes[2], &hashes[3]))
+            ]
+        );
+    }
+
+    #[test]
     fn proof_length_bound() {
-        assert_eq!(path_len(0, 1), 0);
-        for index in [0, 1, 12_345_678, MAX_CHUNKS / 2, MAX_CHUNKS - 1] {
-            assert_eq!(path_len(index, MAX_CHUNKS), MAX_PROOF);
+        let len = |chunks: u64| Layout::new(chunks * CHUNK as u64).unwrap().proof_len();
+        assert_eq!(Layout::new(0).unwrap().proof_len(), 0);
+        for (chunks, expected) in [(1, 0), (2, 1), (3, 2), (4, 2), (5, 3), (8, 3), (9, 4)] {
+            assert_eq!(len(chunks), expected, "{chunks} chunks");
         }
-        for n in [MAX_CHUNKS - 1, MAX_CHUNKS / 2 + 1, 1 << 20, 1_000_003] {
-            for index in [0, 1, n / 2, n - 2, n - 1] {
-                assert!(path_len(index, n) <= MAX_PROOF);
-            }
+        assert_eq!(len(MAX_CHUNKS / 2), MAX_PROOF - 1);
+        assert_eq!(len(MAX_CHUNKS / 2 + 1), MAX_PROOF);
+        assert_eq!(Layout::new(MAX_OBJECT).unwrap().proof_len(), MAX_PROOF);
+        // log2(P / 4), with P the blocks rounded up to a power of two.
+        for object_len in [CHUNK as u64 + 1, 1 << 30, (1 << 40) + 12_345, MAX_OBJECT] {
+            let layout = Layout::new(object_len).unwrap();
+            let p = layout.blocks().next_power_of_two();
+            assert_eq!(layout.proof_len(), (p / 4).ilog2() as usize);
         }
-        // The last leaf of 2^k + 1 leaves sits right below the root.
-        assert_eq!(path_len(MAX_CHUNKS / 2, MAX_CHUNKS / 2 + 1), 1);
     }
 
     #[test]
@@ -1125,22 +1571,32 @@ mod tests {
 
     #[test]
     fn layout() {
+        assert_eq!(CHUNK, 65_520);
+        assert_eq!(BLOCKS_PER_PIECE, 4);
+
         let empty = Layout::new(0).unwrap();
         assert_eq!(empty.chunks(), 1);
         assert_eq!(empty.plain_len(0), Ok(0));
         assert_eq!(empty.cipher_len(0), Ok(TAG));
+        assert_eq!(empty.ciphertext_len(), TAG as u64);
+        assert_eq!(empty.blocks(), 1);
         assert!(empty.is_last(0));
+
+        let full = Layout::new(CHUNK as u64).unwrap();
+        assert_eq!(full.chunks(), 1);
+        assert_eq!(full.cipher_len(0), Ok(PIECE));
+        assert_eq!(full.blocks(), 4);
 
         let layout = Layout::new(2 * CHUNK as u64 + 1).unwrap();
         assert_eq!(layout.chunks(), 3);
         assert_eq!(layout.offset(2), Ok(2 * CHUNK as u64));
         assert_eq!(layout.plain_len(1), Ok(CHUNK));
+        assert_eq!(layout.cipher_len(1), Ok(PIECE));
         assert_eq!(layout.plain_len(2), Ok(1));
-        assert_eq!(layout.cipher_offset(2), Ok(2 * (CHUNK + TAG) as u64));
-        assert_eq!(
-            layout.ciphertext_len(),
-            2 * CHUNK as u64 + 1 + 3 * TAG as u64
-        );
+        assert_eq!(layout.cipher_len(2), Ok(1 + TAG));
+        assert_eq!(layout.cipher_offset(2), Ok(2 * PIECE as u64));
+        assert_eq!(layout.ciphertext_len(), 2 * PIECE as u64 + 1 + TAG as u64);
+        assert_eq!(layout.blocks(), 9);
         assert!(!layout.is_last(1));
         assert!(layout.is_last(2));
         assert!(!layout.is_last(3));
@@ -1156,21 +1612,28 @@ mod tests {
         let largest = Layout::new(MAX_OBJECT).unwrap();
         assert_eq!(largest.chunks(), MAX_CHUNKS);
         assert_eq!(largest.plain_len(MAX_CHUNKS - 1), Ok(CHUNK));
+        assert_eq!(largest.cipher_len(MAX_CHUNKS - 1), Ok(PIECE));
         assert_eq!(largest.position(MAX_CHUNKS - 1), Ok((u32::MAX, true)));
-        for object_len in [MAX_OBJECT + 1, u64::MAX] {
+        assert_eq!(largest.ciphertext_len(), 1 << 48);
+        assert_eq!(largest.blocks(), 1 << 34);
+        assert_eq!(
+            largest.cipher_offset(MAX_CHUNKS - 1),
+            Ok((1 << 48) - PIECE as u64)
+        );
+        for object_len in [MAX_OBJECT + 1, 1 << 48, u64::MAX] {
             assert_eq!(Layout::new(object_len), Err(Error::TooLarge { object_len }));
         }
     }
 
     #[test]
-    fn tree_builder_counts_leaves() {
-        let layout = layout_of_chunks(2);
+    fn tree_builder_counts_pieces() {
+        let layout = layout_of(2, 1);
         let commitment = Key::from_bytes([5; KEY]).commitment();
         let mut builder = TreeBuilder::new(layout, commitment);
         builder.push([0; HASH]);
         assert_eq!(
             builder.finish().unwrap_err(),
-            Error::LeafCount {
+            Error::PieceCount {
                 expected: 2,
                 actual: 1
             }
@@ -1178,7 +1641,7 @@ mod tests {
         let builder = TreeBuilder::new(Layout::new(0).unwrap(), commitment);
         assert_eq!(
             builder.finish().unwrap_err(),
-            Error::LeafCount {
+            Error::PieceCount {
                 expected: 1,
                 actual: 0
             }
@@ -1222,12 +1685,15 @@ mod tests {
             (u64::MAX - (1 << 57) + 1, u64::MAX - (1 << 57) + 1),
             (u64::MAX - (1 << 57) + 2, u64::MAX),
             (u64::MAX, u64::MAX),
-            (MAX_OBJECT - 1, MAX_OBJECT),
-            (MAX_OBJECT, MAX_OBJECT),
+            ((1 << 48) - (1 << 41), (1 << 48) - (1 << 41)),
+            ((1 << 48) - (1 << 41) + 1, 1 << 48),
+            (MAX_OBJECT, 1 << 48),
+            (1 << 48, 1 << 48),
         ];
         for (len, padded) in known {
             assert_eq!(padme(len), padded, "padme({len})");
         }
+        assert!(padme((1 << 48) - (1 << 41)) <= MAX_OBJECT);
     }
 
     #[test]
