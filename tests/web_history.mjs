@@ -2,7 +2,9 @@
 // Real IndexedDB boundary/paging/reopen tests, in a disposable Chromium profile.
 // NUSCHL_PLAYWRIGHT=/path/to/playwright-core/index.mjs node tests/web_history.mjs
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 const module = process.env.NUSCHL_PLAYWRIGHT;
@@ -14,7 +16,9 @@ const server = createServer((req,res) => {
   else { res.writeHead(200,{"Content-Type":"text/html"}); res.end("<!doctype html><title>Private IndexedDB fixture</title>"); }
 });
 await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
-const browser = await chromium.launch({ headless:true, ...(process.env.NUSCHL_CHROMIUM ? { executablePath:process.env.NUSCHL_CHROMIUM } : {}) });
+const profile = await mkdtemp(join(tmpdir(), "nuschl-web-history-"));
+const options = { headless:true, ...(process.env.NUSCHL_CHROMIUM ? { executablePath:process.env.NUSCHL_CHROMIUM } : {}) };
+let browser = await chromium.launchPersistentContext(profile, options);
 try {
  const page = await browser.newPage();
  await page.goto(`http://127.0.0.1:${server.address().port}`);
@@ -64,5 +68,17 @@ try {
  assert.deepEqual(result.isolated,["another certificate"]);
  assert.equal(result.largeCount,4);
  assert.ok(result.largePages>=2);
- console.log("IndexedDB: 238 records survive reopen and complete paging; timestamp ties/backdated rows stable; certificate/channel/cursor scopes enforced; multiline preserved; bounded messages/pages retain all large history.");
-} finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); }
+ await browser.close();
+ browser = await chromium.launchPersistentContext(profile, options);
+ const reopened = await browser.newPage();
+ await reopened.goto(`http://127.0.0.1:${server.address().port}`);
+ const durable = await reopened.evaluate(async () => {
+   const {openHistory}=await import("/history.js");
+   const db=await openHistory(indexedDB,"private-fixture");
+   const result=await db.execute({kind:"page",ticket:"1",identity:"ab".repeat(32),channel:"0",before:null,limit:100});
+   const bookmarks=await db.bookmarks();db.close();return {rows:result.rows.length,bookmarks};
+ });
+ assert.equal(durable.rows,100);
+ assert.equal(durable.bookmarks,result.bookmarks);
+ console.log("IndexedDB: 238 records survive reopen/full paging and browser restart; timestamp ties/backdated rows stable; certificate/channel/cursor scopes enforced; multiline preserved; bounded messages/pages retain all large history.");
+} finally { await browser.close(); await new Promise(resolve=>server.close(resolve)); await rm(profile,{recursive:true,force:true}); }

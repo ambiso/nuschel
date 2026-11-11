@@ -133,6 +133,17 @@ if (alternate) {
   peer.open(peerIndex,0);drain(peer);
   if (!JSON.parse(peer.timeline()).messages.some(message=>message.document.blocks.some(block=>block.kind==="text"&&block.text.includes("root message while")))) throw new Error("cached root history missing after navigation");
 }
+// Private conversation selection/send remains in the shared SDK. A legacy
+// peer without a certificate keeps an ephemeral key instead of adopting a
+// reused session number's history.
+const recipient=JSON.parse(client.servers())[0].users.find(user=>user.name==="web-peer");
+client.open_direct(index,recipient.session);drain(client);
+client.send_text("private text from the browser SDK");
+await until(()=>stores.get(peer).some(row=>row.message.body==="private text from the browser SDK"),"private text did not arrive");
+const direct=JSON.parse(peer.servers())[0].channels.find(channel=>channel.direct);
+if(!direct)throw new Error("SDK private conversation missing");
+peer.open(peerIndex,direct.id);drain(peer);
+if(!JSON.parse(peer.timeline()).messages.some(message=>message.document.blocks.some(block=>block.kind==="text"&&block.text.includes("private text from the browser SDK"))))throw new Error("private timeline missing");
 console.log("text interchange: multiline literals, inert HTML, highlighted Rust, certificate-scoped write acknowledgements and SDK-selected timeline navigation passed");
 clearInterval(keepAlive);clearInterval(peerTimer);
 client.disconnect(index);peer.disconnect(peerIndex);

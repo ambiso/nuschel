@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binaries", type=Path)
-    parser.add_argument("--murmur", type=Path, required=True)
+    parser.add_argument("--server", choices=("murmur", "nuschld"), default="murmur")
+    parser.add_argument("--murmur", type=Path, help="required for --server murmur")
     parser.add_argument("--sdk", type=Path, default=ROOT / "web/app/src/sdk")
     parser.add_argument("--node", default="node")
     parser.add_argument("--site", type=Path, help="also exercise the built Svelte UI in disposable Chromium")
@@ -29,7 +30,13 @@ def main():
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="nuschl-web-client-") as temporary:
         root = Path(temporary)
-        murmur = Murmur(args.murmur, root, free_port())
+        if args.server == "murmur":
+            if args.murmur is None:
+                parser.error("--murmur is required for --server murmur")
+            murmur = Murmur(args.murmur, root, free_port())
+        else:
+            from local_nuschld import Nuschld
+            murmur = Nuschld(args.binaries, root, free_port())
         murmur.seed()
         murmur.start()
         relay_port = free_port()

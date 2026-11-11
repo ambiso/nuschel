@@ -456,6 +456,12 @@ impl Session {
         let Some((sha256, rejected)) = seen else {
             return;
         };
+        // A pinned/CA-valid certificate is not evidence of TLS key possession
+        // until CertificateVerify/Finished have succeeded. Failed handshakes may
+        // report a rejected certificate prompt, never an accepted peer identity.
+        if !rejected && self.tls.is_handshaking() {
+            return;
+        }
         self.certificate_reported = true;
         if rejected {
             self.events.push_back(Event::Certificate {
@@ -542,7 +548,9 @@ impl Session {
                 let Ok(sync) = proto::ServerSync::decode(payload) else {
                     return;
                 };
-                let session = sync.session.unwrap_or_default();
+                let Some(session) = sync.session else {
+                    return self.close("The server omitted our session number.".into());
+                };
                 self.phase = Phase::LoggedIn;
                 self.own = Some(session);
                 self.events
@@ -759,6 +767,22 @@ mod tests {
             pin: None,
         })
         .unwrap()
+    }
+
+    #[test]
+    fn certificate_identity_requires_completed_tls_not_just_chain_verification() {
+        let mut session = session();
+        *session.verifier.seen.lock().unwrap() = Some(("ab".repeat(32), false));
+        session.report_certificate();
+        assert!(session.take_events().is_empty());
+        assert!(session.history_identity().is_none());
+        assert!(!session.certificate_reported);
+        *session.verifier.seen.lock().unwrap() = Some(("ab".repeat(32), true));
+        session.report_certificate();
+        assert!(matches!(
+            session.take_events().first(),
+            Some(Event::Certificate { .. })
+        ));
     }
 
     #[test]
