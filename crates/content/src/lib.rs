@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Run this parser in the content worker, never on the UI or audio thread.
 
+use std::cell::OnceCell;
+
 use base64::Engine as _;
+use image::{DynamicImage, ExtendedColorType, ImageEncoder as _, ImageFormat, ImageReader, Limits};
 use nuschel_core::{CodeRun, ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument};
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 use syntect::{
@@ -20,6 +23,10 @@ pub enum Error {
     Highlight(#[from] syntect::Error),
     #[error("the bundled highlighting theme is missing")]
     MissingTheme,
+    #[error("unsupported or invalid image")]
+    InvalidImage,
+    #[error("the image cannot be made small enough for this server's {0}-byte limit")]
+    ImageTooLarge(usize),
 }
 
 /// Inline images are shown as thumbnails; the worker's reply must stay below
@@ -36,35 +43,176 @@ const MAX_SOURCE_DIMENSION: u32 = 4096;
 /// Decode PNG/JPEG/GIF (first frame) with dimension and allocation limits and
 /// return a thumbnail no larger than `max_width` × `max_height`.
 pub fn decode_image(bytes: &[u8], max_width: u32, max_height: u32) -> Option<ContentBlock> {
-    use image::{ImageReader, Limits};
-    let mut reader = ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()?;
-    if !matches!(
-        reader.format(),
-        Some(image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::Gif)
-    ) {
-        return None;
-    }
-    let mut limits = Limits::default();
-    limits.max_image_width = Some(MAX_SOURCE_DIMENSION);
-    limits.max_image_height = Some(MAX_SOURCE_DIMENSION);
-    limits.max_alloc = Some(64 * 1024 * 1024);
-    reader.limits(limits);
-    let image = reader.decode().ok()?;
-    // Shrink only: `thumbnail` would also enlarge a small image.
-    let thumbnail = if image.width() > max_width || image.height() > max_height {
-        image.thumbnail(max_width.max(1), max_height.max(1))
-    } else {
-        image
-    }
-    .to_rgba8();
+    let image = decode(
+        bytes,
+        &[ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Gif],
+        MAX_SOURCE_DIMENSION,
+        64 * 1024 * 1024,
+    )?;
+    let thumbnail = shrink(image, max_width, max_height).to_rgba8();
     Some(ContentBlock::Image {
         width: thumbnail.width(),
         height: thumbnail.height(),
         rgba: base64::engine::general_purpose::STANDARD.encode(thumbnail.as_raw()),
         source: None,
     })
+}
+
+/// Decode one of `formats` (guessed from the bytes) within the given limits.
+fn decode(
+    bytes: &[u8],
+    formats: &[ImageFormat],
+    max_dimension: u32,
+    max_alloc: u64,
+) -> Option<DynamicImage> {
+    let mut reader = ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    if !reader
+        .format()
+        .is_some_and(|format| formats.contains(&format))
+    {
+        return None;
+    }
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(max_dimension);
+    limits.max_image_height = Some(max_dimension);
+    limits.max_alloc = Some(max_alloc);
+    reader.limits(limits);
+    reader.decode().ok()
+}
+
+/// Shrink only: `thumbnail` would also enlarge a small image.
+fn shrink(image: DynamicImage, max_width: u32, max_height: u32) -> DynamicImage {
+    if image.width() > max_width || image.height() > max_height {
+        image.thumbnail(max_width.max(1), max_height.max(1))
+    } else {
+        image
+    }
+}
+
+/// Pasted screenshots may span several monitors.
+const MAX_PASTE_DIMENSION: u32 = 8192;
+
+/// Re-encode a pasted image as a Mumble image message (an `<img>` element of
+/// at most `limit` bytes), as stock Mumble does (`Log::imageToImg`): at most
+/// 1600×1000 pixels, as JPEG at the highest quality that fits, or as PNG when
+/// that is smaller. When even low quality does not fit, the image shrinks.
+pub fn encode_image_message(bytes: &[u8], limit: usize) -> Result<String, Error> {
+    let limit = limit.min(MAX_CONTENT_BYTES);
+    let formats = [
+        ImageFormat::Png,
+        ImageFormat::Jpeg,
+        ImageFormat::Gif,
+        // Windows hands screenshots over as device-independent bitmaps.
+        ImageFormat::Bmp,
+    ];
+    let mut image = decode(bytes, &formats, MAX_PASTE_DIMENSION, 256 * 1024 * 1024)
+        .ok_or(Error::InvalidImage)?;
+    if image.width() > VIEW_WIDTH || image.height() > VIEW_HEIGHT {
+        image = image.resize(
+            VIEW_WIDTH,
+            VIEW_HEIGHT,
+            image::imageops::FilterType::Triangle,
+        );
+    }
+    loop {
+        let png = encode_png(&image)?;
+        // JPEG has no transparency: blend it onto white.
+        let opaque = flatten(&image);
+        let mut smallest = png.len();
+        for quality in [85, 70, 55] {
+            let jpeg = encode_jpeg(&opaque, quality)?;
+            let (kind, bytes) = if png.len() <= jpeg.len() {
+                ("png", &png)
+            } else {
+                ("jpeg", &jpeg)
+            };
+            let element = img_element(kind, bytes);
+            if element.len() <= limit {
+                return Ok(element);
+            }
+            smallest = smallest.min(jpeg.len());
+        }
+        // Encoded size follows the pixel count: aim a little below the limit.
+        // An element is about 1.44 times its image (base64, percent-encoding, lines).
+        let scale = ((limit as f64 / 1.44) / smallest as f64).sqrt().min(0.85) * 0.95;
+        let (width, height) = (
+            (image.width() as f64 * scale) as u32,
+            (image.height() as f64 * scale) as u32,
+        );
+        if width < 16 || height < 16 {
+            return Err(Error::ImageTooLarge(limit));
+        }
+        image = image.resize(width, height, image::imageops::FilterType::Triangle);
+    }
+}
+
+fn encode_png(image: &DynamicImage) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    let encoder = image::codecs::png::PngEncoder::new(&mut bytes);
+    let (width, height) = (image.width(), image.height());
+    if image.color().has_alpha() {
+        let pixels = image.to_rgba8();
+        encoder.write_image(pixels.as_raw(), width, height, ExtendedColorType::Rgba8)
+    } else {
+        let pixels = image.to_rgb8();
+        encoder.write_image(pixels.as_raw(), width, height, ExtendedColorType::Rgb8)
+    }
+    .map_err(|_| Error::InvalidImage)?;
+    Ok(bytes)
+}
+
+fn encode_jpeg(image: &image::RgbImage, quality: u8) -> Result<Vec<u8>, Error> {
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality)
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            ExtendedColorType::Rgb8,
+        )
+        .map_err(|_| Error::InvalidImage)?;
+    Ok(bytes)
+}
+
+fn flatten(image: &DynamicImage) -> image::RgbImage {
+    if !image.color().has_alpha() {
+        return image.to_rgb8();
+    }
+    let rgba = image.to_rgba8();
+    let mut rgb = image::RgbImage::new(rgba.width(), rgba.height());
+    for (target, source) in rgb.pixels_mut().zip(rgba.pixels()) {
+        let [red, green, blue, alpha] = source.0.map(u32::from);
+        let blend = |channel: u32| ((channel * alpha + 255 * (255 - alpha)) / 255) as u8;
+        target.0 = [blend(red), blend(green), blend(blue)];
+    }
+    rgb
+}
+
+/// `<img src="data:image/<kind>;base64,…" />` as stock Mumble writes it: the
+/// base64 text in lines of 72 characters, each percent-encoded.
+fn img_element(kind: &str, bytes: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let mut element = String::with_capacity(encoded.len() * 9 / 8 + 48);
+    element.push_str("<img src=\"data:image/");
+    element.push_str(kind);
+    element.push_str(";base64,");
+    for (index, line) in encoded.as_bytes().chunks(72).enumerate() {
+        if index > 0 {
+            element.push('\n');
+        }
+        for &byte in line {
+            match byte {
+                b'+' => element.push_str("%2B"),
+                b'/' => element.push_str("%2F"),
+                b'=' => element.push_str("%3D"),
+                other => element.push(char::from(other)),
+            }
+        }
+    }
+    element.push_str("\" />");
+    element
 }
 
 /// Decode an inline `data:` image for the viewer, up to `VIEW_WIDTH` × `VIEW_HEIGHT`.
@@ -112,21 +260,36 @@ fn percent_decode(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Loading syntect's syntaxes and theme costs most of a worker's start-up, so
+/// it happens on the first code block rather than for every message.
+#[derive(Default)]
 pub struct ContentRenderer {
+    highlighter: OnceCell<Highlighter>,
+}
+
+struct Highlighter {
     syntaxes: SyntaxSet,
     theme: Theme,
 }
 
 impl ContentRenderer {
+    /// Cannot fail since the highlighter loads lazily; it keeps its signature.
     pub fn new() -> Result<Self, Error> {
-        let mut themes = ThemeSet::load_defaults();
-        Ok(Self {
+        Ok(Self::default())
+    }
+
+    fn highlighter(&self) -> Result<&Highlighter, Error> {
+        if let Some(highlighter) = self.highlighter.get() {
+            return Ok(highlighter);
+        }
+        let theme = ThemeSet::load_defaults()
+            .themes
+            .remove("base16-ocean.dark")
+            .ok_or(Error::MissingTheme)?;
+        Ok(self.highlighter.get_or_init(|| Highlighter {
             syntaxes: SyntaxSet::load_defaults_newlines(),
-            theme: themes
-                .themes
-                .remove("base16-ocean.dark")
-                .ok_or(Error::MissingTheme)?,
-        })
+            theme,
+        }))
     }
 
     /// Ordinary message text is literal, including all newlines and blank lines.
@@ -252,13 +415,14 @@ impl ContentRenderer {
     }
 
     fn highlight(&self, source: &str, language: Option<&str>) -> Result<Vec<CodeRun>, Error> {
+        let Highlighter { syntaxes, theme } = self.highlighter()?;
         let syntax = language
-            .and_then(|token| self.syntaxes.find_syntax_by_token(token))
-            .unwrap_or_else(|| self.syntaxes.find_syntax_plain_text());
-        let mut highlighter = HighlightLines::new(syntax, &self.theme);
+            .and_then(|token| syntaxes.find_syntax_by_token(token))
+            .unwrap_or_else(|| syntaxes.find_syntax_plain_text());
+        let mut highlighter = HighlightLines::new(syntax, theme);
         let mut runs = Vec::new();
         for line in LinesWithEndings::from(source) {
-            for (style, text) in highlighter.highlight_line(line, &self.syntaxes)? {
+            for (style, text) in highlighter.highlight_line(line, syntaxes)? {
                 runs.push(CodeRun {
                     text: text.to_owned(),
                     foreground: [
@@ -457,6 +621,123 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         Ok(())
+    }
+
+    /// A screenshot-like image: flat areas with some text-like detail, or noise.
+    fn picture(width: u32, height: u32, noisy: bool) -> Vec<u8> {
+        let mut state = 0x9e37_79b9_u32;
+        let image = image::RgbImage::from_fn(width, height, |x, y| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            if noisy {
+                image::Rgb([
+                    (x / 3) as u8 ^ state as u8,
+                    (y / 2) as u8,
+                    (state >> 8) as u8,
+                ])
+            } else if (x / 7 + y / 11) % 5 == 0 {
+                image::Rgb([20, 20, 30])
+            } else {
+                image::Rgb([235, 235, 240])
+            }
+        });
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    /// What a receiver (including stock Mumble's format) makes of an element.
+    fn received(element: &str) -> (u32, u32) {
+        let renderer = ContentRenderer::default();
+        let document = renderer
+            .render(&renderer.legacy_plain_text(element).unwrap())
+            .unwrap();
+        let [ContentBlock::Image { source, .. }] = document.blocks.as_slice() else {
+            panic!("{:?}", document.blocks.len())
+        };
+        let Some(ContentBlock::Image { width, height, .. }) = decode_view(source.as_ref().unwrap())
+        else {
+            panic!("the viewer cannot decode it")
+        };
+        (width, height)
+    }
+
+    #[test]
+    fn pasted_images_are_encoded_as_stock_mumble_does_within_the_limit() {
+        let limit = 131_072;
+        // A large, detailed picture: shrunk to 1600×1000, then by quality or size.
+        let element = encode_image_message(&picture(2400, 1350, true), limit).unwrap();
+        assert!(element.len() <= limit, "{}", element.len());
+        assert!(element.starts_with("<img src=\"data:image/jpeg;base64,"));
+        assert!(element.ends_with("\" />"));
+        let payload = &element["<img src=\"data:image/jpeg;base64,".len()..element.len() - 4];
+        assert!(
+            payload.contains('%'),
+            "percent-encoded like Log::imageToImg"
+        );
+        let lines: Vec<&str> = payload.split('\n').collect();
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|line| {
+            line.replace("%2B", "+")
+                .replace("%2F", "/")
+                .replace("%3D", "=")
+                .len()
+                <= 72
+        }));
+        let (width, height) = received(&element);
+        assert!(width <= 1600 && height <= 1000, "{width}×{height}");
+        assert!(
+            (width * 9).abs_diff(height * 16) <= 16,
+            "keeps 16:9: {width}×{height}"
+        );
+
+        // Flat screenshots stay lossless: PNG is smaller than JPEG there.
+        let element = encode_image_message(&picture(800, 500, false), limit).unwrap();
+        assert!(
+            element.starts_with("<img src=\"data:image/png;base64,"),
+            "{}",
+            &element[..40]
+        );
+        assert_eq!(received(&element), (800, 500));
+
+        // A small limit shrinks the picture until it fits.
+        let element = encode_image_message(&picture(1600, 1000, true), 20_000).unwrap();
+        assert!(element.len() <= 20_000);
+        let (width, _) = received(&element);
+        assert!(width < 1600, "{width}");
+    }
+
+    #[test]
+    fn pasted_images_that_cannot_fit_or_decode_are_rejected() {
+        assert!(matches!(
+            encode_image_message(&picture(64, 64, true), 40),
+            Err(Error::ImageTooLarge(40))
+        ));
+        assert!(matches!(
+            encode_image_message(b"not an image", 131_072),
+            Err(Error::InvalidImage)
+        ));
+        assert!(matches!(
+            encode_image_message(&picture(64, 64, false)[..40], 131_072),
+            Err(Error::InvalidImage)
+        ));
+        assert!(matches!(
+            encode_image_message(b"<svg xmlns='http://www.w3.org/2000/svg'/>", 131_072),
+            Err(Error::InvalidImage)
+        ));
+    }
+
+    #[test]
+    fn plain_messages_never_load_the_highlighter() {
+        let renderer = ContentRenderer::default();
+        renderer.render("no code here").unwrap();
+        renderer.legacy_plain_text("<b>nor here</b>").unwrap();
+        assert!(renderer.highlighter.get().is_none());
+        renderer.render("```\ncode\n```").unwrap();
+        assert!(renderer.highlighter.get().is_some());
     }
 
     #[test]

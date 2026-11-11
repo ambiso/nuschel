@@ -10,7 +10,7 @@ publish.workspace = true
 [dependencies]
 base64 = "0.22"
 html5ever = "0.40.1"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
 markup5ever_rcdom = "0.40.1"
 nuschel-core.workspace = true
 pulldown-cmark = { version = "0.13.6", default-features = false }
