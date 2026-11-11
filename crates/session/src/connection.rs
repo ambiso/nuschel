@@ -177,8 +177,9 @@ pub enum Command {
     },
     /// Send Mumble rich text as-is (e.g. inline images); only on HTML-enabled servers.
     SendHtml {
-        channel: u32,
+        target: TextTarget,
         html: String,
+        expected_peer: Option<u64>,
     },
     SetSelf {
         muted: bool,
@@ -688,29 +689,38 @@ impl State {
                     },
                 );
             }
-            Command::SendHtml { channel, html } => {
-                if !self.allow_html || !self.channels.contains_key(&channel) {
+            Command::SendHtml {
+                target,
+                html,
+                expected_peer,
+            } => {
+                if !self.allow_html {
                     return emit(
                         events,
-                        SessionEvent::Notice("This server does not accept rich text here.".into()),
+                        SessionEvent::Notice("This server does not accept rich text.".into()),
                     )
                     .await;
                 }
-                if html.len() > self.image_limit.max(self.message_limit) {
+                if html.len()
+                    > self
+                        .image_limit
+                        .max(self.message_limit)
+                        .min(MAX_CONTENT_BYTES)
+                {
                     return emit(
                         events,
                         SessionEvent::Notice("Message exceeds this server's limit.".into()),
                     )
                     .await;
                 }
-                self.queue(
-                    kind::TEXT_MESSAGE,
-                    &proto::TextMessage {
-                        message: html,
-                        channel_id: vec![channel],
-                        ..Default::default()
-                    },
-                );
+                self.send_text(
+                    own,
+                    target,
+                    expected_peer,
+                    (html.clone(), html, true),
+                    events,
+                )
+                .await?;
             }
             Command::RegisterSelf => {
                 self.queue(
@@ -998,56 +1008,70 @@ impl State {
                     )
                     .await;
                 }
-                let mut message = proto::TextMessage {
-                    message: wire_body,
-                    ..Default::default()
-                };
-                match target {
-                    TextTarget::Channel(id) => {
-                        if !self.channels.contains_key(&id) {
-                            return emit(
-                                events,
-                                SessionEvent::Notice("This channel is no longer available.".into()),
-                            )
-                            .await;
-                        }
-                        message.channel_id.push(id);
-                    }
-                    TextTarget::Direct(id) => {
-                        if !self.users.get(&id).is_some_and(|user| {
-                            expected_peer.is_none_or(|instance| instance == user.instance)
-                        }) {
-                            return emit(events, SessionEvent::Notice("The recipient disconnected or changed. Open a new private conversation.".into())).await;
-                        }
-                        message.session.push(id);
-                    }
-                }
-                self.queue(kind::TEXT_MESSAGE, &message);
-                let author = self
-                    .users
-                    .get(&own)
-                    .map(|user| user.name.clone())
-                    .unwrap_or_default();
-                let peer = match target {
-                    TextTarget::Direct(id) => self.users.get(&id).cloned(),
-                    _ => None,
-                };
-                emit(
-                    events,
-                    SessionEvent::Text(IncomingText {
-                        target,
-                        author,
-                        peer,
-                        body,
-                        html: false,
-                        outgoing: true,
-                        observed_at_ms: now_ms(),
-                    }),
-                )
-                .await?;
+                self.send_text(own, target, expected_peer, (wire_body, body, false), events)
+                    .await?;
             }
         }
         Ok(())
+    }
+
+    /// Queue a text message and report it as our own outgoing text: `wire` is
+    /// what the server receives, `body` and `html` what the timeline shows.
+    async fn send_text(
+        &mut self,
+        own: u32,
+        target: TextTarget,
+        expected_peer: Option<u64>,
+        (wire, body, html): (String, String, bool),
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        let mut message = proto::TextMessage {
+            message: wire,
+            ..Default::default()
+        };
+        match target {
+            TextTarget::Channel(id) => {
+                if !self.channels.contains_key(&id) {
+                    return emit(
+                        events,
+                        SessionEvent::Notice("This channel is no longer available.".into()),
+                    )
+                    .await;
+                }
+                message.channel_id.push(id);
+            }
+            TextTarget::Direct(id) => {
+                if !self.users.get(&id).is_some_and(|user| {
+                    expected_peer.is_none_or(|instance| instance == user.instance)
+                }) {
+                    return emit(events, SessionEvent::Notice("The recipient disconnected or changed. Open a new private conversation.".into())).await;
+                }
+                message.session.push(id);
+            }
+        }
+        self.queue(kind::TEXT_MESSAGE, &message);
+        let author = self
+            .users
+            .get(&own)
+            .map(|user| user.name.clone())
+            .unwrap_or_default();
+        let peer = match target {
+            TextTarget::Direct(id) => self.users.get(&id).cloned(),
+            _ => None,
+        };
+        emit(
+            events,
+            SessionEvent::Text(IncomingText {
+                target,
+                author,
+                peer,
+                body,
+                html,
+                outgoing: true,
+                observed_at_ms: now_ms(),
+            }),
+        )
+        .await
     }
 
     async fn handle(
@@ -2414,6 +2438,52 @@ mod tests {
         assert_eq!(target.targets[0].session, [9]);
         let listen = proto::UserState::decode(state.outbound[2].1.as_slice()).unwrap();
         assert_eq!(listen.listening_channel_add, [0]);
+    }
+
+    #[tokio::test]
+    async fn images_go_out_as_rich_text_and_into_our_own_timeline() {
+        let mut state = State {
+            own_session: Some(7),
+            ..State::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        let bob = proto::UserState {
+            session: Some(9),
+            name: Some("Bob".into()),
+            ..Default::default()
+        };
+        state
+            .handle(frame(kind::USER_STATE, bob), &tx)
+            .await
+            .unwrap();
+        while rx.try_recv().is_ok() {}
+        let html = "<img src=\"data:image/png;base64,iVBORw0KGgo%3D\" />".to_string();
+        let send = |html: String| Command::SendHtml {
+            target: TextTarget::Direct(9),
+            html,
+            expected_peer: None,
+        };
+        state.command(send(html.clone()), &tx).await.unwrap();
+        let [(kind::TEXT_MESSAGE, wire)] = state.outbound.as_slice() else {
+            panic!("one text message")
+        };
+        let wire = proto::TextMessage::decode(wire.as_slice()).unwrap();
+        assert_eq!(
+            (wire.message.as_str(), wire.session.as_slice()),
+            (html.as_str(), &[9][..])
+        );
+        let Ok(SessionEvent::Text(echo)) = rx.try_recv() else {
+            panic!("no outgoing echo")
+        };
+        assert!(echo.outgoing && echo.html && echo.body == html);
+        // Above the server's image limit, nothing is sent.
+        state.outbound.clear();
+        state
+            .command(send("x".repeat(state.image_limit + 1)), &tx)
+            .await
+            .unwrap();
+        assert!(state.outbound.is_empty());
+        assert!(matches!(rx.try_recv(), Ok(SessionEvent::Notice(_))));
     }
 
     #[test]

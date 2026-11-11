@@ -222,7 +222,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     temporary,
                 },
                 Ok(Input::Register) => Command::RegisterSelf,
-                Ok(Input::Html { channel, html }) => Command::SendHtml { channel, html },
+                Ok(Input::Html { channel, html }) => Command::SendHtml {
+                    target: TextTarget::Channel(channel),
+                    html,
+                    expected_peer: None,
+                },
                 Ok(Input::Avatar { path }) => match std::fs::read(&path) {
                     Ok(bytes) if bytes.len() <= 1024 * 1024 => Command::SetAvatar(bytes),
                     _ => {
