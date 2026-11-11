@@ -39,8 +39,9 @@ let
   autostartReadOnly =
     (config.xdg.autostart.enable or false) && (config.xdg.autostart.readOnly or false);
 
-  # What crates/session/src/config.rs accepts when loading servers.json. A
-  # bookmark it rejects stops Nuschel from starting, so these are checked here.
+  # What crates/session/src/config.rs accepts in servers.json and managed.json.
+  # Nuschel sets aside a servers.json, and ignores a managed.json, with a
+  # bookmark it rejects, so these are checked here.
   host = types.strMatching "[^][[:space:][:cntrl:]/@\\]{1,253}" // {
     description = "hostname or IP address (IPv6 without brackets), at most 253 bytes";
   };
@@ -123,6 +124,58 @@ let
     auto_connect = server.autoConnect;
   };
 
+  # The fields of ClientSettings in crates/session/src/config.rs (checked by
+  # nix/home-manager-test.nix). Nuschel ignores a managed.json with any other.
+  settingNames = [
+    "audio"
+    "force_tcp"
+    "auto_reconnect"
+    "user_volumes"
+    "local_mutes"
+    "shortcuts"
+    "push_to_talk_key"
+    "enter_sends"
+    "sidebar_width"
+    "check_updates"
+    "notifications"
+    "server_icons"
+    "sound_effects"
+    "sound_volume"
+    "friends"
+    "nicknames"
+    "friend_notifications"
+    "wormhole_rendezvous"
+    "wormhole_relay"
+    "appearance"
+  ];
+  unknownSettings = lib.subtractLists settingNames (lib.attrNames cfg.settings);
+  managedFile = json.generate "nuschel-managed.json" {
+    inherit (cfg) settings;
+    servers = map bookmark cfg.servers;
+  };
+  managed = cfg.settings != { } || cfg.servers != [ ];
+
+  # Bookmark lists checked like Nuschel checks them.
+  serverAssertions =
+    option: servers:
+    let
+      ids = map bookmarkId servers;
+    in
+    [
+      {
+        assertion = lib.length servers <= 100;
+        message = "programs.nuschel.${option}: Nuschel saves at most 100 servers.";
+      }
+      {
+        assertion = lib.all (server: lib.length server.tokens <= 64) servers;
+        message = "programs.nuschel.${option}: at most 64 access tokens per server.";
+      }
+      {
+        assertion = lib.length ids == lib.length (lib.unique ids);
+        message = "programs.nuschel.${option}: each host, port and user name may appear only once.";
+      }
+    ];
+
   initialFiles =
     lib.optionalAttrs (cfg.initialSettings != { }) {
       "settings.json" = json.generate "nuschel-settings.json" cfg.initialSettings;
@@ -192,7 +245,9 @@ in
         The file is written only if it does not exist yet, typically before
         Nuschel's first start. Nuschel owns it after that: changes here no
         longer apply, and Nuschel overwrites it when you change a setting.
-        A key Nuschel does not know makes it ignore the whole file.
+        A key Nuschel does not know makes it set the file aside (as
+        `settings.json.invalid`) and start with default settings. For
+        settings that always apply, use {option}`programs.nuschel.settings`.
       '';
     };
 
@@ -211,7 +266,55 @@ in
       description = ''
         Server bookmarks written to Nuschel's `servers.json`, only if the file
         does not exist yet. Like {option}`programs.nuschel.initialSettings`,
-        they seed a new profile: Nuschel owns the file after that.
+        they seed a new profile: Nuschel owns the file after that. For
+        bookmarks that always apply, use {option}`programs.nuschel.servers`.
+      '';
+    };
+
+    settings = mkOption {
+      type = types.attrsOf json.type;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          enter_sends = false;
+          shortcuts."push-to-talk" = "f13";
+          audio.transmit = "push_to_talk";
+        }
+      '';
+      description = ''
+        Settings that apply on every start, in the format of
+        {option}`programs.nuschel.initialSettings`. They are written to a
+        read-only `managed.json` beside Nuschel's own files, merged key by key
+        over `settings.json` (objects such as `audio` merge too). Nuschel
+        shows them in Settings as set by your system configuration, does not
+        let you change them, and never writes them to `settings.json`, so your
+        own choices return when you remove a setting here. Unknown top-level
+        names fail evaluation; Nuschel reports any other invalid value and then
+        ignores `managed.json` until it is fixed.
+      '';
+    };
+
+    servers = mkOption {
+      type = types.listOf (types.submodule server);
+      default = [ ];
+      example = lib.literalExpression ''
+        [
+          {
+            name = "Team";
+            host = "voice.example.org";
+            username = "alice";
+          }
+        ]
+      '';
+      description = ''
+        Server bookmarks that apply on every start, written to `managed.json`.
+        Nuschel lists them with your own bookmarks but does not let you remove
+        them or change their name, address, username, tokens or automatic
+        connection. It keeps what it learns about them (an accepted
+        certificate, the channel tree, the last channel) in `servers.json`.
+        A bookmark removed here disappears from Nuschel on its next start.
+        A bookmark here with the host, port and username of one in
+        {option}`programs.nuschel.initialServers` takes that one over.
       '';
     };
   };
@@ -225,22 +328,12 @@ in
             message = "programs.nuschel.autostart is supported on Linux only; on macOS use Nuschel's Settings → General.";
           }
           {
-            assertion = lib.length cfg.initialServers <= 100;
-            message = "programs.nuschel.initialServers: Nuschel saves at most 100 servers.";
+            assertion = unknownSettings == [ ];
+            message = "programs.nuschel.settings: Nuschel has no settings named ${lib.concatStringsSep ", " unknownSettings}.";
           }
-          {
-            assertion = lib.all (server: lib.length server.tokens <= 64) cfg.initialServers;
-            message = "programs.nuschel.initialServers: at most 64 access tokens per server.";
-          }
-          {
-            assertion =
-              let
-                ids = map bookmarkId cfg.initialServers;
-              in
-              lib.length ids == lib.length (lib.unique ids);
-            message = "programs.nuschel.initialServers: each host, port and user name may appear only once.";
-          }
-        ];
+        ]
+        ++ serverAssertions "initialServers" cfg.initialServers
+        ++ serverAssertions "servers" cfg.servers;
         home.packages = [ cfg.package ];
       }
       (lib.mkIf (cfg.autostart && isLinux && !autostartReadOnly) {
@@ -253,6 +346,13 @@ in
       # A read-only autostart folder takes its entries from this list.
       (lib.mkIf (cfg.autostart && isLinux && autostartReadOnly) {
         xdg.autostart.entries = [ "${autostartEntry}/org.nuschel.Nuschel.desktop" ];
+      })
+      # Read-only: Nuschel never writes managed.json.
+      (lib.mkIf (managed && !isDarwin) {
+        xdg.configFile."nuschel/managed.json".source = managedFile;
+      })
+      (lib.mkIf (managed && isDarwin) {
+        home.file."Library/Application Support/org.Nuschel.Nuschel/managed.json".source = managedFile;
       })
       (lib.mkIf (initialFiles != { }) {
         home.activation.nuschelInitialFiles = lib.hm.dag.entryAfter [ "writeBoundary" ] ''

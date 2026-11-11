@@ -1,6 +1,7 @@
 # Checks for the Home Manager module (nix/home-manager.nix).
 #   files: evaluates Home Manager configurations and inspects what they generate.
-#   vm:    a NixOS machine with Home Manager, where logging in autostarts Nuschel.
+#   vm:    a NixOS machine with Home Manager, where logging in autostarts Nuschel
+#          and managed settings show as set by the system and stay so.
 {
   pkgs,
   home-manager,
@@ -50,6 +51,26 @@ let
           certificateSha256 = lib.toUpper pin;
         }
       ];
+      settings = {
+        enter_sends = false;
+        audio.transmit = "push_to_talk";
+      };
+      servers = [
+        # Takes over the initial bookmark for the same endpoint and user.
+        {
+          name = "Team";
+          host = "voice.example.org";
+          username = "alice";
+          tokens = [ "blue" ];
+        }
+        {
+          host = "Managed.Example.org";
+          port = 1234;
+          username = "bob";
+          autoConnect = false;
+          certificateSha256 = lib.toUpper pin;
+        }
+      ];
     };
   };
   readOnly = homeWith {
@@ -61,52 +82,76 @@ let
   };
   plain = homeWith { };
 
-  # Bookmarks crates/session/src/config.rs would refuse (Nuschel would not
-  # start) fail evaluation instead.
-  server = attrs: {
-    programs.nuschel.initialServers = [
-      (
+  # Bookmarks and settings crates/session/src/config.rs would refuse (Nuschel
+  # would set the file aside or ignore it) fail evaluation instead.
+  refusedServers =
+    option:
+    let
+      server = attrs: {
+        programs.nuschel.${option} = [
+          (
+            {
+              host = "voice.example.org";
+              username = "alice";
+            }
+            // attrs
+          )
+        ];
+      };
+    in
+    lib.mapAttrs' (name: lib.nameValuePair "${option}-${name}") {
+      host-with-space = server { host = "voice example.org"; };
+      host-with-slash = server { host = "voice.example.org/x"; };
+      bracketed-ipv6 = server { host = "[::1]"; };
+      port-zero = server { port = 0; };
+      blank-username = server { username = "  "; };
+      long-username = server { username = lib.concatStrings (lib.genList (_: "a") 129); };
+      short-pin = server { certificateSha256 = "abcd"; };
+      long-token = server { tokens = [ (lib.concatStrings (lib.genList (_: "a") 257)) ]; };
+      duplicate.programs.nuschel.${option} = [
         {
           host = "voice.example.org";
           username = "alice";
         }
-        // attrs
-      )
-    ];
-  };
-  refused = {
-    host-with-space = server { host = "voice example.org"; };
-    host-with-slash = server { host = "voice.example.org/x"; };
-    bracketed-ipv6 = server { host = "[::1]"; };
-    port-zero = server { port = 0; };
-    blank-username = server { username = "  "; };
-    long-username = server { username = lib.concatStrings (lib.genList (_: "a") 129); };
-    short-pin = server { certificateSha256 = "abcd"; };
-    long-token = server { tokens = [ (lib.concatStrings (lib.genList (_: "a") 257)) ]; };
-    duplicate.programs.nuschel.initialServers = [
-      {
-        host = "voice.example.org";
-        username = "alice";
-      }
-      {
-        name = "Again";
-        host = "VOICE.example.org";
-        username = "alice";
-      }
-    ];
-  };
-  # A type error throws; a failed assertion is false. Forcing only these two
+        {
+          name = "Again";
+          host = "VOICE.example.org";
+          username = "alice";
+        }
+      ];
+    };
+  refused =
+    refusedServers "initialServers"
+    // refusedServers "servers"
+    // {
+      unknown-setting.programs.nuschel.settings.enter_send = false;
+    };
+  # A type error throws; a failed assertion is false. Forcing only these
   # is much cheaper than evaluating the whole activation package.
   accepts =
     extra:
     let
       inherit (homeWith extra) config;
+      inherit (config.programs.nuschel) initialServers servers;
       result = builtins.tryEval (
-        builtins.deepSeq config.programs.nuschel.initialServers (lib.all (a: a.assertion) config.assertions)
+        builtins.deepSeq [ initialServers servers ] (lib.all (a: a.assertion) config.assertions)
       );
     in
     result.success && result.value;
   accepted = lib.attrNames (lib.filterAttrs (_: accepts) refused);
+
+  # Every field of ClientSettings is a setting the module accepts.
+  settingFields =
+    let
+      source = builtins.readFile ../crates/session/src/config.rs;
+      body = lib.head (
+        lib.splitString "\n}" (lib.elemAt (lib.splitString "pub struct ClientSettings {" source) 1)
+      );
+      field = line: builtins.match " *(pub )?([a-z_]+): .*" line;
+    in
+    map (match: lib.elemAt match 1) (
+      lib.filter (match: match != null) (map field (lib.splitString "\n" body))
+    );
 
   autostartSource = ../apps/desktop/src/autostart.rs;
 in
@@ -114,6 +159,10 @@ assert lib.assertMsg (
   full.config.programs.nuschel.package.outPath == nuschel.outPath
 ) "programs.nuschel.package does not default to this flake's package";
 assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toString accepted}";
+assert lib.assertMsg (lib.length settingFields > 15) "could not read ClientSettings' fields";
+assert lib.assertMsg (accepts {
+  programs.nuschel.settings = lib.genAttrs settingFields (_: null);
+}) "programs.nuschel.settings refuses a field of ClientSettings: update settingNames";
 {
   files =
     pkgs.runCommand "nuschel-home-manager-files"
@@ -155,7 +204,17 @@ assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toStr
         test -L ${readOnly.activationPackage}/home-files/.config/autostart
         cmp "$entry" ${readOnly.activationPackage}/home-files/.config/autostart/org.nuschel.Nuschel.desktop
 
+        # Managed settings and bookmarks: a read-only file in Nuschel's folder,
+        # with the ids the same endpoints get as initial bookmarks.
+        managed=$home/home-files/.config/nuschel/managed.json
+        test -L "$managed"
+        jq -e '.settings == {enter_sends: false, audio: {transmit: "push_to_talk"}}' "$managed"
+        jq -e '.servers | length == 2 and .[0].id != .[1].id' "$managed"
+        jq -e '.servers[1] == {id: .servers[1].id, name: "Managed.Example.org", host: "managed.example.org",
+          port: 1234, username: "bob", tokens: [], certificate_sha256: "${pin}", auto_connect: false}' "$managed"
+
         # Without autostart or initial files the module installs the package only.
+        test ! -e ${plain.activationPackage}/home-files/.config/nuschel/managed.json
         test ! -e ${plain.activationPackage}/home-files/.config/autostart
         if grep -q nuschel-initial-files ${plain.activationPackage}/activate; then
           echo "initial files are written although none are set" >&2
@@ -180,6 +239,7 @@ assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toStr
           tokens: ["blue"], certificate_sha256: null, auto_connect: true}' "$dir/servers.json"
         jq -e '.[1] == {id: .[1].id, name: "::1", host: "::1", port: 64739, username: "alice",
           tokens: [], certificate_sha256: "${pin}", auto_connect: false}' "$dir/servers.json"
+        jq -e --slurpfile managed "$managed" '.[0] == $managed[0].servers[0]' "$dir/servers.json"
 
         # Once a file exists Nuschel owns it; a deleted one is written again.
         echo '[]' > "$dir/servers.json"
@@ -208,12 +268,24 @@ assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toStr
           programs.nuschel = {
             enable = true;
             autostart = true;
-            initialSettings.enter_sends = false;
+            # The user's own choice, under a managed one.
+            initialSettings.enter_sends = true;
             initialServers = [
               {
                 name = "Local";
                 host = "127.0.0.1";
                 username = "alice";
+              }
+            ];
+            settings = {
+              enter_sends = false;
+              shortcuts."push-to-talk" = "f13";
+            };
+            servers = [
+              {
+                name = "Managed";
+                host = "localhost";
+                username = "bob";
               }
             ];
           };
@@ -228,7 +300,10 @@ assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toStr
       systemd.user.targets.test-session.wants = [ "xdg-desktop-autostart.target" ];
       hardware.graphics.enable = true;
       fonts.packages = [ pkgs.dejavu_fonts ];
-      environment.systemPackages = [ pkgs.xdotool ];
+      environment.systemPackages = [
+        pkgs.xdotool
+        pkgs.xvfb-run
+      ];
       virtualisation.memorySize = 2048;
       virtualisation.cores = 2;
     };
@@ -268,6 +343,13 @@ assert lib.assertMsg (accepted == [ ]) "invalid bookmarks were accepted: ${toStr
           machine.wait_until_succeeds("journalctl -u murmur.service --grep 'New connection'")
           machine.succeed(f"systemctl {user} is-active {unit}")
           machine.succeed(f"systemctl {user} stop {unit}")
+
+      with subtest("managed settings and bookmarks show as set by the system and stay so"):
+          machine.succeed(f"test -L {config}/managed.json")
+          # Over AT-SPI, as a screen reader and a pointer meet them (see the script).
+          machine.succeed(f"su - alice -c '${pkgs.dbus}/bin/dbus-run-session -- xvfb-run -a -s \"-screen 0 1280x800x24\" ${pkgs.python3}/bin/python3 ${../tests}/managed_config.py ${nuschel}/bin/nuschel --at-spi ${pkgs.at-spi2-core} --config {config}'")
+          machine.succeed(f"grep -F '\"enter_sends\": true' {config}/settings.json")
+          machine.succeed(f"test -L {config}/managed.json")
 
       with subtest("switching again keeps Nuschel's files and replaces an entry the app wrote"):
           # The in-app switch turned off and on again: the app's own file in

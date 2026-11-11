@@ -152,24 +152,47 @@ programs.nuschel = {
   enable = true;
   # Start minimised at login (Linux), with the entry Settings → General writes.
   autostart = true;
-  # Written only where Nuschel has no settings.json or servers.json yet.
-  initialServers = [
-    { name = "Team"; host = "voice.example.org"; username = "alice"; }
-  ];
-  initialSettings = {
+  # Applied on every start; read-only in the app.
+  settings = {
     enter_sends = false;
-    push_to_talk_key = "f13";
+    shortcuts."push-to-talk" = "f13";
     audio.transmit = "push_to_talk";
   };
+  servers = [
+    { name = "Team"; host = "voice.example.org"; username = "alice"; }
+  ];
+  # Written only where Nuschel has no settings.json or servers.json yet.
+  initialSettings.sound_volume = 0.5;
+  initialServers = [
+    { name = "Friends"; host = "mumble.example.net"; username = "alice"; }
+  ];
 };
 ```
 
-Nuschel saves `settings.json` and `servers.json` itself (in `~/.config/nuschel`),
-so the module never replaces them with read-only links. `initialSettings` and
-`initialServers` only seed a new profile: once the files exist, Nuschel owns them
-and later changes to these options do not apply. With `autostart`, turning the
-switch off in the app lasts until the next `home-manager switch`. The check
-`.#checks.x86_64-linux.vm-home-manager` boots a VM in which logging in starts Nuschel.
+`settings` and `servers` go into a read-only `managed.json` in Nuschel's folder
+(`~/.config/nuschel`, or `~/Library/Application Support/org.Nuschel.Nuschel`).
+Nuschel never writes it. On every start its settings are merged key by key over
+`settings.json` and win; Settings shows those controls dimmed with "Set by your
+system configuration", and `settings.json` keeps only your own values, which
+return once a key is no longer managed. Its bookmarks cannot be removed and only
+take a password in their form; `servers.json` keeps what Nuschel learns about them
+(an accepted certificate, the channel tree, the last channel), and a bookmark
+removed from `servers` disappears on the next start. A `nuschel/managed.json` in
+`$XDG_CONFIG_DIRS` (such as `/etc/xdg`) sets system-wide defaults under the user's
+own (profiles opened with `--profile-dir` skip it).
+
+`initialSettings` and `initialServers` only seed a new profile: once the files
+exist, Nuschel owns them and later changes to these options do not apply. A bookmark
+in `servers` with the host, port and username of one in `initialServers` takes it
+over. With `autostart`, turning the switch off in the app lasts until the next
+`home-manager switch`.
+
+Nuschel never overwrites a configuration file it cannot read: a broken
+`settings.json` or `servers.json` is renamed to `settings.json.invalid` (or
+`.invalid.1`, …), the app starts without it and says so. An invalid
+`managed.json` is reported and ignored until it is fixed. The check
+`.#checks.x86_64-linux.vm-home-manager` boots a VM in which logging in starts
+Nuschel and managed settings show as set by the system configuration and stay so.
 
 ## Server module and databases
 
