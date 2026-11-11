@@ -16,10 +16,9 @@
 //! they start a heading or list item; `quote` … `/quote` quote what is
 //! between; `hr` is a rule; `data:image/…` is an image.
 
-use crate::{
-    MAX_DOCUMENT_PIXELS_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_IMAGES, data_uri,
-    decode_image, math::Token as Formula,
-};
+use crate::math::Token as Formula;
+#[cfg(feature = "images")]
+use crate::{MAX_DOCUMENT_PIXELS_BYTES, MAX_IMAGE_HEIGHT, MAX_IMAGE_WIDTH, MAX_IMAGES, data_uri, decode_image};
 use html5ever::{
     Attribute,
     tendril::{StrTendril, TendrilSink},
@@ -728,7 +727,9 @@ struct Expand {
     quotes: usize,
     styled: usize,
     links: usize,
+    #[cfg(feature = "images")]
     images: usize,
+    #[cfg(feature = "images")]
     budget: usize,
     formulas: usize,
 }
@@ -891,6 +892,12 @@ impl Expand {
         self.visible(&part[done..]);
     }
 
+    #[cfg(not(feature = "images"))]
+    fn image(&mut self, _uri: &str) {
+        self.visible("[image]");
+    }
+
+    #[cfg(feature = "images")]
     fn image(&mut self, uri: &str) {
         let decoded = (self.images < MAX_IMAGES)
             .then(|| data_uri(uri))
@@ -1021,7 +1028,9 @@ pub(crate) fn expand(pieces: Vec<Piece>, formulas: usize) -> Vec<ContentBlock> {
         quotes: 0,
         styled: 0,
         links: 0,
+        #[cfg(feature = "images")]
         images: 0,
+        #[cfg(feature = "images")]
         budget: MAX_DOCUMENT_PIXELS_BYTES,
         formulas,
     };

@@ -3,7 +3,9 @@
 
 use std::cell::OnceCell;
 
+#[cfg(feature = "images")]
 use base64::Engine as _;
+#[cfg(feature = "images")]
 use image::{DynamicImage, ExtendedColorType, ImageEncoder as _, ImageFormat, ImageReader, Limits};
 use nuschl_core::{CodeRun, ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
@@ -40,12 +42,16 @@ pub const MAX_IMAGE_HEIGHT: u32 = 270;
 /// The image viewer's size limit (its RGBA reply must fit one worker frame).
 pub const VIEW_WIDTH: u32 = 1600;
 pub const VIEW_HEIGHT: u32 = 1000;
+#[cfg(feature = "images")]
 const MAX_IMAGES: usize = 8;
+#[cfg(feature = "images")]
 const MAX_DOCUMENT_PIXELS_BYTES: usize = 640 * 1024;
+#[cfg(feature = "images")]
 const MAX_SOURCE_DIMENSION: u32 = 4096;
 
 /// Decode PNG/JPEG/GIF (first frame) with dimension and allocation limits and
 /// return a thumbnail no larger than `max_width` × `max_height`.
+#[cfg(feature = "images")]
 pub fn decode_image(bytes: &[u8], max_width: u32, max_height: u32) -> Option<ContentBlock> {
     let image = decode(
         bytes,
@@ -68,6 +74,7 @@ pub fn decode_image(bytes: &[u8], max_width: u32, max_height: u32) -> Option<Con
 }
 
 /// A server's website icon (favicon: often ICO), at most 64 × 64.
+#[cfg(feature = "images")]
 pub fn decode_icon(bytes: &[u8]) -> Option<ContentBlock> {
     let formats = [
         ImageFormat::Png,
@@ -88,6 +95,7 @@ pub fn decode_icon(bytes: &[u8]) -> Option<ContentBlock> {
 }
 
 /// Decode one of `formats` (guessed from the bytes) within the given limits.
+#[cfg(feature = "images")]
 fn decode(
     bytes: &[u8],
     formats: &[ImageFormat],
@@ -117,6 +125,7 @@ fn decode(
 }
 
 /// Shrink only: `thumbnail` would also enlarge a small image.
+#[cfg(feature = "images")]
 fn shrink(image: DynamicImage, max_width: u32, max_height: u32) -> DynamicImage {
     if image.width() > max_width || image.height() > max_height {
         image.thumbnail(max_width.max(1), max_height.max(1))
@@ -126,6 +135,7 @@ fn shrink(image: DynamicImage, max_width: u32, max_height: u32) -> DynamicImage 
 }
 
 /// Pasted screenshots may span several monitors.
+#[cfg(feature = "images")]
 const MAX_PASTE_DIMENSION: u32 = 8192;
 /// The composer shows an attached image at most this large (device pixels).
 pub const ATTACHMENT_THUMBNAIL: u32 = 128;
@@ -135,6 +145,7 @@ pub const ATTACHMENT_THUMBNAIL: u32 = 128;
 /// 1600×1000 pixels, as JPEG at the highest quality that fits, or as PNG when
 /// that is smaller. When even low quality does not fit, the image shrinks.
 /// Also returns a thumbnail of at most [`ATTACHMENT_THUMBNAIL`] pixels.
+#[cfg(feature = "images")]
 pub fn encode_image_message(bytes: &[u8], limit: usize) -> Result<(String, ContentBlock), Error> {
     let limit = limit.min(MAX_CONTENT_BYTES);
     let formats = [
@@ -200,6 +211,7 @@ pub fn encode_image_message(bytes: &[u8], limit: usize) -> Result<(String, Conte
     }
 }
 
+#[cfg(feature = "images")]
 fn encode_png(image: &DynamicImage) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(&mut bytes);
@@ -215,6 +227,7 @@ fn encode_png(image: &DynamicImage) -> Result<Vec<u8>, Error> {
     Ok(bytes)
 }
 
+#[cfg(feature = "images")]
 fn encode_jpeg(image: &image::RgbImage, quality: u8) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality)
@@ -228,6 +241,7 @@ fn encode_jpeg(image: &image::RgbImage, quality: u8) -> Result<Vec<u8>, Error> {
     Ok(bytes)
 }
 
+#[cfg(feature = "images")]
 fn flatten(image: &DynamicImage) -> image::RgbImage {
     if !image.color().has_alpha() {
         return image.to_rgb8();
@@ -244,6 +258,7 @@ fn flatten(image: &DynamicImage) -> image::RgbImage {
 
 /// `<img src="data:image/<kind>;base64,…" />` as stock Mumble writes it: the
 /// base64 text in lines of 72 characters, each percent-encoded.
+#[cfg(feature = "images")]
 fn img_element(kind: &str, bytes: &[u8]) -> String {
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     let mut element = String::with_capacity(encoded.len() * 9 / 8 + 48);
@@ -268,11 +283,13 @@ fn img_element(kind: &str, bytes: &[u8]) -> String {
 }
 
 /// Decode an inline `data:` image for the viewer, up to `VIEW_WIDTH` × `VIEW_HEIGHT`.
+#[cfg(feature = "images")]
 pub fn decode_view(uri: &str) -> Option<ContentBlock> {
     decode_image(&data_uri(uri)?, VIEW_WIDTH, VIEW_HEIGHT)
 }
 
 /// Parse `data:image/<type>;base64,<payload>`; nothing else is accepted.
+#[cfg(feature = "images")]
 fn data_uri(uri: &str) -> Option<Vec<u8>> {
     let rest = uri.trim().strip_prefix("data:image/")?;
     let (kind, payload) = rest.split_once(";base64,")?;
@@ -294,6 +311,7 @@ fn data_uri(uri: &str) -> Option<Vec<u8>> {
 }
 
 /// `%XX` escapes to bytes; anything malformed rejects the payload.
+#[cfg(feature = "images")]
 fn percent_decode(text: &str) -> Option<Vec<u8>> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -461,6 +479,19 @@ impl ContentRenderer {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "images"))]
+    #[test]
+    fn text_only_rendering_refuses_embedded_images_but_keeps_code() {
+        let renderer = super::ContentRenderer::default();
+        let html = "one<br>two<img src='data:image/png;base64,iVBORw0KGgo='><img src='https://tracker.invalid/x'>";
+        let source = renderer.legacy_plain_text(html).unwrap();
+        let document = renderer.render(&source).unwrap();
+        assert!(document.blocks.iter().all(|block| !matches!(block, nuschl_core::ContentBlock::Image { .. })));
+        assert!(document.blocks.iter().any(|block| matches!(block, nuschl_core::ContentBlock::Text { text, .. } if text.contains("one\ntwo") && text.contains("[image]"))));
+        let code = renderer.render("```rust\nfn main() {}\n```").unwrap();
+        assert!(matches!(code.blocks.first(), Some(nuschl_core::ContentBlock::Code { runs, .. }) if !runs.is_empty()));
+    }
+
     /// A file offer sent as HTML (servers that allow it) is recognised from the
     /// document the worker renders, though its prepared source keeps markers.
     #[test]
@@ -491,6 +522,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "images")]
     fn webp_images_decode_and_are_sent_as_jpeg_or_png() {
         let mut webp = Vec::new();
         let pixels =
@@ -512,6 +544,7 @@ mod tests {
     use nuschl_core::EMBED;
 
     #[test]
+    #[cfg(feature = "images")]
     fn favicons_decode_from_ico() {
         let mut ico = Vec::new();
         let pixels = vec![200u8; 128 * 128 * 4];
@@ -540,6 +573,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "images")]
     fn png(width: u32, height: u32) -> Vec<u8> {
         let image = image::RgbaImage::from_fn(width, height, |x, y| {
             image::Rgba([x as u8, y as u8, 128, 255])
@@ -555,6 +589,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "images")]
     fn inline_data_images_are_decoded_and_remote_images_ignored() -> Result<(), Error> {
         let renderer = ContentRenderer::new()?;
         let uri = format!(
@@ -597,6 +632,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "images")]
     fn images_pasted_in_stock_mumble_are_decoded() -> Result<(), Error> {
         // Log::imageToImg: base64, cut into 72-character lines, each
         // percent-encoded, joined with newlines.
@@ -645,6 +681,7 @@ mod tests {
     }
 
     /// A screenshot-like image: flat areas with some text-like detail, or noise.
+    #[cfg(feature = "images")]
     fn picture(width: u32, height: u32, noisy: bool) -> Vec<u8> {
         let mut state = 0x9e37_79b9_u32;
         let image = image::RgbImage::from_fn(width, height, |x, y| {
@@ -671,6 +708,7 @@ mod tests {
     }
 
     /// What a receiver (including stock Mumble's format) makes of an element.
+    #[cfg(feature = "images")]
     fn received(element: &str) -> (u32, u32) {
         let renderer = ContentRenderer::default();
         let document = renderer
@@ -687,6 +725,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "images")]
     fn pasted_images_are_encoded_as_stock_mumble_does_within_the_limit() {
         let limit = 131_072;
         // A large, detailed picture: shrunk to 1600×1000, then by quality or size.
@@ -744,6 +783,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "images")]
     fn pasted_images_that_cannot_fit_or_decode_are_rejected() {
         assert!(matches!(
             encode_image_message(&picture(64, 64, true), 40),
@@ -774,6 +814,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "images")]
     fn hostile_image_payloads_are_rejected() {
         assert!(decode_image(b"not an image", 10, 10).is_none());
         assert!(
@@ -788,6 +829,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "images")]
     fn images_without_pixels_are_rejected() {
         // Found by fuzzing: a GIF whose screen is 110 × 0 pixels became an
         // image block of that size without any pixels.
@@ -941,6 +983,7 @@ mod tests {
             }
         }
         // Image decoders reject arbitrary bytes behind valid magic numbers.
+        #[cfg(feature = "images")]
         for magic in [&b"\x89PNG\r\n\x1a\n"[..], b"\xff\xd8\xff", b"GIF89a"] {
             for length in [0, 1, 7, 64, 512] {
                 let mut bytes = magic.to_vec();
