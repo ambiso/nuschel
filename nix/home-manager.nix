@@ -148,6 +148,7 @@ let
     "wormhole_rendezvous"
     "wormhole_relay"
     "appearance"
+    "recovery_key"
   ];
   unknownSettings = lib.subtractLists settingNames (lib.attrNames cfg.settings);
   managedFile = json.generate "nuschel-managed.json" {
