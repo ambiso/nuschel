@@ -6,8 +6,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use nuschel_core::MessageDocument;
 use nuschel_ipc::{
-    ContentRequest, ContentResponse, Envelope,
+    ContentRequest, ContentResponse, Envelope, PreparedContent,
     host::{self, Error},
     read_frame, write_frame,
 };
@@ -21,7 +22,7 @@ fn main() {
     }
 }
 
-/// Echoes each text (as an `Encoded` reply), except: "crash" exits, "hang"
+/// Echoes each text (as the source of a `Prepared` reply), except: "crash" exits, "hang"
 /// never answers, "garble" answers out of turn and "linger" stays after
 /// its last reply.
 fn fake_worker() {
@@ -44,7 +45,11 @@ fn fake_worker() {
             }
             _ => request.request_id,
         };
-        let reply = Envelope::new(id, ContentResponse::Encoded(text));
+        let prepared = PreparedContent {
+            source: text,
+            document: MessageDocument { blocks: Vec::new() },
+        };
+        let reply = Envelope::new(id, ContentResponse::Prepared(prepared));
         if write_frame(&mut output, &reply).is_err() {
             return;
         }
@@ -75,7 +80,7 @@ fn a_failing_request_costs_only_itself() {
     let outcome: Vec<String> = results
         .iter()
         .map(|result| match result {
-            Ok(ContentResponse::Encoded(text)) => text.clone(),
+            Ok(ContentResponse::Prepared(prepared)) => prepared.source.clone(),
             Ok(_) => "?".into(),
             Err(Error::Io(_)) => "exited".into(),
             Err(Error::InvalidResponse) => "invalid".into(),

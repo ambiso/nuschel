@@ -43,10 +43,19 @@ async fn a_history_page_renders_in_order_in_one_worker() {
 async fn a_pasted_image_becomes_a_stock_mumble_image_message() {
     // A 2×2 RGB PNG.
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x02\x08\x02\0\0\0\xfd\xd4\x9as\0\0\0\x12IDATx\x9cc\xf8\xcf\xc0\xc0\0\xc2\x0c\xff\x81\0\0\x1f\xee\x05\xfb\x0b\xd9h\x8b\0\0\0\0IEND\xaeB`\x82";
-    let html = nuschel_ipc::host::encode_image(worker(), PNG, 131_072)
+    let encoded = nuschel_ipc::host::encode_image(worker(), PNG, 131_072)
         .await
         .unwrap();
+    let html = encoded.html;
     assert!(html.starts_with("<img src=\"data:image/"), "{html}");
+    assert!(matches!(
+        encoded.thumbnail,
+        ContentBlock::Image {
+            width: 2,
+            height: 2,
+            ..
+        }
+    ));
     let prepared = nuschel_ipc::host::prepare_content(worker(), &html, true)
         .await
         .unwrap();

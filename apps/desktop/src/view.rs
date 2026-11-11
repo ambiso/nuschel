@@ -1375,13 +1375,23 @@ fn conversation(
     } else {
         channel.topic.clone()
     };
+    let dragged = this.dragged_files.clone();
     div()
         .flex_1()
         .min_w_0()
         .h_full()
+        .relative()
         .flex()
         .flex_col()
         .bg(color(MAIN))
+        // Asked about whatever is being dragged, hovered or not (see file_drop).
+        .can_drop(move |value, _, _| {
+            if let Some(paths) = value.downcast_ref::<ExternalPaths>() {
+                dragged.replace(Some(paths.paths().to_vec()));
+            }
+            true
+        })
+        .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(color(HOVER)))
         .child(
             div()
                 .h(px(52.))
@@ -1626,7 +1636,38 @@ fn conversation(
             ),
         })
         .child(composer(this, server, channel.name.clone(), cx))
+        .child(file_drop(this, cx))
         .into_any_element()
+}
+
+/// Files dropped anywhere on the conversation are attached. GPUI only drops
+/// on a hovered element, and after typing nothing counts as hovered until the
+/// pointer moves, which a drag from another application never does: so the
+/// conversation remembers what is dragged over it and takes the drop by
+/// position instead.
+fn file_drop(this: &Desktop, cx: &mut Context<Desktop>) -> impl IntoElement {
+    let dragged = this.dragged_files.clone();
+    let desktop = cx.entity().downgrade();
+    canvas(
+        move |_, _, cx| {
+            if !cx.has_active_drag() {
+                dragged.take();
+            }
+            dragged
+        },
+        move |bounds, dragged, window, _| {
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                if phase == DispatchPhase::Bubble
+                    && bounds.contains(&event.position)
+                    && let Some(paths) = dragged.take()
+                {
+                    let _ = desktop.update(cx, |this, cx| this.attach_files(paths, cx));
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
 }
 
 /// The top of the timeline: older history on its way, or what the
@@ -2317,7 +2358,18 @@ fn composer(
     channel_name: String,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
-    let _ = server;
+    let note = this
+        .attach_note
+        .as_ref()
+        .filter(|((id, channel), _)| {
+            *id == server.id
+                && this
+                    .navigation
+                    .selection()
+                    .is_some_and(|selected| selected.channel == *channel)
+        })
+        .map(|(_, note)| note.clone());
+    let attachments = this.attachments();
     div()
         .px_4()
         .pb_3()
@@ -2343,9 +2395,69 @@ fn composer(
                 }
             }),
         )
+        // Esc in an empty composer lets go of its attachments.
+        .capture_action(
+            cx.listener(|this, _: &gpui_kit::base::input::Escape, _, cx| {
+                if this.composer.read(cx).value().is_empty() && this.clear_attachments() {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
+        .when_some(this.sending_status(), |composer, status| {
+            composer.child(
+                div()
+                    .id("sending-status")
+                    .role(Role::Status)
+                    .aria_label(status.clone())
+                    .px_1()
+                    .text_xs()
+                    .text_color(color(TEXT_MUTED))
+                    .child(text!(status).with_id("sending-status-label")),
+            )
+        })
+        .when_some(note, |composer, note| {
+            composer.child(
+                div()
+                    .id("attach-note")
+                    .role(Role::Status)
+                    .aria_label(note.clone())
+                    .px_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(color(WARNING))
+                    .child(icon("alert", 14., color(WARNING)))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .child(text!(note).with_id("attach-note-label")),
+                    ),
+            )
+        })
+        .when(!attachments.is_empty(), |composer| {
+            composer.child(
+                div()
+                    .id("attachments")
+                    .role(Role::List)
+                    .aria_label(match attachments.len() {
+                        1 => "1 attachment".to_owned(),
+                        count => format!("{count} attachments"),
+                    })
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(
+                        attachments
+                            .iter()
+                            .map(|attachment| attachment_chip(attachment, cx)),
+                    ),
+            )
+        })
         .child(
             div()
-                .pl_4()
+                .pl_1()
                 .pr_2()
                 .py_2()
                 .rounded(px(10.))
@@ -2355,6 +2467,15 @@ fn composer(
                 .flex()
                 .items_end()
                 .gap_2()
+                .child(icon_button(
+                    "attach-files",
+                    "paperclip",
+                    "Attach images or files",
+                    TEXT_MUTED,
+                    None,
+                    |this, window, cx| this.choose_files(window, cx),
+                    cx,
+                ))
                 .child(
                     div()
                         .flex_1()
@@ -2412,6 +2533,105 @@ fn composer(
                     ),
                 ),
         )
+        .into_any_element()
+}
+
+/// An attachment: an image's thumbnail (once prepared) or a file's icon and
+/// size, its name, and a button that removes it.
+fn attachment_chip(
+    attachment: &crate::attachments::Attachment,
+    cx: &mut Context<Desktop>,
+) -> AnyElement {
+    use crate::attachments::Attachment;
+    let id = attachment.id();
+    let name = attachment.name().to_owned();
+    let (preview, detail, label) = match attachment {
+        Attachment::Image {
+            prepared: Some((_, image)),
+            ..
+        } => (
+            img(image.clone())
+                .size_full()
+                .object_fit(ObjectFit::Cover)
+                .into_any_element(),
+            None,
+            format!("Image {name}"),
+        ),
+        Attachment::Image { .. } => (
+            text!("…")
+                .with_id("attachment-preparing")
+                .into_any_element(),
+            None,
+            format!("Image {name}, being prepared"),
+        ),
+        Attachment::File { size, .. } => {
+            let size = crate::attachments::human_size(*size);
+            (
+                icon("file", 20., color(TEXT_MUTED)).into_any_element(),
+                Some(size.clone()),
+                format!("File {name}, {size}"),
+            )
+        }
+    };
+    div()
+        .id(("attachment", id as usize))
+        .role(Role::ListItem)
+        .aria_label(label)
+        .flex()
+        .items_center()
+        .gap_2()
+        .p_1()
+        .rounded(px(8.))
+        .bg(color(ELEVATED))
+        .border_1()
+        .border_color(color(BORDER_STRONG))
+        .child(
+            div()
+                .size(px(40.))
+                .flex_shrink_0()
+                .rounded(px(6.))
+                .overflow_hidden()
+                .bg(color(INPUT))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(color(TEXT_FAINT))
+                .child(preview),
+        )
+        .child(
+            div()
+                .max_w(px(180.))
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .truncate()
+                        .text_sm()
+                        .text_color(color(TEXT_MUTED))
+                        .child(text!(name.clone()).with_id("attachment-name")),
+                )
+                .when_some(detail, |column, detail| {
+                    column.child(
+                        div()
+                            .text_xs()
+                            .text_color(color(TEXT_FAINT))
+                            .child(text!(detail).with_id("attachment-size")),
+                    )
+                }),
+        )
+        .child(icon_button(
+            ("remove-attachment", id as usize),
+            "window-close",
+            format!("Remove {name}"),
+            TEXT_MUTED,
+            None,
+            move |this, _, cx| {
+                this.remove_attachment(id);
+                cx.notify();
+            },
+            cx,
+        ))
         .into_any_element()
 }
 

@@ -5,7 +5,7 @@ use nuschel_protocol::voice::VoicePacket;
 use nuschel_session::{
     Error,
     config::{Profile, ServerBookmark},
-    connection::{self, Command, ConnectOptions, SessionEvent, TextTarget},
+    connection::{self, Command, ConnectOptions, MessageRate, SessionEvent, TextTarget},
     model::{UserAction, VoiceTargetSpec},
 };
 use serde::Deserialize;
@@ -49,6 +49,13 @@ struct Arguments {
     /// Export the profile's client certificate as PKCS#12 (for Mumble) and exit.
     #[arg(long)]
     export_certificate: Option<PathBuf>,
+    /// The server's text rate limit (murmur.ini `messagelimit`, per second);
+    /// text waits for it instead of being dropped by the server.
+    #[arg(long, default_value_t = MessageRate::default().per_second)]
+    message_limit: u32,
+    /// The server's text burst (murmur.ini `messageburst`).
+    #[arg(long, default_value_t = MessageRate::default().burst)]
+    message_burst: u32,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -192,6 +199,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         muted: true,
         deafened: false,
         channel: None,
+        message_rate: MessageRate {
+            burst: args.message_burst,
+            per_second: args.message_limit,
+        },
     };
     let (tx, rx) = mpsc::channel(32);
     let (events_tx, mut events) = mpsc::channel(64);
@@ -224,7 +235,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(Input::Register) => Command::RegisterSelf,
                 Ok(Input::Html { channel, html }) => Command::SendHtml {
                     target: TextTarget::Channel(channel),
-                    html,
+                    html: vec![html],
                     expected_peer: None,
                 },
                 Ok(Input::Avatar { path }) => match std::fs::read(&path) {
@@ -382,6 +393,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::Acl(acl) => json!({"kind":"acl", "acl":acl}),
                 SessionEvent::UserNames(names) => json!({"kind":"user_names", "names":names}),
                 SessionEvent::UnsupportedCodec { session } => json!({"kind":"unsupported_codec", "session":session}),
+                SessionEvent::Outbox { sent, total } => json!({"kind":"outbox", "sent":sent, "total":total}),
             })?,
         }
     }

@@ -12,8 +12,8 @@ use tokio::{
 };
 
 use crate::{
-    ContentRequest, ContentResponse, Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION, PreparedContent,
-    write_frame,
+    ContentRequest, ContentResponse, EncodedImage, Envelope, MAX_FRAME_BYTES, PROTOCOL_VERSION,
+    PreparedContent, write_frame,
 };
 
 #[derive(Debug, Error)]
@@ -100,12 +100,17 @@ pub async fn decode_view(executable: &Path, uri: &str) -> Result<MessageDocument
     rendered(one(executable, ContentRequest::View { uri }).await?)
 }
 
-/// Re-encode a pasted image as a Mumble `<img>` element of at most `limit` bytes.
-pub async fn encode_image(executable: &Path, image: &[u8], limit: u32) -> Result<String, Error> {
+/// Re-encode a pasted image as a Mumble `<img>` element of at most `limit`
+/// bytes, with a thumbnail for the composer.
+pub async fn encode_image(
+    executable: &Path,
+    image: &[u8],
+    limit: u32,
+) -> Result<EncodedImage, Error> {
     use base64::Engine as _;
     let image = base64::engine::general_purpose::STANDARD.encode(image);
     match one(executable, ContentRequest::EncodeImage { image, limit }).await? {
-        ContentResponse::Encoded(html) => Ok(html),
+        ContentResponse::Encoded(encoded) => Ok(encoded),
         _ => Err(Error::InvalidResponse),
     }
 }

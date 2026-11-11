@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 use crate::document::Document;
 use crate::{
+    attachments::{Attachment, Kind, Source},
     backend::{Backend, Event, RenderKey, RenderedMessage},
     scrolling::{Anchor, SmoothScroll},
 };
@@ -345,6 +346,8 @@ pub struct ServerView {
     pub acl: Option<Acl>,
     pub user_names: BTreeMap<u32, String>,
     pub reconnecting: Option<String>,
+    /// Sent and total messages of the text waiting for the server's rate limit.
+    pub outbox: Option<(usize, usize)>,
     /// Rendered user comments keyed by session, with the raw HTML they came from.
     pub comments: BTreeMap<u32, (String, Document)>,
     /// Decoded avatars by texture hash, and hashes already requested.
@@ -422,6 +425,7 @@ impl ServerView {
             acl: None,
             user_names: BTreeMap::new(),
             reconnecting: None,
+            outbox: None,
             comments: BTreeMap::new(),
             avatars: BTreeMap::new(),
             icon,
@@ -707,6 +711,17 @@ struct PendingSend {
     body: String,
 }
 
+/// A sent message with attachments, waiting for its images to be prepared.
+struct Outgoing {
+    /// The conversation, by server id and channel.
+    key: (String, u32),
+    target: (TextTarget, Option<u64>),
+    text: String,
+    attachments: Vec<Attachment>,
+    /// The server's image and text limits.
+    limits: (usize, usize),
+}
+
 pub struct Desktop {
     pub servers: Vec<ServerView>,
     pub navigation: Navigation,
@@ -785,6 +800,14 @@ pub struct Desktop {
     pasted_image: Option<(u64, std::time::Instant)>,
     passwords: BTreeMap<String, String>,
     drafts: BTreeMap<(String, u32), String>,
+    /// What each conversation's composer has attached, and a line about it.
+    attachments: BTreeMap<(String, u32), Vec<Attachment>>,
+    pub attach_note: Option<((String, u32), String)>,
+    attachment_ids: u64,
+    /// Files being dragged over the conversation (see view::file_drop).
+    pub dragged_files: std::rc::Rc<std::cell::RefCell<Option<Vec<std::path::PathBuf>>>>,
+    /// Sent messages, in order, waiting for their images to be prepared.
+    outgoing: std::collections::VecDeque<Outgoing>,
     _subscriptions: Vec<Subscription>,
     _receive: Task<()>,
     /// Wakes the push-to-talk poll when a system-wide shortcut is bound.
@@ -947,6 +970,11 @@ impl Desktop {
             pasted_image: None,
             passwords: BTreeMap::new(),
             drafts: BTreeMap::new(),
+            attachments: BTreeMap::new(),
+            attach_note: None,
+            attachment_ids: 0,
+            dragged_files: Default::default(),
+            outgoing: std::collections::VecDeque::new(),
             _subscriptions: vec![subscription, activation],
             _receive: receive,
             ptt_wake,
@@ -1524,6 +1552,9 @@ impl Desktop {
         };
         self.backend.disconnect(&server.id);
         self.passwords.remove(&server.id);
+        if let Some(lost) = lost_messages(server) {
+            server.notice = Some(lost);
+        }
         if self
             .sending
             .as_ref()
@@ -1861,13 +1892,18 @@ impl Desktop {
             }
         }
     }
-    pub fn send_message(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        if self.sending.is_some() {
-            return;
-        }
+    pub fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some((server, channel)) = self.selected_indices() else {
             return;
         };
+        // Text waits behind attachments still being prepared for this server.
+        let server_id = &self.servers[server].id;
+        if self.sending.is_some() || self.outgoing.iter().any(|batch| &batch.key.0 == server_id) {
+            return;
+        }
+        if !self.attachments().is_empty() {
+            return self.send_attachments(window, cx);
+        }
         let body = self.composer.read(cx).value().to_string();
         if body.trim().is_empty() {
             return;
@@ -1905,9 +1941,36 @@ impl Desktop {
         }
         cx.notify();
     }
-    /// Ctrl+V with only an image on the clipboard sends that image to the open
-    /// conversation at once (the composer holds text only). Holding the keys
-    /// repeats the paste: the same image again within two seconds is ignored.
+    /// What the open conversation's composer has attached.
+    pub fn attachments(&self) -> &[Attachment] {
+        self.navigation
+            .selection()
+            .and_then(|selected| {
+                self.attachments
+                    .get(&(selected.server.clone(), selected.channel))
+            })
+            .map_or(&[], Vec::as_slice)
+    }
+    /// What the open conversation's composer is waiting for, if anything.
+    pub fn sending_status(&self) -> Option<String> {
+        let (server, _) = self.selected_indices()?;
+        let key = self.selected_key()?;
+        let preparing = self
+            .outgoing
+            .iter()
+            .filter(|batch| batch.key == key)
+            .flat_map(|batch| &batch.attachments)
+            .filter(|attachment| !attachment.ready())
+            .count();
+        match self.servers[server].outbox {
+            Some((sent, total)) => Some(format!("Sending {} of {total}…", sent + 1)),
+            None if preparing == 1 => Some("Preparing the image…".into()),
+            None if preparing > 1 => Some(format!("Preparing {preparing} images…")),
+            None => None,
+        }
+    }
+    /// Ctrl+V with only an image on the clipboard attaches it. Holding the
+    /// keys repeats the paste: the same image again within two seconds is ignored.
     pub fn paste_image(&mut self, id: u64, image: Vec<u8>, cx: &mut Context<Self>) {
         let now = std::time::Instant::now();
         let last = self.pasted_image.replace((id, now));
@@ -1915,32 +1978,375 @@ impl Desktop {
         {
             return;
         }
-        let Some((server, channel)) = self.selected_indices() else {
+        let Some(key) = self.selected_key() else {
             return;
         };
-        let server = &mut self.servers[server];
-        let (allow_html, limit) = server.limits.as_ref().map_or((true, 131_072), |limits| {
-            (limits.allow_html, limits.image_message_length)
-        });
-        if server.status != Status::Connected {
-            server.notice = Some("Connect before sending an image.".into());
-        } else if !allow_html {
-            server.notice = Some("This server does not accept images.".into());
-        } else {
-            let channel = &server.channels[channel];
-            let target = (
-                channel.target.clone(),
-                channel.direct_peer.as_ref().map(|peer| peer.instance),
-            );
-            let limit = limit.min(MAX_CONTENT_BYTES);
-            if let Err(error) =
-                self.backend
-                    .send_image(&server.id, server.generation, target, image, limit)
-            {
-                server.notice = Some(error);
-            }
+        self.attach_note = None;
+        let name =
+            crate::attachments::pasted_name(self.attachments.get(&key).map_or(&[], Vec::as_slice));
+        if let Err(note) = self.attach_image(&key, name, Source::Bytes(image), None) {
+            self.attach_note = Some((key, note));
         }
         cx.notify();
+    }
+    /// Ask for files to attach.
+    pub fn choose_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let paths = match paths.await {
+                Ok(Ok(Some(paths))) => paths,
+                Ok(Ok(None)) | Err(_) => return,
+                Ok(Err(error)) => {
+                    let _ = this.update(cx, |this, cx| {
+                        if let Some(key) = this.selected_key() {
+                            this.attach_note =
+                                Some((key, format!("Could not open the file chooser: {error}")));
+                        }
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+            let _ = this.update(cx, |this, cx| this.attach_files(paths, cx));
+        })
+        .detach();
+    }
+    /// Attach chosen or dropped files to the open conversation: images to
+    /// send in messages, anything else to offer for transfer. They are looked
+    /// at off the UI thread.
+    pub fn attach_files(&mut self, paths: Vec<std::path::PathBuf>, cx: &mut Context<Self>) {
+        let Some(key) = self.selected_key() else {
+            return;
+        };
+        let checked = cx.background_executor().spawn(async move {
+            paths
+                .into_iter()
+                .map(|path| {
+                    let checked = crate::attachments::check(&path);
+                    (path, checked)
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let checked = checked.await;
+            let _ = this.update(cx, |this, cx| {
+                this.attach_note = None;
+                let mut refused = Vec::new();
+                let mut notes = Vec::new();
+                for (path, checked) in checked {
+                    let name = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |name| name.to_string_lossy().into_owned(),
+                    );
+                    match checked {
+                        // An image this server or the tray cannot take goes as a file.
+                        Ok(Kind::Image { size }) => {
+                            let source = Source::File(path.clone());
+                            let file = Some((path, size));
+                            if let Err(note) = this.attach_image(&key, name.clone(), source, file) {
+                                notes.push(note);
+                            }
+                        }
+                        Ok(Kind::File { size }) => this.attach_file(&key, name, path, size),
+                        Err(refusal) => refused.push((name, refusal)),
+                    }
+                }
+                notes.dedup();
+                notes.extend(crate::attachments::refusal(&refused));
+                if !notes.is_empty() {
+                    this.attach_note = Some((key, notes.join(" ")));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+    fn selected_key(&self) -> Option<(String, u32)> {
+        let selected = self.navigation.selection()?;
+        Some((selected.server.clone(), selected.channel))
+    }
+    fn next_attachment(&mut self) -> u64 {
+        self.attachment_ids += 1;
+        self.attachment_ids
+    }
+    /// Add an image to a conversation's tray and have the worker prepare it
+    /// for that server's image limit, keeping room for the text. One from a
+    /// file goes as a file where it cannot go as an image.
+    fn attach_image(
+        &mut self,
+        key: &(String, u32),
+        name: String,
+        source: Source,
+        file: Option<(std::path::PathBuf, u64)>,
+    ) -> Result<(), String> {
+        let server = self.servers.iter().find(|server| server.id == key.0);
+        let (allow_html, limit) = server
+            .and_then(|server| server.limits.as_ref())
+            .map_or((true, 131_072), |limits| {
+                (limits.allow_html, limits.image_message_length)
+            });
+        let images = self.attachments.get(key).map_or(0, |tray| {
+            tray.iter()
+                .filter(|attachment| matches!(attachment, Attachment::Image { .. }))
+                .count()
+        });
+        let refusal = if !allow_html {
+            "This server does not accept images.".to_owned()
+        } else if images >= crate::attachments::MAX_IMAGES {
+            format!(
+                "A message can carry up to {} images; send these first.",
+                crate::attachments::MAX_IMAGES
+            )
+        } else {
+            let id = self.next_attachment();
+            self.attachments
+                .entry(key.clone())
+                .or_default()
+                .push(Attachment::Image {
+                    id,
+                    name,
+                    file,
+                    prepared: None,
+                });
+            let limit = limit.min(MAX_CONTENT_BYTES);
+            let budget = limit
+                .saturating_sub(crate::attachments::CAPTION_ROOM)
+                .max(limit / 2);
+            self.backend.prepare_image(id, source, budget);
+            return Ok(());
+        };
+        match file {
+            Some((path, size)) => {
+                self.attach_file(key, name, path, size);
+                Ok(())
+            }
+            None => Err(refusal),
+        }
+    }
+    fn attach_file(
+        &mut self,
+        key: &(String, u32),
+        name: String,
+        path: std::path::PathBuf,
+        size: u64,
+    ) {
+        let id = self.next_attachment();
+        self.attachments
+            .entry(key.clone())
+            .or_default()
+            .push(Attachment::File {
+                id,
+                name,
+                path,
+                size,
+            });
+    }
+    pub fn remove_attachment(&mut self, id: u64) {
+        for tray in self.attachments.values_mut() {
+            tray.retain(|attachment| attachment.id() != id);
+        }
+        self.attachments.retain(|_, tray| !tray.is_empty());
+        self.attach_note = None;
+    }
+    /// Esc in an empty composer: the open conversation's attachments go.
+    pub fn clear_attachments(&mut self) -> bool {
+        let Some(key) = self.selected_key() else {
+            return false;
+        };
+        self.attach_note = None;
+        self.attachments.remove(&key).is_some()
+    }
+    /// The content worker prepared an attached image, or could not.
+    fn prepared(
+        &mut self,
+        id: u64,
+        result: Result<nuschel_ipc::EncodedImage, String>,
+        cx: &mut Context<Self>,
+    ) {
+        // In a composer's tray, or in a sent message waiting for it.
+        let trays = self.attachments.iter_mut();
+        let batches = self
+            .outgoing
+            .iter_mut()
+            .map(|batch| (&batch.key, &mut batch.attachments));
+        let Some((key, attachment)) = trays.chain(batches).find_map(|(key, tray)| {
+            let attachment = tray.iter_mut().find(|attachment| attachment.id() == id)?;
+            Some((key.clone(), attachment))
+        }) else {
+            return;
+        };
+        let Attachment::Image {
+            name,
+            file,
+            prepared,
+            ..
+        } = attachment
+        else {
+            return;
+        };
+        let thumbnail = result.and_then(|encoded| match encoded.thumbnail {
+            nuschel_core::ContentBlock::Image {
+                width,
+                height,
+                rgba,
+                ..
+            } => crate::document::render_image(width, height, &rgba)
+                .map(|thumbnail| (encoded.html, thumbnail))
+                .ok_or_else(|| "the thumbnail is invalid".to_owned()),
+            _ => Err("the thumbnail is missing".to_owned()),
+        });
+        let note = match (thumbnail, file.take()) {
+            (Ok(thumbnail), _) => {
+                *prepared = Some(thumbnail);
+                None
+            }
+            // A file the worker cannot encode is offered as a file instead.
+            (Err(reason), Some((path, size))) => {
+                let note = format!("{name} goes as a file: {reason}.");
+                *attachment = Attachment::File {
+                    id,
+                    name: std::mem::take(name),
+                    path,
+                    size,
+                };
+                Some(note)
+            }
+            (Err(reason), None) => {
+                let note = format!("Could not attach {name}: {reason}.");
+                let id = attachment.id();
+                for tray in self.attachments.values_mut() {
+                    tray.retain(|attachment| attachment.id() != id);
+                }
+                for batch in &mut self.outgoing {
+                    batch.attachments.retain(|attachment| attachment.id() != id);
+                }
+                Some(note)
+            }
+        };
+        if let Some(note) = note {
+            self.attach_note = Some((key, note));
+        }
+        self.attachments.retain(|_, tray| !tray.is_empty());
+        self.flush_outgoing(cx);
+    }
+    /// Send the open conversation's text and attachments once its images are
+    /// prepared: text first, then the images one per message (the text with
+    /// the first), then the files offered for transfer.
+    fn send_attachments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some((server, channel)), Some(key)) = (self.selected_indices(), self.selected_key())
+        else {
+            return;
+        };
+        let text = self.composer.read(cx).value().to_string();
+        let server = &mut self.servers[server];
+        let limits = server
+            .limits
+            .as_ref()
+            .map_or((true, 131_072, 5000), |limits| {
+                (
+                    limits.allow_html,
+                    limits.image_message_length,
+                    limits.message_length,
+                )
+            });
+        let images = self.attachments.get(&key).is_some_and(|tray| {
+            tray.iter()
+                .any(|attachment| matches!(attachment, Attachment::Image { .. }))
+        });
+        let text_length = nuschel_session::connection::legacy_body(&text, limits.0).len();
+        let note = if server.status != Status::Connected {
+            Some("Connect before sending.".to_owned())
+        } else if images && !limits.0 {
+            Some("This server does not accept images.".to_owned())
+        } else if text_length > limits.2 || text.len() > MAX_CONTENT_BYTES {
+            Some(format!(
+                "The text exceeds this server's {}-byte limit.",
+                limits.2
+            ))
+        } else {
+            None
+        };
+        if note.is_some() {
+            self.attach_note = note.map(|note| (key, note));
+            cx.notify();
+            return;
+        }
+        let channel = &server.channels[channel];
+        self.outgoing.push_back(Outgoing {
+            key: key.clone(),
+            target: (
+                channel.target.clone(),
+                channel.direct_peer.as_ref().map(|peer| peer.instance),
+            ),
+            text,
+            attachments: self.attachments.remove(&key).unwrap_or_default(),
+            limits: (limits.1.min(MAX_CONTENT_BYTES), limits.2),
+        });
+        self.attach_note = None;
+        self.drafts.remove(&key);
+        self.composer
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.flush_outgoing(cx);
+        cx.notify();
+    }
+    /// Hand sent messages whose images are all prepared to the connection,
+    /// in order, then offer their files.
+    fn flush_outgoing(&mut self, cx: &mut Context<Self>) {
+        while self
+            .outgoing
+            .front()
+            .is_some_and(|batch| batch.attachments.iter().all(Attachment::ready))
+        {
+            let Some(batch) = self.outgoing.pop_front() else {
+                break;
+            };
+            let mut images = Vec::new();
+            let mut files = Vec::new();
+            for attachment in batch.attachments {
+                match attachment {
+                    Attachment::Image {
+                        prepared: Some((html, _)),
+                        ..
+                    } => images.push(html),
+                    Attachment::Image { .. } => {}
+                    Attachment::File { path, .. } => files.push(path),
+                }
+            }
+            let (target, expected_peer) = batch.target;
+            let text = (!batch.text.trim().is_empty()).then_some(batch.text);
+            let command = if images.is_empty() {
+                text.map(|body| Command::SendText {
+                    target,
+                    body,
+                    expected_peer,
+                })
+            } else {
+                let (image_limit, message_limit) = batch.limits;
+                let caption =
+                    text.map(|text| nuschel_session::connection::legacy_body(&text, true));
+                let html =
+                    crate::attachments::messages(caption, images, image_limit, message_limit);
+                Some(Command::SendHtml {
+                    target,
+                    html,
+                    expected_peer,
+                })
+            };
+            if let Some(command) = command
+                && let Err(error) = self.backend.command(&batch.key.0, command)
+            {
+                self.attach_note = Some((batch.key, format!("Not sent: {error}")));
+                continue;
+            }
+            if !files.is_empty() {
+                self.offer_files(files, cx);
+            }
+        }
     }
     pub fn open_direct(
         &mut self,
@@ -2261,8 +2667,11 @@ impl Desktop {
                         .iter()
                         .position(|entry| entry.id == server && entry.generation == generation)
                     {
+                        let lost = lost_messages(&mut self.servers[index]);
                         self.disconnect(index);
-                        self.servers[index].notice = Some(reason.clone());
+                        self.servers[index].notice = Some(
+                            lost.map_or_else(|| reason.clone(), |lost| format!("{reason} {lost}")),
+                        );
                         if let Some(kind) =
                             reject.filter(|kind| kind.needs_password() || kind.needs_username())
                         {
@@ -2284,6 +2693,9 @@ impl Desktop {
                     {
                         server.status = Status::Connecting;
                         server.own_session = None;
+                        if let Some(lost) = lost_messages(server) {
+                            server.notice = Some(lost);
+                        }
                         server.users.clear();
                         server.talking.clear();
                         server.transport = None;
@@ -2359,6 +2771,7 @@ impl Desktop {
                         }
                     }
                 }
+                Event::Prepared { id, result } => self.prepared(id, result, cx),
                 Event::Avatar {
                     server,
                     generation,
@@ -2987,6 +3400,9 @@ impl Desktop {
                 server.acl = Some(acl);
             }
             SessionEvent::UserNames(names) => server.user_names.extend(names),
+            SessionEvent::Outbox { sent, total } => {
+                server.outbox = (sent < total).then_some((sent, total));
+            }
             SessionEvent::UnsupportedCodec { session } => {
                 server.legacy_voice.insert(session);
                 if let Some(user) = server.users.get(&session).cloned()
@@ -3081,6 +3497,14 @@ impl Desktop {
             SessionEvent::Text(_) | SessionEvent::Audio(_) => {}
         }
     }
+}
+/// Text still waiting for the rate limit when the connection ends is lost.
+fn lost_messages(server: &mut ServerView) -> Option<String> {
+    let (sent, total) = server.outbox.take()?;
+    Some(match total - sent {
+        1 => "1 message waiting to be sent was not sent.".into(),
+        lost => format!("{lost} messages waiting to be sent were not sent."),
+    })
 }
 /// Returns whether the message is new to this timeline.
 fn merge_message(channel: &mut ChannelView, message: RenderedMessage) -> bool {

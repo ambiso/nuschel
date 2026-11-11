@@ -6,7 +6,7 @@ pub mod host;
 
 use std::io::{self, Read, Write};
 
-use nuschel_core::{ChatMessage, HistoryPage, MessageDocument};
+use nuschel_core::{ChatMessage, ContentBlock, HistoryPage, MessageDocument};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 
@@ -52,6 +52,14 @@ pub enum ContentRequest {
     EncodeImage { image: String, limit: u32 },
 }
 
+/// An image ready to send, and its thumbnail (an `Image` block) for the composer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EncodedImage {
+    pub html: String,
+    pub thumbnail: ContentBlock,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedContent {
@@ -70,7 +78,7 @@ pub enum ContentResponse {
     Rendered(MessageDocument),
     Prepared(PreparedContent),
     /// Mumble rich text to send as it is.
-    Encoded(String),
+    Encoded(EncodedImage),
     Rejected(String),
 }
 

@@ -4,6 +4,7 @@
 // Command-line use goes through nuschel-cli.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 mod assets;
+mod attachments;
 mod autostart;
 mod backend;
 mod chrome;
@@ -23,6 +24,7 @@ mod selection;
 mod settings;
 mod state;
 mod theme;
+mod transfer;
 mod update;
 mod view;
 mod viewer;

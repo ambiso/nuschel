@@ -137,6 +137,11 @@ pub enum Event {
         source: String,
         document: MessageDocument,
     },
+    /// An attached image re-encoded for sending, or why it cannot be sent.
+    Prepared {
+        id: u64,
+        result: Result<nuschel_ipc::EncodedImage, String>,
+    },
     /// A decoded avatar thumbnail for a texture hash.
     Avatar {
         server: String,
@@ -172,6 +177,7 @@ pub struct Backend {
     settings: watch::Sender<ClientSettings>,
     push_to_talk: watch::Sender<bool>,
     render_permits: std::sync::Arc<tokio::sync::Semaphore>,
+    image_permits: std::sync::Arc<tokio::sync::Semaphore>,
     storage_task: tokio::task::JoinHandle<()>,
     content_task: tokio::task::JoinHandle<()>,
     preview: Option<(
@@ -232,6 +238,7 @@ impl Backend {
             settings: watch::Sender::new(settings),
             push_to_talk: watch::Sender::new(false),
             render_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
+            image_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             storage_task,
             content_task,
             preview: None,
@@ -408,61 +415,37 @@ impl Backend {
                 .await;
         });
     }
-    /// Send a pasted image as stock Mumble does: re-encoded in the sandboxed
-    /// content worker into an `<img>` of at most `limit` bytes. Our own copy
-    /// comes back through the connection like any sent message.
-    pub fn send_image(
-        &self,
-        server: &str,
-        generation: u64,
-        (target, expected_peer): (TextTarget, Option<u64>),
-        image: Vec<u8>,
-        limit: usize,
-    ) -> Result<(), String> {
-        // Base64 in one worker frame (nuschel_ipc::MAX_FRAME_BYTES).
-        if image.len() > 8 * 1024 * 1024 {
-            return Err("The image is too large to send (8 MB at most).".into());
-        }
-        if content_worker().is_none() {
-            return Err("Images need the content worker, which is missing.".into());
-        }
-        let commands = self
-            .connections
-            .get(server)
-            .ok_or("Server is not connected.")?
-            .commands
-            .clone();
+    /// Re-encode an attached image as stock Mumble sends one: in the
+    /// sandboxed content worker, into an `<img>` of at most `limit` bytes.
+    /// Two at a time; a file is read only when its turn comes.
+    pub fn prepare_image(&self, id: u64, source: crate::attachments::Source, limit: usize) {
         let events = self.sender.clone();
-        let server = server.to_owned();
+        let permits = self.image_permits.clone();
         self.handle.spawn(async move {
-            let Some(worker) = content_worker() else {
-                return;
-            };
-            let notice = match nuschel_ipc::host::encode_image(worker, &image, limit as u32).await {
-                Ok(html) => {
-                    let command = Command::SendHtml {
-                        target,
-                        html,
-                        expected_peer,
-                    };
-                    if commands.send(command).await.is_ok() {
-                        return;
+            let result = async {
+                let _permit = permits.acquire().await.map_err(|error| error.to_string())?;
+                let worker =
+                    content_worker().ok_or("images need the content worker, which is missing")?;
+                let image = match source {
+                    crate::attachments::Source::Bytes(bytes) => bytes,
+                    crate::attachments::Source::File(path) => {
+                        tokio::task::spawn_blocking(move || crate::attachments::read(&path))
+                            .await
+                            .map_err(|error| error.to_string())??
                     }
-                    "the connection has ended".to_owned()
+                };
+                if image.len() as u64 > crate::attachments::MAX_IMAGE_BYTES {
+                    return Err("it is larger than 8 MB".to_owned());
                 }
-                Err(nuschel_ipc::host::Error::Rejected(reason)) => reason,
-                Err(error) => error.to_string(),
-            };
-            let event = SessionEvent::Notice(format!("Could not send the image: {notice}."));
-            let _ = events
-                .send(Event::Protocol {
-                    server,
-                    generation,
-                    event,
-                })
-                .await;
+                match nuschel_ipc::host::encode_image(worker, &image, limit as u32).await {
+                    Ok(encoded) => Ok(encoded),
+                    Err(nuschel_ipc::host::Error::Rejected(reason)) => Err(reason),
+                    Err(error) => Err(error.to_string()),
+                }
+            }
+            .await;
+            let _ = events.send(Event::Prepared { id, result }).await;
         });
-        Ok(())
     }
     pub fn search(&self, server: String, identity: String, query: String) -> Result<(), String> {
         self.storage
@@ -710,6 +693,7 @@ async fn connect_once(
             muted: restore.muted,
             deafened: restore.deafened,
             channel: restore.channel,
+            message_rate: Default::default(),
         },
         Err(error) => {
             let _ = events

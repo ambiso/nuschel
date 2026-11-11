@@ -146,6 +146,14 @@ pub enum SessionEvent {
     UnsupportedCodec {
         session: u32,
     },
+    /// Text is waiting for the server's rate limit: `sent` of the `total`
+    /// messages queued since the outbox was last empty have left. Reported
+    /// once a message has to wait, and again (with `sent == total`) when the
+    /// last one has left.
+    Outbox {
+        sent: usize,
+        total: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -175,10 +183,11 @@ pub enum Command {
         body: String,
         expected_peer: Option<u64>,
     },
-    /// Send Mumble rich text as-is (e.g. inline images); only on HTML-enabled servers.
+    /// Send Mumble rich text as-is (e.g. inline images), one message per
+    /// entry and in order; only on HTML-enabled servers.
     SendHtml {
         target: TextTarget,
-        html: String,
+        html: Vec<String>,
         expected_peer: Option<u64>,
     },
     SetSelf {
@@ -239,6 +248,122 @@ pub struct ConnectOptions {
     pub deafened: bool,
     /// Rejoin this channel after login (reconnect).
     pub channel: Option<u32>,
+    /// The server's rate limit for text, which it does not announce.
+    pub message_rate: MessageRate,
+}
+
+/// Murmur's per-user rate limit (murmur.ini `messageburst` and `messagelimit`):
+/// a leaky bucket shared by text, our own user state, channel state, ACL and
+/// version messages. The server drops what exceeds it without telling the
+/// sender, so text waits in an outbox for its turn instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MessageRate {
+    pub burst: u32,
+    pub per_second: u32,
+}
+
+impl Default for MessageRate {
+    /// Stock Murmur: a burst of five, then one message a second.
+    fn default() -> Self {
+        Self {
+            burst: 5,
+            per_second: 1,
+        }
+    }
+}
+
+/// A text message waiting for the rate limit: `wire` is what the server
+/// receives, `body` and `html` what our own timeline shows.
+struct Outgoing {
+    target: TextTarget,
+    expected_peer: Option<u64>,
+    wire: String,
+    body: String,
+    html: bool,
+}
+
+/// Text waiting for the server's rate limit, and our estimate of its bucket.
+/// The estimate leaks a fifth slower than the server's bucket, which drops
+/// fractions of a token whenever it drains, and text leaves one message of
+/// room for the user state and other limited messages we send meanwhile.
+struct Outbox {
+    rate: MessageRate,
+    level: f64,
+    at: Instant,
+    waiting: std::collections::VecDeque<Outgoing>,
+    /// Messages queued since the outbox was last empty, how many have left,
+    /// and whether this run was reported (a message had to wait).
+    total: usize,
+    sent: usize,
+    reported: bool,
+}
+
+impl Outbox {
+    fn new(rate: MessageRate) -> Self {
+        Self {
+            rate,
+            level: 0.0,
+            at: Instant::now(),
+            waiting: std::collections::VecDeque::new(),
+            total: 0,
+            sent: 0,
+            reported: false,
+        }
+    }
+    fn leak_rate(&self) -> f64 {
+        f64::from(self.rate.per_second.max(1)) * 0.8
+    }
+    /// Text may fill the bucket up to one message below the server's burst.
+    fn capacity(&self) -> f64 {
+        f64::from(self.rate.burst.saturating_sub(1).max(1))
+    }
+    fn leak(&mut self, now: Instant) {
+        let leaked = now.saturating_duration_since(self.at).as_secs_f64() * self.leak_rate();
+        self.level = (self.level - leaked).max(0.0);
+        self.at = now;
+    }
+    /// Count a limited message that just left.
+    fn charge(&mut self, now: Instant) {
+        self.leak(now);
+        self.level += 1.0;
+    }
+    fn push(&mut self, message: Outgoing) {
+        self.waiting.push_back(message);
+        self.total += 1;
+    }
+    /// The next message, if the bucket has room for it now.
+    fn pop(&mut self, now: Instant) -> Option<Outgoing> {
+        self.leak(now);
+        if self.level + 1.0 > self.capacity() {
+            return None;
+        }
+        let message = self.waiting.pop_front()?;
+        self.sent += 1;
+        Some(message)
+    }
+    /// When the next waiting message may leave (a millisecond late, so the
+    /// bucket has certainly leaked enough by then).
+    fn due(&self) -> Option<Instant> {
+        let excess = (self.level + 1.0 - self.capacity()).max(0.0);
+        (!self.waiting.is_empty()).then(|| {
+            self.at + Duration::from_secs_f64(excess / self.leak_rate()) + Duration::from_millis(1)
+        })
+    }
+    /// The progress to report, if any; an empty outbox starts a new run.
+    fn progress(&mut self) -> Option<SessionEvent> {
+        let event = SessionEvent::Outbox {
+            sent: self.sent,
+            total: self.total,
+        };
+        if self.waiting.is_empty() {
+            let reported = std::mem::take(&mut self.reported);
+            (self.total, self.sent) = (0, 0);
+            reported.then_some(event)
+        } else {
+            self.reported = true;
+            Some(event)
+        }
+    }
 }
 
 pub async fn run(
@@ -291,8 +416,11 @@ pub async fn run(
             local_muted: muted,
             local_deafened: options.deafened,
             rejoin: options.channel,
+            outbox: Outbox::new(options.message_rate),
             ..State::default()
         };
+        // The version and user state above count against the rate limit.
+        state.outbox.level = 2.0;
         let mut ticks = 0_u64;
         let mut reported_udp = false;
         let mut ping = time::interval(Duration::from_secs(1));
@@ -367,6 +495,9 @@ pub async fn run(
                         }
                     }
                 },
+                _ = time::sleep_until(state.outbox.due().unwrap_or_else(Instant::now)), if state.outbox.due().is_some() => {
+                    state.flush_outbox(&events).await?;
+                },
                 _ = &mut deadline, if state.own_session.is_none() => return Err(Error::Timeout("waiting for Mumble login")),
             }
             for (kind, payload) in std::mem::take(&mut state.outbound) {
@@ -407,6 +538,7 @@ struct State {
     blob_bytes: usize,
     /// Budget notices already shown on this connection.
     notices: BTreeSet<&'static str>,
+    outbox: Outbox,
 }
 impl Default for State {
     fn default() -> Self {
@@ -432,6 +564,7 @@ impl Default for State {
             unsupported_codec: BTreeSet::new(),
             blob_bytes: 0,
             notices: BTreeSet::new(),
+            outbox: Outbox::new(MessageRate::default()),
         }
     }
 }
@@ -450,6 +583,13 @@ impl State {
         }
     }
     fn queue<M: Message>(&mut self, kind: u16, message: &M) {
+        // Murmur limits our own user state only; others' are counted too.
+        if matches!(
+            kind,
+            kind::USER_STATE | kind::CHANNEL_STATE | kind::ACL | kind::TEXT_MESSAGE
+        ) {
+            self.outbox.charge(Instant::now());
+        }
         self.outbound.push((kind, message.encode_to_vec()));
     }
     /// What may be sent of a voice packet. While the user may not speak, only
@@ -714,11 +854,13 @@ impl State {
                     )
                     .await;
                 }
-                if html.len()
-                    > self
-                        .image_limit
-                        .max(self.message_limit)
-                        .min(MAX_CONTENT_BYTES)
+                let limit = self
+                    .image_limit
+                    .max(self.message_limit)
+                    .min(MAX_CONTENT_BYTES);
+                if html
+                    .iter()
+                    .any(|html| html.is_empty() || html.len() > limit)
                 {
                     return emit(
                         events,
@@ -726,14 +868,16 @@ impl State {
                     )
                     .await;
                 }
-                self.send_text(
-                    own,
-                    target,
-                    expected_peer,
-                    (html.clone(), html, true),
-                    events,
-                )
-                .await?;
+                for html in html {
+                    self.outbox.push(Outgoing {
+                        target: target.clone(),
+                        expected_peer,
+                        wire: html.clone(),
+                        body: html,
+                        html: true,
+                    });
+                }
+                self.flush_outbox(events).await?;
             }
             Command::RegisterSelf => {
                 self.queue(
@@ -1021,23 +1165,43 @@ impl State {
                     )
                     .await;
                 }
-                self.send_text(own, target, expected_peer, (wire_body, body, false), events)
-                    .await?;
+                self.outbox.push(Outgoing {
+                    target,
+                    expected_peer,
+                    wire: wire_body,
+                    body,
+                    html: false,
+                });
+                self.flush_outbox(events).await?;
             }
         }
         Ok(())
     }
 
-    /// Queue a text message and report it as our own outgoing text: `wire` is
-    /// what the server receives, `body` and `html` what the timeline shows.
+    /// Send the text the rate limit has room for, and report on what waits.
+    async fn flush_outbox(&mut self, events: &mpsc::Sender<SessionEvent>) -> Result<(), Error> {
+        while let Some(message) = self.outbox.pop(Instant::now()) {
+            self.send_text(message, events).await?;
+        }
+        match self.outbox.progress() {
+            Some(event) => emit(events, event).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Queue a text message and report it as our own outgoing text.
     async fn send_text(
         &mut self,
-        own: u32,
-        target: TextTarget,
-        expected_peer: Option<u64>,
-        (wire, body, html): (String, String, bool),
+        Outgoing {
+            target,
+            expected_peer,
+            wire,
+            body,
+            html,
+        }: Outgoing,
         events: &mpsc::Sender<SessionEvent>,
     ) -> Result<(), Error> {
+        let own = self.own_session.unwrap_or_default();
         let mut message = proto::TextMessage {
             message: wire,
             ..Default::default()
@@ -2540,7 +2704,7 @@ mod tests {
         let html = "<img src=\"data:image/png;base64,iVBORw0KGgo%3D\" />".to_string();
         let send = |html: String| Command::SendHtml {
             target: TextTarget::Direct(9),
-            html,
+            html: vec![html],
             expected_peer: None,
         };
         state.command(send(html.clone()), &tx).await.unwrap();
@@ -2564,6 +2728,150 @@ mod tests {
             .unwrap();
         assert!(state.outbound.is_empty());
         assert!(matches!(rx.try_recv(), Ok(SessionEvent::Notice(_))));
+    }
+
+    /// The text messages written since the last call.
+    fn sent_texts(state: &mut State) -> Vec<String> {
+        state
+            .outbound
+            .drain(..)
+            .filter(|(kind, _)| *kind == kind::TEXT_MESSAGE)
+            .map(|(_, wire)| proto::TextMessage::decode(wire.as_slice()).unwrap().message)
+            .collect()
+    }
+
+    fn progress(events: &[SessionEvent]) -> Vec<(usize, usize)> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                SessionEvent::Outbox { sent, total } => Some((*sent, *total)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn text_waits_for_the_servers_rate_limit_instead_of_being_dropped() {
+        let mut state = State {
+            own_session: Some(7),
+            ..State::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        let root = proto::ChannelState {
+            channel_id: Some(0),
+            ..Default::default()
+        };
+        state
+            .handle(frame(kind::CHANNEL_STATE, root), &tx)
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        let images: Vec<String> = (0..7)
+            .map(|n| format!("<img src=\"data:image/png;base64,{n}\" />"))
+            .collect();
+        let send = Command::SendHtml {
+            target: TextTarget::Channel(0),
+            html: images.clone(),
+            expected_peer: None,
+        };
+        state.command(send, &tx).await.unwrap();
+        // Four leave at once, one short of stock Murmur's burst of five.
+        assert_eq!(sent_texts(&mut state), images[..4]);
+        let events = drain(&mut rx).await;
+        let echoes = events
+            .iter()
+            .filter(|event| matches!(event, SessionEvent::Text(text) if text.outgoing))
+            .count();
+        assert_eq!((echoes, progress(&events)), (4, vec![(4, 7)]));
+        // A message typed meanwhile queues behind the images.
+        let text = Command::SendText {
+            target: TextTarget::Channel(0),
+            body: "and one more thing".into(),
+            expected_peer: None,
+        };
+        state.command(text, &tx).await.unwrap();
+        assert!(sent_texts(&mut state).is_empty());
+        assert_eq!(progress(&drain(&mut rx).await), [(4, 8)]);
+        // Then one every 1.25 s: slower than the server's one a second,
+        // which loses fractions of a token whenever it drains.
+        let started = Instant::now();
+        let mut left = Vec::new();
+        while let Some(due) = state.outbox.due() {
+            time::sleep_until(due).await;
+            state.flush_outbox(&tx).await.unwrap();
+            let texts = sent_texts(&mut state);
+            assert_eq!(texts.len(), 1);
+            left.push((started.elapsed().as_millis(), texts[0].clone()));
+        }
+        assert_eq!(
+            left.iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>(),
+            [&images[4], &images[5], &images[6], "and one more thing"]
+        );
+        for (index, (at, _)) in left.iter().enumerate() {
+            let expected = 1250 * (index as u128 + 1);
+            assert!(at.abs_diff(expected) <= 2, "{index}: {at} ms");
+        }
+        assert_eq!(
+            progress(&drain(&mut rx).await),
+            [(5, 8), (6, 8), (7, 8), (8, 8)]
+        );
+        // Once the bucket has drained, a message leaves at once, unreported.
+        time::advance(Duration::from_secs(5)).await;
+        let text = Command::SendText {
+            target: TextTarget::Channel(0),
+            body: "later".into(),
+            expected_peer: None,
+        };
+        state.command(text, &tx).await.unwrap();
+        assert_eq!(sent_texts(&mut state), ["later"]);
+        assert!(progress(&drain(&mut rx).await).is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn other_limited_messages_count_against_the_rate_limit() {
+        let mut state = State {
+            own_session: Some(7),
+            outbox: Outbox::new(MessageRate {
+                burst: 3,
+                per_second: 2,
+            }),
+            ..State::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        let root = proto::ChannelState {
+            channel_id: Some(0),
+            ..Default::default()
+        };
+        state
+            .handle(frame(kind::CHANNEL_STATE, root), &tx)
+            .await
+            .unwrap();
+        // Muting ourselves takes one of the two messages text may burst.
+        state
+            .command(
+                Command::SetSelf {
+                    muted: true,
+                    deafened: false,
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
+        state.outbound.clear();
+        let html = vec!["<b>one</b>".to_string(), "<b>two</b>".to_string()];
+        let send = Command::SendHtml {
+            target: TextTarget::Channel(0),
+            html,
+            expected_peer: None,
+        };
+        state.command(send, &tx).await.unwrap();
+        assert_eq!(sent_texts(&mut state), ["<b>one</b>"]);
+        // At this server's two a second (paced at 1.6), the next follows in 0.625 s.
+        let wait = state.outbox.due().unwrap() - Instant::now();
+        assert!(wait.as_millis().abs_diff(626) <= 1, "{wait:?}");
+        drain(&mut rx).await;
     }
 
     #[test]

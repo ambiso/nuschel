@@ -115,12 +115,15 @@ fn shrink(image: DynamicImage, max_width: u32, max_height: u32) -> DynamicImage 
 
 /// Pasted screenshots may span several monitors.
 const MAX_PASTE_DIMENSION: u32 = 8192;
+/// The composer shows an attached image at most this large (device pixels).
+pub const ATTACHMENT_THUMBNAIL: u32 = 128;
 
 /// Re-encode a pasted image as a Mumble image message (an `<img>` element of
 /// at most `limit` bytes), as stock Mumble does (`Log::imageToImg`): at most
 /// 1600×1000 pixels, as JPEG at the highest quality that fits, or as PNG when
 /// that is smaller. When even low quality does not fit, the image shrinks.
-pub fn encode_image_message(bytes: &[u8], limit: usize) -> Result<String, Error> {
+/// Also returns a thumbnail of at most [`ATTACHMENT_THUMBNAIL`] pixels.
+pub fn encode_image_message(bytes: &[u8], limit: usize) -> Result<(String, ContentBlock), Error> {
     let limit = limit.min(MAX_CONTENT_BYTES);
     let formats = [
         ImageFormat::Png,
@@ -138,6 +141,19 @@ pub fn encode_image_message(bytes: &[u8], limit: usize) -> Result<String, Error>
             image::imageops::FilterType::Triangle,
         );
     }
+    let thumbnail =
+        if image.width() > ATTACHMENT_THUMBNAIL || image.height() > ATTACHMENT_THUMBNAIL {
+            image.thumbnail(ATTACHMENT_THUMBNAIL, ATTACHMENT_THUMBNAIL)
+        } else {
+            image.clone()
+        }
+        .to_rgba8();
+    let thumbnail = ContentBlock::Image {
+        width: thumbnail.width(),
+        height: thumbnail.height(),
+        rgba: base64::engine::general_purpose::STANDARD.encode(thumbnail.as_raw()),
+        source: None,
+    };
     loop {
         let png = encode_png(&image)?;
         // JPEG has no transparency: blend it onto white.
@@ -152,7 +168,7 @@ pub fn encode_image_message(bytes: &[u8], limit: usize) -> Result<String, Error>
             };
             let element = img_element(kind, bytes);
             if element.len() <= limit {
-                return Ok(element);
+                return Ok((element, thumbnail));
             }
             smallest = smallest.min(jpeg.len());
         }
@@ -579,8 +595,20 @@ mod tests {
     fn pasted_images_are_encoded_as_stock_mumble_does_within_the_limit() {
         let limit = 131_072;
         // A large, detailed picture: shrunk to 1600×1000, then by quality or size.
-        let element = encode_image_message(&picture(2400, 1350, true), limit).unwrap();
+        let (element, thumbnail) = encode_image_message(&picture(2400, 1350, true), limit).unwrap();
         assert!(element.len() <= limit, "{}", element.len());
+        // With a thumbnail for the composer.
+        let ContentBlock::Image {
+            width: 128,
+            height: 72,
+            rgba,
+            ..
+        } = thumbnail
+        else {
+            panic!("a 128×72 thumbnail")
+        };
+        let pixels = base64::engine::general_purpose::STANDARD.decode(rgba);
+        assert_eq!(pixels.map(|pixels| pixels.len()).ok(), Some(128 * 72 * 4));
         assert!(element.starts_with("<img src=\"data:image/jpeg;base64,"));
         assert!(element.ends_with("\" />"));
         let payload = &element["<img src=\"data:image/jpeg;base64,".len()..element.len() - 4];
@@ -605,7 +633,7 @@ mod tests {
         );
 
         // Flat screenshots stay lossless: PNG is smaller than JPEG there.
-        let element = encode_image_message(&picture(800, 500, false), limit).unwrap();
+        let (element, _) = encode_image_message(&picture(800, 500, false), limit).unwrap();
         assert!(
             element.starts_with("<img src=\"data:image/png;base64,"),
             "{}",
@@ -614,7 +642,7 @@ mod tests {
         assert_eq!(received(&element), (800, 500));
 
         // A small limit shrinks the picture until it fits.
-        let element = encode_image_message(&picture(1600, 1000, true), 20_000).unwrap();
+        let (element, _) = encode_image_message(&picture(1600, 1000, true), 20_000).unwrap();
         assert!(element.len() <= 20_000);
         let (width, _) = received(&element);
         assert!(width < 1600, "{width}");
