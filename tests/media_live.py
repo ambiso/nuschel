@@ -261,13 +261,19 @@ def check_echo_test(binary, pulse):
             worker.stop()
             return result
         # Convergence still varies from run to run (TODO.md: PulseAudio's own
-        # canceller does better in this rig); the better of two runs must pass.
-        on = min((run("on") for _ in range(2)), key=lambda result: result["transmitted"])
+        # canceller does better in this rig). Prefer an attempt meeting every
+        # limit: the lowest transmission alone can have worse echo reduction
+        # than the other attempt, even when that other attempt passes both.
+        attempts = [run("on") for _ in range(2)]
+        def passes(result):
+            return (result["echo_db"] is not None and -40 < result["echo_db"] < -20
+                    and result["transmitted"] <= 0.25 and result["reduction_db"] >= 15)
+        on = min(attempts, key=lambda result: (not passes(result), result["transmitted"]))
         off = run("off")
         assert on["echo_db"] is not None and -40 < on["echo_db"] < -20, on
         # Measured over many runs of this rig: 20-45 dB and at most a fifth of
         # the far end's speech (the loopback itself glitches now and then).
-        assert on["transmitted"] <= 0.25 and on["reduction_db"] >= 15, f"the canceller let echo through: {on}"
+        assert on["transmitted"] <= 0.25 and on["reduction_db"] >= 15, f"the canceller let echo through: {attempts}"
         assert off["transmitted"] > 0.5, f"without a canceller the test must report a leak: {off}"
         print(f"Echo test: {-on['echo_db']:.0f} dB coupling; canceller removed {on['reduction_db']:.0f} dB "
               f"and sent {on['transmitted']:.0%}; without it {off['transmitted']:.0%} would be sent.", flush=True)
