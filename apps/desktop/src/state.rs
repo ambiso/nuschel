@@ -477,6 +477,10 @@ pub struct ServerForm {
     pub password: Entity<InputState>,
     pub auto_connect: bool,
     pub error: Option<String>,
+    /// The address the name last followed: the name tracks the address
+    /// until it is changed to something else.
+    last_host: String,
+    _subscriptions: Vec<Subscription>,
 }
 
 struct PendingSend {
@@ -1106,7 +1110,10 @@ impl Desktop {
             .map(|server| server.bookmark.username.clone())
             .unwrap_or_default();
         let auto_connect = server.is_none_or(|server| server.bookmark.auto_connect);
+        let last_host = host.clone();
         self.form = Some(ServerForm {
+            last_host,
+            _subscriptions: Vec::new(),
             auto_connect,
             editing: server.map(|server| server.id.clone()),
             name: cx.new(|cx| {
@@ -1161,10 +1168,52 @@ impl Desktop {
             }),
             error: None,
         });
-        if let Some(form) = &self.form {
+        if let Some(form) = &mut self.form {
+            // Enter in any field adds (and connects) or saves.
+            let mut subscriptions: Vec<Subscription> = [
+                &form.name,
+                &form.host,
+                &form.port,
+                &form.username,
+                &form.password,
+            ]
+            .into_iter()
+            .map(|input| {
+                cx.subscribe_in(input, window, |this, _, event, window, cx| {
+                    if let InputEvent::PressEnter { .. } = event {
+                        this.submit_form(window, cx);
+                    }
+                })
+            })
+            .collect();
+            subscriptions.push(cx.subscribe_in(
+                &form.host,
+                window,
+                |this, _, event, window, cx| {
+                    if let InputEvent::Change = event {
+                        this.follow_host(window, cx);
+                    }
+                },
+            ));
+            form._subscriptions = subscriptions;
             form.host.update(cx, |input, cx| input.focus(window, cx));
         }
         cx.notify();
+    }
+    /// The name shows the address while it is empty or still equal to the
+    /// address it followed.
+    fn follow_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &mut self.form else {
+            return;
+        };
+        let host = form.host.read(cx).value().trim().to_string();
+        let name = form.name.read(cx).value().to_string();
+        if name.trim().is_empty() || name == form.last_host {
+            let value = host.clone();
+            form.name
+                .update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        form.last_host = host;
     }
     pub fn submit_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = &self.form else {

@@ -129,7 +129,14 @@ pub async fn connect(
         TcpStream::connect((server.host.as_str(), server.port)),
     )
     .await
-    .map_err(|_| Error::Timeout("connecting"))??;
+    .map_err(|_| Error::Timeout("connecting"))?
+    .map_err(|error| match error.kind() {
+        std::io::ErrorKind::ConnectionRefused => Error::Refused {
+            host: server.host.clone(),
+            port: server.port,
+        },
+        _ => error.into(),
+    })?;
     socket.set_nodelay(true)?;
     let peer_addr = socket.peer_addr()?;
     let name = ServerName::try_from(server.host.clone())

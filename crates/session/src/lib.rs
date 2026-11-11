@@ -22,6 +22,10 @@ pub enum Error {
     },
     #[error("timed out while {0}")]
     Timeout(&'static str),
+    #[error(
+        "{host} refused the connection on port {port}: no Mumble server is listening there (check the port)"
+    )]
+    Refused { host: String, port: u16 },
     #[error("Mumble protocol: {0}")]
     Protocol(String),
     #[error("server rejected connection: {reason}")]
