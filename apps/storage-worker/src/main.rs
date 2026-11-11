@@ -260,6 +260,9 @@ async fn serve_server_state(arguments: Arguments) -> Result<(), Box<dyn std::err
                 .await
                 .map(Response::ReadMarkers),
             Request::HistoryPage { query } => store.history_page(&query).await.map(Response::Page),
+            Request::KtGet { keys } => store.kt_get(&keys).await.map(Response::KtValues),
+            Request::KtScan { prefix } => store.kt_scan(&prefix).await.map(Response::KtRecords),
+            Request::KtWrite { records } => done(store.kt_write(&records).await),
         }
         .unwrap_or_else(|error| Response::Rejected(error.to_string()));
         write_frame(&mut output, &Envelope::new(request.request_id, payload))?;

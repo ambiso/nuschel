@@ -465,7 +465,28 @@ pub enum ServerStorageRequest {
     HistoryPage {
         query: PageQuery,
     },
+    /// Key transparency (nuschel-kt's `KtStore`, docs/e2ee.md §5.2): the values of
+    /// these keys, in order (`KtValues`). Keys and values are base64; the record layout
+    /// belongs to nuschel-kt and `nuscheld`, and the worker never interprets it.
+    KtGet {
+        keys: Vec<String>,
+    },
+    /// Every record whose key starts with `prefix`, in key order (`KtRecords`).
+    KtScan {
+        prefix: String,
+    },
+    /// Insert or overwrite every record in one transaction: all or none (`Done`).
+    KtWrite {
+        records: Vec<(String, String)>,
+    },
 }
+
+/// Keys in one `KtGet`, records in one `KtWrite` or `KtRecords`.
+pub const MAX_KT_RECORDS: usize = 100_000;
+/// A key-transparency key, and a value (a tree node, a value state, a head, an
+/// audit proof of one epoch, or the server's record behind a binding), decoded.
+pub const MAX_KT_KEY_BYTES: usize = 1024;
+pub const MAX_KT_VALUE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(
@@ -500,6 +521,8 @@ pub enum ServerStorageResponse {
     Access(Vec<StoredAccess>),
     ReadMarkers(Vec<(String, u64)>),
     Page(StoredPage),
+    KtValues(Vec<Option<String>>),
+    KtRecords(Vec<(String, String)>),
 }
 
 #[cfg(test)]

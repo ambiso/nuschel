@@ -16,6 +16,7 @@ use sqlx::{
 use std::{collections::HashMap, path::Path, str::FromStr, time::Duration};
 
 mod history;
+mod kt;
 
 /// Its own migrations table, so a database can also hold the history schema.
 const MIGRATIONS_TABLE: &str = "_nuscheld_migrations";
