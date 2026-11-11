@@ -73,6 +73,15 @@ dedicated `history/` subfolder. The updater refuses a signed manifest whose rele
 time or version is older than the newest it has accepted; a client that never saw a
 newer manifest can still be offered an older one, and withheld releases go unnoticed.
 
+The transfer worker (magic-wormhole file offers) is the one worker with network
+access: rendezvous and transit relay, plus only the offered file read-only. The
+peer's transit hints decide where it connects (inherent to magic-wormhole), and the
+rendezvous address can come from an offer message. Downloads stream back to the
+desktop, which writes only the path the user chose (the offered name is a sanitised
+suggestion) and never more than announced. magic-wormhole's own code denies
+`unsafe` apart from a few marked constructors; its Noise crates are compiled in but
+never negotiated by protocol 0.8.
+
 Muted clients do not open microphone streams. A mute mid-sentence ends the
 transmission with a constant packet of Opus silence, never captured audio. Capture generations invalidate queued
 PCM and encoded packets across mute/deafen changes and audio-worker restarts. The

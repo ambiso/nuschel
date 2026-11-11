@@ -68,9 +68,15 @@ Later (reported):
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
       relays (perhaps a small chunk cache, content-defined chunking); resumable
       across restarts and lost connections; clearly shown while still uploading.
-      On Mumble servers (compatibility mode): send a magic-wormhole (wormhole-rs)
-      receive code in the message, refreshed after each pickup so the next person
-      can fetch a copy. Nuschel servers get their own, end-to-end encrypted design.
+      On Mumble servers (compatibility mode): done — a magic-wormhole receive code
+      in the message, refreshed after each pickup, in a sandboxed transfer worker;
+      Nuschel shows offers as file cards. Nuschel servers get their own, end-to-end
+      encrypted design (chunked, resumable; magic-wormhole cannot resume).
+- [ ] File transfer follow-ups: Settings controls for the rendezvous/relay servers,
+      `wss://` rendezvous (the crate's TLS option pulls an old rustls), a rendezvous
+      keepalive for codes waiting for hours, post "no longer available" when Nuschel
+      quits, retry automatically when a newer code arrives, test on macOS/Windows,
+      drop `--offer` if unwanted.
 - [ ] Decide whether Nuschel servers accept only Nuschel clients (legacy Mumble
       clients cannot take part in MLS/E2EE features such as encrypted file sharing),
       and whether servers require a current client like Signal does (a minimum
