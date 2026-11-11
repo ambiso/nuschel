@@ -12,13 +12,38 @@
 //! exit code. It refuses to start the worker unconfined: any failure exits
 //! with [`LAUNCH_FAILED`].
 //!
-//! On other platforms this crate is empty, and it is the only first-party
-//! crate that may contain `unsafe` code, confined to its `win32` module.
+//! This is the only first-party crate allowed `unsafe` code. Its layout keeps
+//! that code small and testable (docs/windows-sandbox.md):
+//! - `plan`: everything computed without Windows (strings, command line,
+//!   environment, job limits, SID and ACL parsing); no unsafe.
+//! - `api`: one trait method per Win32 function, with its documented
+//!   contract; the Windows implementation is one call each.
+//! - `os`: every unsafe call to Windows, one per block, with guards that
+//!   release what Windows allocates exactly once.
+//! - `raw`: the only other unsafe code, copies out of memory Windows returned.
+//! - `launch`: the steps, generic over the API; no unsafe. Tests run them
+//!   against a mock (`mock`) under Miri, failing each call in turn.
+//!
+//! On other platforms only [`LAUNCH_FAILED`] is compiled (and, for tests,
+//! everything but the Windows implementation).
+
+#[cfg(any(windows, test))]
+mod api;
+#[cfg(any(windows, test))]
+mod launch;
+#[cfg(test)]
+mod mock;
+#[cfg(any(windows, test))]
+mod os;
+#[cfg(any(windows, test))]
+mod plan;
+#[cfg(any(windows, test))]
+mod raw;
+#[cfg(windows)]
+mod windows;
 
 #[cfg(windows)]
-mod win32;
-#[cfg(windows)]
-pub use win32::{inherited_file, launch_if_requested};
+pub use windows::{inherited_file, launch_if_requested};
 
 /// Exit code of a launch stage that could not start its worker confined.
 pub const LAUNCH_FAILED: i32 = 125;

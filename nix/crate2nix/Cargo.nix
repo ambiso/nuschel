@@ -21057,8 +21057,7 @@ rec {
           {
             name = "windows-sys";
             packageId = "windows-sys 0.61.2";
-            target = { target, features }: (target."windows" or false);
-            features = [ "Win32_Foundation" "Win32_Security" "Win32_System_DataExchange" "Win32_System_ProcessStatus" "Win32_System_Registry" "Win32_System_Threading" ];
+            features = [ "Win32_Foundation" "Win32_Security" "Win32_Security_Authorization" "Win32_Storage_FileSystem" "Win32_System_JobObjects" "Win32_System_SystemServices" "Win32_System_Threading" "Win32_System_DataExchange" "Win32_System_ProcessStatus" "Win32_System_Registry" ];
           }
         ];
 
