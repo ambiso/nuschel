@@ -234,6 +234,7 @@
             lib.makeBinPath [
               pkgs.wl-clipboard
               pkgs.xclip
+              pkgs.wayland-utils
             ]
           }"
           # Desktop entry and hicolor icons; shells match the window by its app id.
