@@ -232,7 +232,7 @@
           # audio libraries.
           wrapProgram "$out/bin/nuschl-tui" "''${runtimeFlags[@]}" --prefix PATH : "${
             lib.makeBinPath [
-              pkgs.wl-clipboard
+              pkgs.wl-clipboard-rs
               pkgs.xclip
               pkgs.wayland-utils
             ]
