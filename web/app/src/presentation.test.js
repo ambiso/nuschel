@@ -25,3 +25,29 @@ test("highlight runs remain inert text; untrusted colors cannot inject CSS", () 
  assert.equal(codeColor([255,0,10,255]),"rgb(255,0,10)");
  assert.equal(codeColor(['red);url(https://bad.invalid)',0,0]),"inherit");
 });
+
+import { safeLink, textRuns, conversationKey, filterMessages, appearance, rgbaPixels } from "./presentation.js";
+test("UTF-8 span offsets preserve exact Unicode boundaries and reject executable links", () => {
+ const block={text:"👋 hello world",spans:[{start:5,end:10,link:"https://example.invalid/x",style:{bold:true}},{start:11,end:16,link:"javascript:alert(1)"}]};
+ const runs=textRuns(block);
+ assert.equal(runs.map(x=>x.text).join(""),block.text);
+ assert.equal(runs[1].text,"hello");
+ assert.equal(runs[1].link,"https://example.invalid/x");
+ assert.equal(safeLink("javascript:alert(1)"),null);
+ assert.equal(safeLink("https://user:secret@example.invalid"),null);
+ assert.equal(safeLink("https://example.invalid/\nthing"),null);
+ assert.equal(textRuns({text:"👋 test",spans:[{start:1,end:3,link:"https://bad.invalid"}]}).length,1);
+});
+test("draft context includes certificate identity and search is inert", () => {
+ const timeline={channel:1};
+ assert.notEqual(conversationKey(timeline,{id:"s",pin:"a"}),conversationKey(timeline,{id:"s",pin:"b"}));
+ assert.deepEqual(filterMessages([{author:"Ada",document:{blocks:[{kind:"code",runs:[{text:"fn main"}]}]}}],"MAIN").length,1);
+ assert.deepEqual(appearance({theme:"url(bad)",fontSize:200,density:"bad"}),{theme:"system",fontSize:16,density:"comfortable",members:true});
+});
+test("pixels require bounded exact RGBA; source URLs are never used", () => {
+ assert.deepEqual([...rgbaPixels({width:1,height:1,rgba:"/wAA/w==",source:"https://bad.invalid"})],[255,0,0,255]);
+ assert.equal(rgbaPixels({width:100000,height:100000,rgba:""}),null);
+ assert.equal(rgbaPixels({width:1,height:2,rgba:"/wAA/w=="}),null);
+ const image={kind:"image",width:1,height:1,rgba:"/wAA/w=="};
+ assert.deepEqual(visibleBlocks({blocks:[image]}).blocks,[image]);
+});
