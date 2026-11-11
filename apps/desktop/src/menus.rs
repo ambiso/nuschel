@@ -41,14 +41,28 @@ pub struct Menu {
 
 #[derive(Clone, Debug)]
 pub enum PromptAction {
-    CreateChannel { parent: u32 },
-    Kick { session: u32 },
-    Ban { session: u32 },
+    CreateChannel {
+        parent: u32,
+    },
+    Kick {
+        session: u32,
+    },
+    Ban {
+        session: u32,
+    },
     Tokens,
     Comment,
-    ImportCertificate { path: std::path::PathBuf },
+    ImportCertificate {
+        path: std::path::PathBuf,
+    },
     ExportCertificate,
-    Nickname { hash: String },
+    Nickname {
+        hash: String,
+    },
+    /// A message in the open conversation, by its serial (no text to enter).
+    DeleteMessage {
+        serial: u64,
+    },
 }
 
 pub struct Prompt {
@@ -160,6 +174,7 @@ impl Desktop {
             }
             PromptAction::ImportCertificate { .. } => ("Import", true),
             PromptAction::ExportCertificate => ("Choose file…", false),
+            PromptAction::DeleteMessage { .. } => ("Delete", true),
         };
         let secret = matches!(
             action,
@@ -196,6 +211,10 @@ impl Desktop {
         let text = prompt.input.read(cx).value().to_string();
         let reason = (!text.trim().is_empty()).then(|| text.trim().to_string());
         let command = match prompt.action {
+            PromptAction::DeleteMessage { serial } => {
+                self.delete_message(serial);
+                return;
+            }
             PromptAction::Nickname { hash } => {
                 let mut full = false;
                 self.update_settings(|settings| full = !settings.set_nickname(&hash, &text));
@@ -404,6 +423,38 @@ impl Desktop {
                         entries.push(item("Copy message", "copy", move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))
                         }));
+                    }
+                    // Nuschel servers: edit or delete (see editing.rs).
+                    let serial = menu.serial;
+                    let (edit, delete) = self
+                        .selected_indices()
+                        .and_then(|(server, channel)| {
+                            let view = &self.servers[server];
+                            let channel = &view.channels[channel];
+                            let message = channel
+                                .messages
+                                .iter()
+                                .find(|message| message.serial == serial)?;
+                            Some((
+                                view.may_edit(channel, message),
+                                view.may_delete(channel, message),
+                            ))
+                        })
+                        .unwrap_or_default();
+                    if edit || delete {
+                        entries.push(Entry::Separator);
+                    }
+                    if edit {
+                        entries.push(item("Edit message", "pencil", move |this, window, cx| {
+                            this.start_edit(serial, window, cx)
+                        }));
+                    }
+                    if delete {
+                        entries.push(danger(
+                            "Delete message",
+                            "trash",
+                            move |this, window, cx| this.confirm_delete(serial, window, cx),
+                        ));
                     }
                 }
             }
@@ -1342,6 +1393,8 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
 
 pub fn prompt(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     let prompt = this.prompt.as_ref()?;
+    // A question without text to enter (deleting a message).
+    let confirm_only = matches!(prompt.action, PromptAction::DeleteMessage { .. });
     let content = div()
         .flex()
         .flex_col()
@@ -1364,24 +1417,26 @@ pub fn prompt(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                         .text_color(color(TEXT_MUTED))
                         .child(text!(prompt.detail.clone()).with_id("prompt-detail")),
                 )
-                .child(
-                    div()
-                        .mt_2()
-                        .px_3()
-                        .py(px(9.))
-                        .rounded(px(6.))
-                        .bg(color(APP))
-                        .border_1()
-                        .border_color(color(BORDER))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                            if event.keystroke.key == "enter" {
-                                this.confirm_prompt(cx);
-                                cx.stop_propagation();
-                                cx.notify();
-                            }
-                        }))
-                        .child(Input::new(&prompt.input)),
-                ),
+                .when(!confirm_only, |content| {
+                    content.child(
+                        div()
+                            .mt_2()
+                            .px_3()
+                            .py(px(9.))
+                            .rounded(px(6.))
+                            .bg(color(APP))
+                            .border_1()
+                            .border_color(color(BORDER))
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                if event.keystroke.key == "enter" {
+                                    this.confirm_prompt(cx);
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }
+                            }))
+                            .child(Input::new(&prompt.input)),
+                    )
+                }),
         )
         .child(
             div()
@@ -1421,7 +1476,7 @@ pub fn prompt(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     Some(modal(
         this,
         "prompt-dialog",
-        "Input",
+        if confirm_only { "Confirm" } else { "Input" },
         460.,
         content,
         cx,

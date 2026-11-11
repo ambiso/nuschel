@@ -144,6 +144,7 @@ let
     "friends"
     "nicknames"
     "friend_notifications"
+    "send_typing"
     "wormhole_rendezvous"
     "wormhole_relay"
     "appearance"

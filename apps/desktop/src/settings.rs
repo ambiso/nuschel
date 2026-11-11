@@ -1002,6 +1002,24 @@ pub fn dialog(
         );
         general.push(managed(this, "sound_volume", slider));
     }
+    let send_typing = settings.send_typing;
+    let privacy = vec![managed(
+        this,
+        "send_typing",
+        toggle(
+            "send-typing",
+            "Show when you are typing",
+            "On Nuschel servers, people who can read the conversation see that you are typing a \
+             message. Stock Mumble servers have no typing indicators."
+                .into(),
+            send_typing,
+            Rc::new(move |this, _, _| {
+                this.update_settings(|settings| settings.send_typing = !send_typing);
+                this.typing_sent = None;
+            }),
+            cx,
+        ),
+    )];
     let friends = settings.friend_notifications;
     general.push(managed(
         this,
@@ -1166,6 +1184,7 @@ pub fn dialog(
                 .child(section("NETWORK", network))
                 .child(section("APPEARANCE", crate::appearance::settings(this, cx)))
                 .child(section("GENERAL", general))
+                .child(section("PRIVACY", privacy))
                 .child(section("IDENTITY", identity_section)),
         )
         .into_any_element();

@@ -285,7 +285,7 @@ impl Desktop {
                     {
                         continue;
                     }
-                    TextTarget::Direct(_) => {
+                    TextTarget::Direct(_) | TextTarget::DirectConversation(_) => {
                         let (name, alias) = match &channel.direct_peer {
                             Some(peer) => person(peer, &self.settings),
                             None => (channel.name.trim_start_matches("@ ").into(), String::new()),

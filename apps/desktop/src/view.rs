@@ -449,7 +449,12 @@ fn sidebar(
         .channels
         .iter()
         .enumerate()
-        .filter(|(_, channel)| matches!(channel.target, TextTarget::Direct(_)))
+        .filter(|(_, channel)| {
+            matches!(
+                channel.target,
+                TextTarget::Direct(_) | TextTarget::DirectConversation(_)
+            )
+        })
         .map(|(index, channel)| {
             let id = channel.id;
             let selected = index == selected_channel;
@@ -1407,17 +1412,31 @@ impl Desktop {
                 .filter_map(|message| message.id)
                 .max();
             if archive
-                && let (TextTarget::Channel(id), Some(newest)) = (channel.target.clone(), newest)
+                && let Some(newest) = newest
                 && newest > channel.read_seq
             {
-                channel.read_seq = newest;
-                let _ = self.backend.command(
-                    &self.servers[server].id,
-                    nuschel_session::connection::Command::MarkRead {
-                        channel: id,
-                        seq: u64::try_from(newest).unwrap_or(0),
-                    },
-                );
+                let seq = u64::try_from(newest).unwrap_or(0);
+                let command = match channel.target.clone() {
+                    TextTarget::Channel(id) => {
+                        Some(nuschel_session::connection::Command::MarkRead { channel: id, seq })
+                    }
+                    // Direct conversations by id (directs.rs).
+                    TextTarget::DirectConversation(conversation) => {
+                        Some(nuschel_session::connection::Command::Nuschel(
+                            nuschel_session::connection::NuschelRequest::ReadMarker(
+                                nuschel_protocol::nuschel::v1::ReadMarker {
+                                    conversation: conversation.to_vec(),
+                                    seq,
+                                },
+                            ),
+                        ))
+                    }
+                    TextTarget::Direct(_) => None,
+                };
+                if let Some(command) = command {
+                    channel.read_seq = newest;
+                    let _ = self.backend.command(&self.servers[server].id, command);
+                }
             }
         }
     }
@@ -1550,7 +1569,13 @@ fn conversation(
         let grouped = previous.is_some_and(|(author, at)| {
             author == message.author && message.observed_at_ms.saturating_sub(at) < GROUP_MS
         });
-        previous = Some((&message.author, message.observed_at_ms));
+        // A tombstone keeps the group it is in, but never starts one: the
+        // message after it shows its author again.
+        if message.deleted.is_none() || grouped {
+            previous = Some((&message.author, message.observed_at_ms));
+        } else {
+            previous = None;
+        }
         entries.push(Entry::Message { position, grouped });
     }
     let rest: Vec<usize> = activity.map(|(index, _)| index).collect();
@@ -2008,7 +2033,7 @@ fn conversation(
                     .when_some(jump_pill(this, channel, cx), |view, pill| view.child(pill)),
             ),
         })
-        .child(composer(this, server, channel.name.clone(), cx))
+        .child(composer(this, server, channel, cx))
         .child(file_drop(this, cx))
         .into_any_element()
 }
@@ -2109,9 +2134,11 @@ fn timeline_intro(
         )
         .child(
             div().text_sm().text_color(color(TEXT_MUTED)).child(
+                // Honest per conversation: stock direct messages on a Nuschel
+                // server are what this device saw.
                 text!(match server.history_source {
-                    HistorySource::LocalObserved => "Local history · messages seen on this device",
-                    HistorySource::ServerArchive => "Server history",
+                    HistorySource::ServerArchive if server.archived(channel) => "Server history",
+                    _ => "Local history · messages seen on this device",
                 })
                 .with_id("history-source"),
             ),
@@ -2155,19 +2182,24 @@ fn timeline_intro(
         )
         .children(loading)
         .when(channel.beginning && !channel.loading, |view| {
-            view.child(history_start())
+            view.child(history_start(server.archived(channel)))
         })
         .into_any_element()
 }
 
 /// Where local history starts: nothing older was seen on this device.
-fn history_start() -> AnyElement {
+fn history_start(server: bool) -> AnyElement {
     let rule = || div().flex_1().h(px(1.)).bg(color(BORDER));
+    let label = if server {
+        "Beginning of server history"
+    } else {
+        "Beginning of local history"
+    };
     div()
         .id("history-start")
         // A status, like the activity lines: announced once scrolling reaches it.
         .role(Role::Status)
-        .aria_label("Beginning of local history")
+        .aria_label(label)
         .mt_3()
         .flex()
         .items_center()
@@ -2175,7 +2207,7 @@ fn history_start() -> AnyElement {
         .text_xs()
         .text_color(color(TEXT_FAINT))
         .child(rule())
-        .child(text!("Beginning of local history").with_id("history-start-label"))
+        .child(text!(label).with_id("history-start-label"))
         .child(rule())
         .into_any_element()
 }
@@ -2335,14 +2367,15 @@ fn entry_label(
         if channel.next_before.is_some() {
             return Some("Older messages".into());
         }
-        let source = match server.history_source {
-            HistorySource::LocalObserved => "Local history, messages seen on this device",
-            HistorySource::ServerArchive => "Server history",
-        };
-        let start = if channel.beginning {
-            ". Beginning of local history"
+        let source = if server.archived(channel) {
+            "Server history"
         } else {
-            ""
+            "Local history, messages seen on this device"
+        };
+        let start = match (channel.beginning, server.archived(channel)) {
+            (true, true) => ". Beginning of server history",
+            (true, false) => ". Beginning of local history",
+            (false, _) => "",
         };
         return Some(format!("Welcome to {}. {source}{start}", channel.name));
     };
@@ -2363,6 +2396,17 @@ fn entry_label(
             let message = &channel.messages[position];
             let author = authors.get(message.author.as_str()).copied();
             let name = names::author_name(&message.author, author, &this.settings);
+            if let Some(deletion) = message.deleted {
+                return Some(format!(
+                    "{name}: message deleted{}, {}",
+                    if deletion.moderator {
+                        " by a moderator"
+                    } else {
+                        ""
+                    },
+                    message.time
+                ));
+            }
             let mut text = message.document.plain_text();
             let images = message.document.blocks.iter();
             let images = images.filter(|block| matches!(block, Block::Image { .. }));
@@ -2373,8 +2417,13 @@ fn entry_label(
                 count => text.push_str(&format!(" ({count} images)")),
             }
             let status = message.status.map(|status| format!(", {status}"));
+            let edited = if message.edited_ms.is_some() {
+                ", edited"
+            } else {
+                ""
+            };
             format!(
-                "{name}: {text}, {}{}",
+                "{name}: {text}, {}{edited}{}",
                 message.time,
                 status.unwrap_or_default()
             )
@@ -2596,8 +2645,15 @@ fn message_row(
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let message = &channel.messages[index];
+    if let Some(deletion) = message.deleted {
+        return tombstone_row(this, message, index, deletion, author, grouped);
+    }
     // A file offer shows as a card in place of its text (transfer.rs).
     let card = crate::transfer::card(this, server, channel, index, cx);
+    let editing = this
+        .editing
+        .as_ref()
+        .is_some_and(|editing| editing.serial == message.serial);
     let serial = message.serial;
     let name = names::author_name(&message.author, author, &this.settings).to_string();
     // With a nickname shown, the name they sent it under.
@@ -2641,6 +2697,8 @@ fn message_row(
         .rounded(px(6.))
         .group("message")
         .hover(|style| style.bg(color(ROW_HOVER)))
+        // The message the composer edits.
+        .when(editing, |row| row.bg(tint(ACCENT, 0x1a)))
         .child(if grouped {
             div().w(px(40.)).flex_shrink_0().into_any_element()
         } else {
@@ -2755,6 +2813,17 @@ fn message_row(
                             )
                         })
                 })
+                .when_some(message.edited_ms, |view, edited_ms| {
+                    let when = format!("Edited {}", crate::state::local_time(edited_ms));
+                    view.child(
+                        div()
+                            .id(("edited", index))
+                            .text_xs()
+                            .text_color(color(TEXT_FAINT))
+                            .tooltip(move |_, cx| cx.new(|_| Tooltip(when.clone().into())).into())
+                            .child(text!("(edited)").with_id(("edited-label", index))),
+                    )
+                })
                 .when(message.has_more(), |view| {
                     view.child(
                         div()
@@ -2795,6 +2864,58 @@ fn message_row(
         .into_any_element()
 }
 
+/// A deleted message's tombstone: one faint line where it was, so the
+/// conversation keeps its shape (and its author's header when it led a group).
+fn tombstone_row(
+    this: &Desktop,
+    message: &crate::state::MessageView,
+    index: usize,
+    deletion: crate::backend::Deletion,
+    author: Option<&User>,
+    grouped: bool,
+) -> AnyElement {
+    let text = if deletion.moderator {
+        "Message deleted by a moderator"
+    } else {
+        "Message deleted"
+    };
+    let when = format!("Deleted {}", crate::state::local_time(deletion.at_ms));
+    let name = names::author_name(&message.author, author, &this.settings).to_string();
+    div()
+        .id(("message", index))
+        .flex()
+        .gap_3()
+        .px_2()
+        .py(px(2.))
+        .when(!grouped, |row| row.pt_3())
+        .rounded(px(6.))
+        .child(div().w(px(40.)).flex_shrink_0())
+        .child(
+            div()
+                .id(("tombstone", index))
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_sm()
+                .italic()
+                .text_color(color(TEXT_FAINT))
+                .tooltip(move |_, cx| cx.new(|_| Tooltip(when.clone().into())).into())
+                .child(icon("trash", 14., color(TEXT_FAINT)))
+                .child(text!(text).with_id(("tombstone-label", index)))
+                .when(!grouped, |line| {
+                    line.child(
+                        div()
+                            .text_xs()
+                            .not_italic()
+                            .child(text!(format!("· {name}")).with_id(("tombstone-author", index))),
+                    )
+                }),
+        )
+        .into_any_element()
+}
+
 /// Where a link leads, below the pointer, when its text says otherwise.
 fn link_target(hovered: &HoveredLink) -> impl IntoElement {
     deferred(
@@ -2823,9 +2944,14 @@ fn link_target(hovered: &HoveredLink) -> impl IntoElement {
 fn composer(
     this: &Desktop,
     server: &ServerView,
-    channel_name: String,
+    channel: &crate::state::ChannelView,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let channel_name = channel.name.clone();
+    // Who is typing here takes the place of the composer's target, so the
+    // line is always there and nothing moves when it changes.
+    let typing =
+        crate::typing::typing_line(server, channel, &this.settings, std::time::Instant::now());
     let note = this
         .attach_note
         .as_ref()
@@ -2863,15 +2989,47 @@ fn composer(
                 }
             }),
         )
-        // Esc in an empty composer lets go of its attachments.
+        // Esc ends an edit, or in an empty composer lets go of its attachments.
         .capture_action(
-            cx.listener(|this, _: &gpui_kit::base::input::Escape, _, cx| {
-                if this.composer.read(cx).value().is_empty() && this.clear_attachments() {
+            cx.listener(|this, _: &gpui_kit::base::input::Escape, window, cx| {
+                if this.cancel_edit(window, cx)
+                    || this.composer.read(cx).value().is_empty() && this.clear_attachments()
+                {
                     cx.stop_propagation();
                     cx.notify();
                 }
             }),
         )
+        // Up in an empty composer edits our last message (Nuschel servers).
+        .capture_action(
+            cx.listener(|this, _: &gpui_kit::base::input::MoveUp, window, cx| {
+                if this.edit_last(window, cx) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }),
+        )
+        .when(this.editing.is_some(), |composer| {
+            composer.child(
+                div()
+                    .id("editing-status")
+                    .role(Role::Status)
+                    .aria_label("Editing a message. Enter saves, Escape cancels.")
+                    .px_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(color(ACCENT_HOVER))
+                    .child(icon("pencil", 14., color(ACCENT_HOVER)))
+                    .child(
+                        div().min_w_0().child(
+                            text!("Editing message · Enter to save · Escape to cancel")
+                                .with_id("editing-status-label"),
+                        ),
+                    ),
+            )
+        })
         .when_some(this.sending_status(), |composer, status| {
             composer.child(
                 div()
@@ -2968,16 +3126,30 @@ fn composer(
                 .px_1()
                 .text_xs()
                 .text_color(color(TEXT_FAINT))
-                .child(
-                    div().flex_shrink_0().child(
-                        text!(if channel_name.starts_with("@ ") {
-                            format!("Message {}", channel_name.trim_start_matches("@ "))
-                        } else {
-                            format!("Message #{channel_name}")
-                        })
-                        .with_id("composer-target"),
-                    ),
-                )
+                .child(crate::typing::LiveStatus {
+                    id: "typing-status".into(),
+                    label: typing.clone().map(SharedString::from),
+                    child: match typing {
+                        Some(typing) => div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(color(TEXT_MUTED))
+                            .child(text!(typing).with_id("typing-label"))
+                            .into_any_element(),
+                        None => div()
+                            .flex_shrink_0()
+                            .child(
+                                text!(if channel_name.starts_with("@ ") {
+                                    format!("Message {}", channel_name.trim_start_matches("@ "))
+                                } else {
+                                    format!("Message #{channel_name}")
+                                })
+                                .with_id("composer-target"),
+                            )
+                            .into_any_element(),
+                    },
+                })
                 .child(div().flex_1())
                 // The hints give way (with an ellipsis) in narrow windows.
                 .child(

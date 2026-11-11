@@ -29,10 +29,63 @@ pub struct RenderedMessage {
     pub outgoing: bool,
     /// Our message on a Nuschel server until it is acknowledged: its key.
     pub pending: Option<[u8; 16]>,
+    /// Nuschel servers: the author's registration number (who may edit it).
+    pub author_id: Option<u32>,
+    /// When it was last edited (Nuschel servers).
+    pub edited_ms: Option<i64>,
+    /// A tombstone: the message was deleted (Nuschel servers).
+    pub deleted: Option<Deletion>,
 }
 
-/// Server history pages asked for, by request id: server, ticket and cursor.
-type ServerPages = BTreeMap<u64, (String, HistoryTicket, Option<i64>)>;
+/// A deleted message's tombstone: when, and whether a moderator deleted it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Deletion {
+    pub at_ms: i64,
+    pub moderator: bool,
+}
+
+impl RenderedMessage {
+    /// A message as the timeline shows it, without Nuschel server details.
+    #[cfg(test)]
+    pub fn plain(
+        id: Option<i64>,
+        message: ChatMessage,
+        document: MessageDocument,
+        outgoing: bool,
+    ) -> Self {
+        Self {
+            id,
+            message,
+            document,
+            outgoing,
+            pending: None,
+            author_id: None,
+            edited_ms: None,
+            deleted: None,
+        }
+    }
+}
+
+/// Where a conversation of a Nuschel server is kept in local history: the
+/// history identity of the server and the conversation's storage key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CacheKey {
+    pub identity: String,
+    pub channel: String,
+}
+
+/// The local storage key of a direct conversation on a Nuschel server.
+pub fn direct_conversation_key(conversation: &[u8; 16]) -> String {
+    let hex: String = conversation
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("conversation:{hex}")
+}
+
+/// Server history pages asked for, by request id: server, ticket, cursor,
+/// and where the page is kept in local history.
+type ServerPages = BTreeMap<u64, (String, HistoryTicket, Option<i64>, Option<CacheKey>)>;
 static SERVER_PAGES: std::sync::Mutex<ServerPages> = std::sync::Mutex::new(BTreeMap::new());
 
 fn server_pages() -> std::sync::MutexGuard<'static, ServerPages> {
@@ -41,10 +94,56 @@ fn server_pages() -> std::sync::MutexGuard<'static, ServerPages> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// An edit or deletion we asked for, by request id, until the server answers.
+#[derive(Clone, Debug)]
+pub struct ChangeRequest {
+    pub server: String,
+    pub conversation: [u8; 16],
+    pub seq: u64,
+    /// The new text of an edit; `None` deletes.
+    pub content: Option<String>,
+    pub cache: Option<CacheKey>,
+}
+static CHANGES: std::sync::Mutex<BTreeMap<u64, ChangeRequest>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+fn changes() -> std::sync::MutexGuard<'static, BTreeMap<u64, ChangeRequest>> {
+    CHANGES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Request ids of the desktop's own extension requests (pages, edits,
+/// deletions, direct conversations); the session uses ids with the top bit.
+pub fn request_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The author shown for a server message.
+fn author_name(author: &v1::Author) -> String {
+    if author.name.is_empty() && author.account.is_empty() {
+        "Unknown".to_owned()
+    } else if author.name.is_empty() {
+        "Deleted user".to_owned()
+    } else {
+        author.name.clone()
+    }
+}
+
 /// Render a Nuschel server's history page like a local one: text in one
-/// content worker, stock clients' HTML made inert first. Ids are seqs; edits,
-/// deletions and voids only move the cursor.
-async fn render_server_page(page: v1::HistoryPage) -> (Vec<RenderedMessage>, Option<i64>) {
+/// content worker, stock clients' HTML made inert first. Ids are seqs;
+/// messages come in their current state (edited, or a tombstone); edit,
+/// deletion and void rows only move the cursor. Also returns the records
+/// that keep the page in local history (`cache`).
+async fn render_server_page(
+    page: v1::HistoryPage,
+    cache: Option<&CacheKey>,
+) -> (
+    Vec<RenderedMessage>,
+    Option<i64>,
+    Vec<nuschel_core::ServerRecord>,
+) {
     let next_before = page
         .more_before
         .then(|| page.messages.first().map(|message| message.seq as i64))
@@ -55,18 +154,16 @@ async fn render_server_page(page: v1::HistoryPage) -> (Vec<RenderedMessage>, Opt
         .filter(|message| message.kind == v1::message::Kind::Message as i32)
         .collect();
     let mut out = Vec::with_capacity(shown.len());
+    let mut records = Vec::new();
     for message in shown {
         let author = message.author.clone().unwrap_or_default();
-        let author = if author.name.is_empty() && author.account.is_empty() {
-            "Unknown".to_owned()
-        } else if author.name.is_empty() {
-            "Deleted user".to_owned()
-        } else {
-            author.name
-        };
-        let (source, document) = if message.deleted_ms != 0 {
-            let text = "This message was deleted.".to_owned();
-            (text.clone(), plain(&text))
+        let name = author_name(&author);
+        let deleted = (message.deleted_ms != 0).then_some(Deletion {
+            at_ms: message.deleted_ms,
+            moderator: message.delete_reason == 1,
+        });
+        let (source, document) = if deleted.is_some() {
+            (String::new(), MessageDocument { blocks: Vec::new() })
         } else {
             prepare(
                 &message.content,
@@ -74,21 +171,39 @@ async fn render_server_page(page: v1::HistoryPage) -> (Vec<RenderedMessage>, Opt
             )
             .await
         };
+        let edited_ms = (message.edited_ms != 0).then_some(message.edited_ms);
+        if let Some(cache) = cache {
+            records.push(nuschel_core::ServerRecord {
+                message: ChatMessage {
+                    server: cache.identity.clone(),
+                    channel: cache.channel.clone(),
+                    author: name.clone(),
+                    observed_at_ms: message.sent_ms,
+                    body: source.clone(),
+                },
+                seq: message.seq as i64,
+                edited_ms,
+                deleted_ms: deleted.map(|deleted| deleted.at_ms),
+            });
+        }
         out.push(RenderedMessage {
             id: Some(message.seq as i64),
             message: ChatMessage {
                 server: String::new(),
                 channel: String::new(),
-                author,
+                author: name,
                 observed_at_ms: message.sent_ms,
                 body: source,
             },
             document,
             outgoing: false,
             pending: None,
+            author_id: (author.user_id != 0).then_some(author.user_id),
+            edited_ms,
+            deleted,
         });
     }
-    (out, next_before)
+    (out, next_before, records)
 }
 pub enum Event {
     /// The crypto worker's answer to [`Backend::identity`].
@@ -164,6 +279,28 @@ pub enum Event {
         next_after: Option<i64>,
     },
     HistoryError(String),
+    /// A message on a Nuschel server was edited (by its author, perhaps us).
+    Edited {
+        server: String,
+        conversation: [u8; 16],
+        seq: u64,
+        source: String,
+        document: MessageDocument,
+        edited_ms: i64,
+    },
+    /// A message on a Nuschel server became a tombstone.
+    Deleted {
+        server: String,
+        conversation: [u8; 16],
+        seq: u64,
+        deletion: Deletion,
+    },
+    /// The server refused our edit or deletion.
+    ChangeFailed {
+        server: String,
+        delete: bool,
+        reason: String,
+    },
     /// A server history page could not be loaded.
     HistoryFailed {
         server: String,
@@ -301,6 +438,19 @@ enum StorageCommand {
         source: String,
         document: MessageDocument,
     },
+    /// A Nuschel server's messages by seq (a history page): kept, or
+    /// replaced where already kept.
+    StoreServer {
+        records: Vec<nuschel_core::ServerRecord>,
+    },
+    /// Our message (by its key) was stored by the server as `seq`.
+    Acked { key: [u8; 16], seq: u64 },
+    /// A kept message was edited (`body` and when) or deleted.
+    Change {
+        cache: CacheKey,
+        seq: u64,
+        change: CacheChange,
+    },
     Load {
         server: String,
         identity: String,
@@ -314,6 +464,10 @@ enum StorageCommand {
         query: String,
         after: Option<nuschel_core::SearchCursor>,
     },
+}
+enum CacheChange {
+    Edit { body: String, edited_ms: i64 },
+    Delete { deleted_ms: i64 },
 }
 impl Backend {
     /// The backend, and the events it reports for the desktop to apply.
@@ -497,7 +651,7 @@ impl Backend {
             generation,
             (receiver, sound_requests),
             self.sender.clone(),
-            self.content.clone(),
+            (self.content.clone(), self.storage.clone()),
             (self.settings.subscribe(), self.voice_keys.subscribe()),
         ));
         self.connections.insert(
@@ -515,11 +669,10 @@ impl Backend {
         &self,
         server: String,
         conversation: [u8; 16],
-        ticket: HistoryTicket,
+        (ticket, cache): (HistoryTicket, Option<CacheKey>),
         before: Option<i64>,
     ) -> Result<(), String> {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let request_id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let request_id = request_id();
         let anchor = match before {
             Some(seq) => v1::history_request::Anchor::Before(seq.max(0) as u64),
             None => v1::history_request::Anchor::Latest(true),
@@ -530,7 +683,7 @@ impl Backend {
             while pages.len() >= 64 {
                 pages.pop_first();
             }
-            pages.insert(request_id, (server.clone(), ticket, before));
+            pages.insert(request_id, (server.clone(), ticket, before, cache));
         }
         let result = self.command(
             &server,
@@ -543,6 +696,39 @@ impl Backend {
         );
         if result.is_err() {
             server_pages().remove(&request_id);
+        }
+        result
+    }
+    /// Edit (`content`) or delete a message on a Nuschel server. The answer
+    /// arrives as `Event::Edited`/`Event::Deleted` or `Event::ChangeFailed`.
+    pub fn change_message(&self, change: ChangeRequest) -> Result<(), String> {
+        let request_id = request_id();
+        let conversation = change.conversation.to_vec();
+        let request = match &change.content {
+            Some(content) => NuschelRequest::Edit(v1::ChatEdit {
+                request_id,
+                conversation,
+                target: change.seq,
+                format: v1::Format::Text as i32,
+                content: content.clone(),
+            }),
+            None => NuschelRequest::Delete(v1::ChatDelete {
+                request_id,
+                conversation,
+                target: change.seq,
+            }),
+        };
+        let server = change.server.clone();
+        {
+            let mut pending = changes();
+            while pending.len() >= 64 {
+                pending.pop_first();
+            }
+            pending.insert(request_id, change);
+        }
+        let result = self.command(&server, Command::Nuschel(request));
+        if result.is_err() {
+            changes().remove(&request_id);
         }
         result
     }
@@ -763,7 +949,7 @@ async fn connection_loop(
     generation: u64,
     (mut commands, mut sounds): (mpsc::Receiver<Command>, mpsc::Receiver<Sound>),
     events: mpsc::Sender<Event>,
-    content: mpsc::Sender<ContentJob>,
+    (content, storage): (mpsc::Sender<ContentJob>, mpsc::Sender<StorageCommand>),
     (mut settings, mut voice_keys): (watch::Receiver<ClientSettings>, watch::Receiver<VoiceKeys>),
 ) {
     let id = server.id.clone();
@@ -784,7 +970,7 @@ async fn connection_loop(
             generation,
             (&mut commands, &mut sounds),
             &events,
-            &content,
+            (&content, &storage),
             (&mut settings, &mut voice_keys),
             &mut restore,
         )
@@ -912,7 +1098,7 @@ async fn connect_once(
     generation: u64,
     (commands, sounds): (&mut mpsc::Receiver<Command>, &mut mpsc::Receiver<Sound>),
     events: &mpsc::Sender<Event>,
-    content: &mpsc::Sender<ContentJob>,
+    (content, storage): (&mpsc::Sender<ContentJob>, &mpsc::Sender<StorageCommand>),
     (settings, voice_keys): (
         &mut watch::Receiver<ClientSettings>,
         &mut watch::Receiver<VoiceKeys>,
@@ -962,7 +1148,7 @@ async fn connect_once(
     let (session_events, mut incoming) = mpsc::channel(128);
     let mut session = tokio::spawn(connection::run(options, receiver, session_events));
     let mut media: Option<Media> = None;
-    let mut peer = None;
+    let mut peer: Option<String> = None;
     let nonce = format!("{}:{generation}:{}", id, connection::now_ms());
     let mut muted = restore.muted;
     let mut deafened = restore.deafened;
@@ -978,6 +1164,8 @@ async fn connect_once(
     let mut finished = false;
     let mut outcome = None;
     let mut own_session = None;
+    // Where each channel's conversation is kept in local history.
+    let mut conversation_keys = BTreeMap::<[u8; 16], String>::new();
     let mut hashes = BTreeMap::<u32, Option<String>>::new();
     let mut applied_audio = settings.borrow().audio.clone();
     let mut loss_percent = 5_u8;
@@ -1073,6 +1261,7 @@ async fn connect_once(
                 },
                 SessionEvent::ChatAcked { key, seq } => {
                     restore.unacked.retain(|pending| pending.key != key);
+                    let _ = storage.send(StorageCommand::Acked { key, seq }).await;
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::ChatAcked { key, seq } }).await;
                 },
                 SessionEvent::ChatFailed { key, reason } => {
@@ -1081,20 +1270,61 @@ async fn connect_once(
                 },
                 SessionEvent::Nuschel(NuschelEvent::Page(page)) => {
                     let asked = server_pages().remove(&page.request_id);
-                    if let Some((server, ticket, before)) = asked {
-                        let events = events.clone();
+                    if let Some((server, ticket, before, cache)) = asked {
+                        let (events, storage) = (events.clone(), storage.clone());
                         tokio::spawn(async move {
-                            let (messages, next_before) = render_server_page(page).await;
+                            let (messages, next_before, records) = render_server_page(page, cache.as_ref()).await;
+                            // Kept for offline reading and search.
+                            if !records.is_empty() { let _ = storage.send(StorageCommand::StoreServer { records }).await; }
                             let _ = events.send(Event::History { server, ticket, before, messages, next_before }).await;
                         });
                     }
                 },
+                SessionEvent::Nuschel(NuschelEvent::Ack(ack)) if changes().contains_key(&ack.request_id) => {
+                    let change = changes().remove(&ack.request_id);
+                    if let Some(change) = change {
+                        // The server tells others, never us: apply it here.
+                        let (seq, at_ms) = (change.seq, ack.server_ms);
+                        let cache = change.cache.clone();
+                        let (conversation, server) = (change.conversation, change.server.clone());
+                        match change.content {
+                            Some(content) => apply_edit((events, storage), (server, conversation, seq), content, at_ms, cache),
+                            None => apply_delete((events, storage), (server, conversation, seq), Deletion { at_ms, moderator: false }, cache).await,
+                        }
+                    }
+                },
                 SessionEvent::Nuschel(NuschelEvent::Error(error)) => {
                     let asked = server_pages().remove(&error.request_id);
-                    match asked {
-                        Some((server, ticket, _)) => { let _ = events.send(Event::HistoryFailed { server, ticket, reason: error.detail }).await; },
-                        None => { let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Nuschel(NuschelEvent::Error(error)) }).await; },
+                    let change = changes().remove(&error.request_id);
+                    match (asked, change) {
+                        (Some((server, ticket, _, _)), _) => { let _ = events.send(Event::HistoryFailed { server, ticket, reason: error.detail }).await; },
+                        (None, Some(change)) => { let _ = events.send(Event::ChangeFailed { server: change.server, delete: change.content.is_none(), reason: error.detail }).await; },
+                        (None, None) => { let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Nuschel(NuschelEvent::Error(error)) }).await; },
                     }
+                },
+                SessionEvent::Nuschel(NuschelEvent::Chat(chat)) => {
+                    // New messages arrive as `Text`; edits and deletions here.
+                    let Some(message) = chat.message else { continue };
+                    let Some(conversation) = nuschel_protocol::nuschel::id(&chat.conversation) else { continue };
+                    let cache = peer.as_deref().map(|peer| CacheKey {
+                        identity: server.history_identity(peer),
+                        channel: conversation_keys.get(&conversation).cloned().unwrap_or_else(|| direct_conversation_key(&conversation)),
+                    });
+                    let place = (id.clone(), conversation, message.target);
+                    if message.kind == v1::message::Kind::Edit as i32 {
+                        apply_edit((events, storage), place, message.content, message.edited_ms, cache);
+                    } else if message.kind == v1::message::Kind::Delete as i32 {
+                        let deletion = Deletion { at_ms: message.deleted_ms, moderator: message.delete_reason == 1 };
+                        apply_delete((events, storage), place, deletion, cache).await;
+                    }
+                },
+                SessionEvent::ChannelInfo { channel, info } => {
+                    if let Some(conversation) = nuschel_protocol::nuschel::id(&info.conversation)
+                        && conversation_keys.len() < 4096
+                    {
+                        conversation_keys.insert(conversation, channel.to_string());
+                    }
+                    let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::ChannelInfo { channel, info } }).await;
                 },
                 SessionEvent::Negotiated(negotiated) => {
                     // Remember what this server offers: a weaker answer later fails.
@@ -1269,6 +1499,64 @@ async fn mark_talking(
     }
 }
 
+/// Show an edit (rendered like any message) and keep it in local history.
+fn apply_edit(
+    (events, storage): (&mpsc::Sender<Event>, &mpsc::Sender<StorageCommand>),
+    (server, conversation, seq): (String, [u8; 16], u64),
+    content: String,
+    edited_ms: i64,
+    cache: Option<CacheKey>,
+) {
+    let (events, storage) = (events.clone(), storage.clone());
+    tokio::spawn(async move {
+        let (source, document) = prepare(&content, false).await;
+        if let Some(cache) = cache {
+            let change = CacheChange::Edit {
+                body: source.clone(),
+                edited_ms,
+            };
+            let _ = storage
+                .send(StorageCommand::Change { cache, seq, change })
+                .await;
+        }
+        let _ = events
+            .send(Event::Edited {
+                server,
+                conversation,
+                seq,
+                source,
+                document,
+                edited_ms,
+            })
+            .await;
+    });
+}
+
+/// Show a tombstone, and drop the text from local history too.
+async fn apply_delete(
+    (events, storage): (&mpsc::Sender<Event>, &mpsc::Sender<StorageCommand>),
+    (server, conversation, seq): (String, [u8; 16], u64),
+    deletion: Deletion,
+    cache: Option<CacheKey>,
+) {
+    if let Some(cache) = cache {
+        let change = CacheChange::Delete {
+            deleted_ms: deletion.at_ms,
+        };
+        let _ = storage
+            .send(StorageCommand::Change { cache, seq, change })
+            .await;
+    }
+    let _ = events
+        .send(Event::Deleted {
+            server,
+            conversation,
+            seq,
+            deletion,
+        })
+        .await;
+}
+
 /// The content worker next to this executable, looked up once.
 pub fn content_worker() -> Option<&'static std::path::Path> {
     static WORKER: std::sync::LazyLock<Option<PathBuf>> =
@@ -1326,6 +1614,10 @@ async fn storage_loop(
     events: mpsc::Sender<Event>,
 ) {
     let mut storage: Option<Storage> = None;
+    // Our own messages on Nuschel servers, kept before the server stored
+    // them: their rows by key, and acknowledgements that came first.
+    let mut unacked_rows = BTreeMap::<[u8; 16], i64>::new();
+    let mut early_acks = BTreeMap::<[u8; 16], u64>::new();
     // Pages render in their own task, so appends of new messages never wait
     // for one; they arrive in the order they were loaded.
     let (pages, rendering) = mpsc::channel(16);
@@ -1347,6 +1639,7 @@ async fn storage_loop(
             } => {
                 let storage_key = match &job.text.target {
                     TextTarget::Channel(id) => id.to_string(),
+                    TextTarget::DirectConversation(id) => direct_conversation_key(id),
                     TextTarget::Direct(id) => job
                         .text
                         .peer
@@ -1372,6 +1665,15 @@ async fn storage_loop(
                     observed_at_ms: job.text.observed_at_ms,
                     body: source,
                 };
+                // A Nuschel server's message is kept once by its seq (a page
+                // may have brought it already); ours gets its seq when the
+                // server acknowledges it.
+                let seq = job.text.seq.map(|seq| seq as i64).or_else(|| {
+                    job.text
+                        .pending
+                        .and_then(|key| early_acks.remove(&key))
+                        .map(|seq| seq as i64)
+                });
                 // A crashed worker is replaced and the append retried once, so the
                 // message that discovered the failure is not lost.
                 let mut id = None;
@@ -1380,9 +1682,31 @@ async fn storage_loop(
                         storage = Storage::start(&directory).ok();
                     }
                     let Some(worker) = &mut storage else { break };
-                    match worker.append(message.clone()).await {
+                    let saved = match seq {
+                        Some(seq) => worker
+                            .store_server(vec![nuschel_core::ServerRecord {
+                                message: message.clone(),
+                                seq,
+                                edited_ms: None,
+                                deleted_ms: None,
+                            }])
+                            .await
+                            .and_then(|ids| {
+                                ids.first().copied().ok_or_else(|| {
+                                    Error::Worker("unexpected storage response".into())
+                                })
+                            }),
+                        None => worker.append(message.clone()).await,
+                    };
+                    match saved {
                         Ok(saved) => {
                             id = Some(saved);
+                            if let (None, Some(key)) = (seq, job.text.pending) {
+                                while unacked_rows.len() >= 256 {
+                                    unacked_rows.pop_first();
+                                }
+                                unacked_rows.insert(key, saved);
+                            }
                             break;
                         }
                         Err(error) => {
@@ -1404,6 +1728,12 @@ async fn storage_loop(
                     (None, Some(_)) => None,
                     (None, None) => id,
                 };
+                let author_id = job
+                    .text
+                    .peer
+                    .as_ref()
+                    .filter(|_| !job.text.outgoing)
+                    .and_then(|peer| peer.user_id);
                 let _ = events
                     .send(Event::Message {
                         server: job.server,
@@ -1417,9 +1747,58 @@ async fn storage_loop(
                             document,
                             outgoing: job.text.outgoing,
                             pending: job.text.pending,
+                            author_id,
+                            edited_ms: None,
+                            deleted: None,
                         },
                     })
                     .await;
+            }
+            StorageCommand::StoreServer { records } => {
+                let result = match &mut storage {
+                    Some(worker) => worker.store_server(records).await.map(|_| ()),
+                    None => Err(Error::Worker("Local history is unavailable.".into())),
+                };
+                if let Err(error) = result {
+                    storage.take();
+                    let _ = events.send(Event::HistoryError(error.to_string())).await;
+                }
+            }
+            StorageCommand::Acked { key, seq } => match unacked_rows.remove(&key) {
+                Some(id) => {
+                    if let Some(worker) = &mut storage
+                        && worker.set_seq(id, seq as i64).await.is_err()
+                    {
+                        storage.take();
+                    }
+                }
+                // Acknowledged before it was kept (it is still rendering).
+                None => {
+                    while early_acks.len() >= 256 {
+                        early_acks.pop_first();
+                    }
+                    early_acks.insert(key, seq);
+                }
+            },
+            StorageCommand::Change { cache, seq, change } => {
+                if let Some(worker) = &mut storage {
+                    let seq = seq as i64;
+                    let result = match change {
+                        CacheChange::Edit { body, edited_ms } => {
+                            worker
+                                .edit(cache.identity, cache.channel, seq, body, edited_ms)
+                                .await
+                        }
+                        CacheChange::Delete { deleted_ms } => {
+                            worker
+                                .delete(cache.identity, cache.channel, seq, deleted_ms)
+                                .await
+                        }
+                    };
+                    if result.is_err() {
+                        storage.take();
+                    }
+                }
             }
             StorageCommand::Search {
                 request,
@@ -1491,10 +1870,19 @@ async fn history_loop(
             .zip(documents)
             .map(|(entry, document)| RenderedMessage {
                 id: Some(entry.id),
-                document: document.unwrap_or_else(|| plain(&entry.message.body)),
+                document: match entry.deleted_ms {
+                    Some(_) => MessageDocument { blocks: Vec::new() },
+                    None => document.unwrap_or_else(|| plain(&entry.message.body)),
+                },
                 message: entry.message,
                 outgoing: false,
                 pending: None,
+                author_id: None,
+                edited_ms: entry.edited_ms,
+                deleted: entry.deleted_ms.map(|at_ms| Deletion {
+                    at_ms,
+                    moderator: false,
+                }),
             })
             .collect();
         let history = match kind {

@@ -127,6 +127,8 @@ pub struct Candidate {
 
 /// What a message's context menu copies, taken when it opens.
 pub struct MessageMenu {
+    /// The message, by its serial.
+    pub serial: u64,
     pub text: SharedString,
     pub selection: Option<SharedString>,
     pub link: Option<SharedString>,
@@ -386,6 +388,7 @@ impl Desktop {
             .filter(|hovered| hovered.message == message)
             .map(|hovered| hovered.url.clone());
         self.text.menu = Some(MessageMenu {
+            serial: message,
             text,
             selection,
             link,

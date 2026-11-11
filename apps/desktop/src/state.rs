@@ -16,7 +16,7 @@ use nuschel_session::{
         CachedChannel, ClientSettings, Loaded, ManagedSettings, MumbleUrl, Profile, ServerBookmark,
         ShortcutAction,
     },
-    connection::{Command, ServerLimits, SessionEvent, TextTarget, User},
+    connection::{Command, NuschelEvent, ServerLimits, SessionEvent, TextTarget, User},
     model::{Acl, Ban, ContextAction, RegisteredUser, RejectKind, UserStats},
     udp::TransportStats,
 };
@@ -48,6 +48,15 @@ pub struct MessageView {
     pub height: crate::scrolling::Height,
     /// Our message on a Nuschel server until it is acknowledged: its key.
     pub pending: Option<[u8; 16]>,
+    /// Sent from this device (or our account's other one).
+    pub outgoing: bool,
+    /// Nuschel servers: the author's registration number.
+    pub author_id: Option<u32>,
+    /// What was typed (the composer edits it).
+    pub source: String,
+    /// Nuschel servers: when it was last edited, or that it was deleted.
+    pub edited_ms: Option<i64>,
+    pub deleted: Option<crate::backend::Deletion>,
 }
 /// Name a text field for screen readers. GPUI-kit inputs expose no role or
 /// name to AT-SPI/UIA/AX unless the state is told what it is.
@@ -80,6 +89,10 @@ impl MessageView {
     pub fn has_more(&self) -> bool {
         self.measured.get() > COLLAPSED_HEIGHT + 1.
     }
+    /// Ours, on a Nuschel server: sent from here, or by our registration.
+    pub fn ours(&self, own_user_id: Option<u32>) -> bool {
+        self.outgoing || (self.author_id.is_some() && self.author_id == own_user_id)
+    }
 }
 impl From<RenderedMessage> for MessageView {
     fn from(message: RenderedMessage) -> Self {
@@ -91,7 +104,9 @@ impl From<RenderedMessage> for MessageView {
             author: message.message.author,
             observed_at_ms: message.message.observed_at_ms,
             time: local_time(message.message.observed_at_ms),
-            status: if message.pending.is_some() {
+            status: if message.deleted.is_some() {
+                None
+            } else if message.pending.is_some() {
                 Some("sending…")
             } else if message.id.is_none() {
                 Some("not saved")
@@ -106,6 +121,11 @@ impl From<RenderedMessage> for MessageView {
             expanded: false,
             offer,
             pending: message.pending,
+            outgoing: message.outgoing,
+            author_id: message.author_id,
+            source: message.message.body,
+            edited_ms: message.edited_ms,
+            deleted: message.deleted,
         }
     }
 }
@@ -215,6 +235,8 @@ pub struct ChannelView {
     /// Its conversation on a Nuschel server, and the read marker sent last.
     pub conversation: Option<[u8; 16]>,
     pub read_seq: i64,
+    /// Who is typing here (Nuschel servers), by session, and when they last said so.
+    pub typing: BTreeMap<u32, std::time::Instant>,
 }
 #[derive(Clone)]
 pub struct ActivityLine {
@@ -280,6 +302,7 @@ impl ChannelView {
             description: None,
             conversation: None,
             read_seq: 0,
+            typing: BTreeMap::new(),
         }
     }
 }
@@ -379,6 +402,12 @@ pub struct ServerView {
     /// Acknowledgements (or refusals, `None`) of our messages that arrived
     /// before the messages themselves were shown.
     pub acked: BTreeMap<[u8; 16], Option<u64>>,
+    /// What the Nuschel extension negotiated on this connection (empty on
+    /// stock Mumble servers) and the server's policy.
+    pub capabilities: Vec<String>,
+    pub policy: Option<nuschel_protocol::nuschel::v1::Policy>,
+    /// Our direct conversations on a Nuschel server, by id.
+    pub directs: BTreeMap<[u8; 16], nuschel_protocol::nuschel::v1::Direct>,
     pub talking: BTreeSet<u32>,
     pub transport: Option<TransportStats>,
     pub audio: AudioInfo,
@@ -416,6 +445,10 @@ pub struct ServerView {
     pub identity: crate::identity::IdentityState,
 }
 impl ServerView {
+    #[cfg(test)]
+    pub(crate) fn new_for_tests() -> Self {
+        Self::new(ServerBookmark::new("Test", "localhost", 64738, "andi").expect("valid bookmark"))
+    }
     fn new(bookmark: ServerBookmark) -> Self {
         let icon = bookmark
             .icon
@@ -464,6 +497,9 @@ impl ServerView {
             certificate: None,
             downgrade: None,
             acked: BTreeMap::new(),
+            capabilities: Vec::new(),
+            policy: None,
+            directs: BTreeMap::new(),
             talking: BTreeSet::new(),
             transport: None,
             audio: AudioInfo::default(),
@@ -839,7 +875,7 @@ pub struct Desktop {
     /// The message a search result opened, highlighted for a moment.
     pub jumped: Option<crate::search::Jumped>,
     pub finder: crate::finder::Finder,
-    pending_browse: Option<(String, u32)>,
+    pub(crate) pending_browse: Option<(String, u32)>,
     /// A rejected login waiting to reopen the server form for a retry.
     pending_retry: Option<(usize, RejectKind, String)>,
     /// A server's cached channels changed while applying events.
@@ -850,6 +886,15 @@ pub struct Desktop {
     server_writes: ServerWrites,
     sending: Option<PendingSend>,
     acknowledged: Vec<(Conversation, String)>,
+    /// The message the composer edits instead of sending a new one.
+    pub editing: Option<crate::editing::Editing>,
+    /// Typing indicators (see typing.rs): when we last said we type, where.
+    pub typing_sent: Option<((String, u32), std::time::Instant)>,
+    /// A timer to clear others' typing indicators is running.
+    pub typing_timer: bool,
+    /// Direct conversations asked for (`OpenDirect`), by request id: the
+    /// server, the peer's session, and whether to open it once known.
+    pub direct_requests: BTreeMap<u64, (String, u32, bool)>,
     /// The clipboard image pasted last, and when it was last pasted.
     pasted_image: Option<(u64, std::time::Instant)>,
     passwords: BTreeMap<String, String>,
@@ -917,6 +962,7 @@ impl Desktop {
                             input.replace_text_in_range(None, "\n", window, cx)
                         });
                     }
+                    InputEvent::Change => this.composer_changed(cx),
                     _ => {}
                 },
             );
@@ -1050,6 +1096,10 @@ impl Desktop {
             servers_generation: 0,
             server_writes: ServerWrites::default(),
             sending: None,
+            editing: None,
+            typing_sent: None,
+            typing_timer: false,
+            direct_requests: BTreeMap::new(),
             acknowledged: Vec::new(),
             pasted_image: None,
             passwords: BTreeMap::new(),
@@ -1222,11 +1272,13 @@ impl Desktop {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(selected) = self.navigation.selection() {
-            self.drafts.insert(
-                (selected.server.clone(), selected.channel),
-                self.composer.read(cx).value().to_string(),
-            );
+        if let Some(selected) = self.navigation.selection().cloned() {
+            // An edit in progress ends; what it replaced is the draft.
+            let draft = self
+                .drop_edit()
+                .unwrap_or_else(|| self.composer.read(cx).value().to_string());
+            self.drafts
+                .insert((selected.server, selected.channel), draft);
         }
         let Some(server) = self.servers.get(index) else {
             return;
@@ -1699,6 +1751,11 @@ impl Desktop {
         server.status = Status::Disconnected;
         server.security = SessionSecurity::Unknown;
         server.own_session = None;
+        server.capabilities.clear();
+        server.policy = None;
+        for channel in &mut server.channels {
+            channel.typing.clear();
+        }
         // Offline, the timeline is local observations again.
         if server.history_source == HistorySource::ServerArchive {
             server.history_source = HistorySource::LocalObserved;
@@ -2023,6 +2080,9 @@ impl Desktop {
         }
     }
     pub fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing.is_some() {
+            return self.submit_edit(window, cx);
+        }
         let Some((server, channel)) = self.selected_indices() else {
             return;
         };
@@ -2066,7 +2126,11 @@ impl Desktop {
                 expected_peer,
             },
         ) {
-            Ok(()) => self.sending = Some(pending),
+            Ok(()) => {
+                self.sending = Some(pending);
+                // Sent: we are no longer typing it.
+                self.typing_sent = None;
+            }
             Err(error) => server.notice = Some(error),
         }
         cx.notify();
@@ -2496,6 +2560,21 @@ impl Desktop {
         if let Some(user_id) = peer.user_id {
             crate::identity::check(self, index, user_id, true);
         }
+        // On a Nuschel server, between registered accounts: the server's
+        // conversation (it opens once the server names it).
+        if self.open_durable_direct(index, &peer) {
+            cx.notify();
+            return;
+        }
+        let id = self.stock_direct_view(index, &peer);
+        self.browse_channel(index, id, window, cx);
+        cx.notify();
+    }
+    /// The timeline of direct messages with `peer` over the stock path (a
+    /// `TextMessage` to their session), created if needed; returns its id.
+    pub fn stock_direct_view(&mut self, index: usize, peer: &User) -> u32 {
+        let session = peer.session;
+        let peer = peer.clone();
         let server = &mut self.servers[index];
         let key = peer
             .certificate_hash
@@ -2507,7 +2586,7 @@ impl Desktop {
                     server.generation, peer.instance
                 )
             });
-        let id = if let Some(channel) = server
+        if let Some(channel) = server
             .channels
             .iter_mut()
             .find(|channel| channel.storage_key == key)
@@ -2536,9 +2615,7 @@ impl Desktop {
                 ..Default::default()
             });
             id
-        };
-        self.browse_channel(index, id, window, cx);
-        cx.notify();
+        }
     }
     pub fn load_history(&mut self, before: Option<i64>) {
         let Some((index, channel)) = self.selected_indices() else {
@@ -2548,12 +2625,17 @@ impl Desktop {
             return;
         };
         let server = &mut self.servers[index];
+        // Stock direct messages on a Nuschel server are local observations.
+        let archive = server.archived(&server.channels[channel]);
+        let cache = Some(crate::backend::CacheKey {
+            identity: identity.clone(),
+            channel: server.channels[channel].storage_key.clone(),
+        });
         let channel = &mut server.channels[channel];
         channel.loading = true;
         if before.is_none() {
             channel.new_messages = 0;
         }
-        let archive = server.history_source == HistorySource::ServerArchive;
         let ticket = self.navigation.browse(
             Conversation {
                 server: server.id.clone(),
@@ -2563,12 +2645,16 @@ impl Desktop {
         );
         let requested = match channel.conversation.filter(|_| archive) {
             // A Nuschel server's history: everything this member may read.
-            Some(conversation) => {
-                self.backend
-                    .server_history(server.id.clone(), conversation, ticket, before)
-            }
+            Some(conversation) => self.backend.server_history(
+                server.id.clone(),
+                conversation,
+                (ticket, cache),
+                before,
+            ),
             // Until the server names the conversation, nothing loads.
-            None if archive => {
+            None if server.history_source == HistorySource::ServerArchive
+                && matches!(channel.target, TextTarget::Channel(_)) =>
+            {
                 channel.loading = false;
                 return;
             }
@@ -2689,6 +2775,46 @@ impl Desktop {
                         .is_some_and(|error| error.starts_with("Local history"))
                     {
                         self.error = None;
+                    }
+                }
+                Event::Edited {
+                    server,
+                    conversation,
+                    seq,
+                    source,
+                    document,
+                    edited_ms,
+                } => self.apply_change(
+                    &server,
+                    conversation,
+                    seq,
+                    crate::editing::Change::Edited {
+                        source,
+                        document,
+                        edited_ms,
+                    },
+                ),
+                Event::Deleted {
+                    server,
+                    conversation,
+                    seq,
+                    deletion,
+                } => self.apply_change(
+                    &server,
+                    conversation,
+                    seq,
+                    crate::editing::Change::Deleted(deletion),
+                ),
+                Event::ChangeFailed {
+                    server,
+                    delete,
+                    reason,
+                } => {
+                    if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server) {
+                        server.notice = Some(format!(
+                            "The message was not {}: {reason}",
+                            if delete { "deleted" } else { "edited" }
+                        ));
                     }
                 }
                 Event::HistoryFailed {
@@ -3129,6 +3255,20 @@ impl Desktop {
                             ..Default::default()
                         });
                         server.channels.len() - 1
+                    } else if let TextTarget::DirectConversation(id) = target {
+                        // A durable direct conversation (directs.rs), perhaps new.
+                        let name = match &peer {
+                            Some(peer) => {
+                                crate::names::display_name(peer, &self.settings).to_string()
+                            }
+                            None if message.outgoing => server
+                                .directs
+                                .get(&id)
+                                .map(|direct| direct.name.clone())
+                                .unwrap_or_else(|| "Direct message".into()),
+                            None => message.message.author.clone(),
+                        };
+                        server.direct_view(id, &name, peer.clone())
                     } else {
                         continue;
                     };
@@ -3140,7 +3280,10 @@ impl Desktop {
                             && self.navigation.selection().is_some_and(|selected| {
                                 selected.server == server.id && selected.channel == channel.id
                             });
-                        let direct = matches!(target, TextTarget::Direct(_));
+                        let direct = matches!(
+                            target,
+                            TextTarget::Direct(_) | TextTarget::DirectConversation(_)
+                        );
                         let in_voice =
                             matches!(channel.target, TextTarget::Channel(id) if Some(id) == voice);
                         let mut text = String::new();
@@ -3200,7 +3343,10 @@ impl Desktop {
                                 selected.server == server.id
                                     && selected.channel == server.channels[index].id
                             });
-                        let direct = matches!(target, TextTarget::Direct(_));
+                        let direct = matches!(
+                            target,
+                            TextTarget::Direct(_) | TextTarget::DirectConversation(_)
+                        );
                         let mentioned = crate::notify::mentions(
                             &message.message.body,
                             &server.bookmark.username,
@@ -3210,18 +3356,30 @@ impl Desktop {
                         }
                     }
                     let channel = &mut server.channels[index];
+                    // Their message is here: they stopped typing it.
+                    let users = &server.users;
+                    channel.typing.retain(|session, _| {
+                        users
+                            .get(session)
+                            .is_none_or(|user| user.name != message.message.author)
+                    });
                     if matches!(target, TextTarget::Direct(_)) {
                         channel.target = target;
                         channel.direct_peer = peer;
                         channel.storage_key = storage_key;
+                    } else if matches!(target, TextTarget::DirectConversation(_)) && peer.is_some()
+                    {
+                        channel.direct_peer = peer;
                     }
                     let outgoing = message.outgoing;
                     let mention = !outgoing
-                        && (matches!(channel.target, TextTarget::Direct(_))
-                            || message.document.blocks.iter().any(|block| {
-                                matches!(block, nuschel_core::ContentBlock::Text { text, .. }
+                        && (matches!(
+                            channel.target,
+                            TextTarget::Direct(_) | TextTarget::DirectConversation(_)
+                        ) || message.document.blocks.iter().any(|block| {
+                            matches!(block, nuschel_core::ContentBlock::Text { text, .. }
                                     if crate::notify::mentions(text, &server.bookmark.username))
-                            }));
+                        }));
                     // Older history is shown apart from the newest: the
                     // message arrives with the newer pages.
                     let added = if channel.next_after.is_some() && message.id.is_some() {
@@ -3264,6 +3422,7 @@ impl Desktop {
         if std::mem::take(&mut self.cache_dirty) {
             self.save_servers_soon(cx);
         }
+        self.expire_typing(cx);
     }
     /// Write `servers` now, for an action the user waits on; a delayed write
     /// of an older state never lands after it.
@@ -3358,6 +3517,8 @@ impl Desktop {
                     .capabilities
                     .iter()
                     .any(|capability| capability == "history/1");
+                server.capabilities = negotiated.capabilities.clone();
+                server.policy = negotiated.policy;
                 if history && server.history_source != HistorySource::ServerArchive {
                     server.history_source = HistorySource::ServerArchive;
                     for channel in &mut server.channels {
@@ -3403,6 +3564,30 @@ impl Desktop {
                     view.unread = usize::try_from(head.saturating_sub(read))
                         .unwrap_or(usize::MAX)
                         .min(999);
+                }
+            }
+            SessionEvent::Nuschel(NuschelEvent::Typing(typing)) => {
+                self.someone_typing(index, &typing.conversation, typing.session);
+            }
+            SessionEvent::Nuschel(NuschelEvent::DirectList(list)) => {
+                self.directs_listed(index, list.directs);
+            }
+            SessionEvent::Nuschel(NuschelEvent::DirectOpened(opened)) => {
+                self.direct_opened(index, opened);
+            }
+            SessionEvent::Nuschel(NuschelEvent::Error(error)) => {
+                self.direct_failed(index, error);
+            }
+            SessionEvent::Nuschel(NuschelEvent::ReadMarker(marker)) => {
+                // Read on our account's other device.
+                if let Some(channel) = server.channels.iter_mut().find(|channel| {
+                    channel
+                        .conversation
+                        .is_some_and(|id| id.as_slice() == marker.conversation.as_slice())
+                }) {
+                    channel.read_seq = channel.read_seq.max(marker.seq as i64);
+                    channel.unread = 0;
+                    channel.unread_mention = false;
                 }
             }
             SessionEvent::ChatPending(_) | SessionEvent::Nuschel(_) => {}
@@ -3461,7 +3646,7 @@ impl Desktop {
             SessionEvent::Connected { session, .. } => {
                 server.channels.retain(|channel| match channel.target {
                     TextTarget::Channel(id) => server.seen_channels.contains(&id),
-                    TextTarget::Direct(_) => true,
+                    TextTarget::Direct(_) | TextTarget::DirectConversation(_) => true,
                 });
                 let cached = server.bookmark.cached_channels.len();
                 server
@@ -3841,13 +4026,17 @@ impl ChannelView {
                 self.loaded = true;
                 self.next_after = None;
                 self.missed_live = false;
+                // In timeline order (time, then id): local history pages
+                // run by time, and rows stored later may hold older messages.
                 let newest = messages
                     .iter()
-                    .filter_map(|message| message.id)
-                    .max()
-                    .unwrap_or(0);
-                self.messages
-                    .retain(|message| message.id.is_none_or(|id| id > newest));
+                    .filter_map(|message| Some((message.message.observed_at_ms, message.id?)))
+                    .max();
+                self.messages.retain(|message| {
+                    message.id.is_none_or(|id| {
+                        newest.is_none_or(|newest| (message.observed_at_ms, id) > newest)
+                    })
+                });
             }
             // Trimmed while the page was on its way: the next request
             // starts from the new oldest message.
@@ -3867,7 +4056,8 @@ impl ChannelView {
             return;
         }
         self.messages.drain(..self.messages.len() - cap);
-        if let Some(oldest) = self.messages.iter().filter_map(|message| message.id).min() {
+        // The oldest in timeline order, which need not have the smallest id.
+        if let Some(oldest) = self.messages.iter().find_map(|message| message.id) {
             self.next_before = Some(oldest);
             self.beginning = false;
         }
@@ -3880,23 +4070,46 @@ mod tests {
     use super::{ChannelView, RenderedMessage, ServerView, merge_message, settle_pending};
 
     fn message(id: Option<i64>, observed_at_ms: i64) -> RenderedMessage {
-        RenderedMessage {
+        RenderedMessage::plain(
             id,
-            message: nuschel_core::ChatMessage {
+            nuschel_core::ChatMessage {
                 server: "server".into(),
                 channel: "2".into(),
                 author: "Ada".into(),
                 observed_at_ms,
                 body: format!("message {id:?}"),
             },
-            document: nuschel_core::MessageDocument { blocks: Vec::new() },
-            outgoing: false,
-            pending: None,
-        }
+            nuschel_core::MessageDocument { blocks: Vec::new() },
+            false,
+        )
     }
 
     fn page(ids: std::ops::RangeInclusive<i64>) -> Vec<RenderedMessage> {
         ids.map(|id| message(Some(id), id * 1000)).collect()
+    }
+
+    #[test]
+    fn local_pages_follow_time_not_row_ids() {
+        // A server page kept after live messages: newer rows, older times.
+        let mut channel = ChannelView::default();
+        let mut live = message(Some(2), 9500);
+        live.outgoing = true;
+        merge_message(&mut channel, live);
+        merge_message(&mut channel, message(Some(1), 500));
+        channel.take_page(
+            None,
+            vec![message(Some(10), 5000), message(Some(3), 9000)],
+            Some(10),
+        );
+        let shown: Vec<_> = channel.messages.iter().map(|message| message.id).collect();
+        // What arrived after the page's newest stays; what is older goes.
+        assert_eq!(shown, [Some(10), Some(3), Some(2)]);
+        channel.trim_oldest(2);
+        assert_eq!(
+            channel.next_before,
+            Some(3),
+            "the oldest shown, not the smallest id"
+        );
     }
 
     #[test]

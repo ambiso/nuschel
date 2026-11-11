@@ -343,6 +343,8 @@ pub struct ClientSettings {
     pub nicknames: std::collections::BTreeMap<String, String>,
     /// A desktop notification when a friend connects.
     pub friend_notifications: bool,
+    /// Tell others in a conversation that you are typing (Nuschel servers).
+    pub send_typing: bool,
     /// magic-wormhole rendezvous server for offering files (`ws://`).
     pub wormhole_rendezvous: String,
     /// magic-wormhole transit relay (`tcp://host:port`).
@@ -432,6 +434,7 @@ impl Default for ClientSettings {
             friends: Default::default(),
             nicknames: Default::default(),
             friend_notifications: false,
+            send_typing: true,
             wormhole_rendezvous: nuschel_core::transfer::PUBLIC_RENDEZVOUS.into(),
             wormhole_relay: nuschel_core::transfer::PUBLIC_RELAY.into(),
             appearance: AppearanceSettings::default(),

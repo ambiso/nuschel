@@ -10,7 +10,9 @@ mod autostart;
 mod backend;
 mod chrome;
 mod dialogs;
+mod directs;
 mod document;
+mod editing;
 mod emoji;
 mod finder;
 #[cfg(feature = "frame-timing")]
@@ -34,6 +36,7 @@ mod sounds;
 mod state;
 mod theme;
 mod transfer;
+mod typing;
 mod update;
 mod view;
 mod viewer;
