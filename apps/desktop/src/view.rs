@@ -1443,6 +1443,15 @@ impl Desktop {
         }
     }
 
+    /// The open dialogs as a set, to notice when one opens or closes.
+    fn open_dialogs(&self) -> u8 {
+        u8::from(self.form.is_some())
+            | u8::from(self.settings_open) << 1
+            | u8::from(self.panel.is_some()) << 2
+            | u8::from(self.prompt.is_some()) << 3
+            | u8::from(self.finder.is_open()) << 4
+    }
+
     pub fn dialog_open(&self) -> bool {
         self.form.is_some()
             || self.settings_open
@@ -1455,8 +1464,16 @@ impl Desktop {
     /// behind it (the composer: Enter would send) takes keys; when it closes,
     /// the composer gets focus back.
     fn keep_dialog_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self.open_dialogs();
+        let changed = std::mem::replace(&mut self.dialogs_seen, open) != open;
         if self.dialog_open() {
-            if !self.modal_focus.contains_focused(window, cx) {
+            if changed {
+                // Focus is judged against the last drawn frame, which does not
+                // contain a dialog opened since. The field its opener focused
+                // (a prompt's input, the form's address) would look outside it
+                // and lose focus, so check again once the dialog is drawn.
+                window.request_animation_frame();
+            } else if !self.modal_focus.contains_focused(window, cx) {
                 window.focus(&self.modal_focus, cx);
             }
         } else if self.modal_seen.get().is_some() {

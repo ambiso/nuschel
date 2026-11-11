@@ -826,6 +826,8 @@ pub struct Desktop {
     modal_motion: SmoothScroll,
     pub modal_shown: std::cell::Cell<Option<&'static str>>,
     pub modal_seen: std::cell::Cell<Option<&'static str>>,
+    /// Which dialogs were open in the last frame (see `keep_dialog_focus`).
+    pub dialogs_seen: u8,
     scroll_frame_pending: bool,
     /// Keeps the timeline still while history is prepended above.
     pub anchor: Anchor,
@@ -1087,6 +1089,7 @@ impl Desktop {
             modal_motion: SmoothScroll::default(),
             modal_shown: Default::default(),
             modal_seen: Default::default(),
+            dialogs_seen: 0,
             scroll_frame_pending: false,
             anchor: Anchor::default(),
             following: true,
