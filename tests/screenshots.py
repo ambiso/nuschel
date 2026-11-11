@@ -119,6 +119,18 @@ imports.gi.St.Clipboard.get_default().get_text(imports.gi.St.ClipboardType.CLIPB
 """
 CLIPBOARD_TEXT = "global._nuschlClipboard"
 
+# Read the typed image from this private shell's clipboard, independently of
+# Nuschl's own paste handler. A text/data-URI clipboard entry is not sufficient.
+READ_CLIPBOARD_IMAGE = """
+global._nuschlClipboardImage = null;
+imports.gi.St.Clipboard.get_default().get_content(imports.gi.St.ClipboardType.CLIPBOARD,
+    'image/png', (_, bytes) => {
+        global._nuschlClipboardImage = bytes
+            ? imports.gi.GLib.base64_encode(bytes.get_data()) : '';
+    });
+'ok'
+"""
+
 CLAIM_NOTIFICATIONS = """
 imports.gi.Gio.bus_own_name_on_connection(imports.gi.Gio.DBus.session,
     'org.freedesktop.Notifications', 0, null, null);
@@ -1112,8 +1124,28 @@ def main():
                 click(width // 2, height // 2 - 40, button=3)  # right-click the enlarged image
                 time.sleep(0.8)
                 shot("18-image-menu")
-                shell.key("Escape")
-                time.sleep(0.3)
+                # In the viewer Copy image is first (Open image is unnecessary).
+                click(width // 2 + 60, height // 2 - 20)
+                def clipboard_image():
+                    # Encoding and clipboard publication are asynchronous. A
+                    # request issued before publication must be retried too.
+                    shell.eval(READ_CLIPBOARD_IMAGE)
+                    time.sleep(0.2)
+                    return shell.eval("global._nuschlClipboardImage")
+                encoded_clipboard = eventually(
+                    clipboard_image,
+                    "Copy image did not publish image/png on the private clipboard")
+                copied_image = args.output / "18-copied-image.png"
+                copied_image.write_bytes(base64.b64decode(encoded_clipboard, validate=True))
+                assert copied_image.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+                # Compare decoded pixels, not PNG compression choices. A channel
+                # swap, a blank clipboard image or a copied URI must fail.
+                def rgba(path):
+                    return subprocess.run(["magick", str(path), "-depth", "8", "rgba:-"],
+                                          check=True, capture_output=True, timeout=15).stdout
+                assert rgba(copied_image) == rgba(root / "shot.png"), \
+                    "the clipboard image differs from the displayed image"
+                print("Copy image: native image/png clipboard pixels match the displayed image.", flush=True)
                 shell.key("Escape")
                 time.sleep(0.5)
             if want("notify"):

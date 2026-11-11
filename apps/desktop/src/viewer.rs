@@ -223,7 +223,8 @@ fn clipboard_image(image: &RenderImage) -> Result<Image, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::clipboard_image;
+    use gpui_kit::{ImageFormat, RenderImage};
 
     #[test]
     fn copied_image_preserves_displayed_colours_and_transparency_without_a_source() {
