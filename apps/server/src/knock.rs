@@ -5,7 +5,7 @@
 use crate::{authz::Action, state::State};
 use nuschl_protocol::{
     ControlFrame, control, kind as stock,
-    nuschl::{self, capability, kind, v1},
+    nuschl::{capability, kind, v1},
 };
 use prost::Message as _;
 use std::{
@@ -26,6 +26,73 @@ struct Pending {
     created: Instant,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        acl::{AclEntry, perm},
+        state::Channel,
+    };
+
+    #[test]
+    fn requests_coalesce_expire_and_bound_per_session_fanout() {
+        let mut h = crate::fuzzing::Harness::new();
+        let requester = h
+            .state
+            .users
+            .values()
+            .find(|u| u.name == "Anonymous")
+            .unwrap()
+            .session;
+        for id in 100..105 {
+            let mut c = Channel::new(id, Some(0), format!("Private{id}"));
+            c.node.acls.push(AclEntry {
+                apply_here: true,
+                apply_subs: true,
+                user_id: None,
+                group: "all".into(),
+                grant: 0,
+                deny: perm::ENTER,
+            });
+            h.state.conversations.add_channel(c.conversation_id, id);
+            h.state.channels.0.insert(id, c);
+        }
+        let id = h.state.knock_request(requester, 100).unwrap();
+        assert_eq!(h.state.knock_request(requester, 100), Ok(id));
+        assert_eq!(h.state.knocks.pending.len(), 1);
+        assert_eq!(
+            h.state.knock_request(requester, 101),
+            Err((v1::error::Code::RateLimited, 10_000))
+        );
+        for channel in 101..104 {
+            h.state
+                .knocks
+                .last
+                .insert(requester, Instant::now() - COOLDOWN);
+            h.state.knock_request(requester, channel).unwrap();
+        }
+        h.state
+            .knocks
+            .last
+            .insert(requester, Instant::now() - COOLDOWN);
+        assert_eq!(
+            h.state.knock_request(requester, 104),
+            Err((v1::error::Code::TooManyRequests, 0))
+        );
+        assert_eq!(h.state.knocks.pending.len(), MAX_PENDING);
+        for pending in h.state.knocks.pending.values_mut() {
+            pending.created = Instant::now() - TTL;
+        }
+        h.state.sweep_knocks_at(Instant::now());
+        assert!(h.state.knocks.pending.is_empty());
+        assert!(h.state.knock_decide(1, id, true).is_err());
+        h.state.knock_request(requester, 104).unwrap();
+        h.state.disconnect(requester, false);
+        assert!(h.state.knocks.pending.is_empty());
+        assert!(!h.state.knocks.last.contains_key(&requester));
+    }
+}
+
 #[derive(Clone)]
 pub struct Grant {
     pub id: u64,
@@ -39,6 +106,7 @@ pub struct Knocks {
     pending: HashMap<u64, Pending>,
     last: HashMap<u32, Instant>,
     pub(crate) grants: HashMap<u32, Grant>,
+    next_sweep: Option<Instant>,
 }
 
 impl State {
@@ -76,6 +144,16 @@ impl State {
 
     pub(crate) fn knock_sweep(&mut self) {
         let now = Instant::now();
+        if self.knocks.next_sweep.is_some_and(|next| now < next) {
+            return;
+        }
+        self.sweep_knocks_at(now);
+    }
+
+    fn sweep_knocks_at(&mut self, now: Instant) {
+        // `finish` runs for tunneled voice as well: never scan all pending
+        // knocks on each packet. Decisions check their own expiry precisely.
+        self.knocks.next_sweep = Some(now + Duration::from_secs(1));
         let expired: Vec<_> = self
             .knocks
             .pending
@@ -213,6 +291,10 @@ impl State {
             .get(&id)
             .cloned()
             .ok_or((Code::NotFound, 0))?;
+        if Instant::now().saturating_duration_since(p.created) >= TTL {
+            self.resolve_knock(id, None);
+            return Err((Code::NotFound, 0));
+        }
         self.authorize(actor, Action::ModerateKnock { channel: p.channel })?;
         if !admit {
             self.resolve_knock(id, None);

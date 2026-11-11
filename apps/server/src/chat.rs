@@ -657,7 +657,16 @@ impl State {
         let audience: Vec<u32> = self
             .stock_audience(id)
             .into_iter()
-            .filter(|session| *session != origin)
+            .filter(|session| {
+                *session != origin
+                    && self.allowed(
+                        *session,
+                        Action::SeeLive {
+                            conversation: id,
+                            seq: shown,
+                        },
+                    )
+            })
             .collect();
         if audience.is_empty() {
             return;
