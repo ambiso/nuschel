@@ -103,6 +103,38 @@ pub async fn render_many(executable: &Path, texts: &[String]) -> Vec<Option<Mess
     }
 }
 
+/// Prepare many messages (received in a burst) in one worker, each as
+/// [`prepare_content`] would: `(text, legacy_html)` in, `None` where one failed.
+pub async fn prepare_contents(
+    executable: &Path,
+    messages: &[(String, bool)],
+) -> Vec<Option<PreparedContent>> {
+    let requests: Vec<_> = messages
+        .iter()
+        .map(|(text, legacy_html)| match legacy_html {
+            true => ContentRequest::LegacyHtml { html: text.clone() },
+            false => ContentRequest::Render { text: text.clone() },
+        })
+        .collect();
+    match exchange(executable, &requests).await {
+        Ok(results) => results
+            .into_iter()
+            .zip(messages)
+            .map(
+                |(result, (text, legacy_html))| match (result, legacy_html) {
+                    (Ok(ContentResponse::Prepared(prepared)), true) => Some(prepared),
+                    (Ok(ContentResponse::Rendered(document)), false) => Some(PreparedContent {
+                        source: text.clone(),
+                        document,
+                    }),
+                    _ => None,
+                },
+            )
+            .collect(),
+        Err(_) => vec![None; messages.len()],
+    }
+}
+
 /// Decode an avatar in the sandboxed content worker; returns an Image document.
 pub async fn decode_avatar(executable: &Path, encoded: &[u8]) -> Result<MessageDocument, Error> {
     use base64::Engine as _;

@@ -1358,46 +1358,93 @@ async fn prepare(source: &str, html: bool) -> (String, MessageDocument) {
         None => (source.into(), plain(source)),
     }
 }
+/// Many messages, prepared in one content worker (see [`content_loop`]).
+async fn prepare_many(messages: Vec<(String, bool)>) -> Vec<(String, MessageDocument)> {
+    let prepared = match content_worker() {
+        Some(worker) if !messages.is_empty() => {
+            nuschel_ipc::host::prepare_contents(worker, &messages).await
+        }
+        _ => Vec::new(),
+    };
+    messages
+        .into_iter()
+        .zip(prepared.into_iter().chain(std::iter::repeat_with(|| None)))
+        .map(|((source, _), prepared)| match prepared {
+            Some(prepared) => (prepared.source, prepared.document),
+            None => {
+                let document = plain(&source);
+                (source, document)
+            }
+        })
+        .collect()
+}
+
+/// The most received messages and changes prepared in one content worker.
+const CONTENT_BATCH: usize = 64;
+
+/// Received messages and edits, rendered by the sandboxed content worker and
+/// handed to storage in order. Whatever has queued up meanwhile is prepared
+/// together: a burst costs one worker start instead of one per message, so a
+/// slow machine keeps up with it rather than dropping what overflows the
+/// queue in front of this loop.
 async fn content_loop(
     mut jobs: mpsc::Receiver<ContentWork>,
     storage: mpsc::Sender<StorageCommand>,
     events: mpsc::Sender<Event>,
 ) {
-    while let Some(work) = jobs.recv().await {
-        let command = match work {
-            ContentWork::Text(job) => {
-                let (source, document) = prepare(&job.text.body, job.text.html).await;
-                StorageCommand::Append {
-                    job,
-                    source,
-                    document,
-                }
-            }
-            ContentWork::Change(job) => StorageCommand::Change {
-                server: job.server,
-                conversation: job.conversation,
-                seq: job.seq,
-                cache: job.cache,
-                change: match job.change {
-                    ChangeKind::Edit { content, edited_ms } => {
-                        let (source, document) = prepare(&content, false).await;
-                        CacheChange::Edit {
-                            source,
-                            document,
-                            edited_ms,
-                        }
-                    }
-                    ChangeKind::Delete(deletion) => CacheChange::Delete(deletion),
+    let mut batch = Vec::with_capacity(CONTENT_BATCH);
+    while jobs.recv_many(&mut batch, CONTENT_BATCH).await > 0 {
+        let texts: Vec<_> = batch
+            .iter()
+            .filter_map(|work| match work {
+                ContentWork::Text(job) => Some((job.text.body.clone(), job.text.html)),
+                ContentWork::Change(job) => match &job.change {
+                    ChangeKind::Edit { content, .. } => Some((content.clone(), false)),
+                    ChangeKind::Delete(_) => None,
                 },
-            },
-        };
-        if storage.send(command).await.is_err() {
-            let _ = events
-                .send(Event::HistoryError(
-                    "Local history worker has stopped.".into(),
-                ))
-                .await;
-            break;
+            })
+            .collect();
+        let mut prepared = prepare_many(texts).await.into_iter();
+        for work in batch.drain(..) {
+            let command = match work {
+                ContentWork::Text(job) => {
+                    let (source, document) = prepared
+                        .next()
+                        .unwrap_or_else(|| (job.text.body.clone(), plain(&job.text.body)));
+                    StorageCommand::Append {
+                        job,
+                        source,
+                        document,
+                    }
+                }
+                ContentWork::Change(job) => StorageCommand::Change {
+                    server: job.server,
+                    conversation: job.conversation,
+                    seq: job.seq,
+                    cache: job.cache,
+                    change: match job.change {
+                        ChangeKind::Edit { content, edited_ms } => {
+                            let (source, document) = prepared
+                                .next()
+                                .unwrap_or_else(|| (content.clone(), plain(&content)));
+                            CacheChange::Edit {
+                                source,
+                                document,
+                                edited_ms,
+                            }
+                        }
+                        ChangeKind::Delete(deletion) => CacheChange::Delete(deletion),
+                    },
+                },
+            };
+            if storage.send(command).await.is_err() {
+                let _ = events
+                    .send(Event::HistoryError(
+                        "Local history worker has stopped.".into(),
+                    ))
+                    .await;
+                return;
+            }
         }
     }
 }

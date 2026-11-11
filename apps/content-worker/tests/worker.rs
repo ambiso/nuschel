@@ -39,6 +39,32 @@ async fn a_history_page_renders_in_order_in_one_worker() {
     }
 }
 
+/// A burst of received messages, stock Mumble's rich text among them, is
+/// prepared in one worker exactly as each would be on its own.
+#[tokio::test]
+async fn a_burst_of_received_messages_prepares_in_order_in_one_worker() {
+    let messages: Vec<(String, bool)> = (0..40)
+        .map(|index| match index % 3 {
+            0 => (format!("<b>Bold</b> rich text {index} &amp; a <a href=\"https://example.org/{index}\">link</a>"), true),
+            1 => (format!("Plain text {index}\n```rust\nfn answer() -> u32 {{ {index} }}\n```"), false),
+            _ => (format!("Message {index}: <html> & such"), false),
+        })
+        .collect();
+    let burst = nuschel_ipc::host::prepare_contents(worker(), &messages).await;
+    assert_eq!(burst.len(), messages.len());
+    for ((text, legacy_html), prepared) in messages.iter().zip(burst) {
+        let prepared = prepared.expect("prepared");
+        let alone = nuschel_ipc::host::prepare_content(worker(), text, *legacy_html)
+            .await
+            .unwrap();
+        assert_eq!(
+            (prepared.source, prepared.document),
+            (alone.source, alone.document),
+            "{text}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_pasted_image_becomes_a_stock_mumble_image_message() {
     // A 2×2 RGB PNG.
