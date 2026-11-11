@@ -154,7 +154,7 @@
             cp -R ${pulseSource} "$out/vendor/pulseaudio"
             chmod -R u+w "$out/vendor/pulseaudio"
             # GPUI compiles against these patched crates during the dependency pass.
-            for crate in gpui-pre gpui-pre-windows gpui-pre-apple; do
+            for crate in gpui-pre gpui-pre-windows gpui-pre-apple gpui-pre-wgpu; do
               rm -rf "$out/vendor/$crate"
               cp -R ${./vendor}/$crate "$out/vendor/$crate"
               chmod -R u+w "$out/vendor/$crate"
