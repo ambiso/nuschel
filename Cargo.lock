@@ -347,6 +347,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "argon2"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
+dependencies = [
+ "base64ct",
+ "blake2",
+ "cpufeatures 0.2.17",
+ "password-hash",
+]
+
+[[package]]
 name = "array-init"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5345,6 +5357,7 @@ name = "nuschel-storage"
 version = "0.1.0"
 dependencies = [
  "nuschel-core",
+ "nuschel-ipc",
  "sqlx",
  "tempfile",
  "thiserror 2.0.21",
@@ -5394,13 +5407,25 @@ dependencies = [
 name = "nuscheld"
 version = "0.1.0"
 dependencies = [
+ "argon2",
+ "base64 0.22.1",
+ "bytes",
  "clap",
- "nuschel-core",
  "nuschel-ipc",
  "nuschel-protocol",
+ "prost",
+ "rcgen",
+ "regex",
+ "ring",
  "rustls",
+ "serde",
+ "serde_json",
+ "socket2",
+ "tempfile",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
+ "toml 1.2.1+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
 ]
@@ -5992,6 +6017,17 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
 ]
 
 [[package]]

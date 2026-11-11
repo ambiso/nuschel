@@ -1,0 +1,98 @@
+# nuscheld configuration. Every key is optional; the values shown are the defaults.
+# Names follow murmur.ini where Murmur has an equivalent.
+
+# "compatible" admits stock Mumble clients and has no end-to-end encryption.
+# "e2ee" (end-to-end encrypted conversations, stock clients refused) becomes the
+# default once it is implemented; until then the server refuses to start with it.
+security = "compatible"
+
+# TCP and UDP. IPv6 sockets are IPv6-only, so both families can be bound.
+bind = ["0.0.0.0", "::"]
+port = 64738
+
+# Generated certificate and the default database are kept here.
+state_directory = "."
+# SQLite database, relative to state_directory.
+database = "nuscheld.sqlite3"
+# Or a file containing a sqlite: or postgresql:// URL, read only by the storage worker:
+# database_url_file = "/run/credentials/nuscheld.service/database-url"
+
+# PEM certificate chain and key. Without them a self-signed certificate is generated
+# once and kept in state_directory (clients pin it, so keep it across restarts).
+# certificate = "/etc/nuscheld/certificate.pem"
+# private_key = "/etc/nuscheld/private-key.pem"
+
+# The root channel's name; empty shows "Root".
+registered_name = ""
+welcome_text = ""
+# welcome_text_file = "/etc/nuscheld/welcome.html"
+
+# Password for unregistered users (registered users log in with their own).
+# Keep secrets in files: password_file is read at startup.
+password = ""
+# password_file = "/run/credentials/nuscheld.service/server-password"
+# The SuperUser account (user 0) has no password until one is set here or with
+# `nuscheld --set-superuser-password`; without one it cannot log in.
+# superuser_password_file = "/run/credentials/nuscheld.service/superuser-password"
+
+max_users = 1000
+max_users_per_channel = 0
+# Bits per second per user, including protocol overhead.
+max_bandwidth = 558000
+# Seconds without a message (clients ping every few seconds) before disconnecting.
+timeout = 30
+# Seconds for TLS and authentication to complete.
+handshake_timeout = 10
+text_message_length = 5000
+image_message_length = 1048576
+allow_html = true
+default_channel = 0
+remember_channel = true
+# Seconds; 0 remembers the last channel forever.
+remember_channel_duration = 0
+allow_ping = true
+# Stock clients' server lists send 12-byte pings and expect 24-byte answers. Off: an
+# answer is never larger than its request (no amplification of spoofed traffic), so
+# stock server lists show no user count. On: answers up to twice the request size,
+# rate-limited per address and globally.
+allow_ping_amplification = false
+certificate_required = false
+send_version = true
+allow_recording = true
+channel_nesting_limit = 10
+channel_count_limit = 1000
+username_pattern = '[ -=\w\[\]\{\}\(\)\@\|\.]+'
+channel_name_pattern = '[ -=\w\#\[\]\{\}\(\)\@\|]+'
+
+# Control messages per second and burst per user (Murmur's messagelimit and
+# messageburst). Excess messages are dropped, as stock Murmur does.
+message_limit = 1
+message_burst = 5
+plugin_message_limit = 4
+plugin_message_burst = 15
+# Channel listeners; leave unset for no limit.
+# listeners_per_channel = 50
+# listeners_per_user = 10
+broadcast_listener_volume_adjustments = false
+# suggest_version = "1.5.0"
+# suggest_positional = false
+# suggest_push_to_talk = true
+
+# Simultaneous connections from one address, unauthenticated connections in total,
+# and bytes queued for a client before it is dropped as too slow.
+connections_per_address = 16
+max_pending_connections = 256
+max_queued_bytes = 8388608
+
+[autoban]
+# Connection attempts from one address within timeframe seconds before it is banned
+# for duration seconds; 0 attempts disables it.
+attempts = 10
+timeframe = 120
+duration = 300
+count_successful = true
+
+[password_hashing]
+# argon2id cost for registered users' passwords.
+memory_kib = 19456
+passes = 2

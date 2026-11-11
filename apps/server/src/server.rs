@@ -1,0 +1,572 @@
+// SPDX-License-Identifier: EUPL-1.2
+//! Startup and the shared server object: load the persisted state, bind TCP and
+//! UDP on every configured address, and run the accept and voice loops.
+use crate::{
+    config::Settings,
+    connection,
+    limits::LeakyBucket,
+    password,
+    state::{Ban, Channel, Counters, Registered, State},
+    storage::{self, Backend, StorageHandle},
+    tls, udp,
+};
+use bytes::Bytes;
+use nuschel_protocol::{control as proto, encode_control, kind};
+use std::{
+    collections::{HashMap, VecDeque},
+    io,
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex, MutexGuard},
+    time::{Duration, Instant},
+};
+use tokio::{
+    net::{TcpListener, UdpSocket},
+    sync::{Notify, Semaphore},
+    task::JoinHandle,
+};
+use tokio_rustls::TlsAcceptor;
+
+/// The protocol version this server speaks (Mumble 1.5.0).
+pub const PROTOCOL_VERSION: u64 = (1 << 48) | (5 << 32);
+
+#[derive(Debug, thiserror::Error)]
+pub enum StartError {
+    #[error("storage unavailable: {0}")]
+    Storage(String),
+    #[error(transparent)]
+    Tls(#[from] tls::TlsError),
+    #[error("cannot bind {address}: {source}")]
+    Bind {
+        address: SocketAddr,
+        source: io::Error,
+    },
+    #[error("{0}")]
+    Io(#[from] io::Error),
+}
+
+/// Connection-admission state: per-prefix counts, autoban history.
+#[derive(Default)]
+pub struct Admission {
+    per_prefix: HashMap<IpAddr, u32>,
+    attempts: HashMap<IpAddr, VecDeque<Instant>>,
+    banned_until: HashMap<IpAddr, Instant>,
+}
+
+/// IPv4 addresses count individually, IPv6 by /64 (what one host usually has).
+pub fn prefix(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6((u128::from(v6) & !((1_u128 << 64) - 1)).into()),
+        },
+    }
+}
+
+pub struct Server {
+    state: Mutex<State>,
+    pub settings: Arc<Settings>,
+    pub storage: StorageHandle,
+    pub counters: Arc<Counters>,
+    pub udp: Vec<Arc<UdpSocket>>,
+    pub acceptor: TlsAcceptor,
+    pub admission: Mutex<Admission>,
+    /// Connections that have not authenticated yet (TLS included).
+    pub pending: Arc<Semaphore>,
+    /// The server's `Version` message, sent first on every connection.
+    pub version_frame: Bytes,
+    pub shutdown: Notify,
+}
+
+impl Server {
+    /// Take the state lock. A panic while it was held must not take the whole
+    /// server down, so poisoning is ignored (the handlers keep it consistent).
+    pub fn lock(&self) -> MutexGuard<'_, State> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Admission for a new TCP connection from `address`: bans, autoban and
+    /// the per-prefix cap. On success the caller must call [`Server::release`].
+    pub fn admit(&self, address: IpAddr) -> bool {
+        let config = &self.settings.config;
+        let key = prefix(address);
+        let now = Instant::now();
+        let mut admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if admission
+            .banned_until
+            .get(&key)
+            .is_some_and(|until| *until > now)
+        {
+            return false;
+        }
+        admission.banned_until.retain(|_, until| *until > now);
+        if config.autoban.attempts > 0 {
+            let window = Duration::from_secs(config.autoban.timeframe);
+            let attempts = admission.attempts.entry(key).or_default();
+            while attempts
+                .front()
+                .is_some_and(|time| now.duration_since(*time) > window)
+            {
+                attempts.pop_front();
+            }
+            attempts.push_back(now);
+            if attempts.len() > config.autoban.attempts as usize {
+                attempts.clear();
+                admission
+                    .banned_until
+                    .insert(key, now + Duration::from_secs(config.autoban.duration));
+                tracing::info!(address = %address, "autoban: too many connection attempts");
+                return false;
+            }
+            if admission.attempts.len() > 100_000 {
+                admission
+                    .attempts
+                    .retain(|_, attempts| !attempts.is_empty());
+            }
+        }
+        let count = admission.per_prefix.entry(key).or_insert(0);
+        if *count >= config.connections_per_address {
+            return false;
+        }
+        *count += 1;
+        drop(admission);
+        let banned = {
+            let mut state = self.lock();
+            let now = crate::state::now_unix();
+            let before = state.bans.len();
+            state.bans.retain(|ban| !ban.expired(now));
+            if state.bans.len() != before {
+                state.persist_bans();
+            }
+            state.bans.iter().any(|ban| ban.matches_address(address))
+        };
+        if banned {
+            self.release(address);
+            return false;
+        }
+        true
+    }
+
+    pub fn release(&self, address: IpAddr) {
+        let key = prefix(address);
+        let mut admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = admission.per_prefix.get_mut(&key) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                admission.per_prefix.remove(&key);
+            }
+        }
+    }
+
+    /// Murmur's `autobanSuccessfulConnections = false`: a login that worked
+    /// does not count towards the autoban.
+    pub fn forgive(&self, address: IpAddr) {
+        if !self.settings.config.autoban.count_successful {
+            let mut admission = self
+                .admission
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(attempts) = admission.attempts.get_mut(&prefix(address)) {
+                attempts.pop_back();
+            }
+        }
+    }
+
+    pub fn banned_certificate(&self, hash: &str) -> bool {
+        self.lock()
+            .bans
+            .iter()
+            .any(|ban| !ban.hash.is_empty() && ban.hash == hash)
+    }
+}
+
+/// A started server.
+pub struct Running {
+    pub server: Arc<Server>,
+    /// The bound TCP addresses (UDP uses the same ones).
+    pub addresses: Vec<SocketAddr>,
+    tasks: Vec<JoinHandle<()>>,
+}
+
+impl Running {
+    /// Disconnect everyone, persist what is pending and stop.
+    pub async fn shutdown(self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+        {
+            let mut state = self.server.lock();
+            let sessions: Vec<u32> = state.users.keys().copied().collect();
+            for session in sessions {
+                state.disconnect(session, false);
+            }
+        }
+        self.server.shutdown.notify_waiters();
+        self.server.storage.flush().await;
+    }
+}
+
+fn server_version(settings: &Settings) -> Bytes {
+    let mut message = proto::Version {
+        version_v1: Some((1 << 16) | (5 << 8)),
+        version_v2: Some(PROTOCOL_VERSION),
+        ..Default::default()
+    };
+    if settings.config.send_version {
+        message.release = Some(format!("Nuschel {}", env!("CARGO_PKG_VERSION")));
+        message.os = Some(std::env::consts::OS.to_owned());
+    }
+    encode_control(kind::VERSION, &message).unwrap_or_default()
+}
+
+/// Rebuild the channel tree from storage: children lists from parents, and
+/// channels with a missing parent (or in a cycle) moved under the root.
+fn build_channels(
+    state: &mut State,
+    stored: Vec<nuschel_ipc::server::StoredChannel>,
+    links: Vec<(u32, u32)>,
+) {
+    for stored in stored {
+        let mut channel = Channel::from_stored(stored);
+        if channel.id == 0 {
+            channel.node.parent = None;
+        }
+        state.channels.0.insert(channel.id, channel);
+    }
+    let ids: Vec<u32> = state.channels.0.keys().copied().collect();
+    for &id in &ids {
+        if id == 0 {
+            continue;
+        }
+        let mut current = state.channels.get(id).and_then(Channel::parent);
+        let mut steps = 0;
+        let mut valid = false;
+        while let Some(parent) = current {
+            steps += 1;
+            if parent == id || steps > ids.len() {
+                break;
+            }
+            if parent == 0 {
+                valid = true;
+                break;
+            }
+            current = state.channels.get(parent).and_then(Channel::parent);
+        }
+        if !valid && let Some(channel) = state.channels.get_mut(id) {
+            tracing::warn!(
+                channel = id,
+                "reattached a channel without a valid parent to the root"
+            );
+            channel.node.parent = Some(0);
+        }
+    }
+    let mut ordered = ids;
+    ordered.sort_unstable();
+    for id in ordered {
+        if let Some(parent) = state.channels.get(id).and_then(Channel::parent)
+            && let Some(parent) = state.channels.get_mut(parent)
+        {
+            parent.children.push(id);
+        }
+    }
+    for (a, b) in links {
+        if state.channels.get(a).is_some() && state.channels.get(b).is_some() {
+            if let Some(channel) = state.channels.get_mut(a) {
+                channel.links.insert(b);
+            }
+            if let Some(channel) = state.channels.get_mut(b) {
+                channel.links.insert(a);
+            }
+        }
+    }
+}
+
+/// Create the state directory owner-only and, for SQLite, the database file
+/// owner-only before the worker opens it (CVE-2012-0863: a world-readable
+/// Murmur database).
+fn prepare_files(settings: &Settings, backend: &Backend) -> io::Result<()> {
+    let directory = &settings.config.state_directory;
+    if !directory.exists() {
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(directory)?;
+    }
+    if let Backend::Sqlite { path, .. } = backend
+        && !path.exists()
+    {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options.open(path)?;
+    }
+    Ok(())
+}
+
+fn bind_tcp(address: SocketAddr) -> io::Result<TcpListener> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(address),
+        socket2::Type::STREAM,
+        None,
+    )?;
+    if address.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    socket.set_reuse_address(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(1024)?;
+    TcpListener::from_std(socket.into())
+}
+
+fn bind_udp(address: SocketAddr) -> io::Result<UdpSocket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(address),
+        socket2::Type::DGRAM,
+        None,
+    )?;
+    if address.is_ipv6() {
+        socket.set_only_v6(true)?;
+    }
+    socket.set_nonblocking(true)?;
+    socket.bind(&address.into())?;
+    UdpSocket::from_std(socket.into())
+}
+
+/// The persisted state for administrative commands, without starting the server.
+pub async fn load_state_for_admin(
+    settings: &Settings,
+    storage: &StorageHandle,
+    counters: &Arc<Counters>,
+) -> Result<State, StartError> {
+    let mut settings = settings.clone();
+    settings.config.superuser_password_file = None;
+    load_state(&Arc::new(settings), storage, counters).await
+}
+
+/// Load the state and set the SuperUser password from its file, if configured.
+async fn load_state(
+    settings: &Arc<Settings>,
+    storage: &StorageHandle,
+    counters: &Arc<Counters>,
+) -> Result<State, StartError> {
+    let snapshot = storage
+        .load()
+        .await
+        .ok_or_else(|| StartError::Storage("could not load the server state".into()))?;
+    let users = storage
+        .load_users()
+        .await
+        .ok_or_else(|| StartError::Storage("could not load registered users".into()))?;
+    let mut state = State::new(settings.clone(), storage.clone(), counters.clone());
+    build_channels(&mut state, snapshot.channels, snapshot.links);
+    for user in users {
+        state.registry.insert(Registered {
+            id: user.id,
+            name: user.name,
+            password_hash: user.password_hash,
+            certificate_hash: user.certificate_hash,
+            last_channel: user.last_channel,
+            last_active: user.last_active,
+        });
+    }
+    state.registry.next_id = snapshot.next_user_id;
+    state.bans = snapshot.bans.into_iter().map(Ban::from_stored).collect();
+    state.initialise_root();
+    if let Some(path) = &settings.config.superuser_password_file {
+        let password = std::fs::read_to_string(path)?
+            .trim_end_matches(['\r', '\n'])
+            .to_owned();
+        set_superuser_password(&mut state, password, settings).await?;
+    }
+    Ok(state)
+}
+
+/// Replace the SuperUser password unless it already is this one.
+pub async fn set_superuser_password(
+    state: &mut State,
+    password: String,
+    settings: &Settings,
+) -> Result<(), StartError> {
+    if password.is_empty() {
+        return Err(StartError::Storage(
+            "the SuperUser password must not be empty".into(),
+        ));
+    }
+    let current = state
+        .registry
+        .users
+        .get(&0)
+        .and_then(|user| user.password_hash.clone());
+    if let Some(hash) = current
+        && password::verify(password.clone(), hash).await == Some(true)
+    {
+        return Ok(());
+    }
+    let cost = password::Cost {
+        memory_kib: settings.config.password_hashing.memory_kib,
+        passes: settings.config.password_hashing.passes,
+    };
+    let hash = password::hash(password, cost)
+        .await
+        .ok_or_else(|| StartError::Storage("could not hash the SuperUser password".into()))?;
+    if let Some(user) = state.registry.users.get_mut(&0) {
+        user.password_hash = Some(hash);
+    }
+    state.persist_registration(0);
+    tracing::info!("set the SuperUser password");
+    Ok(())
+}
+
+/// The default backend: the storage worker next to this executable.
+pub fn default_backend(settings: &Settings) -> io::Result<Backend> {
+    let worker = match &settings.config.storage_worker {
+        Some(path) => path.clone(),
+        None => std::env::current_exe()?
+            .parent()
+            .map(|directory| directory.join("nuschel-storage-worker"))
+            .ok_or_else(|| io::Error::other("cannot locate nuschel-storage-worker"))?,
+    };
+    Ok(match &settings.config.database_url_file {
+        Some(path) => Backend::UrlFile {
+            worker,
+            path: path.clone(),
+        },
+        None => Backend::Sqlite {
+            worker,
+            path: settings.config.database_path(),
+        },
+    })
+}
+
+pub async fn start(settings: Settings, backend: Backend) -> Result<Running, StartError> {
+    let settings = Arc::new(settings);
+    prepare_files(&settings, &backend)?;
+    let storage = storage::start(backend);
+    let counters = Arc::new(Counters::default());
+    let state = load_state(&settings, &storage, &counters).await?;
+    if state
+        .registry
+        .users
+        .get(&0)
+        .is_none_or(|user| user.password_hash.is_none())
+    {
+        tracing::info!(
+            "SuperUser has no password and cannot log in; set one with superuser_password_file \
+             or `nuscheld --set-superuser-password`"
+        );
+    }
+    let config = &settings.config;
+    let identity = tls::Identity::load_or_generate(
+        config
+            .certificate
+            .as_deref()
+            .zip(config.private_key.as_deref()),
+        &config.state_directory,
+    )?;
+    tracing::info!(sha256 = %identity.fingerprint(), "server certificate");
+    let acceptor = TlsAcceptor::from(tls::server_config(identity)?);
+
+    // Bind everything first; with port 0 (tests) UDP takes the port TCP got.
+    let mut listeners = Vec::new();
+    let mut sockets = Vec::new();
+    for &ip in &config.bind {
+        let requested = SocketAddr::new(ip, config.port);
+        let listener = match bind_tcp(requested) {
+            Ok(listener) => listener,
+            Err(error) if ip.is_ipv6() && config.bind.len() > 1 => {
+                tracing::warn!(address = %requested, %error, "IPv6 unavailable; continuing without it");
+                continue;
+            }
+            Err(source) => {
+                return Err(StartError::Bind {
+                    address: requested,
+                    source,
+                });
+            }
+        };
+        let address = listener.local_addr()?;
+        let socket = bind_udp(address).map_err(|source| StartError::Bind { address, source })?;
+        tracing::info!(%address, "listening on TCP and UDP");
+        listeners.push((listener, address));
+        sockets.push(Arc::new(socket));
+    }
+    let server = Arc::new(Server {
+        state: Mutex::new(state),
+        settings: settings.clone(),
+        storage,
+        counters,
+        udp: sockets.clone(),
+        acceptor,
+        admission: Mutex::new(Admission::default()),
+        pending: Arc::new(Semaphore::new(config.max_pending_connections as usize)),
+        version_frame: server_version(&settings),
+        shutdown: Notify::new(),
+    });
+    let mut tasks = Vec::new();
+    let mut addresses = Vec::new();
+    for (listener, address) in listeners {
+        addresses.push(address);
+        tasks.push(tokio::spawn(connection::accept(server.clone(), listener)));
+    }
+    for (index, socket) in sockets.into_iter().enumerate() {
+        tasks.push(tokio::spawn(udp::run(server.clone(), index, socket)));
+    }
+    Ok(Running {
+        server,
+        addresses,
+        tasks,
+    })
+}
+
+/// A rate limiter for unencrypted pings: per address prefix and global, and
+/// the amplification policy (replies no larger than requests unless allowed).
+pub struct PingLimiter {
+    global: LeakyBucket,
+    prefixes: HashMap<IpAddr, LeakyBucket>,
+    source: IpAddr,
+    allow_double: bool,
+}
+
+impl PingLimiter {
+    pub fn new(allow_double: bool) -> Self {
+        Self {
+            global: LeakyBucket::new(500, 1000, Instant::now()),
+            prefixes: HashMap::new(),
+            source: IpAddr::from([0, 0, 0, 0]),
+            allow_double,
+        }
+    }
+
+    pub fn from(&mut self, source: IpAddr) -> &mut Self {
+        self.source = source;
+        self
+    }
+}
+
+impl nuschel_protocol::relay::PingBudget for PingLimiter {
+    fn allow(&mut self, request_length: usize, reply_length: usize) -> bool {
+        if reply_length > request_length && !self.allow_double {
+            return false;
+        }
+        let now = Instant::now();
+        if self.prefixes.len() > 65_536 {
+            self.prefixes.clear();
+        }
+        let bucket = self
+            .prefixes
+            .entry(prefix(self.source))
+            .or_insert_with(|| LeakyBucket::new(4, 16, now));
+        !bucket.limited(now) && !self.global.limited(now)
+    }
+}
