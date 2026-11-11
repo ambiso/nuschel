@@ -25,10 +25,10 @@ pub fn legacy_body(body: &str, html: bool) -> String {
 /// HTML they get; they do not detect links themselves).
 pub fn text_html(body: &str) -> String {
     let mut out = String::with_capacity(body.len() + 16);
-    let mut rest = body;
-    while let Some((start, end)) = next_link(rest) {
-        out.push_str(&escape_html(&rest[..start]));
-        let url = &rest[start..end];
+    let mut done = 0;
+    for (start, end) in links(body) {
+        out.push_str(&escape_html(&body[done..start]));
+        let url = &body[start..end];
         let href = if url[..4].eq_ignore_ascii_case("www.") {
             format!("https://{url}")
         } else {
@@ -39,51 +39,69 @@ pub fn text_html(body: &str) -> String {
             escape_html(&href),
             escape_html(url)
         ));
-        rest = &rest[end..];
+        done = end;
     }
-    out.push_str(&escape_html(rest));
+    out.push_str(&escape_html(&body[done..]));
     out
 }
 
-/// The next link in `text` as a byte range: http(s):// or mumble:// URLs and
-/// www. addresses at a word start, with URL characters as Mumble matches them,
-/// minus trailing punctuation that belongs to the sentence.
-fn next_link(text: &str) -> Option<(usize, usize)> {
+/// The links in `text` as byte ranges, in order: http(s):// or mumble:// URLs
+/// and www. addresses at a word start, with URL characters as Mumble matches
+/// them, minus trailing punctuation that belongs to the sentence. Linear in
+/// the text: the server makes this copy of every message under its lock.
+fn links(text: &str) -> Vec<(usize, usize)> {
     const PREFIXES: [&str; 4] = ["https://", "http://", "mumble://", "www."];
     let lower = text.to_ascii_lowercase();
+    let find = |prefix: &str, from: usize| lower[from..].find(prefix).map(|at| from + at);
+    // The next match of each prefix, searched again only once passed:
+    // searching every prefix again from every candidate is quadratic.
+    let mut next = PREFIXES.map(|prefix| find(prefix, 0));
+    let mut links = Vec::new();
     let mut from = 0;
     loop {
-        let (start, prefix) = PREFIXES
+        for (index, prefix) in PREFIXES.iter().enumerate() {
+            if next[index].is_some_and(|at| at < from) {
+                next[index] = find(prefix, from);
+            }
+        }
+        let Some((start, prefix)) = next
             .iter()
-            .filter_map(|prefix| {
-                lower[from..]
-                    .find(prefix)
-                    .map(|at| (from + at, prefix.len()))
-            })
-            .min()?;
+            .zip(PREFIXES)
+            .filter_map(|(at, prefix)| at.map(|at| (at, prefix.len())))
+            .min()
+        else {
+            return links;
+        };
+        from = start + 1;
         let word_start = text[..start]
             .chars()
             .next_back()
             .is_none_or(|c| !c.is_alphanumeric());
+        if !word_start {
+            continue;
+        }
         let mut end = start
             + text[start..]
                 .find(|c: char| {
                     !(c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c))
                 })
                 .unwrap_or(text.len() - start);
+        // Brackets are counted once: counting again for every character
+        // trimmed is quadratic in the link's length. URL characters are ASCII.
+        let link = &text[start..end];
+        let mut unclosed = link.matches('(').count() as isize - link.matches(')').count() as isize;
         loop {
-            let link = &text[start..end];
-            let unbalanced =
-                link.ends_with(')') && link.matches(')').count() > link.matches('(').count();
-            if !(unbalanced || link.ends_with(['.', ',', ';', ':', '!', '?', '\''])) {
-                break;
+            match text.as_bytes()[end - 1] {
+                b')' if unclosed < 0 => unclosed += 1,
+                b'.' | b',' | b';' | b':' | b'!' | b'?' | b'\'' => {}
+                _ => break,
             }
             end -= 1;
         }
-        if word_start && end > start + prefix {
-            return Some((start, end));
+        if end > start + prefix {
+            links.push((start, end));
+            from = end;
         }
-        from = start + 1;
     }
 }
 
@@ -127,6 +145,34 @@ mod tests {
         assert_eq!(
             text_html("<b>\"x\"</b>"),
             "&lt;b&gt;&quot;x&quot;&lt;/b&gt;"
+        );
+    }
+
+    #[test]
+    fn hostile_links_take_linear_time() {
+        // At the server's 64 KiB, the first took ten seconds and the second
+        // one under the server's lock, with every bracket or candidate
+        // counted or searched again from the start.
+        let size = 64 * 1024;
+        for (text, links) in [
+            (format!("http://a{}", ")".repeat(size)), 1),
+            ("awww.".repeat(size / 5), 0),
+            ("ahttps://".repeat(size / 9), 0),
+            ("http://a ".repeat(size / 9), size / 9),
+        ] {
+            let started = std::time::Instant::now();
+            let html = text_html(&text);
+            assert_eq!(html.matches("<a href=").count(), links);
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "{:?} for {}",
+                started.elapsed(),
+                &text[..20]
+            );
+        }
+        assert!(
+            text_html(&format!("http://a{}", ")".repeat(9)))
+                .starts_with("<a href=\"http://a\">http://a</a>)))")
         );
     }
 
