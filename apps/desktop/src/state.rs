@@ -2,7 +2,7 @@
 use crate::document::Document;
 use crate::{
     attachments::{Attachment, Kind, Source},
-    scrolling::{Anchor, SmoothScroll},
+    scrolling::{self, Anchor, Nested, Scroller, SmoothScroll},
     services::{ServiceEvent, Services},
 };
 use gpui_kit::{
@@ -217,6 +217,8 @@ pub struct Desktop {
     /// this and the previous frame showed, so a newly opened one starts at the top.
     pub modal_scroll: ScrollHandle,
     modal_motion: SmoothScroll,
+    /// Lists that scroll inside the open dialog.
+    pub nested: Nested,
     pub modal_shown: std::cell::Cell<Option<&'static str>>,
     pub modal_seen: std::cell::Cell<Option<&'static str>>,
     /// Which dialogs were open in the last frame (see `keep_dialog_focus`).
@@ -496,6 +498,7 @@ impl Desktop {
             channel_motion: SmoothScroll::default(),
             modal_scroll: ScrollHandle::new(),
             modal_motion: SmoothScroll::default(),
+            nested: Nested::default(),
             modal_shown: Default::default(),
             modal_seen: Default::default(),
             dialogs_seen: 0,
@@ -891,28 +894,42 @@ impl Desktop {
             self.schedule_scroll_frame(window, cx);
         }
     }
-    pub fn smooth_scroll_modal(
+    /// A wheel step or touchpad motion in the open dialog, over `list` (one
+    /// of the lists that scroll inside it) or elsewhere. It moves either the
+    /// list or the dialog, never both (see `scrolling::WheelRun`).
+    pub fn scroll_modal(
         &mut self,
+        list: Option<&'static str>,
         event: &ScrollEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.modal_motion.wheel(
-            &self.modal_scroll,
-            event,
-            window.line_height(),
-            cx.reduce_motion(),
-        ) {
-            cx.stop_propagation();
-            cx.notify();
-            self.schedule_scroll_frame(window, cx);
+        let line_height = window.line_height();
+        let delta = scrolling::vertical(event, line_height);
+        if delta == px(0.) || !f32::from(delta).is_finite() {
+            return;
         }
+        let reduce_motion = cx.reduce_motion();
+        match self.nested.route(list, delta, std::time::Instant::now()) {
+            Scroller::List(id) => self.nested.scroll(id, event, line_height, reduce_motion),
+            Scroller::Dialog => scrolling::scroll_by(
+                &mut self.modal_motion,
+                &self.modal_scroll,
+                event,
+                line_height,
+                reduce_motion,
+            ),
+        }
+        cx.stop_propagation();
+        cx.notify();
+        self.schedule_scroll_frame(window, cx);
     }
     fn schedule_scroll_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.scroll_frame_pending
             || !(self.chat_motion.active()
                 || self.channel_motion.active()
-                || self.modal_motion.active())
+                || self.modal_motion.active()
+                || self.nested.active())
         {
             return;
         }
@@ -925,7 +942,8 @@ impl Desktop {
                     this.chat_motion.shift(this.anchor.take_shift());
                     let changed = this.chat_motion.advance(&this.scroll)
                         | this.channel_motion.advance(&this.channel_scroll)
-                        | this.modal_motion.advance(&this.modal_scroll);
+                        | this.modal_motion.advance(&this.modal_scroll)
+                        | this.nested.advance();
                     if changed {
                         cx.notify();
                     }

@@ -483,8 +483,13 @@ fn audio_check(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElement> {
     rows
 }
 
+/// The microphones or speakers to choose from, in a list that scrolls when
+/// there are more than four or so.
+#[allow(clippy::too_many_arguments)]
 fn device_list(
+    this: &Desktop,
     id: &'static str,
+    label: &'static str,
     devices: &[AudioDevice],
     selected: Option<&str>,
     active: Option<&str>,
@@ -497,65 +502,65 @@ fn device_list(
             .iter()
             .map(|device| (Some(device.id.clone()), device.name.clone())),
     );
+    let rows = rows.into_iter().enumerate().map(|(index, (device, name))| {
+        let chosen = device.as_deref() == selected;
+        let live = device.is_some() && device.as_deref() == active;
+        let choose = choose.clone();
+        let value = device.clone();
+        div()
+            .id((id, index))
+            .role(Role::RadioButton)
+            .aria_selected(chosen)
+            .aria_label(name.clone())
+            .tab_index(0)
+            .px_2()
+            .py(px(6.))
+            .rounded(px(6.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .cursor_pointer()
+            .text_sm()
+            .when(chosen, |row| row.bg(color(SELECTED)))
+            .hover(|style| style.bg(color(HOVER)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                choose(this, value.clone());
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .size(px(14.))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(color(if chosen { ACCENT } else { BORDER_STRONG }))
+                    .when(chosen, |dot| dot.bg(color(ACCENT))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(text!(name).with_id((id, index + 1000))),
+            )
+            .when(live, |row| {
+                row.child(
+                    div()
+                        .text_xs()
+                        .text_color(color(SUCCESS))
+                        .child(text!("in use").with_id((id, index + 2000))),
+                )
+            })
+    });
     div()
-        .id(id)
-        .role(Role::RadioGroup)
-        .max_h(px(150.))
-        .overflow_y_scroll()
         .rounded(px(8.))
         .bg(color(APP))
         .border_1()
         .border_color(color(BORDER))
-        .p_1()
-        .children(rows.into_iter().enumerate().map(|(index, (device, name))| {
-            let chosen = device.as_deref() == selected;
-            let live = device.is_some() && device.as_deref() == active;
-            let choose = choose.clone();
-            let value = device.clone();
-            div()
-                .id((id, index))
-                .role(Role::RadioButton)
-                .aria_selected(chosen)
-                .aria_label(name.clone())
-                .tab_index(0)
-                .px_2()
-                .py(px(6.))
-                .rounded(px(6.))
-                .flex()
-                .items_center()
-                .gap_2()
-                .cursor_pointer()
-                .text_sm()
-                .when(chosen, |row| row.bg(color(SELECTED)))
-                .hover(|style| style.bg(color(HOVER)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    choose(this, value.clone());
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .size(px(14.))
-                        .rounded_full()
-                        .border_2()
-                        .border_color(color(if chosen { ACCENT } else { BORDER_STRONG }))
-                        .when(chosen, |dot| dot.bg(color(ACCENT))),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child(text!(name).with_id((id, index + 1000))),
-                )
-                .when(live, |row| {
-                    row.child(
-                        div()
-                            .text_xs()
-                            .text_color(color(SUCCESS))
-                            .child(text!("in use").with_id((id, index + 2000))),
-                    )
-                })
-        }))
+        .child(
+            crate::dialogs::nested_list(this, id, px(148.), div().p_1().children(rows), cx)
+                .role(Role::RadioGroup)
+                .aria_label(label),
+        )
         .into_any_element()
 }
 
@@ -863,7 +868,9 @@ pub fn dialog(
                 this,
                 "audio.input_device",
                 device_list(
+                    this,
                     "input-devices",
+                    "Microphone",
                     &inputs,
                     audio.input_device.as_deref(),
                     active_input.as_deref(),
@@ -882,7 +889,9 @@ pub fn dialog(
                 this,
                 "audio.output_device",
                 device_list(
+                    this,
                     "output-devices",
+                    "Speakers or headphones",
                     &outputs,
                     audio.output_device.as_deref(),
                     active_output.as_deref(),

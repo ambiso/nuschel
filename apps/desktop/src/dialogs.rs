@@ -268,6 +268,7 @@ pub fn modal(
     this.modal_shown.set(Some(id));
     if this.modal_seen.get() != Some(id) {
         this.modal_scroll.set_offset(point(px(0.), px(0.)));
+        this.nested.forget_all();
     }
     div()
         .id(SharedString::from(format!("{id}-backdrop")))
@@ -307,12 +308,36 @@ pub fn modal(
                     div()
                         .id(SharedString::from(format!("{id}-content")))
                         .on_scroll(cx.listener(|this, event, window, cx| {
-                            this.smooth_scroll_modal(event, window, cx)
+                            this.scroll_modal(None, event, window, cx)
                         }))
                         .child(content),
                 ),
         )
         .into_any_element()
+}
+
+/// A list that scrolls inside a dialog, at most `max_height` tall, around
+/// `content`. The content takes each wheel step before any scroll container
+/// does, and `Desktop::scroll_modal` moves either the list or the dialog. So
+/// that the content covers all of the list, the list itself has no padding or
+/// border; a frame goes around it.
+pub fn nested_list(
+    this: &Desktop,
+    id: &'static str,
+    max_height: Pixels,
+    content: Div,
+    cx: &mut Context<Desktop>,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .max_h(max_height)
+        .overflow_y_scroll()
+        .track_scroll(&this.nested.handle(id))
+        .child(
+            content.on_scroll(cx.listener(move |this, event, window, cx| {
+                this.scroll_modal(Some(id), event, window, cx)
+            })),
+        )
 }
 
 pub fn server_form(this: &Desktop, cx: &mut Context<Desktop>) -> AnyElement {

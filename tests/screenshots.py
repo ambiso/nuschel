@@ -24,6 +24,7 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from accessibility import snapshot, start_registry  # noqa: E402
 from gnome_session import GnomeSession  # noqa: E402
 from local_murmur import Murmur, eventually, free_port  # noqa: E402
 from mumble_client import Client, certificate_pin  # noqa: E402
@@ -64,6 +65,12 @@ LOBBY_CHEVRON = (129, 234)
 SIDEBAR_EDGE = (346, 400)
 # Wheel clicks for about one screen of the timeline, and the pill that jumps back down.
 SCROLL_CLICKS = 8
+# The devices scene: more microphones and speakers than the lists show at once.
+DEVICES_SCRIPT = "".join(
+    f"load-module module-null-source source_name=studio{n} description=\"Studio microphone {n:02}\"\n"
+    f"load-module module-null-sink sink_name=room{n} sink_properties='device.description=\"Room speaker {n:02}\"'\n"
+    for n in range(1, 13))
+DEVICE_LISTS = ("Microphone", "Speakers or headphones")
 
 
 def JUMP_TO_LATEST(width, height):
@@ -184,13 +191,15 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too)")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,runs,unread,dialog,settings,shortcuts,server,menus,long,search,finder,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,transfer,appearance,maximize; not in all: resize (measures resizing), managed, math (formulas; run it with --theme light and --zoom 1.25 too), devices (wheel over Settings' device lists, checked over AT-SPI; needs --pulse-bin and --at-spi)")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     # Dark by default, as the scenes were drawn; the private shell has no
     # settings portal, so "system" means GPUI's fallback (light).
     parser.add_argument("--theme", choices=["system", "light", "dark"], default="dark")
     parser.add_argument("--zoom", type=float, default=1.0, help="scenes' coordinates assume 1.0")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
+    parser.add_argument("--at-spi", type=Path,
+                        help="at-spi2-core: the devices scene then reads the device lists as a screen reader does")
     parser.add_argument("--resize-messages", type=int, default=1000,
                         help="messages the resize scene sends before measuring a busy channel (0: only the empty one)")
     parser.add_argument("--wormhole-python", type=Path,
@@ -229,8 +238,17 @@ def main():
         shell = GnomeSession(args.gnome_shell, width + 160, height + 100,
                              log=(args.output / "gnome-shell.log").open("w"), portals=args.portals)
         pulse = None
+        helpers = []
+        registry = None
         try:
             shell.start()
+            if args.at_spi:
+                def spawn(command, env, log):
+                    process = subprocess.Popen(command, env=env, stdout=(args.output / log).open("w"),
+                                               stderr=subprocess.STDOUT, start_new_session=True)
+                    helpers.append(process)
+                    return process
+                registry = start_registry(args.at_spi, shell.app_environment(), spawn)
             if args.wormhole_python and {"all", "transfer"} & set(args.scenes.split(",")):
                 # A private mailbox server and transit relay on loopback; Andi
                 # offers a file in Development as soon as Nuschel has joined it.
@@ -249,7 +267,8 @@ def main():
                                   "load-module module-null-sink sink_name=microphone sink_properties=device.description=Mic\n"
                                   "load-module module-sine sink=microphone frequency=220\n"
                                   "update-source-proplist microphone.monitor device.description=\"Test microphone\"\n"
-                                  "set-default-sink speakers\nset-default-source microphone.monitor\n")
+                                  "set-default-sink speakers\nset-default-source microphone.monitor\n"
+                                  + (DEVICES_SCRIPT if "devices" in args.scenes.split(",") else ""))
                 pulse = subprocess.Popen([str(args.pulse_bin / "pulseaudio"), "--daemonize=no", "--use-pid-file=no",
                                           "--exit-idle-time=-1", "-n", "--file=" + str(script)],
                                          env=shell.environment() | {"PULSE_RUNTIME_PATH": str(socket_dir),
@@ -287,6 +306,8 @@ def main():
                 (applications / "org.nuschel.Nuschel.desktop").write_text(
                     f"[Desktop Entry]\nType=Application\nName=Nuschel\nExec={args.binaries / 'nuschel'} %u\n")
             env = shell.app_environment() | {"RUST_LOG": os.environ.get("NUSCHEL_SCREENSHOT_LOG", "nuschel=info")}
+            # AccessKit honours NO_AT_BRIDGE (NixOS sets it where at-spi2-core is off).
+            env.pop("NO_AT_BRIDGE", None)
             if wormhole:
                 env |= wormhole.environment()
             if resizing:
@@ -615,6 +636,143 @@ def main():
                 shot("05b-echo-test")
                 shell.key("Escape")
                 time.sleep(0.4)
+            if "devices" in scenes:
+                # Settings' microphone and speaker lists hold more devices than
+                # they show. A wheel over a list, with the pointer parked, moves
+                # that list alone: its entries pass under the pointer once each,
+                # in order, and the dialog stays put, so another list never
+                # slides under the pointer. (Each step used to move the dialog
+                # as well: the speakers then scrolled by under a pointer parked
+                # on the microphones, "System default" and all.)
+                assert registry, "the devices scene reads the lists over AT-SPI: pass --at-spi"
+                nuschel = eventually(lambda: next((node for node in registry.children()
+                                                   if node.name.lower() == "nuschel"), None),
+                                     "Nuschel is not in the accessibility registry", timeout=30)
+
+                def named(role, name, prefix=False):
+                    """The first node named `name` (or starting with it) with `role`, or any but a label."""
+                    return next((node for _, node, r, n in snapshot(nuschel)
+                                 if (r == role if role else r != "label")
+                                 and (n.startswith(name) if prefix else n == name)), None)
+                named("push button", "Settings").call("Action", "DoAction", "i", "0")
+                lists = {title: eventually(lambda: named(None, title), f"Settings shows no {title} list",
+                                           timeout=20) for title in DEVICE_LISTS}
+                dx, dy, dw, dh = eventually(lambda: named("dialog", "Settings"), "no Settings dialog").extents()
+                # AT-SPI reports window coordinates; the screenshots' (and click's) are 12 pixels larger.
+                margin = (dx + 12 + 10, dy + 12 + dh // 2)  # in the dialog's padding, beside every list
+
+                def entries(group):
+                    return [child for child in group.children() if child.role == "radio button"]
+
+                def seen(area, groups):
+                    """The entries a person sees in `area` (window coordinates), top to bottom:
+                    those whose middle lies within it and within their own list."""
+                    x, y, w, h = area
+                    shown = []
+                    for group in groups:
+                        lx, ly, lw, lh = group.extents()
+                        for child in entries(group):
+                            ex, ey, ew, eh = child.extents()
+                            middle = ey + eh / 2
+                            if y <= middle < y + h and ly <= middle < ly + lh:
+                                shown.append((ey, child.name))
+                    return [name for _, name in sorted(shown)]
+
+                def in_order(names, shown, where):
+                    assert shown, f"no entries seen {where}"
+                    assert shown[0] in names, f"{shown} {where}: {shown[0]!r} is not in this list ({names})"
+                    start = names.index(shown[0])
+                    assert shown == names[start:start + len(shown)], \
+                        f"{where}, the entries under the pointer are {shown}, not in the list's order {names}"
+                    return start
+
+                def park(group, title):
+                    """Bring the list into the upper half of the dialog with the wheel beside it,
+                    and park the pointer on it; returns its area and the pointer."""
+                    for _ in range(60):
+                        _, ly, _, lh = group.extents()
+                        if dy + 40 <= ly <= dy + dh // 2:
+                            break
+                        wheel(*margin, 1 if ly > dy + 40 else -1)
+                        time.sleep(0.5)
+                    else:
+                        raise AssertionError(f"could not scroll the {title} list into view")
+                    time.sleep(1.0)  # a new run of wheel steps
+                    area = tuple(group.extents())
+                    lx, ly, lw, lh = area
+                    pointer = (lx + 12 + lw // 2, ly + 12 + lh // 2)
+                    hover(*pointer)
+                    time.sleep(0.6)
+                    return area, pointer
+
+                for title, group in lists.items():
+                    slug = "microphones" if title == "Microphone" else "speakers"
+                    names = [child.name for child in entries(group)]
+                    assert len(names) == len(set(names)) > 6, f"{title}: {names}"
+                    area, pointer = park(group, title)
+                    groups = list(lists.values())
+                    shot(f"43-{slug}")
+                    start = in_order(names, seen(area, groups), f"in the {title} list before scrolling")
+                    assert start == 0, f"the {title} list starts scrolled: {seen(area, groups)}"
+                    # One step at a time down to the end, then back up.
+                    for direction, last in ((1, names[-1]), (-1, names[0])):
+                        for step in range(len(names)):
+                            wheel(*pointer, direction)
+                            time.sleep(0.6)
+                            where = f"after {step + 1} wheel steps {'down' if direction > 0 else 'up'}"
+                            shown = seen(area, groups)
+                            if direction > 0 and step == 0:
+                                shot(f"43-{slug}-step")
+                            now = in_order(names, shown, f"{where} over the {title} list")
+                            assert tuple(group.extents()) == area, \
+                                f"{where} over the {title} list, the dialog moved: {group.extents()} != {area}"
+                            assert (now - start) * direction >= 0, \
+                                f"{where} over the {title} list, it went the wrong way: {shown}"
+                            start = now
+                            if last in shown:
+                                break
+                        else:
+                            raise AssertionError(f"wheel steps did not reach {last!r} in the {title} list")
+                        print(f"{title}: {step + 1} wheel steps {'down' if direction > 0 else 'up'} "
+                              f"passed the entries in order; the dialog stayed put.", flush=True)
+                    # A quick spin past the end is one run: it stays with the list.
+                    wheel(*pointer, len(names) + 4)
+                    time.sleep(1.0)
+                    assert tuple(group.extents()) == area, f"a spin over the {title} list moved the dialog"
+                    shown = seen(area, groups)
+                    in_order(names, shown, f"after a spin over the {title} list")
+                    assert names[-1] in shown, f"a spin did not reach the end of the {title} list: {shown}"
+                    shot(f"43-{slug}-spun")
+                    # The next spin, at the list's end, moves the dialog.
+                    wheel(*pointer, 2)
+                    time.sleep(1.0)
+                    assert group.extents()[1] < area[1], \
+                        f"at the end of the {title} list, the wheel left the dialog still"
+                    shot(f"43-{slug}-dialog")
+                    print(f"{title}: a spin past the end stayed with the list; the next one moved the dialog.",
+                          flush=True)
+                # The font picker's list scrolls inside Settings the same way.
+                named("push button", "Interface font: ", prefix=True).call("Action", "DoAction", "i", "0")
+                fonts = eventually(lambda: named(None, "Installed fonts"), "the font picker did not open")
+                families = [child.name for child in entries(fonts)]
+                area, pointer = park(fonts, "font")
+                shown = seen(area, [fonts])
+                if len(shown) < len(families):
+                    wheel(*pointer, 1)
+                    time.sleep(0.6)
+                    assert tuple(fonts.extents()) == area, "a wheel step over the font picker moved the dialog"
+                    moved = seen(area, [fonts])
+                    in_order(families, moved, "after a wheel step over the font picker")
+                    assert families.index(moved[0]) > 0, f"a wheel step left the font picker still: {moved}"
+                    shot("43-fonts-step")
+                    print(f"The font picker moved alone, to {moved[0]!r}.", flush=True)
+                else:
+                    print(f"The font picker shows all {len(families)} fonts; nothing to scroll.", flush=True)
+                shell.key("Escape")
+                time.sleep(0.4)
+                if named("dialog", "Settings"):  # the first closed the picker
+                    shell.key("Escape")
+                    time.sleep(0.4)
             if want("shortcuts"):
                 andi = next(e["user"]["session"] for e in reversed(bots[0].events)
                             if e["kind"] == "user" and e["user"]["name"] == "Andi")
@@ -1304,6 +1462,9 @@ def main():
                     pass
             if pulse and pulse.poll() is None:
                 os.killpg(pulse.pid, signal.SIGTERM)
+            for helper in helpers:
+                if helper.poll() is None:
+                    os.killpg(helper.pid, signal.SIGTERM)
             shell.stop()
             murmur.stop()
             if wormhole:

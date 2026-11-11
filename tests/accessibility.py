@@ -53,7 +53,7 @@ ROLES = {23: "frame", 29: "label", 43: "push button", 54: "status bar", 61: "tex
          65: "tree", 69: "window", 75: "application", 79: "entry", 91: "tree item", 27: "image",
          40: "password text", 16: "dialog", 33: "menu", 35: "menu item", 85: "section", 99: "grouping",
          31: "list", 32: "list item", 39: "panel", 98: "list box", 105: "page tab list", 37: "page tab",
-         113: "math"}
+         113: "math", 44: "radio button"}
 INTERACTIVE = {"push button", "toggle button", "text", "entry", "password text", "tree item", "menu item"}
 FOCUSED = 1 << 12  # ATSPI_STATE_FOCUSED, in the first word of GetState
 # Messages in the long conversation: many screens of them.
@@ -123,6 +123,31 @@ def snapshot(application):
     return entries
 
 
+def start_registry(at_spi, env, spawn):
+    """Start an accessibility bus and registry in the D-Bus session of `env`,
+    as a desktop session has them; returns the registry's root node, whose
+    children are the applications. `spawn(command, env, log)` starts a process
+    and keeps it for cleanup."""
+    busctl = shutil.which("busctl") or "/run/current-system/sw/bin/busctl"
+    session = Bus(env["DBUS_SESSION_BUS_ADDRESS"], busctl)
+    # The bus launcher owns org.a11y.Bus and starts the accessibility bus; the
+    # registry tracks applications on it. Neither depends on D-Bus activation.
+    # The launcher keeps IsEnabled in GSettings: the memory backend keeps it in
+    # this process, so the test never writes the user's dconf database (and
+    # still works where no dconf service exists, as in the VM).
+    spawn([str(at_spi / "libexec/at-spi-bus-launcher")], env | {"GSETTINGS_BACKEND": "memory"},
+          "bus-launcher.log")
+    eventually(lambda: AccessibilityTest.try_call(session, "call", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus",
+                                                  "GetAddress"), "the accessibility bus did not start", timeout=15)
+    session("set-property", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Status", "IsEnabled", "b", "true")
+    a11y = Bus(session("call", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress")[0], busctl)
+    spawn([str(at_spi / "libexec/at-spi2-registryd")], env, "registry.log")
+    registry = Node(a11y, "org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root")
+    eventually(lambda: AccessibilityTest.try_call(registry.children), "the accessibility registry did not start",
+               timeout=15)
+    return registry
+
+
 class AccessibilityTest:
     def __init__(self, args, root):
         self.args, self.root = args, root
@@ -136,7 +161,6 @@ class AccessibilityTest:
         return process
 
     def run(self):
-        busctl = shutil.which("busctl") or "/run/current-system/sw/bin/busctl"
         if self.args.gnome_shell:
             from gnome_session import GnomeSession
             self.shell = GnomeSession(self.args.gnome_shell, 1440, 900, log=(self.root / "shell.log").open("w"))
@@ -154,21 +178,7 @@ class AccessibilityTest:
             runtime = self.root / "runtime"
             runtime.mkdir(mode=0o700)
             env["XDG_RUNTIME_DIR"] = str(runtime)
-        session = Bus(env["DBUS_SESSION_BUS_ADDRESS"], busctl)
-        # The bus launcher owns org.a11y.Bus and starts the accessibility bus; the
-        # registry tracks applications on it. Neither depends on D-Bus activation.
-        # The launcher keeps IsEnabled in GSettings: the memory backend keeps it in
-        # this process, so the test never writes the user's dconf database (and
-        # still works where no dconf service exists, as in the VM).
-        self.spawn([str(self.args.at_spi / "libexec/at-spi-bus-launcher")], env | {"GSETTINGS_BACKEND": "memory"},
-                   "bus-launcher.log")
-        eventually(lambda: self.try_call(session, "call", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus",
-                                         "GetAddress"), "the accessibility bus did not start", timeout=15)
-        session("set-property", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Status", "IsEnabled", "b", "true")
-        a11y = Bus(session("call", "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress")[0], busctl)
-        self.spawn([str(self.args.at_spi / "libexec/at-spi2-registryd")], env, "registry.log")
-        registry = Node(a11y, "org.a11y.atspi.Registry", "/org/a11y/atspi/accessible/root")
-        eventually(lambda: self.try_call(registry.children), "the accessibility registry did not start", timeout=15)
+        registry = start_registry(self.args.at_spi, env, self.spawn)
 
         port = free_port()
         (self.root / "murmur").mkdir()
@@ -211,8 +221,8 @@ class AccessibilityTest:
                                   if (self.root / name).exists())
                 variables = {key: value for key, value in env.items() if "BUS" in key or "DISPLAY" in key
                              or key.startswith(("AT_SPI", "NO_AT_BRIDGE", "XDG_RUNTIME"))}
-                raise AssertionError(f"{error}; registered applications: {names}; accessibility bus {a11y.address}; "
-                                     f"environment: {variables}\n{logs}")
+                raise AssertionError(f"{error}; registered applications: {names}; accessibility bus "
+                                     f"{registry.bus.address}; environment: {variables}\n{logs}")
 
             def ready():
                 nodes = snapshot(nuschel)

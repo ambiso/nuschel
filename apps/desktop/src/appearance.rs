@@ -232,6 +232,8 @@ impl Desktop {
             search,
             _changes: changes,
         });
+        // Each picker's list starts at the top.
+        self.nested.forget(FONT_CHOICES);
     }
 }
 
@@ -405,6 +407,9 @@ fn font_row(
 /// At most this many families list at once; the search narrows them down.
 const LISTED: usize = 60;
 
+/// The element id of the picker's list of families.
+const FONT_CHOICES: &str = "font-choices";
+
 /// The open picker: a search field and the matching installed families.
 fn picker(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     let picker = this.appearance.picker.as_ref()?;
@@ -490,15 +495,15 @@ fn picker(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     .child(Input::new(&picker.search)),
             )
             .child(
-                div()
-                    .id("font-choices")
-                    .role(Role::RadioGroup)
-                    .aria_label("Installed fonts")
-                    .max_h(px(220.))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .children(rows),
+                crate::dialogs::nested_list(
+                    this,
+                    FONT_CHOICES,
+                    px(220.),
+                    div().flex().flex_col().children(rows),
+                    cx,
+                )
+                .role(Role::RadioGroup)
+                .aria_label("Installed fonts"),
             )
             .when(more > 0, |list| {
                 list.child(

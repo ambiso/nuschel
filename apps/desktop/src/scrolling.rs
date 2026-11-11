@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! Ease discrete wheel steps; leave precise touchpad motion to the platform.
-//! Keep a timeline's messages still while history grows above them, lay out
-//! only the part of it near the viewport, and move the keyboard through it.
+//! In a dialog with lists that scroll on their own, move one of them per
+//! run of wheel steps. Keep a timeline's messages still while history grows
+//! above them, lay out only the part of it near the viewport, and move the
+//! keyboard through it.
 use gpui_kit::{
     AccessibleAction, AnyElement, App, Bounds, Element, ElementId, GlobalElementId,
     InspectorElementId, IntoElement, LayoutId, Pixels, Role, ScrollDelta, ScrollEvent,
@@ -9,6 +11,7 @@ use gpui_kit::{
 };
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     ops::Range,
     rc::Rc,
     time::{Duration, Instant},
@@ -106,6 +109,165 @@ impl SmoothScroll {
             self.cancel();
         }
         true
+    }
+}
+
+/// How soon a wheel step must follow the previous one to belong to the same
+/// run: a spin of the wheel, or a swipe on a touchpad with its momentum.
+const RUN: Duration = Duration::from_millis(500);
+
+/// Within this much of its end a container counts as there (easing ends a
+/// fraction of a pixel off).
+const EDGE: Pixels = px(0.5);
+
+/// What a wheel step in a dialog moves: the dialog, or a list that scrolls
+/// inside it (Settings' device lists and font picker), by its element id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scroller {
+    Dialog,
+    List(&'static str),
+}
+
+/// The container that a run of wheel steps moves, one per run, as browsers
+/// latch a wheel transaction: the list under the pointer if the run's first
+/// step can move it, the dialog otherwise. A step that moved both carried
+/// the list away from a parked pointer and slid the next list under it, so
+/// the entries passing under the pointer came twice and out of order.
+#[derive(Default)]
+pub struct WheelRun {
+    last: Option<(Scroller, Instant)>,
+}
+
+impl WheelRun {
+    /// The container a step at `now` moves; `list` is the list under the
+    /// pointer, if any, and whether the step can move it.
+    pub fn route(&mut self, list: Option<(&'static str, bool)>, now: Instant) -> Scroller {
+        let running = self
+            .last
+            .filter(|(_, at)| now.saturating_duration_since(*at) < RUN)
+            .map(|(scroller, _)| scroller);
+        let scroller = match (running, list) {
+            // Lists sliding under a parked pointer leave the dialog moving.
+            (Some(Scroller::Dialog), _) => Scroller::Dialog,
+            // At its end, a list keeps the rest of the run.
+            (Some(Scroller::List(held)), Some((under, _))) if held == under => Scroller::List(held),
+            (_, Some((under, true))) => Scroller::List(under),
+            _ => Scroller::Dialog,
+        };
+        self.last = Some((scroller, now));
+        scroller
+    }
+}
+
+/// Whether a step of `delta` (positive towards the top) can move a
+/// container scrolled to `offset` (zero or less) of at most `max`.
+pub fn can_move(offset: Pixels, max: Pixels, delta: Pixels) -> bool {
+    if delta > px(0.) {
+        offset < -EDGE
+    } else if delta < px(0.) {
+        offset > EDGE - max
+    } else {
+        false
+    }
+}
+
+/// A scroll event's motion in pixels for a container that scrolls
+/// vertically (positive towards the top); a horizontal one moves it too, as
+/// it moves GPUI's own.
+pub fn vertical(event: &ScrollEvent, line_height: Pixels) -> Pixels {
+    let delta = event.delta.pixel_delta(line_height);
+    if delta.y == px(0.) { delta.x } else { delta.y }
+}
+
+/// Move `handle` by a scroll event as GPUI would, with wheel steps eased.
+pub fn scroll_by(
+    motion: &mut SmoothScroll,
+    handle: &ScrollHandle,
+    event: &ScrollEvent,
+    line_height: Pixels,
+    reduce_motion: bool,
+) {
+    if motion.wheel(handle, event, line_height, reduce_motion) {
+        return;
+    }
+    motion.cancel();
+    let mut offset = handle.offset();
+    offset.y = (offset.y + vertical(event, line_height)).clamp(-handle.max_offset().y, px(0.));
+    handle.set_offset(offset);
+}
+
+/// Lists that scroll inside the open dialog, which scrolls as well: their
+/// positions while it stays open, which container the current run of wheel
+/// steps moves, and the easing of the list it moves.
+///
+/// The dialog's content and each list's content take every wheel step
+/// before a scroll container sees it, so GPUI's own scrolling, which moves
+/// every container under the pointer, never runs inside a dialog.
+#[derive(Default)]
+pub struct Nested {
+    lists: RefCell<HashMap<&'static str, ScrollHandle>>,
+    run: WheelRun,
+    motion: SmoothScroll,
+    /// The list `motion` eases.
+    moving: Option<&'static str>,
+}
+
+impl Nested {
+    /// The list's scroll position, the same from frame to frame.
+    pub fn handle(&self, id: &'static str) -> ScrollHandle {
+        self.lists.borrow_mut().entry(id).or_default().clone()
+    }
+
+    /// The list starts at the top when it shows next.
+    pub fn forget(&self, id: &'static str) {
+        self.lists.borrow_mut().remove(id);
+    }
+
+    /// Every list starts at the top (another dialog opened).
+    pub fn forget_all(&self) {
+        self.lists.borrow_mut().clear();
+    }
+
+    /// What a step moving `delta` moves, over the list `list` or elsewhere
+    /// in the dialog.
+    pub fn route(&mut self, list: Option<&'static str>, delta: Pixels, now: Instant) -> Scroller {
+        let under = list.map(|id| {
+            let handle = self.handle(id);
+            (
+                id,
+                can_move(handle.offset().y, handle.max_offset().y, delta),
+            )
+        });
+        self.run.route(under, now)
+    }
+
+    /// Move the list `id` by a step.
+    pub fn scroll(
+        &mut self,
+        id: &'static str,
+        event: &ScrollEvent,
+        line_height: Pixels,
+        reduce_motion: bool,
+    ) {
+        if self.moving != Some(id) {
+            self.motion.cancel();
+            self.moving = Some(id);
+        }
+        let handle = self.handle(id);
+        scroll_by(&mut self.motion, &handle, event, line_height, reduce_motion);
+    }
+
+    pub fn active(&self) -> bool {
+        self.motion.active()
+    }
+
+    /// The next frame of a list's easing; whether it moved.
+    pub fn advance(&mut self) -> bool {
+        let Some(id) = self.moving else {
+            return false;
+        };
+        let handle = self.handle(id);
+        self.motion.advance(&handle)
     }
 }
 
@@ -654,8 +816,97 @@ impl Element for Row {
 
 #[cfg(test)]
 mod tests {
-    use super::{Focus, Shown, at, follows, near_top, nearest, shown, step};
+    use super::{
+        Focus, RUN, Scroller, Shown, WheelRun, at, can_move, follows, near_top, nearest, shown,
+        step,
+    };
     use gpui_kit::px;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_run_of_wheel_steps_moves_one_container() {
+        // Settings, with the pointer parked on the microphones: the report
+        // was that a spin there showed some entries twice or out of order.
+        let (microphones, speakers) = ("input-devices", "output-devices");
+        let mut run = WheelRun::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        // A spin moves the list alone, and past its end it stays with the
+        // list: the dialog does not carry the speakers under the pointer.
+        assert_eq!(
+            run.route(Some((microphones, true)), at(0)),
+            Scroller::List(microphones)
+        );
+        assert_eq!(
+            run.route(Some((microphones, true)), at(40)),
+            Scroller::List(microphones)
+        );
+        assert_eq!(
+            run.route(Some((microphones, false)), at(80)),
+            Scroller::List(microphones)
+        );
+        assert_eq!(
+            run.route(Some((microphones, false)), at(400)),
+            Scroller::List(microphones)
+        );
+        // The next spin, at the list's end, moves the dialog; the speakers
+        // sliding under the pointer leave it moving until the spin ends.
+        let pause = 400 + RUN.as_millis() as u64;
+        assert_eq!(
+            run.route(Some((microphones, false)), at(pause)),
+            Scroller::Dialog
+        );
+        assert_eq!(
+            run.route(Some((speakers, true)), at(pause + 50)),
+            Scroller::Dialog
+        );
+        assert_eq!(
+            run.route(Some((speakers, true)), at(pause + 100)),
+            Scroller::Dialog
+        );
+        // After a pause, a spin over the speakers moves them.
+        let later = pause + 100 + RUN.as_millis() as u64;
+        assert_eq!(
+            run.route(Some((speakers, true)), at(later)),
+            Scroller::List(speakers)
+        );
+        // Moving the pointer onto the dialog's text moves the dialog at once,
+        // and onto the other list, that list.
+        assert_eq!(run.route(None, at(later + 50)), Scroller::Dialog);
+        assert_eq!(run.route(None, at(later + 5000)), Scroller::Dialog);
+        assert_eq!(
+            run.route(Some((microphones, true)), at(later + 9000)),
+            Scroller::List(microphones)
+        );
+        assert_eq!(
+            run.route(Some((speakers, true)), at(later + 9050)),
+            Scroller::List(speakers)
+        );
+        // A list too short to scroll never takes the wheel.
+        assert_eq!(
+            run.route(Some(("short", false)), at(later + 20000)),
+            Scroller::Dialog
+        );
+    }
+
+    #[test]
+    fn a_list_can_move_until_it_reaches_an_end() {
+        let max = px(300.);
+        let (up, down) = (px(60.), px(-60.));
+        assert!(!can_move(px(0.), max, up));
+        assert!(can_move(px(0.), max, down));
+        assert!(can_move(px(-150.), max, up));
+        assert!(can_move(px(-150.), max, down));
+        assert!(can_move(-max, max, up));
+        assert!(!can_move(-max, max, down));
+        // Easing ends a fraction of a pixel off.
+        assert!(!can_move(-max + px(0.0001), max, down));
+        assert!(!can_move(px(-0.0001), max, up));
+        // Nothing to scroll, or no motion.
+        assert!(!can_move(px(0.), px(0.), up));
+        assert!(!can_move(px(0.), px(0.), down));
+        assert!(!can_move(px(-150.), max, px(0.)));
+    }
 
     #[test]
     fn only_entries_near_the_viewport_are_laid_out() {

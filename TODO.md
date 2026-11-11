@@ -58,6 +58,13 @@ Reported while testing (2026-11-10/11):
       (`nuschel media-sandbox`; PipeWire restarts rely on the worker being replaced).
 - [ ] The room echo check flaked once under heavy load (gate open 43 % for another
       application's sound while the level dropped 40 dB).
+- [x] "scrolling over the microphone or speakers list while hovering the cursor over a
+      fixed screen location messes up the list. it then shows some entries twice or
+      in a different order": each wheel step moved the list and Settings itself, so
+      the speakers slid under the parked pointer ("System default" again). A run of
+      wheel steps now moves one container, the list under the pointer while it can
+      move, as browsers latch a wheel transaction; the font picker too. The
+      `devices` scene of `tests/screenshots.py` checks it over AT-SPI.
 
 Later (reported):
 
