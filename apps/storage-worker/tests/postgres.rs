@@ -12,7 +12,7 @@ use nuschel_ipc::{
     Envelope, read_frame,
     server::{
         Anchor, MessageKind, PageQuery, Retention, ServerStorageRequest as Request,
-        ServerStorageResponse as Response, StoredMessage, StoredRetention, StoredUser,
+        ServerStorageResponse as Response, StoredBan, StoredMessage, StoredRetention, StoredUser,
     },
     write_frame,
 };
@@ -151,6 +151,19 @@ fn exercise(worker: &mut Worker) {
         worker.request(Request::Load),
         Response::Snapshot(_)
     ));
+    worker.request(Request::SaveBans {
+        bans: vec![StoredBan {
+            address: Some("::ffff:192.0.2.1".into()),
+            private_address: true,
+            mask: 128,
+            name: "Private".into(),
+            hash: "ab".repeat(20),
+            reason: "privacy regression".into(),
+            start: 1,
+            duration: 0,
+        }],
+    });
+    private_ban_survived(worker);
     let user = StoredUser {
         id: 1,
         account: Some(ALICE.into()),
@@ -343,6 +356,18 @@ fn exercise(worker: &mut Worker) {
     ));
 }
 
+fn private_ban_survived(worker: &mut Worker) {
+    let Response::Snapshot(snapshot) = worker.request(Request::Load) else {
+        panic!("expected server state")
+    };
+    assert_eq!(snapshot.bans.len(), 1);
+    assert!(snapshot.bans[0].private_address);
+    assert_eq!(
+        snapshot.bans[0].address.as_deref(),
+        Some("::ffff:192.0.2.1")
+    );
+}
+
 /// One holder of the operator lock at a time; the others never open the
 /// database and answer everything with `Held`.
 fn operator_lock(url_file: &Path) {
@@ -400,6 +425,7 @@ fn the_server_schema_through_the_worker_on_sqlite() {
     let mut worker = Worker::start(&url_file);
     exercise(&mut worker);
     drop(worker);
+    private_ban_survived(&mut Worker::start(&url_file));
     operator_lock(&url_file);
 }
 
@@ -536,6 +562,7 @@ fn the_server_schema_through_the_worker_on_postgresql() {
     // the data is shared (nuscheld runs four).
     drop(worker);
     let mut again = Worker::start(&url_file);
+    private_ban_survived(&mut again);
     assert!(matches!(
         again.request(Request::HistoryHeads { after: None }),
         Response::Heads(heads) if heads == [(LIVE.to_owned(), 7)]
