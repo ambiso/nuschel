@@ -36,13 +36,14 @@ export class BrowserAudio {
       return Promise.resolve(false);
     }
     try {
+      this.status("starting","Enabling browser audio.");
       if(!this.ctx) {
         this.ctx=new AudioContext({sampleRate:RATE,latencyHint:"interactive"});
         if(this.ctx.sampleRate!==RATE)throw new Error("This browser cannot provide a 48 kHz audio context.");
         this.ctx.onstatechange=()=>{
           if(this.ctx?.state!=="running") {
             this.stopCapture(true);this.resetMedia();this.status("suspended","Enable audio to resume playback and microphone use.");
-          } else {this.applyPolicy();this.status(this.stream?"capturing":"listening");}
+          } else this.applyPolicy();
         };
       }
       // Keep this call synchronous with the gesture for Safari/mobile autoplay.
@@ -226,7 +227,7 @@ export class BrowserAudio {
   }
   workerMessage(data) {
     this.lastProgress=performance.now();
-    if(data?.kind==="ready"){this.workerReady=true;this.resetMedia();this.applyPolicy();this.status("listening");return;}
+    if(data?.kind==="ready"){this.workerReady=true;this.resetMedia();this.applyPolicy();return;}
     if(!data||data.epoch!==this.epoch)return;
     if(data.kind==="encoded"||data.kind==="media-error"&&data.operation==="encode") {
       const frame=this.encodeJobs.get(data.job);this.encodeJobs.delete(data.job);
