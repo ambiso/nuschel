@@ -1554,6 +1554,12 @@ impl State {
                 if let Some(peer) = self.users.get(session).and_then(|user| user.account)
                     && peer != sender
                     && self.allowed(source, Action::SendDirect { peer: &peer })
+                    // An end-to-end conversation never stores plaintext; the
+                    // message still arrives live, outside it.
+                    && !self
+                        .conversations
+                        .direct(sender, peer)
+                        .is_some_and(|id| self.mls_group(&id))
                 {
                     directs.insert(peer);
                 }

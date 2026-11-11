@@ -195,27 +195,26 @@ impl Extension {
     }
 }
 
-/// What this server offers: everything, and `kt/1` only with a key-transparency
-/// log.
-pub fn server_capabilities(kt: bool) -> Capabilities {
-    // `mls/1` needs `kt/1` (credentials are checked against key transparency); it
-    // is offered once the delivery service exists (crate::mls).
+/// What this server offers: everything, `kt/1` only with a key-transparency log,
+/// and `mls/1` only with `kt/1` and the delivery service (credentials are checked
+/// against key transparency).
+pub fn server_capabilities(kt: bool, mls: bool) -> Capabilities {
     Capabilities::from_names(
         capability::ALL
             .into_iter()
             .filter(|name| kt || *name != capability::KT)
-            .filter(|name| *name != capability::MLS || (kt && crate::mls::OFFERED)),
+            .filter(|name| *name != capability::MLS || (kt && mls)),
     )
 }
 
 /// The server's hello, sent in its `Version` to `nuschel/1` connections, with
 /// the descriptor of its key-transparency log if it has one.
-pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>) -> v1::Hello {
+pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>, mls: bool) -> v1::Hello {
     let history = &settings.config.history;
     let (retention_days, live_only) = crate::retention::wire(history.default_retention());
     v1::Hello {
         protocol: nuschel::PROTOCOL,
-        capabilities: server_capabilities(kt_log.is_some()).names(),
+        capabilities: server_capabilities(kt_log.is_some(), mls).names(),
         kt_log: kt_log.map(<[u8]>::to_vec).unwrap_or_default(),
         client_version: String::new(),
         policy: Some(v1::Policy {
@@ -266,7 +265,7 @@ mod tests {
 
     #[test]
     fn the_extension_needs_alpn_and_a_hello() {
-        let server = server_capabilities(true);
+        let server = server_capabilities(true, true);
         // ALPN without a hello fails closed.
         assert_eq!(
             Negotiation::from_alpn(Some(nuschel::ALPN)).freeze(),
@@ -317,7 +316,7 @@ mod tests {
             negotiation
                 .version(
                     &hello_body_from(&["history/1"], client_version),
-                    server_capabilities(true),
+                    server_capabilities(true, true),
                 )
                 .unwrap();
             negotiation
@@ -342,7 +341,10 @@ mod tests {
         // Stock connections are never refused for their version.
         let mut stock = Negotiation::from_alpn(None);
         stock
-            .version(&hello_body_from(&[], "0.0.1"), server_capabilities(true))
+            .version(
+                &hello_body_from(&[], "0.0.1"),
+                server_capabilities(true, true),
+            )
             .unwrap();
         assert_eq!(stock.refusal(&graced, i64::MAX), None);
         // Without a minimum nobody is refused; without a date, at once.
@@ -352,7 +354,7 @@ mod tests {
                 .is_some()
         );
         // The hello announces the date only with a minimum.
-        let hello = server_hello(&graced, None).policy.unwrap();
+        let hello = server_hello(&graced, None, false).policy.unwrap();
         assert_eq!(
             (hello.minimum_client, hello.minimum_client_from),
             (0x0000_0003_0000_0000, 86_400)
@@ -362,7 +364,8 @@ mod tests {
     #[test]
     fn at_most_sixteen_requests_are_in_flight_and_ids_are_unique() {
         let config = Config::default();
-        let mut extension = Extension::new(server_capabilities(true), &config, Instant::now());
+        let mut extension =
+            Extension::new(server_capabilities(true, true), &config, Instant::now());
         for id in 0..16 {
             extension.begin(id).unwrap();
         }

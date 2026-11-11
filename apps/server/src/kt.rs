@@ -364,14 +364,14 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     out
 }
 
-fn record_key(account: &Id, hash: &[u8; 32]) -> Vec<u8> {
+pub(crate) fn record_key(account: &Id, hash: &[u8; 32]) -> Vec<u8> {
     let mut key = vec![PREFIX_RECORD];
     key.extend_from_slice(account);
     key.extend_from_slice(hash);
     key
 }
 
-fn current_key(account: &Id) -> Vec<u8> {
+pub(crate) fn current_key(account: &Id) -> Vec<u8> {
     let mut key = vec![PREFIX_CURRENT];
     key.extend_from_slice(account);
     key

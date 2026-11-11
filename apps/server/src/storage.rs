@@ -692,6 +692,7 @@ impl MemoryHistory {
                 deleted_ms,
             } => {
                 let mut count = 0;
+                // MLS commits stay: members need them to catch up (docs/e2ee.md §6.3).
                 for row in self.messages.values_mut().filter(|row| {
                     expirable(row) && row.author_account.as_deref() == Some(account.as_str())
                 }) {
@@ -955,7 +956,14 @@ impl MemoryStore {
                     .collect();
                 match decoded {
                     Some(records) => {
-                        self.kt.extend(records);
+                        // An empty value deletes the key.
+                        for (key, value) in records {
+                            if value.is_empty() {
+                                self.kt.remove(&key);
+                            } else {
+                                self.kt.insert(key, value);
+                            }
+                        }
                         Response::Done
                     }
                     None => Response::Rejected("malformed record".into()),

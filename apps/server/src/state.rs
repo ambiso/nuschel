@@ -795,6 +795,9 @@ pub struct State {
 
     /// The key-transparency directory's queue, when `kt/1` is offered.
     pub kt: Option<crate::kt::KtHandle>,
+    /// The MLS delivery service's queue and each group's epoch, when `mls/1` is
+    /// offered.
+    pub mls: Option<crate::mls::MlsHandle>,
 }
 
 impl State {
@@ -825,6 +828,7 @@ impl State {
             authz_pending: Default::default(),
             fanout,
             kt: None,
+            mls: None,
         }
     }
 

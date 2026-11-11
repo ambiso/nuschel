@@ -305,6 +305,35 @@ impl Default for Kt {
     }
 }
 
+/// The MLS delivery service (`mls/1`, docs/e2ee.md §6.3). Offered only with key
+/// transparency, which credentials are checked against.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Mls {
+    pub enabled: bool,
+    /// Key-package claims per account and minute.
+    pub claims_per_minute: u32,
+    /// Key-package uploads per account and minute.
+    pub uploads_per_minute: u32,
+    /// Member devices per group (docs/e2ee.md §6.7, open question 6).
+    pub max_devices: u32,
+    /// Welcomes older than this are dropped from the mailbox (the catch-up window,
+    /// docs/e2ee.md §6.3).
+    pub welcome_days: u32,
+}
+
+impl Default for Mls {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            claims_per_minute: 30,
+            uploads_per_minute: 10,
+            max_devices: nuschel_e2ee::MAX_GROUP_DEVICES as u32,
+            welcome_days: nuschel_e2ee::INACTIVE_DEVICE_DAYS as u32,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -417,6 +446,7 @@ pub struct Config {
     pub password_hashing: PasswordHashing,
     pub history: History,
     pub kt: Kt,
+    pub mls: Mls,
 }
 
 impl Default for Config {
@@ -483,6 +513,7 @@ impl Default for Config {
             password_hashing: PasswordHashing::default(),
             history: History::default(),
             kt: Kt::default(),
+            mls: Mls::default(),
         }
     }
 }
@@ -624,6 +655,18 @@ impl Config {
                 "history.unlimited_networks: {network:?} is not a network like 10.0.0.0/8"
             )));
         }
+        let mls = &self.mls;
+        if mls.claims_per_minute == 0
+            || mls.uploads_per_minute == 0
+            || mls.welcome_days == 0
+            || mls.max_devices == 0
+            || mls.max_devices as usize > nuschel_e2ee::MAX_GROUP_DEVICES
+        {
+            return Err(ConfigError::Invalid(format!(
+                "mls limits must be nonzero, and mls.max_devices at most {}",
+                nuschel_e2ee::MAX_GROUP_DEVICES
+            )));
+        }
         if self.max_queued_bytes < 64 * 1024 {
             return Err(ConfigError::Invalid(
                 "max_queued_bytes must be at least 64 KiB".into(),
@@ -757,6 +800,18 @@ mod tests {
             .settings()
             .unwrap_err();
         assert!(error.to_string().contains("credential"));
+        let mls = Config::default().mls;
+        assert!(mls.enabled);
+        assert_eq!((mls.max_devices, mls.welcome_days), (1000, 90));
+        for bad in ["[mls]\nmax_devices = 1001", "[mls]\nclaims_per_minute = 0"] {
+            assert!(Config::from_toml(bad).unwrap().settings().is_err(), "{bad}");
+        }
+        assert!(
+            !Config::from_toml("[mls]\nenabled = false")
+                .unwrap()
+                .mls
+                .enabled
+        );
         let members = Config::from_toml("[kt]\nhistory = \"members\"").unwrap();
         assert_eq!(members.kt.history, KtHistoryAccess::Members);
     }

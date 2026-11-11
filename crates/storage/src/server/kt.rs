@@ -114,6 +114,14 @@ impl ServerStore {
         with_pool!(&self.pool, |pool| {
             let mut transaction = pool.begin().await?;
             for (key, value) in &records {
+                // An empty value deletes the key (nuschel-kt never writes one).
+                if value.is_empty() {
+                    sqlx::query("DELETE FROM kt_records WHERE key = $1")
+                        .bind(key)
+                        .execute(&mut *transaction)
+                        .await?;
+                    continue;
+                }
                 sqlx::query(
                     "INSERT INTO kt_records (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
                 )
@@ -175,6 +183,15 @@ mod tests {
         assert_eq!(store.kt_get(&[encode(b"new")]).await?, vec![None]);
         // Oversized keys are refused before decoding.
         assert!(store.kt_get(&[encode(&[0; 2000])]).await.is_err());
+        // An empty value deletes the key, in the same transaction as the rest.
+        store
+            .kt_write(&[pair(b"v\x01a", b""), pair(b"v\x03", b"5")])
+            .await?;
+        assert_eq!(
+            store.kt_get(&[encode(b"v\x01a"), encode(b"v\x03")]).await?,
+            vec![None, Some(encode(b"5"))]
+        );
+        assert_eq!(store.kt_scan(&encode(b"v\x01")).await?.len(), 1);
         Ok(())
     }
 }

@@ -19,7 +19,7 @@ use nuschel_ipc::server::{
 /// within their catch-up window, docs/e2ee.md §6.3, are excluded in both).
 macro_rules! expirable {
     () => {
-        "kind = 0 AND deleted_ms IS NULL"
+        "kind = 0 AND deleted_ms IS NULL AND format <> 4"
     };
 }
 
@@ -451,7 +451,8 @@ impl ServerStore {
         })
     }
 
-    /// Tombstone every message by `account` (the operator's erase).
+    /// Tombstone every message by `account` (the operator's erase). MLS commits
+    /// (format 4) stay: members need them to catch up (docs/e2ee.md §6.3).
     pub async fn history_erase(&self, account: &str, deleted_ms: i64) -> Result<u64, Error> {
         too_long(account, MAX_ID)?;
         let statement = concat!(
@@ -939,6 +940,41 @@ mod tests {
         store.history_purge(&other).await?;
         assert_eq!(store.history_retentions(None).await?.len(), 0);
         assert_eq!(store.history_heads(None).await?.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mls_commits_survive_retention_and_the_erase() -> Result<(), Error> {
+        let directory = tempfile::tempdir().map_err(|_| Error::InvalidMessage)?;
+        let store = ServerStore::open(&directory.path().join("server.sqlite3")).await?;
+        let conversation = "c".repeat(32);
+        for seq in 1..=4 {
+            let mut message = row(seq, "x", None);
+            // Rows 1 and 3 are commits (MLS_HANDSHAKE), 2 and 4 application data.
+            message.format = if seq % 2 == 1 { 4 } else { 3 };
+            store.history_append(&message).await?;
+        }
+        assert_eq!(
+            store
+                .history_count_expirable(&conversation, i64::MAX)
+                .await?,
+            2
+        );
+        assert_eq!(
+            store.history_expire(&conversation, i64::MAX, 7, 10).await?,
+            2
+        );
+        assert_eq!(store.history_erase(&"a".repeat(32), 8).await?, 0);
+        let page = store
+            .history_page(&query(Anchor::After(0), 10, vec![(1, u64::MAX)]))
+            .await?;
+        let kept: Vec<u64> = page
+            .rows
+            .iter()
+            .filter(|row| row.deleted_ms.is_none())
+            .map(|row| row.seq)
+            .collect();
+        assert_eq!(kept, [1, 3]);
         Ok(())
     }
 }

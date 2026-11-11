@@ -178,7 +178,7 @@ impl State {
         }
     }
 
-    fn text_limited(&mut self, session: u32) -> Result<(), Failure> {
+    pub(crate) fn text_limited(&mut self, session: u32) -> Result<(), Failure> {
         if self.rate_limited(session) {
             let retry = 1000 / u64::from(self.settings.config.message_limit.max(1));
             return Err((Code::RateLimited, retry.max(1)));
@@ -316,6 +316,13 @@ impl State {
             | kind::KT_HISTORY
             | kind::KT_AUDIT
             | kind::KT_HEAD => self.kt_frame(session, frame),
+            kind::MLS_KEY_PACKAGE_UPLOAD
+            | kind::MLS_KEY_PACKAGE_CLAIM
+            | kind::MLS_COMMIT
+            | kind::MLS_SEND
+            | kind::MLS_WELCOME_FETCH
+            | kind::MLS_WELCOME_ACK
+            | kind::MLS_JOIN_INFO_REQUEST => self.mls_frame(session, frame),
             _ => self.extension_error(session, request_id, fail(Code::Unsupported)),
         }
     }
@@ -324,6 +331,10 @@ impl State {
 
     fn chat_send(&mut self, session: u32, message: v1::ChatSend) -> Result<(), Failure> {
         let id = conversation(&message.conversation)?;
+        // An end-to-end conversation never takes plaintext (docs/e2ee.md §7.2).
+        if self.mls_group(&id) {
+            return Err(fail(Code::Unsupported));
+        }
         let key = nuschel::id(&message.idempotency_key).ok_or(fail(Code::Malformed))?;
         if message.format != v1::Format::Text as i32 || message.content.is_empty() {
             return Err(fail(Code::Malformed));
@@ -388,6 +399,10 @@ impl State {
 
     fn chat_edit(&mut self, session: u32, message: v1::ChatEdit) -> Result<(), Failure> {
         let id = conversation(&message.conversation)?;
+        // Edits in end-to-end conversations are envelopes inside MLS.
+        if self.mls_group(&id) {
+            return Err(fail(Code::Unsupported));
+        }
         if message.format != v1::Format::Text as i32 || message.content.is_empty() {
             return Err(fail(Code::Malformed));
         }
@@ -445,6 +460,11 @@ impl State {
 
     fn chat_delete(&mut self, session: u32, message: v1::ChatDelete) -> Result<(), Failure> {
         let id = conversation(&message.conversation)?;
+        // Deletions in end-to-end conversations are envelopes inside MLS, and a
+        // commit row must never become a tombstone (docs/e2ee.md §6.3).
+        if self.mls_group(&id) {
+            return Err(fail(Code::Unsupported));
+        }
         self.text_limited(session)?;
         let (account, user_id, name) = self.author(session);
         // Authors may delete their own messages at any time, even after
@@ -501,6 +521,7 @@ impl State {
     pub fn stored(&mut self, done: Done, response: Option<Response>) {
         match done {
             Done::Nothing => {}
+            Done::Mls(stored) => self.mls_stored(*stored, response),
             Done::Request {
                 session,
                 request_id,
@@ -577,7 +598,7 @@ impl State {
 
     /// Live fan-out, under the lock, to whoever may read the conversation now
     /// (never `origin`, which has the acknowledgement).
-    fn deliver(&mut self, id: &Id, delivery: Delivery, origin: u32) {
+    pub(crate) fn deliver(&mut self, id: &Id, delivery: Delivery, origin: u32) {
         let (message, stock) = match delivery {
             Delivery::Message { message, stock } => (message, stock),
             Delivery::Event { message } => (message, None),

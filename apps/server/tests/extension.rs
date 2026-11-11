@@ -660,7 +660,7 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
     assert!(negotiated.nuschel);
     assert_eq!(
         negotiated.capabilities,
-        ["history/1", "subscribe/1", "typing/1", "kt/1"]
+        ["history/1", "subscribe/1", "typing/1", "kt/1", "mls/1"]
     );
     // The key-transparency log comes with `kt/1`.
     assert_eq!(negotiated.kt_log.len(), 71);
@@ -680,7 +680,8 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
 
 #[tokio::test]
 async fn a_record_the_server_no_longer_meets_fails_before_authenticating() {
-    let fixture = Fixture::start("").await;
+    // A server that dropped `mls/1` (docs/e2ee.md §7.1).
+    let fixture = Fixture::start("[mls]\nenabled = false").await;
     let mut wanting = options(fixture.address(), &fixture.running.fingerprint, "Alice", 0);
     wanting.required = requirement(true, &["mls/1"]);
     let error = Session::spawn(wanting).failure().await;

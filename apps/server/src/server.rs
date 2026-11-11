@@ -5,7 +5,7 @@ use crate::{
     config::Settings,
     connection, conversations, extension, history, kt,
     limits::LeakyBucket,
-    password,
+    mls, password,
     state::{Ban, Channel, Counters, Registered, State},
     storage::{self, Backend, StorageHandle},
     tls, udp,
@@ -653,6 +653,22 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         None
     };
     let kt_log = state.kt.as_ref().map(|kt| kt.descriptor.clone());
+    // The MLS delivery service needs key transparency (credentials are checked
+    // against it); its own storage worker too.
+    let mls_service = match (&state.kt, settings.config.mls.enabled) {
+        (Some(kt), true) => {
+            let (handle, service) = mls::open(
+                &settings.config.mls,
+                storage::start(backend.clone()),
+                kt.log_id.0,
+            )
+            .await?;
+            state.mls = Some(handle);
+            Some(service)
+        }
+        _ => None,
+    };
+    let mls_offered = mls_service.is_some();
     if state
         .registry
         .users
@@ -718,9 +734,13 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         version_frame: extension::version_frame(&server_version(&settings), None),
         nuschel_version_frame: extension::version_frame(
             &server_version(&settings),
-            Some(&extension::server_hello(&settings, kt_log.as_deref())),
+            Some(&extension::server_hello(
+                &settings,
+                kt_log.as_deref(),
+                mls_offered,
+            )),
         ),
-        capabilities: extension::server_capabilities(kt_log.is_some()),
+        capabilities: extension::server_capabilities(kt_log.is_some(), mls_offered),
         shutdown: Notify::new(),
         login_failures: Mutex::new(HashMap::new()),
     });
@@ -748,6 +768,9 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         tasks.push(tokio::spawn(statistics(server.clone())));
     }
     if let Some(service) = kt_service {
+        tasks.push(tokio::spawn(service.run(server.clone())));
+    }
+    if let Some(service) = mls_service {
         tasks.push(tokio::spawn(service.run(server.clone())));
     }
     Ok(Running {

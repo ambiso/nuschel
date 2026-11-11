@@ -29,6 +29,9 @@ pub enum Done {
         seq: u64,
         delivery: Delivery,
     },
+    /// An MLS commit or application message (`mls/1`): acknowledge with
+    /// `MlsAck`, deliver, and for a commit tell the delivery service.
+    Mls(Box<crate::mls::Stored>),
     /// A stock client's channel message: deliver to Nuschel readers, or the
     /// stock frame if storing failed.
     Stock {

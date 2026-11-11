@@ -245,6 +245,25 @@ pub enum Action<'a> {
     },
     KtAudit,
     KtHead,
+
+    // ---- MLS, mls/1 (docs/e2ee.md §6.3) ----
+    /// Upload key packages for one's own devices (registered accounts; the
+    /// delivery service checks them against the account's key-transparency
+    /// record).
+    MlsUpload,
+    /// Claim `account`'s key packages: one's own, or a direct-conversation
+    /// partner's.
+    MlsClaim {
+        account: &'a Id,
+    },
+    /// Create `conversation`'s group or commit to it: those who may post there.
+    MlsCommit(&'a Id),
+    /// An application message to `conversation`'s group.
+    MlsSend(&'a Id),
+    /// One's own devices' Welcome mailboxes.
+    MlsMailbox,
+    /// `conversation`'s GroupInfo and tree: its readers.
+    MlsJoinInfo(&'a Id),
 }
 
 /// Why an action is refused, in the protocol's terms.
@@ -565,6 +584,13 @@ impl State {
             A::KtStatus | A::KtAudit | A::KtHead => Ok(()),
             A::KtLookup { account } => found(self.registry.by_account(account).is_some()),
             A::KtHistory { account } => found(self.kt_history_allowed(user, account)),
+
+            A::MlsUpload | A::MlsMailbox => found(user.account.is_some()),
+            A::MlsClaim { account } => found(user.account.is_some_and(|me| {
+                me == *account || self.conversations.direct(me, *account).is_some()
+            })),
+            A::MlsCommit(id) | A::MlsSend(id) => found(self.can_write(actor, id)),
+            A::MlsJoinInfo(id) => found(self.can_read(actor, id)),
         }
     }
 

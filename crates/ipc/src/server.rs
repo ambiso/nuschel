@@ -243,8 +243,14 @@ pub const EXPIRE_BATCH: u32 = 1000;
 /// `expirable!` SQL predicate (crates/storage/src/server/history.rs), which
 /// must say the same.
 pub fn expirable(row: &StoredMessage) -> bool {
-    row.kind == MessageKind::Message && row.deleted_ms.is_none()
+    row.kind == MessageKind::Message
+        && row.deleted_ms.is_none()
+        && row.format != FORMAT_MLS_HANDSHAKE
 }
+
+/// `nuschel.v1.Format.MLS_HANDSHAKE`: MLS commits and proposals, which retention
+/// and the erase keep (members catch up through them).
+pub const FORMAT_MLS_HANDSHAKE: u8 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -598,6 +604,9 @@ pub enum ServerStorageRequest {
         prefix: String,
     },
     /// Insert or overwrite every record in one transaction: all or none (`Done`).
+    /// An empty value deletes the key (nuschel-kt never writes one; the MLS
+    /// delivery service in `nuscheld` uses it for consumed key packages and
+    /// fetched Welcomes).
     KtWrite {
         records: Vec<(String, String)>,
     },
