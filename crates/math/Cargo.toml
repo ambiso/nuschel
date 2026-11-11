@@ -14,6 +14,10 @@ rayon = "1.12.0"
 typst = "0.15.1"
 typst-layout = "0.15.1"
 typst-render = "0.15.1"
+# What Typst reads as a delimiter (its own lexer uses it).
+unicode-math-class = "0.1"
+# Which characters join the next into one grapheme (as Typst lexes them).
+unicode-segmentation = "1.13"
 
 [lints]
 workspace = true

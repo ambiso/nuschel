@@ -2774,6 +2774,8 @@ dependencies = [
  "typst",
  "typst-layout",
  "typst-render",
+ "unicode-math-class",
+ "unicode-segmentation",
 ]
 
 [[package]]

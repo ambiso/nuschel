@@ -20792,6 +20792,14 @@ rec {
             name = "typst-render";
             packageId = "typst-render";
           }
+          {
+            name = "unicode-math-class";
+            packageId = "unicode-math-class";
+          }
+          {
+            name = "unicode-segmentation";
+            packageId = "unicode-segmentation";
+          }
         ];
 
       };

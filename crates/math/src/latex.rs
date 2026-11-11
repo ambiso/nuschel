@@ -164,8 +164,16 @@ impl<'a> Parser<'a> {
         Ok(token)
     }
 
-    /// One atom of output, followed by a space.
+    /// One atom of output, followed by a space. A delimiter character is
+    /// escaped: unescaped, Typst would open or close a group with it, and
+    /// take in the parenthesis that ends a call.
     fn emit(&mut self, atom: &str) -> Result<(), Error> {
+        let mut chars = atom.chars();
+        if let (Some(c), None) = (chars.next(), chars.next())
+            && is_delimiter(c)
+        {
+            self.out.push('\\');
+        }
         self.out.push_str(atom);
         self.out.push(' ');
         self.limit()
@@ -505,6 +513,9 @@ impl<'a> Parser<'a> {
             }
             c if c.is_control() || c.is_whitespace() => Ok(()),
             c if c.is_ascii() => self.emit(&format!("\\{c}")),
+            // A character that joins the next one into one grapheme (Arabic
+            // number signs and the like) would take in what follows it.
+            c if joins_next(c) => self.emit(&string_literal(&c.to_string())),
             c => self.emit(c.encode_utf8(&mut [0; 4])),
         }
     }
@@ -803,7 +814,11 @@ impl<'a> Parser<'a> {
             },
             _ => return error("a delimiter is missing"),
         };
-        Ok(delimiter.to_owned())
+        let mut chars = delimiter.chars();
+        Ok(match (chars.next(), chars.next()) {
+            (Some(c), None) if is_delimiter(c) => format!("\\{c}"),
+            _ => delimiter.to_owned(),
+        })
     }
 
     /// `\not` before a relation: its negated form, or a slash through it.
@@ -1045,6 +1060,29 @@ enum Kind {
     Cases,
     /// Rows of the equation itself, with alignment points.
     Lines,
+}
+
+/// Whether Typst's math syntax reads the non-ASCII `c` as syntax: an
+/// opening or closing delimiter (by its Unicode math class, as its lexer
+/// does) or a root (`√`, `∛`, `∜`, which take the next atom). ASCII syntax
+/// is escaped where it is written.
+fn is_delimiter(c: char) -> bool {
+    use typst::utils::default_math_class;
+    !c.is_ascii()
+        && (matches!(c, '√' | '∛' | '∜')
+            || matches!(
+                default_math_class(c),
+                Some(
+                    unicode_math_class::MathClass::Opening | unicode_math_class::MathClass::Closing
+                )
+            ))
+}
+
+/// Whether `c` forms one grapheme with a character after it, as Typst's
+/// lexer reads graphemes.
+fn joins_next(c: char) -> bool {
+    use unicode_segmentation::UnicodeSegmentation as _;
+    format!("{c})").graphemes(true).count() == 1 || format!("{c}a").graphemes(true).count() == 1
 }
 
 /// `raw` split at every `$` that is not escaped.
@@ -1869,6 +1907,55 @@ mod tests {
         }
         assert_eq!(ok("#x"), "\\# x");
         assert_eq!(ok("\\text{\"}"), "\"\\\"\"");
+    }
+
+    /// Found by fuzzing: `\\right<` wrote `⟨` before the `)` ending `lr(`,
+    /// and Typst read it as a group taking that parenthesis in. Every
+    /// character, typed or from a command, inside calls and as a delimiter.
+    #[test]
+    fn no_character_breaks_the_markup() {
+        assert_eq!(ok("\\left(x\\right<"), "lr(\\( x \\⟨)");
+        let ranges = [
+            0x80..0x3000_u32,
+            0xfe00..0xff00,
+            0x1d400..0x1d800,
+            0x1f300..0x1f400,
+        ];
+        for c in ranges.into_iter().flatten().filter_map(char::from_u32) {
+            for tex in [
+                format!("\\frac{{{c}}}{{b}}"),
+                format!("x^{{{c}}} \\sqrt{{a {c}}}"),
+                format!("\\left( {c} \\right) \\text{{{c}}}"),
+            ] {
+                if let Err(Error(reason)) = to_typst(&tex) {
+                    assert!(!reason.starts_with("internal"), "{tex:?}: {reason}");
+                }
+            }
+        }
+        for name in [
+            "langle",
+            "rangle",
+            "lceil",
+            "rceil",
+            "lfloor",
+            "rfloor",
+            "lgroup",
+            "rgroup",
+            "llbracket",
+            "rrbracket",
+            "ulcorner",
+            "urcorner",
+            "llcorner",
+            "lrcorner",
+            "Vert",
+            "vert",
+            "uparrow",
+            "backslash",
+        ] {
+            ok(&format!(
+                "\\frac{{\\{name}}}{{b}} \\left\\{name} x \\right\\{name}"
+            ));
+        }
     }
 
     #[test]
