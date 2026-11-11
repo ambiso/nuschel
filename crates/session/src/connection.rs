@@ -577,7 +577,7 @@ impl State {
                     // Kick and ban reasons stay plain: Mumble escapes those itself.
                     let description = edit.description.map(|text| {
                         let text = if self.allow_html {
-                            escape_html(&text)
+                            text_html(&text)
                         } else {
                             text
                         };
@@ -659,7 +659,7 @@ impl State {
             }
             Command::SetComment(comment) => {
                 let comment = if self.allow_html {
-                    escape_html(&comment)
+                    text_html(&comment)
                 } else {
                     comment
                 };
@@ -1980,9 +1980,76 @@ pub fn legacy_body(body: &str, html: bool) -> String {
         std::borrow::Cow::Borrowed(body)
     };
     if html {
-        escape_html(&body)
+        text_html(&body)
     } else {
         body.into_owned()
+    }
+}
+
+/// Plain text as Mumble HTML: escaped, line breaks kept, and web links made
+/// clickable the way stock Mumble's chat bar makes them (receivers show the
+/// HTML they get; they do not detect links themselves).
+pub fn text_html(body: &str) -> String {
+    let mut out = String::with_capacity(body.len() + 16);
+    let mut rest = body;
+    while let Some((start, end)) = next_link(rest) {
+        out.push_str(&escape_html(&rest[..start]));
+        let url = &rest[start..end];
+        let href = if url[..4].eq_ignore_ascii_case("www.") {
+            format!("https://{url}")
+        } else {
+            url.to_owned()
+        };
+        out.push_str(&format!(
+            "<a href=\"{}\">{}</a>",
+            escape_html(&href),
+            escape_html(url)
+        ));
+        rest = &rest[end..];
+    }
+    out.push_str(&escape_html(rest));
+    out
+}
+
+/// The next link in `text` as a byte range: http(s):// or mumble:// URLs and
+/// www. addresses at a word start, with URL characters as Mumble matches them,
+/// minus trailing punctuation that belongs to the sentence.
+fn next_link(text: &str) -> Option<(usize, usize)> {
+    const PREFIXES: [&str; 4] = ["https://", "http://", "mumble://", "www."];
+    let lower = text.to_ascii_lowercase();
+    let mut from = 0;
+    loop {
+        let (start, prefix) = PREFIXES
+            .iter()
+            .filter_map(|prefix| {
+                lower[from..]
+                    .find(prefix)
+                    .map(|at| (from + at, prefix.len()))
+            })
+            .min()?;
+        let word_start = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
+        let mut end = start
+            + text[start..]
+                .find(|c: char| {
+                    !(c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c))
+                })
+                .unwrap_or(text.len() - start);
+        loop {
+            let link = &text[start..end];
+            let unbalanced =
+                link.ends_with(')') && link.matches(')').count() > link.matches('(').count();
+            if !(unbalanced || link.ends_with(['.', ',', ';', ':', '!', '?', '\''])) {
+                break;
+            }
+            end -= 1;
+        }
+        if word_start && end > start + prefix {
+            return Some((start, end));
+        }
+        from = start + 1;
     }
 }
 
@@ -2497,6 +2564,30 @@ mod tests {
             .unwrap();
         assert!(state.outbound.is_empty());
         assert!(matches!(rx.try_recv(), Ok(SessionEvent::Notice(_))));
+    }
+
+    #[test]
+    fn links_are_clickable_for_stock_mumble() {
+        assert_eq!(
+            text_html("see https://google.com."),
+            "see <a href=\"https://google.com\">https://google.com</a>."
+        );
+        assert_eq!(
+            text_html("(www.example.org/a?b=1&c=2)"),
+            "(<a href=\"https://www.example.org/a?b=1&amp;c=2\">www.example.org/a?b=1&amp;c=2</a>)"
+        );
+        assert_eq!(
+            text_html("wiki https://en.wikipedia.org/wiki/Rust_(language) ok"),
+            "wiki <a href=\"https://en.wikipedia.org/wiki/Rust_(language)\">https://en.wikipedia.org/wiki/Rust_(language)</a> ok"
+        );
+        // Not at a word start, nothing after the prefix, other schemes: plain text.
+        assert_eq!(text_html("xhttps://a.b"), "xhttps://a.b");
+        assert_eq!(text_html("https:// and www."), "https:// and www.");
+        assert_eq!(text_html("javascript:alert(1)"), "javascript:alert(1)");
+        assert_eq!(
+            text_html("<b>\"x\"</b>"),
+            "&lt;b&gt;&quot;x&quot;&lt;/b&gt;"
+        );
     }
 
     #[test]
