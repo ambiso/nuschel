@@ -208,16 +208,24 @@ def notice_zoom(args, root, shell, registry, bots, profile, port, pin, shot):
     for size_name, width in [("normal", 1280), ("narrow", 900)]:
         shell.chord("Control_L", "0")
         shell.place("Nuschl", 40, 40, width, 800)
-        for percent, steps in [(100, 0), (125, 2), (150, 1), (200, 2)]:
+        for percent, steps in [(100, 0), (125, 2), (150, 3), (200, 5)]:
+            # Reconnect at the baseline size before exercising the notice at
+            # the requested zoom. Header actions can lie outside a narrow,
+            # heavily zoomed viewport; they are not the behavior under test.
+            shell.chord("Control_L", "0")
+            connect = named("push button", "Connect")
+            if connect:
+                connect.press()
+            eventually(lambda: next((node for node, role, name, _ in items(application)
+                                     if role == "push button" and name.startswith("Screenshot server;")
+                                     and "voice here, muted" in name), None),
+                       "the server did not reconnect while muted", timeout=30)
             for _ in range(steps):
                 shell.chord("Control_L", "equal")
                 time.sleep(0.2)
             eventually(lambda: abs(json.loads((profile / "config/settings.json").read_text())
                                    ["appearance"]["zoom"] - percent / 100) < 0.001,
                        f"Ctrl++ did not reach {percent}%")
-            connect = named("push button", "Connect")
-            if connect:
-                connect.press()
             rail = eventually(lambda: next((node for node, role, name, _ in items(application)
                                             if role == "push button" and name.startswith("Screenshot server;")
                                             and "voice here, muted" in name), None),
@@ -233,8 +241,9 @@ def notice_zoom(args, root, shell, registry, bots, profile, port, pin, shot):
             name = f"44-muted-{size_name}-{percent}"
             shot(name)
             rx, ry, rw, rh = rail_bounds
+            margin = round(12 * percent / 100)
             subprocess.run(["magick", str(args.output / f"{name}.png"), "-crop",
-                            f"{rw + 8}x{rh + 8}+{rx + 8}+{ry + 8}", "+repage",
+                            f"{rw + 2 * margin}x{rh + 2 * margin}+{max(0, rx + 12 - margin)}+{max(0, ry + 12 - margin)}", "+repage",
                             str(args.output / f"{name}-badge.png")], check=True)
             moderator.send(kind="moderate", session=session, action="kick", reason=reason)
             notice = eventually(lambda: named("status bar", "Connection notice"),
