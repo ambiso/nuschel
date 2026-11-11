@@ -395,28 +395,46 @@ impl Walk {
     }
 }
 
-/// Roughly how deep elements nest: start tags less end tags, void ones aside.
+/// Roughly how deep elements nest, and never much less than the parser's
+/// tree: start tags, void ones aside, less the end tags that close the
+/// innermost one. An end tag that closes nothing (`<b></i>`) leaves the
+/// parser's elements open, and it looks through all of them for a match:
+/// counting it as a close let repeated ones build a tree deep enough to take
+/// longer than the content worker's five seconds.
 fn nesting(source: &str) -> usize {
     const VOID: &[&[u8]] = &[
         b"area", b"base", b"br", b"col", b"embed", b"hr", b"img", b"input", b"link", b"meta",
         b"param", b"source", b"track", b"wbr",
     ];
-    let (mut depth, mut deepest) = (0_usize, 0);
+    // Longer names never match an end tag (and are read no further).
+    const MAX_NAME: usize = 64;
+    let mut open: Vec<&[u8]> = Vec::new();
+    let mut deepest = 0;
     for (at, _) in source.match_indices('<') {
         let rest = &source.as_bytes()[at + 1..];
-        if rest.first() == Some(&b'/') {
-            depth = depth.saturating_sub(1);
+        let (end, rest) = match rest.split_first() {
+            Some((b'/', rest)) => (true, rest),
+            _ => (false, rest),
+        };
+        let rest = &rest[..rest.len().min(MAX_NAME + 1)];
+        let name = rest
+            .iter()
+            .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+            .map_or(rest, |length| &rest[..length]);
+        if !name.first().is_some_and(u8::is_ascii_alphabetic) {
             continue;
         }
-        let name: Vec<u8> = rest
-            .iter()
-            .take(8)
-            .take_while(|byte| byte.is_ascii_alphanumeric())
-            .map(u8::to_ascii_lowercase)
-            .collect();
-        if name.first().is_some_and(u8::is_ascii_alphabetic) && !VOID.contains(&&name[..]) {
-            depth += 1;
-            deepest = deepest.max(depth);
+        if end {
+            if name.len() <= MAX_NAME
+                && open
+                    .last()
+                    .is_some_and(|last| last.eq_ignore_ascii_case(name))
+            {
+                open.pop();
+            }
+        } else if !VOID.iter().any(|void| void.eq_ignore_ascii_case(name)) {
+            open.push(name);
+            deepest = deepest.max(open.len());
         }
     }
     deepest
@@ -931,7 +949,7 @@ pub fn expand(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
 mod tests {
     use super::{MAX_LINKS, MAX_URL_BYTES};
     use crate::{ContentRenderer, Error};
-    use nuschel_core::{ContentBlock, EMBED, MessageDocument, Style, TextRole};
+    use nuschel_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument, Style, TextRole};
 
     /// (visible text, [(linked text, url)]) of each text block; neighbouring
     /// spans of one link (differently styled) count as one.
@@ -1302,6 +1320,18 @@ mod tests {
         );
         let deep = format!("<script>x()</script>{}a<br>b", "<p>".repeat(2_000));
         assert_eq!(renderer.legacy_plain_text(&deep)?, "a\nb");
+        // End tags that close nothing leave everything open: the parser took
+        // longer than the worker's five seconds for the first at 256 KiB.
+        for unit in ["<b></i>", "<em></x>", "<x-a></x-b>", "<div></span>"] {
+            let source = format!("{}x", unit.repeat(MAX_CONTENT_BYTES / unit.len() - 1));
+            let started = std::time::Instant::now();
+            assert_eq!(renderer.legacy_plain_text(&source)?, "x");
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "{unit}: {:?}",
+                started.elapsed()
+            );
+        }
         // A huge style attribute is ignored rather than parsed.
         let css = format!(
             "<span style=\"{}font-weight:bold\">x</span>",
