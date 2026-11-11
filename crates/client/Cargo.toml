@@ -7,10 +7,19 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = ["native"]
+# The driver for Linux, Windows and macOS: tokio, the native session and the
+# sandboxed workers. Without it the SDK builds for wasm32-unknown-unknown.
+native = ["dep:nuschel-ipc", "dep:nuschel-session", "dep:tokio", "nuschel-core/uuid"]
+
 [dependencies]
 nuschel-core.workspace = true
+nuschel-ipc = { workspace = true, optional = true }
 nuschel-protocol.workspace = true
+nuschel-session = { workspace = true, optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt", "time", "sync", "macros"], optional = true }
 
 [lints]
 workspace = true

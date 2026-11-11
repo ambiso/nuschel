@@ -29,7 +29,7 @@ impl Desktop {
         let request = self.viewer_requests;
         let loading = match &image.source {
             Some(source) => {
-                self.backend.decode_view(request, source.to_string());
+                self.services.decode_view(request, source.to_string());
                 true
             }
             None => false,

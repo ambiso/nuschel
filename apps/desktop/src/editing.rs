@@ -6,12 +6,14 @@
 //! they may (`moderators_delete`) and they hold Write on the channel. The
 //! server checks every request again; its refusals show like a failed send.
 use crate::{
-    backend::{CacheKey, ChangeRequest},
     menus::PromptAction,
     state::{ChannelView, Desktop, ServerView, Status},
 };
 use gpui_kit::*;
-use nuschel_client::timeline::Change;
+use nuschel_client::{
+    native::{CacheKey, ChangeRequest},
+    timeline::Change,
+};
 
 /// The message the composer is editing, and what it held before.
 pub struct Editing {
@@ -196,7 +198,7 @@ impl Desktop {
             cache: view.cache_key(channel_view),
             moderator: false,
         };
-        match self.backend.change_message(change) {
+        match self.driver.change_message(change) {
             Ok(()) => {
                 self.cancel_edit(window, cx);
             }
@@ -261,7 +263,7 @@ impl Desktop {
             cache: view.cache_key(channel_view),
             moderator: view.moderates(channel_view),
         };
-        if let Err(error) = self.backend.change_message(change) {
+        if let Err(error) = self.driver.change_message(change) {
             self.servers[server].notice = Some(error);
         }
     }

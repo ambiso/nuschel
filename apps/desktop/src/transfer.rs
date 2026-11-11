@@ -161,7 +161,7 @@ impl Desktop {
             };
             let name = display_name(&path.file_name().unwrap_or_default().to_string_lossy());
             let started = {
-                let _runtime = self.backend.runtime().enter();
+                let _runtime = self.driver.runtime().enter();
                 Transfer::start(Some(&path))
             };
             let request = TransferRequest::Offer {
@@ -197,7 +197,7 @@ impl Desktop {
                 commands: Some(worker.commands.clone()),
             });
             let (updates, receiver) = mpsc::channel(32);
-            self.backend.runtime().spawn(run_offer(worker, updates));
+            self.driver.runtime().spawn(run_offer(worker, updates));
             follow(id, receiver, cx);
         }
         cx.notify();
@@ -291,7 +291,7 @@ impl Desktop {
             servers,
         };
         let started = {
-            let _runtime = self.backend.runtime().enter();
+            let _runtime = self.driver.runtime().enter();
             Transfer::start(None)
         };
         self.transfers
@@ -310,7 +310,7 @@ impl Desktop {
             Ok(worker) if worker.commands.try_send(request).is_ok() => {
                 download.commands = Some(worker.commands.clone());
                 let (updates, receiver) = mpsc::channel(32);
-                self.backend
+                self.driver
                     .runtime()
                     .spawn(run_download(worker, path, updates));
                 follow(id, receiver, cx);
@@ -493,7 +493,7 @@ impl Desktop {
                 expected_peer,
             }
         };
-        let posted = self.backend.command(&server.id, command).is_ok();
+        let posted = self.driver.command(&server.id, command).is_ok();
         outgoing.posted |= posted;
         Some(posted)
     }

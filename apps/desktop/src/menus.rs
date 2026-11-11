@@ -134,7 +134,7 @@ impl Desktop {
             for channel in channel.into_iter().chain([0]) {
                 if !view.permissions.contains_key(&channel) {
                     let _ = self
-                        .backend
+                        .driver
                         .command(&view.id, Command::RequestPermissions(channel));
                 }
             }
@@ -148,7 +148,7 @@ impl Desktop {
 
     pub fn run(&mut self, server: usize, command: Command) {
         if let Some(view) = self.servers.get_mut(server)
-            && let Err(error) = self.backend.command(&view.id, command)
+            && let Err(error) = self.driver.command(&view.id, command)
         {
             view.notice = Some(error);
         }
@@ -1002,7 +1002,7 @@ impl Desktop {
             || !self.servers[server].descriptions.contains_key(&channel)
         {
             let id = self.servers[server].id.clone();
-            let _ = self.backend.command(
+            let _ = self.driver.command(
                 &id,
                 Command::RequestBlobs {
                     textures: vec![],
@@ -1058,16 +1058,16 @@ impl Desktop {
                     .get(&session)
                     .is_none_or(|(source, _)| source != comment)
                 {
-                    self.backend.render_html(
+                    self.driver.render_html(
                         view.id.clone(),
                         view.generation,
-                        crate::backend::RenderKey::Comment(session),
+                        nuschel_client::native::RenderKey::Comment(session),
                         comment.clone(),
                     );
                 }
             }
             (None, Some(_)) => {
-                let _ = self.backend.command(
+                let _ = self.driver.command(
                     &view.id,
                     Command::RequestBlobs {
                         textures: vec![],

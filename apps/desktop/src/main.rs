@@ -7,7 +7,6 @@ mod appearance;
 mod assets;
 mod attachments;
 mod autostart;
-mod backend;
 mod chrome;
 mod dialogs;
 mod directs;
@@ -32,9 +31,9 @@ mod preview;
 mod scrolling;
 mod search;
 mod selection;
+mod services;
 mod settings;
 mod shortcuts;
-mod sounds;
 mod state;
 mod theme;
 mod timeline_keys;
@@ -145,7 +144,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Some(Action::Render { text }) = arguments.command {
-        let worker = backend::content_worker().ok_or("cannot locate the content worker")?;
+        let worker =
+            nuschel_client::native::content_worker().ok_or("cannot locate the content worker")?;
         let document = runtime.block_on(nuschel_ipc::host::render_content(worker, &text))?;
         println!("{}", serde_json::to_string(&document)?);
         return Ok(());

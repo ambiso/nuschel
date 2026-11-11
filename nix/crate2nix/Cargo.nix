@@ -21900,13 +21900,29 @@ rec {
             packageId = "nuschel-core";
           }
           {
+            name = "nuschel-ipc";
+            packageId = "nuschel-ipc";
+            optional = true;
+          }
+          {
             name = "nuschel-protocol";
             packageId = "nuschel-protocol";
+          }
+          {
+            name = "nuschel-session";
+            packageId = "nuschel-session";
+            optional = true;
           }
           {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            optional = true;
+            features = [ "rt" "time" "sync" "macros" ];
           }
         ];
         devDependencies = [
@@ -21920,7 +21936,11 @@ rec {
             packageId = "serde_json";
           }
         ];
-
+        features = {
+          "default" = [ "native" ];
+          "native" = [ "dep:nuschel-ipc" "dep:nuschel-session" "dep:tokio" "nuschel-core/uuid" ];
+        };
+        resolvedDefaultFeatures = [ "default" "native" ];
       };
       "nuschel-content" = rec {
         crateName = "nuschel-content";

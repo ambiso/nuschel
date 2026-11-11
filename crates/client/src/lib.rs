@@ -6,8 +6,11 @@
 
 pub mod conversation;
 pub mod favicon;
+#[cfg(feature = "native")]
+pub mod native;
 mod navigation;
 pub mod server;
+pub mod sounds;
 pub mod timeline;
 pub mod tree;
 pub use navigation::*;

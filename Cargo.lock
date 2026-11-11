@@ -6707,9 +6707,12 @@ name = "nuschel-client"
 version = "0.1.0"
 dependencies = [
  "nuschel-core",
+ "nuschel-ipc",
  "nuschel-protocol",
+ "nuschel-session",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

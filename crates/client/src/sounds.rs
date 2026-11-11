@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! When sound effects play. The media worker synthesises and mixes them; the
-//! backend sends each to the connection's worker and keeps quiet while
+//! native driver sends each to the connection's worker and keeps quiet while
 //! deafened, except for the deafen sound itself (as stock Mumble does).
 use nuschel_core::audio::Sound;
 

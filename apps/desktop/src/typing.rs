@@ -69,7 +69,7 @@ impl Desktop {
             session: 0,
         };
         let command = Command::Nuschel(NuschelRequest::Typing(typing));
-        if self.backend.command(&view.id, command).is_ok() {
+        if self.driver.command(&view.id, command).is_ok() {
             self.typing_sent = Some((key, now));
         }
     }

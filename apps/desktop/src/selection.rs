@@ -404,7 +404,7 @@ impl Desktop {
             && !self.servers[server].permissions.contains_key(&id)
         {
             let _ = self
-                .backend
+                .driver
                 .command(&self.servers[server].id, Command::RequestPermissions(id));
         }
         self.text.menu = Some(MessageMenu {

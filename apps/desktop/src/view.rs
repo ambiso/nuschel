@@ -1435,7 +1435,7 @@ impl Desktop {
                 };
                 if let Some(command) = command {
                     channel.read_seq = newest;
-                    let _ = self.backend.command(&self.servers[server].id, command);
+                    let _ = self.driver.command(&self.servers[server].id, command);
                 }
             }
         }

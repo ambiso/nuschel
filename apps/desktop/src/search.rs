@@ -241,7 +241,7 @@ impl Desktop {
             return;
         }
         match scope {
-            Ok(scope) => match self.backend.search(search.request, scope, query, None) {
+            Ok(scope) => match self.driver.search(search.request, scope, query, None) {
                 Ok(()) => search.loading = true,
                 Err(error) => search.error = Some(error),
             },
@@ -262,7 +262,7 @@ impl Desktop {
             return;
         }
         match self
-            .backend
+            .driver
             .search(search.request, scope, search.query(cx), Some(next))
         {
             Ok(()) => search.loading = true,
@@ -451,18 +451,18 @@ impl Desktop {
         );
         let requested = match channel.conversation.filter(|_| archived) {
             Some(conversation) => {
-                let cache = crate::backend::CacheKey {
+                let cache = nuschel_client::native::CacheKey {
                     identity,
                     channel: channel.storage_key.clone(),
                 };
-                self.backend.server_history(
+                self.driver.server_history(
                     server.id.clone(),
                     conversation,
                     (ticket, Some(cache)),
                     page,
                 )
             }
-            None => self.backend.history_page(
+            None => self.driver.history_page(
                 server.id.clone(),
                 identity,
                 channel.storage_key.clone(),

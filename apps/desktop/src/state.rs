@@ -2,15 +2,17 @@
 use crate::document::Document;
 use crate::{
     attachments::{Attachment, Kind, Source},
-    backend::{Backend, Event, RenderKey},
     scrolling::{Anchor, SmoothScroll},
+    services::{ServiceEvent, Services},
 };
 use gpui_kit::{
     base::input::{InputEvent, InputState, TextareaState},
     *,
 };
 use nuschel_client::{
-    Conversation, HistorySource, Navigation, SessionSecurity, timeline::MAX_TIMELINE,
+    Conversation, HistorySource, Navigation, SessionSecurity,
+    native::{Driver, Event, RenderKey},
+    timeline::MAX_TIMELINE,
 };
 use nuschel_core::MAX_CONTENT_BYTES;
 use nuschel_session::{
@@ -96,7 +98,7 @@ pub fn local_time(milliseconds: i64) -> String {
 }
 pub use nuschel_client::{
     conversation::{ActivityLine, ConversationState as ChannelView},
-    server::{AudioHealth, CertificatePrompt, ServerState, Status},
+    server::{CertificatePrompt, ServerState, Status},
     tree::{ChannelRow, TreeRow},
 };
 /// A server as the desktop shows it: the SDK's state of it, and what only
@@ -223,7 +225,9 @@ pub struct Desktop {
     /// What drawing derives from the timelines' messages (presentation.rs).
     pub presentation: crate::presentation::Presentation,
     pub history_enabled: bool,
-    pub backend: Backend,
+    pub driver: Driver,
+    /// The desktop's own background work (services.rs).
+    pub services: Services,
     pub profile: Profile,
     pub form: Option<ServerForm>,
     pub composer: Entity<TextareaState>,
@@ -336,6 +340,7 @@ pub struct Desktop {
     outgoing: std::collections::VecDeque<Outgoing>,
     _subscriptions: Vec<Subscription>,
     _receive: Task<()>,
+    _serve: Task<()>,
     /// Wakes the shortcut poll when system-wide shortcuts are bound.
     ptt_wake: Arc<tokio::sync::Notify>,
     _ptt_poll: Task<()>,
@@ -443,7 +448,20 @@ impl Desktop {
                 .unwrap_or_else(|| this.window_focus.clone());
             window.focus(&target, cx);
         });
-        let (backend, mut events) = Backend::new(handle.clone(), profile.clone(), settings.clone());
+        let (driver, mut events) = Driver::new(handle.clone(), profile.clone(), settings.clone());
+        let (services, mut service_events) = Services::new(handle.clone(), driver.settings());
+        // The desktop's own services report apart from the driver.
+        let serve = cx.spawn(async move |this, cx| {
+            while let Some(event) = service_events.recv().await {
+                let applied = this.update(cx, |this, cx| {
+                    this.apply_service_event(event, cx);
+                    cx.notify();
+                });
+                if applied.is_err() {
+                    break;
+                }
+            }
+        });
         // Events apply as they arrive, a bounded batch per update.
         let receive = cx.spawn(async move |this, cx| {
             let mut batch = Vec::new();
@@ -489,7 +507,8 @@ impl Desktop {
             presentation: Default::default(),
             history_enabled: true,
             notes: crate::notify::start(&handle),
-            backend,
+            driver,
+            services,
             profile,
             form: None,
             composer,
@@ -564,6 +583,7 @@ impl Desktop {
             outgoing: std::collections::VecDeque::new(),
             _subscriptions: vec![subscription, activation, focus_lost, links],
             _receive: receive,
+            _serve: serve,
             ptt_wake,
             _ptt_poll: ptt_poll,
         };
@@ -585,25 +605,25 @@ impl Desktop {
         desktop.refresh_icons();
         if crate::update::supported() {
             crate::update::cleanup();
-            desktop.backend.schedule_update_checks();
+            desktop.services.schedule_update_checks();
         }
         desktop
     }
     /// Check for an update now (Settings) rather than on the schedule.
     pub fn check_update_now(&mut self) {
         self.update = crate::update::UpdateState::Checking;
-        self.backend.check_update();
+        self.services.check_update();
     }
     pub fn install_update(&mut self) {
         if let crate::update::UpdateState::Available(update) = &self.update {
-            self.backend.install_update(update.clone());
+            self.services.install_update(update.clone());
             self.update = crate::update::UpdateState::Installing { done: 0, total: 0 };
         }
     }
     /// Keep the system-wide shortcuts in step with the settings.
     pub fn sync_global_shortcuts(&mut self) {
         let wanted = crate::shortcuts::active(&self.settings);
-        if let Some(released) = self.shortcuts.rebind(wanted, self.backend.runtime()) {
+        if let Some(released) = self.shortcuts.rebind(wanted, self.driver.runtime()) {
             for effect in released {
                 self.apply_shortcut(effect);
             }
@@ -821,7 +841,7 @@ impl Desktop {
         let server = &self.servers[index];
         if server.status == Status::Connected && !server.permissions.contains_key(&id) {
             let _ = self
-                .backend
+                .driver
                 .command(&server.id, Command::RequestPermissions(id));
         }
     }
@@ -1169,7 +1189,7 @@ impl Desktop {
             return;
         }
         if index < self.servers.len() {
-            self.backend.disconnect(&bookmark.id);
+            self.driver.disconnect(&bookmark.id);
             self.servers[index] = ServerView::new(bookmark);
         } else {
             self.servers.push(ServerView::new(bookmark));
@@ -1201,7 +1221,7 @@ impl Desktop {
             self.passwords.insert(server.id.clone(), password.clone());
         }
         match self
-            .backend
+            .driver
             .connect(server.bookmark.clone(), password, deafened)
         {
             Ok(generation) => {
@@ -1260,9 +1280,9 @@ impl Desktop {
         let Some(server) = self.servers.get_mut(index) else {
             return;
         };
-        self.backend.disconnect(&server.id);
+        self.driver.disconnect(&server.id);
         if server.status == Status::Connected && !server.deafened {
-            self.backend.chime(nuschel_core::audio::Sound::Disconnected);
+            self.driver.chime(nuschel_core::audio::Sound::Disconnected);
         }
         self.passwords.remove(&server.id);
         if let Some(lost) = lost_messages(server) {
@@ -1321,7 +1341,7 @@ impl Desktop {
             self.error = Some(error.to_string());
             return;
         }
-        self.backend.disconnect(&id);
+        self.driver.disconnect(&id);
         self.passwords.remove(&id);
         self.servers.retain(|server| server.id != id);
         self.form = None;
@@ -1336,7 +1356,7 @@ impl Desktop {
         };
         if let TextTarget::Channel(id) = self.servers[server].channels[channel].target
             && let Err(error) = self
-                .backend
+                .driver
                 .command(&self.servers[server].id, Command::Join(id))
         {
             self.servers[server].notice = Some(error);
@@ -1361,11 +1381,11 @@ impl Desktop {
     pub fn open_settings(&mut self) {
         self.settings_open = true;
         self.autostart = Some(crate::autostart::enabled());
-        self.backend
+        self.driver
             .identity(nuschel_ipc::crypto::CryptoRequest::Identity);
         if self.preview.is_none() {
             self.preview = Some(Default::default());
-            self.backend.start_preview();
+            self.services.start_preview();
         }
     }
     pub fn close_settings(&mut self) {
@@ -1373,7 +1393,7 @@ impl Desktop {
         self.appearance.close_picker();
         self.shortcuts.recording = None;
         self.preview = None;
-        self.backend.stop_preview();
+        self.services.stop_preview();
     }
     /// Open or close the microphone for the Settings check, or toggle hearing yourself.
     pub fn set_preview(&mut self, capture: bool, loopback: bool) {
@@ -1388,7 +1408,7 @@ impl Desktop {
                     preview.echo_test = crate::preview::EchoTestState::Idle;
                 }
             }
-            self.backend.preview(crate::preview::Command::Set {
+            self.services.preview(crate::preview::Command::Set {
                 capture,
                 loopback: loopback && capture,
             });
@@ -1406,7 +1426,7 @@ impl Desktop {
             let bookmark = &server.bookmark;
             let wait = if bookmark.icon.is_some() { 30 } else { 7 } * DAY_MS;
             if now - bookmark.icon_checked_ms >= wait {
-                self.backend
+                self.services
                     .fetch_icon(bookmark.id.clone(), bookmark.host.clone());
             }
         }
@@ -1422,7 +1442,7 @@ impl Desktop {
             preview.test_opened_capture = !preview.capture;
             preview.capture = true;
             preview.echo_test = crate::preview::EchoTestState::Running;
-            self.backend.preview(crate::preview::Command::EchoTest);
+            self.services.preview(crate::preview::Command::EchoTest);
         }
     }
     pub fn stop_echo_test(&mut self) {
@@ -1431,7 +1451,7 @@ impl Desktop {
             if std::mem::take(&mut preview.test_opened_capture) {
                 preview.close_capture();
             }
-            self.backend.preview(crate::preview::Command::StopEchoTest);
+            self.services.preview(crate::preview::Command::StopEchoTest);
         }
     }
     pub fn update_settings(&mut self, change: impl FnOnce(&mut ClientSettings)) {
@@ -1444,14 +1464,14 @@ impl Desktop {
         if let Err(error) = self.profile.save_settings(&settings, &self.managed) {
             self.error = Some(format!("Could not save settings: {error}"));
         }
-        self.backend.apply_settings(settings.clone());
+        self.driver.apply_settings(settings.clone());
         self.settings = settings;
         self.sync_global_shortcuts();
     }
     pub fn set_push_to_talk(&mut self, active: bool) {
         if self.ptt_active != active {
             self.ptt_active = active;
-            self.backend.set_push_to_talk(active);
+            self.driver.set_push_to_talk(active);
         }
     }
     /// Returns true when the key was consumed by a shortcut or key recording.
@@ -1554,7 +1574,7 @@ impl Desktop {
             Effect::PushToTalk(active) => self.set_push_to_talk(active),
             Effect::PushToMute(active) => {
                 self.push_muted = active;
-                self.backend.set_push_to_mute(active);
+                self.driver.set_push_to_mute(active);
             }
             Effect::ToggleMute if connected => self.set_mute(false),
             Effect::ToggleDeafen if connected => self.set_mute(true),
@@ -1577,7 +1597,7 @@ impl Desktop {
                 server.deafened = false;
             }
         }
-        if let Err(error) = self.backend.command(
+        if let Err(error) = self.driver.command(
             &server.id,
             Command::SetSelf {
                 muted: server.muted,
@@ -1643,7 +1663,7 @@ impl Desktop {
             target: target.clone(),
             body: body.clone(),
         };
-        match self.backend.command(
+        match self.driver.command(
             &server.id,
             Command::SendText {
                 target,
@@ -1836,7 +1856,7 @@ impl Desktop {
             let budget = limit
                 .saturating_sub(crate::attachments::CAPTION_ROOM)
                 .max(limit / 2);
-            self.backend.prepare_image(id, source, budget);
+            self.services.prepare_image(id, source, budget);
             return Ok(());
         };
         match file {
@@ -2057,7 +2077,7 @@ impl Desktop {
                 })
             };
             if let Some(command) = command
-                && let Err(error) = self.backend.command(&batch.key.0, command)
+                && let Err(error) = self.driver.command(&batch.key.0, command)
             {
                 self.attach_note = Some((batch.key, format!("Not sent: {error}")));
                 continue;
@@ -2123,7 +2143,7 @@ impl Desktop {
         let server = &mut self.servers[index].state;
         // Stock direct messages on a Nuschel server are local observations.
         let archive = server.archived(&server.channels[channel]);
-        let cache = Some(crate::backend::CacheKey {
+        let cache = Some(nuschel_client::native::CacheKey {
             identity: identity.clone(),
             channel: server.channels[channel].storage_key.clone(),
         });
@@ -2141,7 +2161,7 @@ impl Desktop {
         );
         let requested = match channel.conversation.filter(|_| archive) {
             // A Nuschel server's history: everything this member may read.
-            Some(conversation) => self.backend.server_history(
+            Some(conversation) => self.driver.server_history(
                 server.id.clone(),
                 conversation,
                 (ticket, cache),
@@ -2154,7 +2174,7 @@ impl Desktop {
                 channel.timeline.loading = false;
                 return;
             }
-            None => self.backend.history(
+            None => self.driver.history(
                 server.id.clone(),
                 identity,
                 channel.storage_key.clone(),
@@ -2452,7 +2472,7 @@ impl Desktop {
                         .find(|entry| entry.id == server && entry.generation == generation)
                     {
                         if server.status == Status::Connected && !server.deafened {
-                            self.backend.chime(nuschel_core::audio::Sound::Disconnected);
+                            self.driver.chime(nuschel_core::audio::Sound::Disconnected);
                         }
                         server.status = Status::Connecting;
                         server.own_session = None;
@@ -2535,7 +2555,6 @@ impl Desktop {
                         }
                     }
                 }
-                Event::Prepared { id, result } => self.prepared(id, result, cx),
                 Event::Avatar {
                     server,
                     generation,
@@ -2585,71 +2604,6 @@ impl Desktop {
                         server.audio.echo = echo;
                         server.audio.noise = noise;
                         server.audio.reference = reference;
-                    }
-                }
-                Event::ServerIcon { server, icon } => {
-                    if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server) {
-                        server.bookmark.icon_checked_ms = nuschel_session::connection::now_ms();
-                        if let Some(nuschel_core::ContentBlock::Image {
-                            width,
-                            height,
-                            rgba,
-                            ..
-                        }) = icon
-                        {
-                            server.icon = crate::document::render_image(width, height, &rgba);
-                            server.bookmark.icon = Some(nuschel_session::config::ServerIcon {
-                                width,
-                                height,
-                                rgba,
-                            });
-                        }
-                        self.cache_dirty = true;
-                    }
-                }
-                Event::Viewed { request, document } => {
-                    let image = document.and_then(|document| {
-                        document.blocks.into_iter().find_map(|block| match block {
-                            nuschel_core::ContentBlock::Image {
-                                width,
-                                height,
-                                rgba,
-                                ..
-                            } => crate::document::render_image(width, height, &rgba)
-                                .map(|image| (image, width, height)),
-                            _ => None,
-                        })
-                    });
-                    self.viewed(request, image);
-                }
-                Event::Update(event) => {
-                    use crate::update::{UpdateEvent, UpdateState};
-                    match event {
-                        UpdateEvent::Checked(result) => {
-                            // Installing or installed wins over a late check.
-                            if !matches!(
-                                self.update,
-                                UpdateState::Installing { .. } | UpdateState::Installed
-                            ) {
-                                self.update = match result {
-                                    Ok(Some(update)) => UpdateState::Available(update),
-                                    Ok(None) => UpdateState::UpToDate,
-                                    Err(error) => UpdateState::Failed(error),
-                                };
-                            }
-                        }
-                        UpdateEvent::Progress { done, total } => {
-                            self.update = UpdateState::Installing { done, total };
-                        }
-                        UpdateEvent::Installed(Ok(())) => self.update = UpdateState::Installed,
-                        UpdateEvent::Installed(Err(error)) => {
-                            self.update = UpdateState::Failed(error)
-                        }
-                    }
-                }
-                Event::Preview(event) => {
-                    if let Some(preview) = &mut self.preview {
-                        preview.apply(event);
                     }
                 }
                 Event::Echo {
@@ -2855,8 +2809,10 @@ impl Desktop {
                             &message.message.body,
                             &server.bookmark.username,
                         );
-                        if let Some(sound) = crate::sounds::message(shown, direct, mentioned) {
-                            self.backend.play_sound(&server.id, sound);
+                        if let Some(sound) =
+                            nuschel_client::sounds::message(shown, direct, mentioned)
+                        {
+                            self.driver.play_sound(&server.id, sound);
                         }
                     }
                     let channel = &mut server.channels[index];
@@ -2929,6 +2885,78 @@ impl Desktop {
             if !self.servers[server].waiting_changes.is_empty() {
                 self.apply_waiting_changes(server);
             }
+        }
+    }
+    /// What the desktop's own services report (services.rs).
+    fn apply_service_event(&mut self, event: ServiceEvent, cx: &mut Context<Self>) {
+        match event {
+            ServiceEvent::Prepared { id, result } => self.prepared(id, result, cx),
+            ServiceEvent::ServerIcon { server, icon } => {
+                if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server) {
+                    server.bookmark.icon_checked_ms = nuschel_session::connection::now_ms();
+                    if let Some(nuschel_core::ContentBlock::Image {
+                        width,
+                        height,
+                        rgba,
+                        ..
+                    }) = icon
+                    {
+                        server.icon = crate::document::render_image(width, height, &rgba);
+                        server.bookmark.icon = Some(nuschel_session::config::ServerIcon {
+                            width,
+                            height,
+                            rgba,
+                        });
+                    }
+                    self.cache_dirty = true;
+                }
+            }
+            ServiceEvent::Viewed { request, document } => {
+                let image = document.and_then(|document| {
+                    document.blocks.into_iter().find_map(|block| match block {
+                        nuschel_core::ContentBlock::Image {
+                            width,
+                            height,
+                            rgba,
+                            ..
+                        } => crate::document::render_image(width, height, &rgba)
+                            .map(|image| (image, width, height)),
+                        _ => None,
+                    })
+                });
+                self.viewed(request, image);
+            }
+            ServiceEvent::Update(event) => {
+                use crate::update::{UpdateEvent, UpdateState};
+                match event {
+                    UpdateEvent::Checked(result) => {
+                        // Installing or installed wins over a late check.
+                        if !matches!(
+                            self.update,
+                            UpdateState::Installing { .. } | UpdateState::Installed
+                        ) {
+                            self.update = match result {
+                                Ok(Some(update)) => UpdateState::Available(update),
+                                Ok(None) => UpdateState::UpToDate,
+                                Err(error) => UpdateState::Failed(error),
+                            };
+                        }
+                    }
+                    UpdateEvent::Progress { done, total } => {
+                        self.update = UpdateState::Installing { done, total };
+                    }
+                    UpdateEvent::Installed(Ok(())) => self.update = UpdateState::Installed,
+                    UpdateEvent::Installed(Err(error)) => self.update = UpdateState::Failed(error),
+                }
+            }
+            ServiceEvent::Preview(event) => {
+                if let Some(preview) = &mut self.preview {
+                    preview.apply(event);
+                }
+            }
+        }
+        if std::mem::take(&mut self.cache_dirty) {
+            self.save_servers_soon(cx);
         }
     }
     /// Write `servers` now, for an action the user waits on; a delayed write
@@ -3207,7 +3235,7 @@ impl Desktop {
                         }
                     }
                     if found {
-                        let _ = self.backend.command(&server.id, Command::Join(current));
+                        let _ = self.driver.command(&server.id, Command::Join(current));
                         self.pending_browse = Some((server.id.clone(), current));
                     } else {
                         server.notice = Some(format!("Channel /{} was not found.", path.join("/")));
@@ -3255,7 +3283,7 @@ impl Desktop {
                         channel.description_raw = update.description.clone();
                         server.descriptions.remove(&update.id);
                         if !update.description.is_empty() {
-                            self.backend.render_html(
+                            self.driver.render_html(
                                 server.id.clone(),
                                 server.generation,
                                 RenderKey::Description(update.id),
@@ -3265,7 +3293,7 @@ impl Desktop {
                     }
                 } else {
                     if !update.description.is_empty() {
-                        self.backend.render_html(
+                        self.driver.render_html(
                             server.id.clone(),
                             server.generation,
                             RenderKey::Description(update.id),
@@ -3370,7 +3398,7 @@ impl Desktop {
                     .collect();
                 if !unknown.is_empty() {
                     let _ = self
-                        .backend
+                        .driver
                         .command(&server.id, Command::QueryUserNames(unknown));
                 }
                 server.acl = Some(acl);
@@ -3418,7 +3446,7 @@ impl Desktop {
                 {
                     if let Some(texture) = user.texture.clone() {
                         if server.avatar_requests.insert(format!("decode:{hash}")) {
-                            self.backend.decode_avatar(
+                            self.driver.decode_avatar(
                                 server.id.clone(),
                                 server.generation,
                                 hash,
@@ -3428,7 +3456,7 @@ impl Desktop {
                     } else if server.voice_channel() == Some(user.channel)
                         && server.avatar_requests.insert(hash)
                     {
-                        let _ = self.backend.command(
+                        let _ = self.driver.command(
                             &server.id,
                             Command::RequestBlobs {
                                 textures: vec![user.session],
@@ -3440,10 +3468,12 @@ impl Desktop {
                 }
                 if server.status == Status::Connected && Some(user.session) != server.own_session {
                     let from = server.users.get(&user.session).map(|old| old.channel);
-                    if let Some(sound) =
-                        crate::sounds::movement(server.voice_channel(), from, Some(user.channel))
-                    {
-                        self.backend.play_sound(&server.id, sound);
+                    if let Some(sound) = nuschel_client::sounds::movement(
+                        server.voice_channel(),
+                        from,
+                        Some(user.channel),
+                    ) {
+                        self.driver.play_sound(&server.id, sound);
                     }
                 }
                 if Some(user.session) == server.own_session {
@@ -3467,9 +3497,10 @@ impl Desktop {
                 let from = server.users.get(&session).map(|old| old.channel);
                 if server.status == Status::Connected
                     && Some(session) != server.own_session
-                    && let Some(sound) = crate::sounds::movement(server.voice_channel(), from, None)
+                    && let Some(sound) =
+                        nuschel_client::sounds::movement(server.voice_channel(), from, None)
                 {
-                    self.backend.play_sound(&server.id, sound);
+                    self.driver.play_sound(&server.id, sound);
                 }
                 server.users.remove(&session);
                 server.talking.remove(&session);

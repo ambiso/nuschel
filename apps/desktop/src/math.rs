@@ -145,7 +145,7 @@ pub fn prepare(this: &Desktop, cx: &mut Context<Desktop>) {
             entries: HashMap::new(),
             clock: 0,
             jobs: None,
-            runtime: this.backend.runtime().clone(),
+            runtime: this.driver.runtime().clone(),
             desktop,
             enabled,
             scale: 1.,

@@ -255,7 +255,7 @@ pub fn settings_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElemen
                     "Show recovery key",
                     Tone::Primary,
                     |this, _, cx| {
-                        this.backend.identity(CryptoRequest::ShowRecoveryKey);
+                        this.driver.identity(CryptoRequest::ShowRecoveryKey);
                         cx.notify();
                     },
                     cx,
@@ -267,7 +267,7 @@ pub fn settings_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElemen
                     Tone::Primary,
                     |this, _, cx| {
                         this.own_identity.recovery_key = None;
-                        this.backend.identity(CryptoRequest::RecoveryKeySaved);
+                        this.driver.identity(CryptoRequest::RecoveryKeySaved);
                         cx.notify();
                     },
                     cx,
@@ -280,7 +280,7 @@ pub fn settings_rows(this: &Desktop, cx: &mut Context<Desktop>) -> Vec<AnyElemen
                     Tone::Ghost,
                     |this, _, cx| {
                         this.own_identity.recovery_key = None;
-                        this.backend.identity(CryptoRequest::SkipRecoveryKey);
+                        this.driver.identity(CryptoRequest::SkipRecoveryKey);
                         cx.notify();
                     },
                     cx,

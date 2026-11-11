@@ -29,13 +29,13 @@ impl Desktop {
             self.pending_browse = Some((server.id.clone(), server.channels[channel].id));
             return true;
         }
-        let request_id = crate::backend::request_id();
+        let request_id = nuschel_client::native::request_id();
         let open = v1::OpenDirect {
             request_id,
             user_id,
         };
         let command = Command::Nuschel(NuschelRequest::OpenDirect(open));
-        if self.backend.command(&server.id, command).is_err() {
+        if self.driver.command(&server.id, command).is_err() {
             return false;
         }
         while self.direct_requests.len() >= 16 {

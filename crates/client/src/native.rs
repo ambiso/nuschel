@@ -1,8 +1,14 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! The desktop sees typed events; transport, parsing, audio and history run off its thread.
-use nuschel_client::{
+//! The native driver: the SDK's platform services on Linux, Windows and
+//! macOS, on tokio. It supervises one connection per server (`nuschel-session`)
+//! with reconnects and backoff, runs each connection's media worker, renders
+//! messages in the sandboxed content worker and keeps local history in the
+//! storage worker, and reports what happens as typed [`Event`]s for the
+//! client to apply. Nothing here runs on the caller's thread: every method
+//! returns at once, and answers arrive as events.
+use crate::{
     HistoryTicket,
-    server::direct_conversation_key,
+    server::{AudioHealth, direct_conversation_key},
     timeline::{Deletion, IncomingMessage, Page},
 };
 use nuschel_core::audio::{AudioDevice, EchoSource, Sound, TransmitMode};
@@ -66,7 +72,7 @@ fn changes() -> std::sync::MutexGuard<'static, BTreeMap<u64, ChangeRequest>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Request ids of the desktop's own extension requests (pages, edits,
+/// Request ids of the client's own extension requests (pages, edits,
 /// deletions, direct conversations); the session uses ids with the top bit.
 pub fn request_id() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -169,7 +175,7 @@ async fn render_server_page(
     (out, (next_before, next_after), records)
 }
 pub enum Event {
-    /// The crypto worker's answer to [`Backend::identity`].
+    /// The crypto worker's answer to [`Driver::identity`].
     OwnIdentity(Result<nuschel_ipc::crypto::CryptoResponse, String>),
     Protocol {
         server: String,
@@ -276,7 +282,7 @@ pub enum Event {
         generation: u64,
         reason: String,
     },
-    /// Results for search `request` (see `Backend::search`).
+    /// Results for search `request` (see `Driver::search`).
     SearchResults {
         request: u64,
         result: Result<nuschel_core::SearchPage, String>,
@@ -294,19 +300,6 @@ pub enum Event {
         noise: Option<String>,
         reference: Option<String>,
     },
-    /// The local audio check in Settings.
-    Preview(crate::preview::Event),
-    Update(crate::update::UpdateEvent),
-    /// The image viewer's larger decode (`None` if the worker refused it).
-    /// A server's website icon, decoded by the content worker (`None`: none found).
-    ServerIcon {
-        server: String,
-        icon: Option<nuschel_core::ContentBlock>,
-    },
-    Viewed {
-        request: u64,
-        document: Option<MessageDocument>,
-    },
     Echo {
         server: String,
         generation: u64,
@@ -317,7 +310,7 @@ pub enum Event {
     AudioHealth {
         server: String,
         generation: u64,
-        health: crate::state::AudioHealth,
+        health: AudioHealth,
     },
     /// Inert rendering of untrusted Mumble HTML (descriptions, comments).
     Rendered {
@@ -326,11 +319,6 @@ pub enum Event {
         key: RenderKey,
         source: String,
         document: MessageDocument,
-    },
-    /// An attached image re-encoded for sending, or why it cannot be sent.
-    Prepared {
-        id: u64,
-        result: Result<nuschel_ipc::EncodedImage, String>,
     },
     /// A decoded avatar thumbnail for a texture hash.
     Avatar {
@@ -357,7 +345,7 @@ struct Connection {
     sounds: mpsc::Sender<Sound>,
     task: tokio::task::JoinHandle<()>,
 }
-pub struct Backend {
+pub struct Driver {
     handle: Handle,
     profile: Profile,
     /// The crypto worker, shared by every connection (identity and key transparency).
@@ -370,13 +358,8 @@ pub struct Backend {
     settings: watch::Sender<ClientSettings>,
     voice_keys: watch::Sender<VoiceKeys>,
     render_permits: std::sync::Arc<tokio::sync::Semaphore>,
-    image_permits: std::sync::Arc<tokio::sync::Semaphore>,
     storage_task: tokio::task::JoinHandle<()>,
     content_task: tokio::task::JoinHandle<()>,
-    preview: Option<(
-        mpsc::Sender<crate::preview::Command>,
-        tokio::task::JoinHandle<()>,
-    )>,
 }
 struct ContentJob {
     server: String,
@@ -450,8 +433,8 @@ enum CacheChange {
     },
     Delete(Deletion),
 }
-impl Backend {
-    /// The backend, and the events it reports for the desktop to apply.
+impl Driver {
+    /// The driver, and the events it reports for the client to apply.
     pub fn new(
         handle: Handle,
         profile: Profile,
@@ -488,124 +471,10 @@ impl Backend {
             settings: watch::Sender::new(settings),
             voice_keys: watch::Sender::new(VoiceKeys::default()),
             render_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
-            image_permits: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             storage_task,
             content_task,
-            preview: None,
         };
         (backend, events)
-    }
-    /// Start the Settings audio check (devices only until the microphone test starts).
-    pub fn start_preview(&mut self) {
-        if self.preview.is_some() {
-            return;
-        }
-        let (commands, receiver) = mpsc::channel(8);
-        let task = self.handle.spawn(crate::preview::run(
-            receiver,
-            self.settings.subscribe(),
-            self.sender.clone(),
-        ));
-        self.preview = Some((commands, task));
-    }
-    pub fn preview(&self, command: crate::preview::Command) {
-        if let Some((commands, _)) = &self.preview {
-            let _ = commands.try_send(command);
-        }
-    }
-    /// Closing the sender lets the task shut its worker down cleanly.
-    pub fn stop_preview(&mut self) {
-        self.preview.take();
-    }
-    /// Decode an inline image at the viewer's size in the sandboxed content worker.
-    /// Look for the server website's icon (see `icons`).
-    pub fn fetch_icon(&self, server: String, host: String) {
-        let events = self.sender.clone();
-        self.handle.spawn(async move {
-            let bytes = tokio::task::spawn_blocking(move || crate::icons::fetch(&host))
-                .await
-                .ok()
-                .flatten();
-            let icon = match (bytes, content_worker()) {
-                (Some(bytes), Some(worker)) => nuschel_ipc::host::decode_icon(worker, &bytes)
-                    .await
-                    .ok()
-                    .and_then(|document| document.blocks.into_iter().next()),
-                _ => None,
-            };
-            let _ = events.send(Event::ServerIcon { server, icon }).await;
-        });
-    }
-    pub fn decode_view(&self, request: u64, uri: String) {
-        let events = self.sender.clone();
-        self.handle.spawn(async move {
-            let document = match content_worker() {
-                Some(worker) => nuschel_ipc::host::decode_view(worker, &uri).await.ok(),
-                None => None,
-            };
-            let _ = events.send(Event::Viewed { request, document }).await;
-        });
-    }
-    /// Ask the release server for a newer version now.
-    pub fn check_update(&self) {
-        let events = self.sender.clone();
-        self.handle.spawn(async move {
-            let result = tokio::task::spawn_blocking(crate::update::check)
-                .await
-                .unwrap_or_else(|error| Err(error.to_string()));
-            let _ = events
-                .send(Event::Update(crate::update::UpdateEvent::Checked(result)))
-                .await;
-        });
-    }
-    /// Check shortly after start and then periodically, while the setting is on.
-    pub fn schedule_update_checks(&self) {
-        let events = self.sender.clone();
-        let settings = self.settings.subscribe();
-        self.handle.spawn(async move {
-            let mut delay = crate::update::FIRST_CHECK;
-            loop {
-                tokio::time::sleep(delay).await;
-                delay = crate::update::INTERVAL;
-                if !settings.borrow().check_updates {
-                    continue;
-                }
-                let result = tokio::task::spawn_blocking(crate::update::check)
-                    .await
-                    .unwrap_or_else(|error| Err(error.to_string()));
-                if events
-                    .send(Event::Update(crate::update::UpdateEvent::Checked(result)))
-                    .await
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-    }
-    /// Download, verify and swap in an update.
-    pub fn install_update(&self, update: crate::update::Update) {
-        let events = self.sender.clone();
-        self.handle.spawn(async move {
-            let progress = events.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                let mut last = 0;
-                crate::update::install(&update, |done, total| {
-                    // About every 5% (try_send: progress may be dropped).
-                    if done == total || done.saturating_sub(last) > total / 20 {
-                        last = done;
-                        let _ = progress.try_send(Event::Update(
-                            crate::update::UpdateEvent::Progress { done, total },
-                        ));
-                    }
-                })
-            })
-            .await
-            .unwrap_or_else(|error| Err(error.to_string()));
-            let _ = events
-                .send(Event::Update(crate::update::UpdateEvent::Installed(result)))
-                .await;
-        });
     }
     /// Connect self-muted; `deafened` also deafens (automatic connections at startup).
     pub fn connect(
@@ -758,38 +627,6 @@ impl Backend {
                 .await;
         });
     }
-    /// Re-encode an attached image as stock Mumble sends one: in the
-    /// sandboxed content worker, into an `<img>` of at most `limit` bytes.
-    /// Two at a time; a file is read only when its turn comes.
-    pub fn prepare_image(&self, id: u64, source: crate::attachments::Source, limit: usize) {
-        let events = self.sender.clone();
-        let permits = self.image_permits.clone();
-        self.handle.spawn(async move {
-            let result = async {
-                let _permit = permits.acquire().await.map_err(|error| error.to_string())?;
-                let worker =
-                    content_worker().ok_or("images need the content worker, which is missing")?;
-                let image = match source {
-                    crate::attachments::Source::Bytes(bytes) => bytes,
-                    crate::attachments::Source::File(path) => {
-                        tokio::task::spawn_blocking(move || crate::attachments::read(&path))
-                            .await
-                            .map_err(|error| error.to_string())??
-                    }
-                };
-                if image.len() as u64 > crate::attachments::MAX_IMAGE_BYTES {
-                    return Err("it is larger than 8 MB".to_owned());
-                }
-                match nuschel_ipc::host::encode_image(worker, &image, limit as u32).await {
-                    Ok(encoded) => Ok(encoded),
-                    Err(nuschel_ipc::host::Error::Rejected(reason)) => Err(reason),
-                    Err(error) => Err(error.to_string()),
-                }
-            }
-            .await;
-            let _ = events.send(Event::Prepared { id, result }).await;
-        });
-    }
     /// Search the history of these server identities, or of one
     /// conversation (its storage key) of a single one; results come back
     /// as `Event::SearchResults` for `request`.
@@ -809,8 +646,13 @@ impl Backend {
             })
             .map_err(|_| "History is busy; try again shortly.".into())
     }
+    /// The runtime the driver's tasks run on.
     pub fn runtime(&self) -> &Handle {
         &self.handle
+    }
+    /// The preferences as they are now, and as they change.
+    pub fn settings(&self) -> watch::Receiver<ClientSettings> {
+        self.settings.subscribe()
     }
     /// Decode an avatar image in the sandboxed content worker.
     pub fn decode_avatar(&self, server: String, generation: u64, hash: String, encoded: Vec<u8>) {
@@ -896,7 +738,7 @@ impl Backend {
             .map_err(|_| "History is busy; try again shortly.".into())
     }
 }
-impl Drop for Backend {
+impl Drop for Driver {
     fn drop(&mut self) {
         for connection in self.connections.values() {
             connection.task.abort();
@@ -921,7 +763,7 @@ struct Restore {
 
 enum Outcome {
     Ended(Result<Result<(), Error>, tokio::task::JoinError>),
-    /// The desktop dropped this connection.
+    /// The client dropped this connection.
     Closed,
 }
 
@@ -1424,7 +1266,7 @@ async fn connect_once(
                     let _ = events.try_send(Event::Echo { server: id.clone(), generation, erle_db, residual_likelihood });
                 },
                 Some(LiveMediaEvent::Health { clipping, echo_guard, double_talk, underruns, playback_ms }) => {
-                    let health = crate::state::AudioHealth { clipping, echo_guard, double_talk, underruns, playback_ms };
+                    let health = AudioHealth { clipping, echo_guard, double_talk, underruns, playback_ms };
                     let _ = events.send(Event::AudioHealth { server: id.clone(), generation, health }).await;
                 },
                 Some(LiveMediaEvent::Status { ready, message }) => {

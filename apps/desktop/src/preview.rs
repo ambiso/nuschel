@@ -175,10 +175,10 @@ fn configure(media: &Media, audio: &AudioSettings) {
 pub async fn run(
     mut commands: mpsc::Receiver<Command>,
     mut settings: watch::Receiver<ClientSettings>,
-    events: mpsc::Sender<crate::backend::Event>,
+    events: mpsc::Sender<crate::services::ServiceEvent>,
 ) {
     let send = |event: Event| {
-        let _ = events.try_send(crate::backend::Event::Preview(event));
+        let _ = events.try_send(crate::services::ServiceEvent::Preview(event));
     };
     let (mut capture, mut loopback) = (false, false);
     let mut media: Option<Media> = None;
