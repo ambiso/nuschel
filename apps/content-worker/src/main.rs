@@ -52,6 +52,9 @@ fn answer(renderer: &ContentRenderer, request: ContentRequest) -> Result<Content
         ContentRequest::Avatar { image: encoded } => {
             image(nuschel_content::decode_image(&base64(&encoded)?, 96, 96))
         }
+        ContentRequest::Icon { image: encoded } => {
+            image(nuschel_content::decode_icon(&base64(&encoded)?))
+        }
         ContentRequest::View { uri } => image(nuschel_content::decode_view(&uri)),
         ContentRequest::EncodeImage { image, limit } => {
             nuschel_content::encode_image_message(&base64(&image)?, limit as usize)

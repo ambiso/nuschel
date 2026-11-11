@@ -198,7 +198,21 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
                                 cx.notify();
                             }
                         }))
-                        .child(text!(theme::initials(&server.name)).with_id(("server-name", index)))
+                        .map(|tile| {
+                            match server.icon.clone().filter(|_| this.settings.server_icons) {
+                                Some(icon) => {
+                                    tile.child(img(icon).size(px(48.)).rounded(px(if active {
+                                        16.
+                                    } else {
+                                        24.
+                                    })))
+                                }
+                                None => tile.child(
+                                    text!(theme::initials(&server.name))
+                                        .with_id(("server-name", index)),
+                                ),
+                            }
+                        })
                         .child(
                             div()
                                 .absolute()

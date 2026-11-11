@@ -15720,6 +15720,12 @@ rec {
             features = [ "env-filter" ];
           }
           {
+            name = "ureq";
+            packageId = "ureq";
+            usesDefaultFeatures = false;
+            features = [ "rustls" ];
+          }
+          {
             name = "zbus";
             packageId = "zbus";
             usesDefaultFeatures = false;
@@ -15820,7 +15826,7 @@ rec {
             name = "image";
             packageId = "image";
             usesDefaultFeatures = false;
-            features = [ "png" "jpeg" "gif" "bmp" ];
+            features = [ "png" "jpeg" "gif" "bmp" "ico" ];
           }
           {
             name = "markup5ever_rcdom";

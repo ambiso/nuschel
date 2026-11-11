@@ -43,6 +43,8 @@ pub enum ContentRequest {
     LegacyHtml { html: String },
     /// A base64-encoded avatar image; answered with a small `Rendered` thumbnail.
     Avatar { image: String },
+    /// A base64-encoded website icon (favicon, also ICO/BMP); answered like `Avatar`.
+    Icon { image: String },
     /// An inline `data:` image; answered with a `Rendered` image at the viewer's size.
     View { uri: String },
     /// A base64-encoded pasted image, re-encoded as a Mumble `<img>` element

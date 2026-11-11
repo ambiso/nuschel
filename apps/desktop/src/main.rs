@@ -11,6 +11,7 @@ mod dialogs;
 mod document;
 mod emoji;
 mod global_ptt;
+mod icons;
 mod images;
 mod menus;
 mod notify;

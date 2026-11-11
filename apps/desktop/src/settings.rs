@@ -900,6 +900,18 @@ pub fn dialog(
         ),
     ];
     let mut general = general;
+    let server_icons = settings.server_icons;
+    general.push(toggle(
+        "server-icons",
+        "Server icons",
+        "Shows each server's website icon, fetched over HTTPS from its address.".into(),
+        server_icons,
+        Rc::new(move |this, _, _| {
+            this.update_settings(|settings| settings.server_icons = !server_icons);
+            this.refresh_icons();
+        }),
+        cx,
+    ));
     let notifications = settings.notifications;
     general.push(toggle(
         "notifications",

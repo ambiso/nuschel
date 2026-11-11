@@ -87,6 +87,13 @@ pub async fn decode_avatar(executable: &Path, encoded: &[u8]) -> Result<MessageD
     rendered(one(executable, ContentRequest::Avatar { image }).await?)
 }
 
+/// Decode a server's website icon in the sandboxed content worker.
+pub async fn decode_icon(executable: &Path, encoded: &[u8]) -> Result<MessageDocument, Error> {
+    use base64::Engine as _;
+    let image = base64::engine::general_purpose::STANDARD.encode(encoded);
+    rendered(one(executable, ContentRequest::Icon { image }).await?)
+}
+
 /// Decode an inline image at the viewer's size in the sandboxed content worker.
 pub async fn decode_view(executable: &Path, uri: &str) -> Result<MessageDocument, Error> {
     let uri = uri.to_owned();

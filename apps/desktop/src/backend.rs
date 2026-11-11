@@ -108,6 +108,11 @@ pub enum Event {
     Preview(crate::preview::Event),
     Update(crate::update::UpdateEvent),
     /// The image viewer's larger decode (`None` if the worker refused it).
+    /// A server's website icon, decoded by the content worker (`None`: none found).
+    ServerIcon {
+        server: String,
+        icon: Option<nuschel_core::ContentBlock>,
+    },
     Viewed {
         request: u64,
         document: Option<MessageDocument>,
@@ -256,6 +261,24 @@ impl Backend {
         self.preview.take();
     }
     /// Decode an inline image at the viewer's size in the sandboxed content worker.
+    /// Look for the server website's icon (see `icons`).
+    pub fn fetch_icon(&self, server: String, host: String) {
+        let events = self.sender.clone();
+        self.handle.spawn(async move {
+            let bytes = tokio::task::spawn_blocking(move || crate::icons::fetch(&host))
+                .await
+                .ok()
+                .flatten();
+            let icon = match (bytes, content_worker()) {
+                (Some(bytes), Some(worker)) => nuschel_ipc::host::decode_icon(worker, &bytes)
+                    .await
+                    .ok()
+                    .and_then(|document| document.blocks.into_iter().next()),
+                _ => None,
+            };
+            let _ = events.send(Event::ServerIcon { server, icon }).await;
+        });
+    }
     pub fn decode_view(&self, request: u64, uri: String) {
         let events = self.sender.clone();
         self.handle.spawn(async move {

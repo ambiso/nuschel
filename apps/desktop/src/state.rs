@@ -339,6 +339,8 @@ pub struct ServerView {
     pub comments: BTreeMap<u32, (String, Document)>,
     /// Decoded avatars by texture hash, and hashes already requested.
     pub avatars: BTreeMap<String, std::sync::Arc<RenderImage>>,
+    /// The server website's icon, from the bookmark.
+    pub icon: Option<std::sync::Arc<RenderImage>>,
     pub avatar_requests: BTreeSet<String>,
     /// Active whisper/shout target label while one is selected.
     pub whisper: Option<String>,
@@ -351,6 +353,10 @@ pub struct ServerView {
 }
 impl ServerView {
     fn new(bookmark: ServerBookmark) -> Self {
+        let icon = bookmark
+            .icon
+            .as_ref()
+            .and_then(|icon| crate::document::render_image(icon.width, icon.height, &icon.rgba));
         let mut channels = bookmark
             .cached_channels
             .iter()
@@ -408,6 +414,7 @@ impl ServerView {
             reconnecting: None,
             comments: BTreeMap::new(),
             avatars: BTreeMap::new(),
+            icon,
             avatar_requests: BTreeSet::new(),
             whisper: None,
             pending_channel: Vec::new(),
@@ -938,6 +945,7 @@ impl Desktop {
             }
         }
         desktop.sync_global_ptt();
+        desktop.refresh_icons();
         if crate::update::supported() {
             crate::update::cleanup();
             desktop.backend.schedule_update_checks();
@@ -1022,6 +1030,7 @@ impl Desktop {
                     return;
                 }
                 self.servers.push(ServerView::new(bookmark));
+                self.refresh_icons();
                 self.servers.len() - 1
             }
         };
@@ -1362,6 +1371,8 @@ impl Desktop {
                 bookmark.host == previous.bookmark.host && bookmark.port == previous.bookmark.port;
             if same_address {
                 bookmark.certificate_sha256 = previous.bookmark.certificate_sha256.clone();
+                bookmark.icon = previous.bookmark.icon.clone();
+                bookmark.icon_checked_ms = previous.bookmark.icon_checked_ms;
                 bookmark.cached_channels = previous.bookmark.cached_channels.clone();
             }
             let online = previous.status != Status::Disconnected;
@@ -1422,6 +1433,7 @@ impl Desktop {
         } else {
             self.servers.push(ServerView::new(bookmark));
         }
+        self.refresh_icons();
         self.form = None;
         self.browse_server(index, window, cx);
         if connect {
@@ -1594,6 +1606,23 @@ impl Desktop {
                 capture,
                 loopback: loopback && capture,
             });
+        }
+    }
+    /// Look for website icons that are missing (again after a week) or old
+    /// (after a month), while the setting is on.
+    pub fn refresh_icons(&self) {
+        const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+        if !self.settings.server_icons {
+            return;
+        }
+        let now = nuschel_session::connection::now_ms();
+        for server in &self.servers {
+            let bookmark = &server.bookmark;
+            let wait = if bookmark.icon.is_some() { 30 } else { 7 } * DAY_MS;
+            if now - bookmark.icon_checked_ms >= wait {
+                self.backend
+                    .fetch_icon(bookmark.id.clone(), bookmark.host.clone());
+            }
         }
     }
     pub fn set_autostart(&mut self, enable: bool) {
@@ -2357,6 +2386,26 @@ impl Desktop {
                         server.audio.echo = echo;
                         server.audio.noise = noise;
                         server.audio.reference = reference;
+                    }
+                }
+                Event::ServerIcon { server, icon } => {
+                    if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server) {
+                        server.bookmark.icon_checked_ms = nuschel_session::connection::now_ms();
+                        if let Some(nuschel_core::ContentBlock::Image {
+                            width,
+                            height,
+                            rgba,
+                            ..
+                        }) = icon
+                        {
+                            server.icon = crate::document::render_image(width, height, &rgba);
+                            server.bookmark.icon = Some(nuschel_session::config::ServerIcon {
+                                width,
+                                height,
+                                rgba,
+                            });
+                        }
+                        self.cache_dirty = true;
                     }
                 }
                 Event::Viewed { request, document } => {

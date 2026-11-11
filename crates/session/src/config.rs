@@ -35,6 +35,20 @@ pub struct ServerBookmark {
     /// Connect when Nuschel starts, self-muted and deafened.
     #[serde(default = "connect_on_startup")]
     pub auto_connect: bool,
+    /// The server website's icon (its favicon), decoded and shrunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<ServerIcon>,
+    /// When the icon was last looked for (milliseconds since the epoch).
+    #[serde(default)]
+    pub icon_checked_ms: i64,
+}
+
+/// A small RGBA image (base64), as decoded by the sandboxed content worker.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServerIcon {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: String,
 }
 
 fn connect_on_startup() -> bool {
@@ -78,6 +92,8 @@ impl ServerBookmark {
             cached_channels: Vec::new(),
             tokens: Vec::new(),
             auto_connect: true,
+            icon: None,
+            icon_checked_ms: 0,
         })
     }
 
@@ -219,6 +235,8 @@ pub struct ClientSettings {
     pub check_updates: bool,
     /// Desktop notifications for direct messages, your voice channel and mentions.
     pub notifications: bool,
+    /// Show each server's website icon, fetched over HTTPS from its address.
+    pub server_icons: bool,
 }
 
 pub const SIDEBAR_WIDTH: std::ops::RangeInclusive<f32> = 200.0..=560.0;
@@ -235,6 +253,7 @@ impl Default for ClientSettings {
             sidebar_width: 248.,
             check_updates: true,
             notifications: true,
+            server_icons: true,
         }
     }
 }

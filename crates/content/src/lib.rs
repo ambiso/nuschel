@@ -58,6 +58,25 @@ pub fn decode_image(bytes: &[u8], max_width: u32, max_height: u32) -> Option<Con
     })
 }
 
+/// A server's website icon (favicon: often ICO), at most 64 × 64.
+pub fn decode_icon(bytes: &[u8]) -> Option<ContentBlock> {
+    let formats = [
+        ImageFormat::Png,
+        ImageFormat::Jpeg,
+        ImageFormat::Gif,
+        ImageFormat::Ico,
+        ImageFormat::Bmp,
+    ];
+    let image = decode(bytes, &formats, 1024, 16 * 1024 * 1024)?;
+    let icon = shrink(image, 64, 64).to_rgba8();
+    Some(ContentBlock::Image {
+        width: icon.width(),
+        height: icon.height(),
+        rgba: base64::engine::general_purpose::STANDARD.encode(icon.as_raw()),
+        source: None,
+    })
+}
+
 /// Decode one of `formats` (guessed from the bytes) within the given limits.
 fn decode(
     bytes: &[u8],
@@ -504,6 +523,20 @@ fn expand_embeds(blocks: Vec<ContentBlock>) -> Vec<ContentBlock> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn favicons_decode_from_ico() {
+        let mut ico = Vec::new();
+        let pixels = vec![200u8; 128 * 128 * 4];
+        image::codecs::ico::IcoEncoder::new(&mut ico)
+            .write_image(&pixels, 128, 128, ExtendedColorType::Rgba8)
+            .unwrap();
+        let Some(ContentBlock::Image { width, height, .. }) = decode_icon(&ico) else {
+            panic!("the icon did not decode");
+        };
+        assert_eq!((width, height), (64, 64));
+        assert!(decode_icon(b"<!doctype html>").is_none());
+    }
 
     #[test]
     fn legacy_html_is_inert_and_preserves_explicit_line_breaks() -> Result<(), Error> {
