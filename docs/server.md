@@ -370,7 +370,10 @@ UDP socket ──► udp task ─────────┘  (handlers,└─�
   when a registered user connects. Graceful shutdown (SIGTERM) disconnects everyone and flushes the
   queue. The schema (`crates/storage/server-migrations`) works on SQLite and
   PostgreSQL and is tracked in its own migrations table, so it can share a
-  database with the history schema.
+  database with the history schema. Several storage workers share the database
+  (state, history writes and reads, key transparency, MLS); on SQLite every write
+  transaction begins with `BEGIN IMMEDIATE`, so one that reads before it writes waits
+  for the lock instead of failing when another worker committed in between.
 - **Channel listeners** of registered users are kept, as in Murmur: adding one,
   changing its volume and removing it are stored (`channel_listeners`, removed with
   the user or the channel), and after `ServerSync` on the next login they are added
