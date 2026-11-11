@@ -517,11 +517,22 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          log line per `statistics_interval`; clients reporting a version below 1.2.2
          are refused with WrongVersion (they cannot fetch blobs by hash and have no
          Opus). Not done: a live metrics endpoint (`nuscheld admin` works offline).
-   - [ ] Chat in the stock-client VM check (needs typing into the stock window).
-   - [ ] `stock_client.py` in `vm-server` fails under heavy host load ("too few
-         packets from the stock client: 0" at load ~47 on 24 cores): it waits at most
-         40 s for the stock GUI to open its microphone; wait for the first voice
-         packet instead of a fixed deadline.
+   - [x] Chat in the stock-client VM check (2026-11-11): xdotool types into the stock
+         window's chat bar and the Nuschel peer receives it from StockUser; the peer's
+         message is read back from the stock client's log (F6, copy, xclip).
+   - [x] `stock_client.py` under heavy host load (2026-11-11): the "0 packets" came
+         from counting in a slice of a deque capped at 1000 events, which stays empty
+         once full; packets now come from the event queue, the tone plays until the
+         first packet (up to 180 s), then is counted for 60 s. Passed in vm-server at
+         host load ~6-11; not yet seen at a load like the failing run's ~47.
+   - [ ] Listen revoked (an ACL edit, a token gone) does not end an existing channel
+         listener, as in Murmur: it keeps hearing voice and text, and keeps
+         `can_read` through the listener (review D3.4). Decide whether re-evaluation
+         should drop listeners that lost Listen (stock clients are told by a
+         `UserState` with `listening_channel_remove`).
+   - [ ] A deleted channel's archive can be read by SuperUser but not moderated
+         (`Action::Moderate` covers live channels); only `nuscheld admin history
+         erase-user` removes messages there. Decide whether SuperUser moderates it.
    - [x] Review deviations (2026-11-11): every permission decision goes through one
          `State::authorize(actor, action)` (authz.rs) over the ACL engine, which only
          that module can evaluate (a test guards the rest of the server); three
