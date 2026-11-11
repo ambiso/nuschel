@@ -1,0 +1,41 @@
+{
+  "font_sha256": "d66ac1cc91c55c24d3636ae2df1238076debdff51841f9893fc5419cc2df3df7",
+  "name_records": [
+    {
+      "name_id": 0,
+      "platform": 1,
+      "language": 0,
+      "value": "(C) 2019-2026 Antonis Tsolomitis. This work is released under the GUST Font License --  see http://tug.org/fonts/licenses/GUST-FONT-LICENSE.txt for details."
+    },
+    {
+      "name_id": 1,
+      "platform": 1,
+      "language": 0,
+      "value": "NewComputerModernMath"
+    },
+    {
+      "name_id": 2,
+      "platform": 1,
+      "language": 0,
+      "value": "Regular"
+    },
+    {
+      "name_id": 0,
+      "platform": 3,
+      "language": 1033,
+      "value": "(C) 2019-2026 Antonis Tsolomitis. This work is released under the GUST Font License --  see http://tug.org/fonts/licenses/GUST-FONT-LICENSE.txt for details."
+    },
+    {
+      "name_id": 1,
+      "platform": 3,
+      "language": 1033,
+      "value": "NewComputerModernMath"
+    },
+    {
+      "name_id": 2,
+      "platform": 3,
+      "language": 1033,
+      "value": "Regular"
+    }
+  ]
+}

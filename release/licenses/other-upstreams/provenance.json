@@ -1,4 +1,38 @@
 {
+  "assets": [
+    {
+      "embedded_sha256": "d66ac1cc91c55c24d3636ae2df1238076debdff51841f9893fc5419cc2df3df7",
+      "files": [
+        {
+          "local": "assets/newcm/README.md",
+          "sha256": "7f899011765a13ca9c0e5989b3e2bf9499176fc8c1a4776f76f863e00f13eaad",
+          "upstream_path": "crates/math/fonts/README.md",
+          "url": "project-source:crates/math/fonts/README.md"
+        },
+        {
+          "local": "assets/newcm/GUST-FONT-LICENSE.txt",
+          "sha256": "77b2b0e16f14a563726556a474dd5f59b1eeae3cf5beb1e3b97b6796fe357e75",
+          "upstream_path": "crates/math/fonts/GUST-FONT-LICENSE.txt",
+          "url": "project-source:crates/math/fonts/GUST-FONT-LICENSE.txt"
+        },
+        {
+          "local": "assets/newcm/LPPL-1.3c.txt",
+          "sha256": "c1ae6e179a6d28bbd5c483fbacc744acc75e922d598281dc3390aab26126e163",
+          "upstream_path": "lppl/lppl-1-3c.txt",
+          "url": "https://www.latex-project.org/lppl/lppl-1-3c.txt"
+        },
+        {
+          "local": "assets/newcm/FONT-METADATA.json",
+          "sha256": "7d553d7b2710b2dd39122e170567927e5300e24f13b9b6e291e9a3c9c60b1929",
+          "upstream_path": "OpenType name table of crates/math/fonts/NewCMMath-Regular.otf",
+          "url": "project-source:crates/math/fonts/NewCMMath-Regular.otf"
+        }
+      ],
+      "name": "newcm-math-font",
+      "source": "Unmodified NewCMMath-Regular.otf by Antonis Tsolomitis, as shipped by typst-assets0.15.1; exact root source hash and OpenType notices retained. GUST explicitly incorporates LPPL1.3c or later.",
+      "version": "typst-assets-0.15.1/NewCMMath-Regular"
+    }
+  ],
   "format": 1,
   "method": "Actual upstream repository root notices at the package VCS revision. No generic license text substituted.",
   "packages": [
