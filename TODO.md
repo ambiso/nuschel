@@ -378,18 +378,64 @@ ServerConfig.
 
 ## Later
 
-### Nuschel server (`nuscheld`)
+### Nuschel server (`nuscheld`) — queued (2026-11-11), in dependency order
 
-`apps/server/src/main.rs` refuses to start a listener.
+`apps/server/src/main.rs` refuses to start a listener. Decisions so far (user):
+OpenMLS with the libcrux provider (pure Rust; hybrid post-quantum X-Wing key exchange,
+Ed25519 signatures until ML-DSA suites exist); trust on first use with optional
+out-of-band verification; key transparency, as in Signal's automatic key
+verification (https://signal.org/blog/automatic-key-verification/); possibly
+Nuschel-only servers and a minimum client version.
 
-- [ ] Mumble protocol listener for stock clients: TLS, authentication, ACLs, channel
-      state, voice routing (no decoding), UDP and TCP tunnel.
-- [ ] Capability-negotiated extension: server message IDs, persistent history,
-      network pagination with ACL checks on every page, idempotency keys, independent
-      text-channel subscriptions. Client side of the extension.
-- [ ] Retention, moderation, edits and deletion/tombstones applied to history.
-- [ ] Make the NixOS module deployable (VM test currently runs config-only).
-- [ ] VM matrix rows: stock client → Nuschel server, Nuschel → Nuschel.
+1. **Server for stock Mumble clients** (the base everything else extends)
+   - [ ] TLS listener (rustls), certificate and password authentication, user
+         registration, server and channel passwords, ban list.
+   - [ ] Channels (create, move, links, temporary channels), user state, ACLs and
+         groups with Mumble's permission model (PermissionQuery, PermissionDenied).
+   - [ ] Text messages to channels, trees and users; blobs (comments, descriptions,
+         avatars) with size limits.
+   - [ ] Voice routing without decoding: UDP with OCB2-AES128 (shared with the
+         client's implementation), the TCP tunnel, whisper/shout targets, codec
+         negotiation (Opus only).
+   - [ ] Persistent state in SQLite/PostgreSQL (crates/storage); config file; the
+         NixOS module made deployable (today config-only in the VM).
+   - [ ] Rate limits as configurable and visible as Murmur's; the VM matrix rows:
+         stock client → Nuschel server, Nuschel → Nuschel, Nuschel → stock server.
+2. **Nuschel extension** (negotiated; stock clients keep working)
+   - [ ] Capability negotiation in the Mumble handshake (extension message range or
+         `Version` fields) and a protocol version with a minimum-version policy.
+   - [ ] Persistent history: server message ids, network pagination with ACL checks
+         on every page, idempotency keys, edits and deletions as tombstones,
+         independent text-channel subscriptions, retention.
+   - [ ] Client side: server history replaces local-only history for such servers;
+         the history source label already exists (`HistorySource::ServerArchive`).
+3. **Identity**
+   - [ ] Per-user identity keys (Ed25519 now, ML-DSA when available), separate
+         from the Mumble RSA certificate; device keys under the user identity.
+   - [ ] Trust on first use: pin a contact's identity key on first sight; a changed
+         key is shown, never silently accepted.
+   - [ ] Optional out-of-band verification: safety numbers and QR codes; verified
+         contacts are marked, and the trust follows the identity across servers.
+   - [ ] Key transparency: the server publishes an append-only, auditable key
+         directory (Merkle prefix tree with epochs, e.g. the `akd` crate or the IETF
+         KEYTRANS design); clients check inclusion and consistency proofs, monitor
+         their own key, and verify contacts automatically; independent auditors
+         optional.
+4. **End-to-end encryption (MLS)**
+   - [ ] Dedicated crypto worker running OpenMLS + libcrux; state in an encrypted
+         store; key packages published to the server.
+   - [ ] Delivery service in the server: ordered handshake messages per group, key
+         package directory, welcome delivery.
+   - [ ] One MLS group per conversation; membership follows ACL changes; direct
+         messages as two-party groups.
+   - [ ] Encrypted messages, files (the file-transfer design for Nuschel servers) and
+         history archive with an explicit historical-access policy.
+   - [ ] Strict mode: no legacy clients in end-to-end channels, no downgrades; a
+         green lock only after authenticated MLS establishment.
+   - [ ] Media later: SFrame with MLS-exported keys (with the WebRTC work below).
+5. **Moderation and operations**
+   - [ ] Moderation tools on top of E2EE (reports, membership removal), retention
+         policies, server admin CLI, metrics.
 
 ### WebRTC and video (follow-ups to the str0m trial)
 
@@ -401,15 +447,6 @@ ServerConfig.
 - [ ] Camera and screen capture, video rendering in GPUI, A/V sync, calling UI.
 - [ ] Browser interoperability and long-call quality tests; str0m vs webrtc-rs benchmark.
 - [ ] Resolve AWS-LC pulled in by str0m certificate generation.
-
-### MLS / end-to-end encryption
-
-- [ ] Choose and review a Rust MLS implementation; dedicated crypto worker.
-- [ ] One MLS group per conversation; membership follows ACL changes.
-- [ ] SFrame with MLS-exported keys for media; replay/sender/epoch handling.
-- [ ] Encrypted archive with explicit historical-access policy.
-- [ ] Strict mode rejecting legacy clients and downgrades; green lock only after
-      authenticated MLS establishment.
 
 ### Release and other targets
 
