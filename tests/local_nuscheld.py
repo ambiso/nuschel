@@ -69,21 +69,11 @@ class Nuscheld:
         assert self.process is None or self.process.returncode in (0, -signal.SIGKILL), self.log.read_text()[-2000:]
 
     def seed(self):
-        from mumble_client import Client, certificate_pin
+        from seed_server import seed
         self.write_config(message_limit=100, message_burst=100)
         self.start()
         try:
-            pin = certificate_pin(self.binaries, "127.0.0.1", self.port, self.root / "seed-probe")
-            admin = Client(self.binaries, "127.0.0.1", self.port, pin, "SuperUser", self.root / "seed-admin",
-                           ["--password-file", str(self.password)])
-            try:
-                for channel_id, parent, name in CHANNELS:
-                    admin.send(kind="create_channel", parent=parent, name=name, temporary=False)
-                    event = admin.wait(lambda e: e["kind"] == "permission_denied"
-                                       or (e["kind"] == "channel" and e["channel"]["name"] == name))
-                    assert event["kind"] == "channel" and event["channel"]["id"] == channel_id, event
-            finally:
-                admin.close()
+            seed(self.binaries, "127.0.0.1", self.port, self.password, CHANNELS, self.root / "seed")
         finally:
             self.stop()
         self.write_config(message_limit=1, message_burst=5)

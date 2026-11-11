@@ -465,6 +465,12 @@
           {
             home-manager = homeManagerChecks.files;
             vm-home-manager = homeManagerChecks.vm;
+            # nuscheld under the module with stock clients (`nix build .#checks.x86_64-linux.vm-server`).
+            vm-server = import ./nix/vm-server.nix {
+              inherit pkgs;
+              nuschel = package;
+              module = self.nixosModules.default;
+            };
             vm-smoke = import ./nix/vm-smoke.nix {
               inherit pkgs;
               nuschel = package;

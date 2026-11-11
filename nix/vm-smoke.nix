@@ -24,8 +24,8 @@ pkgs.testers.runNixOSTest {
           database.type = "postgresql";
           database.createLocally = true;
         };
-        # Exercise the real hardened unit and database preflight. A protocol daemon
-        # does not exist yet, so this smoke test deliberately runs configuration validation.
+        # Exercise the hardened unit and PostgreSQL preflight here; the protocol
+        # daemon itself is tested with stock clients in vm-server.nix.
         systemd.services.nuschel.serviceConfig = {
           Type = lib.mkForce "oneshot";
           ExecStart = lib.mkForce "${nuschel}/bin/nuscheld --check-config";

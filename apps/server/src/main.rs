@@ -29,6 +29,12 @@ struct Arguments {
     tls_certificate_file: Option<PathBuf>,
     #[arg(long, requires = "tls_certificate_file")]
     tls_key_file: Option<PathBuf>,
+    /// File with the server password (replaces `password_file`).
+    #[arg(long)]
+    password_file: Option<PathBuf>,
+    /// File with the SuperUser password, applied at startup.
+    #[arg(long)]
+    superuser_password_file: Option<PathBuf>,
     /// Keep all state in memory (nothing is written).
     #[arg(long)]
     ephemeral: bool,
@@ -66,6 +72,12 @@ fn settings(arguments: &Arguments) -> Result<Settings, Box<dyn std::error::Error
     {
         config.certificate = Some(certificate.clone());
         config.private_key = Some(key.clone());
+    }
+    if let Some(path) = &arguments.password_file {
+        config.password_file = Some(path.clone());
+    }
+    if let Some(path) = &arguments.superuser_password_file {
+        config.superuser_password_file = Some(path.clone());
     }
     Ok(config.settings()?)
 }
