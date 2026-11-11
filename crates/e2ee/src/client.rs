@@ -783,6 +783,29 @@ impl Client {
             .ok_or(Error::Invalid("no conversation binding"))
     }
 
+    /// Export only a domain-separated archive application key, never the MLS
+    /// exporter secret. Its index is this group's epoch; retain only this key.
+    pub fn history_key(&self, group_id: &[u8]) -> Result<crate::history::HistoryKey, Error> {
+        let group = self.group(group_id)?;
+        let binding = self.binding(group_id)?;
+        let index = u32::try_from(group.epoch().as_u64())
+            .map_err(|_| Error::Invalid("history key epoch exceeds its wire index"))?;
+        let key = group
+            .export_secret(
+                self.provider.crypto(),
+                "nuschel/archive-key/v1",
+                &binding.encode(),
+                32,
+            )
+            .map_err(mls)?;
+        Ok(crate::history::HistoryKey {
+            index,
+            key: key
+                .try_into()
+                .map_err(|_| Error::Invalid("archive key length"))?,
+        })
+    }
+
     /// The epoch authenticator (RFC 9420 §8.7): equal for all members of an epoch.
     pub fn epoch_authenticator(&self, group_id: &[u8]) -> Result<Vec<u8>, Error> {
         Ok(self

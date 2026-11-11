@@ -87,7 +87,7 @@ impl State {
             },
         });
         // MLS rows keep their message as base64 in `content` (crate::mls).
-        let (content, mls) = crate::mls::row_content(row.format, row.content);
+        let (content, mls, archive) = crate::mls::row_content(row.format, row.content);
         v1::Message {
             seq: row.seq,
             kind: wire_kind(row.kind) as i32,
@@ -96,6 +96,7 @@ impl State {
             format: i32::from(row.format),
             content,
             mls,
+            archive,
             reply_to: row.reply_to.unwrap_or(0),
             sent_ms: row.sent_ms,
             edited_ms: row.edited_ms.unwrap_or(0),

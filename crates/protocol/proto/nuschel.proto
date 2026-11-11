@@ -208,6 +208,9 @@ message Message {
   // With format MLS_APPLICATION or MLS_HANDSHAKE: the MLS message (RFC 9420
   // `MLSMessage`); `content` is empty.
   bytes mls = 13;
+  // With MLS_APPLICATION: the archive record the sender sealed under the
+  // conversation's history key (docs/e2ee.md §6.6), for members who join later.
+  bytes archive = 14;
 }
 
 // 0x4E01 -> ChatAck or Error.
@@ -608,6 +611,9 @@ message MlsSend {
   bytes conversation = 2;
   bytes idempotency_key = 3;
   bytes message = 4;
+  // The archive record of the same envelope (docs/e2ee.md §6.6), kept with the
+  // row for members who join later; empty when there is none.
+  bytes archive = 5;
 }
 
 // A Welcome waiting for a device.

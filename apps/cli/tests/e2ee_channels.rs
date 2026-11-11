@@ -176,6 +176,8 @@ async fn three_people_and_four_devices_in_an_encrypted_channel() {
     let conversation = alice.conversation_of(channel).await;
     alice.open_channel(&conversation, 1).await;
 
+    alice.sent(&conversation, "before anyone else joined").await;
+
     // Carol and Bob's laptop join lazily, by external commit, when they open it;
     // Alice sees each join and checks the joiner in key transparency.
     let mut carol = Cli::spawn(&running, "carol", carol_profile, Some(carol_identity), &[]).await;
@@ -183,6 +185,22 @@ async fn three_people_and_four_devices_in_an_encrypted_channel() {
     assert_eq!(carol.conversation_of(channel).await, conversation);
     carol.open_channel(&conversation, 2).await;
     alice.channel_view(&conversation, 2).await;
+    // The first online existing member grants retained keys. A new member
+    // reads the old text from its signed archive, not past MLS epoch secrets.
+    carol
+        .send(json!({"kind":"e2ee_history", "conversation":conversation}))
+        .await;
+    carol
+        .wait("history from before joining", |event| {
+            (event["kind"] == "history_page"
+                && event["messages"].as_array().is_some_and(|messages| {
+                    messages
+                        .iter()
+                        .any(|message| message["content"] == "before anyone else joined")
+                }))
+            .then_some(())
+        })
+        .await;
     let mut laptop = Cli::spawn(&running, "bob", bob_profile, Some(laptop_identity), &[]).await;
     laptop.open_channel(&conversation, 3).await;
     alice.channel_view(&conversation, 3).await;
@@ -234,7 +252,23 @@ async fn three_people_and_four_devices_in_an_encrypted_channel() {
             (event["kind"] == "unsubscribed" && event["conversation"] == conversation).then_some(())
         })
         .await;
-    let removed = alice.channel_view(&conversation, 3).await;
+    let removed = alice
+        .wait("Carol removed from the group", |event| {
+            let view = if event["kind"] == "e2ee_received" {
+                &event["received"]["view"]
+            } else {
+                &event["view"]
+            };
+            (event["conversation"] == conversation
+                && view["members"].as_array().is_some_and(|members| {
+                    members.len() == 3
+                        && members
+                            .iter()
+                            .all(|member| member["device_name"] != "carol (nuschel-cli)")
+                }))
+            .then(|| event.clone())
+        })
+        .await;
     let view = if removed["kind"] == "e2ee_received" {
         &removed["received"]["view"]
     } else {

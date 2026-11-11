@@ -227,7 +227,7 @@ pub fn client_limit(kind: u16) -> usize {
             (MAX_MLS_UPLOAD_PACKAGES + 1) * (MAX_MLS_KEY_PACKAGE_BYTES + 8) + 64
         }
         MLS_COMMIT => MAX_MLS_COMMIT_FRAME,
-        MLS_SEND => MAX_MLS_APPLICATION_BYTES + 256,
+        MLS_SEND => 2 * MAX_MLS_APPLICATION_BYTES + 256,
         MLS_WELCOME_ACK => MAX_MLS_WELCOMES * 20 + 64,
         SHARE_LINK_CREATE => MAX_ACCESS_TOKEN_BYTES + 64,
         _ => 64,
@@ -427,9 +427,11 @@ pub fn valid_message(message: &v1::Message) -> bool {
         MAX_CONTENT_BYTES
     };
     let mls = if is_mls_format(message.format) {
-        message.content.is_empty() && message.mls.len() <= MAX_MLS_HANDSHAKE_BYTES
+        message.content.is_empty()
+            && message.mls.len() <= MAX_MLS_HANDSHAKE_BYTES
+            && message.archive.len() <= MAX_MLS_APPLICATION_BYTES
     } else {
-        message.mls.is_empty()
+        message.mls.is_empty() && message.archive.is_empty()
     };
     mls && message.content.len() <= limit
         && message.author.as_ref().is_none_or(|author| {

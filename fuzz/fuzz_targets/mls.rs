@@ -58,6 +58,10 @@ fuzz_target!(|data: &[u8]| {
     let _ = prevalidate::ratchet_tree(data);
     let _ = prevalidate::message(data);
     let _ = prevalidate::wire_format(data);
+    let _ = nuschel_e2ee::history::archive_key_index(data);
+    let _ = nuschel_e2ee::history::decode_grant(data);
+    let key = nuschel_e2ee::history::HistoryKey { index: 0, key: [0; 32] };
+    let _ = nuschel_e2ee::history::open_archive(&key, &[0; 16], data);
     let _ = nuschel_e2ee::ConversationBinding::decode(data);
     let _ = nuschel_e2ee::binding::parse_group_id(data);
     if let Ok(parsed) = envelope::Envelope::decode(data) {

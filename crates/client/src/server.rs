@@ -108,6 +108,7 @@ pub struct ServerState {
     /// MLS group. Without it there is no end-to-end encryption, and the extension's
     /// extras are labelled "not end-to-end encrypted".
     pub mls: bool,
+    pub encryption: BTreeMap<[u8; 16], crate::conversation::EncryptionState>,
     /// Channels in display order, then direct conversations.
     pub channels: Vec<ConversationState>,
     pub status: Status,
@@ -210,6 +211,7 @@ impl ServerState {
             history_source: HistorySource::LocalObserved,
             security: SessionSecurity::Unknown,
             mls: false,
+            encryption: BTreeMap::new(),
             channels,
             status: Status::Disconnected,
             generation: 0,
@@ -528,6 +530,7 @@ impl ServerState {
         {
             let channel = &mut self.channels[index];
             channel.conversation = Some(id);
+            channel.encryption = self.encryption.get(&id).cloned();
             channel.target = TextTarget::DirectConversation(id);
             if peer.is_some() {
                 channel.direct_peer = peer;
@@ -542,6 +545,7 @@ impl ServerState {
         );
         channel.direct_peer = peer;
         channel.conversation = Some(id);
+        channel.encryption = self.encryption.get(&id).cloned();
         self.channels.push(channel);
         self.channels.len() - 1
     }

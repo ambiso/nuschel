@@ -105,6 +105,12 @@ pkgs.testers.runNixOSTest {
         systemd.services.nuschel-witness.wantedBy = lib.mkForce [ ];
         environment.systemPackages = [ pkgs.curl ];
       };
+    encrypted = serverNode { security = "e2ee"; };
+    encryptedPostgres = serverNode {
+      security = "e2ee";
+      database.type = "postgresql";
+      database.createLocally = true;
+    };
     client =
       { ... }:
       {
@@ -157,7 +163,7 @@ pkgs.testers.runNixOSTest {
     witness.wait_for_open_port(80)
     witness.succeed("curl -sf http://witness/nuschel-kt/v1/vkey | diff - ${witnessKey}")
     witness.succeed("test \"$(stat -c %a /var/lib/private/nuschel-witness)\" = 700")
-    for node in (server, postgres):
+    for node in (server, postgres, encrypted, encryptedPostgres):
         node.wait_for_unit("multi-user.target")
         start_server(node)
     client.wait_for_unit("multi-user.target")
@@ -205,10 +211,10 @@ pkgs.testers.runNixOSTest {
     # End-to-end-encrypted direct conversations (mls/1, docs/e2ee.md "Phase 4
     # prototype"): group creation, messages both ways, offline delivery, and the
     # group and stream surviving a restart.
-    as_tester(f"python3 {tests}/e2ee_direct.py {bins} --host server --state /tmp/nuschel-e2ee")
-    server.succeed("systemctl restart nuschel.service")
-    server.wait_for_open_port(64738)
-    as_tester(f"python3 {tests}/e2ee_direct.py {bins} --host server --state /tmp/nuschel-e2ee --phase second")
+    as_tester(f"python3 {tests}/e2ee_direct.py {bins} --host encrypted --state /tmp/nuschel-e2ee")
+    encrypted.succeed("systemctl restart nuschel.service")
+    encrypted.wait_for_open_port(64738)
+    as_tester(f"python3 {tests}/e2ee_direct.py {bins} --host encrypted --state /tmp/nuschel-e2ee --phase second")
 
     # The real stock Mumble GUI against nuscheld: login with a certificate
     # exported by Nuschel, then voice and chat in both directions.
@@ -228,7 +234,7 @@ pkgs.testers.runNixOSTest {
     # Key transparency on PostgreSQL, with keys the server generated (0600).
     as_tester(f"python3 {tests}/key_transparency.py {bins} --host postgres")
     # End-to-end direct conversations on PostgreSQL.
-    as_tester(f"python3 {tests}/e2ee_direct.py {bins} --host postgres")
+    as_tester(f"python3 {tests}/e2ee_direct.py {bins} --host encryptedPostgres")
     postgres.succeed("test \"$(stat -c %a /var/lib/private/nuschel/kt-vrf.key)\" = 600")
     # The periodic statistics line.
     server.wait_until_succeeds("journalctl -u nuschel.service --no-pager | grep -q 'statistics'", timeout=30)

@@ -274,6 +274,10 @@ enum Input {
     },
     /// Open a channel's end-to-end conversation (its conversation id from
     /// `channel_info`, 32 hex digits): join its group, creating it if needed.
+    E2eeHistory {
+        conversation: String,
+        before: Option<u64>,
+    },
     E2eeOpenChannel {
         conversation: String,
     },
@@ -326,7 +330,7 @@ fn nuschel_json(event: &NuschelEvent) -> serde_json::Value {
         NuschelEvent::Chat(event) => {
             json!({"kind":"chat", "conversation":hex(&event.conversation), "message":event.message.as_ref().map(message_json)})
         }
-        NuschelEvent::Page(page) => {
+        NuschelEvent::Page(page) | NuschelEvent::DecryptedPage(page) => {
             json!({"kind":"history_page", "request_id":page.request_id, "conversation":hex(&page.conversation),
             "messages":page.messages.iter().map(message_json).collect::<Vec<_>>(), "more_before":page.more_before,
             "more_after":page.more_after, "restricted":page.restricted, "head":page.head})
@@ -386,6 +390,7 @@ fn mls_json(event: &MlsEvent) -> serde_json::Value {
             conversation,
             key,
             seq,
+            ..
         } => json!({"kind":"e2ee_sent",
             "conversation":hex(conversation), "key":hex(key), "seq":seq}),
         MlsEvent::NotSent {
@@ -660,6 +665,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     Some(conversation) => Command::Mls(MlsCommand::Sync { conversation }),
                     None => {
                         let _ = output(json!({"kind":"error", "message":"bad conversation"}));
+                        continue;
+                    }
+                },
+                Ok(Input::E2eeHistory {
+                    conversation,
+                    before,
+                }) => match account(&conversation) {
+                    Some(conversation) => Command::Mls(MlsCommand::History {
+                        conversation,
+                        before,
+                    }),
+                    None => {
+                        let _ =
+                            output(json!({"kind":"error", "message":"invalid conversation id"}));
                         continue;
                     }
                 },

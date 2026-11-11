@@ -692,8 +692,8 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         // phase 4; docs/server.md, "Security mode").
         tracing::warn!(
             "end-to-end mode: stock clients are refused and text travels only in MLS \
-             groups, but voice, whispers and shouts are not end-to-end encrypted yet \
-             (SFrame, phase 4e), and read markers are still visible to the server"
+             groups; voice, whispers and shouts are disabled until SFrame (phase 4e), \
+             and read markers are still visible to the server"
         );
     }
     if state

@@ -21,6 +21,17 @@ pub enum Request {
         body: String,
         expected_peer: Option<u64>,
     },
+    /// Establish or refresh the selected encrypted conversation.
+    OpenEncrypted {
+        conversation: [u8; 16],
+        channel: bool,
+        peer: Option<u32>,
+    },
+    /// No plaintext fallback is permitted for this request.
+    SendEncrypted {
+        conversation: [u8; 16],
+        text: String,
+    },
     /// Mumble rich text as-is (inline images), one message per entry.
     SendHtml {
         target: TextTarget,

@@ -696,6 +696,18 @@ impl Desktop {
     pub fn conversation_lock(&self, index: usize) -> (SessionSecurity, String) {
         use nuschel_ipc::crypto::Lock;
         let server = &self.client.servers[index];
+        if let Some((selected, channel)) = self.selected_indices()
+            && selected == index
+            && let Some(state) = &server.channels[channel].encryption
+        {
+            return (state.security, state.description.clone());
+        }
+        if server.mls {
+            return (
+                SessionSecurity::MlsPending,
+                "End-to-end encryption is being set up".into(),
+            );
+        }
         let peer = self
             .selected_indices()
             .filter(|(selected, _)| *selected == index)

@@ -10,6 +10,7 @@
 //!   before OpenMLS or libcrux see them (short X-Wing keys made libcrux-kem 0.0.9
 //!   panic; it is patched to 0.0.10, and a planted key would still break commits).
 //! - [`envelope`]: the application payload with per-sender counters (§6.4).
+//! - [`history`]: history keys, archive records and grants (§6.6).
 //! - [`ds`]: the delivery service's view of a group (`PublicGroup`), and key
 //!   package checks for the directory (§6.3).
 //! - [`client`]: a device's groups: key packages, creating a group, Welcomes,
@@ -26,6 +27,7 @@ pub mod binding;
 pub mod client;
 pub mod ds;
 pub mod envelope;
+pub mod history;
 pub mod prevalidate;
 
 mod provider;

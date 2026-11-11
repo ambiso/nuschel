@@ -24,6 +24,13 @@ use nuschel_kt::{AccountBinding, Directory, RosterCommitment};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+fn archives() -> &'static std::sync::Mutex<std::collections::BTreeMap<Vec<u8>, Vec<u8>>> {
+    static ARCHIVES: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<Vec<u8>, Vec<u8>>>,
+    > = std::sync::OnceLock::new();
+    ARCHIVES.get_or_init(Default::default)
+}
+
 const CONVERSATION: [u8; 16] = [0xc0; 16];
 
 fn conversation() -> Vec<u8> {
@@ -177,21 +184,37 @@ impl Client {
     }
 
     fn receive(&mut self, ds: &Ds, seq: u64) -> Received {
-        received(self.ask(CryptoRequest::MlsReceive {
-            server: SERVER.into(),
-            conversation: conversation(),
-            seq,
-            message: ds.at(seq),
-        }))
+        received(
+            self.ask(CryptoRequest::MlsReceive {
+                server: SERVER.into(),
+                conversation: conversation(),
+                seq,
+                archive: archives()
+                    .lock()
+                    .unwrap()
+                    .get(&ds.at(seq))
+                    .cloned()
+                    .unwrap_or_default(),
+                message: ds.at(seq),
+            }),
+        )
     }
 
     fn receive_bytes(&mut self, seq: u64, message: Vec<u8>) -> Received {
-        received(self.ask(CryptoRequest::MlsReceive {
-            server: SERVER.into(),
-            conversation: conversation(),
-            seq,
-            message,
-        }))
+        received(
+            self.ask(CryptoRequest::MlsReceive {
+                server: SERVER.into(),
+                conversation: conversation(),
+                seq,
+                archive: archives()
+                    .lock()
+                    .unwrap()
+                    .get(&message)
+                    .cloned()
+                    .unwrap_or_default(),
+                message,
+            }),
+        )
     }
 
     fn encrypt(&mut self, key: [u8; 16], text: &str) -> Result<Vec<u8>, String> {
@@ -201,7 +224,12 @@ impl Client {
             idempotency_key: key.to_vec(),
             text: text.into(),
         }) {
-            CryptoResponse::MlsCiphertext { message, .. } => Ok(message),
+            CryptoResponse::MlsCiphertext {
+                message, archive, ..
+            } => {
+                archives().lock().unwrap().insert(message.clone(), archive);
+                Ok(message)
+            }
             CryptoResponse::Rejected(reason) => Err(reason),
             other => panic!("{other:?}"),
         }
@@ -321,6 +349,49 @@ async fn a_direct_conversation_between_two_workers() {
     assert!(matches!(
         alice.receive_bytes(replayed, ds.at(again)),
         Received::Undecryptable { .. } | Received::Duplicate { .. }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn archives_are_context_bound_authenticated_and_not_reassigned_to_other_rows() {
+    let (dir, mut alice, alice_person, mut bob, _) = pair().await;
+    let mut ds = Ds::new(&dir);
+    establish(&mut ds, &mut alice, alice_person.account, &mut bob);
+    let seq = alice.say(&mut ds, 1, "retained private text");
+    bob.receive(&ds, seq);
+    let archive = archives()
+        .lock()
+        .unwrap()
+        .get(&ds.at(seq))
+        .cloned()
+        .unwrap();
+    let read = |client: &mut Client, seq, archive: Vec<u8>, conversation: Vec<u8>| {
+        client.ask(CryptoRequest::MlsArchive {
+            server: SERVER.into(),
+            conversation,
+            seq,
+            archive,
+        })
+    };
+    assert!(
+        matches!(read(&mut bob, seq, archive.clone(), conversation()), CryptoResponse::MlsReceived(Received::Message { text, .. }) if text == "retained private text")
+    );
+    // Re-reading the same history row is idempotent. Assigning its signed record
+    // to a different row is a replay, even after a worker restart.
+    bob.restart();
+    assert!(matches!(
+        read(&mut bob, seq + 10, archive.clone(), conversation()),
+        CryptoResponse::MlsReceived(Received::Duplicate { .. })
+    ));
+    let mut bad = archive.clone();
+    *bad.last_mut().unwrap() ^= 1;
+    assert!(matches!(
+        read(&mut bob, seq, bad, conversation()),
+        CryptoResponse::Rejected(_)
+    ));
+    assert!(matches!(
+        read(&mut bob, seq, archive, vec![9; 16]),
+        CryptoResponse::MlsReceived(Received::Undecryptable { .. }) | CryptoResponse::Rejected(_)
     ));
 }
 

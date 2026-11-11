@@ -522,6 +522,7 @@ impl Connection {
         self.request(
             nk::MLS_SEND,
             &v1::MlsSend {
+                archive: Vec::new(),
                 request_id: id,
                 conversation: conversation.to_vec(),
                 idempotency_key: key.to_vec(),

@@ -198,6 +198,8 @@ pub struct IdentitySetup {
 /// What the frontend asks about identities on this server.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum IdentityCommand {
+    /// Registration changed: publish and start MLS on this connection promptly.
+    Refresh,
     /// Look up and check a registered user: when their profile opens (`direct:
     /// false`) or a direct conversation with them does (`direct: true`).
     Check {
@@ -288,6 +290,7 @@ pub(crate) struct Context {
     pub(crate) events: mpsc::Sender<crate::connection::SessionEvent>,
     next_request: u64,
     pub(crate) account: Vec<u8>,
+    descriptor: Vec<u8>,
     /// Self-monitoring found our newest binding not published yet.
     publication_pending: bool,
     /// Our identity exists (created on first need).
@@ -853,6 +856,15 @@ impl Context {
     async fn command(&mut self, command: IdentityCommand) -> Result<(), Error> {
         let server = self.server.key.clone();
         let response = match command {
+            IdentityCommand::Refresh => {
+                if self.connect(self.descriptor.clone()).await? {
+                    self.run_due(true).await?;
+                    if self.mls.is_some() {
+                        self.mls_start().await?;
+                    }
+                }
+                return Ok(());
+            }
             IdentityCommand::Check {
                 user_id,
                 account,
@@ -957,6 +969,7 @@ pub async fn drive(driver: Driver) {
         events,
         next_request: 0,
         account: Vec::new(),
+        descriptor: descriptor.clone(),
         publication_pending: false,
         identity_ready: false,
         mls: None,

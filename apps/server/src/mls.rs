@@ -144,17 +144,21 @@ type Records = Vec<(Vec<u8>, Vec<u8>)>;
 type Push = (Id, Device, v1::MlsWelcome);
 type Failure = (Code, u64);
 
-/// An MLS row keeps its message as base64 in the stored `content` (the history
-/// table has no binary column; a later schema change is mechanical). Returns the
-/// wire `content` and `mls`.
-pub fn row_content(format: u8, content: String) -> (String, Vec<u8>) {
+/// An MLS row keeps its message as base64 in the stored `content`, and an
+/// application message's archive record after a newline (the history table has no
+/// binary column; a later schema change is mechanical). Returns the wire `content`,
+/// `mls` and `archive`.
+pub fn row_content(format: u8, content: String) -> (String, Vec<u8>, Vec<u8>) {
     if is_mls_format(i32::from(format)) {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(content.as_bytes())
-            .unwrap_or_default();
-        (String::new(), bytes)
+        let decode = |text: &str| {
+            base64::engine::general_purpose::STANDARD
+                .decode(text.as_bytes())
+                .unwrap_or_default()
+        };
+        let (message, archive) = content.split_once('\n').unwrap_or((&content, ""));
+        (String::new(), decode(message), decode(archive))
     } else {
-        (content, Vec::new())
+        (content, Vec::new(), Vec::new())
     }
 }
 
@@ -2017,9 +2021,17 @@ impl State {
             return Ok(());
         }
         self.mls_seen(session, Some(conversation));
+        if message.archive.len() > MAX_MLS_APPLICATION_BYTES {
+            return Err((Code::TooLarge, 0));
+        }
         let format = v1::Format::MlsApplication as u8;
         let (_, user_id, name) = self.mls_author(session);
         let seq = self.conversations.next_seq(conversation);
+        let mut content = base64(&message.message);
+        if !message.archive.is_empty() {
+            content.push('\n');
+            content.push_str(&base64(&message.archive));
+        }
         let row = StoredMessage {
             conversation: hex(&conversation),
             seq,
@@ -2028,7 +2040,7 @@ impl State {
             author_user_id: user_id,
             author_name: name,
             format,
-            content: base64(&message.message),
+            content,
             sent_ms: crate::chat::now_ms(),
             idempotency_key: Some(crate::tls::hex(&key)),
             // The key names the message: a resend after STALE_EPOCH re-encrypts the
@@ -2583,6 +2595,39 @@ impl State {
             }
             Err(failure) => self.failed(session, request_id, failure),
         }
+        if let Some(rollback) = &commit
+            && rollback.channel
+            && !rollback.added.is_empty()
+            && let Some(mls) = self.mls.as_ref()
+            && let Some(cache) = mls.groups.get(&conversation)
+            && cache.epoch == epoch
+        {
+            // Someone joined a channel: one connected member grants it the
+            // history keys (docs/e2ee.md §6.6; the member checks the policy).
+            let members: BTreeSet<(Id, Device)> = cache
+                .members
+                .iter()
+                .filter(|(device, _)| !rollback.added.contains(*device))
+                .map(|(device, account)| (*account, *device))
+                .collect();
+            let granter = mls
+                .listening
+                .iter()
+                .filter(|(_, devices)| devices.first().is_some_and(|pair| members.contains(pair)))
+                .map(|(session, _)| *session)
+                .min();
+            if let Some(user) = granter.and_then(|session| self.users.get(&session)) {
+                user.link.message(
+                    kind::MLS_TASK,
+                    &v1::MlsTask {
+                        conversation: conversation.to_vec(),
+                        epoch,
+                        commit: false,
+                        grant: true,
+                    },
+                );
+            }
+        }
         if commit.is_some() {
             // The epoch moved: proposals of the old one are void, and the
             // members may have changed.
@@ -2680,9 +2725,17 @@ mod tests {
 
     #[test]
     fn mls_rows_carry_their_message_as_base64() {
-        let (content, mls) = row_content(v1::Format::MlsHandshake as u8, base64(&[1, 2, 3]));
+        let (content, mls, archive) =
+            row_content(v1::Format::MlsHandshake as u8, base64(&[1, 2, 3]));
         assert_eq!((content.as_str(), mls.as_slice()), ("", &[1u8, 2, 3][..]));
-        let (content, mls) = row_content(v1::Format::Text as u8, "hi".into());
+        assert!(archive.is_empty());
+        let both = format!("{}\n{}", base64(&[1]), base64(&[2, 2]));
+        let (_, mls, archive) = row_content(v1::Format::MlsApplication as u8, both);
+        assert_eq!(
+            (mls.as_slice(), archive.as_slice()),
+            (&[1u8][..], &[2u8, 2][..])
+        );
+        let (content, mls, _) = row_content(v1::Format::Text as u8, "hi".into());
         assert_eq!((content.as_str(), mls.len()), ("hi", 0));
     }
 }

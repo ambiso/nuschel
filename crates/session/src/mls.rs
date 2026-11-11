@@ -71,7 +71,7 @@ fn busy_delay(reply: &Reply) -> Option<Duration> {
 }
 
 /// What the frontend asks for in end-to-end conversations.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MlsCommand {
     /// Open (creating it if needed) the end-to-end direct conversation with this
     /// registered user.
@@ -89,6 +89,18 @@ pub enum MlsCommand {
     /// The user opened this channel's conversation: join its group (creating it
     /// if it has none), or catch up, and tell the server it was opened.
     OpenChannel { conversation: [u8; 16] },
+    /// Read one authorized server archive page through the crypto worker.
+    History {
+        conversation: [u8; 16],
+        before: Option<u64>,
+    },
+    /// Assign a fresh idempotency key inside the native session adapter.
+    SendText {
+        conversation: [u8; 16],
+        text: String,
+    },
+    /// Decrypt the already-authorized bounded page before exposing it to a UI.
+    DecryptPage { page: v1::HistoryPage },
 }
 
 /// What happens in end-to-end conversations.
@@ -116,6 +128,7 @@ pub enum MlsEvent {
         conversation: [u8; 16],
         key: [u8; 16],
         seq: u64,
+        text: String,
     },
     /// Our message was not sent (blocked, or the server refused it).
     NotSent {
@@ -135,6 +148,8 @@ pub enum MlsEvent {
 /// The driver's end-to-end state on one connection.
 #[derive(Default)]
 pub(crate) struct MlsState {
+    /// UI pages waiting for this device's first history grant.
+    pages: Vec<v1::HistoryPage>,
     /// Our device id (16 bytes), once the worker made key packages.
     device: Vec<u8>,
     /// When to try uploading key packages again (`None`: not needed now).
@@ -744,6 +759,24 @@ impl Context {
     ) -> Result<(), crate::Error> {
         let cursor = self.mls().cursors.get(&conversation).copied().unwrap_or(0);
         if message.seq <= cursor {
+            if message.format == v1::Format::MlsApplication as i32 && !message.archive.is_empty() {
+                let received = self
+                    .mls_worker(CryptoRequest::MlsArchive {
+                        server: self.server.key.clone(),
+                        conversation: conversation.to_vec(),
+                        seq: message.seq,
+                        archive: message.archive,
+                    })
+                    .await;
+                if let Ok(CryptoResponse::MlsReceived(received)) = received {
+                    self.mls_emit(MlsEvent::Received {
+                        conversation,
+                        received,
+                        author: message.author,
+                    })
+                    .await;
+                }
+            }
             return Ok(());
         }
         self.mls().cursors.insert(conversation, message.seq);
@@ -780,6 +813,7 @@ impl Context {
                 conversation: conversation.to_vec(),
                 seq,
                 message: message.mls,
+                archive: message.archive,
             })
             .await
         {
@@ -857,8 +891,10 @@ impl Context {
                     text: text.clone(),
                 })
                 .await;
-            let message = match encrypted {
-                Ok(CryptoResponse::MlsCiphertext { message, .. }) => message,
+            let (message, archive) = match encrypted {
+                Ok(CryptoResponse::MlsCiphertext {
+                    message, archive, ..
+                }) => (message, archive),
                 Ok(_) => return Err(crate::Error::Worker("unexpected worker answer".into())),
                 Err(error) => {
                     self.mls_emit(MlsEvent::NotSent {
@@ -877,6 +913,7 @@ impl Context {
                         conversation: conversation.to_vec(),
                         idempotency_key: key.to_vec(),
                         message,
+                        archive,
                     }
                     .encode_to_vec()
                 })
@@ -900,6 +937,7 @@ impl Context {
                         conversation,
                         key,
                         seq: ack.seq,
+                        text: text.clone(),
                     })
                     .await;
                     return Ok(());
@@ -940,7 +978,7 @@ impl Context {
     }
 
     pub(crate) async fn mls_command(&mut self, command: MlsCommand) -> Result<(), crate::Error> {
-        match command {
+        let result = match command {
             MlsCommand::OpenDirect { user_id } => self.mls_open_direct(user_id).await,
             MlsCommand::Send {
                 conversation,
@@ -954,7 +992,60 @@ impl Context {
             }
             MlsCommand::Sync { conversation } => self.mls_sync(conversation).await,
             MlsCommand::OpenChannel { conversation } => self.mls_open_channel(conversation).await,
-        }
+            MlsCommand::SendText { conversation, text } => {
+                self.mls_send(conversation, text, *uuid::Uuid::new_v4().as_bytes())
+                    .await
+            }
+            MlsCommand::History {
+                conversation,
+                before,
+            } => {
+                let reply = self
+                    .ask(kind::HISTORY_REQUEST, |request_id| {
+                        v1::HistoryRequest {
+                            request_id,
+                            conversation: conversation.to_vec(),
+                            anchor: Some(match before {
+                                Some(seq) => v1::history_request::Anchor::Before(seq),
+                                None => v1::history_request::Anchor::Latest(true),
+                            }),
+                            limit: nuschel::MAX_PAGE_MESSAGES as u32,
+                        }
+                        .encode_to_vec()
+                    })
+                    .await?;
+                if let Reply::Frame(kind::HISTORY_PAGE, payload) = reply {
+                    let page = v1::HistoryPage::decode(payload).map_err(|_| {
+                        crate::Error::Protocol("invalid encrypted history page".into())
+                    })?;
+                    if page.messages.len() > nuschel::MAX_PAGE_MESSAGES
+                        || !page.messages.iter().all(nuschel::valid_message)
+                    {
+                        return Err(crate::Error::Protocol(
+                            "invalid encrypted history page".into(),
+                        ));
+                    }
+                    if self.mls().pages.len() >= 8 {
+                        return Err(crate::Error::Worker(
+                            "too many encrypted pages are waiting".into(),
+                        ));
+                    }
+                    self.mls().pages.push(page);
+                }
+                Ok(())
+            }
+            MlsCommand::DecryptPage { page } => {
+                if self.mls().pages.len() >= 8 {
+                    return Err(crate::Error::Worker(
+                        "too many encrypted history pages are waiting".into(),
+                    ));
+                }
+                self.mls().pages.push(page);
+                Ok(())
+            }
+        };
+        result?;
+        self.mls_flush_pages().await
     }
 
     /// Opens a channel's end-to-end conversation: catch up if this device is in
@@ -1063,6 +1154,13 @@ impl Context {
         let Some(conversation) = id16(&task.conversation) else {
             return Ok(());
         };
+        if task.grant {
+            self.mls_rows(conversation, u64::MAX).await?;
+            let view = self.mls_status(conversation).await?;
+            if view.pinned && view.active && view.epoch == task.epoch {
+                self.mls_grant(conversation).await?;
+            }
+        }
         if !task.commit {
             return Ok(());
         }
@@ -1081,6 +1179,175 @@ impl Context {
         {
             // Lost to another commit: the server asks again for the next epoch.
             self.mls_rows(conversation, u64::MAX).await?;
+        }
+        Ok(())
+    }
+
+    /// Grant history in bounded messages. The cursor bounds each IPC/network
+    /// frame, not the total archive: every retained key remains reachable.
+    async fn mls_grant(&mut self, conversation: [u8; 16]) -> Result<(), crate::Error> {
+        let mut after = None;
+        loop {
+            let key = *uuid::Uuid::new_v4().as_bytes();
+            let mut accepted = None;
+            for _ in 0..MAX_RESENDS + MAX_BUSY_RETRIES {
+                let (message, archive, next_key) = match self
+                    .mls_worker(CryptoRequest::MlsGrant {
+                        server: self.server.key.clone(),
+                        conversation: conversation.to_vec(),
+                        idempotency_key: key.to_vec(),
+                        rotate: false,
+                        after,
+                    })
+                    .await?
+                {
+                    CryptoResponse::MlsCiphertext {
+                        message,
+                        archive,
+                        next_key,
+                        ..
+                    } => (message, archive, next_key),
+                    _ => {
+                        return Err(crate::Error::Worker(
+                            "unexpected history-grant answer".into(),
+                        ));
+                    }
+                };
+                let reply = self
+                    .ask(kind::MLS_SEND, |request_id| {
+                        v1::MlsSend {
+                            request_id,
+                            conversation: conversation.to_vec(),
+                            idempotency_key: key.to_vec(),
+                            message,
+                            archive,
+                        }
+                        .encode_to_vec()
+                    })
+                    .await?;
+                match reply {
+                    Reply::Frame(kind::MLS_ACK, payload) => {
+                        let ack = v1::MlsAck::decode(payload).map_err(|_| {
+                            crate::Error::Protocol("invalid grant acknowledgement".into())
+                        })?;
+                        self.mls_worker(CryptoRequest::MlsSent {
+                            server: self.server.key.clone(),
+                            conversation: conversation.to_vec(),
+                            idempotency_key: key.to_vec(),
+                            seq: ack.seq,
+                        })
+                        .await?;
+                        accepted = Some(next_key);
+                        break;
+                    }
+                    Reply::Error(error) if error.code == Code::StaleEpoch as i32 => {
+                        self.mls_rows(conversation, u64::MAX).await?;
+                    }
+                    Reply::Error(ref error) if error.code == Code::Busy as i32 => {
+                        if let Some(delay) = busy_delay(&reply) {
+                            tokio::time::sleep(delay).await;
+                        }
+                    }
+                    Reply::Error(error) => {
+                        return Err(crate::Error::Protocol(format!(
+                            "history grant refused: {}",
+                            error.detail
+                        )));
+                    }
+                    _ => {
+                        return Err(crate::Error::Protocol(
+                            "unexpected history grant reply".into(),
+                        ));
+                    }
+                }
+            }
+            let Some(next) = accepted else {
+                return Err(crate::Error::Protocol(
+                    "history grant kept racing a group change".into(),
+                ));
+            };
+            let Some(next) = next else {
+                break;
+            };
+            if after.is_some_and(|previous| next <= previous) {
+                return Err(crate::Error::Worker(
+                    "history grant cursor did not advance".into(),
+                ));
+            }
+            after = Some(next);
+            tokio::task::yield_now().await;
+        }
+        let view = self.mls_status(conversation).await?;
+        self.mls_view(view).await;
+        Ok(())
+    }
+
+    /// Keeps pagination cursors from the original ciphertext rows, but only
+    /// exposes verified archive text. Control rows become void, never chat text.
+    async fn mls_flush_pages(&mut self) -> Result<(), crate::Error> {
+        let pages = std::mem::take(&mut self.mls().pages);
+        for mut page in pages {
+            let Some(conversation) = id16(&page.conversation) else {
+                continue;
+            };
+            let view = self.mls_status(conversation).await?;
+            if !view.pinned || !view.active || view.history_pending {
+                self.mls().pages.push(page);
+                continue;
+            }
+            for message in &mut page.messages {
+                if !nuschel::is_mls_format(message.format) {
+                    message.content = "The server supplied unencrypted content in an encrypted conversation; it was refused.".into();
+                    self.mls_emit(MlsEvent::PlaintextRefused {
+                        conversation,
+                        seq: message.seq,
+                    })
+                    .await;
+                    continue;
+                }
+                if message.format != v1::Format::MlsApplication as i32 || message.archive.is_empty()
+                {
+                    message.kind = v1::message::Kind::Void as i32;
+                } else {
+                    let response = self
+                        .mls_worker(CryptoRequest::MlsArchive {
+                            server: self.server.key.clone(),
+                            conversation: conversation.to_vec(),
+                            seq: message.seq,
+                            archive: message.archive.clone(),
+                        })
+                        .await;
+                    match response {
+                        Ok(CryptoResponse::MlsReceived(Received::Message {
+                            text,
+                            sent_at,
+                            ..
+                        })) => {
+                            message.content = text;
+                            message.sent_ms = sent_at.min(i64::MAX as u64) as i64;
+                        }
+                        Ok(CryptoResponse::MlsReceived(Received::Duplicate { .. })) => {
+                            message.kind = v1::message::Kind::Void as i32;
+                        }
+                        Ok(_) => {
+                            message.content = "Unable to decrypt this archived message.".into();
+                        }
+                        Err(error) => {
+                            message.content =
+                                format!("Unable to decrypt this archived message: {error}");
+                        }
+                    }
+                }
+                message.format = v1::Format::Text as i32;
+                message.mls.clear();
+                message.archive.clear();
+            }
+            self.events
+                .send(crate::connection::SessionEvent::Nuschel(
+                    crate::connection::NuschelEvent::Page(page),
+                ))
+                .await
+                .ok();
         }
         Ok(())
     }
@@ -1152,6 +1419,7 @@ impl Context {
                 };
                 if message.seq == cursor + 1 {
                     self.mls_row(conversation, message).await?;
+                    self.mls_flush_pages().await?;
                     if self.mls_status(conversation).await?.missing.is_empty() {
                         return Ok(());
                     }
@@ -1162,6 +1430,6 @@ impl Context {
             }
             _ => {}
         }
-        Ok(())
+        self.mls_flush_pages().await
     }
 }

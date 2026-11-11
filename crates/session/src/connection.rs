@@ -399,6 +399,8 @@ pub enum NuschelEvent {
     Ack(v1::ChatAck),
     Chat(v1::ChatEvent),
     Page(v1::HistoryPage),
+    /// Local crypto-worker output, never decoded from a server frame.
+    DecryptedPage(v1::HistoryPage),
     Subscribed(v1::Subscribed),
     Unsubscribed(v1::Unsubscribed),
     ReadMarker(v1::ReadMarker),
@@ -869,7 +871,7 @@ pub async fn run(
                     let now = now_ms() as u64;
                     let Some(udp) = state.udp.as_mut() else { continue; };
                     match udp.handle(&datagram[..size], now) {
-                        Received::Message(UdpMessage::Audio(packet)) => if !state.local_deafened {
+                        Received::Message(UdpMessage::Audio(packet)) => if !state.local_deafened && !state.encrypted_server() {
                             emit(&events, SessionEvent::Audio(packet)).await?;
                         },
                         Received::Message(UdpMessage::Ping { .. }) | Received::Ignored => {},
@@ -1068,12 +1070,7 @@ fn kt_reply(
     // sees as text.
     let push = frame.kind == kind::MLS_WELCOME_PUSH
         || frame.kind == kind::MLS_TASK
-        || (frame.kind == kind::CHAT_EVENT
-            && v1::ChatEvent::decode(frame.payload.clone()).is_ok_and(|event| {
-                event
-                    .message
-                    .is_some_and(|message| nuschel::is_mls_format(message.format))
-            }));
+        || (frame.kind == kind::CHAT_EVENT && running.mls_commands.is_some());
     if push {
         if let Some(pushes) = &running.pushes {
             let _ = pushes.try_send((frame.kind, frame.payload));
@@ -1156,6 +1153,10 @@ impl Default for State {
     }
 }
 impl State {
+    fn encrypted_server(&self) -> bool {
+        self.extension.as_ref().is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::E2EE))
+    }
+
     fn transport(&self) -> TransportStats {
         let crypt = self.udp.as_ref().map(Udp::crypt_stats).unwrap_or_default();
         TransportStats {
@@ -1182,7 +1183,7 @@ impl State {
     /// What may be sent of a voice packet. While the user may not speak, only
     /// a terminator leaves, and it carries silence instead of captured audio.
     fn outgoing_voice(&self, mut packet: VoicePacket) -> Option<VoicePacket> {
-        if self.own_session.is_none() || !self.opus {
+        if self.encrypted_server() || self.own_session.is_none() || !self.opus {
             return None;
         }
         if !self.local_muted && !self.local_deafened && self.may_speak() {
@@ -1983,6 +1984,20 @@ impl State {
                 }
             }
             NuschelEvent::Chat(chat) => {
+                if self
+                    .extension
+                    .as_ref()
+                    .is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::E2EE))
+                {
+                    emit(
+                        events,
+                        SessionEvent::Notice(
+                            "Unencrypted chat on an end-to-end server was refused.".into(),
+                        ),
+                    )
+                    .await?;
+                    return Ok(());
+                }
                 // Frontends with a timeline use the `Text` below; the event
                 // itself also carries edits and deletions.
                 emit(
@@ -2273,7 +2288,7 @@ impl State {
                 });
             }
             kind::UDP_TUNNEL => match voice::decode_udp(&frame.payload) {
-                Ok(UdpMessage::Audio(packet)) if !self.local_deafened => {
+                Ok(UdpMessage::Audio(packet)) if !self.local_deafened && !self.encrypted_server() => {
                     emit(events, SessionEvent::Audio(packet)).await?
                 }
                 Err(voice::VoiceError::Unsupported) => {
@@ -2540,6 +2555,20 @@ impl State {
             }
             kind::USER_STATE => self.user_state(decode(&frame)?, events).await?,
             kind::TEXT_MESSAGE => {
+                if self
+                    .extension
+                    .as_ref()
+                    .is_some_and(|caps| caps.iter().any(|cap| cap == nuschel::capability::E2EE))
+                {
+                    emit(
+                        events,
+                        SessionEvent::Notice(
+                            "Unencrypted chat on an end-to-end server was refused.".into(),
+                        ),
+                    )
+                    .await?;
+                    return Ok(());
+                }
                 let message: proto::TextMessage = decode(&frame)?;
                 if message.message.len() > MAX_CONTENT_BYTES {
                     emit(
@@ -3566,6 +3595,13 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn end_to_end_mode_never_sends_plaintext_voice_even_a_terminator() {
+        let state = State { own_session: Some(7), opus: true, extension: Some(vec![nuschel::capability::E2EE.into()]), ..State::default() };
+        let packet = VoicePacket { sender: 0, sequence: 0, opus: vec![1,2,3], end: true, volume: 1.0 };
+        assert!(state.outgoing_voice(packet).is_none());
     }
 
     #[tokio::test]

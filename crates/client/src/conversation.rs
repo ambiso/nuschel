@@ -47,10 +47,21 @@ pub struct ConversationState {
     pub description_raw: String,
     /// Its conversation on a Nuschel server, and the read marker sent last.
     pub conversation: Option<[u8; 16]>,
+    pub encryption: Option<EncryptionState>,
     pub read_seq: i64,
     /// Who is typing here (Nuschel servers), by session, and when they last
     /// said so (the platform's monotonic milliseconds).
     pub typing: BTreeMap<u32, u64>,
+}
+
+/// Renderer-independent encryption state, established by the crypto worker.
+/// A server capability advertisement never changes this to green.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncryptionState {
+    pub security: crate::SessionSecurity,
+    pub description: String,
+    pub blocked: Option<String>,
+    pub epoch: u64,
 }
 
 /// A one-line event among a conversation's messages.
@@ -93,6 +104,7 @@ impl ConversationState {
             max_users: 0,
             description_raw: String::new(),
             conversation: None,
+            encryption: None,
             read_seq: 0,
             typing: BTreeMap::new(),
         }

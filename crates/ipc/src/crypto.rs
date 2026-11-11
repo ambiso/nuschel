@@ -483,6 +483,8 @@ pub enum CryptoRequest {
         seq: u64,
         #[serde(with = "base64_bytes")]
         message: Vec<u8>,
+        #[serde(default, with = "base64_bytes")]
+        archive: Vec<u8>,
     },
     /// Encrypt chat text for the conversation's current epoch
     /// (`MlsCiphertext`). The same idempotency key again (after `STALE_EPOCH`)
@@ -532,6 +534,30 @@ pub enum CryptoRequest {
         server: String,
         #[serde(with = "base64_bytes")]
         conversation: Vec<u8>,
+    },
+    /// A history grant for the group (docs/e2ee.md §6.6): every history key, after
+    /// a device joined (`members` history), or with `rotate` a fresh one after a
+    /// removal (`MlsCiphertext`, sent like a message; empty when the policy grants
+    /// nothing).
+    MlsGrant {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        #[serde(with = "base64_bytes")]
+        idempotency_key: Vec<u8>,
+        rotate: bool,
+        /// Keys strictly after this cursor; current key is repeated in every page.
+        after: Option<u32>,
+    },
+    /// An archive record from before this device joined (`Message.archive` of an
+    /// application row), opened with a granted history key (`MlsReceived`).
+    MlsArchive {
+        server: String,
+        #[serde(with = "base64_bytes")]
+        conversation: Vec<u8>,
+        seq: u64,
+        #[serde(with = "base64_bytes")]
+        archive: Vec<u8>,
     },
 
     // ---- Device linking (docs/e2ee.md §3.4) ----
@@ -831,11 +857,13 @@ impl CryptoRequest {
                 server: s,
                 conversation: c,
                 message,
+                archive,
                 ..
             } => {
                 server(s)?;
                 conversation(c)?;
-                at_most(message.len(), MAX_MLS_BYTES, "message")
+                at_most(message.len(), MAX_MLS_BYTES, "message")?;
+                at_most(archive.len(), MAX_MLS_BYTES, "archive")
             }
             Self::MlsEncrypt {
                 server: s,
@@ -868,6 +896,26 @@ impl CryptoRequest {
             } => {
                 server(s)?;
                 conversation(c)
+            }
+            Self::MlsGrant {
+                server: s,
+                conversation: c,
+                idempotency_key,
+                ..
+            } => {
+                server(s)?;
+                conversation(c)?;
+                key(idempotency_key)
+            }
+            Self::MlsArchive {
+                server: s,
+                conversation: c,
+                archive,
+                ..
+            } => {
+                server(s)?;
+                conversation(c)?;
+                at_most(archive.len(), MAX_MLS_BYTES, "archive")
             }
             Self::MlsJoinChannel {
                 server: s,
@@ -1076,6 +1124,13 @@ pub enum CryptoResponse {
         #[serde(with = "base64_bytes")]
         message: Vec<u8>,
         epoch: u64,
+        /// The archive record of the same envelope (`MlsSend.archive`), empty
+        /// without a history key.
+        #[serde(default, with = "base64_bytes")]
+        archive: Vec<u8>,
+        /// More history-grant keys remain after this cursor.
+        #[serde(default)]
+        next_key: Option<u32>,
     },
     /// Show `code` to the user; relay `pake` to the new device.
     LinkOffer {
@@ -1180,6 +1235,15 @@ pub struct ConversationView {
     /// Removals the server proposed that wait for a member's commit.
     #[serde(default)]
     pub removals: u32,
+    /// The seq at which this device joined (0: it was there from the start);
+    /// what came before is read from archive records.
+    #[serde(default)]
+    pub joined: u64,
+    /// History keys this device holds (docs/e2ee.md §6.6).
+    #[serde(default)]
+    pub history_keys: u32,
+    #[serde(default)]
+    pub history_pending: bool,
 }
 
 /// A commit to send as `MlsCommit`.
@@ -1248,6 +1312,9 @@ pub enum Received {
     },
     /// A commit was applied; the view shows the group now.
     Commit { seq: u64, view: ConversationView },
+    /// History keys arrived (a grant, docs/e2ee.md §6.6): what came before this
+    /// device joined can be read from the archive now (`MlsArchive`).
+    History { seq: u64, keys: u32 },
     /// Nothing to show (a typing indicator, a proposal, an envelope kind this
     /// version does not show).
     Nothing { seq: u64 },

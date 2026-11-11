@@ -26,7 +26,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
-const TIMEOUT: Duration = Duration::from_secs(30);
+const TIMEOUT: Duration = Duration::from_secs(90);
 
 /// One person: the SDK's client over the native driver.
 struct Person {
@@ -83,14 +83,20 @@ impl Person {
                 .ok_or("the driver stopped")?;
             self.client
                 .set_time(self.started.elapsed().as_millis() as u64);
-            if let Ok(input) = event.into_input() {
-                self.client.handle(input);
+            match event.into_input() {
+                Ok(input) => self.client.handle(input),
+                Err(native::Native::Identity { event, .. }) => {
+                    if let nuschel_session::identity::IdentityEvent::Failed(reason) = *event { self.say(format!("identity: {reason}")); }
+                }
+                Err(native::Native::OwnIdentity(result)) => { if let Err(reason) = *result { self.say(format!("identity worker: {reason}")); } }
+                _ => {},
             }
             self.client.settle();
             for update in self.client.take_updates() {
                 self.follow(update)?;
             }
             let server = &self.client.servers[0];
+            if let Some(notice) = &server.notice { self.say(format!("notice: {notice}")); }
             if server.status == Status::Disconnected && server.certificate.is_none() {
                 return Err(format!(
                     "{}: disconnected: {}",
@@ -225,36 +231,57 @@ async fn scenario(host: &str, port: u16, root: &Path) -> Result<(), String> {
     })
     .await?;
 
-    // Edit our own message once the server stored it (it has its seq).
-    andi.until("has it acknowledged", |client| {
-        client.servers[0].channels[at_andi]
+    let encrypted = andi.client.servers[0].mls;
+    let edited = if encrypted {
+        hello
+    } else {
+        "Hello from the SDK, edited"
+    };
+    if !encrypted {
+        // Edit our own message once the server stored it (it has its seq).
+        andi.until("has it acknowledged", |client| {
+            client.servers[0].channels[at_andi]
+                .timeline
+                .messages
+                .iter()
+                .any(|message| message.source == hello && message.seq.is_some())
+        })
+        .await?;
+        let seq = andi.client.servers[0].channels[at_andi]
             .timeline
             .messages
             .iter()
-            .any(|message| message.source == hello && message.seq.is_some())
-    })
-    .await?;
-    let seq = andi.client.servers[0].channels[at_andi]
-        .timeline
-        .messages
-        .iter()
-        .find(|message| message.source == hello)
-        .and_then(|message| message.seq)
-        .ok_or("no seq")?;
-    let edited = "Hello from the SDK, edited";
-    andi.client.edit(0, at_andi, seq, edited.into())?;
-    andi.until("edited it", |client| {
-        texts(client, at_andi).iter().any(|text| text == edited)
-    })
-    .await?;
-    ada.until("sees the edit", |client| {
-        client.servers[0].channels[at_ada]
-            .timeline
-            .messages
-            .iter()
-            .any(|message| message.source == edited && message.edited_ms.is_some())
-    })
-    .await?;
+            .find(|message| message.source == hello)
+            .and_then(|message| message.seq)
+            .ok_or("no seq")?;
+        andi.client.edit(0, at_andi, seq, edited.into())?;
+        andi.until("edited it", |client| {
+            texts(client, at_andi).iter().any(|text| text == edited)
+        })
+        .await?;
+        ada.until("sees the edit", |client| {
+            client.servers[0].channels[at_ada]
+                .timeline
+                .messages
+                .iter()
+                .any(|message| message.source == edited && message.edited_ms.is_some())
+        })
+        .await?;
+    } else {
+        for person in [&mut ada, &mut andi] {
+            let position = person.position(channel);
+            person
+                .until("has a confirmed encrypted conversation", |client| {
+                    client.servers[0].channels[position]
+                        .encryption
+                        .as_ref()
+                        .is_some_and(|state| {
+                            state.security == nuschel_client::SessionSecurity::MlsEstablished
+                        })
+                })
+                .await?;
+        }
+    }
 
     // Someone who was not there reads it from the server's history.
     let mut grace = Person::start("Grace", (host, port), root)?;

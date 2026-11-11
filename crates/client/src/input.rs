@@ -85,6 +85,12 @@ pub enum Input {
         target: TextTarget,
         body: String,
     },
+    /// A failed encrypted send keeps the composer's text and releases its pending state.
+    SendFailed {
+        server: String,
+        generation: u64,
+        reason: String,
+    },
     /// A page read backwards; `before` is None for the latest.
     History {
         server: String,
@@ -194,6 +200,10 @@ pub enum Input {
 /// What a server said (the session's events the client models).
 #[derive(Clone, Debug)]
 pub enum ServerEvent {
+    Encryption {
+        conversation: [u8; 16],
+        state: crate::conversation::EncryptionState,
+    },
     /// The server's certificate fingerprint on this connection.
     PeerCertificate(String),
     /// The Nuschel extension's negotiation (only with Nuschel servers).

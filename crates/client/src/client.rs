@@ -604,6 +604,19 @@ impl Client {
                 .platform
                 .request(&server.id, Request::RequestPermissions(channel));
         }
+        if server.mls
+            && let Some(entry) = server.channels.iter().find(|entry| entry.id == channel)
+            && let Some(conversation) = entry.conversation
+        {
+            let _ = self.platform.request(
+                &server.id,
+                Request::OpenEncrypted {
+                    conversation,
+                    channel: !entry.is_direct(),
+                    peer: entry.direct_peer.as_ref().and_then(|peer| peer.user_id),
+                },
+            );
+        }
         result
     }
 
@@ -716,10 +729,29 @@ impl Client {
             target: target.clone(),
             body: body.clone(),
         };
-        let request = Request::SendText {
-            target,
-            body,
-            expected_peer,
+        let request = if server.mls {
+            let Some(conversation) = channel.conversation else {
+                server.notice = Some("End-to-end encryption is being set up.".into());
+                return Err(SendError::Refused);
+            };
+            if let Some(reason) = channel
+                .encryption
+                .as_ref()
+                .and_then(|state| state.blocked.clone())
+            {
+                server.notice = Some(reason);
+                return Err(SendError::Refused);
+            }
+            Request::SendEncrypted {
+                conversation,
+                text: body,
+            }
+        } else {
+            Request::SendText {
+                target,
+                body,
+                expected_peer,
+            }
         };
         match self.platform.request(&server.id, request) {
             Ok(()) => {
@@ -988,6 +1020,16 @@ impl Client {
                         conversation: pending.conversation,
                         body: pending.body,
                     });
+                }
+            }
+            Input::SendFailed {
+                server,
+                generation,
+                reason,
+            } => {
+                if let Some(index) = self.current(&server, generation) {
+                    self.sending = None;
+                    self.servers[index].notice = Some(reason);
                 }
             }
             Input::SearchResults { request, result } => {
@@ -1593,6 +1635,19 @@ impl Client {
     fn server_event(&mut self, index: usize, event: ServerEvent) {
         let server = &mut self.servers[index];
         match event {
+            ServerEvent::Encryption {
+                conversation,
+                state,
+            } => {
+                for channel in &mut server.channels {
+                    if channel.conversation == Some(conversation) {
+                        channel.encryption = Some(state.clone());
+                    }
+                }
+                if server.encryption.len() < 4096 || server.encryption.contains_key(&conversation) {
+                    server.encryption.insert(conversation, state);
+                }
+            }
             // The driver keeps the sticky record. With history, the timeline
             // pages from the server (seqs), not from local observations.
             ServerEvent::Negotiated {
@@ -1626,8 +1681,23 @@ impl Client {
                 let selected = self.navigation.selection().is_some_and(|selected| {
                     selected.server == server.id && selected.channel == channel
                 });
+                if selected
+                    && server.mls
+                    && let Some(conversation) = conversation
+                {
+                    let _ = self.platform.request(
+                        &server.id,
+                        Request::OpenEncrypted {
+                            conversation,
+                            channel: true,
+                            peer: None,
+                        },
+                    );
+                }
+                let encryption = conversation.and_then(|id| server.encryption.get(&id).cloned());
                 if let Some(view) = server.channel_view(channel) {
                     view.conversation = conversation;
+                    view.encryption = encryption;
                     if selected
                         && !view.timeline.loaded
                         && !view.timeline.loading
@@ -2629,6 +2699,59 @@ mod tests {
         assert_eq!(
             client.send_text("x".repeat(MAX_CONTENT_BYTES + 1)),
             Err(SendError::TooLong)
+        );
+    }
+
+    #[test]
+    fn encrypted_conversations_use_only_the_crypto_request_path() {
+        let (mut client, recorder, id) = connected();
+        client.servers[0].mls = true;
+        let conversation = [7; 16];
+        let channel = client.servers[0]
+            .channels
+            .iter_mut()
+            .find(|channel| channel.id == 2)
+            .unwrap();
+        channel.conversation = Some(conversation);
+        client.open(0, 2).unwrap();
+        assert!(recorder.requests.lock().unwrap().iter().any(|(_, request)| matches!(request, Request::OpenEncrypted { conversation: id, channel: true, .. } if *id == conversation)));
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Encryption {
+                conversation,
+                state: crate::conversation::EncryptionState {
+                    security: SessionSecurity::MlsEstablished,
+                    description: "Encrypted".into(),
+                    blocked: None,
+                    epoch: 3,
+                },
+            },
+        });
+        let state = client.servers[0]
+            .channels
+            .iter()
+            .find(|channel| channel.id == 2)
+            .unwrap()
+            .encryption
+            .as_ref()
+            .unwrap();
+        assert_eq!(state.security, SessionSecurity::MlsEstablished);
+        assert_eq!(client.send_text("private text".into()), Ok(()));
+        assert!(
+            matches!(recorder.requests.lock().unwrap().last(), Some((_, Request::SendEncrypted { conversation: id, text })) if *id == conversation && text == "private text")
+        );
+        client.handle(Input::SendFailed {
+            server: id,
+            generation: 1,
+            reason: "Identity verification needed".into(),
+        });
+        assert!(!client.sending());
+        assert!(
+            client.servers[0]
+                .notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("verification"))
         );
     }
 

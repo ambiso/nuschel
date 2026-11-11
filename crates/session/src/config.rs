@@ -398,7 +398,7 @@ impl Default for ClientSettings {
             wormhole_relay: nuschel_core::transfer::PUBLIC_RELAY.into(),
             appearance: AppearanceSettings::default(),
             recovery_key: Default::default(),
-            e2ee_direct_messages: false,
+            e2ee_direct_messages: true,
             key_transparency: Default::default(),
             share_web_host: String::new(),
         }

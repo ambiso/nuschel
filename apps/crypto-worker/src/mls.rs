@@ -40,6 +40,7 @@ use crate::store::Store;
 use crate::worker::Worker;
 use nuschel_e2ee::client::{Client, Incoming, MemberInfo, ValidKeyPackage};
 use nuschel_e2ee::envelope::{self, Chain, Envelope, Kind};
+use nuschel_e2ee::history::{self, HistoryKey};
 use nuschel_e2ee::{ConversationBinding, ConversationKind};
 use nuschel_identity::{
     DeviceCertificate, DeviceCredential, DeviceId, DeviceRevocation, DeviceRoster,
@@ -113,6 +114,8 @@ pub struct PendingCommit {
 pub struct OutgoingEnvelope {
     #[serde(with = "base64_bytes")]
     pub envelope: Vec<u8>,
+    #[serde(default, with = "base64_bytes")]
+    pub archive: Vec<u8>,
 }
 
 /// A message we sent: the ciphertext's hash (to recognise it in the stream).
@@ -124,6 +127,26 @@ pub struct SentText {
     #[serde(with = "base64_bytes")]
     pub idempotency_key: Vec<u8>,
     pub text: String,
+    #[serde(default)]
+    pub control: bool,
+    #[serde(default, with = "base64_bytes")]
+    pub archive_hash: Vec<u8>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryState {
+    pub keys: BTreeMap<u32, Vec<u8>>,
+    pub archived: BTreeMap<String, u64>,
+}
+
+impl std::fmt::Debug for HistoryState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistoryState")
+            .field("keys", &self.keys.len())
+            .field("archived", &self.archived.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -174,6 +197,12 @@ pub struct Conversation {
     pub active: bool,
     /// The last processed seq.
     pub cursor: u64,
+    #[serde(default)]
+    pub joined: u64,
+    #[serde(default)]
+    pub history: HistoryState,
+    #[serde(default)]
+    pub history_pending: bool,
     pub pending: Option<PendingCommit>,
     /// Per sender device (hex): its chain.
     pub chains: BTreeMap<String, ChainState>,
@@ -547,9 +576,10 @@ impl Worker {
                 conversation,
                 seq,
                 message,
+                archive,
             } => {
                 let conversation = array16(&conversation, "a conversation id")?;
-                let received = self.receive(&server, &conversation, seq, &message)?;
+                let received = self.receive(&server, &conversation, seq, &message, &archive)?;
                 CryptoResponse::MlsReceived(received)
             }
             CryptoRequest::MlsEncrypt {
@@ -559,9 +589,14 @@ impl Worker {
                 text,
             } => {
                 let conversation = array16(&conversation, "a conversation id")?;
-                let (message, epoch) =
+                let (message, epoch, archive) =
                     self.encrypt(&server, &conversation, &idempotency_key, &text)?;
-                CryptoResponse::MlsCiphertext { message, epoch }
+                CryptoResponse::MlsCiphertext {
+                    message,
+                    epoch,
+                    archive,
+                    next_key: None,
+                }
             }
             CryptoRequest::MlsSent {
                 server,
@@ -604,6 +639,25 @@ impl Worker {
             } => {
                 let conversation = array16(&conversation, "a conversation id")?;
                 CryptoResponse::MlsOutgoing(self.commit_proposals(&server, &conversation)?)
+            }
+            CryptoRequest::MlsGrant {
+                server,
+                conversation,
+                idempotency_key,
+                rotate,
+                after,
+            } => {
+                let conversation = array16(&conversation, "a conversation id")?;
+                self.grant(&server, &conversation, &idempotency_key, rotate, after)?
+            }
+            CryptoRequest::MlsArchive {
+                server,
+                conversation,
+                seq,
+                archive,
+            } => {
+                let conversation = array16(&conversation, "a conversation id")?;
+                CryptoResponse::MlsReceived(self.archive(&server, &conversation, seq, &archive)?)
             }
             _ => return Err("unsupported request".into()),
         };
@@ -890,6 +944,9 @@ impl Worker {
             missing,
             channel: entry.channel,
             removals,
+            joined: entry.joined,
+            history_keys: entry.history.keys.len().try_into().unwrap_or(u32::MAX),
+            history_pending: entry.history_pending,
         })
     }
 
@@ -1165,6 +1222,10 @@ impl Worker {
             stored.pinned = true;
             stored.active = true;
             stored.cursor = stored.cursor.max(seq);
+            if stored.joined == 0 {
+                stored.joined = seq;
+            }
+            self.current_history_key(server, conversation)?;
             self.mls.save(&self.store)?;
             self.recheck(server, conversation)?;
         } else {
@@ -1311,6 +1372,7 @@ impl Worker {
         let entry = self.conversation_mut(server, conversation)?;
         entry.reset_group();
         entry.channel = true;
+        entry.history_pending = true;
         entry.group_id = binding.group_id();
         entry.active = true;
         entry.cursor = existing.cursor;
@@ -1447,6 +1509,7 @@ impl Worker {
         entry.pinned = true;
         entry.active = true;
         entry.cursor = seq;
+        entry.joined = seq;
         entry.unverified = assessment.unverified;
         if rejoined {
             entry.notice("You were added back to this conversation.".into());
@@ -1462,6 +1525,7 @@ impl Worker {
         conversation: &[u8; 16],
         seq: u64,
         message: &[u8],
+        archive: &[u8],
     ) -> Result<Received, String> {
         let Some(entry) = self.conversation(server, conversation).cloned() else {
             return Ok(Received::Undecryptable {
@@ -1505,10 +1569,23 @@ impl Worker {
             .find(|sent| sent.ciphertext_hash == hash)
             .cloned()
         {
+            if !sent.archive_hash.is_empty() && sent.archive_hash != history::archive_hash(archive)
+            {
+                return Ok(Received::Undecryptable {
+                    seq,
+                    reason: "the server changed or withheld the archive record".into(),
+                });
+            }
             let stored = self.conversation_mut(server, conversation)?;
             stored.cursor = seq;
             stored.outgoing.remove(&hex(&sent.idempotency_key));
+            if !sent.archive_hash.is_empty() {
+                stored.history.archived.insert(hex(&sent.archive_hash), seq);
+            }
             self.mls.save(&self.store)?;
+            if sent.control {
+                return Ok(Received::Nothing { seq });
+            }
             return Ok(Received::Own {
                 seq,
                 text: sent.text,
@@ -1606,7 +1683,7 @@ impl Worker {
                 return Ok(Received::Commit { seq, view });
             }
             Ok(Incoming::Application { sender, data }) => {
-                self.application(server, conversation, seq, &sender, &data)?
+                self.application(server, conversation, seq, &sender, &data, archive)?
             }
         };
         self.mls.save(&self.store)?;
@@ -1620,6 +1697,7 @@ impl Worker {
         seq: u64,
         sender: &MemberInfo,
         data: &[u8],
+        archive: &[u8],
     ) -> Result<Received, String> {
         let undecryptable = |reason: &str| Received::Undecryptable {
             seq,
@@ -1649,11 +1727,83 @@ impl Worker {
                 "the envelope names another device than its sender",
             ));
         }
+        if !envelope.archive_hash.is_empty() {
+            if entry
+                .history
+                .archived
+                .get(&hex(&envelope.archive_hash))
+                .is_some_and(|previous| *previous != seq)
+            {
+                return Ok(Received::Duplicate { seq });
+            }
+            if envelope.archive_hash != history::archive_hash(archive) {
+                return Ok(undecryptable(
+                    "the server changed or withheld the archive record",
+                ));
+            }
+            self.current_history_key(server, conversation)?;
+            let index = history::archive_key_index(archive).ok_or("malformed archive record")?;
+            if let Some(key) = self.history_key(server, conversation, index) {
+                let opened = history::open_archive(&key, conversation, archive)
+                    .map_err(|e| e.to_string())?;
+                let mut archived = Envelope::decode(&opened.envelope).map_err(|e| e.to_string())?;
+                archived.archive_hash = history::archive_hash(archive).to_vec();
+                if archived != envelope || opened.credential != sender.credential {
+                    return Ok(undecryptable(
+                        "the live message and its signed archive disagree",
+                    ));
+                }
+            }
+        }
+        if envelope.kind == Kind::HistoryGrant {
+            let (keys, _, more) =
+                history::decode_grant(&envelope.body).map_err(|e| e.to_string())?;
+            let group_id = entry.group_id.clone();
+            let epoch = self
+                .mls
+                .client
+                .epoch(&group_id)
+                .map_err(|e| e.to_string())?;
+            let binding = self
+                .mls
+                .client
+                .binding(&group_id)
+                .map_err(|e| e.to_string())?;
+            if keys.iter().any(|key| u64::from(key.index) > epoch)
+                || (binding.history == nuschel_e2ee::HistoryPolicy::SinceJoin
+                    && keys.iter().any(|key| u64::from(key.index) < epoch))
+            {
+                return Ok(undecryptable(
+                    "the history grant violates this conversation's policy",
+                ));
+            }
+            let stored = self.conversation_mut(server, conversation)?;
+            stored.history_pending = more;
+            for key in keys {
+                if stored
+                    .history
+                    .keys
+                    .get(&key.index)
+                    .is_some_and(|known| known != &key.key)
+                {
+                    return Ok(undecryptable(
+                        "a history key conflicts with an earlier grant",
+                    ));
+                }
+                stored.history.keys.insert(key.index, key.key.to_vec());
+            }
+        }
         if !envelope.kind.durable() {
             return Ok(Received::Nothing { seq });
         }
         let hash = envelope.hash();
         let stored = self.conversation_mut(server, conversation)?;
+        if !envelope.archive_hash.is_empty() {
+            stored
+                .history
+                .archived
+                .insert(hex(&envelope.archive_hash), seq);
+        }
         let device = hex(&envelope.device_id);
         let mut state = stored.chains.get(&device).cloned().unwrap_or_default();
         let mut chain = Chain {
@@ -1737,7 +1887,178 @@ impl Worker {
         conversation: &[u8; 16],
         idempotency_key: &[u8],
         text: &str,
-    ) -> Result<(Vec<u8>, u64), String> {
+    ) -> Result<(Vec<u8>, u64, Vec<u8>), String> {
+        self.current_history_key(server, conversation)?;
+        self.encrypt_body(
+            server,
+            conversation,
+            idempotency_key,
+            Kind::Chat,
+            text.as_bytes(),
+        )
+    }
+
+    fn current_history_key(
+        &mut self,
+        server: &str,
+        conversation: &[u8; 16],
+    ) -> Result<HistoryKey, String> {
+        let group = self
+            .conversation(server, conversation)
+            .ok_or("no end-to-end group")?
+            .group_id
+            .clone();
+        let key = self
+            .mls
+            .client
+            .history_key(&group)
+            .map_err(|error| error.to_string())?;
+        self.conversation_mut(server, conversation)?
+            .history
+            .keys
+            .insert(key.index, key.key.to_vec());
+        Ok(key)
+    }
+
+    fn history_key(&self, server: &str, conversation: &[u8; 16], index: u32) -> Option<HistoryKey> {
+        let bytes = self
+            .conversation(server, conversation)?
+            .history
+            .keys
+            .get(&index)?;
+        Some(HistoryKey {
+            index,
+            key: bytes.as_slice().try_into().ok()?,
+        })
+    }
+
+    fn grant(
+        &mut self,
+        server: &str,
+        conversation: &[u8; 16],
+        idempotency_key: &[u8],
+        _rotate: bool,
+        after: Option<u32>,
+    ) -> Result<CryptoResponse, String> {
+        let current = self.current_history_key(server, conversation)?;
+        let group = self
+            .conversation(server, conversation)
+            .ok_or("no end-to-end group")?
+            .group_id
+            .clone();
+        let binding = self.mls.client.binding(&group).map_err(|e| e.to_string())?;
+        let entry = self
+            .conversation(server, conversation)
+            .ok_or("no end-to-end group")?;
+        let (keys, next_key) = history::grant_page(
+            entry.history.keys.iter().filter_map(|(index, key)| {
+                if binding.history != nuschel_e2ee::HistoryPolicy::Members {
+                    return None;
+                }
+                Some(HistoryKey {
+                    index: *index,
+                    key: key.as_slice().try_into().ok()?,
+                })
+            }),
+            current.clone(),
+            after,
+        );
+        let body = history::encode_grant_page(&keys, current.index, next_key.is_some())
+            .map_err(|e| e.to_string())?;
+        let (message, epoch, archive) = self.encrypt_body(
+            server,
+            conversation,
+            idempotency_key,
+            Kind::HistoryGrant,
+            &body,
+        )?;
+        Ok(CryptoResponse::MlsCiphertext {
+            message,
+            epoch,
+            archive,
+            next_key,
+        })
+    }
+
+    fn archive(
+        &mut self,
+        server: &str,
+        conversation: &[u8; 16],
+        seq: u64,
+        bytes: &[u8],
+    ) -> Result<Received, String> {
+        let view = self.conversation_view(server, conversation)?;
+        if !view.pinned || !view.active {
+            return Ok(Received::Undecryptable {
+                seq,
+                reason: "not a current member of this conversation".into(),
+            });
+        }
+        let hash = history::archive_hash(bytes);
+        if self
+            .conversation(server, conversation)
+            .is_some_and(|entry| {
+                entry
+                    .history
+                    .archived
+                    .get(&hex(&hash))
+                    .is_some_and(|known| *known != seq)
+            })
+        {
+            return Ok(Received::Duplicate { seq });
+        }
+        let index = history::archive_key_index(bytes).ok_or("malformed archive record")?;
+        let key = self
+            .history_key(server, conversation, index)
+            .ok_or("history key has not been granted yet")?;
+        let opened = history::open_archive(&key, conversation, bytes).map_err(|e| e.to_string())?;
+        let credential = DeviceCredential::decode(&opened.credential).map_err(|e| e.to_string())?;
+        let entry = self
+            .conversation(server, conversation)
+            .cloned()
+            .ok_or("no end-to-end group")?;
+        let rosters = self.rosters_for(server, &entry)?;
+        let sender = MemberInfo {
+            credential: opened.credential,
+            signature_key: opened.signature_key,
+            index: 0,
+        };
+        let sender = assess(&rosters, &[sender], self.now() / 1000)
+            .members
+            .pop()
+            .ok_or("the archive sender does not verify")?;
+        let envelope = Envelope::decode(&opened.envelope).map_err(|e| e.to_string())?;
+        if !envelope.archive_hash.is_empty()
+            || envelope.device_id != *credential.device_id().as_bytes()
+            || envelope.kind != Kind::Chat
+        {
+            return Err("invalid archived chat envelope".into());
+        }
+        let text =
+            String::from_utf8(envelope.body).map_err(|_| "the archive message is not text")?;
+        self.conversation_mut(server, conversation)?
+            .history
+            .archived
+            .insert(hex(&hash), seq);
+        self.mls.save(&self.store)?;
+        Ok(Received::Message {
+            seq,
+            sender,
+            text,
+            sent_at: envelope.sent_at,
+            idempotency_key: envelope.idempotency_key.to_vec(),
+            order: Order::InOrder,
+        })
+    }
+
+    fn encrypt_body(
+        &mut self,
+        server: &str,
+        conversation: &[u8; 16],
+        idempotency_key: &[u8],
+        kind: Kind,
+        body: &[u8],
+    ) -> Result<(Vec<u8>, u64, Vec<u8>), String> {
         let key = key_of(idempotency_key)?;
         let view = self.conversation_view(server, conversation)?;
         if !view.pinned {
@@ -1749,75 +2070,101 @@ impl Worker {
         if view.pending_commit {
             return Err("a commit is waiting for the server".into());
         }
-        let device = *self
-            .keystore
-            .as_ref()
-            .ok_or("no identity yet")?
-            .device()
-            .device_id()
-            .as_bytes();
+        let keystore = self.keystore.as_ref().ok_or("no identity yet")?;
+        let device = *keystore.device().device_id().as_bytes();
         let now = self.now();
-        let entry = self.conversation_mut(server, conversation)?;
-        let encoded = match entry.outgoing.get(&key) {
-            // A resend: the same envelope, counter and chain, for the new epoch.
-            Some(outgoing) => outgoing.envelope.clone(),
+        let entry = self
+            .conversation(server, conversation)
+            .cloned()
+            .ok_or("no end-to-end group")?;
+        let (encoded, archive) = match entry.outgoing.get(&key) {
+            Some(outgoing) => (outgoing.envelope.clone(), outgoing.archive.clone()),
             None => {
                 if entry.outgoing.len() >= MAX_OUTGOING {
                     return Err("too many messages wait for the server".into());
                 }
-                let envelope = Envelope {
-                    kind: Kind::Chat,
+                let mut envelope = Envelope {
+                    kind,
                     device_id: device,
-                    counter: entry.own.counter + 1,
+                    counter: entry
+                        .own
+                        .counter
+                        .checked_add(1)
+                        .ok_or("message counter exhausted")?,
                     prev: entry.own.hash,
                     seen: entry.seen,
                     idempotency_key: array16(idempotency_key, "an idempotency key")?,
                     sent_at: now,
                     archive_hash: Vec::new(),
-                    body: text.as_bytes().to_vec(),
+                    body: body.to_vec(),
+                };
+                let archive = if kind == Kind::Chat {
+                    let history_key = self.current_history_key(server, conversation)?;
+                    let keystore = self.keystore.as_ref().ok_or("no identity yet")?;
+                    let record = history::seal_archive(
+                        &history_key,
+                        conversation,
+                        &envelope.encode(),
+                        keystore.device(),
+                        keystore.device_credential(),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    envelope.archive_hash = history::archive_hash(&record).to_vec();
+                    record
+                } else {
+                    Vec::new()
                 };
                 let encoded = envelope.encode();
-                let hash = envelope::hash_encoded(&encoded);
-                entry.own = ChainState {
+                let hash = envelope.hash();
+                let stored = self.conversation_mut(server, conversation)?;
+                stored.own = ChainState {
                     counter: envelope.counter,
                     hash,
                     missing: BTreeSet::new(),
                 };
-                entry.know(hash);
-                entry.outgoing.insert(
-                    key.clone(),
+                stored.know(hash);
+                stored.outgoing.insert(
+                    key,
                     OutgoingEnvelope {
                         envelope: encoded.clone(),
+                        archive: archive.clone(),
                     },
                 );
-                encoded
+                (encoded, archive)
             }
         };
-        let group_id = entry.group_id.clone();
+        let group_id = entry.group_id;
         let keystore = self.keystore.as_ref().ok_or("no identity yet")?;
         let message = self
             .mls
             .client
             .encrypt(keystore.device(), &group_id, &encoded)
-            .map_err(|error| error.to_string())?;
+            .map_err(|e| e.to_string())?;
         let epoch = self
             .mls
             .client
             .epoch(&group_id)
-            .map_err(|error| error.to_string())?;
-        let body = Envelope::decode(&encoded)
-            .map(|envelope| String::from_utf8_lossy(&envelope.body).into_owned())
-            .unwrap_or_default();
+            .map_err(|e| e.to_string())?;
         let entry = self.conversation_mut(server, conversation)?;
         entry.sent.push_back(SentText {
             ciphertext_hash: envelope::hash_encoded(&message).to_vec(),
             idempotency_key: idempotency_key.to_vec(),
-            text: body,
+            text: if kind == Kind::Chat {
+                String::from_utf8_lossy(body).into_owned()
+            } else {
+                String::new()
+            },
+            control: kind != Kind::Chat,
+            archive_hash: if archive.is_empty() {
+                Vec::new()
+            } else {
+                history::archive_hash(&archive).to_vec()
+            },
         });
         while entry.sent.len() > MAX_SENT {
             entry.sent.pop_front();
         }
         self.mls.save(&self.store)?;
-        Ok((message, epoch))
+        Ok((message, epoch, archive))
     }
 }

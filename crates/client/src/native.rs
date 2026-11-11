@@ -153,6 +153,7 @@ async fn render_server_page(
     (out, (next_before, next_after), records)
 }
 pub enum Event {
+    Input(Input),
     /// The crypto worker's answer to [`Driver::identity`].
     OwnIdentity(Result<nuschel_ipc::crypto::CryptoResponse, String>),
     Protocol {
@@ -995,10 +996,15 @@ async fn connect_once(
     let mut finished = false;
     let mut outcome = None;
     let mut own_session = None;
+    let mut own_registration = None;
     // Where each channel's conversation is kept in local history.
     let mut conversation_keys = BTreeMap::<[u8; 16], String>::new();
     // Timelines here are the server's history (the extension's history/1).
     let mut server_history = false;
+    let mut encrypted_server = false;
+    // A channel can be opened before registration/key publication completes.
+    // Retry the latest visible conversation when the worker uploads its keys.
+    let mut pending_encrypted_open = None;
     let mut hashes = BTreeMap::<u32, Option<String>>::new();
     let mut loss_percent = 5_u8;
     // Our own voice is on the air (no terminator sent yet).
@@ -1044,6 +1050,9 @@ async fn connect_once(
                 hub.send(media::Control::Sound(sound));
             },
             Some(command) = commands.recv() => {
+                if let Command::Mls(command @ (nuschel_session::mls::MlsCommand::OpenChannel { .. } | nuschel_session::mls::MlsCommand::OpenDirect { .. })) = &command {
+                    pending_encrypted_open = Some(command.clone());
+                }
                 if let Command::SetSelf { muted: mute, deafened: deaf } = &command {
                     voice_revision = voice_revision.wrapping_add(1);
                     let cue = crate::sounds::self_state((muted, deafened), (*mute || *deaf, *deaf));
@@ -1087,7 +1096,13 @@ async fn connect_once(
                     restore.unacked.retain(|pending| pending.key != key);
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::ChatFailed { key, reason } }).await;
                 },
-                SessionEvent::Nuschel(NuschelEvent::Page(page)) => {
+                SessionEvent::Nuschel(page_event @ (NuschelEvent::Page(_) | NuschelEvent::DecryptedPage(_))) => {
+                    let decrypted = matches!(&page_event, NuschelEvent::DecryptedPage(_));
+                    let page = match page_event { NuschelEvent::Page(page) | NuschelEvent::DecryptedPage(page) => page, _ => unreachable!() };
+                    if encrypted_server && !decrypted {
+                        let _ = session_commands.send(Command::Mls(nuschel_session::mls::MlsCommand::DecryptPage { page })).await;
+                        continue;
+                    }
                     let asked = server_pages().remove(&page.request_id);
                     if let Some((server, ticket, asked, cache)) = asked {
                         let (events, storage) = (events.clone(), storage.clone());
@@ -1163,6 +1178,7 @@ async fn connect_once(
                             message: "End-to-end voice is not available yet on this server.".into() }).await;
                     }
                     server_history = negotiated.capabilities.iter().any(|capability| capability == "history/1");
+                    encrypted_server = negotiated.capabilities.iter().any(|capability| capability == "e2ee/1");
                     // Remember what this server offers: a weaker answer later fails.
                     let raised = profile.policy()
                         .and_then(|mut store| store.raise(&server.host, server.port, negotiated.nuschel, &negotiated.capabilities));
@@ -1202,6 +1218,10 @@ async fn connect_once(
                     hashes.insert(user.session, user.certificate_hash.clone());
                     if Some(user.session) == own_session {
                         restore.channel = Some(user.channel);
+                        if own_registration != user.user_id && user.user_id.is_some() {
+                            own_registration = user.user_id;
+                            let _ = session_commands.send(Command::Identity(nuschel_session::identity::IdentityCommand::Refresh)).await;
+                        }
                     }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::User(user) }).await;
                 },
@@ -1220,6 +1240,51 @@ async fn connect_once(
                         }
                     }
                     let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Transport(stats) }).await;
+                },
+                SessionEvent::Mls(event) => {
+                    use nuschel_session::mls::MlsEvent;
+                    use nuschel_ipc::crypto::Received;
+                    match &event {
+                        MlsEvent::KeyPackages { .. } => {
+                            if let Some(open) = pending_encrypted_open.clone() { let _ = session_commands.send(Command::Mls(open)).await; }
+                        }
+                        MlsEvent::Conversation { view, peer } => {
+                            if view.pinned && view.active && pending_encrypted_open.as_ref().is_some_and(|pending| match pending {
+                                nuschel_session::mls::MlsCommand::OpenChannel { conversation } => view.conversation.as_slice() == conversation,
+                                nuschel_session::mls::MlsCommand::OpenDirect { user_id } => *peer == Some(*user_id),
+                                _ => false,
+                            }) { pending_encrypted_open = None; }
+
+                            if let Some(conversation) = nuschel_protocol::nuschel::id(&view.conversation) {
+                                let state = encryption_state(view);
+                                let _ = events.send(Event::Input(Input::Server { server: id.clone(), generation, event: ServerEvent::Encryption { conversation, state } })).await;
+                            }
+                        }
+                        MlsEvent::Sent { conversation, seq, key, text } => {
+                            let target = conversation_keys.get(conversation).and_then(|key| key.parse().ok()).map(TextTarget::Channel).unwrap_or(TextTarget::DirectConversation(*conversation));
+                            let _ = storage.send(StorageCommand::Acked { key: *key, seq: *seq }).await;
+                            let _ = events.send(Event::Sent { server: id.clone(), generation, target, body: text.clone() }).await;
+                        }
+                        MlsEvent::NotSent { reason, .. } | MlsEvent::Failed(reason) => {
+                            let _ = events.send(Event::Input(Input::SendFailed { server: id.clone(), generation, reason: reason.clone() })).await;
+                        }
+                        MlsEvent::Received { conversation, received, author } => {
+                            let visible = match received {
+                                Received::Message { seq, text, sent_at, .. } => Some((*seq, text.clone(), *sent_at as i64, false)),
+                                Received::Own { seq, text, .. } => Some((*seq, text.clone(), connection::now_ms(), true)),
+                                _ => None,
+                            };
+                            if let (Some((seq, body, observed_at_ms, outgoing)), Some(peer)) = (visible, peer.as_ref()) {
+                                let target = conversation_keys.get(conversation).and_then(|key| key.parse().ok()).map(TextTarget::Channel).unwrap_or(TextTarget::DirectConversation(*conversation));
+                                let author = if outgoing { server.username.clone() } else { author.as_ref().map(author_name).unwrap_or_else(|| "Encrypted member".into()) };
+                                let text = IncomingText { target, author, peer: None, body, html: false, outgoing, observed_at_ms, seq: Some(seq), pending: None };
+                                let job = ContentJob { server: id.clone(), generation, identity: server.history_identity(peer), nonce: nonce.clone(), text, archived: true };
+                                if content.send(ContentWork::Text(Box::new(job))).await.is_err() { break; }
+                            }
+                        }
+                        _ => {}
+                    }
+                    let _ = events.send(Event::Protocol { server: id.clone(), generation, event: SessionEvent::Mls(event) }).await;
                 },
                 SessionEvent::Text(text) => if let Some(peer) = &peer {
                     if text.outgoing { let _ = events.send(Event::Sent { server: id.clone(), generation, target: text.target.clone(), body: text.body.clone() }).await; }
@@ -1927,6 +1992,18 @@ impl Platform for Driver {
     fn request(&self, server: &str, request: Request) -> Result<(), String> {
         let command = match request {
             Request::Join(channel) => Command::Join(channel),
+            Request::OpenEncrypted {
+                conversation,
+                channel,
+                peer,
+            } => Command::Mls(match (channel, peer) {
+                (true, _) => nuschel_session::mls::MlsCommand::OpenChannel { conversation },
+                (false, Some(user_id)) => nuschel_session::mls::MlsCommand::OpenDirect { user_id },
+                _ => nuschel_session::mls::MlsCommand::Sync { conversation },
+            }),
+            Request::SendEncrypted { conversation, text } => {
+                Command::Mls(nuschel_session::mls::MlsCommand::SendText { conversation, text })
+            }
             Request::SendText {
                 target,
                 body,
@@ -2070,6 +2147,7 @@ impl Event {
     /// The client's input for this event, or what the client does not model.
     pub fn into_input(self) -> Result<Input, Native> {
         Ok(match self {
+            Event::Input(input) => input,
             Event::OwnIdentity(result) => return Err(Native::OwnIdentity(Box::new(result))),
             Event::Protocol {
                 server,
@@ -2356,6 +2434,38 @@ enum Unmodelled {
 /// What the session said, as the client models it; identity and end-to-end
 /// events (to the UI for now) and what nobody needs (the driver's own
 /// business) are not.
+fn encryption_state(
+    view: &nuschel_ipc::crypto::ConversationView,
+) -> crate::conversation::EncryptionState {
+    use crate::SessionSecurity;
+    use nuschel_ipc::crypto::Lock;
+    let (security, description) = match &view.lock {
+        Lock::Encrypted | Lock::Verified => (
+            SessionSecurity::MlsEstablished,
+            if view.history_pending {
+                "End-to-end encrypted; waiting for history keys".into()
+            } else {
+                "End-to-end encrypted; every device confirmed by key transparency".into()
+            },
+        ),
+        Lock::Attention { reason } => (
+            SessionSecurity::MlsPending,
+            format!("End-to-end encrypted; needs attention: {reason}"),
+        ),
+        Lock::Pending { reason } => (SessionSecurity::MlsPending, reason.clone()),
+        Lock::Open => (
+            SessionSecurity::TransportOnly,
+            "Not end-to-end encrypted".into(),
+        ),
+    };
+    crate::conversation::EncryptionState {
+        security,
+        description,
+        blocked: view.blocked.clone(),
+        epoch: view.epoch,
+    }
+}
+
 fn server_event(event: SessionEvent) -> Result<ServerEvent, Option<Unmodelled>> {
     Ok(match event {
         SessionEvent::PeerCertificate(pin) => ServerEvent::PeerCertificate(pin),
