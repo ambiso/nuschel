@@ -257,6 +257,7 @@ impl State {
     /// Deferred work after a handler: temporary channels that became empty go
     /// away once the state change that emptied them has been broadcast.
     pub fn finish(&mut self) {
+        self.knock_sweep();
         while let Some(id) = self.emptied.pop() {
             if self.channels.get(id).is_some_and(|channel| {
                 channel.temporary && channel.users.is_empty() && channel.children.is_empty()
@@ -430,6 +431,9 @@ impl State {
             if self.channels.get(channel).is_none() || channel == destination_channel {
                 return;
             }
+            if source != target && self.stock_knock_move(source, target, channel) {
+                return;
+            }
             if !self.check(
                 source,
                 Action::Move {
@@ -437,6 +441,9 @@ impl State {
                     to: channel,
                 },
             ) {
+                if source == target {
+                    let _ = self.knock_request(source, channel);
+                }
                 return;
             }
             if self.channel_full(channel, Some(source)) {
@@ -766,6 +773,7 @@ impl State {
     /// Move a user (Murmur's `userEnterChannel`): updates suppression from the
     /// Speak permission and clears priority speaker in `message`.
     pub fn enter_channel(&mut self, session: u32, channel: u32, message: &mut proto::UserState) {
+        self.knock_left(session, Some(channel));
         let Some(user) = self.users.get_mut(&session) else {
             return;
         };
@@ -982,6 +990,7 @@ impl State {
     /// Drop a user's session: everyone else learns it left (`announce`, unless
     /// they were already told), and the connection flushes and closes.
     pub fn disconnect(&mut self, session: u32, announce: bool) {
+        self.knock_left(session, None);
         let Some(user) = self.users.remove(&session) else {
             return;
         };

@@ -47,6 +47,291 @@ const ARCHIVE: Id = [0xaa; 16];
 const DIRECT: Id = [0xdd; 16];
 const UNKNOWN: Id = [0x99; 16];
 
+#[test]
+fn knocking_requires_both_moderator_permissions_and_rechecks_decisions() {
+    let mut f = Fixture::new(Config::default());
+    let requester = f.actor("registered");
+    let moderator = f.actor("admin");
+    let member = f.actor("member");
+    assert!(f.state.allowed(member, Action::Enter { channel: PRIVATE }));
+    assert!(
+        !f.state
+            .allowed(member, Action::ModerateKnock { channel: PRIVATE })
+    );
+    let id = f.state.knock_request(requester, PRIVATE).unwrap();
+    assert_eq!(f.state.knock_request(requester, PRIVATE), Ok(id));
+    assert!(f.state.knock_decide(member, id, false).is_err());
+    // Write grants implicit Move, but an explicit Enter denial still excludes
+    // this moderator. Changes after the notice affect BOTH Admit and Decline.
+    f.state
+        .channels
+        .get_mut(PRIVATE)
+        .unwrap()
+        .node
+        .acls
+        .push(entry("", Some(ADMIN), 0, perm::ENTER));
+    f.state.invalidate();
+    assert!(
+        !f.state
+            .allowed(moderator, Action::ModerateKnock { channel: PRIVATE })
+    );
+    assert!(f.state.knock_decide(moderator, id, true).is_err());
+    assert!(f.state.knock_decide(moderator, id, false).is_err());
+    assert_eq!(f.state.users[&requester].channel, LOBBY);
+}
+
+#[test]
+fn admission_has_exact_channel_permissions_history_floor_and_lifetime() {
+    let mut f = Fixture::new(Config::default());
+    let requester = f.actor("registered");
+    let moderator = f.actor("admin");
+    let conversation = f.conversation(PRIVATE);
+    f.state.conversations.set_head(conversation, 20);
+    let id = f.state.knock_request(requester, PRIVATE).unwrap();
+    f.state.knock_decide(moderator, id, true).unwrap();
+    f.state.finish();
+    assert_eq!(f.state.users[&requester].channel, PRIVATE);
+    assert!(!f.state.users[&requester].suppress);
+    for action in [
+        Action::Enter { channel: PRIVATE },
+        Action::Speak { channel: PRIVATE },
+        Action::TextChannel { channel: PRIVATE },
+        Action::ReadHistory(&conversation),
+    ] {
+        assert!(f.state.allowed(requester, action), "{action:?}");
+    }
+    assert!(
+        !f.state
+            .allowed(requester, Action::Whisper { channel: PRIVATE })
+    );
+    assert!(!f.state.allowed(
+        requester,
+        Action::Listen {
+            user: requester,
+            channel: PRIVATE
+        }
+    ));
+    assert_eq!(
+        f.state.visible_ranges(requester, &conversation),
+        (vec![(21, u64::MAX)], true)
+    );
+    assert!(!f.state.allowed(
+        requester,
+        Action::SeeLive {
+            conversation: &conversation,
+            seq: 20
+        }
+    ));
+    assert!(f.state.allowed(
+        requester,
+        Action::SeeLive {
+            conversation: &conversation,
+            seq: 21
+        }
+    ));
+    assert_ne!(
+        f.state.registry.users[&REGISTERED].last_channel,
+        Some(PRIVATE)
+    );
+    f.handle(
+        requester,
+        kind::USER_STATE,
+        &proto::UserState {
+            channel_id: Some(LOBBY),
+            ..Default::default()
+        },
+    );
+    assert_eq!(f.state.admission_floor(requester, PRIVATE), None);
+    assert!(
+        !f.state
+            .allowed(requester, Action::Enter { channel: PRIVATE })
+    );
+    assert!(
+        !f.state
+            .allowed(requester, Action::ReadHistory(&conversation))
+    );
+}
+
+#[test]
+fn stock_denied_enter_knocks_and_a_stock_moderator_move_admits() {
+    use prost::Message as _;
+    let mut f = Fixture::new(Config::default());
+    let requester = f.actor("anonymous");
+    let moderator = f.actor("admin");
+    f.state.users.get_mut(&requester).unwrap().extension = None;
+    f.state.users.get_mut(&moderator).unwrap().extension = None;
+    f.handle(
+        requester,
+        kind::USER_STATE,
+        &proto::UserState {
+            channel_id: Some(PRIVATE),
+            ..Default::default()
+        },
+    );
+    assert_eq!(f.state.users[&requester].channel, LOBBY);
+    assert!(f.received(moderator).iter().any(|(k, b)| {
+        *k == kind::TEXT_MESSAGE
+            && proto::TextMessage::decode(b.clone())
+                .unwrap()
+                .message
+                .contains("knocks")
+    }));
+    f.handle(
+        moderator,
+        kind::USER_STATE,
+        &proto::UserState {
+            session: Some(requester),
+            channel_id: Some(PRIVATE),
+            ..Default::default()
+        },
+    );
+    assert_eq!(f.state.users[&requester].channel, PRIVATE);
+    assert!(
+        f.state
+            .allowed(requester, Action::Speak { channel: PRIVATE })
+    );
+    // Guests receive read during admission even under history.guests=none.
+    assert!(
+        f.state
+            .allowed(requester, Action::ReadHistory(&f.conversation(PRIVATE)))
+    );
+    f.state.disconnect(requester, false);
+    assert_eq!(f.state.admission_floor(requester, PRIVATE), None);
+}
+
+#[test]
+fn admission_fences_pending_pages_and_live_edits_of_old_messages() {
+    use nuschl_ipc::server::{Anchor, PageQuery, StoredMessage, StoredPage};
+    use prost::Message as _;
+    let mut f = Fixture::new(Config::default());
+    let requester = f.actor("registered");
+    let moderator = f.actor("admin");
+    let conversation = f.conversation(PRIVATE);
+    let old_epoch = f.state.authz_epoch;
+    f.state.conversations.set_head(conversation, 10);
+    let id = f.state.knock_request(requester, PRIVATE).unwrap();
+    f.state.knock_decide(moderator, id, true).unwrap();
+    f.received(requester);
+    // A reader started under a previous authz epoch with an unrestricted query.
+    f.state.page_read(
+        crate::history::Read {
+            session: requester,
+            request_id: 44,
+            conversation,
+            query: PageQuery {
+                conversation: crate::conversations::hex(&conversation),
+                anchor: Anchor::Latest,
+                limit: 10,
+                ranges: vec![(1, u64::MAX)],
+                max_bytes: 4096,
+            },
+            epoch: old_epoch,
+            clipped: false,
+        },
+        Some(StoredPage {
+            rows: vec![
+                StoredMessage {
+                    seq: 9,
+                    content: "secret".into(),
+                    ..Default::default()
+                },
+                StoredMessage {
+                    seq: 11,
+                    content: "new".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }),
+    );
+    let frames = f.received(requester);
+    let page = frames
+        .iter()
+        .find(|(k, _)| *k == nuschl::kind::HISTORY_PAGE)
+        .unwrap();
+    let page = v1::HistoryPage::decode(page.1.clone()).unwrap();
+    assert_eq!(page.messages.len(), 1);
+    assert_eq!(page.messages[0].seq, 11);
+    assert!(page.restricted);
+    for (target, expected) in [(9, false), (11, true)] {
+        f.state.deliver(
+            &conversation,
+            crate::history::Delivery::Event {
+                message: v1::Message {
+                    seq: 12,
+                    kind: v1::message::Kind::Edit as i32,
+                    target,
+                    content: "edited".into(),
+                    ..Default::default()
+                },
+            },
+            moderator,
+        );
+        assert_eq!(
+            f.received(requester)
+                .iter()
+                .any(|(k, _)| *k == nuschl::kind::CHAT_EVENT),
+            expected
+        );
+    }
+}
+
+#[test]
+fn knock_protocol_negotiation_cancel_and_e2ee_fail_closed() {
+    use prost::Message as _;
+    let mut f = Fixture::new(Config::default());
+    let requester = f.actor("registered");
+    let moderator = f.actor("admin");
+    f.handle(
+        requester,
+        nuschl::kind::KNOCK_REQUEST,
+        &v1::KnockRequest {
+            request_id: 55,
+            channel: PRIVATE,
+        },
+    );
+    let frames = f.received(requester);
+    let frame = frames
+        .iter()
+        .find(|(k, _)| *k == nuschl::kind::KNOCK_PENDING)
+        .unwrap();
+    let id = v1::KnockPending::decode(frame.1.clone()).unwrap().knock_id;
+    f.handle(
+        moderator,
+        nuschl::kind::KNOCK_CANCEL,
+        &v1::KnockCancel {
+            request_id: 56,
+            knock_id: id,
+        },
+    );
+    assert!(
+        f.received(moderator)
+            .iter()
+            .any(|(k, _)| *k == nuschl::kind::ERROR)
+    );
+    f.handle(
+        requester,
+        nuschl::kind::KNOCK_CANCEL,
+        &v1::KnockCancel {
+            request_id: 57,
+            knock_id: id,
+        },
+    );
+    assert!(f.state.knock_decide(moderator, id, true).is_err());
+    // Existing requests must not bypass a mode change either.
+    f.state.mls = Some(crate::mls::MlsHandle::detached(
+        f.state.settings.config.mls.clone(),
+    ));
+    assert_eq!(
+        f.state.knock_request(requester, PRIVATE),
+        Err((v1::error::Code::Unsupported, 0))
+    );
+    assert_eq!(f.state.admission_floor(requester, PRIVATE), None);
+    assert!(
+        !crate::extension::server_capabilities(true, true, true).has(nuschl::capability::KNOCK)
+    );
+}
+
 fn account(id: u32) -> Id {
     [0x10 + id as u8; 16]
 }

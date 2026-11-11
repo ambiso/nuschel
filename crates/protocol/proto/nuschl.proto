@@ -749,3 +749,23 @@ message ShareLinkResolve {
   uint64 request_id = 1;
   bytes token = 2;
 }
+
+// ---- knock/1, 0x4E60–0x4E67 (66–67 reserved) ----
+// Compatible servers only until MLS supports a no-history admission policy.
+message KnockRequest { uint64 request_id = 1; uint32 channel = 2; }
+// A coalesced request; request_id is zero for unsolicited status updates.
+message KnockPending { uint64 request_id = 1; uint64 knock_id = 2; uint32 channel = 3; }
+// Only online moderators with BOTH Move and Enter in the target receive this.
+message KnockNotice { uint64 knock_id = 1; uint32 session = 2; uint32 channel = 3; }
+message KnockDecide { uint64 request_id = 1; uint64 knock_id = 2; bool admit = 3; }
+// Ephemeral permission grant; first_seq excludes every older message/event.
+// active=false also resolves a declined, cancelled or expired pending request.
+message KnockAdmission {
+  uint64 knock_id = 1;
+  uint32 session = 2;
+  uint32 channel = 3;
+  uint32 admitted_by = 4;
+  uint64 first_seq = 5;
+  bool active = 6;
+}
+message KnockCancel { uint64 request_id = 1; uint64 knock_id = 2; }

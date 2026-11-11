@@ -16,6 +16,7 @@ pub mod extension;
 pub mod fuzzing;
 pub mod handlers;
 pub mod history;
+pub mod knock;
 pub mod kt;
 pub mod kt_witness;
 pub mod limits;

@@ -814,6 +814,8 @@ pub struct State {
     pub mls: Option<crate::mls::MlsHandle>,
     /// Share links by token (`share/1`).
     pub share_links: crate::share::Links,
+    /// Pending knocks and temporary admissions; never persisted.
+    pub knocks: crate::knock::Knocks,
 }
 
 impl State {
@@ -846,6 +848,7 @@ impl State {
             kt: None,
             mls: None,
             share_links: Default::default(),
+            knocks: Default::default(),
         }
     }
 
@@ -1039,6 +1042,10 @@ impl State {
 
     /// Remember a registered user's channel (Murmur's `setLastChannel`).
     pub fn remember_channel(&mut self, session: u32) {
+        // Temporary admission must not become the persisted reconnect target.
+        if self.knocks.grants.contains_key(&session) {
+            return;
+        }
         let Some(user) = self.users.get(&session) else {
             return;
         };

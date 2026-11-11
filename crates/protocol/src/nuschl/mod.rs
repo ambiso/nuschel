@@ -47,8 +47,9 @@ pub mod capability {
     /// Share links (docs/web.md): tokens that open a channel.
     pub const SHARE: &str = "share/1";
     pub const PRIVACY: &str = "privacy/1";
-    pub const ALL: [&str; 9] = [
-        HISTORY, SUBSCRIBE, TYPING, KT, MLS, E2EE, KT_WITNESS, SHARE, PRIVACY,
+    pub const KNOCK: &str = "knock/1";
+    pub const ALL: [&str; 10] = [
+        HISTORY, SUBSCRIBE, TYPING, KT, MLS, E2EE, KT_WITNESS, SHARE, PRIVACY, KNOCK,
     ];
 }
 
@@ -100,6 +101,12 @@ pub mod kind {
     pub const MLS_JOIN_INFO_REQUEST: u16 = 0x4e2b;
     pub const MLS_JOIN_INFO: u16 = 0x4e2c;
     pub const PRIVACY: u16 = 0x4e36;
+    pub const KNOCK_REQUEST: u16 = 0x4e60;
+    pub const KNOCK_PENDING: u16 = 0x4e61;
+    pub const KNOCK_NOTICE: u16 = 0x4e62;
+    pub const KNOCK_DECIDE: u16 = 0x4e63;
+    pub const KNOCK_ADMISSION: u16 = 0x4e64;
+    pub const KNOCK_CANCEL: u16 = 0x4e65;
     /// `share/1`, 0x4E90–0x4E97 (0x4E94–0x4E97 reserved).
     pub const SHARE_LINK_CREATE: u16 = 0x4e90;
     pub const SHARE_LINK: u16 = 0x4e91;
@@ -208,6 +215,7 @@ pub fn required_capability(kind: u16) -> Option<&'static str> {
         | MLS_OPENED => Some(capability::MLS),
         SHARE_LINK_CREATE | SHARE_LINK_REVOKE | SHARE_LINK_RESOLVE => Some(capability::SHARE),
         PRIVACY => Some(capability::PRIVACY),
+        KNOCK_REQUEST | KNOCK_DECIDE | KNOCK_CANCEL => Some(capability::KNOCK),
         _ => None,
     }
 }

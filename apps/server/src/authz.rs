@@ -63,6 +63,14 @@ impl Cache {
 /// users, channels are channel ids, conversations and accounts are 128-bit ids.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action<'a> {
+    /// Request temporary admission when Enter is currently denied.
+    Knock {
+        channel: u32,
+    },
+    /// Receive or resolve knocks: both Move AND Enter in the target.
+    ModerateKnock {
+        channel: u32,
+    },
     // ---- Mumble: presence and voice ----
     /// Be in `channel`: the first channel after login, the one a user lands in
     /// when theirs is removed, and `ChannelState.can_enter`.
@@ -320,6 +328,16 @@ impl State {
             return Err(Ignored);
         };
         match action {
+            A::Knock { channel } => found(
+                self.channels.get(channel).is_some()
+                    && user.channel != channel
+                    && !self.has(actor, channel, perm::ENTER),
+            ),
+            A::ModerateKnock { channel } => found(
+                self.channels.get(channel).is_some()
+                    && self.has(actor, channel, perm::MOVE)
+                    && self.has(actor, channel, perm::ENTER),
+            ),
             A::Enter { channel } => self.require(actor, channel, perm::ENTER),
             A::Move { user: target, to } => {
                 let from = self.channel_of(target)?;
@@ -654,7 +672,11 @@ impl State {
         let Some(user) = self.users.get(&session) else {
             return perm::NONE;
         };
-        let granted = acl::effective_permissions(&self.channels, &subject(user), channel);
+        let mut granted = acl::effective_permissions(&self.channels, &subject(user), channel);
+        // Exact channel only; never inherited by children, listeners or peers.
+        if user.channel == channel && self.admission_floor(session, channel).is_some() {
+            granted |= perm::ENTER | perm::SPEAK | perm::TEXT_MESSAGE;
+        }
         self.permission_cache
             .0
             .borrow_mut()
@@ -905,7 +927,9 @@ impl State {
         match self.conversations.kind(id) {
             None => false,
             Some(Kind::Channel(channel)) => {
-                (user.account.is_some() || self.guests_read())
+                (user.account.is_some()
+                    || self.guests_read()
+                    || self.admission_floor(session, channel).is_some())
                     && (user.channel == channel
                         || user.listening.contains_key(&channel)
                         || self.has(session, channel, perm::ENTER))
@@ -988,6 +1012,11 @@ impl State {
     /// The seq ranges this connection may see, and whether they are clipped
     /// (`since_access`, docs/extension.md §6).
     pub fn visible_ranges(&self, session: u32, id: &Id) -> (Vec<(u64, u64)>, bool) {
+        if let Some(Kind::Channel(channel)) = self.conversations.kind(id)
+            && let Some(first) = self.admission_floor(session, channel)
+        {
+            return (vec![(first, u64::MAX)], true);
+        }
         if self.visibility(id) == HistoryVisibility::Members {
             return (vec![(1, u64::MAX)], false);
         }
@@ -1003,6 +1032,11 @@ impl State {
     /// Whether a connection may see `seq` live: always in the channel's live
     /// audience, otherwise within its visible ranges.
     fn sees(&self, session: u32, id: &Id, seq: u64) -> bool {
+        if let Some(Kind::Channel(channel)) = self.conversations.kind(id)
+            && let Some(first) = self.admission_floor(session, channel)
+        {
+            return seq >= first;
+        }
         if let Some(Kind::Channel(channel)) = self.conversations.kind(id)
             && self.users.get(&session).is_some_and(|user| {
                 user.channel == channel || user.listening.contains_key(&channel)

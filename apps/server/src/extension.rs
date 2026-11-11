@@ -236,7 +236,7 @@ pub fn server_capabilities(kt: bool, mls: bool, e2ee: bool) -> Capabilities {
             .filter(|name| kt || (*name != capability::KT && *name != capability::KT_WITNESS))
             .filter(|name| *name != capability::MLS || (kt && mls))
             .filter(|name| *name != capability::E2EE || (kt && mls && e2ee))
-            .filter(|name| !e2ee || *name != capability::TYPING),
+            .filter(|name| !e2ee || (*name != capability::TYPING && *name != capability::KNOCK)),
     )
 }
 

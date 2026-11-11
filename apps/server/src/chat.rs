@@ -148,7 +148,7 @@ impl State {
     }
 
     /// Run a request that answers at once: begin, answer, release.
-    fn immediate(
+    pub(crate) fn immediate(
         &mut self,
         session: u32,
         request_id: u64,
@@ -331,6 +331,9 @@ impl State {
             | kind::MLS_OPENED => self.mls_frame(session, frame),
             kind::SHARE_LINK_CREATE | kind::SHARE_LINK_REVOKE | kind::SHARE_LINK_RESOLVE => {
                 self.share_frame(session, frame)
+            }
+            kind::KNOCK_REQUEST | kind::KNOCK_DECIDE | kind::KNOCK_CANCEL => {
+                self.knock_frame(session, frame)
             }
             _ => self.extension_error(session, request_id, fail(Code::Unsupported)),
         }
@@ -595,6 +598,13 @@ impl State {
                 _ => {
                     for session in self.readers(&conversation) {
                         if session != source
+                            && self.allowed(
+                                session,
+                                Action::SeeLive {
+                                    conversation: &conversation,
+                                    seq: message.seq,
+                                },
+                            )
                             && let Some(user) = self.users.get(&session)
                         {
                             user.link.send(fallback.clone());
@@ -681,7 +691,10 @@ impl State {
                 Done::Stock {
                     source,
                     conversation: id,
-                    message: v1::Message::default(),
+                    message: v1::Message {
+                        seq: self.conversations.head(&id).saturating_add(1),
+                        ..Default::default()
+                    },
                     fallback: fallback.clone(),
                 },
                 None,
