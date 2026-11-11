@@ -375,16 +375,16 @@ mod tests {
         let pick = |flag| {
             let db = &db;
             let a = a.clone();
-            async move { db.get_user_state(&a, flag).await.map(|s| s.version) }
+            async move { db.get_user_state(&a, flag).await.map(|s| s.version).ok() }
         };
-        assert_eq!(pick(ValueStateRetrievalFlag::LeqEpoch(4)).await, Ok(1));
-        assert_eq!(pick(ValueStateRetrievalFlag::LeqEpoch(5)).await, Ok(2));
-        assert_eq!(pick(ValueStateRetrievalFlag::LeqEpoch(100)).await, Ok(3));
-        assert!(pick(ValueStateRetrievalFlag::LeqEpoch(1)).await.is_err());
-        assert_eq!(pick(ValueStateRetrievalFlag::MaxEpoch).await, Ok(3));
-        assert_eq!(pick(ValueStateRetrievalFlag::MinEpoch).await, Ok(1));
-        assert_eq!(pick(ValueStateRetrievalFlag::SpecificEpoch(5)).await, Ok(2));
-        assert_eq!(pick(ValueStateRetrievalFlag::SpecificVersion(3)).await, Ok(3));
+        assert_eq!(pick(ValueStateRetrievalFlag::LeqEpoch(4)).await, Some(1));
+        assert_eq!(pick(ValueStateRetrievalFlag::LeqEpoch(5)).await, Some(2));
+        assert_eq!(pick(ValueStateRetrievalFlag::LeqEpoch(100)).await, Some(3));
+        assert_eq!(pick(ValueStateRetrievalFlag::LeqEpoch(1)).await, None);
+        assert_eq!(pick(ValueStateRetrievalFlag::MaxEpoch).await, Some(3));
+        assert_eq!(pick(ValueStateRetrievalFlag::MinEpoch).await, Some(1));
+        assert_eq!(pick(ValueStateRetrievalFlag::SpecificEpoch(5)).await, Some(2));
+        assert_eq!(pick(ValueStateRetrievalFlag::SpecificVersion(3)).await, Some(3));
         let versions = db
             .get_user_state_versions(
                 &[a.clone(), AkdLabel(b"zz".to_vec())],

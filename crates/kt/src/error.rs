@@ -38,8 +38,12 @@ pub enum KtError {
     ProofInvalid { proof: ProofKind, reason: String },
     #[error("the server cannot prove that epoch {to} extends epoch {from}: {reason}")]
     AuditFailed { from: u64, to: u64, reason: String },
-    #[error("a directory value is malformed")]
+    #[error("a directory value is malformed or of an unknown format")]
     MalformedValue,
+    #[error("the identity record does not match the log's roster commitment")]
+    RosterMismatch,
+    #[error("the committed identity record does not verify: {0}")]
+    InvalidRecord(String),
     #[error("the server reports no entry (unauthenticated)")]
     NotFound,
     #[error("own key changed without this identity: version {version} at epoch {epoch}")]
@@ -84,6 +88,8 @@ impl KtError {
             | Self::Rollback { .. }
             | Self::ProofInvalid { .. }
             | Self::MalformedValue
+            | Self::RosterMismatch
+            | Self::InvalidRecord(_)
             | Self::NotFound => ErrorClass::Failure,
         }
     }

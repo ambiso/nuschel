@@ -2,9 +2,10 @@
 //! Key transparency for Nuschel servers (docs/e2ee.md §5).
 //!
 //! Each Nuschel server runs one verifiable key directory. It maps [`Label`]s (account
-//! ids, identity roots, user names) to opaque, versioned [`DirectoryValue`]s (for an
-//! account: the identity root public key and the device-list commitment), publishes the
-//! changes in epochs, and signs a [`SignedHead`] for every epoch with its identity key.
+//! ids, identity fingerprints, user names) to versioned [`DirectoryValue`]s (for an
+//! account: an [`AccountBinding`], the identity root public key and a commitment to the
+//! identity's device roster, from `nuschel-identity`), publishes the changes in epochs,
+//! and signs a [`SignedHead`] for every epoch with its identity key.
 //! Clients check that what the server tells them is what it tells everyone, in the
 //! manner of Signal's automatic key verification.
 //!
@@ -22,8 +23,9 @@
 //! - **Client:** pure functions. [`verify_head`], [`check_freshness`] and
 //!   [`check_successor`]/[`KnownHeads`] for heads; [`verify_lookup`];
 //!   [`verify_history`] and [`monitor_own`] for self-monitoring; [`verify_audit`] for
-//!   the append-only property; [`ContactTrust::assess`] for the TOFU decision
-//!   (docs/e2ee.md §5.5) and [`Assessment::surface`] for what the UI shows.
+//!   the append-only property; [`roster_for_binding`] to check the device certificates
+//!   from the directory API against the log; [`ContactTrust::assess`] for the TOFU
+//!   decision (docs/e2ee.md §5.5) and [`Assessment::surface`] for what the UI shows.
 //! - **Gossip:** [`HeadGossip`] and [`check_gossip`] for heads exchanged in MLS
 //!   application messages (docs/e2ee.md §5.3); [`Evidence`] when two heads contradict.
 //!
@@ -99,6 +101,7 @@ mod server;
 mod store;
 mod tofu;
 mod types;
+mod values;
 mod verify;
 
 pub use akd_backend::{AkdConfig, AkdDirectory, VrfSecret, descriptor as akd_descriptor};
@@ -125,7 +128,10 @@ pub use store::{KtStore, MemoryStore, StoreError};
 pub use tofu::{Assessment, ContactTrust, ConversationKind, Observation, RETRY_WITHIN_MS, Surface};
 pub use types::{
     AccountId, DirectoryValue, Label, MAX_NAME_BYTES, MAX_VALUE_DATA, MAX_VALUE_ENCODED,
-    RootFingerprint,
+};
+pub use values::{
+    AccountBinding, FORMAT_ACCOUNT_BINDING_V1, FORMAT_NAME_BINDING_V1, MAX_ROSTER_ENTRIES,
+    NameBinding, RosterCommitment, ValueError, roster_for_binding,
 };
 pub use verify::{
     MonitorCheckpoint, MonitorReport, VerifiedEntry, VerifiedHistory, monitor_own, verify_audit,

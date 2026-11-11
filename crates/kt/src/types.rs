@@ -2,6 +2,7 @@
 //! Labels and values of the directory.
 
 use crate::codec::{DecodeError, EncodeError, Reader, Writer};
+use nuschel_identity::IdentityFingerprint;
 use std::fmt;
 
 /// Largest opaque payload of a [`DirectoryValue`]: a hybrid identity root public key
@@ -29,9 +30,6 @@ impl fmt::Debug for AccountId {
     }
 }
 
-/// SHA-256 of an identity root public key (docs/e2ee.md §3.3).
-pub type RootFingerprint = [u8; 32];
-
 /// What a directory entry is about (docs/e2ee.md §5.1). The label is hidden by the VRF:
 /// the tree contains only pseudorandom node labels derived from it.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
@@ -40,7 +38,7 @@ pub enum Label {
     Account(AccountId),
     /// `id:` — the identity record (device-signing key generation, devices,
     /// revocations, Mumble bindings) of an identity root.
-    Identity(RootFingerprint),
+    Identity(IdentityFingerprint),
     /// `name:` — the account behind a registered user name, as the server normalises it.
     Name(String),
 }
@@ -80,7 +78,7 @@ impl Label {
             }
             Self::Identity(fp) => {
                 w.u8(LABEL_IDENTITY);
-                w.raw(fp);
+                w.raw(fp.as_bytes());
             }
             Self::Name(name) => {
                 if name.is_empty() {
@@ -100,7 +98,9 @@ impl Label {
     pub(crate) fn read(r: &mut Reader<'_>) -> Result<Self, DecodeError> {
         match r.u8("label.kind")? {
             LABEL_ACCOUNT => Ok(Self::Account(AccountId(r.array("label.account")?))),
-            LABEL_IDENTITY => Ok(Self::Identity(r.array("label.identity")?)),
+            LABEL_IDENTITY => Ok(Self::Identity(IdentityFingerprint::from_bytes(
+                r.array("label.identity")?,
+            ))),
             LABEL_NAME => {
                 let bytes = r.bytes_u8("label.name", MAX_NAME_BYTES)?;
                 if bytes.is_empty() {
@@ -120,9 +120,9 @@ impl Label {
     }
 }
 
-/// The value of a directory entry: opaque, versioned bytes. For `acct:` labels the
-/// identity crate puts the identity root public key and the device-list commitment
-/// here; this crate never interprets them.
+/// The value of a directory entry: versioned bytes. The backend never interprets them;
+/// [`crate::AccountBinding`] and [`crate::NameBinding`] are the typed formats Nuschel
+/// publishes.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DirectoryValue {
     format: u16,
@@ -186,7 +186,7 @@ mod tests {
     fn labels_round_trip_and_are_distinct_by_kind() {
         let labels = [
             Label::Account(AccountId([7; 16])),
-            Label::Identity([7; 32]),
+            Label::Identity(IdentityFingerprint::from_bytes([7; 32])),
             Label::name("alice").unwrap(),
         ];
         let mut encodings = Vec::new();

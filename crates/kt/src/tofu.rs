@@ -8,7 +8,9 @@
 //! automatically".
 
 use crate::error::{ErrorClass, KtError};
-use crate::types::RootFingerprint;
+use crate::values::AccountBinding;
+use crate::verify::{VerifiedEntry, VerifiedHistory};
+use nuschel_identity::IdentityFingerprint;
 
 /// The kind of conversation a result is shown in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,51 +24,85 @@ pub enum ConversationKind {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ContactTrust {
     /// The pinned identity root, once seen.
-    pub pinned: Option<RootFingerprint>,
+    pub pinned: Option<IdentityFingerprint>,
     /// Safety numbers compared out of band (docs/e2ee.md §4).
     pub manually_verified: bool,
     /// The newest KT version of the contact's `acct:` label already assessed.
     pub checked_version: u64,
     /// A KT-consistent rebinding of a manually verified contact, waiting for the user.
-    pub pending_change: Option<RootFingerprint>,
+    pub pending_change: Option<IdentityFingerprint>,
     /// Consecutive KT failures, and when the first of them happened.
     pub failures: u32,
     pub first_failure_ms: Option<u64>,
 }
 
-/// A KT result about a contact, reduced to identity roots by the caller (the value
-/// format belongs to the identity crate).
+/// A KT result about a contact's `acct:` label, reduced to identities. Build it with
+/// [`Observation::from_lookup`] or [`Observation::from_history`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Observation {
     /// A verified lookup of the contact's `acct:` label.
-    Lookup { root: RootFingerprint, version: u64 },
+    Lookup { root: IdentityFingerprint, version: u64 },
     /// A verified history (DM and verified contacts, every connect): the current root,
     /// and the roots of all versions after `checked_version` except the current one.
     History {
-        root: RootFingerprint,
+        root: IdentityFingerprint,
         version: u64,
-        intermediate: Vec<RootFingerprint>,
+        intermediate: Vec<IdentityFingerprint>,
     },
     /// Verification failed.
     Failed(KtError),
+}
+
+impl Observation {
+    /// From a verified lookup; a value that is not an [`AccountBinding`] is a failure.
+    pub fn from_lookup(result: Result<VerifiedEntry, KtError>) -> Self {
+        match result.and_then(|entry| Ok((binding(&entry)?, entry.version))) {
+            Ok((root, version)) => Self::Lookup { root, version },
+            Err(e) => Self::Failed(e),
+        }
+    }
+
+    /// From a verified history; `checked_version` is [`ContactTrust::checked_version`].
+    pub fn from_history(result: Result<VerifiedHistory, KtError>, checked_version: u64) -> Self {
+        let observe = |history: VerifiedHistory| -> Result<Self, KtError> {
+            let latest = history.latest();
+            let intermediate = history.entries[1..]
+                .iter()
+                .take_while(|e| e.version > checked_version)
+                .map(binding)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(Self::History {
+                root: binding(latest)?,
+                version: latest.version,
+                intermediate,
+            })
+        };
+        result.and_then(observe).unwrap_or_else(Self::Failed)
+    }
+}
+
+fn binding(entry: &VerifiedEntry) -> Result<IdentityFingerprint, KtError> {
+    AccountBinding::from_value(&entry.value)
+        .map(|b| b.fingerprint())
+        .map_err(|_| KtError::MalformedValue)
 }
 
 /// The meaning of an observation for this contact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Assessment {
     /// First sight: the root is pinned now.
-    FirstContact { root: RootFingerprint },
+    FirstContact { root: IdentityFingerprint },
     /// KT confirms the pinned root.
     Match { manually_verified: bool },
     /// The account is now bound to another root, consistently for everyone.
     KeyChanged {
-        from: RootFingerprint,
-        to: RootFingerprint,
+        from: IdentityFingerprint,
+        to: IdentityFingerprint,
         was_verified: bool,
     },
     /// The pinned root is current, but the history shows other roots bound in between:
     /// a temporary fake binding that came and went between lookups (docs/e2ee.md §5.4).
-    TransientBinding { seen: Vec<RootFingerprint> },
+    TransientBinding { seen: Vec<IdentityFingerprint> },
     /// First failure: retry within a day; nothing shown yet.
     Intermittent(KtError),
     /// Repeated failure: "Automatic verification unavailable". A manually verified
@@ -137,7 +173,7 @@ impl ContactTrust {
         };
         if root == pinned {
             self.pending_change = None;
-            let seen: Vec<RootFingerprint> =
+            let seen: Vec<IdentityFingerprint> =
                 intermediate.into_iter().filter(|r| *r != pinned).collect();
             return if seen.is_empty() {
                 Assessment::Match {
