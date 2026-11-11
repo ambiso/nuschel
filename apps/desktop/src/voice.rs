@@ -258,7 +258,7 @@ fn place_link(
         cx.notify();
     };
     let key = go;
-    div()
+    let control = div()
         .id(id)
         .role(Role_::Button)
         .tab_index(0)
@@ -286,8 +286,8 @@ fn place_link(
                 cx.stop_propagation();
             }
         }))
-        .child(text!(place.label.clone()).with_id(("voice-place-label", id.1)))
-        .into_any_element()
+        .child(text!(place.label.clone()).with_id(("voice-place-label", id.1)));
+    layout::focusable(id, control)
 }
 
 /// The voice card above the user panel: where your voice goes, on every

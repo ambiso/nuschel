@@ -7,6 +7,63 @@
 //! text); callers must not measure or edit strings to make them fit.
 use crate::{assets::icon, dialogs::Tooltip, theme::*};
 use gpui_kit::{prelude::*, *};
+use std::{cell::Cell, rc::Rc};
+
+/// A control's retained focus state; no text/layout cache or global registry.
+struct FocusState {
+    handle: FocusHandle,
+    focused: Rc<Cell<bool>>,
+}
+
+#[derive(IntoElement)]
+struct Focusable {
+    id: ElementId,
+    child: Stateful<Div>,
+}
+
+impl RenderOnce for Focusable {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let state = window.use_keyed_state(
+            SharedString::from(format!("{}:focus-reveal", self.id)),
+            cx,
+            |_, cx| FocusState {
+                handle: cx.focus_handle(),
+                focused: Rc::default(),
+            },
+        );
+        let state = state.read(cx);
+        let handle = state.handle.clone();
+        let observed = state.handle.clone();
+        let focused = state.focused.clone();
+        self.child.track_focus(&handle).relative().child(
+            canvas(
+                move |bounds, window, _| {
+                    let now = observed.is_focused(window);
+                    if now && !focused.replace(now) {
+                        window.request_autoscroll(bounds);
+                    } else {
+                        focused.set(now);
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+        )
+    }
+}
+
+/// Newly focused controls ask their nearest supporting scroll region to reveal
+/// them. Keeping focus in place never fights intentional wheel/keyboard reading.
+pub fn focusable(id: impl Into<ElementId>, child: Stateful<Div>) -> AnyElement {
+    Focusable {
+        id: id.into(),
+        child,
+    }
+    .into_any_element()
+}
 
 /// The shrinking lane of a row. `min_w_0` alone does not override flex-basis
 /// auto: use zero basis so a long label cannot reserve its intrinsic width.
@@ -82,12 +139,17 @@ pub fn notice(
         .border_1()
         .border_color(tint(tone, 0x60))
         .text_sm()
+        .flex()
+        .flex_col()
+        .gap_2()
         .child(
             row()
-                .child(fixed().pt(px(2.)).child(icon(icon_name, 16., color(tone))))
-                .child(flexible().child(body))
+                .items_center()
+                .child(fixed().child(icon(icon_name, 16., color(tone))))
+                .child(flexible())
                 .when_some(trailing, |row, action| row.child(fixed().child(action))),
         )
+        .child(div().w_full().min_w_0().child(body))
 }
 
 /// A bounded scroll region with real keyboard navigation as well as wheel
@@ -102,8 +164,39 @@ pub fn scroll_region(
 ) -> Stateful<Div> {
     let state = window.use_keyed_state((id, 0_usize), cx, |_, _| ScrollHandle::new());
     let handle = state.read(cx).clone();
+    scrollable(id, label, handle).max_h(height)
+}
+
+/// The same keyboard/focus contract for a caller-owned scroll handle (dialogs
+/// already retain one for smooth wheel scrolling).
+pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -> Stateful<Div> {
     let keys = handle.clone();
+    let reveal = handle.clone();
+    let outer_request = Rc::new(Cell::new(None));
+    let begin = outer_request.clone();
     div()
+        .on_children_prepainted(move |_, window, _| {
+            if let Some(target) = window.take_autoscroll() {
+                let clip = reveal.bounds();
+                let dy = if target.top() < clip.top() {
+                    target.top() - clip.top()
+                } else if target.bottom() > clip.bottom() {
+                    target.bottom() - clip.bottom()
+                } else {
+                    px(0.)
+                };
+                let mut offset = reveal.offset();
+                let prior = offset;
+                offset.y = (offset.y - dy).clamp(-reveal.max_offset().y, px(0.));
+                if offset != prior {
+                    reveal.set_offset(offset);
+                    window.refresh();
+                }
+            }
+            if let Some(prior) = outer_request.take() {
+                window.request_autoscroll(prior);
+            }
+        })
         .id(id)
         .role(Role::Group)
         .aria_label(label)
@@ -111,9 +204,22 @@ pub fn scroll_region(
         .w_full()
         .min_w_0()
         .min_h_0()
-        .max_h(height)
         .overflow_y_scroll()
         .track_scroll(&handle)
+        // Establish an autoscroll scope before prepainting descendants; a
+        // request from a preceding sibling must not scroll this region.
+        .child(
+            canvas(
+                move |_, window, _| {
+                    begin.set(window.take_autoscroll());
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size(px(0.)),
+        )
         .on_key_down(move |event, window, cx| {
             if event.keystroke.modifiers.modified() {
                 return;

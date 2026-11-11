@@ -45,6 +45,8 @@ pub fn named_button(
     action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let id = id.into();
+    let reveal_id = id.clone();
     let action = Rc::new(action);
     let click = action.clone();
     let label = label.into();
@@ -54,7 +56,7 @@ pub fn named_button(
         Tone::Danger => (DANGER, DANGER_HOVER, WHITE),
         Tone::Ghost => (MAIN, HOVER, TEXT_MUTED),
     };
-    div()
+    let control = div()
         .id(id)
         .role(Role::Button)
         .aria_label(name.into())
@@ -83,8 +85,8 @@ pub fn named_button(
                 .min_w_0()
                 .whitespace_normal()
                 .child(text!(label).with_id("button-label")),
-        )
-        .into_any_element()
+        );
+    crate::layout::focusable(reveal_id, control)
 }
 
 /// A square icon button; `label` is announced to assistive technology and shown as tooltip.
@@ -97,11 +99,13 @@ pub fn icon_button(
     action: impl Fn(&mut Desktop, &mut Window, &mut Context<Desktop>) + 'static,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
+    let id = id.into();
+    let reveal_id = id.clone();
     let action = Rc::new(action);
     let click = action.clone();
     let label = label.into();
     let tooltip = label.clone();
-    div()
+    let control = div()
         .id(id)
         .role(Role::Button)
         .aria_label(label)
@@ -126,8 +130,8 @@ pub fn icon_button(
                 cx.stop_propagation();
             }
         }))
-        .child(icon(name, 18., color(foreground)))
-        .into_any_element()
+        .child(icon(name, 18., color(foreground)));
+    crate::layout::focusable(reveal_id, control)
 }
 
 /// A voice toggle (mute, deafen): `on` from 0 to 1 eases the background to
@@ -298,8 +302,7 @@ pub fn modal(
             }),
         )
         .child(
-            div()
-                .id(id)
+            crate::layout::scrollable(id, label, this.modal_scroll.clone())
                 .track_focus(&this.modal_focus)
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .role(Role::Dialog)

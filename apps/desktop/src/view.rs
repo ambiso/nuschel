@@ -2610,6 +2610,37 @@ fn conversation_notices(
             )),
         ));
     }
+    if let Some(notice) = server.notice.clone().or_else(|| this.error.clone()) {
+        let from_server = server.notice.is_some();
+        let dismiss = icon_button(
+            "dismiss-connection-notice",
+            "window-close",
+            "Dismiss notice",
+            DANGER_TEXT,
+            None,
+            move |this, _, cx| {
+                if from_server {
+                    this.client.servers[index].dismiss_notice();
+                } else {
+                    this.error = None;
+                }
+                cx.notify();
+            },
+            cx,
+        );
+        notices.push(
+            layout::notice(
+                "connection-notice-banner",
+                DANGER,
+                "alert",
+                layout::text("connection-notice", notice),
+                Some(dismiss),
+            )
+            .aria_label("Connection notice")
+            .text_color(color(DANGER_TEXT))
+            .into_any_element(),
+        );
+    }
     if let Some(text) = &server.suggestion {
         let ptt = text.contains("push-to-talk");
         let actions = layout::actions()
@@ -2653,37 +2684,6 @@ fn conversation_notices(
             text.clone(),
             Some(actions),
         ));
-    }
-    if let Some(notice) = server.notice.clone().or_else(|| this.error.clone()) {
-        let from_server = server.notice.is_some();
-        let dismiss = icon_button(
-            "dismiss-connection-notice",
-            "window-close",
-            "Dismiss notice",
-            DANGER_TEXT,
-            None,
-            move |this, _, cx| {
-                if from_server {
-                    this.client.servers[index].dismiss_notice();
-                } else {
-                    this.error = None;
-                }
-                cx.notify();
-            },
-            cx,
-        );
-        notices.push(
-            layout::notice(
-                "connection-notice-banner",
-                DANGER,
-                "alert",
-                layout::text("connection-notice", notice),
-                Some(dismiss),
-            )
-            .aria_label("Connection notice")
-            .text_color(color(DANGER_TEXT))
-            .into_any_element(),
-        );
     }
     layout::notices(window, cx, notices)
 }

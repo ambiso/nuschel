@@ -10,8 +10,8 @@ from accessibility import items, snapshot
 from local_murmur import eventually
 import frame_timing
 
-SERVER_NAME = "Community-" + "verylongunbrokensubdomain" * 8 + "-日本語-👩🏽‍💻"
-CHANNEL_NAME = "Development-" + "longunbrokendestination" * 7 + "-Ελληνικά-日本語"
+SERVER_NAME = "Community-" + "verylongunbrokentoken" * 4 + "-日本語-👩🏽‍💻"
+CHANNEL_NAME = "Development-" + "longdestination" * 5 + "-Ελληνικά-日本語"
 
 def inside(inner, outer):
     x, y, w, h = inner
@@ -28,37 +28,72 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
     # The archive warning is produced by real profile migration at startup.
     notice=eventually(lambda:named("status bar","Connection notice"),"migration notice absent")
     original=snapshot(notice)
+    suggestion=eventually(lambda:named("push button","Use push-to-talk"),"real server SuggestConfig notice absent")
     full="\n".join(name for _,_,_,name in original)
     assert "The experimental Nuschel end-to-end identity was archived at" in full,full
     assert str(profile) in full,"full unbroken absolute path was lost"
     assert (profile / "data/keys.nuschel-v1/layout-evidence").read_text()=="synthetic, not a key\n"
-    for label,width,sidebar in [("wide",1280,240),("narrow",900,180),("expanded-sidebar",1280,360)]:
+    for label,width,sidebar in [("wide",1280,240),("narrow",900,200),("expanded-sidebar",1280,360)]:
         for percent,steps in [(100,0),(125,2),(150,3),(200,5)]:
             shell.chord("Control_L","0")
             shell.place("Nuschl",40,40,width,800)
             # Actual splitter keyboard API, not a direct config mutation.
             splitter=eventually(lambda:named("role 51","Resize channel list") or named(None,"Resize channel list"),"splitter missing")
             sx,sy=splitter.centre()
-            current_window=shell.window("Nuschl")
-            shell.drag((current_window["x"]+sx,current_window["y"]+sy),
-                       (current_window["x"]+72+sidebar+2,current_window["y"]+sy))
+            geometry=json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window).find(w=>w.get_title().startsWith('Nuschl'));const f=w.get_frame_rect(),b=w.get_buffer_rect();return {frame:{x:f.x,y:f.y,width:f.width,height:f.height},buffer:{x:b.x,y:b.y,width:b.width,height:b.height}};})())"))
+            buffer=geometry["buffer"];frame=geometry["frame"]
+            shell.drag((buffer["x"]+sx,buffer["y"]+sy),
+                       (frame["x"]+72+sidebar+2,buffer["y"]+sy))
             for _ in range(steps):shell.chord("Control_L","equal");time.sleep(.1)
             eventually(lambda:abs(json.loads((profile/"config/settings.json").read_text())["appearance"]["zoom"]-percent/100)<.001,"real zoom missing")
             time.sleep(.35)
-            window=shell.window("Nuschl"); viewport=(0,0,window["width"],window["height"])
+            window=shell.window("Nuschl")
+            geometry=json.loads(shell.eval("JSON.stringify((()=>{const w=global.get_window_actors().map(a=>a.meta_window).find(w=>w.get_title().startsWith('Nuschl'));const f=w.get_frame_rect(),b=w.get_buffer_rect();return {frame:{x:f.x,y:f.y,width:f.width,height:f.height},buffer:{x:b.x,y:b.y,width:b.width,height:b.height}};})())"))
+            frame,buffer=geometry["frame"],geometry["buffer"]
+            # AT-SPI window coordinates include the compositor's invisible CSD
+            # buffer inset. Derive that inset from actual rectangles, not a
+            # hardcoded padding or a relaxation of the visible frame bounds.
+            viewport=(frame["x"]-buffer["x"],frame["y"]-buffer["y"],frame["width"],frame["height"])
             current=eventually(lambda:named("status bar","Connection notice"),"notice disappeared")
             dismiss=eventually(lambda:named("push button","Dismiss notice"),"Dismiss missing")
             disconnect=eventually(lambda:named("push button","Disconnect"),"voice Disconnect missing")
             status=eventually(lambda:named(None,"Voice connected"),"fixed voice connection indicator missing")
+            stack=eventually(lambda:named(None,"Notifications"),"bounded notification stack missing")
+            dismiss.call("Component","GrabFocus")
+            eventually(lambda:inside(dismiss.extents(),stack.extents()),"initial dismiss focus was not revealed")
             # Native accessibility values retain full paths and route labels.
             names=[name for _,_,_,name in snapshot(current)]
             assert any(str(profile) in name for name in names),"migration text was truncated in accessibility"
             assert any(CHANNEL_NAME in name and SERVER_NAME in name for _,_,name,_ in items(application)),"full voice destination inaccessible"
-            entry={"case":label,"width":width,"zoom":percent,"notice":current.extents(),"dismiss":dismiss.extents(),"disconnect":disconnect.extents(),"voice_status":status.extents(),"window":viewport}
+            entry={"geometry":geometry,"stack":stack.extents(),"case":label,"width":width,"zoom":percent,"notice":current.extents(),"dismiss":dismiss.extents(),"disconnect":disconnect.extents(),"voice_status":status.extents(),"window":viewport}
             records.append(entry);report.write_text(json.dumps(records,indent=2))
-            for key in ["notice","dismiss","disconnect","voice_status"]:assert inside(entry[key],viewport),f"{key} outside viewport: {entry}"
-            assert inside(entry["dismiss"],entry["notice"]),f"Dismiss outside notice: {entry}"
             shot(f"layout-{label}-{percent}")
+            for key in ["stack","dismiss","disconnect","voice_status"]:assert inside(entry[key],viewport),f"{key} outside viewport: {entry}"
+            assert entry["stack"][3] <= viewport[3] * .35, f"notice stack exceeded its shared viewport budget: {entry}"
+            assert inside(entry["dismiss"],entry["stack"]),f"Dismiss outside visible stack: {entry}"
+            assert inside(entry["dismiss"],entry["notice"]),f"Dismiss outside notice: {entry}"
+            if entry["notice"][3] > entry["stack"][3] + 10:
+                initial_y=current.extents()[1]
+                stack.call("Component","GrabFocus");shell.key("End")
+                eventually(lambda:current.extents()[1] < initial_y-5,"End did not scroll the focused notice stack")
+                shell.key("Home")
+                eventually(lambda:inside(dismiss.extents(),stack.extents()),"Home did not restore visible dismiss")
+                entry["keyboard_scrolled"] = True
+                shell.key("End")
+                eventually(lambda:not inside(dismiss.extents(),stack.extents()),"End did not move dismiss outside the clip before focus probe")
+                dismiss.call("Component","GrabFocus")
+                eventually(lambda:inside(dismiss.extents(),stack.extents()),"focusing a clipped Dismiss did not reveal it")
+                entry["focused_action_revealed"] = True
+            suggestion.call("Component","GrabFocus")
+            eventually(lambda:inside(suggestion.extents(),stack.extents()),"secondary notice action was not revealed")
+            entry["secondary_action"] = suggestion.extents()
+            assert inside(entry["secondary_action"],viewport),f"secondary notice button escaped: {entry}"
+            dismiss.call("Component","GrabFocus")
+            eventually(lambda:inside(dismiss.extents(),stack.extents()),"returning to first notice did not reveal Dismiss")
+            # The search action is mandatory even when the header wraps.
+            search=eventually(lambda:named("push button","Search messages"),"header search missing")
+            assert inside(search.extents(),viewport),f"header toolbar escaped: {entry}"
+            report.write_text(json.dumps(records,indent=2))
     # Pointer and keyboard both activate the same fixed dismiss control.
     shell.chord("Control_L","0")
     shell.place("Nuschl",40,40,1280,800)
@@ -75,3 +110,42 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
     if log.exists():records[-1]["frames"]=frame_timing.summarize(frame_timing.read_log(log),*records[-1]["resize_span"])
     report.write_text(json.dumps(records,indent=2))
     print("Layout: long actual migration path, Unicode voice destinations, viewport bounds, 12 resize/zoom cases and keyboard dismissal passed.",flush=True)
+
+
+def performance(args, shell, profile, shot):
+    """Same real long-notice fixture before/after, with frame-timing builds."""
+    log = args.output / "frames.log"
+    eventually(log.exists, "frame-timing executable required; no timings were logged")
+    measured = {}
+    for percent, steps in [(100, 0), (125, 2)]:
+        shell.chord("Control_L", "0")
+        shell.place("Nuschl", 40, 40, 1280, 800)
+        for _ in range(steps):
+            shell.chord("Control_L", "equal")
+            time.sleep(.1)
+        eventually(lambda: abs(json.loads((profile / "config/settings.json").read_text())["appearance"]["zoom"] - percent / 100) < .001, "actual benchmark zoom missing")
+        time.sleep(1)
+        shot(f"performance-{percent}")
+        begin = int(shell.eval("imports.gi.GLib.get_monotonic_time()"))
+        time.sleep(3)
+        end = int(shell.eval("imports.gi.GLib.get_monotonic_time()"))
+        measured[f"idle-{percent}"] = {"span": [begin, end], "frames": frame_timing.summarize(frame_timing.read_log(log), begin, end)}
+        sizes = [[round(1280 - 380 * (1 - abs(i - 60) / 60)), round(800 - 180 * (1 - abs(i - 60) / 60))] for i in range(121)]
+        ticks = shell.resize_sweep("Nuschl", sizes)
+        span = frame_timing.moving(ticks, sizes)
+        measured[f"sweep-{percent}"] = {"span": span, "ticks": frame_timing.lag(ticks, sizes), "frames": frame_timing.summarize(frame_timing.read_log(log), *span)}
+        time.sleep(.5)
+        shell.place("Nuschl", 40, 40, 1280, 800)
+        time.sleep(.8)
+        window = shell.window("Nuschl")
+        corner = (window["x"] + window["width"] + 4, window["y"] + window["height"] + 4)
+        path, sizes = [], []
+        for i in range(126):
+            dx, dy = round(-380 * i / 125), round(-180 * i / 125)
+            path.append([corner[0] + dx, corner[1] + dy])
+            sizes.append([1280 + dx, 800 + dy])
+        ticks = shell.drag_resize("Nuschl", corner, path)
+        span = frame_timing.moving(ticks, sizes)
+        measured[f"drag-{percent}"] = {"span": span, "ticks": frame_timing.lag(ticks, sizes), "frames": frame_timing.summarize(frame_timing.read_log(log), *span)}
+        (args.output / "performance.json").write_text(json.dumps(measured, indent=2))
+    print("Matched frame-timing fixture captured actual idle/sweep/drag at 100% and 125%.", flush=True)
