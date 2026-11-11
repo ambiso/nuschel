@@ -159,7 +159,7 @@ let
       body = lib.head (
         lib.splitString "\n}" (lib.elemAt (lib.splitString "pub struct ClientSettings {" source) 1)
       );
-      field = line: builtins.match " *(pub )?([a-z_]+): .*" line;
+      field = line: builtins.match " *(pub )?([a-z_][a-z0-9_]*): .*" line;
     in
     map (match: lib.elemAt match 1) (
       lib.filter (match: match != null) (map field (lib.splitString "\n" body))

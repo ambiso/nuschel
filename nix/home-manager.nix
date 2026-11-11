@@ -153,6 +153,7 @@ let
     "wormhole_relay"
     "appearance"
     "recovery_key"
+    "e2ee_direct_messages"
     "key_transparency"
     "share_web_host"
   ];
