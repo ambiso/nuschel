@@ -146,6 +146,7 @@ jobs:
           name: ${{ steps.names.outputs.artifact }}
           path: dist/
           if-no-files-found: error
+          overwrite: true
           retention-days: ${{ inputs.retention-days }}
           compression-level: 6
 
@@ -163,6 +164,7 @@ jobs:
           name: nuschl-linux-nix-logs-${{ github.sha }}
           path: ${{ runner.temp }}/build-logs/
           if-no-files-found: ignore
+          overwrite: true
           retention-days: ${{ inputs.retention-days }}
 
   windows:
@@ -255,6 +257,7 @@ jobs:
           name: ${{ steps.names.outputs.artifact }}
           path: dist/
           if-no-files-found: error
+          overwrite: true
           retention-days: ${{ inputs.retention-days }}
           compression-level: 6
 
@@ -272,6 +275,7 @@ jobs:
           name: nuschl-windows-x86_64-logs-${{ github.sha }}
           path: ${{ runner.temp }}/build-logs/
           if-no-files-found: ignore
+          overwrite: true
           retention-days: ${{ inputs.retention-days }}
 
   macos:
@@ -363,6 +367,7 @@ jobs:
           name: ${{ steps.names.outputs.artifact }}
           path: dist/
           if-no-files-found: error
+          overwrite: true
           retention-days: ${{ inputs.retention-days }}
           compression-level: 6
 
@@ -380,5 +385,6 @@ jobs:
           name: nuschl-macos-universal-logs-${{ github.sha }}
           path: ${{ runner.temp }}/build-logs/
           if-no-files-found: ignore
+          overwrite: true
           retention-days: ${{ inputs.retention-days }}
 
