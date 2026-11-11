@@ -170,7 +170,17 @@ formula; 32 formulas a message; the desktop queues at most 64 formulas and
 caches 512.
 
 The `math` fuzz target runs hostile LaTeX through the converter, the check,
-Typst and the rasteriser; `math_tokens` checks the grammar (above).
+Typst and the rasteriser; `math_tokens` checks the grammar (above). They found
+code spans losing to math in pulldown-cmark (above), and in the converter a
+line break escaping the next parenthesis, `\not` making identifiers and
+panicking before a control character, and delimiter and root characters
+(`⟨`, `√`) taking in the parenthesis that closes a call; each is fixed with a
+regression test. Open: Typst's own debug assertion that shaped glyphs stay in
+their text's range fails for some right-to-left text in `\text{…}`
+(`typst-layout`, `inline/shaping.rs`). Release builds have no such check and
+render it; a debug build's worker panics, is replaced, and the formula shows
+as its source. It also stops `just fuzz math` (debug assertions) on such
+inputs.
 
 ### Dependencies
 
