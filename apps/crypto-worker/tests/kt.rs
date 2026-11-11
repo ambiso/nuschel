@@ -6,7 +6,10 @@
 //! Each user has their own worker directory. Users register on a first connection
 //! without key transparency and reconnect with it, as an account exists only after
 //! registration.
-use nuschel_ipc::crypto::{ContactState, ContactView, HeadOutcome, MonitorOutcome, RecoveryPolicy};
+use nuschel_ipc::crypto::{
+    ContactState, ContactView, HeadOutcome, KeyTransparencySettings, MonitorOutcome,
+    RecoveryPolicy, WitnessSetting, WitnessStatus,
+};
 use nuschel_protocol::nuschel::v1;
 use nuschel_session::{
     config::{ClientIdentity, ServerBookmark},
@@ -88,6 +91,38 @@ impl Server {
     fn address(&self) -> SocketAddr {
         self.running.addresses[0]
     }
+
+    /// With a local witness: the origin is this server's loopback address, and
+    /// submissions go out every second.
+    async fn start_witnessed(witness: &nuschel_witness::Running) -> Self {
+        // The port is part of the origin, so it is chosen before the start.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let directory = tempfile::tempdir().unwrap();
+        let store = MemoryStore::shared();
+        let config = Config::from_toml(&format!(
+            "bind = [\"127.0.0.1\"]\nport = {port}\nstate_directory = {:?}\n\
+             message_limit = 1000\nmessage_burst = 1000\n\
+             [autoban]\nattempts = 0\n[password_hashing]\nmemory_kib = 64\npasses = 1\n\
+             [kt]\npublish_interval = 1\norigins = [\"127.0.0.1:{port}\"]\nwitness_interval = 1\n\
+             [[kt.witnesses]]\nkey = {:?}\nurl = \"http://{}\"\n",
+            directory.path(),
+            witness.vkey,
+            witness.address,
+        ))
+        .unwrap();
+        let running = start(config.settings().unwrap(), Backend::Memory(store.clone()))
+            .await
+            .unwrap();
+        Self {
+            running,
+            store,
+            directory,
+        }
+    }
 }
 
 fn mumble_identity(index: usize) -> ClientIdentity {
@@ -105,6 +140,7 @@ struct User {
     index: usize,
     worker: tempfile::TempDir,
     crypto: CryptoHandle,
+    witnessing: KeyTransparencySettings,
 }
 
 impl User {
@@ -116,6 +152,7 @@ impl User {
             index,
             worker,
             crypto,
+            witnessing: KeyTransparencySettings::default(),
         }
     }
 
@@ -143,7 +180,7 @@ impl User {
             message_rate: Default::default(),
             required: Requirement::default(),
             crypto: kt.then(|| IdentitySetup {
-                witnessing: Default::default(),
+                witnessing: self.witnessing.clone(),
                 crypto: self.crypto.clone(),
                 device_name: format!("{}'s laptop", self.name),
                 recovery: RecoveryPolicy::Offer,
@@ -259,11 +296,16 @@ impl Session {
 
     /// Checks a user and returns the first view of them (after the lookup).
     async fn check(&mut self, user_id: u32, direct: bool) -> ContactView {
+        self.check_named(user_id, direct, None).await
+    }
+
+    /// The same, with the name the server shows for them.
+    async fn check_named(&mut self, user_id: u32, direct: bool, name: Option<&str>) -> ContactView {
         self.backlog.retain(|event| {
             !matches!(event, SessionEvent::Identity(IdentityEvent::Contact { .. }))
         });
         self.command(IdentityCommand::Check {
-            name: None,
+            name: name.map(str::to_owned),
             user_id: Some(user_id),
             account: None,
             direct,
@@ -614,4 +656,120 @@ fn server_head(server: &Server) -> Vec<u8> {
         .map(|(_, value)| value.clone())
         .next_back()
         .expect("a signed head")
+}
+
+/// The head check of a new connection.
+async fn log_outcome(session: &mut Session) -> HeadOutcome {
+    match session
+        .identity(|event| matches!(event, IdentityEvent::Log(_)))
+        .await
+    {
+        IdentityEvent::Log(outcome) => outcome,
+        _ => unreachable!(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_local_witness_cosigns_the_log_and_clients_require_it() {
+    let witness_state = tempfile::tempdir().unwrap();
+    let witness = nuschel_witness::start(nuschel_witness::Config {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        enrol_private_addresses: true,
+        ..nuschel_witness::Config::new("witness.test/nuschel-kt", witness_state.path())
+    })
+    .await
+    .unwrap();
+    let server = Server::start_witnessed(&witness).await;
+    let required = KeyTransparencySettings {
+        witnesses: vec![WitnessSetting {
+            key: witness.vkey.clone(),
+            enabled: true,
+        }],
+        ..Default::default()
+    };
+    let mut alice = User::new("Alice", 0);
+    let mut bob = User::new("Bob", 1);
+    alice.witnessing = required.clone();
+    bob.witnessing = required.clone();
+    let alice_id = alice.register(&server).await;
+    bob.register(&server).await;
+    let mut a = alice.connect(&server).await;
+    a.published().await;
+    a.disconnect().await;
+
+    // The server submits every second; once the auditor has the newest epoch, a
+    // connection is witnessed.
+    let mut witnessed = None;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let mut b = bob.connect(&server).await;
+        let outcome = log_outcome(&mut b).await;
+        if matches!(
+            outcome,
+            HeadOutcome::Accepted {
+                witness: WitnessStatus::Witnessed { .. },
+                ..
+            }
+        ) {
+            witnessed = Some(b);
+            break;
+        }
+        b.disconnect().await;
+    }
+    let mut b = witnessed.expect("the server's log was never witnessed");
+    // Alice, by her number and the name the server shows: both labels name her
+    // account in the witnessed log.
+    let view = b.check_named(alice_id, false, Some("Alice")).await;
+    assert_eq!(view.state, ContactState::Unverified, "{view:?}");
+    assert!(view.identity.is_some());
+    b.disconnect().await;
+
+    // A name the log does not give her account is not accepted (a fresh device).
+    let mut dave = User::new("Bob", 1);
+    dave.witnessing = required.clone();
+    let mut d = dave.connect(&server).await;
+    let view = d.check_named(alice_id, false, Some("Mallory")).await;
+    assert!(view.identity.is_none(), "{view:?}");
+    d.disconnect().await;
+
+    // A client that requires a witness this server does not reach: unavailable,
+    // and first contact still proceeds as "not verified".
+    let stranger = nuschel_kt::witness::note::Cosigner::from_seed("other.test", &[5; 32])
+        .unwrap()
+        .key()
+        .vkey();
+    let mut carol = User::new("Carol", 2);
+    carol.witnessing = KeyTransparencySettings {
+        witnesses: vec![WitnessSetting {
+            key: stranger,
+            enabled: true,
+        }],
+        ..Default::default()
+    };
+    carol.register(&server).await;
+    let mut c = carol.connect(&server).await;
+    let outcome = log_outcome(&mut c).await;
+    assert!(
+        matches!(
+            outcome,
+            HeadOutcome::Accepted {
+                witness: WitnessStatus::Unavailable { .. },
+                ..
+            }
+        ),
+        "{outcome:?}"
+    );
+    let view = c.check(alice_id, false).await;
+    assert!(
+        matches!(
+            view.state,
+            ContactState::Unavailable {
+                verified: false,
+                ..
+            }
+        ),
+        "{view:?}"
+    );
+    assert!(view.identity.is_some());
+    c.disconnect().await;
 }

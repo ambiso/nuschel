@@ -7017,6 +7017,7 @@ dependencies = [
  "nuschel-protocol",
  "nuschel-sandbox-windows",
  "nuschel-session",
+ "nuschel-witness",
  "nuscheld",
  "serde",
  "serde_json",
