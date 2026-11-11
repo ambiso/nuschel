@@ -4,13 +4,21 @@
 The stock client logs in with a certificate exported by Nuschel (PKCS#12
 interoperability), then both exchange voice through the server: the stock
 client transmits a tone from a private PulseAudio microphone that Nuschel must
-decode, and Nuschel's tone must reach the stock client's speakers.
+decode, and Nuschel's tone must reach the stock client's speakers. Then chat
+both ways: a message typed into the stock window (xdotool; Xvfb has no window
+manager) reaches Nuschel, and Nuschel's message shows in the stock client's log
+(copied out through the X clipboard with xclip).
+
+Waits that depend on how fast the stock GUI is are generous: under heavy host
+load it has opened its microphone more than 40 s after joining.
 """
 import argparse
 import hashlib
 import json
 import os
 from pathlib import Path
+import queue
+import shutil
 import signal
 import sqlite3
 import ssl
@@ -32,6 +40,70 @@ def eventually(predicate, message, timeout=40):
             return result
         time.sleep(0.25)
     raise AssertionError(message)
+
+
+def drain(client):
+    """The events queued for a Nuschel client since it last waited, without blocking."""
+    events = []
+    while True:
+        try:
+            event = client.queue.get_nowait()
+        except queue.Empty:
+            return events
+        if event is None:
+            raise AssertionError(f"the Nuschel client exited: {list(client.events)[-8:]}")
+        events.append(event)
+
+
+def xdotool(*arguments, timeout=30):
+    return subprocess.run(["xdotool", *arguments], check=True, capture_output=True, text=True,
+                          timeout=timeout).stdout
+
+
+class StockWindow:
+    """The stock client's main window in this Xvfb, driven like a user would."""
+
+    def __init__(self):
+        found = xdotool("search", "--sync", "--onlyvisible", "--name", "^Mumble", timeout=120).split()
+        sizes = {}
+        for window in found:
+            geometry = dict(line.split("=", 1) for line in
+                            xdotool("getwindowgeometry", "--shell", window).splitlines() if "=" in line)
+            sizes[window] = (int(geometry["WIDTH"]), int(geometry["HEIGHT"]))
+        assert sizes, "no stock Mumble window"
+        # The main window is the largest one (menus and tooltips are small).
+        self.window = max(sizes, key=lambda window: sizes[window][0] * sizes[window][1])
+        self.width, self.height = sizes[self.window]
+
+    def focus_chat_bar(self):
+        # The classic layout: the log on the left with the chat bar along its
+        # bottom, the channel tree on the right (which has the focus at first).
+        xdotool("windowfocus", "--sync", self.window)
+        xdotool("mousemove", "--window", self.window, str(self.width // 6), str(self.height - 12), "click", "1")
+        time.sleep(0.3)
+
+    def type_message(self, text):
+        self.focus_chat_bar()
+        # Replaces whatever an earlier attempt may have left in the chat bar.
+        xdotool("key", "ctrl+a")
+        xdotool("type", "--delay", "20", text)
+        xdotool("key", "Return")
+
+    def log_text(self):
+        """The whole log: F6 moves from the chat bar to the channel tree and on to
+        the log (MainWindow::focusNextMainWidget), which is then copied."""
+        self.focus_chat_bar()
+        xdotool("key", "F6", "F6", "ctrl+a", "ctrl+c")
+        time.sleep(0.3)
+        copied = subprocess.run(["xclip", "-o", "-selection", "clipboard"], capture_output=True, text=True,
+                                timeout=10)
+        return copied.stdout if copied.returncode == 0 else ""
+
+
+def screenshot(output):
+    """Keep the screen for a failed run (the VM test copies the output directory)."""
+    if shutil.which("xwd"):
+        subprocess.run(["xwd", "-root", "-silent", "-out", str(output / "screen.xwd")], timeout=20, check=False)
 
 
 def main():
@@ -74,7 +146,7 @@ def main():
             exported = subprocess.run([str(args.binaries / "nuschel-cli"), "--host", "unused", "--username", "unused",
                                        "--profile-dir", str(root / "stock-identity"), "--export-certificate",
                                        str(certificates / "MumbleAutomaticCertificateBackup.p12")],
-                                      capture_output=True, text=True, check=True, timeout=30)
+                                      capture_output=True, text=True, check=True, timeout=120)
             identity_hash = json.loads(exported.stdout.splitlines()[-1])["hash"]
             # Trust the fixture's self-signed server certificate the way Mumble remembers it.
             der = ssl.PEM_cert_to_DER_cert(ssl.get_server_certificate((args.host, args.port)))
@@ -101,7 +173,7 @@ def main():
                                       env=env, stdout=(args.output / "mumble.log").open("w"), stderr=subprocess.STDOUT,
                                       start_new_session=True)
             stock = peer.wait(lambda e: e["kind"] == "user" and e["user"]["name"] == "StockUser"
-                              and e["user"]["channel"] == 1, timeout=60)["user"]
+                              and e["user"]["channel"] == 1, timeout=180)["user"]
             assert stock["certificate_hash"] == identity_hash, "stock Mumble did not use the Nuschel-exported certificate"
             print("Stock Mumble logged in with Nuschel's exported PKCS#12 identity.", flush=True)
 
@@ -109,41 +181,91 @@ def main():
             peer.unmute()
             mono = tone(0, 48000)
             second = struct.pack("<%df" % (2 * len(mono)), *[v for s in mono for v in (s, s)])
-            before = len(peer.events)
 
-            def received():
-                return [e["opus"] for e in list(peer.events)[before:]
-                        if e["kind"] == "audio" and e["sender"] == stock["session"] and not e["end"]]
-            # Mumble opens its microphone some time after joining (seconds on a slow
-            # VM): keep playing the tone, a second at a time, until it transmits.
-            deadline = time.monotonic() + 40
-            while len(received()) <= 40 and time.monotonic() < deadline:
+            def play_second():
                 subprocess.run([str(args.pulse_bin / "pacat"), f"--server=unix:{socket}", "--playback",
                                 "--device=stockmic", "--raw", "--format=float32le", "--rate=48000", "--channels=2"],
-                               input=second, check=True, timeout=20, env=env)
+                               input=second, check=True, timeout=60, env=env)
+
+            def stock_audio(events):
+                return [e["opus"] for e in events
+                        if e["kind"] == "audio" and e["sender"] == stock["session"] and not e["end"]]
+            # Mumble opens its microphone some time after joining: seconds on a
+            # slow VM, more than 40 s under heavy host load. Play the tone a second
+            # at a time until the first packet arrives (up to three minutes), and
+            # only then count, so a late start does not eat the counting time.
+            drain(peer)
+            started = time.monotonic()
+            packets, first = [], None
+            while len(packets) <= 40:
+                play_second()
+                packets += stock_audio(drain(peer))
+                now = time.monotonic()
+                if packets and first is None:
+                    first = now
+                    print(f"First voice packet from the stock client after {first - started:.1f} s.", flush=True)
+                if (first is None and now - started > 180) or (first is not None and now - first > 60):
+                    break
             time.sleep(0.5)
-            packets = received()
+            packets += stock_audio(drain(peer))
+            assert first is not None, "no voice packet from the stock client within 180 s"
             assert len(packets) > 40, f"too few packets from the stock client: {len(packets)}"
             assert rms(reference.decode(packets)) > 0.01, "stock client's audio did not decode"
             print(f"Stock Mumble → Nuschel voice: {len(packets)} Opus packets decoded.", flush=True)
 
-            # Nuschel → stock client: record what Mumble plays.
+            # Nuschel → stock client: record what Mumble plays; a busy client may
+            # take a while to play the first spurt, so it is sent again until heard.
             recording = root / "stock-playback.pcm"
+            played = False
             with recording.open("wb") as sink:
                 recorder = subprocess.Popen([str(args.pulse_bin / "parec"), f"--server=unix:{socket}",
                                              "--device=speakers.monitor", "--raw", "--format=float32le",
                                              "--rate=48000", "--channels=1"], stdout=sink, env=env, start_new_session=True)
-                eventually(lambda: recording.stat().st_size > 48000, "recorder did not start", timeout=10)
-                for index, packet in enumerate(reference.encode_tone(100)):
-                    peer.send(kind="voice", sequence=index * 2, opus=packet, end=index == 99)
-                    time.sleep(0.02)
-                time.sleep(1.0)
-                os.killpg(recorder.pid, signal.SIGTERM)
-                recorder.wait(timeout=5)
-            raw = recording.read_bytes()
-            samples = struct.unpack("<%df" % (len(raw) // 4), raw)
-            assert rms(samples) > 0.005, "stock client did not play Nuschel's voice"
+                try:
+                    eventually(lambda: recording.stat().st_size > 48000, "recorder did not start", timeout=60)
+                    deadline = time.monotonic() + 90
+                    sequence = 0
+                    while not played and time.monotonic() < deadline:
+                        start = recording.stat().st_size // 4 * 4
+                        for index, packet in enumerate(reference.encode_tone(100)):
+                            peer.send(kind="voice", sequence=sequence, opus=packet, end=index == 99)
+                            sequence += 2
+                            time.sleep(0.02)
+                        time.sleep(1.0)
+                        raw = recording.read_bytes()[start:]
+                        raw = raw[:len(raw) // 4 * 4]
+                        played = bool(raw) and rms(struct.unpack("<%df" % (len(raw) // 4), raw)) > 0.005
+                finally:
+                    os.killpg(recorder.pid, signal.SIGTERM)
+                    recorder.wait(timeout=10)
+            assert played, "stock client did not play Nuschel's voice"
             print("Nuschel → stock Mumble voice played on the stock client's speakers.", flush=True)
+
+            # Chat, typed into the stock window: Nuschel receives it from StockUser.
+            window = StockWindow()
+            typed, attempt = None, 0
+            deadline = time.monotonic() + 120
+            while typed is None:
+                attempt += 1
+                window.type_message(f"Typed in stock Mumble {attempt}")
+                try:
+                    typed = peer.wait(lambda e: e["kind"] == "text" and e["author"] == "StockUser"
+                                      and e["body"].startswith("Typed in stock Mumble"), timeout=20)
+                except AssertionError:
+                    if peer.process.poll() is not None or time.monotonic() > deadline:
+                        raise AssertionError("the message typed into stock Mumble did not reach Nuschel") from None
+            assert typed["target"] == {"kind": "channel", "id": 1}, typed
+            print(f"Stock Mumble → Nuschel chat: {typed['body']!r} (typed {attempt} time(s)).", flush=True)
+            # And Nuschel's message shows in the stock client's log.
+            body = f"Hello stock Mumble from Nuschel {os.getpid()}"
+            peer.send(kind="text", channel=1, body=body)
+            eventually(lambda: f"NuschelPeer: {body}" in window.log_text(),
+                       "Nuschel's message is not in the stock client's log", timeout=60)
+            print("Nuschel → stock Mumble chat: shown in the stock client's log.", flush=True)
+        except BaseException:
+            if mumble:
+                screenshot(args.output)
+            raise
         finally:
             for process in (mumble, pulse):
                 if process and process.poll() is None:

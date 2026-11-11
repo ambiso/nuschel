@@ -1,5 +1,5 @@
 # nuscheld under the NixOS module, with stock clients: the stock Mumble GUI
-# (login with a Nuschel-exported certificate, voice both ways) and the same
+# (login with a Nuschel-exported certificate, voice and chat both ways) and the same
 # client suites vm-smoke runs against stock Murmur; and Nuschel with the
 # extension's server history (SQLite and PostgreSQL) and key transparency (its
 # keys as credentials on one node, generated on the other). A second node runs
@@ -76,6 +76,11 @@ pkgs.testers.runNixOSTest {
           pkgs.xvfb-run
           pkgs.pulseaudio
           pkgs.mumble
+          # Typing into the stock window and reading its log (stock_client.py);
+          # xwd keeps the screen of a failed run.
+          pkgs.xdotool
+          pkgs.xclip
+          pkgs.xwd
           pkgs.openssl
           pkgs.iptables
           pkgs.iproute2
@@ -139,7 +144,7 @@ pkgs.testers.runNixOSTest {
     server.succeed("test ! -e /var/lib/private/nuschel/kt-vrf.key")
 
     # The real stock Mumble GUI against nuscheld: login with a certificate
-    # exported by Nuschel, then voice in both directions.
+    # exported by Nuschel, then voice and chat in both directions.
     as_tester(f"xvfb-run -a -s \"-screen 0 1280x800x24\" python3 {tests}/stock_client.py {bins} --mumble ${pkgs.mumble}/bin/mumble --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${opus} --output /tmp/nuschel-stock-artifacts")
     client.copy_from_machine("/tmp/nuschel-stock-artifacts", "stock")
 
