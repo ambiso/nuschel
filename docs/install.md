@@ -52,6 +52,8 @@ programs.nuschel = {
     enter_sends = false;
     shortcuts."push-to-talk" = "f13";
     audio.transmit = "push_to_talk";
+    # Privacy → Relay-only connections; no direct peer sockets or IP discovery.
+    relay_only = true;
   };
   servers = [
     { name = "Team"; host = "voice.example.org"; username = "alice"; }

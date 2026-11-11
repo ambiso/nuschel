@@ -287,6 +287,9 @@ pub struct ClientSettings {
     pub friend_notifications: bool,
     /// Tell others in a conversation that you are typing (Nuschel servers).
     pub send_typing: bool,
+    /// Use only locally configured servers/relays: never gather or advertise
+    /// peer addresses, use STUN or establish a direct peer connection.
+    pub relay_only: bool,
     /// magic-wormhole rendezvous server for offering files (`ws://`).
     pub wormhole_rendezvous: String,
     /// magic-wormhole transit relay (`tcp://host:port`).
@@ -395,6 +398,7 @@ impl Default for ClientSettings {
             friend_notifications: false,
             send_typing: true,
             wormhole_rendezvous: nuschel_core::transfer::PUBLIC_RENDEZVOUS.into(),
+            relay_only: false,
             wormhole_relay: nuschel_core::transfer::PUBLIC_RELAY.into(),
             appearance: AppearanceSettings::default(),
             recovery_key: Default::default(),
@@ -2294,6 +2298,8 @@ mod tests {
             ClientSettings::default()
         );
         let mut settings = ClientSettings::default();
+        assert!(!settings.relay_only);
+        settings.relay_only = true;
         settings.user_volumes.insert("abc".into(), 9.);
         settings.server_volumes.insert("server".into(), -1.);
         settings.local_mutes.insert("def".into());
@@ -2302,6 +2308,7 @@ mod tests {
             .save_settings(&settings, &ManagedSettings::default())
             .unwrap();
         let loaded = profile.load_settings(&Managed::default()).unwrap().0;
+        assert!(loaded.relay_only);
         assert_eq!(loaded.volume_for(Some("abc")), 4.);
         assert_eq!(loaded.sound_volume, 1.);
         assert!(loaded.locally_muted(Some("def")));
@@ -2441,6 +2448,22 @@ mod tests {
         let root = std::env::temp_dir().join(format!("nuschel-{name}-{}", Uuid::new_v4()));
         let profile = Profile::open(Some(root.clone())).unwrap();
         (root, profile)
+    }
+    #[test]
+    fn managed_relay_only_cannot_be_disabled_by_user_settings() {
+        let (root, profile) = temporary_profile("managed-relay-only");
+        write(&profile, "settings.json", r#"{"relay_only":false}"#);
+        write(
+            &profile,
+            "managed.json",
+            r#"{"settings":{"relay_only":true}}"#,
+        );
+        let declared = profile.load_managed().unwrap();
+        let (settings, managed) = profile.load_settings(&declared).unwrap();
+        assert!(settings.relay_only);
+        assert!(managed.contains("relay_only"));
+        assert!(managed.apply(ClientSettings::default()).relay_only);
+        fs::remove_dir_all(root).unwrap();
     }
     fn write(profile: &Profile, name: &str, contents: &str) {
         fs::write(profile.config_dir.join(name), contents).unwrap();

@@ -1466,6 +1466,9 @@ impl Desktop {
         if settings == self.settings {
             return;
         }
+        if settings.relay_only {
+            self.transfers.require_relay();
+        }
         if let Err(error) = self.profile.save_settings(&settings, &self.managed) {
             self.error = Some(format!("Could not save settings: {error}"));
         }

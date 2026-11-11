@@ -19,6 +19,11 @@ Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 
 Reported while testing (2026-11-10/11):
 
+- [x] Persistent relay-only privacy: accessible/managed setting, no direct peer
+      sockets, STUN or peer-IP hints, configured transfer relays only, and active
+      direct-capable transfer workers revoked when enabled. Server sessions
+      reconnect to apply the privacy preference before publishing new presence.
+
 - [x] Private conversations refresh their online recipient automatically on send,
       receive and presence changes, using the same certificate identity rather than
       a recycled session number. Queued images/files resolve the current presence

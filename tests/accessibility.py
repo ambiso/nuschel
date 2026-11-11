@@ -373,6 +373,9 @@ class AccessibilityTest:
         typing = [role for _, _, role, name in nodes if name == "Show when you are typing"]
         assert typing and typing[0] in INTERACTIVE | {"check box", "switch"}, \
             f"the typing setting is not a named control: {typing}"
+        relay = [role for _, _, role, name in nodes if name == "Relay-only connections"]
+        assert relay and relay[0] in INTERACTIVE | {"check box", "switch"}, \
+            f"relay-only privacy is not a named control: {relay}"
         self.find(nodes, "push button", "Record Toggle mute shortcut").call("Action", "DoAction", "i", "0")
 
         def recording():

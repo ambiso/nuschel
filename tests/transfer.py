@@ -34,6 +34,7 @@ class Wormhole:
     """A private magic-wormhole mailbox server and transit relay on 127.0.0.1."""
 
     def __init__(self, python, root):
+        self.python = python
         self.bin = Path(python).parent
         self.mailbox_port, self.relay_port = free_port(), free_port()
         self.servers = {"rendezvous": f"ws://127.0.0.1:{self.mailbox_port}/v1",
@@ -222,6 +223,46 @@ def main():
             assert event["kind"] == "done", event
             assert incoming.data == b"from the reference client\n"
             cli.wait(timeout=30)
+
+            # An authenticated peer can call its own address a "relay".
+            # FORCE_RELAY must advertise no local/direct hints and must not
+            # contact that address, even when the configured relay fails.
+            with socket.socket() as configured, socket.socket() as canary:
+                for listener in (configured, canary):
+                    listener.bind(("127.0.0.1", 0))
+                    listener.listen()
+                    listener.settimeout(10)
+                pinned = dict(servers, relay=f"tcp://127.0.0.1:{configured.getsockname()[1]}")
+                private = worker({"kind": "offer", "name": "report.pdf", "servers": pinned}, offered)
+                code = private.wait("code")["code"]
+                result = root / "privacy-hints.json"
+                adversary = subprocess.Popen([
+                    str(wormhole.python), str(Path(__file__).with_name("transfer_privacy_peer.py")),
+                    servers["rendezvous"], code, str(canary.getsockname()[1]), str(result),
+                ])
+                try:
+                    eventually(result.exists, "adversary did not complete the authenticated exchange", timeout=30)
+                    connection, _ = configured.accept()
+                    with connection:
+                        connection.settimeout(5)
+                        assert connection.recv(1024).startswith(b"please relay ")
+                    # The configured endpoint failed, so no direct or
+                    # peer-advertised relay fallback may follow.
+                    canary.settimeout(6)
+                    try:
+                        connection, _ = canary.accept()
+                    except TimeoutError:
+                        pass
+                    else:
+                        connection.close()
+                        raise AssertionError("relay-only transfer contacted an unconfigured peer address")
+                    private.send({"kind": "cancel"})
+                    private.process.wait(timeout=5)
+                    print("relay-only advertised no peer IP and ignored hostile direct/relay hints after relay failure", flush=True)
+                finally:
+                    if adversary.poll() is None:
+                        adversary.terminate()
+                    adversary.wait(timeout=10)
 
             # Cancelling ends the offer: the worker exits promptly.
             sender.send({"kind": "cancel"})

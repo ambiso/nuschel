@@ -62,6 +62,8 @@ struct Outgoing {
     problem: Option<String>,
     ended: bool,
     commands: Option<mpsc::Sender<TransferRequest>>,
+    stop: Option<tokio::task::AbortHandle>,
+    direct: bool,
 }
 
 /// A file someone offered, being received or received.
@@ -71,6 +73,8 @@ struct Download {
     path: PathBuf,
     state: Receiving,
     commands: Option<mpsc::Sender<TransferRequest>>,
+    stop: Option<tokio::task::AbortHandle>,
+    direct: bool,
 }
 
 enum Receiving {
@@ -121,13 +125,49 @@ fn wormhole_servers(settings: &ClientSettings) -> WormholeServers {
         (None, None) => WormholeServers {
             rendezvous: settings.wormhole_rendezvous.clone(),
             relay: settings.wormhole_relay.clone(),
-            direct: true,
+            direct: nuschel_core::network::PeerPolicy {
+                relay_only: settings.relay_only,
+            }
+            .permits(nuschel_core::network::Destination::DirectPeer),
         },
         (rendezvous, relay) => WormholeServers {
             rendezvous: rendezvous.unwrap_or_else(|| settings.wormhole_rendezvous.clone()),
             relay: relay.unwrap_or_else(|| settings.wormhole_relay.clone()),
             direct: false,
         },
+    }
+}
+
+fn receiving_servers(settings: &ClientSettings, offer: &Offer) -> Result<WormholeServers, String> {
+    let mut servers = wormhole_servers(settings);
+    let rendezvous = offer.rendezvous.as_deref().unwrap_or(PUBLIC_RENDEZVOUS);
+    if settings.relay_only && rendezvous != servers.rendezvous {
+        return Err("This file uses a different rendezvous server. Configure that server before downloading in relay-only mode.".into());
+    }
+    servers.rendezvous = rendezvous.to_owned();
+    Ok(servers)
+}
+
+impl Transfers {
+    /// A privacy change revokes active direct-capable workers, including ones
+    /// still negotiating. Never wait for a full command pipe to accept Cancel.
+    pub fn require_relay(&mut self) {
+        for offer in self.offers.iter_mut().filter(|offer| offer.direct) {
+            if let Some(stop) = offer.stop.take() {
+                stop.abort();
+                offer.commands = None;
+                offer.ended = true;
+                offer.sending.clear();
+                offer.problem = Some("Stopped because relay-only privacy was enabled.".into());
+            }
+        }
+        for download in self.downloads.iter_mut().filter(|download| download.direct) {
+            if let Some(stop) = download.stop.take() {
+                stop.abort();
+                download.commands = None;
+                download.state = Receiving::Cancelled;
+            }
+        }
     }
 }
 
@@ -200,6 +240,8 @@ impl Desktop {
                 problem: None,
                 ended: false,
                 commands: Some(worker.commands.clone()),
+                stop: Some(worker.abort_handle()),
+                direct: servers.direct,
             });
             let (updates, receiver) = mpsc::channel(32);
             self.driver.runtime().spawn(run_offer(worker, updates));
@@ -284,12 +326,16 @@ impl Desktop {
         let Some(code) = offer.code.clone() else {
             return;
         };
-        let mut servers = wormhole_servers(&self.settings);
-        // The sender's rendezvous server is where its code is waiting.
-        servers.rendezvous = offer
-            .rendezvous
-            .clone()
-            .unwrap_or_else(|| PUBLIC_RENDEZVOUS.into());
+        // Under relay-only privacy, a peer cannot choose an address for us to
+        // contact, even by calling it a rendezvous server.
+        let servers = match receiving_servers(&self.settings, &offer) {
+            Ok(servers) => servers,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
+        };
+        let direct = servers.direct;
         let request = TransferRequest::Receive {
             code,
             max_size: size_limit(offer.size),
@@ -310,10 +356,13 @@ impl Desktop {
             path: path.clone(),
             state: Receiving::Connecting,
             commands: None,
+            stop: None,
+            direct,
         };
         match started {
             Ok(worker) if worker.commands.try_send(request).is_ok() => {
                 download.commands = Some(worker.commands.clone());
+                download.stop = Some(worker.abort_handle());
                 let (updates, receiver) = mpsc::channel(32);
                 self.driver
                     .runtime()
@@ -378,6 +427,7 @@ impl Desktop {
                     announce = !offer.ended && offer.posted;
                     offer.ended = true;
                     offer.commands = None;
+                    offer.stop = None;
                     offer.sending.clear();
                 }
             }
@@ -402,6 +452,7 @@ impl Desktop {
             };
             if matches!(download.state, Receiving::Done | Receiving::Failed(_)) {
                 download.commands = None;
+                download.stop = None;
             }
         }
     }
@@ -1047,5 +1098,75 @@ mod tests {
         } else {
             assert!(!servers.direct);
         }
+        let mut settings = settings;
+        settings.relay_only = true;
+        let private = wormhole_servers(&settings);
+        assert!(!private.direct);
+        assert_eq!(private.rendezvous, servers.rendezvous);
+        assert_eq!(private.relay, servers.relay);
+    }
+
+    #[test]
+    fn enabling_privacy_revokes_direct_workers_even_with_full_command_queues() {
+        use super::{Download, Key, Receiving, Transfers};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let direct = tokio::spawn(std::future::pending::<()>());
+            let relayed = tokio::spawn(std::future::pending::<()>());
+            let (commands, _full) = mpsc::channel(1);
+            commands
+                .try_send(nuschel_ipc::TransferRequest::Cancel)
+                .unwrap();
+            let download = |id, direct, stop| Download {
+                id,
+                key: Key {
+                    server: "server".into(),
+                    channel: 1,
+                    author: "peer".into(),
+                    name: format!("file{id}"),
+                    size: "1 MB".into(),
+                },
+                path: std::path::PathBuf::new(),
+                state: Receiving::Connecting,
+                commands: Some(commands.clone()),
+                stop: Some(stop),
+                direct,
+            };
+            let mut transfers = Transfers::default();
+            transfers
+                .downloads
+                .push(download(1, true, direct.abort_handle()));
+            transfers
+                .downloads
+                .push(download(2, false, relayed.abort_handle()));
+            transfers.require_relay();
+            assert!(direct.await.unwrap_err().is_cancelled());
+            assert!(matches!(transfers.downloads[0].state, Receiving::Cancelled));
+            assert!(transfers.downloads[0].commands.is_none());
+            assert!(!relayed.is_finished());
+            assert!(matches!(
+                transfers.downloads[1].state,
+                Receiving::Connecting
+            ));
+            relayed.abort();
+        });
+    }
+
+    #[test]
+    fn a_peer_cannot_override_the_private_rendezvous_server() {
+        let mut settings = ClientSettings::default();
+        settings.relay_only = true;
+        let mut offer = super::Offer {
+            name: "file".into(),
+            size: 1,
+            code: Some("1-test-code".into()),
+            rendezvous: Some("ws://127.0.0.1:9999/v1".into()),
+        };
+        assert!(super::receiving_servers(&settings, &offer).is_err());
+        offer.rendezvous = Some(wormhole_servers(&settings).rendezvous);
+        assert!(super::receiving_servers(&settings, &offer).is_ok());
     }
 }

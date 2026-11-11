@@ -330,6 +330,12 @@ pub struct Transfer {
     task: tokio::task::JoinHandle<()>,
 }
 impl Transfer {
+    /// Revoke this worker's network/file capabilities, even when its command
+    /// pipe is full or a cooperative cancellation is delayed.
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.task.abort_handle()
+    }
+
     pub fn start(file: Option<&Path>) -> Result<Self, Error> {
         let executable = sibling("nuschel-transfer-worker")?;
         let mut command = nuschel_ipc::host::transfer_sandbox_command(&executable, file)

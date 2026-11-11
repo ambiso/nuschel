@@ -6232,8 +6232,6 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 [[package]]
 name = "magic-wormhole"
 version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77f48df27b95c28b11b82c1db97d4a95964ef164da4288bac4acc4893329190d"
 dependencies = [
  "async-executor",
  "async-fs",

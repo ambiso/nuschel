@@ -134,8 +134,23 @@ key before serving it.
 
 The transfer worker (magic-wormhole file offers) is the one worker with network
 access: rendezvous and transit relay, plus only the offered file read-only. The
-peer's transit hints decide where it connects (inherent to magic-wormhole), and the
-rendezvous address can come from an offer message. Downloads stream back to the
+peer's transit hints normally decide where it connects, and the rendezvous
+address can normally come from an offer message. **Relay-only connections**
+(`relay_only` in client settings) skips all direct socket setup, interface
+enumeration, STUN and peer-address advertising. It uses only the locally
+configured rendezvous and transit relay: peer-provided relay addresses are also
+ignored, because an attacker could call their own address a relay. The narrow
+pure-Rust dependency patch is documented in
+`vendor/magic-wormhole/NUSCHEL-PATCH.md`. Failure of the configured relay never
+falls back to a peer address. Enabling the setting revokes active direct-capable
+workers; offers/downloads can be started again under the new policy. Configured
+servers and relays still see the client's connection address. Legacy Mumble
+servers cannot enforce address redaction for other clients.
+
+The shared `nuschel_core::network::PeerPolicy` applies before gathering or dialing;
+future RTC adapters must use it before ICE and advertise relay candidates only
+in this mode. The standalone RTC probe uses two explicitly bound loopback sockets
+and is not an application call path. Downloads stream back to the
 desktop, which writes only the path the user chose (the offered name is a sanitised
 suggestion) and never more than announced. magic-wormhole's own code denies
 `unsafe` apart from a few marked constructors; its Noise crates are compiled in but

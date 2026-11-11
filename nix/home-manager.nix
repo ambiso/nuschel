@@ -149,6 +149,7 @@ let
     "nicknames"
     "friend_notifications"
     "send_typing"
+    "relay_only"
     "wormhole_rendezvous"
     "wormhole_relay"
     "appearance"

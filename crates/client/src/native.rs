@@ -769,6 +769,8 @@ enum Outcome {
     Ended(Result<Result<(), Error>, tokio::task::JoinError>),
     /// The client dropped this connection.
     Closed,
+    /// Apply a changed address-privacy policy in Hello before new presence.
+    PrivacyReconnect,
 }
 
 /// Supervise one server connection: reconnect with backoff after transient
@@ -809,6 +811,21 @@ async fn connection_loop(
         .await;
         let result = match outcome {
             Outcome::Closed => return,
+            Outcome::PrivacyReconnect => {
+                restore
+                    .disconnected_at_ms
+                    .get_or_insert_with(connection::now_ms);
+                let _ = events
+                    .send(Event::Reconnecting {
+                        server: id.clone(),
+                        generation,
+                        attempt: 0,
+                        delay_secs: 0,
+                        reason: "Applying relay-only connection privacy".into(),
+                    })
+                    .await;
+                continue;
+            }
             Outcome::Ended(result) => result,
         };
         if started.elapsed() > std::time::Duration::from_secs(30) {
@@ -953,7 +970,7 @@ async fn connect_once(
             identity,
             password,
             force_tcp: settings.borrow().force_tcp,
-            relay_only: false,
+            relay_only: settings.borrow().relay_only,
             muted: restore.muted,
             deafened: restore.deafened,
             channel: restore.channel,
@@ -981,6 +998,7 @@ async fn connect_once(
     };
     let (session_commands, receiver) = mpsc::channel(32);
     let (session_events, mut incoming) = mpsc::channel(128);
+    let relay_only = options.relay_only;
     let mut session = tokio::spawn(connection::run(options, receiver, session_events));
     let mut peer: Option<String> = None;
     let nonce = format!("{}:{generation}:{}", id, connection::now_ms());
@@ -1022,7 +1040,12 @@ async fn connect_once(
                 // Volumes apply to the next packet; the worker follows audio
                 // settings itself.
                 if changed.is_err() { break; }
-                settings.borrow_and_update();
+                if settings.borrow_and_update().relay_only != relay_only {
+                    // A full command queue must not silently lose an opt-in.
+                    // Reconnect even when ordinary auto-reconnect is disabled.
+                    outcome = Some(Outcome::PrivacyReconnect);
+                    break;
+                }
             },
             changed = voice_keys.changed() => {
                 if changed.is_err() { break; }

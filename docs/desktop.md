@@ -104,8 +104,18 @@ The design and its measurements: [architecture.md](architecture.md#audio-configu
   sends it. Other files go through the paperclip or a drop: Nuschel offers them
   peer to peer, with a magic-wormhole code in the message that stock Mumble users
   can use with any wormhole client, and shows offers as file cards.
+
 - Long messages collapse by measured height behind **Show more**.
 - Ctrl+. or Ctrl+; opens an emoji picker.
+
+Settings → Privacy → **Relay-only connections** (`relay_only`, off by default)
+uses the configured rendezvous and transit relay without gathering or sharing
+peer addresses. Enabling it stops direct-capable transfers; offer or download
+again to start through the relay. It never falls back to direct connections or
+a relay suggested by another user. Changing it reconnects server sessions so
+supporting servers receive the privacy choice before publishing your presence.
+Configured servers/relays still see your connection address; legacy Mumble
+servers cannot enforce address privacy for other users.
 
 ### History
 

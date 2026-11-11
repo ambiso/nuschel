@@ -1012,7 +1012,7 @@ pub fn dialog(
         general.push(managed(this, "sound_volume", slider));
     }
     let send_typing = settings.send_typing;
-    let privacy = vec![managed(
+    let mut privacy = vec![managed(
         this,
         "send_typing",
         toggle(
@@ -1029,6 +1029,25 @@ pub fn dialog(
             cx,
         ),
     )];
+    let relay_only = settings.relay_only;
+    privacy.push(managed(
+        this,
+        "relay_only",
+        toggle(
+            "relay-only",
+            "Relay-only connections",
+            "Use configured servers and relays without sharing your IP address with other users. \
+             Skips direct connections and address discovery. Enabling stops active direct-capable file \
+             transfers; offer or download them again to use the relay. Legacy Mumble servers cannot \
+             enforce address privacy."
+                .into(),
+            relay_only,
+            Rc::new(move |this, _, _| {
+                this.update_settings(|settings| settings.relay_only = !relay_only);
+            }),
+            cx,
+        ),
+    ));
     let friends = settings.friend_notifications;
     general.push(managed(
         this,
