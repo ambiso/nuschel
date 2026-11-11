@@ -22,6 +22,7 @@ struct Pair {
     drop_video: bool,
     video_packets: usize,
     dropped: usize,
+    loss_ssrc: Option<[u8; 4]>,
     keyframes: [Vec<Track>; 2],
 }
 
@@ -109,6 +110,7 @@ impl Pair {
             drop_video: false,
             video_packets: 0,
             dropped: 0,
+            loss_ssrc: None,
             keyframes: [vec![], vec![]],
         }
     }
@@ -133,11 +135,19 @@ impl Pair {
                         && data[0] >> 6 == 2
                         && data[1] & 0x7f == self.video_pt
                     {
-                        self.video_packets += 1;
-                        if self.video_packets == 2 {
-                            self.drop_video = false;
-                            self.dropped += 1;
-                            continue;
+                        let ssrc = [data[8], data[9], data[10], data[11]];
+                        let selected = *self.loss_ssrc.get_or_insert(ssrc);
+                        if ssrc == selected {
+                            self.video_packets += 1;
+                            if self.video_packets == 2 {
+                                // Drop an interior fragment of ONE SSRC. With
+                                // two video tracks, packet #2 overall can be the
+                                // first packet of the other stream: RTP cannot
+                                // NACK an initial sequence number it never saw.
+                                self.drop_video = false;
+                                self.dropped += 1;
+                                continue;
+                            }
                         }
                     }
                     self.wire.push_back((1 - from, source, data));
@@ -542,7 +552,12 @@ fn one_video_loss_does_not_block_either_audio_role_or_the_other_video() {
             .collect();
         assert_eq!(
             frames.len(),
-            if purpose.kind() == Kind::Audio { 24 } else { 6 }
+            if purpose.kind() == Kind::Audio { 24 } else { 6 },
+            "{purpose:?}: {:?}",
+            frames
+                .iter()
+                .map(|f| (f.timestamp, f.contiguous))
+                .collect::<Vec<_>>()
         );
         if purpose.kind() == Kind::Video {
             assert!(frames.iter().all(|f| f.data == video()));
@@ -665,5 +680,83 @@ fn each_audio_mid_rejects_tampering_and_replay_independently() {
         let _ = pair.peers[to].receive(source, pair.now, &original);
         pair.advance(Duration::from_millis(25)).unwrap();
         assert_eq!(pair.frames[to].len(), 1);
+    }
+}
+
+#[test]
+fn a_flooded_system_audio_track_cannot_spend_the_microphone_or_video_allocations() {
+    let mut pair = Pair::multi();
+    pair.connect();
+    let system = pair.peers[0].track_for(Purpose::SystemAudio).unwrap();
+    let microphone = pair.peers[0].track_for(Purpose::Microphone).unwrap();
+    for tick in 0..12 {
+        pair.peers[0]
+            .write(system, tick * 3840, pair.now, Arc::from([0xf8, 0xff, 0xfe]))
+            .unwrap();
+        for extra in 1..100 {
+            assert!(matches!(
+                pair.peers[0].write(
+                    system,
+                    tick * 3840 + extra,
+                    pair.now,
+                    Arc::from([0xf8, 0xff, 0xfe])
+                ),
+                Err(Error::Backpressure)
+            ));
+        }
+        // Oversized frames and backwards clocks consume no media budget or
+        // timestamp: the correct frame with this timestamp must still succeed.
+        assert!(matches!(
+            pair.peers[0].write(
+                microphone,
+                tick * 3840,
+                pair.now,
+                vec![0; MAX_OPUS_BYTES + 1].into()
+            ),
+            Err(Error::Frame)
+        ));
+        assert!(matches!(
+            pair.peers[0].write(
+                microphone,
+                tick * 3840,
+                pair.now - Duration::from_nanos(1),
+                Arc::from([0xf8, 0xff, 0xfe])
+            ),
+            Err(Error::Clock)
+        ));
+        pair.peers[0]
+            .write(
+                microphone,
+                tick * 3840,
+                pair.now,
+                Arc::from([0xf8, 0xff, 0xfe]),
+            )
+            .unwrap();
+        for purpose in [Purpose::Camera, Purpose::ScreenVideo] {
+            let track = pair.peers[0].track_for(purpose).unwrap();
+            pair.peers[0]
+                .write(track, tick * 7200, pair.now, video())
+                .unwrap();
+        }
+        pair.advance(Duration::from_millis(80)).unwrap();
+        assert!(matches!(
+            pair.peers[0].write(system, tick * 3840, pair.now, Arc::from([0xf8, 0xff, 0xfe])),
+            Err(Error::Frame)
+        ));
+    }
+    pair.advance(Duration::from_millis(500)).unwrap();
+    for purpose in [
+        Purpose::Microphone,
+        Purpose::SystemAudio,
+        Purpose::Camera,
+        Purpose::ScreenVideo,
+    ] {
+        assert_eq!(
+            pair.frames[1]
+                .iter()
+                .filter(|f| f.purpose == purpose)
+                .count(),
+            12
+        );
     }
 }
