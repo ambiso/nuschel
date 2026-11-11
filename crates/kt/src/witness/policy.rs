@@ -79,7 +79,8 @@ impl WitnessPolicy {
     }
 
     pub fn is_active(&self) -> bool {
-        self.required > 0 && !self.witnesses.is_empty()
+        // An impossible quorum is unavailable, never implicitly switched off.
+        self.required > 0
     }
 }
 

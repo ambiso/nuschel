@@ -404,24 +404,23 @@ impl ClientSettings {
         if !self.wormhole_relay.starts_with("tcp://") || self.wormhole_relay.len() > 256 {
             self.wormhole_relay = nuschel_core::transfer::PUBLIC_RELAY.into();
         }
-        // Witnesses whose keys are not even shaped like one are dropped; the crypto
-        // worker parses the rest and ignores keys that do not verify as ML-DSA-44.
+        // Never repair a security policy by silently dropping witnesses or
+        // reducing its quorum. Invalid keys remain required in the crypto worker.
+        // Oversized configurations become one bounded invalid enabled entry,
+        // rather than leaking an unbounded setting through worker IPC.
         let mut witnessing = std::mem::take(&mut self.key_transparency);
-        witnessing
-            .witnesses
-            .truncate(nuschel_ipc::crypto::MAX_WITNESSES);
-        witnessing.witnesses.retain(|witness| {
-            nuschel_ipc::crypto::KeyTransparencySettings {
-                witnesses: vec![witness.clone()],
-                ..Default::default()
+        if witnessing.witnesses.len() > nuschel_ipc::crypto::MAX_WITNESSES {
+            witnessing.witnesses = vec![nuschel_ipc::crypto::WitnessSetting {
+                key: "invalid: too many configured witnesses".into(),
+                enabled: true,
+            }];
+        }
+        for witness in &mut witnessing.witnesses {
+            if witness.key.len() > nuschel_ipc::crypto::MAX_WITNESS_KEY {
+                witness.key = "invalid: verifier key exceeds the size limit".into();
             }
-            .check()
-            .is_ok()
-        });
+        }
         witnessing.max_age_hours = witnessing.max_age_hours.clamp(1, 168);
-        witnessing.required = witnessing
-            .required
-            .map(|r| r.min(nuschel_ipc::crypto::MAX_WITNESSES as u32));
         self.key_transparency = witnessing;
         self
     }
@@ -2471,9 +2470,11 @@ mod tests {
         let loaded = profile.load();
         assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
         let witnessing = &loaded.settings.key_transparency;
-        // The managed list replaces the user's; values are sanitised.
-        assert_eq!(witnessing.witnesses.len(), 1);
+        // The managed list replaces the user's; malformed enabled keys remain
+        // required so a typo cannot silently weaken the policy.
+        assert_eq!(witnessing.witnesses.len(), 2);
         assert_eq!(witnessing.witnesses[0].key, vkey);
+        assert_eq!(witnessing.witnesses[1].key, "not a key");
         assert!(witnessing.witnesses[0].enabled);
         assert_eq!(witnessing.max_age_hours, 168);
         assert!(!witnessing.block_new_devices && witnessing.default_witnesses);
@@ -2491,6 +2492,49 @@ mod tests {
         assert!(defaults.block_new_devices && defaults.default_witnesses);
         assert_eq!(defaults.required, None);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn oversized_witness_settings_fail_closed_with_bounded_ipc() {
+        use nuschel_ipc::crypto::{
+            KeyTransparencySettings, MAX_WITNESS_KEY, MAX_WITNESSES, WitnessSetting,
+        };
+        let oversized = WitnessSetting {
+            key: "x".repeat(MAX_WITNESS_KEY + 1),
+            enabled: true,
+        };
+        let settings = ClientSettings {
+            key_transparency: KeyTransparencySettings {
+                witnesses: vec![oversized.clone()],
+                required: Some(100),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(settings.key_transparency.required, Some(100));
+        assert!(settings.key_transparency.witnesses[0].enabled);
+        assert!(
+            settings.key_transparency.witnesses[0]
+                .key
+                .starts_with("invalid:")
+        );
+        assert!(settings.key_transparency.check().is_ok());
+        let settings = ClientSettings {
+            key_transparency: KeyTransparencySettings {
+                witnesses: vec![oversized; MAX_WITNESSES + 1],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!(settings.key_transparency.witnesses.len(), 1);
+        assert!(settings.key_transparency.witnesses[0].enabled);
+        assert!(
+            settings.key_transparency.witnesses[0]
+                .key
+                .starts_with("invalid:")
+        );
+        assert!(settings.key_transparency.check().is_ok());
     }
     #[test]
     fn system_wide_managed_settings_yield_to_the_users_own() {

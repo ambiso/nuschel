@@ -177,6 +177,67 @@ async fn without_witnesses_nothing_changes_but_checkpoints_are_still_checked() {
 }
 
 #[tokio::test]
+async fn invalid_keys_and_impossible_quorums_never_reduce_the_policy() {
+    let dir = directory([0x11; 32]).await;
+    let mut auditor = Auditor::new();
+    let mut alice = Client::new();
+    let note = auditor.cosign(&dir, T0).await;
+    let head = dir.latest_head().await.unwrap();
+    let attached = attach(&dir, &note, head.epoch).await;
+
+    // Malformed syntax and a shaped but invalid ML-DSA verifier key both
+    // remain required; neither may turn the policy into Off.
+    for key in ["not a key", "witness.example.org/kt+00000000+AQ=="] {
+        let settings = KeyTransparencySettings {
+            default_witnesses: false,
+            witnesses: vec![WitnessSetting {
+                key: key.into(),
+                enabled: true,
+            }],
+            ..Default::default()
+        };
+        assert!(settings.check().is_ok(), "within the IPC resource bounds");
+        let outcome = connect(&mut alice, &dir, &head, Some(attached.clone()), &settings);
+        assert!(
+            matches!(witness(&outcome), WitnessStatus::Unavailable { .. }),
+            "{outcome:?}"
+        );
+        assert!(alice.worker.new_devices_blocked(SERVER).is_some());
+    }
+
+    // One genuine signature cannot satisfy the requested two witnesses, even
+    // when the configured set itself is incomplete.
+    let settings = KeyTransparencySettings {
+        required: Some(2),
+        ..auditor.settings()
+    };
+    let outcome = connect(&mut alice, &dir, &head, Some(attached.clone()), &settings);
+    assert!(
+        matches!(witness(&outcome), WitnessStatus::Unavailable { .. }),
+        "{outcome:?}"
+    );
+    assert!(alice.worker.new_devices_blocked(SERVER).is_some());
+
+    // Default "all" includes an invalid enabled extra rather than silently
+    // accepting the signature of the one key that happened to parse.
+    let mut settings = auditor.settings();
+    settings.witnesses.push(WitnessSetting {
+        key: "invalid extra witness".into(),
+        enabled: true,
+    });
+    let outcome = connect(&mut alice, &dir, &head, Some(attached.clone()), &settings);
+    assert!(
+        matches!(witness(&outcome), WitnessStatus::Unavailable { .. }),
+        "{outcome:?}"
+    );
+
+    // Explicitly turning the requirement off is still the user's choice.
+    settings.required = Some(0);
+    let outcome = connect(&mut alice, &dir, &head, Some(attached), &settings);
+    assert_eq!(witness(&outcome), &WitnessStatus::Off);
+}
+
+#[tokio::test]
 async fn a_witnessed_server_is_fresh_by_the_witness_clock_not_its_own() {
     let dir = directory([0x11; 32]).await;
     let mut auditor = Auditor::new();

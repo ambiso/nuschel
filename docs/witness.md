@@ -108,7 +108,12 @@ has not confirmed; both are settings.
 clients that require `k` of the same `n` witnesses are safe from split views only if
 `2k > n`. An entry with `enabled: false` turns a built-in witness off. At most 16
 witnesses; `max_age_hours` from 1 to 168. A managed list replaces the user's and is
-shown locked. The crypto worker parses the keys and ignores invalid ones.
+shown locked. The crypto worker parses the keys; invalid enabled keys still count
+towards the required quorum, so verification stays unavailable until they are fixed.
+It never lowers an explicit `required` value to the number of valid keys. Oversized
+local configurations are bounded before IPC and represented as invalid requirements,
+rather than silently dropping part of a security policy. `required: 0` explicitly
+turns the requirement off.
 `nuschel-cli --kt-witness <vkey> --kt-witness-max-age-hours N` sets the same.
 
 ```nix
@@ -249,5 +254,12 @@ epoch 0). The auditor verifies about a millisecond per changed account.
   type 0x04 if an independent witness only speaks that.
 - The auditor's enrolment check trusts what the network shows at `host:port`, like
   ACME's HTTP challenge.
+- **A server that loses its key-transparency data** (a new database with the same
+  keys, as the vm-server check's Murmur import does) restarts its log at epoch 0,
+  which is exactly what a fork looks like: the auditor keeps answering with its
+  larger size, and the server logs "it has another log for this name". There is no
+  automatic recovery; the auditor's operator decides whether to delete that origin's
+  state file (`logs/<hash>.state`) and let it enrol again. Back up the server's
+  database along with its keys.
 - Checkpoint equivocation evidence (two log-signed checkpoints of one size) is not
   collected by clients; the auditor refuses the second lineage instead.

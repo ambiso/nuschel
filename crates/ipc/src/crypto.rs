@@ -188,8 +188,9 @@ fn enabled() -> bool {
 }
 
 impl KeyTransparencySettings {
-    /// Within bounds; `Err` names the first violation. Keys are parsed by the
-    /// worker; this checks their shape (`name+id+key`, a name without spaces).
+    /// Within resource bounds; `Err` names the first violation. The worker parses
+    /// keys and keeps invalid enabled entries in the required quorum, so a typo
+    /// cannot silently disable witnessing or reduce the requested threshold.
     pub fn check(&self) -> Result<(), &'static str> {
         if self.witnesses.len() > MAX_WITNESSES {
             return Err("at most 16 witnesses");
@@ -197,23 +198,9 @@ impl KeyTransparencySettings {
         if !(1..=168).contains(&self.max_age_hours) {
             return Err("max_age_hours is 1 to 168");
         }
-        if self.required.is_some_and(|r| r as usize > MAX_WITNESSES) {
-            return Err("required is at most 16");
-        }
         for witness in &self.witnesses {
-            let mut parts = witness.key.splitn(3, '+');
-            let shaped = witness.key.len() <= MAX_WITNESS_KEY
-                && parts.next().is_some_and(|name| {
-                    !name.is_empty()
-                        && name.len() <= 255
-                        && !name.chars().any(|c| c.is_whitespace() || c.is_control())
-                })
-                && parts
-                    .next()
-                    .is_some_and(|id| id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()))
-                && parts.next().is_some_and(|key| !key.is_empty());
-            if !shaped {
-                return Err("a witness key is not name+id+key");
+            if witness.key.len() > MAX_WITNESS_KEY {
+                return Err("a witness key exceeds 4096 bytes");
             }
         }
         Ok(())

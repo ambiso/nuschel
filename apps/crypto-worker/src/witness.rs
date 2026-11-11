@@ -52,18 +52,25 @@ impl Worker {
             .filter(|w| w.enabled)
             .map(|w| w.key.as_str());
         let mut witnesses: Vec<CosignerKey> = Vec::new();
+        let mut invalid = Vec::new();
+        let mut intended = Vec::new();
         for vkey in builtin.chain(configured) {
-            if let Ok(key) = CosignerKey::from_vkey(vkey)
-                && !disabled.contains(&key)
-                && !witnesses.contains(&key)
-                && witnesses.len() < nuschel_kt::witness::policy::MAX_WITNESSES
-            {
-                witnesses.push(key);
+            match CosignerKey::from_vkey(vkey) {
+                Ok(key) if !disabled.contains(&key) && !intended.contains(&key) => {
+                    intended.push(key.clone());
+                    if witnesses.len() < nuschel_kt::witness::policy::MAX_WITNESSES {
+                        witnesses.push(key);
+                    }
+                }
+                Err(_) if !invalid.contains(&vkey) => invalid.push(vkey),
+                _ => {}
             }
         }
+        // Invalid keys and a missing configured quorum must not lower a security
+        // requirement. They make verification unavailable until corrected.
         let required = settings
             .required
-            .map_or(witnesses.len(), |r| (r as usize).min(witnesses.len()));
+            .map_or(intended.len() + invalid.len(), |r| r as usize);
         WitnessPolicy {
             witnesses,
             required,
