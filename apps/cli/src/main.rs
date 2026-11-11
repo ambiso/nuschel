@@ -10,6 +10,7 @@ use nuschel_session::{
         TextTarget,
     },
     identity::{CryptoHandle, IdentityCommand, IdentityEvent, IdentitySetup},
+    mls::{MlsCommand, MlsEvent},
     model::{UserAction, VoiceTargetSpec},
 };
 use serde::Deserialize;
@@ -233,6 +234,26 @@ enum Input {
         account: String,
     },
     IdentityOwn,
+    /// End-to-end encryption (`mls/1`, with `--identity-dir`): open (creating it if
+    /// needed) the encrypted direct conversation with a registered user.
+    E2eeOpen {
+        user_id: u32,
+    },
+    /// Send text in an end-to-end conversation (32 hex digits); `key` makes a retry
+    /// idempotent.
+    E2eeSend {
+        conversation: String,
+        text: String,
+        key: Option<String>,
+    },
+    /// The conversation's lock, members and whether sending is blocked.
+    E2eeStatus {
+        conversation: String,
+    },
+    /// Catch up an end-to-end conversation from the server's stream.
+    E2eeSync {
+        conversation: String,
+    },
     Disconnect,
 }
 fn hex(bytes: &[u8]) -> String {
@@ -304,6 +325,35 @@ fn identity_json(event: &IdentityEvent) -> serde_json::Value {
             "user_id":user_id, "account":hex(&view.account), "state":view.state,
             "identity":view.identity, "safety_number":view.safety_number, "notice":view.notice}),
         IdentityEvent::Failed(reason) => json!({"kind":"identity_failed", "reason":reason}),
+    }
+}
+fn mls_json(event: &MlsEvent) -> serde_json::Value {
+    match event {
+        MlsEvent::Conversation { view, peer } => json!({"kind":"e2ee_conversation",
+            "conversation":hex(&view.conversation), "peer":peer, "view":view}),
+        MlsEvent::Received {
+            conversation,
+            received,
+        } => json!({"kind":"e2ee_received",
+            "conversation":hex(conversation), "received":received}),
+        MlsEvent::Sent {
+            conversation,
+            key,
+            seq,
+        } => json!({"kind":"e2ee_sent",
+            "conversation":hex(conversation), "key":hex(key), "seq":seq}),
+        MlsEvent::NotSent {
+            conversation,
+            key,
+            reason,
+        } => json!({"kind":"e2ee_not_sent",
+            "conversation":hex(conversation), "key":hex(key), "reason":reason}),
+        MlsEvent::PlaintextRefused { conversation, seq } => json!({"kind":"e2ee_plaintext_refused",
+            "conversation":hex(conversation), "seq":seq}),
+        MlsEvent::KeyPackages { one_time } => {
+            json!({"kind":"e2ee_key_packages", "one_time":one_time})
+        }
+        MlsEvent::Failed(reason) => json!({"kind":"e2ee_failed", "reason":reason}),
     }
 }
 fn account(text: &str) -> Option<[u8; 16]> {
@@ -430,6 +480,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     }
                 },
                 Ok(Input::IdentityOwn) => Command::Identity(IdentityCommand::Own),
+                Ok(Input::E2eeOpen { user_id }) => Command::Mls(MlsCommand::OpenDirect { user_id }),
+                Ok(Input::E2eeSend {
+                    conversation,
+                    text,
+                    key,
+                }) => match (
+                    account(&conversation),
+                    key.map_or(Some(connection::random_key()), |key| account(&key)),
+                ) {
+                    (Some(conversation), Some(key)) => Command::Mls(MlsCommand::Send {
+                        conversation,
+                        text,
+                        key,
+                    }),
+                    _ => {
+                        let _ =
+                            output(json!({"kind":"error", "message":"bad conversation or key"}));
+                        continue;
+                    }
+                },
+                Ok(Input::E2eeStatus { conversation }) => match account(&conversation) {
+                    Some(conversation) => Command::Mls(MlsCommand::Status { conversation }),
+                    None => {
+                        let _ = output(json!({"kind":"error", "message":"bad conversation"}));
+                        continue;
+                    }
+                },
+                Ok(Input::E2eeSync { conversation }) => match account(&conversation) {
+                    Some(conversation) => Command::Mls(MlsCommand::Sync { conversation }),
+                    None => {
+                        let _ = output(json!({"kind":"error", "message":"bad conversation"}));
+                        continue;
+                    }
+                },
                 Ok(Input::Html { channel, html }) => Command::SendHtml {
                     target: TextTarget::Channel(channel),
                     html: vec![html],
@@ -702,6 +786,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::ChatFailed { key, reason } => json!({"kind":"chat_failed", "key":hex(&key), "reason":reason}),
                 SessionEvent::ConversationState { channel, head, read } => json!({"kind":"conversation_state", "channel":channel, "head":head, "read":read}),
                 SessionEvent::Identity(event) => identity_json(&event),
+                SessionEvent::Mls(event) => mls_json(&event),
             })?,
         }
     }

@@ -1874,20 +1874,23 @@ fn conversation(
                     },
                     cx,
                 ))
-                .child(
+                .child({
+                    // Direct conversations show their end-to-end lock (§7.4).
+                    let (security, label) = this.conversation_lock(index);
                     div()
                         .id("conversation-security")
                         .px_2()
                         .tooltip({
-                            let label = security_label(server.security);
-                            move |_, cx| cx.new(|_| Tooltip(label.into())).into()
+                            let label = label.clone();
+                            move |_, cx| cx.new(|_| Tooltip(label.clone().into())).into()
                         })
-                        .child(security_icon(
-                            server.security,
+                        .child(security_icon_labelled(
+                            security,
+                            label,
                             this.servers.len() + index,
                             18.,
-                        )),
-                ),
+                        ))
+                }),
         )
         .when_some(crate::panels::reconnect_banner(server), |view, text| {
             view.child(banner("reconnect-banner", WARNING, "signal", text, None))
@@ -3441,7 +3444,7 @@ fn activation_key(event: &KeyDownEvent) -> bool {
     event.keystroke.key == "enter" || event.keystroke.key == "space"
 }
 
-fn security_label(security: SessionSecurity) -> &'static str {
+pub fn security_label(security: SessionSecurity) -> &'static str {
     match security {
         SessionSecurity::Unknown => "Encryption status unknown",
         SessionSecurity::TransportOnly => "No end-to-end encryption; transport encryption only",
@@ -3451,6 +3454,15 @@ fn security_label(security: SessionSecurity) -> &'static str {
 }
 
 fn security_icon(security: SessionSecurity, id: usize, size: f32) -> AnyElement {
+    security_icon_labelled(security, security_label(security).into(), id, size)
+}
+
+fn security_icon_labelled(
+    security: SessionSecurity,
+    label: String,
+    id: usize,
+    size: f32,
+) -> AnyElement {
     let (name, tone) = match security {
         SessionSecurity::TransportOnly => ("unlock", DANGER),
         SessionSecurity::MlsEstablished => ("lock", SUCCESS),
@@ -3460,7 +3472,7 @@ fn security_icon(security: SessionSecurity, id: usize, size: f32) -> AnyElement 
     div()
         .id(("security", id))
         .role(Role::Image)
-        .aria_label(security_label(security))
+        .aria_label(label)
         .text_color(color(tone))
         .child(icon(name, size, color(tone)))
         .into_any_element()

@@ -259,32 +259,43 @@ pub struct Driver {
     pub replies: mpsc::Receiver<(u16, bytes::Bytes)>,
     pub commands: mpsc::Receiver<IdentityCommand>,
     pub events: mpsc::Sender<crate::connection::SessionEvent>,
+    /// With `mls/1`: end-to-end conversations (crate::mls).
+    pub mls: Option<MlsLink>,
 }
 
-struct Context {
-    crypto: CryptoHandle,
-    server: CryptoServer,
-    device_name: String,
-    recovery: RecoveryPolicy,
+/// The `mls/1` side of the driver: frontend commands and server pushes (Welcomes,
+/// and rows of end-to-end conversations).
+pub struct MlsLink {
+    pub commands: mpsc::Receiver<crate::mls::MlsCommand>,
+    pub pushes: mpsc::Receiver<(u16, bytes::Bytes)>,
+}
+
+pub(crate) struct Context {
+    pub(crate) crypto: CryptoHandle,
+    pub(crate) server: CryptoServer,
+    pub(crate) device_name: String,
+    pub(crate) recovery: RecoveryPolicy,
     frames: mpsc::Sender<(u16, Vec<u8>)>,
     replies: mpsc::Receiver<(u16, bytes::Bytes)>,
-    events: mpsc::Sender<crate::connection::SessionEvent>,
+    pub(crate) events: mpsc::Sender<crate::connection::SessionEvent>,
     next_request: u64,
-    account: Vec<u8>,
+    pub(crate) account: Vec<u8>,
     /// Self-monitoring found our newest binding not published yet.
     publication_pending: bool,
     /// Our identity exists (created on first need).
     identity_ready: bool,
+    /// End-to-end conversations, with `mls/1`.
+    pub(crate) mls: Option<crate::mls::MlsState>,
 }
 
 /// A server reply, or its error.
-enum Reply {
+pub(crate) enum Reply {
     Frame(u16, bytes::Bytes),
     Error(v1::Error),
 }
 
 impl Context {
-    async fn emit(&self, event: IdentityEvent) {
+    pub(crate) async fn emit(&self, event: IdentityEvent) {
         let _ = self
             .events
             .send(crate::connection::SessionEvent::Identity(event))
@@ -297,7 +308,11 @@ impl Context {
 
     /// Sends a request and waits for its reply; replies to earlier, abandoned
     /// requests are dropped.
-    async fn ask(&mut self, kind: u16, build: impl FnOnce(u64) -> Vec<u8>) -> Result<Reply, Error> {
+    pub(crate) async fn ask(
+        &mut self,
+        kind: u16,
+        build: impl FnOnce(u64) -> Vec<u8>,
+    ) -> Result<Reply, Error> {
         self.next_request += 1;
         let id = KT_REQUEST | self.next_request;
         self.frames
@@ -559,7 +574,7 @@ impl Context {
         Ok(())
     }
 
-    async fn check_contact(
+    pub(crate) async fn check_contact(
         &mut self,
         user_id: Option<u32>,
         account: Option<[u8; 16]>,
@@ -778,7 +793,12 @@ pub async fn drive(driver: Driver) {
         replies,
         mut commands,
         events,
+        mls,
     } = driver;
+    let (mut mls_commands, mut pushes) = match mls {
+        Some(link) => (Some(link.commands), Some(link.pushes)),
+        None => (None, None),
+    };
     let mut context = Context {
         crypto,
         server,
@@ -791,6 +811,7 @@ pub async fn drive(driver: Driver) {
         account: Vec::new(),
         publication_pending: false,
         identity_ready: false,
+        mls: None,
     };
     let healthy = match context.connect(descriptor.clone()).await {
         Ok(accepted) => accepted,
@@ -805,6 +826,18 @@ pub async fn drive(driver: Driver) {
     };
     if healthy && let Err(error) = context.run_due(true).await {
         context.emit(IdentityEvent::Failed(error.to_string())).await;
+    }
+    // End-to-end conversations need the log: without an accepted head, the worker
+    // cannot check anyone's credential, so MLS waits for the next hourly round.
+    if mls_commands.is_some()
+        && healthy
+        && let Err(error) = context.mls_start().await
+    {
+        context
+            .emit(IdentityEvent::Failed(format!(
+                "End-to-end encryption: {error}"
+            )))
+            .await;
     }
     // While our binding waits for its epoch (about ten seconds), look again after
     // 2, 4, 8, … seconds; then hourly.
@@ -824,6 +857,48 @@ pub async fn drive(driver: Driver) {
                     if matches!(error, Error::Protocol(_)) {
                         break;
                     }
+                }
+            }
+            command = async {
+                match mls_commands.as_mut() {
+                    Some(commands) => commands.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let Some(command) = command else { break };
+                if let Err(error) = context.mls_command(command).await {
+                    context.emit(IdentityEvent::Failed(error.to_string())).await;
+                    if matches!(error, Error::Protocol(_)) {
+                        break;
+                    }
+                }
+            }
+            push = async {
+                match pushes.as_mut() {
+                    Some(pushes) => pushes.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let Some((kind, payload)) = push else { break };
+                if let Err(error) = context.mls_push(kind, payload).await {
+                    context.emit(IdentityEvent::Failed(error.to_string())).await;
+                    if matches!(error, Error::Protocol(_)) {
+                        break;
+                    }
+                }
+            }
+            _ = async {
+                match context.mls.as_ref().and_then(crate::mls::MlsState::upload_due) {
+                    Some(at) => tokio::time::sleep_until(at.into()).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Err(error) = context.mls_upload().await {
+                    context.emit(IdentityEvent::Failed(error.to_string())).await;
+                }
+                // Welcomes may have waited for our first key packages.
+                if let Err(error) = context.mls_fetch_welcomes().await {
+                    context.emit(IdentityEvent::Failed(error.to_string())).await;
                 }
             }
             _ = &mut recheck, if context.publication_pending && rechecks < 8 => {

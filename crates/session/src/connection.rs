@@ -148,6 +148,8 @@ pub enum SessionEvent {
     ChatPending(PendingChat),
     /// Identity and key transparency on this server (`kt/1`, with a crypto worker).
     Identity(crate::identity::IdentityEvent),
+    /// End-to-end-encrypted conversations (`mls/1`, with a crypto worker).
+    Mls(crate::mls::MlsEvent),
     /// The server stored our message as `seq`.
     ChatAcked {
         key: [u8; 16],
@@ -300,6 +302,9 @@ pub enum Command {
     /// Identity and key transparency (`kt/1` servers with a crypto worker);
     /// ignored elsewhere.
     Identity(crate::identity::IdentityCommand),
+    /// End-to-end-encrypted conversations (`mls/1` servers with a crypto worker);
+    /// ignored elsewhere.
+    Mls(crate::mls::MlsCommand),
     Voice {
         target: u32,
         packet: VoicePacket,
@@ -784,6 +789,10 @@ pub async fn run(
         let mut kt = kt_descriptor.zip(options.crypto).map(|(descriptor, setup)| KtLink {
             descriptor,
             setup,
+            mls: state
+                .extension
+                .as_ref()
+                .is_some_and(|capabilities| capabilities.iter().any(|c| c == nuschel::capability::MLS)),
             server: nuschel_ipc::crypto::CryptoServer {
                 key: crate::sticky::key(&options.server.host, options.server.port),
                 label: if options.server.name.is_empty() {
@@ -852,6 +861,13 @@ pub async fn run(
                                 let _ = running.commands.try_send(command);
                             }
                         }
+                        Command::Mls(command) => {
+                            match kt.as_ref().and_then(|link| link.running.as_ref()).and_then(|running| running.mls_commands.as_ref()) {
+                                Some(commands) => { let _ = commands.try_send(command); }
+                                None => emit(&events, SessionEvent::Mls(crate::mls::MlsEvent::Failed(
+                                    "This server offers no end-to-end encryption (mls/1).".into()))).await?,
+                            }
+                        }
                         Command::SelectVoiceTarget(id) => state.voice_target = id.min(30),
                         Command::Voice { target, packet } => if let Some(packet) = state.outgoing_voice(packet)
                             && let Ok(payload) = voice::encode_voice(state.version, if target == 0 { state.voice_target } else { target }, &packet) {
@@ -913,6 +929,8 @@ pub async fn run(
 struct KtLink {
     descriptor: Vec<u8>,
     setup: crate::identity::IdentitySetup,
+    /// `mls/1` was negotiated: the driver also runs end-to-end conversations.
+    mls: bool,
     server: nuschel_ipc::crypto::CryptoServer,
     running: Option<KtRunning>,
 }
@@ -921,6 +939,10 @@ struct KtRunning {
     frames: mpsc::Receiver<(u16, Vec<u8>)>,
     replies: mpsc::Sender<(u16, bytes::Bytes)>,
     commands: mpsc::Sender<crate::identity::IdentityCommand>,
+    mls_commands: Option<mpsc::Sender<crate::mls::MlsCommand>>,
+    /// Welcomes and rows of end-to-end conversations; a full queue drops them
+    /// (the driver catches up from the stream).
+    pushes: Option<mpsc::Sender<(u16, bytes::Bytes)>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -929,6 +951,20 @@ impl KtLink {
         let (frames_tx, frames) = mpsc::channel(8);
         let (replies, replies_rx) = mpsc::channel(8);
         let (commands, commands_rx) = mpsc::channel(32);
+        let (mls_commands, pushes, mls) = if self.mls {
+            let (commands, commands_rx) = mpsc::channel(32);
+            let (pushes, pushes_rx) = mpsc::channel(64);
+            (
+                Some(commands),
+                Some(pushes),
+                Some(crate::identity::MlsLink {
+                    commands: commands_rx,
+                    pushes: pushes_rx,
+                }),
+            )
+        } else {
+            (None, None, None)
+        };
         let task = tokio::spawn(crate::identity::drive(crate::identity::Driver {
             crypto: self.setup.crypto.clone(),
             server: self.server.clone(),
@@ -939,11 +975,14 @@ impl KtLink {
             replies: replies_rx,
             commands: commands_rx,
             events: events.clone(),
+            mls,
         }));
         self.running = Some(KtRunning {
             frames,
             replies,
             commands,
+            mls_commands,
+            pushes,
             task,
         });
     }
@@ -960,6 +999,9 @@ fn kt_reply(
     let Some(running) = link.and_then(|link| link.running.as_mut()) else {
         return Ok(Some(frame));
     };
+    if !extension {
+        return Ok(Some(frame));
+    }
     let reply = matches!(
         frame.kind,
         kind::KT_STATUS_REPLY
@@ -968,21 +1010,43 @@ fn kt_reply(
             | kind::KT_HISTORY_REPLY
             | kind::KT_AUDIT_REPLY
             | kind::KT_HEAD_REPLY
+            | kind::MLS_KEY_PACKAGE_STATUS
+            | kind::MLS_KEY_PACKAGES
+            | kind::MLS_ACK
+            | kind::MLS_WELCOMES
+            | kind::MLS_JOIN_INFO
     );
-    let ours = reply
-        || (frame.kind == kind::ERROR
-            && v1::Done::decode(frame.payload.clone()).is_ok_and(|done| {
-                done.request_id & crate::identity::KT_REQUEST != 0
-                    && done.request_id & INTERNAL == 0
-            }));
-    if !extension || !ours {
-        return Ok(Some(frame));
-    }
+    // Replies to the driver's own requests of other kinds (history pages, direct
+    // conversations), by its request ids.
+    let by_id = matches!(
+        frame.kind,
+        kind::ERROR | kind::HISTORY_PAGE | kind::DIRECT_LIST | kind::DIRECT_OPENED | kind::DONE
+    ) && v1::Done::decode(frame.payload.clone()).is_ok_and(|done| {
+        done.request_id & crate::identity::KT_REQUEST != 0 && done.request_id & INTERNAL == 0
+    });
     if frame.payload.len() > nuschel::server_limit(frame.kind) {
         return Err(Error::Protocol("oversized Nuschel message".into()));
     }
-    let _ = running.replies.try_send((frame.kind, frame.payload));
-    Ok(None)
+    if reply || by_id {
+        let _ = running.replies.try_send((frame.kind, frame.payload));
+        return Ok(None);
+    }
+    // Pushes for end-to-end conversations: Welcomes, and rows the frontend never
+    // sees as text.
+    let push = frame.kind == kind::MLS_WELCOME_PUSH
+        || (frame.kind == kind::CHAT_EVENT
+            && v1::ChatEvent::decode(frame.payload.clone()).is_ok_and(|event| {
+                event
+                    .message
+                    .is_some_and(|message| nuschel::is_mls_format(message.format))
+            }));
+    if push {
+        if let Some(pushes) = &running.pushes {
+            let _ = pushes.try_send((frame.kind, frame.payload));
+        }
+        return Ok(None);
+    }
+    Ok(Some(frame))
 }
 
 struct State {
@@ -1172,7 +1236,8 @@ impl State {
             Command::Disconnect
             | Command::Voice { .. }
             | Command::SelectVoiceTarget(_)
-            | Command::Identity(_) => {}
+            | Command::Identity(_)
+            | Command::Mls(_) => {}
             Command::Join(channel) => {
                 if self.channels.contains_key(&channel) {
                     self.queue(
@@ -3189,6 +3254,12 @@ fn negotiate(nuschel: bool, version: &[u8]) -> Result<Negotiated, Error> {
     if kt && hello.kt_log.is_empty() {
         return Err(Error::Protocol(
             "the server offers key transparency without naming its log".into(),
+        ));
+    }
+    // MLS credentials are checked against key transparency: never one without it.
+    if capabilities.iter().any(|c| c == nuschel::capability::MLS) && !kt {
+        return Err(Error::Protocol(
+            "the server offers end-to-end encryption without key transparency".into(),
         ));
     }
     Ok(Negotiated {

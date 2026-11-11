@@ -21,5 +21,10 @@ tokio = { version = "1.54.1", features = [
   "time",
 ] }
 
+[dev-dependencies]
+# End-to-end tests drive this binary against nuscheld on loopback (tests/e2ee.rs).
+nuscheld = { path = "../server", version = "0.1.0" }
+tempfile = "3.27.0"
+
 [lints]
 workspace = true

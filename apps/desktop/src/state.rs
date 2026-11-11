@@ -387,6 +387,10 @@ pub struct ServerView {
     pub bookmark: ServerBookmark,
     pub history_source: HistorySource,
     pub security: SessionSecurity,
+    /// The server negotiated `mls/1` (end-to-end-encrypted direct conversations).
+    pub mls: bool,
+    /// End-to-end state of direct conversations, by the peer's registration number.
+    pub e2ee: BTreeMap<u32, nuschel_ipc::crypto::ConversationView>,
     pub channels: Vec<ChannelView>,
     pub status: Status,
     pub generation: u64,
@@ -490,6 +494,8 @@ impl ServerView {
             bookmark,
             history_source: HistorySource::LocalObserved,
             security: SessionSecurity::Unknown,
+            mls: false,
+            e2ee: BTreeMap::new(),
             channels,
             status: Status::Disconnected,
             generation: 0,
@@ -1278,6 +1284,55 @@ impl Desktop {
         self.browse_server(index, window, cx);
         self.connect(index, url.password);
     }
+    /// The lock in the selected conversation's header (docs/e2ee.md §7.4): a direct
+    /// conversation with an end-to-end group shows its own state; anything else the
+    /// server's transport state. Chat encryption never turns the server badge green.
+    pub fn conversation_lock(&self, index: usize) -> (SessionSecurity, String) {
+        use nuschel_ipc::crypto::Lock;
+        let server = &self.servers[index];
+        let peer = self
+            .selected_indices()
+            .filter(|(selected, _)| *selected == index)
+            .and_then(|(_, channel)| server.channels[channel].direct_peer.as_ref())
+            .and_then(|peer| peer.user_id);
+        match peer.and_then(|peer| server.e2ee.get(&peer)) {
+            Some(view) if view.pinned => match &view.lock {
+                Lock::Encrypted => (
+                    SessionSecurity::MlsEstablished,
+                    "End-to-end encrypted; every device verified by key transparency".into(),
+                ),
+                Lock::Verified => (
+                    SessionSecurity::MlsEstablished,
+                    "End-to-end encrypted; contact verified".into(),
+                ),
+                Lock::Attention { reason } => (
+                    SessionSecurity::MlsPending,
+                    format!("End-to-end encrypted, needs attention: {reason}"),
+                ),
+                Lock::Pending { reason } => (SessionSecurity::Unknown, reason.clone()),
+                Lock::Open => (
+                    SessionSecurity::TransportOnly,
+                    "No end-to-end encryption; transport encryption only".into(),
+                ),
+            },
+            Some(view) => match &view.lock {
+                Lock::Pending { reason } => (SessionSecurity::Unknown, reason.clone()),
+                _ => (
+                    SessionSecurity::Unknown,
+                    "End-to-end encryption is being set up".into(),
+                ),
+            },
+            None if peer.is_some() && server.mls => (
+                SessionSecurity::Unknown,
+                "End-to-end encryption is being set up".into(),
+            ),
+            None => (
+                server.security,
+                crate::view::security_label(server.security).into(),
+            ),
+        }
+    }
+
     pub fn selected_indices(&self) -> Option<(usize, usize)> {
         let selected = self.navigation.selection()?;
         let server = self.servers.iter().position(|s| s.id == selected.server)?;
@@ -2597,9 +2652,19 @@ impl Desktop {
         let Some(peer) = server.users.get(&session).cloned() else {
             return;
         };
-        // A direct conversation checks the peer's identity (and its history).
+        // A direct conversation checks the peer's identity (and its history), and on
+        // a `mls/1` server opens its end-to-end group (creating it on first use).
+        let mls = server.mls;
         if let Some(user_id) = peer.user_id {
             crate::identity::check(self, index, user_id, true);
+            if mls {
+                self.run(
+                    index,
+                    nuschel_session::connection::Command::Mls(
+                        nuschel_session::mls::MlsCommand::OpenDirect { user_id },
+                    ),
+                );
+            }
         }
         // On a Nuschel server, between registered accounts: the server's
         // conversation (it opens once the server names it).
@@ -3584,6 +3649,10 @@ impl Desktop {
             // pages from the server (seqs), not from local observations.
             SessionEvent::Negotiated(negotiated) => {
                 server.version.negotiated(&negotiated);
+                server.mls = negotiated
+                    .capabilities
+                    .iter()
+                    .any(|capability| capability == "mls/1");
                 let history = negotiated
                     .capabilities
                     .iter()
@@ -3662,6 +3731,22 @@ impl Desktop {
                 }
             }
             SessionEvent::ChatPending(_) | SessionEvent::Nuschel(_) => {}
+            SessionEvent::Mls(event) => match event {
+                nuschel_session::mls::MlsEvent::Conversation {
+                    view,
+                    peer: Some(peer),
+                } => {
+                    if let Some(notice) = view.notices.last() {
+                        server.notice = Some(notice.clone());
+                    }
+                    server.e2ee.insert(peer, view);
+                }
+                nuschel_session::mls::MlsEvent::Failed(reason)
+                | nuschel_session::mls::MlsEvent::NotSent { reason, .. } => {
+                    server.notice = Some(reason);
+                }
+                _ => {}
+            },
             SessionEvent::Identity(event) => {
                 if let nuschel_session::identity::IdentityEvent::Own(view) = &event {
                     self.own_identity.view = Some(view.clone());

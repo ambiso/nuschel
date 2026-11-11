@@ -6738,8 +6738,10 @@ dependencies = [
  "nuschel-ipc",
  "nuschel-protocol",
  "nuschel-session",
+ "nuscheld",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

@@ -162,7 +162,12 @@ async fn render_server_page(
     let shown: Vec<v1::Message> = page
         .messages
         .into_iter()
-        .filter(|message| message.kind == v1::message::Kind::Message as i32)
+        // MLS rows (`mls/1`) are ciphertext: the session hands them to the crypto
+        // worker, never to the timeline as text.
+        .filter(|message| {
+            message.kind == v1::message::Kind::Message as i32
+                && !nuschel_protocol::nuschel::is_mls_format(message.format)
+        })
         .collect();
     let mut out = Vec::with_capacity(shown.len());
     let mut records = Vec::new();
