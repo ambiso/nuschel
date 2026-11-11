@@ -7,6 +7,7 @@ pub mod host;
 pub mod math;
 pub mod murmur;
 pub mod server;
+pub mod windows_sandbox;
 
 use std::io::{self, Read, Write};
 
