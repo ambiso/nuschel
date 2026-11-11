@@ -1,13 +1,27 @@
 # Nuschl TODO
 
 Current focus: **web client/deployment, server admission/moderation, and WebRTC**
-(user, 2026-11-11). The iOS app track was cancelled after Apple account/download
-access failed; do not resume it or acquire further Apple materials automatically.
+(user, 2026-11-11). The user has now supplied `Xcode_16.2.xip`, removing the
+earlier iOS download blocker; archive verification and installed-guest/Simulator
+feasibility are the next iOS gates, not yet completed.
 The desktop and server support stock Mumble interoperability; shared multi-server
 audio, key-transparency witnesses, the browser foundation and experimental MLS
 text/history are implemented. The rename and build-cache cleanup are complete.
 Historical package/cross-build/VM verification remains recorded below; each new
 change has its own validation.
+
+Current integration checkpoint (2026-11-11):
+
+- Web: legacy text/private chat and IndexedDB implementation/follow-ups integrated;
+  final crate2nix WASM/site rebuild and full browser reload/UI proof in progress.
+  Native tests, stock-Murmur relay tests and both content feature suites passed.
+- Knocking: compatible-server implementation ready on `69ed5405`, 134 tests passed;
+  root review/integration and SDK/UI consumers remain. MLS admission is refused.
+- RTC: RustCrypto provider/certificates and their tested follow-up integrated;
+  2 certificate and 6 transport tests passed. ICE restart has a plan, no implementation.
+- Desktop image clipboard/contrast and authenticated Windows VM control integrated;
+  combined validation/release checkpoint remains before publishing these changes.
+- Local speech is designed/queued; no runtime or model downloads implemented yet.
 
 ## Execution order
 
@@ -22,8 +36,8 @@ change has its own validation.
    One owner controls shared protocol/server authorization changes before assigning
    callers. Experimental E2EE must refuse unsupported admission rather than leak
    earlier history or keys.
-4. **WebRTC/video:** remove the remaining AWS-LC certificate dependency where
-   feasible, then ICE/re-negotiation, authenticated signaling and relay-only
+4. **WebRTC/video:** certificate/DTLS RustCrypto gate passed; next ICE/re-negotiation,
+   authenticated signaling and relay-only
    privacy, calling/SFU/media adapters, and SFrame. Transport/codec tests do not
    establish a usable video-call product.
 5. **Independent safety and desktop fixes:** native image clipboard and contrast,
@@ -42,13 +56,15 @@ commands/events → desktop/web controls. Web build/worker storage and RTC encod
 transport can progress independently until signaling integration. Moderation and
 knocking share server authorization/history code and must be serialized there.
 
-## Deferred iOS plan
+## iOS feasibility and app plan
 
-Cancelled by the user on 2026-11-11 ("Okay no iOS app then"). Preserve the following
-milestones as reference, not active assignments. The experiment demonstrated
+Initially cancelled after Apple access failed; the user subsequently supplied the
+Xcode archive on 2026-11-11. Resume at archive verification and guest feasibility.
+The earlier experiment demonstrated
 Sonoma Recovery 14.6.1/23G93 x86_64 boot and basic GUI rendering over KVM, not an
 installed macOS/Xcode/Simulator environment. Experiment processes were stopped;
-media/evidence remain on disk. No further Apple acquisition or development is queued.
+media/evidence remain on disk. The archive's presence does not prove its integrity,
+an installed macOS guest, Xcode availability or Simulator graphics.
 
    - [ ] **Linux-hosted macOS VM first** (user, 2026-11-11): no owned Apple
          hardware or paid macOS runner is a development prerequisite. Evaluate
@@ -82,9 +98,8 @@ media/evidence remain on disk. No further Apple acquisition or development is qu
          Physical-device audio, Bluetooth, battery and background checks remain
          separate validation work, potentially with external testers; acquiring a
          Mac or iPhone must not gate the SDK, UI or simulator milestones.
-The earlier SwiftUI/UniFFI choice remains historical context if the user explicitly
-reopens this track. Simulator/SwiftUI/XCTest/Rust linkage and physical-device audio
-were never proven.
+SwiftUI/UniFFI remains the proposed client direction. Simulator/SwiftUI/XCTest/Rust
+linkage and physical-device audio were never proven.
 
 Full source/test audit (2026-11-11): [findings, evidence and conflict ownership](docs/todo-audit.md).
 Checked implementation and checked runtime coverage are separate claims; untested
@@ -132,7 +147,9 @@ Reported while testing (2026-11-10/11):
       clipboard assertions in `screenshots.py`).
 - [x] Message text is selectable; right-click for Copy message. Image menus offer
       Open image and Save image as (`selection.rs`, `menus.rs`).
-- [ ] Image menu: Copy image to the clipboard.
+- [x] Image menu: Copy image to the clipboard. Linux backend offers real image MIME
+      data; private GNOME test compared externally pasted PNG pixels to the fixture.
+      Separate native Windows/macOS runtime checks remain open.
 - [x] Clickable links and a safe supported subset of Mumble HTML formatting (bold,
       italic, lists, headings, colour; tables normalized to text rows): no remote resources, link
       scheme allowlist, deceptive-anchor tooltip, libFuzzer targets.
@@ -329,8 +346,9 @@ Later (reported):
 - [x] Light mode, the system theme by default (live switching), interface and code
       fonts, text size, and Ctrl+= / Ctrl+− / Ctrl+0 zoom (a vendored gpui-pre patch
       scales the whole window; drop it once upstream has a window scale).
-- [ ] The dark palette's faint text is about 3.6:1 on the main background (below
-      AA); Ctrl+scroll / pinch zoom; IME placement at zoom ≠ 100 % untested.
+- [x] Dark faint-text contrast raised to 6.04:1 on the main background and 4.68:1
+      on selected rows; desktop tests and real GNOME clipboard/UI checks passed.
+- [ ] Ctrl+scroll / pinch zoom; IME placement at zoom ≠ 100 % untested.
 - [x] Smooth resizing: only messages near the viewport are laid out (1000-message
       resize: 113 ms → 7 ms per frame), full frame rate during drag-resizes.
 - [x] Off-screen messages are in the accessibility tree again (2026-11-11): every
@@ -391,7 +409,9 @@ Security review (2026-11-11):
       releases go unnoticed (needs expiring, regularly re-signed manifests).
 - [x] L7 Exported certificates are written 0600, atomically.
 - [ ] Sanitise control characters in names for display.
-- [ ] L8 The Windows VM harness's HTTP control has no authentication (test-only).
+- [x] L8 Windows VM HTTP control uses fresh per-boot bearer authentication, bounded
+      requests/results and a flat file allowlist. Host tests and two existing-guest
+      boots passed, including rejected missing/stale tokens.
 
 Code quality and performance review (2026-11-11):
 
@@ -1117,10 +1137,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 - [ ] Real video encoder with bitrate adaptation, keyframe requests, frame dependency tracking.
 - [ ] Camera and screen capture, video rendering in GPUI, A/V sync, calling UI.
 - [ ] Browser interoperability and long-call quality tests; str0m vs webrtc-rs benchmark.
-- [ ] Resolve AWS-LC still pulled in by str0m certificate generation:
-      `str0m-rust-crypto` selects `dimpl`'s `rcgen` feature, which enables AWS-LC.
-      `rust-crypto` with str0m defaults off does not remove that transitive path
-      (`cargo tree --locked --offline -p nuschl-rtc -i aws-lc-rs`, 2026-11-11).
+- [x] Remove AWS-LC from the native RTC dependency graph and explicitly select
+      dimpl's RustCrypto DTLS provider. Vendored adapter generates P-256 certificates
+      without the dimpl rcgen feature; 2 certificate and 6 real transport tests pass.
+      Native RTC normal/build graph contains neither AWS-LC nor ring.
 
 ### Release and other targets
 
@@ -1329,6 +1349,10 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       leaves the channel or disconnects**; **no earlier history** (in end-to-end
       channels the device joins the group without a history grant). Stock admins admit
       by moving the person in; a stock client's refused Enter can knock for it.
+      Compatible-server implementation is ready for root integration (`69ed5405`,
+      134 passing tests). Typed SDK/desktop/web controls and no-history MLS admission
+      remain open; current E2EE admission fails closed. Native clients deliberately
+      do not advertise `knock/1` until they consume its events and history floors.
 - [x] Channel share links (user, 2026-11-11; built 2026-11-11, docs/web.md "Share
       links"): `https://<web host>/join/<token>#<client-only data>`; nuschld issues,
       resolves and revokes tokens (`share/1`, 0x4E90–0x4E97: expiry, access token for
