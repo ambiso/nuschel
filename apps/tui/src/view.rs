@@ -403,7 +403,7 @@ fn draw_tree(frame: &mut Frame, app: &App, area: Rect, cursor: &mut Option<Posit
                 {
                     Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 }
-                Row::Channel { .. } | Row::Direct { .. } => Style::new().fg(Color::Blue),
+                Row::Channel { .. } | Row::Direct { .. } => Style::new().fg(Color::LightBlue),
                 Row::Direct { server, index }
                     if app.client.servers[*server].channels[*index].unread > 0 =>
                 {
