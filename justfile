@@ -39,6 +39,12 @@ licenses:
 audit:
     cargo deny check advisories
 
+# Safe Rust needs no sanitizer, and the targets run about four times faster
+# without one. FUZZ_SANITIZER=address also checks the unsafe code in
+# dependencies (html5ever, the image decoders), e.g. over a corpus with
+# `just fuzz <target> 0 -runs=0`; switching rebuilds every target.
+fuzz_sanitizer := env_var_or_default("FUZZ_SANITIZER", "none")
+
 # Run a libFuzzer target (`fuzz/fuzz_targets/<target>.rs`) for `seconds`, from
 # fuzz/seeds/<target>; new inputs go to fuzz/corpus/<target>, crashes to
 # fuzz/artifacts/<target> (neither is committed). Extra arguments go to libFuzzer,
@@ -46,8 +52,8 @@ audit:
 # flake's fuzz shell. Targets: `just fuzz-list`. See SECURITY.md, "Fuzzing".
 fuzz target seconds="600" *libfuzzer:
     mkdir -p fuzz/corpus/{{target}} fuzz/seeds/{{target}}
-    nix develop .#fuzz --command cargo fuzz run --fuzz-dir fuzz --debug-assertions {{target}} \
-        fuzz/corpus/{{target}} fuzz/seeds/{{target}} -- \
+    nix develop .#fuzz --command cargo fuzz run --fuzz-dir fuzz --debug-assertions \
+        --sanitizer {{fuzz_sanitizer}} {{target}} fuzz/corpus/{{target}} fuzz/seeds/{{target}} -- \
         -max_total_time={{seconds}} -timeout=10 -rss_limit_mb=2048 {{libfuzzer}}
 
 fuzz-list:
@@ -55,7 +61,8 @@ fuzz-list:
 
 # Build every fuzz target (as `just fuzz` does), without running one.
 fuzz-build:
-    nix develop .#fuzz --command cargo fuzz build --fuzz-dir fuzz --debug-assertions
+    nix develop .#fuzz --command cargo fuzz build --fuzz-dir fuzz --debug-assertions \
+        --sanitizer {{fuzz_sanitizer}}
 
 # Regenerate the per-crate Nix build after changing dependencies (Cargo.lock).
 crate2nix:
