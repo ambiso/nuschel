@@ -15,6 +15,7 @@ pub mod extension;
 pub mod fuzzing;
 pub mod handlers;
 pub mod history;
+pub mod kt;
 pub mod limits;
 pub mod password;
 pub mod routing;

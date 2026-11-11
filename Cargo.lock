@@ -5923,6 +5923,7 @@ dependencies = [
 name = "nuschel-storage"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "nuschel-core",
  "nuschel-ipc",
  "sqlx",
@@ -5975,10 +5976,13 @@ name = "nuscheld"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "async-trait",
  "base64 0.22.1",
  "bytes",
  "clap",
+ "nuschel-identity",
  "nuschel-ipc",
+ "nuschel-kt",
  "nuschel-legacy-html",
  "nuschel-protocol",
  "nuschel-session",
@@ -5997,6 +6001,7 @@ dependencies = [
  "toml 1.2.1+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]

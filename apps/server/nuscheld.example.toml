@@ -115,3 +115,24 @@ pages_per_minute = 120
 page_bytes_per_minute = 16777216
 # minimum_client = "0.1.0"
 # recommended_client = "0.1.0"
+
+[kt]
+# Key transparency (docs/e2ee.md §5): a verifiable directory of the identities
+# bound to accounts, which Nuschel clients check (`kt/1`).
+enabled = true
+# The head-signing key (the server's identity key, which clients pin) and the
+# VRF secret: files with 32 random bytes or 64 hex digits, passed as credentials
+# (never from the Nix store). Without them both are generated once in
+# state_directory (kt-signing.key, kt-vrf.key); keep them, a log can never
+# change its VRF secret.
+# signing_key_file = "/run/credentials/nuscheld.service/kt-signing-key"
+# vrf_secret_file = "/run/credentials/nuscheld.service/kt-vrf-secret"
+# Seconds between epochs while bindings wait, and between re-signed heads.
+publish_interval = 10
+refresh_interval = 3600
+lookups_per_minute = 120
+histories_per_minute = 60
+publishes_per_minute = 6
+# Who may fetch an account's history besides its owner: "contacts" (direct
+# conversations and the same channel) or "members" (everyone).
+history = "contacts"

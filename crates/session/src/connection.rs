@@ -465,6 +465,9 @@ pub struct Negotiated {
     /// The capabilities both sides offered.
     pub capabilities: Vec<String>,
     pub policy: Option<v1::Policy>,
+    /// With `kt/1`: the server's key-transparency log descriptor (nuschel-kt
+    /// encoding), which the crypto worker pins.
+    pub kt_log: Vec<u8>,
 }
 
 /// Murmur's per-user rate limit (murmur.ini `messageburst` and `messagelimit`):
@@ -625,6 +628,7 @@ pub async fn run(
             protocol: nuschel::PROTOCOL,
             capabilities: nuschel::capability::ALL.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
+            kt_log: Vec::new(),
         });
         let frame = nuschel::version_frame(&version, hello.as_ref())
             .ok_or_else(|| Error::Protocol("outgoing version too large".into()))?;
@@ -2819,6 +2823,7 @@ fn negotiate(nuschel: bool, version: &[u8]) -> Result<Negotiated, Error> {
             nuschel: false,
             capabilities: Vec::new(),
             policy: None,
+            kt_log: Vec::new(),
         });
     }
     let hello = nuschel::hello(version)
@@ -2826,13 +2831,23 @@ fn negotiate(nuschel: bool, version: &[u8]) -> Result<Negotiated, Error> {
         .ok_or_else(|| {
             Error::Protocol("the server selected the Nuschel protocol but sent no hello".into())
         })?;
-    Ok(Negotiated {
-        nuschel: true,
-        capabilities: nuschel::intersect(&nuschel::capability::ALL, &hello.capabilities)
+    let capabilities: Vec<String> =
+        nuschel::intersect(&nuschel::capability::ALL, &hello.capabilities)
             .into_iter()
             .map(str::to_owned)
-            .collect(),
+            .collect();
+    let kt = capabilities.iter().any(|c| c == nuschel::capability::KT);
+    // Key transparency without a log to pin fails closed, like a hello without ALPN.
+    if kt && hello.kt_log.is_empty() {
+        return Err(Error::Protocol(
+            "the server offers key transparency without naming its log".into(),
+        ));
+    }
+    Ok(Negotiated {
+        nuschel: true,
+        capabilities,
         policy: hello.policy,
+        kt_log: if kt { hello.kt_log } else { Vec::new() },
     })
 }
 

@@ -137,7 +137,8 @@ fn main() -> ExitCode {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("NUSCHELD_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                // akd reports every proof and preload at info.
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,akd=warn")),
         )
         .with_writer(std::io::stderr)
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))

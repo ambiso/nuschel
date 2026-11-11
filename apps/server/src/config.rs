@@ -113,6 +113,61 @@ impl Default for History {
     }
 }
 
+/// Who may fetch an account's key-transparency history besides its owner
+/// (docs/e2ee.md §5.7: a history reveals every past key and when it changed).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KtHistoryAccess {
+    /// People the account talks to: a direct conversation with it, or the same
+    /// channel right now.
+    #[default]
+    Contacts,
+    /// Every connection that may look the account up.
+    Members,
+}
+
+/// Key transparency (docs/e2ee.md §5): the server's verifiable key directory.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Kt {
+    /// Run the directory and offer `kt/1` to Nuschel clients.
+    pub enabled: bool,
+    /// The head-signing key, which is the server's identity key: a file with 32
+    /// random bytes or 64 hex digits. Without it one is generated once in
+    /// `state_directory` (`kt-signing.key`). Clients pin it: keep it.
+    pub signing_key_file: Option<PathBuf>,
+    /// The VRF secret, in the same format (`kt-vrf.key` when generated). It hides
+    /// labels and can never change for the life of the log.
+    pub vrf_secret_file: Option<PathBuf>,
+    /// Seconds between epochs while bindings are waiting.
+    pub publish_interval: u64,
+    /// Seconds after which the current epoch is signed again while nothing
+    /// changes, so that a fresh head always exists.
+    pub refresh_interval: u64,
+    /// Per connection and minute.
+    pub lookups_per_minute: u32,
+    /// Histories, audits and heads, per connection and minute.
+    pub histories_per_minute: u32,
+    pub publishes_per_minute: u32,
+    pub history: KtHistoryAccess,
+}
+
+impl Default for Kt {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            signing_key_file: None,
+            vrf_secret_file: None,
+            publish_interval: 10,
+            refresh_interval: 3600,
+            lookups_per_minute: 120,
+            histories_per_minute: 60,
+            publishes_per_minute: 6,
+            history: KtHistoryAccess::Contacts,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -201,6 +256,7 @@ pub struct Config {
     pub autoban: Autoban,
     pub password_hashing: PasswordHashing,
     pub history: History,
+    pub kt: Kt,
 }
 
 impl Default for Config {
@@ -260,6 +316,7 @@ impl Default for Config {
             autoban: Autoban::default(),
             password_hashing: PasswordHashing::default(),
             history: History::default(),
+            kt: Kt::default(),
         }
     }
 }
@@ -355,6 +412,25 @@ impl Config {
                 "user and connection limits must be nonzero".into(),
             ));
         }
+        let kt = &self.kt;
+        if kt.publish_interval == 0 || kt.refresh_interval < kt.publish_interval {
+            return Err(ConfigError::Invalid(
+                "kt.publish_interval must be nonzero and at most kt.refresh_interval".into(),
+            ));
+        }
+        for (name, path) in [
+            ("kt.signing_key_file", &kt.signing_key_file),
+            ("kt.vrf_secret_file", &kt.vrf_secret_file),
+        ] {
+            if path
+                .as_ref()
+                .is_some_and(|path| path.starts_with("/nix/store"))
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "{name} is in the Nix store, which is world-readable; pass it as a credential"
+                )));
+            }
+        }
         if self.max_queued_bytes < 64 * 1024 {
             return Err(ConfigError::Invalid(
                 "max_queued_bytes must be at least 64 KiB".into(),
@@ -442,6 +518,26 @@ mod tests {
                 .settings()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn key_transparency_settings_are_checked() {
+        let kt = Config::default().kt;
+        assert!(kt.enabled);
+        assert_eq!((kt.publish_interval, kt.refresh_interval), (10, 3600));
+        assert!(
+            Config::from_toml("[kt]\npublish_interval = 0")
+                .unwrap()
+                .settings()
+                .is_err()
+        );
+        let error = Config::from_toml("[kt]\nvrf_secret_file = \"/nix/store/abc-kt/vrf\"")
+            .unwrap()
+            .settings()
+            .unwrap_err();
+        assert!(error.to_string().contains("credential"));
+        let members = Config::from_toml("[kt]\nhistory = \"members\"").unwrap();
+        assert_eq!(members.kt.history, KtHistoryAccess::Members);
     }
 
     #[test]

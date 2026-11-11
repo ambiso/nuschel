@@ -102,7 +102,7 @@ impl Harness {
         // Nuschel connections, so the extension's handlers are reached.
         if nuschel {
             user.extension = Some(Box::new(crate::extension::Extension::new(
-                crate::extension::server_capabilities(),
+                crate::extension::server_capabilities(true),
                 &config,
                 Instant::now(),
             )));

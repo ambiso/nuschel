@@ -772,6 +772,8 @@ pub struct State {
     /// re-checked when it moved.
     pub authz_epoch: u64,
     pub authz_pending: conversations::Pending,
+    /// The key-transparency directory's queue, when `kt/1` is offered.
+    pub kt: Option<crate::kt::KtHandle>,
 }
 
 impl State {
@@ -795,6 +797,7 @@ impl State {
             history: crate::history::Queues::detached(),
             authz_epoch: 0,
             authz_pending: Default::default(),
+            kt: None,
         }
     }
 

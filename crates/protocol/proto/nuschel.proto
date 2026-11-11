@@ -18,6 +18,10 @@ message Hello {
   repeated string capabilities = 2;
   // Only from servers.
   Policy policy = 3;
+  // Only from servers that offer `kt/1`: the descriptor of the server's
+  // key-transparency log (nuschel-kt `LogDescriptor`, at most 512 bytes).
+  // Clients pin it like the server (docs/e2ee.md §5.1).
+  bytes kt_log = 4;
 }
 
 message Policy {
@@ -296,4 +300,117 @@ message ChannelSettings {
 // 0x4E13, success without a payload.
 message Done {
   uint64 request_id = 1;
+}
+
+// ---- Key transparency (`kt/1`, docs/e2ee.md §5) ----
+// Proofs, heads and certificates travel in nuschel-kt's and
+// nuschel-identity's own strict encodings, as opaque bytes.
+
+// 0x4E14 -> KtStatusReply or Error.
+message KtStatus {
+  uint64 request_id = 1;
+}
+
+// 0x4E15
+message KtStatusReply {
+  uint64 request_id = 1;
+  // The requester's own account id (16 bytes); empty when unregistered.
+  bytes account = 2;
+  // The newest signed head (nuschel-kt `SignedHead`).
+  bytes head = 3;
+}
+
+// The certificates behind an account's binding: what the log's roster
+// commitment and statement hash refer to.
+message KtRecord {
+  // nuschel-identity `DeviceSigningCertificate`.
+  bytes device_signing_certificate = 1;
+  // `DeviceCertificate`s, at most 16.
+  repeated bytes devices = 2;
+  // `DeviceRevocation`s, at most 32.
+  repeated bytes revocations = 3;
+  // The identity's `AccountStatement` for this account on this log.
+  bytes statement = 4;
+}
+
+// 0x4E16 -> KtPublished or Error. Binds the sender's own account (registered
+// users only) to an identity; the statement and every certificate must
+// verify under `root`, and the statement must name this account and log.
+message KtPublish {
+  uint64 request_id = 1;
+  // nuschel-identity `HybridPublicKey`: the identity root.
+  bytes root = 2;
+  KtRecord record = 3;
+}
+
+// 0x4E17
+message KtPublished {
+  uint64 request_id = 1;
+  // The `acct:` value (nuschel-kt `DirectoryValue`) the server publishes.
+  bytes value = 2;
+  // True if it is already the current value; otherwise it is published in
+  // the next epoch (within about ten seconds).
+  bool current = 3;
+}
+
+// 0x4E18 -> KtLookupReply or Error. Any registered account on this server.
+message KtLookup {
+  uint64 request_id = 1;
+  oneof target {
+    // A registration number (Mumble's wire alias).
+    uint32 user_id = 2;
+    // An account id (16 bytes).
+    bytes account = 3;
+  }
+}
+
+// 0x4E19
+message KtLookupReply {
+  uint64 request_id = 1;
+  bytes account = 2;
+  // nuschel-kt `LookupResponse` for the account's `acct:` label.
+  bytes response = 3;
+  KtRecord record = 4;
+}
+
+// 0x4E1A -> KtHistoryReply or Error. Only for the requester's own account
+// and their contacts.
+message KtHistory {
+  uint64 request_id = 1;
+  bytes account = 2;
+}
+
+// 0x4E1B
+message KtHistoryReply {
+  uint64 request_id = 1;
+  bytes account = 2;
+  // nuschel-kt `HistoryResponse`.
+  bytes response = 3;
+}
+
+// 0x4E1C -> KtAuditReply or Error (`TOO_LARGE`: audit a shorter span, with
+// `KtHead` for the epoch in between).
+message KtAudit {
+  uint64 request_id = 1;
+  uint64 from_epoch = 2;
+  uint64 to_epoch = 3;
+}
+
+// 0x4E1D
+message KtAuditReply {
+  uint64 request_id = 1;
+  // nuschel-kt `AuditResponse`.
+  bytes response = 2;
+}
+
+// 0x4E1E -> KtHeadReply or Error: the newest head of an earlier epoch.
+message KtHead {
+  uint64 request_id = 1;
+  uint64 epoch = 2;
+}
+
+// 0x4E1F
+message KtHeadReply {
+  uint64 request_id = 1;
+  bytes head = 2;
 }

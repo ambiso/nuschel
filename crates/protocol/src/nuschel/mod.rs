@@ -28,7 +28,10 @@ pub mod capability {
     pub const HISTORY: &str = "history/1";
     pub const SUBSCRIBE: &str = "subscribe/1";
     pub const TYPING: &str = "typing/1";
-    pub const ALL: [&str; 3] = [HISTORY, SUBSCRIBE, TYPING];
+    /// Key transparency (docs/e2ee.md §5): the log descriptor in the hello,
+    /// binding publication, lookups, histories, audits and heads.
+    pub const KT: &str = "kt/1";
+    pub const ALL: [&str; 4] = [HISTORY, SUBSCRIBE, TYPING, KT];
 }
 
 /// Message types.
@@ -53,6 +56,18 @@ pub mod kind {
     pub const DIRECT_LIST: u16 = 0x4e11;
     pub const CHANNEL_SETTINGS: u16 = 0x4e12;
     pub const DONE: u16 = 0x4e13;
+    pub const KT_STATUS: u16 = 0x4e14;
+    pub const KT_STATUS_REPLY: u16 = 0x4e15;
+    pub const KT_PUBLISH: u16 = 0x4e16;
+    pub const KT_PUBLISHED: u16 = 0x4e17;
+    pub const KT_LOOKUP: u16 = 0x4e18;
+    pub const KT_LOOKUP_REPLY: u16 = 0x4e19;
+    pub const KT_HISTORY: u16 = 0x4e1a;
+    pub const KT_HISTORY_REPLY: u16 = 0x4e1b;
+    pub const KT_AUDIT: u16 = 0x4e1c;
+    pub const KT_AUDIT_REPLY: u16 = 0x4e1d;
+    pub const KT_HEAD: u16 = 0x4e1e;
+    pub const KT_HEAD_REPLY: u16 = 0x4e1f;
 }
 
 /// Requests in flight per connection.
@@ -71,6 +86,21 @@ pub const MAX_DIRECTS: usize = 1024;
 pub const MAX_CAPABILITIES: usize = 32;
 pub const MAX_CAPABILITY_BYTES: usize = 64;
 pub const MAX_NAME_BYTES: usize = 512;
+/// A key-transparency log descriptor in the hello.
+pub const MAX_KT_LOG_BYTES: usize = 512;
+/// Device certificates and revocations in one `KtRecord`.
+pub const MAX_KT_DEVICES: usize = 16;
+pub const MAX_KT_REVOCATIONS: usize = 32;
+/// Any one certificate, statement or root key in a `KtRecord` (a device
+/// certificate is at most 4764 bytes, a device-signing certificate 5439).
+pub const MAX_KT_CERTIFICATE_BYTES: usize = 8 * 1024;
+/// A `KtPublish` from a client.
+pub const MAX_KT_PUBLISH_BYTES: usize = 256 * 1024;
+/// A lookup reply: the proof (nuschel-kt allows 256 KiB) and the record.
+pub const MAX_KT_LOOKUP_REPLY_BYTES: usize = 512 * 1024;
+/// History and audit replies; a server answers `TOO_LARGE` beyond this, and
+/// clients audit shorter spans.
+pub const MAX_KT_REPLY_BYTES: usize = 6 * 1024 * 1024;
 
 /// 16 bytes: conversation ids, account ids and idempotency keys.
 pub type Id = [u8; 16];
@@ -88,6 +118,9 @@ pub fn required_capability(kind: u16) -> Option<&'static str> {
         | LIST_DIRECT | CHANNEL_SETTINGS => Some(capability::HISTORY),
         SUBSCRIBE | UNSUBSCRIBE => Some(capability::SUBSCRIBE),
         TYPING => Some(capability::TYPING),
+        KT_STATUS | KT_PUBLISH | KT_LOOKUP | KT_HISTORY | KT_AUDIT | KT_HEAD => {
+            Some(capability::KT)
+        }
         _ => None,
     }
 }
@@ -102,6 +135,7 @@ pub fn client_limit(kind: u16) -> usize {
         CHAT_SEND | CHAT_EDIT => MAX_CONTENT_BYTES + 256,
         SUBSCRIBE | UNSUBSCRIBE => MAX_SUBSCRIBE_PER_MESSAGE * 18 + 32,
         HISTORY_REQUEST => 128,
+        KT_PUBLISH => MAX_KT_PUBLISH_BYTES,
         _ => 64,
     }
 }
@@ -116,6 +150,9 @@ pub fn server_limit(kind: u16) -> usize {
         SUBSCRIBED => MAX_SUBSCRIBE_PER_MESSAGE * 64 + 32,
         DIRECT_LIST => MAX_DIRECTS * (MAX_NAME_BYTES + 96) + 32,
         DIRECT_OPENED => MAX_NAME_BYTES + 128,
+        KT_LOOKUP_REPLY => MAX_KT_LOOKUP_REPLY_BYTES,
+        KT_HISTORY_REPLY | KT_AUDIT_REPLY => MAX_KT_REPLY_BYTES,
+        KT_PUBLISHED => 8 * 1024,
         _ => 1024,
     }
     .min(MAX_CONTROL_BYTES)
@@ -187,6 +224,9 @@ pub fn hello(version_body: &[u8]) -> Result<Option<v1::Hello>, HelloError> {
     }
     if hello.protocol != PROTOCOL {
         return Err(HelloError::Protocol);
+    }
+    if !valid_kt_log(&hello) {
+        return Err(HelloError::Malformed);
     }
     Ok(Some(hello))
 }
@@ -272,6 +312,22 @@ pub fn valid_message(message: &v1::Message) -> bool {
         })
 }
 
+/// Bounds of a `KtRecord` (from either side).
+pub fn valid_kt_record(record: &v1::KtRecord) -> bool {
+    let bounded = |bytes: &Vec<u8>| bytes.len() <= MAX_KT_CERTIFICATE_BYTES;
+    record.devices.len() <= MAX_KT_DEVICES
+        && record.revocations.len() <= MAX_KT_REVOCATIONS
+        && bounded(&record.device_signing_certificate)
+        && bounded(&record.statement)
+        && record.devices.iter().all(bounded)
+        && record.revocations.iter().all(bounded)
+}
+
+/// Bounds of a hello's log descriptor.
+pub fn valid_kt_log(hello: &v1::Hello) -> bool {
+    hello.kt_log.len() <= MAX_KT_LOG_BYTES
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +337,7 @@ mod tests {
             protocol: PROTOCOL,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
+            kt_log: Vec::new(),
         }
     }
 
@@ -395,5 +452,42 @@ mod tests {
         assert_eq!(required_capability(0x4eff), None);
         assert!(client_limit(kind::CHAT_SEND) > MAX_CONTENT_BYTES);
         assert_eq!(client_limit(kind::CHAT_ACK), 64);
+        for request in [
+            kind::KT_STATUS,
+            kind::KT_PUBLISH,
+            kind::KT_LOOKUP,
+            kind::KT_HISTORY,
+            kind::KT_AUDIT,
+            kind::KT_HEAD,
+        ] {
+            assert_eq!(required_capability(request), Some(capability::KT));
+        }
+        assert_eq!(required_capability(kind::KT_LOOKUP_REPLY), None);
+        assert_eq!(client_limit(kind::KT_LOOKUP), 64);
+        assert!(server_limit(kind::KT_AUDIT_REPLY) < MAX_CONTROL_BYTES);
+    }
+
+    #[test]
+    fn kt_records_are_bounded() {
+        let certificate = vec![0; 4764];
+        let mut record = v1::KtRecord {
+            device_signing_certificate: vec![0; 5439],
+            devices: vec![certificate.clone(); MAX_KT_DEVICES],
+            revocations: vec![vec![0; 3439]; MAX_KT_REVOCATIONS],
+            statement: vec![0; 3467],
+        };
+        assert!(valid_kt_record(&record));
+        // The largest valid publish fits its frame limit.
+        let publish = v1::KtPublish {
+            request_id: u64::MAX,
+            root: vec![0; 1986],
+            record: Some(record.clone()),
+        };
+        assert!(publish.encoded_len() <= client_limit(kind::KT_PUBLISH));
+        record.devices.push(certificate);
+        assert!(!valid_kt_record(&record));
+        record.devices.pop();
+        record.statement = vec![0; MAX_KT_CERTIFICATE_BYTES + 1];
+        assert!(!valid_kt_record(&record));
     }
 }

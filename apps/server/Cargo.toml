@@ -18,6 +18,11 @@ path = "src/main.rs"
 nuschel-protocol.workspace = true
 nuschel-ipc.workspace = true
 nuschel-legacy-html.workspace = true
+# Key transparency (docs/e2ee.md §5): the directory, and checking what clients
+# publish to it.
+nuschel-identity.workspace = true
+nuschel-kt.workspace = true
+async-trait = "0.1.92"
 argon2 = { version = "0.5.3", default-features = false, features = [
   "alloc",
   "password-hash",
@@ -63,6 +68,7 @@ toml = { version = "1.2.1", default-features = false, features = [
 ] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zeroize = "1.9.1"
 
 [dev-dependencies]
 # Loopback tests between the real client session and this server.

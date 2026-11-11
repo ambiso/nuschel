@@ -24,6 +24,7 @@ nuschel-protocol = { path = "crates/protocol", version = "0.1.0" }
 nuschel-storage = { path = "crates/storage", version = "0.1.0" }
 nuschel-update = { path = "crates/update", version = "0.1.0" }
 nuschel-identity = { path = "crates/identity", version = "0.1.0" }
+nuschel-kt = { path = "crates/kt", version = "0.1.0" }
 
 nuschel-session = { path = "crates/session", version = "0.1.0" }
 

@@ -11,7 +11,7 @@
 use crate::{
     auth,
     config::{Security, Settings},
-    extension::{Negotiation, server_capabilities},
+    extension::Negotiation,
     routing::Datagrams,
     server::Server,
     state::{Link, Peer},
@@ -243,7 +243,7 @@ async fn serve(
                 }
                 if let Err(error) = peer
                     .negotiation
-                    .version(&frame.payload, server_capabilities())
+                    .version(&frame.payload, server.capabilities)
                 {
                     tracing::info!(%address, %error, "closed a nuschel/1 connection");
                     break None;

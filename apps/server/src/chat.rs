@@ -102,7 +102,7 @@ impl State {
         }
     }
 
-    fn extension_error(&self, session: u32, request_id: u64, (code, retry): Failure) {
+    pub(crate) fn extension_error(&self, session: u32, request_id: u64, (code, retry): Failure) {
         self.send(
             session,
             kind::ERROR,
@@ -111,12 +111,12 @@ impl State {
     }
 
     /// Answer a failed request and release its id.
-    fn failed(&mut self, session: u32, request_id: u64, failure: Failure) {
+    pub(crate) fn failed(&mut self, session: u32, request_id: u64, failure: Failure) {
         self.extension_error(session, request_id, failure);
         self.end_request(session, request_id);
     }
 
-    fn end_request(&mut self, session: u32, request_id: u64) {
+    pub(crate) fn end_request(&mut self, session: u32, request_id: u64) {
         if let Some(extension) = self
             .users
             .get_mut(&session)
@@ -161,7 +161,7 @@ impl State {
 
     /// Run a request whose answer comes from the history tasks; it keeps its
     /// id until then.
-    fn deferred(
+    pub(crate) fn deferred(
         &mut self,
         session: u32,
         request_id: u64,
@@ -307,6 +307,12 @@ impl State {
                     state.channel_settings(session, message)
                 });
             }
+            kind::KT_STATUS
+            | kind::KT_PUBLISH
+            | kind::KT_LOOKUP
+            | kind::KT_HISTORY
+            | kind::KT_AUDIT
+            | kind::KT_HEAD => self.kt_frame(session, frame),
             _ => self.extension_error(session, request_id, fail(Code::Unsupported)),
         }
     }

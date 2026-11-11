@@ -502,6 +502,7 @@ impl Raw {
             protocol: nuschel::PROTOCOL,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
+            kt_log: Vec::new(),
         });
         let frame = nuschel::version_frame(
             &proto::Version {
@@ -627,6 +628,7 @@ fn hello_version(capabilities: &[&str]) -> bytes::Bytes {
             protocol: nuschel::PROTOCOL,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
+            kt_log: Vec::new(),
         }),
     )
     .unwrap()
@@ -655,8 +657,10 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
     assert!(negotiated.nuschel);
     assert_eq!(
         negotiated.capabilities,
-        ["history/1", "subscribe/1", "typing/1"]
+        ["history/1", "subscribe/1", "typing/1", "kt/1"]
     );
+    // The key-transparency log comes with `kt/1`.
+    assert_eq!(negotiated.kt_log.len(), 71);
     let policy = negotiated.policy.unwrap();
     assert_eq!(policy.guests, v1::policy::Guests::None as i32);
     assert_eq!(policy.retention_days, 0, "forever by default");

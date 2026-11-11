@@ -380,6 +380,8 @@ pub struct MemoryStore {
     bans: Vec<StoredBan>,
     next_user_id: u32,
     pub history: MemoryHistory,
+    /// The key-transparency table.
+    pub kt: BTreeMap<Vec<u8>, Vec<u8>>,
 }
 
 /// The history tables, in memory.
@@ -416,6 +418,14 @@ impl SeqRows for MemoryRows<'_> {
             range.take(limit).collect()
         })
     }
+}
+
+fn base64(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn unbase64(text: &str) -> Option<Vec<u8>> {
+    base64::engine::general_purpose::STANDARD.decode(text).ok()
 }
 
 /// Run a future that never waits (the in-memory store) to completion.
@@ -754,6 +764,42 @@ impl MemoryStore {
             Request::SetNextUserId { id } => {
                 self.next_user_id = self.next_user_id.max(id);
                 Response::Done
+            }
+            Request::KtGet { keys } => {
+                let values: Option<Vec<Option<String>>> = keys
+                    .iter()
+                    .map(|key| {
+                        let key = unbase64(key)?;
+                        Some(self.kt.get(&key).map(|value| base64(value)))
+                    })
+                    .collect();
+                values.map_or_else(
+                    || Response::Rejected("malformed key".into()),
+                    Response::KtValues,
+                )
+            }
+            Request::KtScan { prefix } => match unbase64(&prefix) {
+                Some(prefix) => Response::KtRecords(
+                    self.kt
+                        .range(prefix.clone()..)
+                        .take_while(|(key, _)| key.starts_with(&prefix))
+                        .map(|(key, value)| (base64(key), base64(value)))
+                        .collect(),
+                ),
+                None => Response::Rejected("malformed prefix".into()),
+            },
+            Request::KtWrite { records } => {
+                let decoded: Option<Vec<(Vec<u8>, Vec<u8>)>> = records
+                    .iter()
+                    .map(|(key, value)| Some((unbase64(key)?, unbase64(value)?)))
+                    .collect();
+                match decoded {
+                    Some(records) => {
+                        self.kt.extend(records);
+                        Response::Done
+                    }
+                    None => Response::Rejected("malformed record".into()),
+                }
             }
             history => self.history.apply(history),
         }

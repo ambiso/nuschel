@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 /// `per_second`; a message that would overflow `burst` is limited.
 #[derive(Clone, Debug)]
 pub struct LeakyBucket {
-    per_second: u32,
+    per_minute: u32,
     burst: u32,
     tokens: u64,
     since: Instant,
@@ -16,8 +16,14 @@ pub struct LeakyBucket {
 
 impl LeakyBucket {
     pub fn new(per_second: u32, burst: u32, now: Instant) -> Self {
+        Self::per_minute(per_second.max(1).saturating_mul(60), burst, now)
+    }
+
+    /// A bucket that drains `per_minute` tokens a minute, for rates below one a
+    /// second.
+    pub fn per_minute(per_minute: u32, burst: u32, now: Instant) -> Self {
         Self {
-            per_second: per_second.max(1),
+            per_minute: per_minute.max(1),
             burst: burst.max(1),
             tokens: 0,
             since: now,
@@ -42,7 +48,7 @@ impl LeakyBucket {
 
     fn drain(&mut self, now: Instant) {
         let elapsed = now.saturating_duration_since(self.since).as_millis();
-        let drained = elapsed.saturating_mul(u128::from(self.per_second)) / 1000;
+        let drained = elapsed.saturating_mul(u128::from(self.per_minute)) / 60_000;
         // Restart the clock only once a whole token has drained, or frequent
         // messages would never drain anything.
         if drained > 0 {

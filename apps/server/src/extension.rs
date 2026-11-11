@@ -119,6 +119,10 @@ pub struct Extension {
     pub markers: LeakyBucket,
     /// When this connection last typed in each conversation.
     pub typing: HashMap<Id, Instant>,
+    /// Key-transparency lookups; histories, audits and heads; publications.
+    pub kt_lookups: LeakyBucket,
+    pub kt_histories: LeakyBucket,
+    pub kt_publishes: LeakyBucket,
 }
 
 impl Extension {
@@ -134,6 +138,17 @@ impl Extension {
             requests: LeakyBucket::new(5, 30, now),
             markers: LeakyBucket::new(5, 30, now),
             typing: HashMap::new(),
+            kt_lookups: LeakyBucket::per_minute(
+                config.kt.lookups_per_minute,
+                config.kt.lookups_per_minute.div_ceil(4).max(8),
+                now,
+            ),
+            kt_histories: LeakyBucket::per_minute(
+                config.kt.histories_per_minute,
+                config.kt.histories_per_minute.div_ceil(4).max(8),
+                now,
+            ),
+            kt_publishes: LeakyBucket::per_minute(config.kt.publishes_per_minute, 3, now),
         }
     }
 
@@ -158,17 +173,24 @@ impl Extension {
     }
 }
 
-/// What this server offers.
-pub fn server_capabilities() -> Capabilities {
-    Capabilities::from_names(capability::ALL)
+/// What this server offers: everything, and `kt/1` only with a key-transparency
+/// log.
+pub fn server_capabilities(kt: bool) -> Capabilities {
+    Capabilities::from_names(
+        capability::ALL
+            .into_iter()
+            .filter(|name| kt || *name != capability::KT),
+    )
 }
 
-/// The server's hello, sent in its `Version` to `nuschel/1` connections.
-pub fn server_hello(settings: &Settings) -> v1::Hello {
+/// The server's hello, sent in its `Version` to `nuschel/1` connections, with
+/// the descriptor of its key-transparency log if it has one.
+pub fn server_hello(settings: &Settings, kt_log: Option<&[u8]>) -> v1::Hello {
     let history = &settings.config.history;
     v1::Hello {
         protocol: nuschel::PROTOCOL,
-        capabilities: server_capabilities().names(),
+        capabilities: server_capabilities(kt_log.is_some()).names(),
+        kt_log: kt_log.map(<[u8]>::to_vec).unwrap_or_default(),
         policy: Some(v1::Policy {
             mode: v1::policy::Mode::Compatible as i32,
             minimum_client: settings.minimum_client.unwrap_or(0),
@@ -198,6 +220,7 @@ mod tests {
             protocol: nuschel::PROTOCOL,
             capabilities: capabilities.iter().map(|c| (*c).to_owned()).collect(),
             policy: None,
+            kt_log: Vec::new(),
         };
         nuschel::version_frame(&proto::Version::default(), Some(&hello)).unwrap()[HEADER_BYTES..]
             .to_vec()
@@ -205,7 +228,7 @@ mod tests {
 
     #[test]
     fn the_extension_needs_alpn_and_a_hello() {
-        let server = server_capabilities();
+        let server = server_capabilities(true);
         // ALPN without a hello fails closed.
         assert_eq!(
             Negotiation::from_alpn(Some(nuschel::ALPN)).freeze(),
@@ -246,7 +269,7 @@ mod tests {
     #[test]
     fn at_most_sixteen_requests_are_in_flight_and_ids_are_unique() {
         let config = Config::default();
-        let mut extension = Extension::new(server_capabilities(), &config, Instant::now());
+        let mut extension = Extension::new(server_capabilities(true), &config, Instant::now());
         for id in 0..16 {
             extension.begin(id).unwrap();
         }

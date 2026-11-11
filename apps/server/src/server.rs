@@ -3,7 +3,7 @@
 //! UDP on every configured address, and run the accept and voice loops.
 use crate::{
     config::Settings,
-    connection, conversations, extension, history,
+    connection, conversations, extension, history, kt,
     limits::LeakyBucket,
     password,
     state::{Ban, Channel, Counters, Registered, State},
@@ -79,6 +79,8 @@ pub struct Server {
     /// second carries the Nuschel hello, for `nuschel/1` connections.
     pub version_frame: Bytes,
     pub nuschel_version_frame: Bytes,
+    /// What `nuschel/1` connections are offered (`kt/1` only with a log).
+    pub capabilities: extension::Capabilities,
     pub shutdown: Notify,
     /// Failed password logins per registered account (ten, then one a second).
     pub login_failures: Mutex<HashMap<u32, LeakyBucket>>,
@@ -567,11 +569,23 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     // channel save.
     let storage = storage::start(backend.clone());
     let history_writer = storage::start(backend.clone());
-    let history_reads = storage::start(backend);
+    let history_reads = storage::start(backend.clone());
     let counters = Arc::new(Counters::default());
     let mut state = load_state(&settings, &storage, &history_reads, &counters).await?;
     let (queues, receivers) = history::queues();
     state.history = queues;
+    // Key transparency on its own storage worker: a lookup never waits behind
+    // a history write.
+    let kt_service = if settings.config.kt.enabled {
+        let keys = kt::Keys::load(&settings.config.kt, &settings.config.state_directory)?;
+        let (handle, service) =
+            kt::open(&settings.config.kt, keys, storage::start(backend.clone())).await?;
+        state.kt = Some(handle);
+        Some(service)
+    } else {
+        None
+    };
+    let kt_log = state.kt.as_ref().map(|kt| kt.descriptor.clone());
     if state
         .registry
         .users
@@ -632,8 +646,9 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
         version_frame: extension::version_frame(&server_version(&settings), None),
         nuschel_version_frame: extension::version_frame(
             &server_version(&settings),
-            Some(&extension::server_hello(&settings)),
+            Some(&extension::server_hello(&settings, kt_log.as_deref())),
         ),
+        capabilities: extension::server_capabilities(kt_log.is_some()),
         shutdown: Notify::new(),
         login_failures: Mutex::new(HashMap::new()),
     });
@@ -654,6 +669,9 @@ pub async fn start(settings: Settings, backend: Backend) -> Result<Running, Star
     ));
     if settings.config.history.retention_days > 0 {
         tasks.push(tokio::spawn(expire(server.clone())));
+    }
+    if let Some(service) = kt_service {
+        tasks.push(tokio::spawn(service.run(server.clone())));
     }
     Ok(Running {
         server,
