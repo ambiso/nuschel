@@ -141,6 +141,11 @@ impl Desktop {
         let rendezvous =
             (servers.rendezvous != PUBLIC_RENDEZVOUS).then(|| servers.rendezvous.clone());
         let server = &mut self.client.servers[index];
+        if server.mls {
+            server.notice = Some("File offers are not supported on encrypted servers yet.".into());
+            cx.notify();
+            return;
+        }
         if server.status != Status::Connected {
             server.notice = Some("Connect before offering a file.".into());
             cx.notify();

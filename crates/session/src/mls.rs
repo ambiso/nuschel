@@ -1394,6 +1394,13 @@ impl Context {
                         seq: message.seq,
                     })
                     .await;
+                    let text = std::mem::take(&mut message.content);
+                    *message = reconstructed_archive_chat(
+                        std::mem::take(message),
+                        text,
+                        crate::connection::now_ms().max(0) as u64,
+                    );
+                    message.author = None;
                     continue;
                 }
                 if message.format != v1::Format::MlsApplication as i32 || message.archive.is_empty()
@@ -1447,6 +1454,15 @@ impl Context {
                                 format!("Unable to decrypt this archived message: {error}");
                         }
                     }
+                }
+                if unauthenticated.last() == Some(&message.seq) {
+                    let text = std::mem::take(&mut message.content);
+                    *message = reconstructed_archive_chat(
+                        std::mem::take(message),
+                        text,
+                        crate::connection::now_ms().max(0) as u64,
+                    );
+                    message.author = None;
                 }
                 message.format = v1::Format::Text as i32;
                 message.mls.clear();

@@ -875,7 +875,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          column for MLS rows, eviction of idle groups on the server.
    - [x] Encrypted text and authenticated channel history, with bounded grant pages
          covering all retained authorized keys and explicit historical-access policy.
-   - [ ] 4d: periodic key rotation/self-updates, own-device self blobs, and files.
+   - [ ] 4d: authenticated historical roster/membership evidence (revoked or
+         unconfirmed historical signers currently fail closed), periodic key
+         rotation/self-updates, own-device self blobs, and files.
    - [ ] Strict mode: no legacy clients in end-to-end channels, no downgrades; a
          green lock only after authenticated MLS establishment (pins, plaintext
          refusal and the lock exist for direct conversations).

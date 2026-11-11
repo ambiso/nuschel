@@ -204,7 +204,8 @@ pub fn required_capability(kind: u16) -> Option<&'static str> {
         | MLS_SEND
         | MLS_WELCOME_FETCH
         | MLS_WELCOME_ACK
-        | MLS_JOIN_INFO_REQUEST | MLS_OPENED => Some(capability::MLS),
+        | MLS_JOIN_INFO_REQUEST
+        | MLS_OPENED => Some(capability::MLS),
         SHARE_LINK_CREATE | SHARE_LINK_REVOKE | SHARE_LINK_RESOLVE => Some(capability::SHARE),
         PRIVACY => Some(capability::PRIVACY),
         _ => None,

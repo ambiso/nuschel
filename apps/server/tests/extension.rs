@@ -806,7 +806,15 @@ async fn the_session_negotiates_the_extension_with_nuscheld() {
     // A compatible server has no end-to-end encryption: no `mls/1`, no `e2ee/1`.
     assert_eq!(
         negotiated.capabilities,
-        ["history/1", "subscribe/1", "typing/1", "kt/1", "kt-witness/1", "share/1", "privacy/1"]
+        [
+            "history/1",
+            "subscribe/1",
+            "typing/1",
+            "kt/1",
+            "kt-witness/1",
+            "share/1",
+            "privacy/1"
+        ]
     );
     // The key-transparency log comes with `kt/1`.
     assert_eq!(negotiated.kt_log.len(), 71);

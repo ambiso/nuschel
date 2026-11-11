@@ -132,6 +132,7 @@ impl Negotiation {
         let Self::Agreed {
             client,
             capabilities,
+            ..
         } = self
         else {
             return None;
