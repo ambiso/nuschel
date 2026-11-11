@@ -194,6 +194,7 @@ pub struct Session {
     opus_allowed: bool,
     desired_muted: bool,
     desired_deafened: bool,
+    self_change_pending: bool,
 }
 
 impl Session {
@@ -246,6 +247,7 @@ impl Session {
             opus_allowed: true,
             desired_muted: true,
             desired_deafened: true,
+            self_change_pending: false,
         })
     }
 
@@ -318,6 +320,7 @@ impl Session {
         self.desired_muted = muted || deafened;
         self.desired_deafened = deafened;
         if let Some(session) = self.own_session() {
+            self.self_change_pending = true;
             self.send(
                 kind::USER_STATE,
                 &proto::UserState {
@@ -338,6 +341,7 @@ impl Session {
         let deaf = self.desired_deafened || own.self_deafened || own.deafened;
         (
             self.desired_muted
+                || self.self_change_pending
                 || deaf
                 || own.self_muted
                 || own.muted
@@ -787,6 +791,7 @@ impl Session {
                 if self.users.len() >= 10_000 && !self.users.contains_key(&session) {
                     return;
                 }
+                let observed_self = state.self_mute.is_some() || state.self_deaf.is_some();
                 let user = self.users.entry(session).or_insert_with(|| User {
                     session,
                     instance: next_user_instance(),
@@ -828,6 +833,13 @@ impl Session {
                     user.self_deafened = deafened;
                 }
                 user.self_muted |= user.self_deafened;
+                if self.own == Some(session)
+                    && observed_self
+                    && (user.self_muted, user.self_deafened)
+                        == (self.desired_muted, self.desired_deafened)
+                {
+                    self.self_change_pending = false;
+                }
                 let user = user.clone();
                 self.events
                     .push_back(Event::Server(ServerEvent::User(user)));
@@ -891,6 +903,30 @@ mod tests {
         assert_eq!(s.voice_policy(), (true, true));
         assert!(s.send_voice(0, vec![1], false).is_err());
         s.set_self(false, false);
+        // Missing/default false fields are not an acknowledgement of this command.
+        assert_eq!(s.voice_policy(), (true, false));
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                channel_id: Some(1),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
+        assert_eq!(s.voice_policy(), (true, false));
+        s.control(
+            kind::USER_STATE,
+            proto::UserState {
+                session: Some(3),
+                self_mute: Some(false),
+                self_deaf: Some(false),
+                ..Default::default()
+            }
+            .encode_to_vec()
+            .into(),
+        );
         assert_eq!(s.voice_policy(), (false, false));
         s.set_self(false, true);
         s.control(

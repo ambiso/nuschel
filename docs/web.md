@@ -234,7 +234,9 @@ never changes this route. Moving to another voice destination first mutes the
 previous one through shared SDK policy. `toggle_mute(index)` and
 `toggle_deaf(index)` operate only on the joined route; deaf implies mute. Server
 mute/suppression and acknowledgement are additional gates and cannot undo a newer
-local mute/deaf choice. This slice alone is not a finished browser call UI:
+local mute/deaf choice. An explicit self-state change remains capture-blocked
+until a subsequent matching own self-state observation; absent/default false
+fields and unrelated sparse channel updates do not count as that acknowledgement. This slice alone is not a finished browser call UI:
 separate audio-worker/controller integration, browser permission and device UX,
 and exact-package synthetic playback/capture tests must also pass.
 
