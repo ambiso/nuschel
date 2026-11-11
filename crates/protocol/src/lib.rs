@@ -5,6 +5,7 @@ use bytes::{Buf, Bytes, BytesMut};
 use thiserror::Error;
 
 pub mod crypt;
+pub mod nuschel;
 pub mod relay;
 pub mod voice;
 

@@ -5847,6 +5847,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschel-legacy-html"
+version = "0.1.0"
+
+[[package]]
 name = "nuschel-media-worker"
 version = "0.1.0"
 dependencies = [
@@ -5897,6 +5901,7 @@ dependencies = [
  "nuschel-client",
  "nuschel-core",
  "nuschel-ipc",
+ "nuschel-legacy-html",
  "nuschel-protocol",
  "p12-keystore",
  "prost",
@@ -5974,6 +5979,7 @@ dependencies = [
  "bytes",
  "clap",
  "nuschel-ipc",
+ "nuschel-legacy-html",
  "nuschel-protocol",
  "prost",
  "rcgen",

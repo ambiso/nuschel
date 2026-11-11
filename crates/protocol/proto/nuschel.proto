@@ -1,0 +1,299 @@
+// SPDX-License-Identifier: EUPL-1.2
+// The Nuschel protocol extension (docs/extension.md). Messages use Mumble's
+// control framing with types 0x4E00-0x4EFF (see `nuschel::kind`); the hello
+// travels in field 7200 of Mumble's `Version`, channel properties in field
+// 7200 of `ChannelState`. Nothing here is sent to a peer that did not
+// negotiate it (ALPN `nuschel/1` and both hellos).
+syntax = "proto3";
+
+package nuschel.v1;
+
+// Field 7200 of `MumbleProto.Version`, from both sides, once, before
+// `Authenticate`.
+message Hello {
+  // 1 for this specification.
+  uint32 protocol = 1;
+  // At most 32, each ASCII `[a-z0-9-]+/[0-9]+` of at most 64 bytes; unknown
+  // ones are ignored. The effective set is the intersection.
+  repeated string capabilities = 2;
+  // Only from servers.
+  Policy policy = 3;
+}
+
+message Policy {
+  enum Mode {
+    COMPATIBLE = 0;
+    E2EE = 1;
+  }
+  enum Guests {
+    // Unregistered users read no history (they see live messages).
+    GUESTS_NONE = 0;
+    GUESTS_FULL = 1;
+  }
+  Mode mode = 1;
+  // In the 1.5 version format (`major << 48 | minor << 32 | patch << 16`);
+  // advisory, never a security control.
+  uint64 minimum_client = 2;
+  uint64 recommended_client = 3;
+  // 0 keeps history forever.
+  uint32 retention_days = 4;
+  Guests guests = 5;
+  // How often one message may be edited.
+  uint32 edit_limit = 6;
+}
+
+// Decodes only the extension field of a `Version` frame (other fields are
+// skipped); appending its encoding to a `Version` adds the hello.
+message VersionExtension {
+  Hello hello = 7200;
+}
+
+// Field 7200 of `MumbleProto.ChannelState`, to Nuschel connections only.
+message ChannelInfo {
+  // 16 random bytes, never reused.
+  bytes conversation = 1;
+  Visibility visibility = 2;
+  // 0 keeps history forever.
+  uint32 retention_days = 3;
+}
+
+message ChannelStateExtension {
+  ChannelInfo nuschel = 7200;
+}
+
+enum Visibility {
+  // Members read the retained history, including from before they joined.
+  MEMBERS = 0;
+  // Only what was said while the reader could read the channel.
+  SINCE_ACCESS = 1;
+}
+
+enum Format {
+  FORMAT_UNSPECIFIED = 0;
+  // Literal text; fenced code blocks are the only markup.
+  TEXT = 1;
+  // Mumble HTML from a stock client, as received; render as inert text.
+  LEGACY_HTML = 2;
+}
+
+// 0x4E00. Errors have stable codes and fixed details.
+message Error {
+  enum Code {
+    UNSPECIFIED = 0;
+    // The message type or capability was not negotiated.
+    UNSUPPORTED = 1;
+    // Out of bounds or undecodable.
+    MALFORMED = 2;
+    // No such conversation or message, or not allowed: never distinguished.
+    NOT_FOUND = 3;
+    TOO_LARGE = 4;
+    RATE_LIMITED = 5;
+    // The idempotency key was used for a different message.
+    IDEMPOTENCY_CONFLICT = 6;
+    // Storage or the server is busy; retry after `retry_after_ms`.
+    BUSY = 7;
+    // The `request_id` is already in flight.
+    DUPLICATE_REQUEST = 8;
+    // More than 16 requests in flight.
+    TOO_MANY_REQUESTS = 9;
+    // The edit limit was reached.
+    LIMIT_REACHED = 10;
+  }
+  uint64 request_id = 1;
+  Code code = 2;
+  // Fixed text for the code; never SQL, paths or user text.
+  string detail = 3;
+  uint64 retry_after_ms = 4;
+}
+
+message Author {
+  // The immutable account id (16 bytes); empty for unregistered users.
+  bytes account = 1;
+  // Mumble's registration number, a wire alias; 0 when unregistered.
+  uint32 user_id = 2;
+  // The name when the message was sent.
+  string name = 3;
+}
+
+message Message {
+  enum Kind {
+    MESSAGE = 0;
+    // Refers to `target`, whose current content is in `content`.
+    EDIT = 1;
+    // Refers to `target`, which is now a tombstone.
+    DELETE = 2;
+    // A sequence number that carries nothing (a retried send, or expired).
+    VOID = 3;
+  }
+  uint64 seq = 1;
+  Kind kind = 2;
+  uint64 target = 3;
+  Author author = 4;
+  Format format = 5;
+  string content = 6;
+  uint64 reply_to = 7;
+  // Unix milliseconds, from the server.
+  int64 sent_ms = 8;
+  int64 edited_ms = 9;
+  // Set on tombstones: content, reply and attachments are gone.
+  int64 deleted_ms = 10;
+  // 0 by the author, 1 by a moderator.
+  uint32 delete_reason = 11;
+  uint32 edits = 12;
+}
+
+// 0x4E01 -> ChatAck or Error.
+message ChatSend {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  // 16 random bytes; scoped to (account, conversation).
+  bytes idempotency_key = 3;
+  Format format = 4;
+  string content = 5;
+  // A `seq` in the same conversation, at most its head; 0 for none.
+  uint64 reply_to = 6;
+}
+
+// 0x4E02, once the message (or edit, deletion) is durably stored.
+message ChatAck {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  uint64 seq = 3;
+  int64 server_ms = 4;
+}
+
+// 0x4E03, live, to connections that may read the conversation now.
+message ChatEvent {
+  bytes conversation = 1;
+  Message message = 2;
+}
+
+// 0x4E04 -> HistoryPage or Error.
+message HistoryRequest {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  oneof anchor {
+    bool latest = 3;
+    uint64 before = 4;
+    uint64 after = 5;
+    uint64 around = 6;
+  }
+  // At most 100.
+  uint32 limit = 7;
+}
+
+// 0x4E05. Chronological; ends early at the byte cap but never skips.
+message HistoryPage {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  repeated Message messages = 3;
+  bool more_before = 4;
+  bool more_after = 5;
+  // The page stops at the edge of what this reader may see.
+  bool restricted = 6;
+  uint64 head = 7;
+}
+
+// 0x4E06 -> Subscribed. Conversations the reader may not read are left out.
+message Subscribe {
+  uint64 request_id = 1;
+  // At most 64 per message, 256 per connection.
+  repeated bytes conversations = 2;
+}
+
+message ConversationState {
+  bytes conversation = 1;
+  uint64 head = 2;
+  // The account's read marker (0 if none).
+  uint64 read = 3;
+}
+
+// 0x4E07
+message Subscribed {
+  uint64 request_id = 1;
+  repeated ConversationState conversations = 2;
+}
+
+// 0x4E08, fire and forget.
+message Unsubscribe {
+  repeated bytes conversations = 1;
+}
+
+// 0x4E09, from the server: the reader lost access (or the conversation went).
+message Unsubscribed {
+  bytes conversation = 1;
+}
+
+// 0x4E0A -> ChatAck (with the edit's own seq) or Error.
+message ChatEdit {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  uint64 target = 3;
+  Format format = 4;
+  string content = 5;
+}
+
+// 0x4E0B -> ChatAck or Error.
+message ChatDelete {
+  uint64 request_id = 1;
+  bytes conversation = 2;
+  uint64 target = 3;
+}
+
+// 0x4E0C, both ways: set (client) and sync to the account's other devices.
+message ReadMarker {
+  bytes conversation = 1;
+  uint64 seq = 2;
+}
+
+// 0x4E0D, both ways; never stored.
+message Typing {
+  bytes conversation = 1;
+  // From the server: who types.
+  uint32 session = 2;
+}
+
+// 0x4E0E -> DirectOpened or Error.
+message OpenDirect {
+  uint64 request_id = 1;
+  // The peer's registration number.
+  uint32 user_id = 2;
+}
+
+message Direct {
+  bytes conversation = 1;
+  uint32 user_id = 2;
+  string name = 3;
+  bytes account = 4;
+  uint64 head = 5;
+  uint64 read = 6;
+}
+
+// 0x4E0F
+message DirectOpened {
+  uint64 request_id = 1;
+  Direct direct = 2;
+}
+
+// 0x4E10 -> DirectList.
+message ListDirect {
+  uint64 request_id = 1;
+}
+
+// 0x4E11
+message DirectList {
+  uint64 request_id = 1;
+  repeated Direct directs = 2;
+}
+
+// 0x4E12 -> Done or Error. Needs Write on the channel.
+message ChannelSettings {
+  uint64 request_id = 1;
+  uint32 channel = 2;
+  Visibility visibility = 3;
+}
+
+// 0x4E13, success without a payload.
+message Done {
+  uint64 request_id = 1;
+}
