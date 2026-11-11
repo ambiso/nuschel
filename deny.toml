@@ -20,6 +20,10 @@ ignore = [
   { id = "RUSTSEC-2026-0372", reason = "The zvariant derive macros migrate together with the GPUI/accessibility zbus 6 upgrade" },
   { id = "RUSTSEC-2026-0459", reason = "Bundled SQLite (via sqlx 0.9, which caps libsqlite3-sys below the fixed 0.39) opens Nuschel's own databases in the sandboxed storage worker, and an operator-supplied Murmur database read-only and immutable for nuscheld --import-murmur, which refuses WAL-mode files and never opens a -wal; the flaw needs an attacker-written database and WAL. Remove with an sqlx release that allows 0.39" },
   { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is reachable only through hax-lib-macros 0.3.7 under cfg(hax), libcrux's formal-verification builds (libcrux-intrinsics -> core-models -> hax-lib); it is never compiled into Nuschel (cargo tree shows it for no real target). nuschel-identity uses the libcrux crates" },
+  { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.38 in Typst's citation styles (citationberg, via hayagriva), math worker only: bibliography and cite are removed from its Typst library and its formulas cannot contain code; remove with a Typst on quick-xml 0.41" },
+  { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.38 namespaces in Typst's citation styles, math worker only, unreachable as RUSTSEC-2026-0194" },
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml (serde_yaml) behind Typst's yaml() and bibliographies, removed from the math worker's Typst library; its formulas cannot contain code" },
+  { id = "RUSTSEC-2024-0320", reason = "yaml-rust loads syntect syntax definitions in Typst's raw-text highlighting, which formulas from the math worker's LaTeX converter never use" },
   { id = "RUSTSEC-2023-0071", reason ="rsa (Marvin timing side channel in private-key operations) only generates the local Mumble client key; TLS signing uses ring, and no RSA decryption or signing runs on untrusted input" },
 ]
 
@@ -87,10 +91,33 @@ deny = [
   ], reason = "Do not link SQLite into the UI, client, or server" },
   { name = "syntect", wrappers = [
     "nuschel-content",
-  ], reason = "Untrusted grammars and message parsing belong in the content worker" },
+    "typst-library",
+    "two-face",
+  ], reason = "Untrusted grammars and message parsing belong in the content worker (and Typst's raw-text highlighting, unused, in the math worker)" },
   { name = "nuschel-content", wrappers = [
     "nuschel-content-worker",
   ], reason = "The UI consumes typed text spans over IPC" },
+  { name = "typst", wrappers = [
+    "nuschel-math",
+  ], reason = "Typst (a scripting language with file, package and plugin access) runs only in the sandboxed math worker, behind its LaTeX converter" },
+  { name = "typst-layout", wrappers = [
+    "nuschel-math",
+    "typst",
+    "typst-render",
+    "typst-svg",
+  ], reason = "Typst runs only in the math worker" },
+  { name = "typst-render", wrappers = [
+    "nuschel-math",
+  ], reason = "Typst runs only in the math worker" },
+  { name = "nuschel-math", wrappers = [
+    "nuschel-math-worker",
+  ], reason = "The UI receives coverage masks over IPC, never Typst" },
+  { name = "stacker", wrappers = [
+    "typst-eval",
+  ], reason = "Assembly stack switching (psm) only for Typst's evaluator, in the math worker" },
+  { name = "psm", wrappers = [
+    "stacker",
+  ], reason = "Assembly stack switching only through stacker, for Typst's evaluator" },
   { name = "magic-wormhole", wrappers = [
     "nuschel-transfer-worker",
   ], reason = "Peer-to-peer file transfer talks to untrusted peers from the sandboxed transfer worker" },
