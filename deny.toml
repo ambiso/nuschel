@@ -137,6 +137,7 @@ deny = [
   { name = "nuschel-kt", wrappers = [
     "nuscheld",
     "nuschel-crypto-worker",
+    "nuschel-witness",
   ], reason = "Key-transparency decisions belong to the crypto worker (and the server's log); akd_core makes ed25519-dalek accept malleable signatures in any binary that links it (docs/e2ee.md §5.2)" },
   { name = "nuschel-sandbox-windows", wrappers = [
     "nuschel-content-worker",

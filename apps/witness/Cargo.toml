@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "nuschel-witness"
+description = "The project auditor for Nuschel's key transparency: checks every akd epoch of a server's log and cosigns its checkpoints (docs/witness.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "nuschel-witness"
+path = "src/main.rs"
+
+[dependencies]
+nuschel-kt.workspace = true
+# The enrolment check reads a server's hello (its key-transparency log).
+nuschel-protocol.workspace = true
+clap = { version = "4.6.7", features = ["derive"] }
+getrandom = "0.4.3"
+# HTTP/1.1 request heads; the body is length-delimited and bounded.
+httparse = "1.10.1"
+rustls = { version = "0.23.46", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
+] }
+sha2 = "0.10.9"
+tokio = { version = "1.54.1", features = [
+  "macros",
+  "rt-multi-thread",
+  "net",
+  "io-util",
+  "signal",
+  "sync",
+  "time",
+] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = [
+  "ring",
+  "tls12",
+] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zeroize = "1.9.1"
+
+[dev-dependencies]
+rcgen = { version = "0.14.10", default-features = false, features = [
+  "ring",
+  "pem",
+] }
+tempfile = "3.27.0"
+ureq = { version = "3", default-features = false }
+
+[lints]
+workspace = true

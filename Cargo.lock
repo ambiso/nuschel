@@ -7283,6 +7283,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "nuschel-witness"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "getrandom 0.4.3",
+ "httparse",
+ "nuschel-kt",
+ "nuschel-protocol",
+ "rcgen",
+ "rustls",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
+ "zeroize",
+]
+
+[[package]]
 name = "nuscheld"
 version = "0.1.0"
 dependencies = [
