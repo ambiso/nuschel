@@ -18,6 +18,10 @@ const CATCH_UP_MS: f32 = 120.;
 /// Concealment beyond this ends playout until enough audio is buffered again.
 const MAX_CONCEALED_FRAMES: u32 = 10;
 const MAX_PACKETS: usize = 64;
+/// Sequence numbers count 10 ms frames; this many take billions of years. Any
+/// sender (a server relays them unchanged) picks them, and room above them
+/// keeps the arithmetic on them from overflowing.
+const MAX_SEQUENCE: u64 = u64::MAX / 2;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Pull {
@@ -88,7 +92,10 @@ impl JitterBuffer {
     }
 
     pub fn push(&mut self, sequence: u64, opus: Vec<u8>, end: bool, now: Instant) {
-        if self.next.is_some_and(|next| sequence < next) || self.packets.contains_key(&sequence) {
+        if sequence > MAX_SEQUENCE
+            || self.next.is_some_and(|next| sequence < next)
+            || self.packets.contains_key(&sequence)
+        {
             return;
         }
         // Packet spacing is the smallest gap to a neighbour; the decoder
@@ -189,6 +196,23 @@ impl JitterBuffer {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn sequence_numbers_near_the_end_of_their_range_are_ignored() {
+        // Found writing the voice_playback fuzz target: the next slot and the
+        // buffered length overflowed (a panic with overflow checks, a garbled
+        // stream without).
+        let mut buffer = JitterBuffer::default();
+        let start = Instant::now();
+        for index in 0..4_u64 {
+            let at = start + Duration::from_millis(20 * index);
+            buffer.push(u64::MAX - 7 + 2 * index, vec![1], index == 3, at);
+        }
+        assert_eq!(buffer.buffered_ms(), 0.);
+        assert_eq!(buffer.pull(), Pull::Idle);
+        buffer.push(MAX_SEQUENCE, vec![2], true, start);
+        assert!(matches!(buffer.pull(), Pull::Packet { end: true, .. }));
+    }
 
     fn feed(buffer: &mut JitterBuffer, start: Instant, sequences: &[(u64, u64)]) {
         for (sequence, at_ms) in sequences {
