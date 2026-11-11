@@ -18,6 +18,10 @@ use std::{
     time::Instant,
 };
 
+/// Stands for the root channel's conversation id in [`Harness::run`]'s input:
+/// conversation ids are random, so input could not name one otherwise.
+pub const ROOT: [u8; 16] = *b"nuschel-fuzzroot";
+
 pub struct Harness {
     pub state: State,
     sessions: Vec<u32>,
@@ -139,7 +143,9 @@ impl Harness {
 
     /// Interpret `data` as frames: a sender byte, a type byte (mapped onto
     /// Mumble's range and the extension block), a length byte, then the body.
+    /// [`ROOT`] in a body stands for the root channel's conversation id.
     pub fn run(&mut self, mut data: &[u8]) {
+        let root = self.root_conversation();
         while data.len() >= 3 {
             let sender = self.sessions[usize::from(data[0]) % self.sessions.len()];
             let kind = match data[1] {
@@ -147,7 +153,14 @@ impl Harness {
                 other => 0x4e00 | u16::from(other - 32),
             };
             let length = usize::from(data[2]).min(data.len() - 3);
-            let payload = Bytes::copy_from_slice(&data[3..3 + length]);
+            let mut body = data[3..3 + length].to_vec();
+            let mut from = 0;
+            while let Some(at) = body[from..].windows(ROOT.len()).position(|w| w == ROOT) {
+                let at = from + at;
+                body[at..at + ROOT.len()].copy_from_slice(&root);
+                from = at + ROOT.len();
+            }
+            let payload = Bytes::from(body);
             data = &data[3 + length..];
             if !self.state.users.contains_key(&sender) {
                 continue;
@@ -220,6 +233,23 @@ impl Default for Harness {
 mod tests {
     use super::*;
     use prost::Message as _;
+
+    #[test]
+    fn the_placeholder_names_the_root_conversation() {
+        let mut harness = Harness::new();
+        let send = nuschel_protocol::nuschel::v1::ChatSend {
+            request_id: 1,
+            conversation: ROOT.to_vec(),
+            idempotency_key: vec![7; 16],
+            format: 1,
+            content: "x".into(),
+            reply_to: 0,
+        }
+        .encode_to_vec();
+        harness.run(&[&[1, 33, send.len() as u8][..], &send].concat());
+        let root = harness.root_conversation();
+        assert_eq!(harness.state.conversations.head(&root), 1);
+    }
 
     #[test]
     fn random_and_structured_frames_keep_the_state_consistent() {
