@@ -912,6 +912,15 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
         (`services.nginx.virtualHosts` with `enableACME = true`, optionally a
         subdomain).
   - [ ] Push for mobile: content-free pushes (Signal-style), UnifiedPush on Android.
+- [ ] **Voice on several servers at once** (user, 2026-11-11): every connected server
+      that is not deafened starts its own media worker, so unmuted on two servers you
+      speak into both, hear both mixed, and push-to-talk transmits on every one; the
+      footer names only one. Proposed: exactly one voice server (the one whose channel
+      you last joined); other servers are set muted and deafened and run no media
+      worker; switching restores the previous mute state; push-to-talk and mute
+      shortcuts act on the voice server only; the voice server is highlighted in the
+      server rail (green ring and speaker badge, pulsing while someone talks) and
+      named in the footer. Awaiting the user's go.
 - [ ] Knocking (user, 2026-11-11): someone who may not enter a voice or chat channel
       knocks; online users with **Move and Enter** in that channel get a notice with
       Admit / Decline (knocks rate-limited). Admitting grants temporary Enter, Speak,
