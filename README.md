@@ -222,11 +222,14 @@ the storage worker. The `vm-server` check runs Nuschel's protocol suites and the
 stock Mumble GUI against it. `security = "e2ee"` (the planned default) refuses to
 start until end-to-end encryption exists. Design, configuration and deviations
 from Murmur: [docs/server.md](docs/server.md). Options include `listenAddresses`,
-`settings`, `passwordFile` and `superUserPasswordFile`.
+`settings`, `passwordFile` and `superUserPasswordFile`. `nuscheld admin` manages
+users, channels and their retention, bans and stored history offline, and refuses to
+touch a database a running server holds.
 
 With Nuschel clients the server negotiates its extension (docs/extension.md): durable
-server history that new members can read, sends that survive reconnects, read
-markers and typing. Nuschel never falls back to plain Mumble with a server that
+server history that new members can read (kept forever unless the server or a
+channel sets a shorter retention, or "none" for live-only channels), sends that
+survive reconnects, read markers and typing. Nuschel never falls back to plain Mumble with a server that
 once offered the extension. Invite links can carry the server's certificate
 fingerprint and policy (`mumble://…?fp=sha256:…&policy=nuschel`).
 
