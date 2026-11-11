@@ -1,8 +1,9 @@
 # nuscheld under the NixOS module, with stock clients: the stock Mumble GUI
 # (login with a Nuschel-exported certificate, voice both ways) and the same
 # client suites vm-smoke runs against stock Murmur; and Nuschel with the
-# extension's server history (SQLite and PostgreSQL). A second node runs the
-# server on local PostgreSQL. State must survive service restarts.
+# extension's server history (SQLite and PostgreSQL) and key transparency (its
+# keys as credentials on one node, generated on the other). A second node runs
+# the server on local PostgreSQL. State must survive service restarts.
 {
   pkgs,
   nuschel,
@@ -43,7 +44,11 @@ in
 pkgs.testers.runNixOSTest {
   name = "nuschel-server";
   nodes = {
-    server = serverNode { };
+    server = serverNode {
+      # Key-transparency keys as credentials (written by the test, never in the store).
+      kt.signingKeyFile = "/run/keys/nuschel-kt-signing";
+      kt.vrfSecretFile = "/run/keys/nuschel-kt-vrf";
+    };
     postgres = serverNode {
       database.type = "postgresql";
       database.createLocally = true;
@@ -75,6 +80,9 @@ pkgs.testers.runNixOSTest {
   testScript = ''
     def start_server(node):
         node.succeed("install -d -m 0700 /run/keys && printf %s ${superuser} > /run/keys/nuschel-superuser && chmod 0600 /run/keys/nuschel-superuser")
+        # Two random 32-byte keys as hex, kept across restarts (a log's keys never change).
+        node.succeed("for key in kt-signing kt-vrf; do test -e /run/keys/nuschel-$key || "
+                     "(umask 077; od -An -tx1 -N32 /dev/urandom | tr -d ' \\n' > /run/keys/nuschel-$key); done")
         node.succeed("systemctl restart nuschel.service")
         node.wait_for_unit("nuschel.service")
         node.wait_for_open_port(64738)
@@ -107,6 +115,15 @@ pkgs.testers.runNixOSTest {
     # history after being offline (docs/extension.md).
     as_tester(f"python3 {tests}/nuschel_history.py {bins} --host server")
 
+    # Key transparency (docs/e2ee.md §5): identities published, found, verified,
+    # and a key change detected, with the crypto worker in its sandbox; the log
+    # (keys from credentials) survives a restart.
+    as_tester(f"python3 {tests}/key_transparency.py {bins} --host server")
+    server.succeed("systemctl restart nuschel.service")
+    server.wait_for_open_port(64738)
+    as_tester(f"python3 {tests}/key_transparency.py {bins} --host server")
+    server.succeed("test ! -e /var/lib/private/nuschel/kt-vrf.key")
+
     # The real stock Mumble GUI against nuscheld: login with a certificate
     # exported by Nuschel, then voice in both directions.
     as_tester(f"xvfb-run -a -s \"-screen 0 1280x800x24\" python3 {tests}/stock_client.py {bins} --mumble ${pkgs.mumble}/bin/mumble --host server --pulse-bin ${pkgs.pulseaudio}/bin --opus-library ${opus} --output /tmp/nuschel-stock-artifacts")
@@ -122,6 +139,9 @@ pkgs.testers.runNixOSTest {
     postgres.succeed("systemctl restart nuschel.service")
     postgres.wait_for_open_port(64738)
     as_tester(f"python3 {tests}/nuschel_history.py {bins} --host postgres")
+    # Key transparency on PostgreSQL, with keys the server generated (0600).
+    as_tester(f"python3 {tests}/key_transparency.py {bins} --host postgres")
+    postgres.succeed("test \"$(stat -c %a /var/lib/private/nuschel/kt-vrf.key)\" = 600")
     print(server.succeed("journalctl -u nuschel.service --no-pager | tail -n 40"))
   '';
 }

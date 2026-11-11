@@ -35,6 +35,12 @@ struct Arguments {
     /// File with the SuperUser password, applied at startup.
     #[arg(long)]
     superuser_password_file: Option<PathBuf>,
+    /// Key-transparency head-signing key (replaces `kt.signing_key_file`).
+    #[arg(long)]
+    kt_signing_key_file: Option<PathBuf>,
+    /// Key-transparency VRF secret (replaces `kt.vrf_secret_file`).
+    #[arg(long)]
+    kt_vrf_secret_file: Option<PathBuf>,
     /// Keep all state in memory (nothing is written).
     #[arg(long)]
     ephemeral: bool,
@@ -82,6 +88,12 @@ fn settings(arguments: &Arguments) -> Result<Settings, Box<dyn std::error::Error
     }
     if let Some(path) = &arguments.superuser_password_file {
         config.superuser_password_file = Some(path.clone());
+    }
+    if let Some(path) = &arguments.kt_signing_key_file {
+        config.kt.signing_key_file = Some(path.clone());
+    }
+    if let Some(path) = &arguments.kt_vrf_secret_file {
+        config.kt.vrf_secret_file = Some(path.clone());
     }
     Ok(config.settings()?)
 }

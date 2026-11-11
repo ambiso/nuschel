@@ -60,6 +60,14 @@ let
     ++ lib.optionals (cfg.superUserPasswordFile != null) [
       "--superuser-password-file"
       "%d/superuser-password"
+    ]
+    ++ lib.optionals (cfg.kt.signingKeyFile != null) [
+      "--kt-signing-key-file"
+      "%d/kt-signing-key"
+    ]
+    ++ lib.optionals (cfg.kt.vrfSecretFile != null) [
+      "--kt-vrf-secret-file"
+      "%d/kt-vrf-secret"
     ];
   notInStore = path: path == null || !(lib.hasPrefix builtins.storeDir (toString path));
 in
@@ -150,6 +158,26 @@ in
         description = "Provision PostgreSQL with Unix-socket peer authentication for nuschel.";
       };
     };
+    kt = {
+      signingKeyFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Runtime file with the key-transparency head-signing key, the server's
+          identity key that clients pin (32 random bytes or 64 hex digits; LoadCredential).
+          Without it, nuscheld generates one once in its state directory.
+        '';
+      };
+      vrfSecretFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Runtime file with the key-transparency VRF secret (same format; LoadCredential).
+          It can never change for the life of the log. Without it, nuscheld generates
+          one once in its state directory.
+        '';
+      };
+    };
     tls = {
       certificateFile = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
@@ -188,8 +216,15 @@ in
           cfg.database.urlFile
           cfg.passwordFile
           cfg.superUserPasswordFile
+          cfg.kt.signingKeyFile
+          cfg.kt.vrfSecretFile
         ];
-        message = "Nuschel secrets (tls.keyFile, database.urlFile, passwordFile, superUserPasswordFile) must not be in the world-readable Nix store.";
+        message = "Nuschel secrets (tls.keyFile, database.urlFile, passwordFile, superUserPasswordFile, kt.signingKeyFile, kt.vrfSecretFile) must not be in the world-readable Nix store.";
+      }
+      {
+        assertion =
+          !(cfg.settings ? kt && (cfg.settings.kt ? signing_key_file || cfg.settings.kt ? vrf_secret_file));
+        message = "Use services.nuschel.kt.signingKeyFile / vrfSecretFile instead of key paths in settings.";
       }
       {
         assertion =
@@ -234,7 +269,9 @@ in
           ++ lib.optional (cfg.passwordFile != null) "server-password:${cfg.passwordFile}"
           ++ lib.optional (
             cfg.superUserPasswordFile != null
-          ) "superuser-password:${cfg.superUserPasswordFile}";
+          ) "superuser-password:${cfg.superUserPasswordFile}"
+          ++ lib.optional (cfg.kt.signingKeyFile != null) "kt-signing-key:${cfg.kt.signingKeyFile}"
+          ++ lib.optional (cfg.kt.vrfSecretFile != null) "kt-vrf-secret:${cfg.kt.vrfSecretFile}";
         # Migrations and a connection check before the server takes traffic.
         ExecStartPre = lib.escapeShellArgs (
           [
