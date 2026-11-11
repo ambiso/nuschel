@@ -162,6 +162,7 @@ fn options(address: SocketAddr, pin: &str, name: &str, identity: usize) -> Conne
         resend: Vec::new(),
         message_rate: Default::default(),
         required: Requirement::default(),
+        crypto: None,
     }
 }
 

@@ -277,6 +277,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             nuschel: args.require_nuschel,
             ..Default::default()
         },
+        crypto: None,
     };
     let (tx, rx) = mpsc::channel(32);
     let (events_tx, mut events) = mpsc::channel(64);

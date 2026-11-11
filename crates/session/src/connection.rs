@@ -139,6 +139,8 @@ pub enum SessionEvent {
     Nuschel(NuschelEvent),
     /// Our message went to a Nuschel server and waits for its acknowledgement.
     ChatPending(PendingChat),
+    /// Identity and key transparency on this server (`kt/1`, with a crypto worker).
+    Identity(crate::identity::IdentityEvent),
     /// The server stored our message as `seq`.
     ChatAcked {
         key: [u8; 16],
@@ -288,6 +290,9 @@ pub enum Command {
     /// capability it needs) was negotiated, otherwise answered locally with
     /// `UNSUPPORTED`.
     Nuschel(NuschelRequest),
+    /// Identity and key transparency (`kt/1` servers with a crypto worker);
+    /// ignored elsewhere.
+    Identity(crate::identity::IdentityCommand),
     Voice {
         target: u32,
         packet: VoicePacket,
@@ -315,6 +320,9 @@ pub struct ConnectOptions {
     /// What this server negotiated before (the sticky policy, or an invite):
     /// a weaker answer fails the connection before any credential is sent.
     pub required: crate::sticky::Requirement,
+    /// The crypto worker, for key transparency on `kt/1` servers (none: the
+    /// session neither publishes nor checks identities).
+    pub crypto: Option<crate::identity::IdentitySetup>,
 }
 
 /// Requests of the Nuschel extension (docs/extension.md), as on the wire.
@@ -645,6 +653,7 @@ pub async fn run(
         };
         // With the extension (or a sticky record) the server's hello decides
         // before any credential is sent.
+        let mut kt_descriptor = None;
         if nuschel || !options.required.is_empty() {
             let frame = loop {
                 let frame = timeout(Duration::from_secs(10), frames.recv())
@@ -664,6 +673,9 @@ pub async fn run(
             state.handle(frame, &events).await?;
             if negotiated.nuschel {
                 state.extension = Some(negotiated.capabilities.clone());
+                if !negotiated.kt_log.is_empty() {
+                    kt_descriptor = Some(negotiated.kt_log.clone());
+                }
                 emit(&events, SessionEvent::Negotiated(negotiated)).await?;
             }
         }
@@ -689,11 +701,43 @@ pub async fn run(
         ping.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         let deadline = time::sleep_until(Instant::now() + Duration::from_secs(20));
         tokio::pin!(deadline);
+        // Key transparency: the driver starts once we are logged in (see identity.rs).
+        let mut kt = kt_descriptor.zip(options.crypto).map(|(descriptor, setup)| KtLink {
+            descriptor,
+            setup,
+            server: nuschel_ipc::crypto::CryptoServer {
+                key: crate::sticky::key(&options.server.host, options.server.port),
+                label: if options.server.name.is_empty() {
+                    options.server.host.clone()
+                } else {
+                    options.server.name.clone()
+                },
+            },
+            running: None,
+        });
         loop {
+            if let Some(link) = kt.as_mut()
+                && link.running.is_none()
+                && state.logged_in()
+            {
+                link.start(&events);
+            }
             tokio::select! {
                 frame = frames.recv() => {
                     let frame = frame.ok_or_else(|| Error::Protocol("connection reader stopped".into()))??;
-                    state.handle(frame, &events).await?;
+                    if let Some(frame) = kt_reply(kt.as_mut(), state.extension.is_some(), frame)? {
+                        state.handle(frame, &events).await?;
+                    }
+                },
+                outgoing = async {
+                    match kt.as_mut().and_then(|link| link.running.as_mut()) {
+                        Some(running) => running.frames.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if let Some((kind, payload)) = outgoing {
+                        write_control(&mut writer, kind, &payload).await?;
+                    }
                 },
                 received = async {
                     match &state.udp {
@@ -721,6 +765,11 @@ pub async fn run(
                     let Some(command) = command else { break; };
                     match command {
                         Command::Disconnect => break,
+                        Command::Identity(command) => {
+                            if let Some(running) = kt.as_ref().and_then(|link| link.running.as_ref()) {
+                                let _ = running.commands.try_send(command);
+                            }
+                        }
                         Command::SelectVoiceTarget(id) => state.voice_target = id.min(30),
                         Command::Voice { target, packet } => if let Some(packet) = state.outgoing_voice(packet)
                             && let Ok(payload) = voice::encode_voice(state.version, if target == 0 { state.voice_target } else { target }, &packet) {
@@ -766,6 +815,9 @@ pub async fn run(
                 write_control(&mut writer, kind, &payload).await?;
             }
         }
+        if let Some(running) = kt.and_then(|link| link.running) {
+            running.task.abort();
+        }
         let _ = timeout(Duration::from_secs(2), writer.shutdown()).await;
         Ok(())
     }
@@ -773,6 +825,82 @@ pub async fn run(
     read_task.abort();
     let _ = read_task.await;
     result
+}
+
+/// The key-transparency driver of a `kt/1` connection with a crypto worker.
+struct KtLink {
+    descriptor: Vec<u8>,
+    setup: crate::identity::IdentitySetup,
+    server: nuschel_ipc::crypto::CryptoServer,
+    running: Option<KtRunning>,
+}
+
+struct KtRunning {
+    frames: mpsc::Receiver<(u16, Vec<u8>)>,
+    replies: mpsc::Sender<(u16, bytes::Bytes)>,
+    commands: mpsc::Sender<crate::identity::IdentityCommand>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl KtLink {
+    fn start(&mut self, events: &mpsc::Sender<SessionEvent>) {
+        let (frames_tx, frames) = mpsc::channel(8);
+        let (replies, replies_rx) = mpsc::channel(8);
+        let (commands, commands_rx) = mpsc::channel(32);
+        let task = tokio::spawn(crate::identity::drive(crate::identity::Driver {
+            crypto: self.setup.crypto.clone(),
+            server: self.server.clone(),
+            descriptor: self.descriptor.clone(),
+            device_name: self.setup.device_name.clone(),
+            recovery: self.setup.recovery,
+            frames: frames_tx,
+            replies: replies_rx,
+            commands: commands_rx,
+            events: events.clone(),
+        }));
+        self.running = Some(KtRunning {
+            frames,
+            replies,
+            commands,
+            task,
+        });
+    }
+}
+
+/// Hands the driver its replies (and errors for its requests); everything else
+/// goes on to the session.
+fn kt_reply(
+    link: Option<&mut KtLink>,
+    extension: bool,
+    frame: ControlFrame,
+) -> Result<Option<ControlFrame>, Error> {
+    use nuschel::kind;
+    let Some(running) = link.and_then(|link| link.running.as_mut()) else {
+        return Ok(Some(frame));
+    };
+    let reply = matches!(
+        frame.kind,
+        kind::KT_STATUS_REPLY
+            | kind::KT_PUBLISHED
+            | kind::KT_LOOKUP_REPLY
+            | kind::KT_HISTORY_REPLY
+            | kind::KT_AUDIT_REPLY
+            | kind::KT_HEAD_REPLY
+    );
+    let ours = reply
+        || (frame.kind == kind::ERROR
+            && v1::Done::decode(frame.payload.clone()).is_ok_and(|done| {
+                done.request_id & crate::identity::KT_REQUEST != 0
+                    && done.request_id & INTERNAL == 0
+            }));
+    if !extension || !ours {
+        return Ok(Some(frame));
+    }
+    if frame.payload.len() > nuschel::server_limit(frame.kind) {
+        return Err(Error::Protocol("oversized Nuschel message".into()));
+    }
+    let _ = running.replies.try_send((frame.kind, frame.payload));
+    Ok(None)
 }
 
 struct State {
@@ -955,7 +1083,10 @@ impl State {
         }
         let own = self.own_session.unwrap_or_default();
         match command {
-            Command::Disconnect | Command::Voice { .. } | Command::SelectVoiceTarget(_) => {}
+            Command::Disconnect
+            | Command::Voice { .. }
+            | Command::SelectVoiceTarget(_)
+            | Command::Identity(_) => {}
             Command::Join(channel) => {
                 if self.channels.contains_key(&channel) {
                     self.queue(

@@ -900,6 +900,7 @@ async fn connect_once(
             resend: restore.unacked.clone(),
             message_rate: Default::default(),
             required,
+            crypto: None,
         },
         Err(error) => {
             let _ = events

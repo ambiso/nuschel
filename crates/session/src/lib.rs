@@ -2,6 +2,7 @@
 //! Native Mumble networking and worker supervision, independent of GPUI.
 pub mod config;
 pub mod connection;
+pub mod identity;
 pub mod model;
 pub mod sticky;
 mod tls;
