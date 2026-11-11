@@ -968,6 +968,22 @@ pub fn dialog(
             cx,
         ));
     }
+    let friends = settings.friend_notifications;
+    general.push(toggle(
+        "friend-notifications",
+        "Notify when friends connect",
+        if cfg!(target_os = "linux") {
+            "When someone you added as a friend comes online while Nuschel is not in front."
+        } else {
+            "Not available on this system yet."
+        }
+        .into(),
+        friends,
+        Rc::new(move |this, _, _| {
+            this.update_settings(|settings| settings.friend_notifications = !friends)
+        }),
+        cx,
+    ));
     if crate::update::supported() {
         use crate::update::UpdateState;
         let check = settings.check_updates;

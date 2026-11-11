@@ -16,6 +16,7 @@ mod icons;
 mod images;
 mod menus;
 mod motion;
+mod names;
 mod notify;
 mod panels;
 mod preview;

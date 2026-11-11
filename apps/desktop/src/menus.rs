@@ -4,6 +4,7 @@
 use crate::{
     assets::icon,
     dialogs::{Tone, modal, styled_button},
+    names::display_name,
     state::{Desktop, Panel, Status},
     theme::*,
 };
@@ -13,7 +14,7 @@ use gpui_kit::{
     *,
 };
 use nuschel_session::{
-    connection::{Command, TextTarget},
+    connection::{Command, TextTarget, User},
     model::{ChannelEdit, UserAction, VoiceTargetSpec, permission as perm},
 };
 use std::rc::Rc;
@@ -47,6 +48,7 @@ pub enum PromptAction {
     Comment,
     ImportCertificate { path: std::path::PathBuf },
     ExportCertificate,
+    Nickname { hash: String },
 }
 
 pub struct Prompt {
@@ -72,6 +74,8 @@ enum Entry {
         hash: String,
         volume: f32,
     },
+    /// An explanation in place of entries that do not apply.
+    Note(&'static str),
     Separator,
 }
 
@@ -151,7 +155,9 @@ impl Desktop {
             PromptAction::CreateChannel { .. } => ("Create", false),
             PromptAction::Kick { .. } => ("Kick", true),
             PromptAction::Ban { .. } => ("Ban", true),
-            PromptAction::Tokens | PromptAction::Comment => ("Save", false),
+            PromptAction::Tokens | PromptAction::Comment | PromptAction::Nickname { .. } => {
+                ("Save", false)
+            }
             PromptAction::ImportCertificate { .. } => ("Import", true),
             PromptAction::ExportCertificate => ("Choose file…", false),
         };
@@ -190,6 +196,18 @@ impl Desktop {
         let text = prompt.input.read(cx).value().to_string();
         let reason = (!text.trim().is_empty()).then(|| text.trim().to_string());
         let command = match prompt.action {
+            PromptAction::Nickname { hash } => {
+                let mut full = false;
+                self.update_settings(|settings| full = !settings.set_nickname(&hash, &text));
+                if full {
+                    self.error = Some(format!(
+                        "You have {} nicknames, the most Nuschel keeps.",
+                        nuschel_session::config::MAX_PEOPLE
+                    ));
+                }
+                self.rename_directs();
+                return;
+            }
             PromptAction::ImportCertificate { path } => {
                 let result = std::fs::metadata(&path)
                     .map_err(|error| error.to_string())
@@ -311,6 +329,18 @@ impl Desktop {
         .detach();
     }
 
+    /// Direct conversations are named after the other person: follow a
+    /// nickname change.
+    fn rename_directs(&mut self) {
+        for server in &mut self.servers {
+            for channel in &mut server.channels {
+                if let Some(peer) = &channel.direct_peer {
+                    channel.name = format!("@ {}", display_name(peer, &self.settings));
+                }
+            }
+        }
+    }
+
     pub fn whisper(&mut self, server: usize, target: VoiceTargetSpec, label: String) {
         self.run(
             server,
@@ -381,7 +411,7 @@ impl Desktop {
                 let Some(user) = server.users.get(&session).cloned() else {
                     return entries;
                 };
-                let name = user.name.clone();
+                let name = display_name(&user, &self.settings).to_string();
                 let mine = own == Some(session);
                 let channel = user.channel;
                 entries.push(item("Profile and connection", "info", move |this, _, _| {
@@ -432,6 +462,12 @@ impl Desktop {
                                 });
                             },
                         ));
+                    }
+                    match user.certificate_hash.clone() {
+                        Some(hash) => people_entries(&mut entries, &self.settings, &user, hash),
+                        None => entries.push(Entry::Note(
+                            "No certificate: cannot be a friend or have a nickname",
+                        )),
                     }
                     if server.may_try(channel, perm::WHISPER) {
                         let label = format!("Whispering to {name}");
@@ -1017,6 +1053,58 @@ fn push_context_actions(
     }
 }
 
+/// Friend and nickname entries for someone with a certificate, as in
+/// Mumble: both are kept by certificate hash, only on this device.
+fn people_entries(
+    entries: &mut Vec<Entry>,
+    settings: &nuschel_session::config::ClientSettings,
+    user: &User,
+    hash: String,
+) {
+    let nickname = settings
+        .nickname(Some(&hash))
+        .unwrap_or_default()
+        .to_string();
+    if settings.friend(Some(&hash)).is_some() {
+        let hash = hash.clone();
+        entries.push(item("Remove friend", "heart", move |this, _, _| {
+            this.update_settings(|settings| {
+                settings.friends.remove(&hash);
+            })
+        }));
+    } else {
+        let (hash, name) = (hash.clone(), user.name.clone());
+        entries.push(item("Add friend", "heart", move |this, _, _| {
+            let mut full = false;
+            this.update_settings(|settings| full = !settings.add_friend(&hash, &name));
+            if full {
+                this.error = Some(format!(
+                    "You have {} friends, the most Nuschel keeps.",
+                    nuschel_session::config::MAX_PEOPLE
+                ));
+            }
+        }));
+    }
+    let name = user.name.clone();
+    entries.push(item(
+        "Set nickname…",
+        "pencil",
+        move |this, window, cx| {
+            this.open_prompt(
+                usize::MAX,
+                PromptAction::Nickname { hash: hash.clone() },
+                format!("Nickname for {name}"),
+                format!(
+                    "Shown instead of “{name}”, only to you. Leave empty to show their own name."
+                ),
+                nickname.clone(),
+                window,
+                cx,
+            );
+        },
+    ));
+}
+
 /// Plain text from Mumble's HTML for editing fields. Display goes through the content worker.
 pub fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
@@ -1080,6 +1168,16 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 .my_1()
                 .h(px(1.))
                 .bg(color(BORDER_STRONG))
+                .into_any_element(),
+            Entry::Note(note) => div()
+                .id(("menu-note", index))
+                .role(Role::Label)
+                .aria_label(note)
+                .px_2()
+                .py(px(6.))
+                .text_xs()
+                .text_color(color(TEXT_FAINT))
+                .child(text!(note).with_id(("menu-note-text", index)))
                 .into_any_element(),
             Entry::Item {
                 label,

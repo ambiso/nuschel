@@ -30,6 +30,7 @@ const ICONS: &[(&str, &[u8])] = icons!(
     "hash",
     "headphones",
     "headphones-off",
+    "heart",
     "info",
     "keyboard",
     "link",

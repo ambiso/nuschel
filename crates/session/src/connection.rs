@@ -3,8 +3,8 @@ use crate::{
     Error,
     config::{ClientIdentity, ServerBookmark},
     model::{
-        Acl, AclEntry, AclGroup, Activity, Ban, ChannelEdit, ContextAction, PacketStats,
-        RegisteredUser, RejectKind, UserAction, UserStats, VoiceTargetSpec,
+        Acl, AclEntry, AclGroup, Activity, Ban, ChannelEdit, ContextAction, NameSpan, PacketStats,
+        Presence, RegisteredUser, RejectKind, UserAction, UserStats, VoiceTargetSpec,
     },
     udp::{self, PingStats, Received, TransportStats, Udp},
 };
@@ -633,7 +633,7 @@ impl State {
         &self,
         events: &mpsc::Sender<SessionEvent>,
         channels: Vec<u32>,
-        text: String,
+        line: Line,
     ) -> Result<(), Error> {
         if self.own_session.is_none() {
             return Ok(());
@@ -642,8 +642,8 @@ impl State {
             events,
             SessionEvent::Activity(Activity {
                 channels,
-                text,
                 observed_at_ms: now_ms(),
+                ..line.0
             }),
         )
         .await
@@ -1436,6 +1436,7 @@ impl State {
             kind::USER_REMOVE => {
                 let remove: proto::UserRemove = decode(&frame)?;
                 let actor = remove.actor.map(|actor| self.user_name(Some(actor)));
+                let by = remove.actor.map(|actor| self.users.get(&actor).cloned());
                 let reason = remove.reason.map(|reason| bounded(reason, 1024));
                 let ban = remove.ban.unwrap_or(false);
                 if Some(remove.session) == self.own_session {
@@ -1445,22 +1446,26 @@ impl State {
                     return Ok(());
                 };
                 self.blob_bytes -= user.blob_bytes();
-                let text = match (&actor, &reason) {
-                    (Some(actor), Some(reason)) if !reason.is_empty() => {
-                        format!(
-                            "{} was {} by {actor}: {reason}",
-                            user.name,
-                            if ban { "banned" } else { "kicked" }
-                        )
+                let line = match by {
+                    Some(by) => {
+                        let line = Line::default()
+                            .name(&user)
+                            .text(if ban {
+                                " was banned by "
+                            } else {
+                                " was kicked by "
+                            })
+                            .actor(by.as_ref());
+                        match reason.as_deref() {
+                            Some(reason) if !reason.is_empty() => line.text(": ").text(reason),
+                            _ => line,
+                        }
                     }
-                    (Some(actor), _) => format!(
-                        "{} was {} by {actor}",
-                        user.name,
-                        if ban { "banned" } else { "kicked" }
-                    ),
-                    (None, _) => format!("{} disconnected", user.name),
+                    None => Line::presence(Presence::Disconnected)
+                        .name(&user)
+                        .text(" disconnected"),
                 };
-                self.activity(events, vec![user.channel], text).await?;
+                self.activity(events, vec![user.channel], line).await?;
                 emit(events, SessionEvent::UserRemoved(remove.session)).await?;
             }
             kind::USER_STATE => self.user_state(decode(&frame)?, events).await?,
@@ -1887,10 +1892,11 @@ impl State {
         let actor = update
             .actor
             .filter(|actor| *actor != session && Some(*actor) != self.own_session.filter(|_| own));
-        let actor_name = update
+        // Who did it, if someone else; None inside is the server.
+        let by = update
             .actor
             .filter(|actor| *actor != session)
-            .map(|actor| self.user_name(Some(actor)));
+            .map(|actor| self.users.get(&actor).cloned());
         let mut log = Vec::new();
         let user = self.users.entry(session).or_insert_with(|| User {
             session,
@@ -1979,89 +1985,153 @@ impl State {
         }
         let user = user.clone();
         if self.own_session.is_some() {
-            let by = |verb: &str| match &actor_name {
-                Some(actor) => format!("{} was {verb} by {actor}", user.name),
-                None => format!("{} was {verb}", user.name),
+            let done = |verb: &str| {
+                let line = Line::default().name(&user).text(verb);
+                match &by {
+                    Some(by) => line.text(" by ").actor(by.as_ref()),
+                    None => line,
+                }
             };
             if !known {
-                log.push((vec![user.channel], format!("{} connected", user.name)));
+                log.push((
+                    vec![user.channel],
+                    Line::presence(Presence::Connected)
+                        .name(&user)
+                        .text(" connected"),
+                ));
             } else if previous.channel != user.channel {
                 let destination = self.channel_name(user.channel);
-                let text = match (&actor_name, own) {
-                    (Some(actor), true) => format!("You were moved to {destination} by {actor}"),
-                    (Some(actor), false) => {
-                        format!("{} was moved to {destination} by {actor}", user.name)
-                    }
-                    (None, true) => format!("You joined {destination}"),
-                    (None, false) => format!("{} moved to {destination}", user.name),
+                let line = if own {
+                    Line::default().text(if by.is_some() {
+                        "You were moved to "
+                    } else {
+                        "You joined "
+                    })
+                } else {
+                    Line::default().name(&user).text(if by.is_some() {
+                        " was moved to "
+                    } else {
+                        " moved to "
+                    })
+                }
+                .text(&destination);
+                let line = match &by {
+                    Some(by) => line.text(" by ").actor(by.as_ref()),
+                    None => line,
                 };
-                log.push((vec![previous.channel, user.channel], text));
+                log.push((vec![previous.channel, user.channel], line));
+            }
+            if known && !own && previous.name != user.name {
+                // The new name is plain text: a nickname stands for the person.
+                log.push((
+                    vec![user.channel],
+                    Line::presence(Presence::Renamed)
+                        .name(&previous)
+                        .text(" renamed to ")
+                        .text(&user.name),
+                ));
             }
             if known && previous.muted != user.muted {
                 log.push((
                     vec![user.channel],
-                    by(if user.muted { "muted" } else { "unmuted" }),
+                    done(if user.muted {
+                        " was muted"
+                    } else {
+                        " was unmuted"
+                    }),
                 ));
             }
             if known && previous.deafened != user.deafened {
                 log.push((
                     vec![user.channel],
-                    by(if user.deafened {
-                        "deafened"
+                    done(if user.deafened {
+                        " was deafened"
                     } else {
-                        "undeafened"
+                        " was undeafened"
                     }),
                 ));
             }
             if known && previous.suppressed != user.suppressed && actor.is_some() {
                 log.push((
                     vec![user.channel],
-                    by(if user.suppressed {
-                        "suppressed"
+                    done(if user.suppressed {
+                        " was suppressed"
                     } else {
-                        "unsuppressed"
+                        " was unsuppressed"
                     }),
                 ));
             }
             if known && previous.priority_speaker != user.priority_speaker {
                 log.push((
                     vec![user.channel],
-                    format!(
-                        "{} is {} a priority speaker",
-                        user.name,
-                        if user.priority_speaker {
-                            "now"
-                        } else {
-                            "no longer"
-                        }
-                    ),
+                    Line::default().name(&user).text(if user.priority_speaker {
+                        " is now a priority speaker"
+                    } else {
+                        " is no longer a priority speaker"
+                    }),
                 ));
             }
             if previous.recording != user.recording {
                 log.push((
                     vec![user.channel],
-                    format!(
-                        "{} {} recording",
-                        user.name,
-                        if user.recording { "started" } else { "stopped" }
-                    ),
+                    Line::default().name(&user).text(if user.recording {
+                        " started recording"
+                    } else {
+                        " stopped recording"
+                    }),
                 ));
             }
             if known && previous.user_id.is_none() && user.user_id.is_some() {
                 log.push((
                     Vec::new(),
-                    format!("{} is now registered on this server", user.name),
+                    Line::default()
+                        .name(&user)
+                        .text(" is now registered on this server"),
                 ));
             }
         }
         emit(events, SessionEvent::User(user)).await?;
-        for (channels, text) in log {
-            self.activity(events, channels, text).await?;
+        for (channels, line) in log {
+            self.activity(events, channels, line).await?;
         }
         if over_budget {
             self.notice_once(events, BLOBS_NOTICE).await?;
         }
         Ok(())
+    }
+}
+
+/// An activity line being written, recording where it names people.
+#[derive(Default)]
+struct Line(Activity);
+
+impl Line {
+    fn presence(presence: Presence) -> Self {
+        Self(Activity {
+            presence: Some(presence),
+            ..Activity::default()
+        })
+    }
+    fn text(mut self, text: &str) -> Self {
+        self.0.text.push_str(text);
+        self
+    }
+    fn name(mut self, user: &User) -> Self {
+        let start = self.0.text.len();
+        self.0.text.push_str(&user.name);
+        self.0.names.push(NameSpan {
+            start,
+            end: self.0.text.len(),
+            certificate_hash: user.certificate_hash.clone(),
+        });
+        self
+    }
+    /// Whoever acted: a user, or the server (also for a session not known).
+    fn actor(self, actor: Option<&User>) -> Self {
+        match actor {
+            Some(actor) => self.name(actor),
+            None => self.text("the server"),
+        }
     }
 }
 
@@ -2353,6 +2423,7 @@ mod tests {
                         proto::UserState {
                             session: Some(session),
                             name: Some(name.into()),
+                            hash: Some(format!("{name}-hash")),
                             ..Default::default()
                         },
                     ),
@@ -2361,21 +2432,24 @@ mod tests {
                 .await
                 .unwrap();
         }
-        state
-            .handle(
-                frame(
-                    kind::USER_STATE,
-                    proto::UserState {
-                        session: Some(2),
-                        actor: Some(3),
-                        mute: Some(true),
-                        ..Default::default()
-                    },
-                ),
-                &tx,
-            )
-            .await
-            .unwrap();
+        for update in [
+            proto::UserState {
+                session: Some(2),
+                actor: Some(3),
+                mute: Some(true),
+                ..Default::default()
+            },
+            proto::UserState {
+                session: Some(3),
+                name: Some("Moderator".into()),
+                ..Default::default()
+            },
+        ] {
+            state
+                .handle(frame(kind::USER_STATE, update), &tx)
+                .await
+                .unwrap();
+        }
         state
             .handle(
                 frame(
@@ -2391,21 +2465,49 @@ mod tests {
             )
             .await
             .unwrap();
-        let lines: Vec<String> = drain(&mut rx)
+        let activities: Vec<Activity> = drain(&mut rx)
             .await
             .into_iter()
             .filter_map(|event| match event {
-                SessionEvent::Activity(activity) => Some(activity.text),
+                SessionEvent::Activity(activity) => Some(activity),
                 _ => None,
             })
             .collect();
-        assert!(
-            lines.contains(&"Ada was muted by Mod".to_string()),
-            "{lines:?}"
+        let lines: Vec<&str> = activities.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            lines,
+            [
+                "Me connected",
+                "Ada connected",
+                "Mod connected",
+                "Ada was muted by Mod",
+                "Mod renamed to Moderator",
+                "Ada was banned by Moderator: spam"
+            ]
         );
-        assert!(
-            lines.contains(&"Ada was banned by Mod: spam".to_string()),
-            "{lines:?}"
+        // Where each line names someone, for local nicknames.
+        let span = |start, end, name: &str| NameSpan {
+            start,
+            end,
+            certificate_hash: Some(format!("{name}-hash")),
+        };
+        assert_eq!(
+            activities[3].names,
+            [span(0, 3, "Ada"), span(17, 20, "Mod")]
+        );
+        assert_eq!(activities[4].names, [span(0, 3, "Mod")]);
+        assert_eq!(activities[5].names[1], span(18, 27, "Mod"));
+        let presence: Vec<_> = activities.iter().map(|line| line.presence).collect();
+        assert_eq!(
+            presence,
+            [
+                Some(Presence::Connected),
+                Some(Presence::Connected),
+                Some(Presence::Connected),
+                None,
+                Some(Presence::Renamed),
+                None
+            ]
         );
         let error = state
             .handle(
@@ -2423,7 +2525,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(error, Error::Removed { actor: Some(ref actor), ban: false, .. } if actor == "Mod")
+            matches!(error, Error::Removed { actor: Some(ref actor), ban: false, .. } if actor == "Moderator")
         );
     }
 

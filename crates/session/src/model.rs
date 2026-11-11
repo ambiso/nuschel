@@ -176,12 +176,33 @@ impl RejectKind {
 }
 
 /// A one-line event for the conversation log (joins, moves, moderation…).
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct Activity {
     /// Channels the line is relevant to; empty means server-wide.
     pub channels: Vec<u32>,
     pub text: String,
     pub observed_at_ms: i64,
+    /// Where `text` names people, in order, so a client can show its own
+    /// names for them. The first is the person the line is about.
+    pub names: Vec<NameSpan>,
+    /// Someone connected, disconnected or changed name.
+    pub presence: Option<Presence>,
+}
+
+/// A user's name in an activity line: bytes `start..end` of its text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NameSpan {
+    pub start: usize,
+    pub end: usize,
+    pub certificate_hash: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Presence {
+    Connected,
+    Disconnected,
+    Renamed,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]

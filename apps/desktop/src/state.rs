@@ -2391,7 +2391,7 @@ impl Desktop {
             server.channels.push(ChannelView {
                 id,
                 parent: None,
-                name: format!("@ {}", peer.name),
+                name: format!("@ {}", crate::names::display_name(&peer, &self.settings)),
                 topic: "Private conversation".into(),
                 position: i32::MAX,
                 target: TextTarget::Direct(session),
@@ -2972,8 +2972,8 @@ impl Desktop {
                             name: format!(
                                 "@ {}",
                                 peer.as_ref()
-                                    .map(|peer| peer.name.clone())
-                                    .unwrap_or_else(|| "Direct message".into())
+                                    .map(|peer| crate::names::display_name(peer, &self.settings))
+                                    .unwrap_or("Direct message")
                             ),
                             topic: "Private conversation".into(),
                             position: i32::MAX,
@@ -3031,7 +3031,11 @@ impl Desktop {
                             "message notification check"
                         );
                         if !shown && (direct || in_voice || mentioned) {
-                            let author = message.message.author.clone();
+                            let name = &message.message.author;
+                            let author =
+                                crate::names::author(name, server.users.values(), peer.as_ref());
+                            let author =
+                                crate::names::author_name(name, author, &self.settings).to_string();
                             let preview = crate::notify::preview(&text);
                             let _ = self.notes.try_send(crate::notify::Note {
                                 key: format!("{}:{}", server.id, channel.id),
@@ -3366,16 +3370,33 @@ impl Desktop {
             }
             SessionEvent::Activity(activity) => {
                 let mut targets = activity.channels.clone();
-                if targets.is_empty() {
+                // A friend's arrival, departure or new name shows server-wide,
+                // as in Mumble's log.
+                let friend = activity.presence.is_some()
+                    && crate::names::about_friend(&activity, &self.settings);
+                if targets.is_empty() || friend {
                     targets.push(0);
                     targets.extend(server.voice_channel());
                 }
                 targets.sort_unstable();
                 targets.dedup();
+                let text = crate::names::activity_text(&activity, &self.settings);
                 for id in targets {
                     if let Some(channel) = server.channel_view(id) {
-                        channel.log(activity.text.clone(), activity.observed_at_ms, false);
+                        channel.log(text.clone(), activity.observed_at_ms, false);
                     }
+                }
+                if friend
+                    && activity.presence == Some(nuschel_session::model::Presence::Connected)
+                    && self.settings.friend_notifications
+                    && !self.window_active
+                {
+                    let _ = self.notes.try_send(crate::notify::Note {
+                        key: format!("{}:friends", server.id),
+                        summary: text,
+                        body: server.name.clone(),
+                        image: None,
+                    });
                 }
             }
             SessionEvent::Limits(limits) => server.limits = Some(limits),
@@ -3432,7 +3453,7 @@ impl Desktop {
                     channel.log(
                         format!(
                             "{} uses a legacy voice codec (CELT/Speex) that Nuschel cannot play.",
-                            user.name
+                            crate::names::display_name(&user, &self.settings)
                         ),
                         nuschel_session::connection::now_ms(),
                         true,

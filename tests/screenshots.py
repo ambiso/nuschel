@@ -48,6 +48,15 @@ def JUMP_TO_LATEST(width, height):
     return (width // 2 + 160, height - 112)
 
 
+# In #Development's member list: Ada's and Grace's rows. Entries of the user
+# menu opened on Ada (on Grace they are 60 pixels lower).
+ADA_ROW = (236, 301)
+GRACE_ROW = (236, 361)
+MENU_PROFILE = (300, 323)
+MENU_ADD_FRIEND = (300, 471)
+MENU_NICKNAME = (300, 506)
+PROFILE_DONE = (925, 178)
+
 # The screenshot sent into #Development, and the Lobby row.
 CHAT_IMAGE = (580, 670)
 LOBBY_ROW = (189, 233)
@@ -143,7 +152,7 @@ def main():
     parser.add_argument("--gnome-shell", type=Path)
     parser.add_argument("--size", default="1280x800")
     parser.add_argument("--settle", type=float, default=4.0)
-    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,maximize")
+    parser.add_argument("--scenes", default="all", help="comma-separated: select,multiline,links,rich,friends,unread,dialog,settings,server,menus,long,search,emoji,toggles,clipping,viewer,notify,scroll,paste,attach,maximize")
     parser.add_argument("--dragon-drop", type=Path, help="dragon-drop, to drop files on the conversation (attach scene)")
     parser.add_argument("--pulse-bin", type=Path, help="start a private PulseAudio with a sine-wave microphone")
     args = parser.parse_args()
@@ -397,6 +406,55 @@ def main():
                 shot("36-rich-text-expanded")
                 click(461, 685)  # Show less, so the timeline is as later scenes expect
                 time.sleep(0.6)
+
+            if want("friends"):
+                # Before the server scene, which collapses Lobby and its members.
+                click(228, 268)  # #Development
+                time.sleep(0.6)
+                click(*ADA_ROW, button=3)
+                time.sleep(0.8)
+                click(*MENU_ADD_FRIEND)
+                time.sleep(0.6)
+                click(*ADA_ROW, button=3)
+                time.sleep(0.8)
+                click(*MENU_NICKNAME)
+                time.sleep(0.8)
+                shell.type("Countess")
+                time.sleep(0.6)
+                shot("37-nickname-prompt")
+                shell.key("Return")
+                time.sleep(0.6)
+                click(*GRACE_ROW, button=3)
+                time.sleep(0.8)
+                click(MENU_ADD_FRIEND[0], MENU_ADD_FRIEND[1] + 60)
+                time.sleep(0.6)
+                # A friend's arrival shows here although she connects to Root.
+                bots[1].close()
+                time.sleep(1.0)
+                bots[1] = Client(args.binaries, "127.0.0.1", port, pin, "Grace", root / "bot1")
+                bots[1].send(kind="join", channel=2)
+                bots[1].send(kind="avatar", path=str(avatars[1]))
+                time.sleep(1.5)
+                shot("38-friends")
+                hover(ADA_ROW[0] - 20, ADA_ROW[1])
+                time.sleep(1.5)
+                shot("39-nickname-tooltip")
+                click(*ADA_ROW, button=3)
+                time.sleep(0.8)
+                shot("40-friend-menu")
+                click(*MENU_PROFILE)
+                time.sleep(1.5)
+                shot("41-friend-profile")
+                click(*PROFILE_DONE)
+                time.sleep(0.4)
+                click(width // 2, 140)  # a click after the dialog can be swallowed, as after mapping
+                time.sleep(0.4)
+                settings = json.loads((profile / "config/settings.json").read_text())
+                ada = next(e["user"]["certificate_hash"] for e in bots[1].events
+                           if e["kind"] == "user" and e["user"]["name"] == "Ada Lovelace")
+                assert settings["nicknames"] == {ada: "Countess"}, settings
+                assert settings["friends"][ada] == "Ada Lovelace", settings
+                assert "Grace" in settings["friends"].values(), settings
 
             if want("dialog"):
                 click(59, 227)

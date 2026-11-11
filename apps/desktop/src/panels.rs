@@ -141,6 +141,21 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     2,
                 ),
             ];
+            let shown_name = crate::names::display_name(user, &this.settings).to_string();
+            if shown_name != user.name {
+                rows.push(row("Name on the server", user.name.clone(), 14));
+            }
+            if let Some(added) = this.settings.friend(user.certificate_hash.as_deref()) {
+                rows.push(row(
+                    "Friend",
+                    if added == user.name {
+                        "Yes".into()
+                    } else {
+                        format!("Yes, added as {added}")
+                    },
+                    15,
+                ));
+            }
             let mut status = Vec::new();
             for (flag, text) in [
                 (user.muted, "server-muted"),
@@ -258,20 +273,20 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                             div()
                                 .size(px(56.))
                                 .rounded_full()
-                                .bg(theme::avatar(&user.name))
+                                .bg(theme::avatar(&shown_name))
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .text_xl()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(color(0xffffff))
-                                .child(text!(theme::initials(&user.name)).with_id("info-avatar")),
+                                .child(text!(theme::initials(&shown_name)).with_id("info-avatar")),
                         )
                         .child(
                             div()
                                 .text_lg()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(text!(user.name.clone()).with_id("info-name")),
+                                .child(text!(shown_name).with_id("info-name")),
                         ),
                 )
                 .when_some(comment, |column, blocks| {

@@ -246,6 +246,12 @@ pub struct ClientSettings {
     pub sound_effects: bool,
     /// Their volume, from 0 to 1.
     pub sound_volume: f32,
+    /// Friends by certificate hash, with the name they had when added.
+    pub friends: std::collections::BTreeMap<String, String>,
+    /// Names shown instead of a user's own, by certificate hash; only for you.
+    pub nicknames: std::collections::BTreeMap<String, String>,
+    /// A desktop notification when a friend connects.
+    pub friend_notifications: bool,
 }
 
 pub const SIDEBAR_WIDTH: std::ops::RangeInclusive<f32> = 200.0..=560.0;
@@ -265,6 +271,9 @@ impl Default for ClientSettings {
             server_icons: true,
             sound_effects: true,
             sound_volume: 0.7,
+            friends: Default::default(),
+            nicknames: Default::default(),
+            friend_notifications: false,
         }
     }
 }
@@ -282,6 +291,12 @@ impl ClientSettings {
         }
         while self.local_mutes.len() > 4096 {
             self.local_mutes.pop_first();
+        }
+        for names in [&mut self.friends, &mut self.nicknames] {
+            names.retain(|hash, name| hash.len() <= 128 && clean_name(name) == *name);
+            while names.len() > MAX_PEOPLE {
+                names.pop_first();
+            }
         }
         if self
             .push_to_talk_key
@@ -311,6 +326,59 @@ impl ClientSettings {
     pub fn locally_muted(&self, hash: Option<&str>) -> bool {
         hash.is_some_and(|hash| self.local_mutes.contains(hash))
     }
+    pub fn nickname(&self, hash: Option<&str>) -> Option<&str> {
+        hash.and_then(|hash| self.nicknames.get(hash))
+            .map(String::as_str)
+    }
+    /// The name a friend had when added.
+    pub fn friend(&self, hash: Option<&str>) -> Option<&str> {
+        hash.and_then(|hash| self.friends.get(hash))
+            .map(String::as_str)
+    }
+    /// Befriend, remembering `name`; false when the friends list is full.
+    pub fn add_friend(&mut self, hash: &str, name: &str) -> bool {
+        insert_name(&mut self.friends, hash, name)
+    }
+    /// Set a local nickname; an empty one removes it. False when the list is full.
+    pub fn set_nickname(&mut self, hash: &str, nickname: &str) -> bool {
+        if clean_name(nickname).is_empty() {
+            self.nicknames.remove(hash);
+            return true;
+        }
+        insert_name(&mut self.nicknames, hash, nickname)
+    }
+}
+
+/// Friends and nicknames kept, each; at most this many of the longest names
+/// keep settings.json well within the 1 MiB it is read with.
+pub const MAX_PEOPLE: usize = 1024;
+/// Longest friend name or nickname, in characters.
+pub const MAX_PERSON_NAME: usize = 64;
+
+/// A name on one line, trimmed and bounded.
+fn clean_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_PERSON_NAME)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn insert_name(
+    names: &mut std::collections::BTreeMap<String, String>,
+    hash: &str,
+    name: &str,
+) -> bool {
+    let name = clean_name(name);
+    if hash.is_empty() || hash.len() > 128 || name.is_empty() {
+        return false;
+    }
+    if names.len() >= MAX_PEOPLE && !names.contains_key(hash) {
+        return false;
+    }
+    names.insert(hash.to_string(), name);
+    true
 }
 
 #[derive(Clone)]
@@ -848,6 +916,50 @@ mod tests {
         assert!(loaded.locally_muted(Some("def")));
         assert_eq!(loaded.volume_for(None), 1.);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn friends_and_nicknames_are_bounded() {
+        let mut settings = ClientSettings::default();
+        assert!(settings.add_friend("aa", "Ada"));
+        assert!(settings.set_nickname("aa", "  Countess\n of Lovelace "));
+        assert_eq!(settings.friend(Some("aa")), Some("Ada"));
+        assert_eq!(settings.nickname(Some("aa")), Some("Countess of Lovelace"));
+        assert_eq!(settings.nickname(None), None);
+        // Empty clears; no hash, an overlong one or a blank name is refused.
+        assert!(settings.set_nickname("aa", " \t"));
+        assert_eq!(settings.nickname(Some("aa")), None);
+        assert!(!settings.add_friend("", "Ada"));
+        assert!(!settings.add_friend(&"f".repeat(129), "Ada"));
+        assert!(!settings.add_friend("bb", "\u{7}"));
+        assert!(settings.set_nickname("bb", &"n".repeat(500)));
+        assert_eq!(
+            settings.nickname(Some("bb")).unwrap().len(),
+            MAX_PERSON_NAME
+        );
+        // A full list refuses newcomers but still renames those on it.
+        for n in 0..MAX_PEOPLE - 1 {
+            assert!(settings.add_friend(&format!("{n:040x}"), "Friend"));
+        }
+        assert!(!settings.add_friend("cc", "One too many"));
+        assert!(settings.add_friend("aa", "Ada Lovelace"));
+        // A hand-edited file loses what the menu could not have written.
+        settings.friends.insert("dd".into(), "Two\nlines".into());
+        settings
+            .nicknames
+            .insert("x".repeat(200), "Long hash".into());
+        settings.nicknames.insert("ee".into(), " padded ".into());
+        let settings = settings.sanitized();
+        assert_eq!(settings.friends.len(), MAX_PEOPLE);
+        assert_eq!(settings.friend(Some("aa")), Some("Ada Lovelace"));
+        assert_eq!(settings.friend(Some("dd")), None);
+        assert_eq!(settings.nicknames.len(), 1);
+        let many = ClientSettings {
+            nicknames: (0..MAX_PEOPLE + 10)
+                .map(|n| (format!("{n:040x}"), "Nick".to_string()))
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(many.sanitized().nicknames.len(), MAX_PEOPLE);
     }
     #[test]
     fn parses_mumble_urls_like_stock_clients() {

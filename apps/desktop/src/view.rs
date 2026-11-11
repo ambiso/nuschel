@@ -5,6 +5,7 @@ use crate::{
     chrome,
     dialogs::{self, Tone, Tooltip, icon_button, styled_button},
     menus::MenuTarget,
+    names,
     selection::{self, BlockText, Caret, HoveredLink, SelectionArea, TextBox, Texts},
     state::{COLLAPSED_HEIGHT, ChannelRow, Desktop, ServerView, Status, TreeRow},
     theme::{self, *},
@@ -389,14 +390,17 @@ fn sidebar(
                 cx,
             ),
             TreeRow::User { session, depth } => match server.users.get(&session) {
-                Some(user) => user_row(server, server_index, user, depth, cx),
+                Some(user) => user_row(this, server, server_index, user, depth, cx),
                 None => div().into_any_element(),
             },
             TreeRow::Listener { session, depth } => match server.users.get(&session) {
                 Some(user) => div()
                     .id(("listener-row", session as usize))
                     .role(Role::TreeItem)
-                    .aria_label(format!("{} is listening", user.name))
+                    .aria_label(format!(
+                        "{} is listening",
+                        names::full_name(user, &this.settings)
+                    ))
                     .h(px(26.))
                     .pl(px(user_indent(depth)))
                     .flex()
@@ -405,9 +409,12 @@ fn sidebar(
                     .text_sm()
                     .text_color(color(TEXT_FAINT))
                     .child(icon("ear", 14., color(TEXT_FAINT)))
-                    .child(div().truncate().child(
-                        text!(user.name.clone()).with_id(("listener-name", session as usize)),
-                    ))
+                    .child(
+                        div().truncate().child(
+                            text!(names::display_name(user, &this.settings).to_string())
+                                .with_id(("listener-name", session as usize)),
+                        ),
+                    )
                     .into_any_element(),
                 None => div().into_any_element(),
             },
@@ -825,6 +832,7 @@ fn user_indent(depth: usize) -> f32 {
 }
 
 fn user_row(
+    this: &Desktop,
     server: &ServerView,
     server_index: usize,
     user: &User,
@@ -836,17 +844,33 @@ fn user_row(
     let talking = server.talking.contains(&session);
     let muted = user.muted || user.self_muted || user.suppressed;
     let deafened = user.deafened || user.self_deafened;
+    let name = names::display_name(user, &this.settings).to_string();
+    let full_name = names::full_name(user, &this.settings);
+    // The name they were befriended under, when it is no longer theirs.
+    let friend = this
+        .settings
+        .friend(user.certificate_hash.as_deref())
+        .map(|added| {
+            SharedString::from(if added == user.name {
+                "Friend".to_string()
+            } else {
+                format!("Friend, added as {added}")
+            })
+        });
     div()
         .id(("user-row", session as usize))
         .role(Role::TreeItem)
         .tab_index(0)
         .aria_label(format!(
-            "{}{}{}{}",
-            user.name,
+            "{full_name}{}{}{}{}",
+            if friend.is_some() { ", friend" } else { "" },
             if talking { ", talking" } else { "" },
             if muted { ", muted" } else { "" },
             if deafened { ", deafened" } else { "" }
         ))
+        .when(full_name != name, |row| {
+            row.tooltip(move |_, cx| cx.new(|_| Tooltip(full_name.clone().into())).into())
+        })
         .aria_level(depth + 1)
         .flex()
         .items_center()
@@ -872,7 +896,7 @@ fn user_row(
             }),
         )
         .child(avatar(
-            &user.name,
+            &name,
             22.,
             talking,
             ("user-avatar", session as usize),
@@ -885,8 +909,16 @@ fn user_row(
                 .truncate()
                 .text_sm()
                 .when(talking, |name| name.text_color(color(TEXT)))
-                .child(text!(user.name.clone()).with_id(("user-name", session as usize))),
+                .child(text!(name).with_id(("user-name", session as usize))),
         )
+        .when_some(friend, |row, friend| {
+            row.child(
+                div()
+                    .id(("friend", session as usize))
+                    .tooltip(move |_, cx| cx.new(|_| Tooltip(friend.clone())).into())
+                    .child(icon("heart", 14., color(names::FRIEND))),
+            )
+        })
         .when(user.recording, |row| {
             row.child(
                 div()
@@ -1337,14 +1369,12 @@ fn conversation(
             author == message.author && message.observed_at_ms.saturating_sub(at) < GROUP_MS
         });
         previous = Some((&message.author, message.observed_at_ms));
-        let image = avatar_image(
-            server,
-            server
-                .users
-                .values()
-                .find(|user| user.name == message.author),
+        let author = names::author(
+            &message.author,
+            server.users.values(),
+            channel.direct_peer.as_ref(),
         );
-        let row = message_row(this, message, position, grouped, image, cx);
+        let row = message_row(this, server, message, author, position, grouped, cx);
         messages.push(match message.id {
             Some(id) => anchor.row(id, row),
             None => row,
@@ -1897,8 +1927,11 @@ fn search_panel(
             search.query
         )
     };
+    let server = &this.servers[server_index];
     let results = search.results.iter().enumerate().map(|(index, hit)| {
         let channel = hit.channel;
+        let author = names::author(&hit.author, server.users.values(), None);
+        let author = names::author_name(&hit.author, author, &this.settings).to_string();
         div()
             .id(("search-hit", index))
             .role(Role::ListItem)
@@ -1933,8 +1966,8 @@ fn search_panel(
                     .child(
                         div()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme::name_color(&hit.author))
-                            .child(text!(hit.author.clone()).with_id(("hit-author", index))),
+                            .text_color(theme::name_color(&author))
+                            .child(text!(author).with_id(("hit-author", index))),
                     )
                     .child(
                         div()
@@ -2137,13 +2170,19 @@ fn banner(
 
 fn message_row(
     this: &Desktop,
+    server: &ServerView,
     message: &crate::state::MessageView,
+    author: Option<&User>,
     index: usize,
     grouped: bool,
-    image: Option<std::sync::Arc<RenderImage>>,
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let serial = message.serial;
+    let name = names::author_name(&message.author, author, &this.settings).to_string();
+    // With a nickname shown, the name they sent it under.
+    let real_name = author
+        .map(|author| names::full_name(author, &this.settings))
+        .filter(|full| *full != name);
     let order = selection::order(message);
     let selected = this
         .text
@@ -2184,11 +2223,11 @@ fn message_row(
                 .w(px(40.))
                 .flex_shrink_0()
                 .child(avatar(
-                    &message.author,
+                    &name,
                     40.,
                     false,
                     ("avatar", index),
-                    image,
+                    avatar_image(server, author),
                 ))
                 .into_any_element()
         })
@@ -2207,11 +2246,15 @@ fn message_row(
                             .gap_2()
                             .child(
                                 div()
+                                    .id(("author-name", index))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme::name_color(&message.author))
-                                    .child(
-                                        text!(message.author.clone()).with_id(("author", index)),
-                                    ),
+                                    .text_color(theme::name_color(&name))
+                                    .when_some(real_name, |author, real_name| {
+                                        author.tooltip(move |_, cx| {
+                                            cx.new(|_| Tooltip(real_name.clone().into())).into()
+                                        })
+                                    })
+                                    .child(text!(name.clone()).with_id(("author", index))),
                             )
                             .child(
                                 div().text_xs().text_color(color(TEXT_FAINT)).child(
