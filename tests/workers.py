@@ -103,6 +103,16 @@ def check_workers(binaries):
     assert "".join(run["text"] for run in code["runs"]) == "fn main() {}\n"
     assert len({tuple(run["foreground"]) for run in code["runs"]}) > 1
 
+    formula, refused = exchange(binaries / "nuschel-math-worker", [
+        {"tex": "\\frac{a}{b} + x^2", "display": False, "size": 20.0},
+        {"tex": "\\foo", "display": True, "size": 20.0},
+    ])
+    assert formula["status"] == "rendered", formula
+    image = formula["value"]
+    assert len(base64.b64decode(image["coverage"])) == image["width"] * image["height"] > 0, image
+    assert 0 < image["baseline"] < image["height"], image
+    assert refused == {"status": "rejected", "value": "unknown command \\foo"}, refused
+
     failed = subprocess.run(
         [str(binaries / "nuschel-content-worker")], input=struct.pack(">I", 2**32 - 1),
         capture_output=True, timeout=10,

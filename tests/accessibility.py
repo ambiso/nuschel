@@ -18,6 +18,8 @@ Orca would and checks that:
 - Settings' shortcut rows name each action's Record button, and recording is
   announced as a status that a screen reader reads out; the privacy switch
   "Show when you are typing" is a named control;
+- a formula in a message is a math node named by its source, as typed (inline
+  and display);
 - after a long conversation, every loaded message is a list item a screen
   reader can read, including the oldest, screens above the viewport (the
   timeline lays out only what is near it); ScrollTo and GrabFocus through
@@ -50,7 +52,8 @@ from mumble_client import Client, certificate_pin  # noqa: E402
 ROLES = {23: "frame", 29: "label", 43: "push button", 54: "status bar", 61: "text", 62: "toggle button",
          65: "tree", 69: "window", 75: "application", 79: "entry", 91: "tree item", 27: "image",
          40: "password text", 16: "dialog", 33: "menu", 35: "menu item", 85: "section", 99: "grouping",
-         31: "list", 32: "list item", 39: "panel", 98: "list box", 105: "page tab list", 37: "page tab"}
+         31: "list", 32: "list item", 39: "panel", 98: "list box", 105: "page tab list", 37: "page tab",
+         113: "math"}
 INTERACTIVE = {"push button", "toggle button", "text", "entry", "password text", "tree item", "menu item"}
 FOCUSED = 1 << 12  # ATSPI_STATE_FOCUSED, in the first word of GetState
 # Messages in the long conversation: many screens of them.
@@ -256,6 +259,7 @@ class AccessibilityTest:
                 self.find(nodes, "dialog", "Quick switcher")
                 self.shell.key("Escape")
                 print(f"Switcher announced through its field: {field!r}; options: {options}.", flush=True)
+            self.check_math(nuschel, peer)
             self.check_timeline(nuschel, peer)
         finally:
             if peer:
@@ -327,6 +331,18 @@ class AccessibilityTest:
                    "Settings did not close", timeout=10)
         print("Settings: every shortcut row has a named Record button; recording is announced as a status.",
               flush=True)
+
+    def check_math(self, nuschel, peer):
+        """Formulas are math nodes named by their LaTeX source, as typed."""
+        peer.send(kind="text", channel=2, body="The area is $\\pi r^2$, so\n$$\\sum_{i=1}^n i$$")
+
+        def formulas():
+            nodes = snapshot(nuschel)
+            found = {name for _, _, role, name in nodes if role == "math"}
+            return (nodes, found) if {"$\\pi r^2$", "$$\\sum_{i=1}^n i$$"} <= found else None
+        nodes, found = eventually(formulas, "the formulas are not math nodes named by their source", timeout=20)
+        self.write_tree(nodes, "math-tree.txt")
+        print(f"Formulas are math nodes named by their source: {sorted(found)}.", flush=True)
 
     def check_timeline(self, nuschel, peer):
         """A long conversation: every loaded message is a list item a screen
