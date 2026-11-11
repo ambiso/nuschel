@@ -55,8 +55,8 @@ impl Destination {
             return self.peer_certificate == current.peer_certificate;
         }
         self.generation == current.generation
-            && self.storage == current.storage
             && self.peer == current.peer
+            && (self.peer.is_some() || self.storage == current.storage)
     }
 }
 
@@ -332,6 +332,11 @@ impl App {
             && *generation == flight.generation
             && *target == flight.target
             && *body == flight.body
+            && self.client.servers.iter().any(|view| {
+                view.id == *server
+                    && view.generation == *generation
+                    && view.status == Status::Connected
+            })
         {
             let caption = flight.caption.clone();
             let destination = self

@@ -34,7 +34,11 @@ pub async fn run(
     execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
     // Query before the event reader owns stdin. Unsupported terminals keep
     // text descriptions, and --plain never emits graphics queries.
-    let picker = ratatui_image::picker::Picker::from_query_stdio()
+    let query = ratatui_image::picker::cap_parser::QueryStdioOptions {
+        terminal_background_color_osc: true,
+        ..Default::default()
+    };
+    let picker = ratatui_image::picker::Picker::from_query_stdio_with_options(query)
         .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks());
     app.say(format!(
         "Terminal pictures: {:?}. Formula source stays available; --plain uses text.",

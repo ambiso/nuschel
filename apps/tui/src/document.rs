@@ -318,6 +318,48 @@ mod tests {
     }
 
     #[test]
+    fn syntax_colors_survive_multiline_runs_and_controls_remain_inert() {
+        let document = MessageDocument {
+            blocks: vec![ContentBlock::Code {
+                language: Some("rust".into()),
+                runs: vec![
+                    nuschl_core::CodeRun {
+                        text: "fn main() {\n".into(),
+                        foreground: [195, 70, 200, 255],
+                        bold: true,
+                        italic: false,
+                    },
+                    nuschl_core::CodeRun {
+                        text: "  \x1b]52;nope\x07\n}".into(),
+                        foreground: [60, 160, 210, 255],
+                        bold: false,
+                        italic: true,
+                    },
+                ],
+            }],
+        };
+        let lines = lines(&document, "", &mut Vec::new());
+        assert!(
+            lines[1]
+                .spans
+                .iter()
+                .any(|span| span.style.fg == Some(Color::Rgb(195, 70, 200)))
+        );
+        assert!(
+            lines[2]
+                .spans
+                .iter()
+                .any(|span| span.style.fg == Some(Color::Rgb(60, 160, 210)))
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|line| !plain(line).contains(['\x1b', '\x07']))
+        );
+        assert!(plain(&lines[3]).ends_with('}'));
+    }
+
+    #[test]
     fn long_lines_wrap_at_spaces_with_an_indent() {
         let wrapped = wrap(Line::from("one two three four five six"), 12, 2);
         let text: Vec<String> = wrapped.iter().map(plain).collect();

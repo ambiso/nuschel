@@ -183,7 +183,47 @@ fn prepared_images_do_not_follow_navigation_reconnects_or_certificate_changes() 
             "{change}"
         );
         assert!(app.clipboard.attached(), "{change}");
+        if change == "navigation" {
+            app.browse(0, 1);
+        }
         assert_eq!(app.composer.text(), "keep this draft", "{change}");
+    }
+}
+
+#[test]
+fn private_image_follows_the_same_certificate_but_rejects_a_reused_presence() {
+    for identity in ["same certificate", "different certificate", "anonymous"] {
+        let (mut app, recorder, _) = connected();
+        if identity != "anonymous" {
+            app.client.servers[0]
+                .users
+                .get_mut(&2)
+                .unwrap()
+                .certificate_hash = Some("bob-cert".into());
+        }
+        app.command("dm Bob");
+        app.clipboard = crate::clipboard::Clipboard::with_test_image(&app);
+        app.composer.insert("private caption");
+        let peer = app.client.servers[0].users.get_mut(&2).unwrap();
+        peer.instance = 99;
+        if identity == "different certificate" {
+            peer.certificate_hash = Some("someone-else".into());
+        }
+        app.client.servers[0].generation += 1;
+        recorder.requests.lock().unwrap().clear();
+        app.submit();
+        let sent = recorder.requests.lock().unwrap().iter().any(|request| {
+            matches!(
+                request,
+                Request::SendHtml {
+                    expected_peer: Some(99),
+                    ..
+                }
+            )
+        });
+        assert_eq!(sent, identity == "same certificate", "{identity}");
+        assert!(app.clipboard.attached());
+        assert_eq!(app.composer.text(), "private caption");
     }
 }
 

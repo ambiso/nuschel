@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 const CACHE: usize = 32;
 const QUEUE: usize = 4;
 const MAX_PIXELS: usize = 512 * 1024;
+const MAX_INPUT_PIXELS: usize = 2 * 1024 * 1024;
 const MAX_CACHE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ROWS: u16 = 16;
 const MAX_ENCODED: usize = 8 * 1024 * 1024;
@@ -26,7 +27,7 @@ enum Source {
     Image {
         width: u32,
         height: u32,
-        rgba: String,
+        rgba: Arc<str>,
     },
     Math {
         tex: String,
@@ -69,7 +70,7 @@ impl SourceRef<'_> {
                     height: h,
                     rgba: data,
                 },
-            ) => width == w && height == h && *rgba == data,
+            ) => width == w && height == h && *rgba == data.as_ref(),
             (
                 Self::Math { tex, display },
                 Source::Math {
@@ -118,6 +119,7 @@ struct Cached {
 struct Job {
     key: Key,
     picker: Picker,
+    background: [u8; 3],
 }
 struct Reply {
     key: Key,
@@ -134,6 +136,7 @@ pub struct Graphics {
     replies: Option<mpsc::Receiver<Reply>>,
     task: Option<tokio::task::JoinHandle<()>>,
     deleted: Vec<u32>,
+    background: [u8; 3],
 }
 
 impl Graphics {
@@ -141,11 +144,25 @@ impl Graphics {
     /// not become keystrokes. Half-blocks use one raster column per terminal
     /// column and two raster rows per terminal row, keeping formulas readable.
     pub fn configure(&mut self, picker: Picker) {
-        let picker = if picker.protocol_type() == ProtocolType::Halfblocks {
+        self.background = picker
+            .capabilities()
+            .iter()
+            .find_map(|capability| match capability {
+                ratatui_image::picker::Capability::Background(r, g, b) => Some([*r, *g, *b]),
+                _ => None,
+            })
+            .unwrap_or([0, 0, 0]);
+        let mut picker = if picker.protocol_type() == ProtocolType::Halfblocks {
             Picker::from_fontsize((1, 2).into())
         } else {
             picker
         };
+        picker.set_background_color(Some(image::Rgba([
+            self.background[0],
+            self.background[1],
+            self.background[2],
+            255,
+        ])));
         let font = picker.font_size();
         if font.width == 0 || font.height == 0 || font.width > 128 || font.height > 256 {
             return;
@@ -158,10 +175,15 @@ impl Graphics {
     pub fn poll(&mut self) {
         while let Some(reply) = self.replies.as_mut().and_then(|rx| rx.try_recv().ok()) {
             if let Some(entry) = self.entries.get_mut(&reply.key) {
-                entry.entry = reply
-                    .image
-                    .map_or(Entry::Failed, |image| Entry::Ready(Arc::new(image)));
-                entry.bytes = reply.bytes;
+                if reply.bytes <= MAX_CACHE_BYTES {
+                    entry.entry = reply
+                        .image
+                        .map_or(Entry::Failed, |image| Entry::Ready(Arc::new(image)));
+                    entry.bytes = reply.bytes;
+                } else {
+                    entry.entry = Entry::Failed;
+                    entry.bytes = reply.key.source.bytes();
+                }
             }
         }
         self.evict();
@@ -230,7 +252,8 @@ impl Graphics {
             source: source.owned(),
             columns,
         };
-        let reserved = key.source.bytes().saturating_mul(2);
+        // Image keys share their base64 storage with the job/reply via Arc.
+        let reserved = key.source.bytes();
         if self
             .entries
             .values()
@@ -252,6 +275,7 @@ impl Graphics {
             .try_send(Job {
                 key: key.clone(),
                 picker,
+                background: self.background,
             })
             .is_err()
         {
@@ -289,7 +313,7 @@ impl Graphics {
                     rgba,
                     ..
                 } if valid_size(*width, *height, 4).is_some()
-                    && rgba.len() <= MAX_PIXELS * 4 * 4 / 3 + 8 =>
+                    && rgba.len() <= MAX_INPUT_PIXELS * 4 * 4 / 3 + 8 =>
                 {
                     sources.push(SourceRef::Image {
                         width: *width,
@@ -374,7 +398,7 @@ fn valid_size(width: u32, height: u32, channels: usize) -> Option<usize> {
     let pixels = usize::try_from(width)
         .ok()?
         .checked_mul(usize::try_from(height).ok()?)?;
-    (width > 0 && height > 0 && width <= 4096 && height <= 2048 && pixels <= MAX_PIXELS)
+    (width > 0 && height > 0 && width <= 4096 && height <= 2048 && pixels <= MAX_INPUT_PIXELS)
         .then_some(pixels.checked_mul(channels)?)
 }
 
@@ -436,9 +460,19 @@ fn encoded_len(image: &SlicedProtocol) -> usize {
 
 fn encode(
     picker: &Picker,
-    pixels: image::RgbaImage,
+    mut pixels: image::RgbaImage,
     columns: u16,
+    background: [u8; 3],
 ) -> Option<(SlicedProtocol, usize)> {
+    for pixel in pixels.pixels_mut() {
+        let alpha = u16::from(pixel[3]);
+        for channel in 0..3 {
+            pixel[channel] = ((u16::from(pixel[channel]) * alpha
+                + u16::from(background[channel]) * (255 - alpha))
+                / 255) as u8;
+        }
+        pixel[3] = 255;
+    }
     let pixels = image::DynamicImage::ImageRgba8(pixels);
     let size = ratatui_image::Resize::Fit(None).size_for(
         &pixels,
@@ -446,6 +480,13 @@ fn encode(
         Size::new(columns, MAX_ROWS),
     );
     let font = picker.font_size();
+    let padded_pixels = usize::from(size.width)
+        * usize::from(font.width)
+        * usize::from(size.height)
+        * usize::from(font.height);
+    if padded_pixels > MAX_PIXELS {
+        return None;
+    }
     valid_size(
         u32::from(size.width) * u32::from(font.width),
         u32::from(size.height) * u32::from(font.height),
@@ -489,20 +530,7 @@ async fn serve(mut jobs: mpsc::Receiver<Job>, replies: mpsc::Sender<Reply>) {
                     })
                     .await
                     .ok()
-                    .and_then(|image| {
-                        let background = job
-                            .picker
-                            .capabilities()
-                            .iter()
-                            .find_map(|capability| match capability {
-                                ratatui_image::picker::Capability::Background(r, g, b) => {
-                                    Some([*r, *g, *b])
-                                }
-                                _ => None,
-                            })
-                            .unwrap_or([0, 0, 0]);
-                        formula(image, background)
-                    }),
+                    .and_then(|image| formula(image, job.background)),
                 None => None,
             },
         };
@@ -510,10 +538,12 @@ async fn serve(mut jobs: mpsc::Receiver<Job>, replies: mpsc::Sender<Reply>) {
         let input_bytes = key.source.bytes();
         let columns = key.columns;
         let (image, bytes) = if let Some(pixels) = pixels {
-            let encoded = tokio::task::spawn_blocking(move || encode(&job.picker, pixels, columns))
-                .await
-                .ok()
-                .flatten();
+            let encoded = tokio::task::spawn_blocking(move || {
+                encode(&job.picker, pixels, columns, job.background)
+            })
+            .await
+            .ok()
+            .flatten();
             match encoded {
                 Some((image, bytes)) => (Some(image), bytes.saturating_add(input_bytes)),
                 None => (None, input_bytes),
@@ -542,5 +572,56 @@ mod tests {
         assert!(rgba(u32::MAX, u32::MAX, &bytes).is_none());
         assert!(rgba(4096, 2048, "").is_none());
         assert!(rgba(1, 1, "\x1b]52;evil").is_none());
+    }
+
+    #[test]
+    fn formula_coverage_is_composited_for_dark_and_light_terminals() {
+        let mask = MathImage {
+            width: 3,
+            height: 1,
+            baseline: 1,
+            coverage: base64::engine::general_purpose::STANDARD.encode([0, 128, 255]),
+        };
+        let dark = formula(mask.clone(), [0, 0, 0]).unwrap();
+        assert_eq!(*dark.get_pixel(0, 0), image::Rgba([0, 0, 0, 255]));
+        assert_eq!(*dark.get_pixel(1, 0), image::Rgba([115, 115, 115, 255]));
+        assert_eq!(*dark.get_pixel(2, 0), image::Rgba([230, 230, 230, 255]));
+        let light = formula(mask, [255, 255, 255]).unwrap();
+        assert_eq!(*light.get_pixel(0, 0), image::Rgba([255, 255, 255, 255]));
+        assert_eq!(*light.get_pixel(2, 0), image::Rgba([24, 24, 24, 255]));
+    }
+
+    #[test]
+    fn raster_rows_are_legible_clipped_and_composited_without_a_terminal() {
+        use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+        use ratatui_image::sliced::SlicedImage;
+        let picker = Picker::from_fontsize((1, 2).into());
+        let pixels = image::RgbaImage::from_fn(12, 12, |x, y| {
+            if x == y {
+                image::Rgba([255, 255, 255, 255])
+            } else {
+                image::Rgba([255, 255, 255, 0])
+            }
+        });
+        let (picture, _) = encode(&picker, pixels, 12, [0, 0, 0]).unwrap();
+        assert_eq!(picture.size(), Size::new(12, 6));
+        let area = Rect::new(0, 0, 12, 3);
+        let mut clipped = Buffer::empty(area);
+        SlicedImage::new(&picture, (0, -2).into()).render(area, &mut clipped);
+        let colors: std::collections::HashSet<_> = clipped
+            .content
+            .iter()
+            .flat_map(|cell| [cell.fg, cell.bg])
+            .collect();
+        assert!(colors.contains(&ratatui::style::Color::Rgb(0, 0, 0)));
+        assert!(colors.contains(&ratatui::style::Color::Rgb(255, 255, 255)));
+        let (small, _) = encode(
+            &picker,
+            image::RgbaImage::from_pixel(1280, 720, image::Rgba([20, 30, 40, 255])),
+            40,
+            [0, 0, 0],
+        )
+        .unwrap();
+        assert!(small.size().width <= 40 && small.size().height <= MAX_ROWS);
     }
 }
