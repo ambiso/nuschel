@@ -57,6 +57,7 @@
             || lib.hasSuffix ".json" path
             || lib.hasSuffix ".vp8" path
             || lib.hasSuffix ".svg" path
+            || lib.hasSuffix ".ico" path
             # The release signing key the updater trusts.
             || lib.hasSuffix "update-key.pub" path
             # Vendored GPUI platform crates keep their shaders and headers.

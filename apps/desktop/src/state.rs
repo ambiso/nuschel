@@ -158,6 +158,9 @@ pub struct ChannelView {
     pub next_before: Option<i64>,
     /// The oldest stored message is loaded: there is nothing further up.
     pub beginning: bool,
+    /// The latest page is in memory; live messages keep it current, so
+    /// opening the conversation again needs no reload.
+    pub loaded: bool,
     pub loading: bool,
     /// Messages that arrived while the reader was scrolled up.
     pub new_messages: usize,
@@ -206,6 +209,7 @@ impl ChannelView {
             messages: Vec::new(),
             next_before: None,
             beginning: false,
+            loaded: false,
             loading: false,
             new_messages: 0,
             activity: Default::default(),
@@ -816,7 +820,17 @@ impl Desktop {
         self.anchor.reset();
         self.following = true;
         self.older_paused = false;
-        self.load_history(None);
+        let channel = self.servers[index]
+            .channels
+            .iter_mut()
+            .find(|channel| channel.id == id)
+            .expect("checked above");
+        if channel.loaded {
+            channel.trim_oldest(MAX_TIMELINE);
+            channel.new_messages = 0;
+        } else {
+            self.load_history(None);
+        }
         self.scroll.scroll_to_bottom();
         let server = &self.servers[index];
         if server.status == Status::Connected && !server.permissions.contains_key(&id) {
@@ -2422,14 +2436,18 @@ impl Desktop {
                 }
                 // Reconnecting to the same server leaves the timeline (and where
                 // the reader is in it) alone; a new identity has other history.
-                let server = &self.servers[index];
-                if server.history_identity() != identity
-                    && self
+                let server = &mut self.servers[index];
+                if server.history_identity() != identity {
+                    for channel in &mut server.channels {
+                        channel.loaded = false;
+                    }
+                    if self
                         .navigation
                         .selection()
                         .is_some_and(|selected| selected.server == server.id)
-                {
-                    self.load_history(None);
+                    {
+                        self.load_history(None);
+                    }
                 }
             }
             SessionEvent::Connected { session, .. } => {
@@ -2747,6 +2765,7 @@ impl ChannelView {
     ) -> bool {
         match before {
             None => {
+                self.loaded = true;
                 let newest = messages
                     .iter()
                     .filter_map(|message| message.id)

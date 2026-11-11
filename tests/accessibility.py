@@ -230,7 +230,7 @@ class AccessibilityTest:
             for button in ("Minimize", "Close"):
                 self.find(nodes, "push button", button)
             assert any(role == "push button" and name in ("Maximize", "Restore") for _, _, role, name in nodes)
-        for button in ("Add a server", "Disconnect", "Voice & audio settings", "Unmute", "Deafen",
+        for button in ("Add a server", "Disconnect", "Settings", "Unmute", "Deafen",
                        "Search local history", "Send"):
             self.find(nodes, "push button", button)
         self.find(nodes, "tree", "Channels")

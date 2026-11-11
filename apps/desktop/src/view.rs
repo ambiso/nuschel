@@ -974,7 +974,7 @@ fn voice_card(
                     .when_some(
                         server.audio.health.issues().first().map(|issue| issue.0),
                         |column, issue| {
-                            // Details and advice are in Voice & audio settings.
+                            // Details and advice are in Settings.
                             column.child(
                                 div()
                                     .id("audio-issue")
@@ -1463,12 +1463,13 @@ fn timeline_intro(
     cx: &mut Context<Desktop>,
 ) -> AnyElement {
     let is_channel = matches!(channel.target, TextTarget::Channel(_));
+    if !channel.loaded && channel.loading {
+        // The first page usually arrives within a frame or two: showing the
+        // welcome or a loading line meanwhile would only flash and shift.
+        return div().into_any_element();
+    }
     let loading = channel.loading.then(|| {
-        let label = if channel.messages.is_empty() {
-            "Loading local history…"
-        } else {
-            "Loading older messages…"
-        };
+        let label = "Loading older messages…";
         div()
             .id("history-loading")
             .role(Role::Status)

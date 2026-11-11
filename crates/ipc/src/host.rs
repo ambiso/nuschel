@@ -224,13 +224,21 @@ pub fn storage_sandbox_command(executable: &Path, directory: &Path) -> Result<Co
 pub fn media_sandbox_command(executable: &Path) -> Result<Command, Error> {
     let mut command = persistent_sandbox(executable)?;
     command.args(["--dir", "/run/audio", "--dir", "/run/audio/pulse"]);
+    // PulseAudio's directory is bound rather than its socket, so a restarted
+    // server's new socket shows up inside. PipeWire's socket sits directly in
+    // the runtime directory: after a restart the worker reports the failure
+    // and its replacement binds the new socket.
     if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") {
         let runtime = std::path::PathBuf::from(runtime);
         for (source, target) in [
             (runtime.join("pipewire-0"), "/run/audio/pipewire-0"),
-            (runtime.join("pulse/native"), "/run/audio/pulse/native"),
+            (runtime.join("pulse"), "/run/audio/pulse"),
         ] {
-            if source.exists() {
+            // A file deleted under a bind mount (the sound server restarted
+            // since a container was set up) still "exists", but bwrap cannot
+            // bind it and the whole sandbox would fail to start.
+            use std::os::unix::fs::MetadataExt as _;
+            if std::fs::metadata(&source).is_ok_and(|metadata| metadata.nlink() > 0) {
                 command.arg("--ro-bind").arg(source).arg(target);
             }
         }

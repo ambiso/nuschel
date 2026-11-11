@@ -33,7 +33,10 @@ a clipping microphone. It adjusts only Nuschel's own buffer and voice gate, and
 tells you what it cannot fix. Microphone capture starts muted. Audio service
 failures restart only the media worker and keep the connection and mute state.
 
-Click a channel to browse its local history. Double-click it, or use **Join
+Click a channel to open its conversation: one continuous timeline that follows new
+messages at the bottom. Scrolling up loads older local history without moving what
+is on screen, down to **Beginning of local history**; while you read further up, a
+pill counts new messages and jumps back to the latest. Double-click a channel, or use **Join
 channel**, to move your voice connection. Right-click users, channels and servers
 for whisper and shout, channel listening and links, per-user volume and local mute,
 direct messages, comments and avatars, registration, moderation, the channel
@@ -102,6 +105,11 @@ just workers
 # Linux VM packaging, confinement, SQLx/PostgreSQL and service preflight:
 just vm
 ```
+
+The icon's source is `apps/desktop/assets/nuschel.svg`. The Linux package installs
+the desktop entry and icons and registers `mumble://` links; after changing the icon,
+regenerate the committed Windows `.ico` with the command at the top of
+`nix/desktop-files.nix`.
 
 `cargo add` is built into the pinned Cargo. `Cargo.lock` and `flake.lock` are tracked.
 The Linux package (`nix build .#default`, also used by the VM tests) is built per
