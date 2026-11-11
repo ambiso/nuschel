@@ -69,7 +69,13 @@ The app is not notarised for now, so macOS refuses the first start: then open
 **System Settings → Privacy & Security** and choose **Open Anyway** next to the note
 that Nuschel was blocked. The macOS build has not been tried on a Mac yet.
 
-### Android, iOS, the web, a terminal client
+### A terminal client
+
+`nix run github:ambiso/nuschel#tui -- mumble://you@voice.example.org` starts `nuschel-tui`
+with the same servers and history, also over SSH (voice off there); `--plain` suits
+screen readers, and F1 lists the keys.
+
+### Android, iOS and the web
 
 Planned ([docs/clients.md](docs/clients.md)).
 

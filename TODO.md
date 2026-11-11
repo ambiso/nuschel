@@ -907,7 +907,17 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
   - [ ] What the SDK does not model yet (docs/clients.md, "Status"): identity, key
         transparency and trust; administration requests; transfers and
         attachments; split `native.rs`; UniFFI and wasm-bindgen wrappers.
-  - [ ] **TUI** (ratatui), the SDK's second consumer; full protocol and voice.
+  - [x] **TUI** (ratatui), the SDK's second consumer: `apps/tui` (`nuschel-tui`),
+        connections, certificate pins, the channel tree, timeline with paging,
+        composer, voice through the media worker, edits, deletions, typing, unread,
+        direct conversations, Ctrl+K and Ctrl+F, plain-line mode, no audio over SSH
+        (docs/clients.md, "The terminal client"). The switcher, search, typing line
+        and `mumble://` links moved into the SDK for it.
+  - [ ] TUI, left: identity and key transparency (warnings, verification),
+        end-to-end direct conversations, file transfers (offers show as text),
+        administration (ACLs, bans, moving people), whisper and push-to-talk (a
+        terminal has no key-up), Settings beyond the command line, image alt text
+        (the content worker keeps none).
   - [ ] **Android**: Kotlin + Compose over UniFFI; full protocol natively; workers as
         `isolatedProcess` services; platform echo cancellation; foreground service.
   - [ ] **iOS**: Swift + SwiftUI over UniFFI; workers in-process behind the same

@@ -9,8 +9,9 @@ first tag will make one ([How releases are made](#how-releases-are-made)).
 
 The flake builds the desktop app for Linux (`packages.<system>.default`, tested on
 x86_64) and exports a NixOS module for the server and a Home Manager module for the
-app. `nix run github:ambiso/nuschel` starts the app without installing it. To install
-it system-wide from your own flake:
+app. `nix run github:ambiso/nuschel` starts the app without installing it, and
+`nix run github:ambiso/nuschel#tui` the terminal client (`nuschel-tui`, in the same
+package). To install it system-wide from your own flake:
 
 ```nix
 # inputs.nuschel.url = "github:ambiso/nuschel";

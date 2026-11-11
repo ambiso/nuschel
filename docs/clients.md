@@ -1,7 +1,8 @@
 # Clients on every platform
 
 Decisions with the user (2026-11-11) and the architecture that follows from them. The
-desktop (GPUI) exists; the terminal, Android, iOS and web clients are queued.
+desktop (GPUI) and the terminal client (`apps/tui`) exist; the Android, iOS and web
+clients are queued.
 
 ## Decisions
 
@@ -73,9 +74,17 @@ features for `wasm32-unknown-unknown`. The core depends on `nuschel-core`,
   `typing_conversation`, `durable_directs_with`, …).
 - `tree` — the channel tree as rows, closed branches counting who is inside.
 - `names` — nicknames and friends (`Names`, `Preferences`), mentions.
+- `finder` — the quick switcher's results (Ctrl+K): channels, people and direct
+  conversations of every server, ranked by recent visits, unread state and a fuzzy
+  match.
+- `search` — what a message search covers (`Scope`), its results as a UI lists them
+  (`Hit`: place, author, snippet), and where a result's message is now (`Located`,
+  `Client::show_message`).
 - `sounds` — when a sound effect plays.
 - `navigation` — the open conversation, voice, and tickets that drop late pages.
-- `native` (feature) — `Driver`, its `Event`s and their conversion to `Input`.
+- `native` (feature) — `Driver`, its `Event`s and their conversion to `Input`;
+  `Client::open_url` for `mumble://` links (their parser and the servers' security
+  records are `nuschel-session`'s).
 
 ### API
 
@@ -96,12 +105,12 @@ while let Some(event) = events.recv().await {
 - **State is read in place**: `client.servers` (each a `ServerState` with its
   conversations and their timelines), `client.navigation`, `client.focus`. Cheap: no
   copies; a UI redraws what an update names.
-- **Commands** are methods: `connect`, `disconnect`, `add_server`,
-  `replace_server`, `remove_server`, `open` (browse a conversation; loads its latest
-  page), `load_history`, `load_page`, `send_text`, `edit`, `delete`,
-  `change_message`, `composing` (typing), `mark_read`, `set_mute`, `join`,
-  `open_direct`, `search`, `request` (to a server, for what is not modelled yet),
-  `log_gap`. None blocks: slow work is a `Platform` call answered later as an
+- **Commands** are methods: `connect`, `disconnect`, `trust_certificate`,
+  `open_url`, `add_server`, `replace_server`, `remove_server`, `open` (browse a
+  conversation; loads its latest page), `load_history`, `load_page`, `send_text`,
+  `edit`, `delete`, `change_message`, `composing` (typing), `mark_read`, `set_mute`,
+  `join`, `open_direct`, `search` (with `search_scope`, `search_hits`, `locate`,
+  `show_message`), `request` (to a server, for what is not modelled yet), `log_gap`. None blocks: slow work is a `Platform` call answered later as an
   `Input`. Failures to show at once (not connected, too long, a full queue) come back
   as `Result`s; the rest as the server's `notice` or an `Update`.
 - **Inputs** (`Client::handle`): what the platform reports, each with the server and
@@ -147,6 +156,12 @@ Moved, in this order, each step leaving the desktop working:
 6. `examples/headless.rs` with `tests/sdk_headless.py`: three clients without a UI
    connect to a loopback nuscheld, register, meet in a channel, send, receive, edit,
    and load the server's history through the SDK alone.
+7. For the terminal client, what it would otherwise have copied from the desktop: the
+   switcher's ranking (`finder`), search scopes, result naming and jumps (`search`),
+   the typing line (`ServerState::typing_line`), opening `mumble://` links
+   (`Client::open_url`, which the desktop uses too) and trusting a certificate
+   (`Client::trust_certificate`). The desktop keeps writing the servers before it
+   reconnects after a trust (it rolls the pin back if that fails).
 
 Left, in the order they should move:
 
@@ -171,11 +186,55 @@ Left, in the order they should move:
   policy is an `nuschel-ipc` type); the client sees `names::Preferences`.
 - **Transfers** (wormhole offers, `transfer.rs`) and **attachments**: a platform
   service and SDK state each.
-- **Search**: requests go through the client; results are shown by the desktop.
+- **Search**: requests, scopes, results and jumps go through the client; the
+  highlight of a jumped-to message is each UI's.
 - **The driver** is one file (`native.rs`); split it into connection, content and
   storage before the mobile work.
 - **Bindings**: UniFFI and wasm-bindgen are not adopted yet; a thin crate per
   binding will wrap `Client` (snapshots and updates as records).
+
+## The terminal client (`apps/tui`)
+
+`nuschel-tui` (ratatui on crossterm) is the SDK's second view, built on 2026-11-11 to
+prove the SDK is UI-independent: everything in it that is not drawing or keys is a
+call into `nuschel-client`, and what the desktop had kept to itself moved into the SDK
+first (Status, step 7). Decisions:
+
+- **Same profile and workers.** `Profile` (or `--profile-dir`), the saved servers,
+  local history, identity and the sandboxed workers beside the executable, through the
+  native driver; a `mumble://` link on the command line or with `/url`.
+- **One state, two outputs.** The full screen (channels and people, the conversation,
+  who is typing, the composer, two status lines, dialogs) and `--plain`, which prints
+  each change once as a line and reads commands and messages from standard input. Both
+  run the same `App` and the same commands (`/join`, `/edit`, `/search`, …), so
+  whatever a key does, a command does too. Plain lines are chosen automatically when
+  standard output is not a terminal or `TERM=dumb`.
+- **Screen readers.** Nothing is said by colour alone: states are words ("talking",
+  "muted", "3 unread, mention", "(edited)", "(deleted by a moderator)"), the row or
+  message the keyboard is on starts with `>`, and the terminal cursor sits on it (or in
+  the field being typed in), so readers that follow the cursor read the right line.
+  Plain lines suit readers that read new output (Speakup, Orca or NVDA in a terminal).
+- **Untrusted text.** Every string from a server goes through one cleaning step:
+  control characters (escape sequences) and bidirectional overrides never reach the
+  terminal. Images show as `[image, W×H]` (the content worker keeps no alternative
+  text), display formulas as `[formula]` with their source; links are numbered under
+  the message and open only on request (`o`, `/open N`), web links with the system's
+  opener (`--opener`; none over SSH, where they are shown), `mumble://` links in the
+  client itself.
+- **Voice over SSH.** Over SSH (or with `--no-audio`) every connection stays muted
+  and deafened, so no media worker opens audio devices on the remote machine; voice
+  elsewhere goes through the same media worker as the desktop (`--audio` over SSH).
+  Most terminals report no key releases, so there is no push-to-talk yet (the kitty
+  keyboard protocol would allow it where a terminal speaks it).
+- **Keys.** Tab moves between the panes; Ctrl+K, Ctrl+F, F1 (and `?` outside the
+  composer), Alt+M and Alt+D work everywhere; single letters act only outside the
+  composer. `keys.rs` holds the bindings and the help that lists them.
+
+Not yet in the terminal client: identity and key transparency beyond a new
+identity's recovery key and the worker's failures, which show as warnings (the
+driver's other `Native` events are dropped), end-to-end direct conversations, file
+transfers (an offer shows as text), administration, whisper, and settings beyond the
+command line.
 
 ## Reuse by layer
 
@@ -232,8 +291,8 @@ High-quality video without transcoding, so servers stay cheap:
 
 ## Order of work
 
-1. The SDK extraction, with the desktop moved onto it.
-2. The terminal client.
+1. The SDK extraction, with the desktop moved onto it (done).
+2. The terminal client (done: `apps/tui`).
 3. Android, then iOS.
 4. The web client, the tunnel relay and the NixOS module for the web host and share
    links.

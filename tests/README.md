@@ -50,6 +50,13 @@ channel, send, receive, edit, and load the server's history through the SDK alon
 `readme_screenshot.py` (`just readme-screenshot`) makes the picture at the top of
 README.md the same way: a loopback `nuscheld`, scripted people, and the desktop in a
 private headless GNOME Shell, cropped to the window; check it before committing.
+The terminal client: `with_local_nuscheld.py <binaries> tui_loopback.py <binaries> --port
+PORT` (or `with_local_murmur.py <mumble-server> tui_loopback.py <binaries> --port PORT
+--stock`) drives `nuschel-tui` through pseudo-terminals, one person in the full screen
+(read back by a small VT100 emulator; `--screens DIR` saves each step's screen as text)
+and one in plain lines: certificate on first use, joining through Ctrl+K, sending and
+receiving, and on nuscheld registering, typing, editing, deleting, search, a direct
+conversation and unread counts.
 
 `windows_vm.py` installs Windows 11 Enterprise (evaluation ISO from Microsoft)
 unattended into a KVM guest with two vCPUs and drives it through a PowerShell agent
