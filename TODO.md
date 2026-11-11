@@ -76,16 +76,16 @@ Later (reported):
       in the message, refreshed after each pickup, in a sandboxed transfer worker;
       Nuschel shows offers as file cards. Nuschel servers get their own, end-to-end
       encrypted design (chunked, resumable; magic-wormhole cannot resume).
-- [ ] Files on Nuschel servers: designed in docs/files.md (2026-11-11): *kept* files
-      on the server, *live* files sent from the sender's device magic-wormhole style
-      (direct first, the server as relay with a piece cache), one encrypted format
-      with per-chunk Merkle proofs (prototyped in `crates/files`). The user decided
-      all five questions (docs/files.md §11): 100 MiB / 10 GiB defaults; live shares
-      last forever but must cost nothing at startup or on the network while idle;
-      direct first everywhere; wormhole codes for stock users offered automatically
-      without re-posting everything after a restart; recipients as sources wanted
-      (evaluate rqbit with a private swarm over the encrypted object; the sender keeps
-      authority over deletion).
+- [ ] Files on Nuschel servers: designed in docs/files.md (2026-11-11), the user's
+      decisions in §11 folded in: *kept* files on the server (100 MiB / 10 GiB
+      defaults), *live* files sent magic-wormhole style (direct first everywhere, the
+      server as relay with a piece cache) from the sender or from recipients who help
+      share them (a private swarm of members; deleting the message ends every source);
+      shares cost nothing at rest (no announcements at login, a lazily read share
+      index, §3.5); wormhole codes for stock users re-offered after a restart only for
+      recent files, as one digest (§7); one encrypted format hashed with BitTorrent v2's
+      tree (BEP 52), prototyped in `crates/files`. rqbit is not embedded for now (no
+      BEP 52, no pluggable transport; §2.10). Next: implement (§8).
 - [ ] File transfer follow-ups: Settings controls for the rendezvous/relay servers,
       `wss://` rendezvous (the crate's TLS option pulls an old rustls), a rendezvous
       keepalive for codes waiting for hours, post "no longer available" when Nuschel

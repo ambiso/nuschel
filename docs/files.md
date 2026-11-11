@@ -25,27 +25,38 @@ files may go in one message.
 
 Both are kept, as two classes of one thing:
 
-- A **file object** is a file encrypted under its own random key in 64 KiB chunks,
-  with a Merkle tree over the encrypted chunks. Its root goes in the message, so every
-  chunk is verified before it is written, whoever delivered it. The format is the
-  same for both classes, in both server modes.
+- A **file object** is a file encrypted under its own random key in chunks that each
+  become one 64 KiB piece, hashed with BitTorrent v2's tree (BEP 52). Its root, bound to
+  the key and length, goes in the message, so every piece is verified before it is
+  written, whoever delivered it. The format is the same for both classes, in both server
+  modes.
 - A **kept** object is uploaded to the server and lives as long as the message that
   references it (forever by default). Images and small files are kept by default, so
   offline members, and new members with history, get them.
 - A **live** object stays on the sender's disk and is sent **magic-wormhole style**:
   for each recipient the two clients exchange sealed connection hints through the
   server, race direct connections, and fall back to the server as relay. It is
-  available while the sender's device is online and sharing it. Large files are live
-  by default; the sender can **keep** one later (the server then pulls the pieces it
-  lacks; the message does not change).
+  available while any **source** is online: the sender's device, or a recipient who
+  downloaded it and helps share it (a private swarm of people who may read the message;
+  §2.10). Large files are live by default; the sender can **keep** one later (the server
+  then pulls the pieces it lacks; the message does not change). Deleting the message ends
+  the file for every source; copies already downloaded remain.
 - The relay keeps a **piece cache**: a bounded, short-lived cache of encrypted pieces
   keyed by object and index, so a brief disconnect or restart resumes without the sender
   sending again, several recipients are served from one upload, and a recipient who
   comes online a little later still gets what was already sent. End-to-end encryption
   is per piece, not per pipe, which is what lets the relay cache pieces it cannot read.
-- On the server side **the sender only answers requests**: the server pulls pieces from
-  the sender, into its store for a kept object and on behalf of relayed recipients for
-  a live one. Uploads, relaying, keeping later and resumption are one mechanism.
+- On the server side **sources only answer requests**: the server pulls pieces from a
+  source, into its store for a kept object and on behalf of relayed recipients for a live
+  one. Uploads, relaying, keeping later and resumption are one mechanism.
+- **Shares cost nothing at rest**: the server persists which devices hold which objects,
+  so nothing is announced at login, the client's share index is read only when a request
+  comes, and a reconnect costs the same with 10,000 shares as with none (§3.5).
+- **Wormhole codes for stock users** are offered automatically for new files; codes cannot
+  survive a restart, so after one they are re-offered only for recent files and only to
+  stock users who saw them, as one digest per conversation (§7).
+- **rqbit is not embedded for now**: it has no BitTorrent v2 support yet and no way to run
+  over our authenticated channels; the BEP 52 format keeps that door open (§2.10).
 - Server traffic runs on a **second TLS connection to the same port** (ALPN
   `nuschel-bulk/1`), so bulk data never queues in front of chat, control or tunnelled
   voice; direct paths are TLS 1.3 between the two clients with per-transfer
@@ -62,9 +73,9 @@ Both are kept, as two classes of one thing:
 | | Kept | Live |
 | --- | --- | --- |
 | Where the bytes are | Server's blob store (ciphertext) | Sender's disk; sent directly, or through the server's relay and piece cache |
-| Available | As long as a referencing message exists (retention, forever by default) | While the sender's device is online and sharing |
-| Offline recipients | Download any time | See the message; download starts when the sender is next online |
-| New members with history | Get it (the key is in the archive record, §4.2) | Get the key; download while the sender shares |
+| Available | As long as a referencing message exists (retention, forever by default) | While a source is online: the sender's device, or a recipient who helps share it |
+| Offline recipients | Download any time | See the message; download starts when a source is next online |
+| New members with history | Get it (the key is in the archive record, §4.2) | Get the key; download while a source is online |
 | Server disk | Charged to the sender's quota | Only the piece cache: bounded, pieces gone within an hour of last use |
 | Typical | Images, documents, short clips | Videos, disk images, archives, datasets |
 
@@ -117,10 +128,11 @@ The size limit is not a cap on what can be sent: a file over it still goes, live
   size (width and height travel in the message, so nothing shifts when the image
   arrives). Download any time; if the upload is still running, the card says so and a
   download follows it.
-- **Live, sender online:** "From Alice's computer", with Download.
-- **Live, sender offline:** "Alice's device with this file is offline", with
-  "Download when available". The recipient's client remembers that and starts on its
-  own once the server reports the sender back (§3.4).
+- **Live, a source online:** "From Alice's computer" (or "From Alice and 2 others"),
+  with Download.
+- **Live, no source online:** "Nobody who has this file is online", with "Download when
+  available". The recipient's client remembers that and starts on its own once the
+  server reports a source back (§3.4).
 - **Ended** (the sender stopped sharing, the file is gone from the sender's disk, or the
   message was deleted): "No longer available". The message and its text stay.
 
@@ -150,8 +162,8 @@ file kept forwards it, which makes a new object under a new key (§4.3).
   deletions need that request to be open to moderators too, which e2ee.md does not yet
   say.
 - A live object ends when its last referencing message goes: the server stops
-  relaying (authorisation needs a referencing message, §5.1) and the sender's client
-  stops sharing when it sees the deletion.
+  relaying (authorisation needs a referencing message, §5.1), drops every source, and
+  every source's client stops sharing when it sees the deletion (§2.10).
 - A live share has no lifetime of its own: it lasts until the sender stops it, deletes
   the message, or the file changes or disappears on the sender's disk (open question
   2). The sender's Transfers panel lists every share.
@@ -161,8 +173,8 @@ file kept forwards it, which makes a new object under a new key (§4.3).
   fetch the attachment, and it ends with the owner's session.
 - **History grants (e2ee.md §6.6).** Attachments travel in the message envelope and in
   its archive record (§4.2), so a member granted history keys can decrypt every
-  attachment of the retained history: kept ones from the server, live ones from the
-  sender while it shares. `since_access` intervals apply to files as to text: the server
+  attachment of the retained history: kept ones from the server, live ones from any
+  source that is online. `since_access` intervals apply to files as to text: the server
   serves an object only to someone who may read a referencing message (§5.1).
 
 ## 2. Live transfers: direct first, relay fallback, piece cache
@@ -194,9 +206,9 @@ What differs from magic-wormhole:
 
 | Connection | Between | Carries |
 | --- | --- | --- |
-| Control (the existing TLS connection) | Client and server | `FileOpen`, `ChatSend`, `FileConnect` (sealed hints), `FileQuery`/`FileStatus` |
-| Bulk (TLS, same port, ALPN `nuschel-bulk/1`) | Client and server | The relay path and kept uploads: `FileServe`, `FilePull`, `FileWant`, `FileChunk`, `FileHalt` |
-| Direct (TLS 1.3, ALPN `nuschel-direct/1`, per-transfer certificates) | Owner and one recipient | `FileWant`, `FileChunk`, `FileHalt` |
+| Control (the existing TLS connection) | Client and server | `FileOpen`, `ChatSend`, `FileConnect` (sealed hints), `FileQuery`/`FileStatus`, `FileHold`, `FileServe` (withdrawals), `BulkWanted` |
+| Bulk (TLS, same port, ALPN `nuschel-bulk/1`), opened on demand | Client and server | The relay path and kept uploads: `FilePull`, `FileWant`, `FileChunk`, `FileHalt` |
+| Direct (TLS 1.3, ALPN `nuschel-direct/1`, per-transfer certificates) | A source and one recipient | `FileWant`, `FileChunk`, `FileHalt` |
 
 ### 2.2 Hint exchange
 
@@ -304,11 +316,13 @@ pieces are gigabytes and get a connection of their own.
 **The pull model.** Three parties: the **owner** (the sender's device that has the
 file), the **server**, and **recipients**.
 
-- After login the owner's client opens the bulk connection and announces the objects
-  it can serve (`FileServe`; again after every reconnect).
+- The server knows which devices hold which objects (§3.5); a source opens its bulk
+  connection when the server asks for it (`BulkWanted` on the control connection) and
+  announces nothing at login.
 - A recipient on the relay path asks for piece ranges (`FileWant { object, ranges,
   window }`). The server checks authorisation (§5.1) and answers from its store (kept
-  objects), from the piece cache (§2.8), or by pulling from the owner.
+  objects), from the piece cache (§2.8), or by pulling from a source: the owner, or a
+  recipient who helps share (§2.10).
 - The server pulls (`FilePull { object, ranges }`); the owner answers with `FileChunk`
   frames, each carrying its inclusion proof. The owner never sends anything unasked.
   It keeps no ciphertext copy: encryption is deterministic for a key, index and
@@ -318,7 +332,7 @@ file), the **server**, and **recipients**.
   set by its write budget, and pulls pieces a recipient is waiting for first. Keeping a
   live object later (§1.4) is the same, with pieces already in the cache moved into the
   store instead of being pulled again.
-- The server verifies every piece from the owner against the object's root before it
+- The server verifies every piece from a source against the object's `R` before it
   stores, caches or forwards it, and forwards the proof with it. Recipients verify
   again against the root from the message (§4.2), which the server cannot change.
 
@@ -386,8 +400,9 @@ Credit at each hop, in pieces:
 
 ### 2.7 Several recipients
 
-Each recipient gets its own path, raced independently, and the owner's client decides
-what to offer when it answers a `FileConnect`:
+Each recipient gets its own path to each source it uses, raced independently, and each
+source's client decides what to offer when it answers a `FileConnect`. What follows is
+said of the owner; it holds for every source (§2.10):
 
 - **Direct paths cost the owner one upload each; the relay costs one upload for
   everyone.** All recipients receive the same pieces (one key per object), so the server
@@ -403,12 +418,16 @@ what to offer when it answers a `FileConnect`:
   from one upload. When the direct recipient finishes, the next one to (re)connect may
   race again.
 - Switching a recipient between paths costs nothing: its bitmap says what is missing.
+- Recipients who finish become sources themselves if they help share (§2.10), so a
+  channel's later recipients mostly fetch from them and the owner's upload is spent once.
 - A kept object costs the owner one upload whatever the number of recipients; recipients
   of a kept object always use the server.
 
 ### 2.8 The piece cache
 
-A bounded cache of verified pieces on the relay. It exists so that:
+A bounded cache of verified pieces on the relay, fed by whichever source served them (the
+owner, or a recipient who helps share, §2.10; "owner" below stands for either). It exists
+so that:
 
 - a recipient's brief disconnect or client restart resumes from the cache, without the
   owner sending those pieces again;
@@ -463,10 +482,9 @@ entries are files of 0600 in the state directory, removed on eviction; remnants 
 are ciphertext.
 
 **Budgets.** Cache residency counts against the object's cache share, not against the
-owner's storage quota (§5.3): it is transport and it expires. The owner's upload counts
-once against the owner's relay bucket, read-ahead included; pieces served from the cache
-count against each receiving account's bucket; the owner is not charged again for a cache
-hit.
+owner's storage quota (§5.3): it is transport and it expires. A source's upload counts
+once against its relay bucket, read-ahead included; pieces served from the cache count
+against each receiving account's bucket; no source is charged again for a cache hit.
 
 ### 2.9 Content-defined chunking
 
@@ -505,6 +523,98 @@ transfer between the two clients (rsync-like, over the direct path, comparing ch
 under a key both hold) gets the gain without the server learning anything and without
 changing the object format. **Fixed 64 KiB chunks.**
 
+### 2.10 Recipients as sources: a private swarm
+
+The user decided that recipients who have a live file should help share it (§11,
+decision 5), so that it stays available while anyone who has it is online, while "the
+original person sharing should still have authority over deleting a message/file".
+
+**Who is a source.** The owner's device, and every device that has downloaded and
+verified the whole object, belongs to an account that may read a referencing message,
+and has "Help share files I received" on (a user setting, on by default; sources serve
+only while Nuschel runs, under the client's upload limit, below its own transfers). With
+it off, a device never serves. Partial holders do not serve in this version; the format
+would allow it, since every piece verifies on its own.
+
+**How the server tracks them.** A recipient whose download completes sends `FileHold {
+object_id }` once; the server checks that the account may read a referencing message and
+adds the device to the object's persisted sources (§3.5). Nothing is repeated at login.
+A device withdraws with `FileServe { stop }` (the user deleted the file, turned the
+setting off, or the file changed on disk), or is dropped when a request finds it gone.
+When an account loses `can_read`, its devices stop being sources at the next
+`authz_epoch` re-evaluation, and transfers from them stop.
+
+**How recipients use several sources.** For a `FileWant` or `FileConnect`, the server
+picks up to three online sources (the owner when online, the others by least recent use,
+so load spreads). The recipient races a direct path to each (§2.3, keyed by the file key,
+which every source holds), splits the ranges it still needs between the paths that work,
+and in the last few pieces asks a second source for anything outstanding (BitTorrent's
+endgame). The relay pulls from any online source, so the piece cache (§2.8) keeps being
+fed while the owner is away. Every piece is verified against `R` whatever its source;
+a source whose pieces fail is dropped for the object (§3.2).
+
+**Deletion authority stays with the sender.** Deleting the message (by its author, or a
+moderator), its expiry, and "Stop sharing" by the owner all **end the object** for
+everyone:
+
+- the server drops every source record, refuses new wants and `FileConnect`s for the
+  object with `not_found`, purges its pieces from the cache, stops relays in progress, and
+  pushes `FileStatus { ended }` and `FileHalt { ended }` to every online source and
+  recipient, including both ends of running direct transfers;
+- clients honour the tombstone wherever they see it (the push, a history page, or in
+  end-to-end conversations the deletion envelope inside MLS, even if the server never
+  acted on it): they stop serving, drop the share index row and keep their downloaded
+  copy;
+- since direct paths are only ever set up through `FileConnect`, no new transfer starts
+  after a deletion.
+
+Only the owner going offline, or its own copy changing, does not end the object: the
+other sources carry on. What deletion cannot do, honestly: copies already downloaded stay
+on recipients' disks, a modified client could finish a direct transfer already running or
+pass the file on by other means, and a recipient offline at the time learns of the
+deletion only when it next sees the conversation. Deletion withdraws distribution through
+Nuschel; it cannot recall copies, as with message text.
+
+**Privacy.** The server learns which devices hold which objects (it already knew who
+fetched them). Peers learn each other's IP addresses, LAN addresses included, as with
+"direct first everywhere" (§11, decision 3); the "relay only" setting applies to serving
+as to fetching. A recipient does not learn which account a source belongs to: hints carry
+addresses and a per-transfer certificate only.
+
+**Budgets.** A source's bucket pays for the first pull of each piece from it (§5.2), and
+its client's per-share budget (ten times the file a day) covers serving as a helper too.
+
+**Embedding rqbit instead?** The user suggested embedding rqbit and encrypting the file
+before transmission. librqbit, as of 9.1.0:
+
+| Question | Finding |
+| --- | --- |
+| Maintenance | Active: 9.1.0 on 2026-10-29, 9.0 in August 2026, about 190,000 downloads |
+| Licence | Apache-2.0, already allowed in `deny.toml`; compatible with distributing Nuschel under EUPL-1.2 |
+| BitTorrent v2 (BEP 52) | **Not supported.** It verifies v1 SHA-1 piece hashes. Issue #70 ("Support BitTorrent v2") and the design issue #546 are open; the SHA-256 groundwork (#562) is merged, the Merkle tree module (#568) was closed unmerged, the hybrid verification work (#554) is open |
+| Private swarm | Possible at run time: `SessionOptions { dht: None, disable_local_service_discovery, disable_trackers }` and `AddTorrentOptions::initial_peers` from the Nuschel server. But the DHT, local service discovery, UPnP, uTP and tracker code is always compiled in (ten workspace crates of its own), and there is no switch for UPnP in `SessionOptions` |
+| Transport | Plain BitTorrent over TCP or uTP. No hook to run it over our authenticated direct TLS or the bulk connection (a SOCKS proxy for outgoing connections only). The info hash crosses the network in clear in every handshake, and a peer is anyone who knows an address and the info hash |
+| `unsafe` and C | librqbit's own 19,000 lines have 7 `unsafe` (sparse files, read buffers, an mmap example, tests) and do not forbid it; it depends on memmap2, nix and socket2; the default TLS for its HTTP client is the platform's (OpenSSL on Linux), `rust-tls` uses ring |
+| What it would bring | A mature piece picker, choking and endgame; a storage trait that could serve the ciphertext by encrypting on read |
+
+**Verdict: not now; build multi-source fetching into `files/1`, and keep the format
+ready for rqbit later.** Without BEP 52, rqbit would verify a second, SHA-1 piece list,
+and a v1 info dictionary per object would have to travel through the server, instead of
+the root the message already carries. It cannot run over our authenticated channels or
+the relay, so its peers would be reachable by anyone who learns the info hash, the
+server's relay and piece cache would not see its traffic, and "relay only" would mean
+not using it. And it would bring a large network-facing surface (DHT, local discovery,
+UPnP, uTP, an HTTP client) into the desktop, or a new worker with network access, mostly
+for features we would switch off. Our protocol already has what a private swarm needs:
+the server as tracker and relay, peers limited to `can_read`, per-piece verification and
+direct paths; multi-source fetching adds a source list, range splitting and an endgame.
+
+Because the object format now hashes the ciphertext exactly as BEP 52 does (§4.1), the
+question can be reopened when rqbit ships BitTorrent v2 and a way to plug in a transport:
+it would verify the same pieces root, could run in a sandboxed worker allowed to reach
+only the peers the server names, and its traffic could go over our TLS paths. Until then
+a BitTorrent swarm would cost more security than it saves code.
+
 ## 3. Resumability
 
 ### 3.1 Unit of progress
@@ -516,48 +626,52 @@ fetch and gaps work.
 
 ### 3.2 Verified streaming
 
-Each `FileChunk` carries its inclusion proof (≤ 32 hashes; 14 hashes, 448 bytes, for a
-1 GB file, 0.7 % overhead). The receiver checks the chunk's length for its index,
-recomputes the root from the chunk and the proof, compares it with the root from the
-message, then decrypts (ChaCha20-Poly1305 checks the tag again under the key) and writes
-the plaintext at its offset. A chunk that fails is dropped and asked for again; three
-failures from the same object end the download with "the file was corrupted in
-transit", and the client reports it (never silently retries forever).
+Each `FileChunk` carries one piece and its inclusion proof: the sibling hashes from the
+piece layer to the pieces root, ≤ 32 hashes (14, 448 bytes, for a 1 GB file: 0.7 %
+overhead). The receiver checks the piece's length for its index, hashes its four 16 KiB
+blocks up to the piece hash, folds the proof to the pieces root, computes `R` with its
+own key commitment and compares it with the object's `R`, then decrypts
+(ChaCha20-Poly1305 checks the tag again under the key) and writes the plaintext at its
+offset. A piece that fails is dropped and asked for again, from another source if there
+is one (§2.10); three failures from the same source end that source for the object, and
+when no source is left the download ends with "the file was corrupted in transit", which
+the client reports (never silently retrying forever).
 
-Alternatives: BLAKE3's own tree with bao. Its 1 KiB granularity means an outboard of
-about 6 % (3 GB for a 50 GB file) or rehashing subtrees on demand; bao-tree's chunk groups
-fix that but bring their own encoding for what is here a 150-line tree with RFC 9162's
-shape, built on the SHA-256 the TLS provider already has. Fetching the whole leaf layer
-first (as BitTorrent v2's piece layers) saves the per-chunk proof but needs a
-second, layered scheme for very large files; per-chunk proofs cost ≤ 1.6 % even at
-2³² chunks and need nothing else. The proof could later shrink by omitting levels the
-receiver already holds.
+Alternatives considered: BLAKE3's own tree with bao (1 KiB granularity: an outboard of
+about 6 %, 3 GB for a 50 GB file, or rehashing subtrees on demand; bao-tree's chunk groups
+fix that with an encoding of their own); the RFC 9162 tree over whole chunks that the
+first version of this design used (domain-separated, but a format of our own that no
+BitTorrent engine verifies); and fetching the whole piece layer first, as BitTorrent v2
+peers may, which saves the per-piece proof but needs a layered scheme for very large
+files. Per-piece proofs cost ≤ 1.6 % even at 2³² pieces and need nothing else; the proof
+could later shrink by omitting levels the receiver already holds.
 
 ### 3.3 State on each side
 
 | Party | Persisted | Where |
 | --- | --- | --- |
-| Owner | Each share: the file key, the `FileRef`, both idempotency keys (`FileOpen`, `ChatSend`), object id once known, server, conversation and `seq` once acknowledged, path, size, modification time and file id at preparation, the tree (2 hashes per chunk, 0.1 % of the file) | Local storage worker database (which already holds the plaintext of local history); the tree in a file beside it |
-| Recipient | Each download: object id, message, destination, done bitmap, and the leaf hash of each verified piece; the partial file `name.part` beside the destination | Same database; bitmap and leaves written atomically after the data they cover is synced (every 8 MiB or 2 s) |
-| Server | Object record (owner account, root, key commitment, `object_len`, class, state), references to messages, for kept objects the bitmap of stored pieces | Server database, the bitmap updated only after the pieces it covers are synced; blobs and tree nodes as files (§5.4) |
-| Server (transient) | Wants, pulls in flight, the piece cache (memory and disk tier) | Gone after a restart (the disk tier is emptied); clients re-announce and re-want |
+| Owner | Each share, one row of the share index: the file key, the `FileRef`, both idempotency keys (`FileOpen`, `ChatSend`), object id once known, server, conversation and `seq` once acknowledged, path, size, modification time and file id at preparation; the piece layer (32 bytes per 64 KiB, 0.05 % of the file) | Local storage worker database (which already holds the plaintext of local history); the piece layer in a file beside it, read only when a request comes (§3.5) |
+| Recipient | Each download: object id, message, destination, done bitmap, and the hash of each verified piece; the partial file `name.part` beside the destination. A finished download that the user lets help share (§2.10) becomes a share index row like the owner's | Same database; bitmap and piece hashes written atomically after the data they cover is synced (every 8 MiB or 2 s) |
+| Server | Object record (owner account, `R`, pieces root, key commitment, `object_len`, class, state), references to messages, the **sources** (the devices that hold the whole object: the owner's, and recipients' that help share), for kept objects the bitmap of stored pieces | Server database, the bitmap updated only after the pieces it covers are synced; blobs and the piece layer as files (§5.4) |
+| Server (transient) | Which devices are online, wants, pulls in flight, watchers, the piece cache (memory and disk tier) | Gone after a restart (the disk tier is emptied); recipients re-want; sources announce nothing (§3.5) |
 
 **The owner's order of writes** makes every step repeatable after a crash: the key, the
 `FileRef` and both idempotency keys are saved before `FileOpen`; the object id when
 `FileOpened` arrives; the `seq` when `ChatAck` arrives. A restart repeats the first step
 not known to be done, with the same idempotency keys, so it never creates a second
-object or a second message. Preparation saves its leaf hashes as it goes and resumes
+object or a second message. Preparation saves its piece hashes as it goes and resumes
 where it stopped (a 50 GB file is a minute or two on an NVMe disk, five minutes or more
 on a hard disk). An end-to-end sender needs its own record of the key: it cannot decrypt
 its own MLS PrivateMessage.
 
-A recipient keeps the leaf hash of every piece it verified, so it can check what is on
-disk at any time: encryption is deterministic for a key, index and plaintext, so it
+A recipient keeps the hash of every piece it verified, so it can check what is on disk
+at any time: encryption is deterministic for a key, index and plaintext, so it
 re-encrypts the partial file and compares. If its state is lost entirely, the partial file
-is fetched again. The owner checks the same way before answering a request: if the
-chunk it reads no longer matches its tree, the file changed, no ciphertext of the new
-content is ever sent (it would reuse a nonce under the same key), and the share ends with
-"the file changed on your disk since you sent it".
+is fetched again. A source checks the same way before answering a request: if the
+chunk it reads no longer encrypts to its piece hash, the file changed, no ciphertext of
+the new content is ever sent (it would reuse a nonce under the same key), and that device
+stops being a source for the object ("the file changed on your disk since you sent it");
+other sources are unaffected.
 
 On file systems with reflinks (btrfs, XFS, APFS) the owner's client clones the file into
 its transfer directory at preparation, so later edits do not end the share and it costs
@@ -565,12 +679,14 @@ no space until the original changes.
 
 ### 3.4 When someone is offline
 
-- **Owner offline** (quit, asleep, connection lost): the server marks the object
-  unavailable and pushes `FileStatus { offline }` to recipients watching it; their cards
-  say "Paused: waiting for Alice's device" and keep the bitmap. When the owner's bulk
-  connection announces the object again, the server pushes `available` and recipients
-  re-want what is missing. A kept object that is still uploading keeps serving the pieces
-  it has, and the piece cache keeps serving what it holds.
+- **Every source offline** (the owner quit, is asleep or lost its connection, and no
+  recipient who helps share is online): the server marks the object unavailable and
+  pushes `FileStatus { unavailable }` to recipients watching it; their cards say "Paused:
+  waiting for Alice's device" (or "for someone who has it") and keep the bitmap. When a
+  source's device logs in, the server, which knows the object's sources (§3.5), pushes
+  `available`, and recipients re-want what is missing. A kept object that is still
+  uploading keeps serving the pieces it has, and the piece cache keeps serving what it
+  holds.
 - **Owner logged in elsewhere.** Mumble allows one session per account, so opening
   Nuschel on a second device takes the session over and would take the first device's
   shares offline. Instead, the server keeps the first device's bulk connection as
@@ -579,17 +695,70 @@ no space until the original changes.
   its certificate and a serve token it got while it held the session (random, bound to the
   account and certificate, revoked when the account's certificate changes). The account's
   other devices then show these shares as "From your other device".
-- **Owner not responding:** a pull without progress for 30 seconds marks the object
-  unavailable for a minute ("Alice's device is not responding") and is then retried. A
-  piece from the owner that fails verification ends relaying of that object for the
-  session and tells the owner; its client will usually have caught a changed file first.
+- **A source not responding:** a pull without progress for 30 seconds sets that source
+  aside for a minute (with no other source: "Alice's device is not responding") and is
+  then retried. A piece from a source that fails verification ends that source for the
+  object for the session and tells it; its client will usually have caught a changed file
+  first.
 - **Recipient offline or restarting:** on the next connection its client re-opens the
   bulk connection and re-wants each unfinished download, automatically.
-- **Server restart:** objects, references and kept chunks survive (database and blob
-  files); cache and wants do not; both sides re-announce.
-- **Owner restarting:** shares are reloaded from the local database and re-announced.
-  Quitting with active uploads or shares asks first ("2 uploads will continue when you
-  start Nuschel again; 1 shared file is unavailable while Nuschel is closed").
+- **Server restart:** objects, references, sources and kept pieces survive (database and
+  blob files); cache and wants do not; recipients re-want, sources announce nothing.
+- **Owner restarting:** nothing is reloaded or announced (§3.5); the server already knows
+  the device's shares and sends requests when they come. Quitting with active uploads or
+  shares asks first ("2 uploads will continue when you start Nuschel again; 1 shared file
+  is unavailable while Nuschel is closed").
+
+### 3.5 Thousands of shares: nothing at rest
+
+Live shares last forever (§11, decision 2), so a device may hold thousands of them. The
+user's condition: no cost "in network traffic and startup time when you have a lot of
+files you're sharing". So shares are records, not running tasks, and every cost is paid
+when a recipient asks, not before.
+
+- **The server knows the shares.** Each live object's record lists its sources: the
+  owner's device (recorded at `FileOpen`) and every recipient device that finished the
+  download and helps share it (one `FileHold` message, once, §2.10). A device is
+  identified by its account and certificate hash (or its serve token, §3.4). Both are
+  persisted, so neither a client restart nor a server restart needs a re-announcement.
+  `FileServe` remains only to withdraw a share (or to restore one the user stopped), one
+  message per change.
+- **Login stays O(1).** When a device logs in, the server marks it online in a map from
+  device to session. Nothing is sent about shares. Watchers (recipients waiting for an
+  unavailable object) are indexed by source device, so the server pushes `available`
+  only to those: the work at login is O(waiting recipients of that device's objects),
+  usually zero, never O(shares).
+- **Requests find the source.** A `FileWant` or `FileConnect` for an object looks up its
+  sources (an indexed query), keeps those online, and picks one or more (§2.10). If a
+  chosen source has no bulk connection open, the server sends it `BulkWanted` on its
+  control connection and the client opens one (§2.5). Bulk connections close again after
+  a minute without transfers.
+- **The client's share index is loaded lazily.** It is a table in the local storage
+  database, keyed by object id; nothing in it is read at startup. A request reads one row,
+  checks the file (size, modification time, file id), and loads that object's piece layer
+  into a small cache of active objects. Pieces are verified as they are read (§3.3), so a
+  changed or missing file is found when someone asks, and the device then withdraws only
+  that share.
+- **Nothing runs in the background.** No periodic scans of shared files, no keep-alives
+  per share, no timers. The rail's "Sharing 3,214 files from this device" is one
+  `count(*)`; the Transfers panel pages through the index and asks the server for the
+  state of the rows on screen only (`FileQuery`, ≤ 64 per request).
+- **Withdrawn and deleted shares are tidied lazily.** When a referencing message is
+  deleted or expires, the server ends the object and drops its sources at once (§2.10);
+  a client removes its index row when it sees the deletion in a conversation it reads,
+  or when the Transfers panel, asking the server about the rows on screen, finds the
+  object ended. A user short of disk can let shares drop their piece layers, which are
+  then recomputed with one read of the file on the next request.
+  Sources the server has not seen for 90 days (e2ee.md's inactive-device bound) are
+  forgotten.
+
+Costs, for 10,000 shares of 1 GB each on one device:
+
+| | At rest | Startup or reconnect | Per request |
+| --- | --- | --- | --- |
+| Owner or helping recipient | One index row each (about 300 bytes: 3 MB in all); piece layers 0.05 % of the files (5 GB of shares cost 2.5 MB, 10 TB cost 5 GB) | Nothing beyond the login; the rail's count is one query | One row read, a `stat`, the piece layer loaded once (512 KB for 1 GB), the requested pieces read and encrypted |
+| Server | One object record and one row per source (about 100 bytes each: a few MB); no memory | Marking the device online; pushes to waiting recipients only | Source lookup, authorisation, the relay and cache if direct fails |
+| Network | Nothing | The login only | The transfer, plus one `BulkWanted` if the source had no bulk connection |
 
 ## 4. End-to-end encryption and the object format
 
@@ -606,34 +775,55 @@ One format for both classes and both server modes:
   for known files. `object_len` is the padded length; the true `file_len` travels only
   in the message. Recipients fetch the padding pieces too, so their requests do not give
   `file_len` away.
-- **Chunks:** `object_len` split into 65,536-byte chunks, the last one shorter;
-  an empty object is one empty chunk. At most 2³² chunks (256 TiB).
+- **Chunks and pieces:** `object_len` is split into plaintext chunks of 65,520 bytes,
+  the last one shorter; an empty object is one empty chunk. At most 2³² chunks (2⁴⁸ −
+  2³⁶ bytes, just under 256 TiB; Padmé pushes files above 254 TiB past that, and they are
+  refused). Each chunk encrypts to exactly one 65,536-byte **piece** (the last one
+  shorter): 65,520 bytes and a 16-byte tag. The pieces in order form the *ciphertext
+  object*, `object_len + 16 n` bytes, never empty.
 - **Encryption:** ChaCha20-Poly1305, STREAM construction (Hoang, Reyhanitabar, Rogaway,
   Vizár): nonce = 7 zero bytes ‖ chunk index (u32, big-endian) ‖ last-chunk flag (1
-  byte); empty associated data. Each encrypted chunk is 16 bytes longer.
-- **Tree:** leaf `L_i = SHA-256(0x00 ‖ c_i)`; RFC 9162 Merkle tree hash over the leaves
-  (node `SHA-256(0x01 ‖ left ‖ right)`, split at the largest power of two smaller than
-  the number of leaves); key commitment `C = SHA-256(0x03 ‖ "nuschel files/1 key" ‖ key)`;
-  root `R = SHA-256(0x02 ‖ "nuschel files/1 root" ‖ chunk_log2 ‖ object_len (u64 BE) ‖ C
-  ‖ MTH)`, which binds size, chunk size and key. Inclusion proofs are RFC 9162 audit
-  paths.
+  byte); empty associated data.
+- **Tree: BitTorrent v2's.** The ciphertext object is hashed exactly as BEP 52 hashes a
+  file: 16 KiB blocks (the last one shorter), leaf `SHA-256(block)`, leaves padded with
+  zero hashes to a power of two, node `SHA-256(left ‖ right)`. Its root is BEP 52's
+  **pieces root** for a file with those bytes. With a piece length of 64 KiB, BEP 52's
+  *piece layer* is one hash per piece, the root of its four blocks, so a piece is
+  verified by hashing its blocks up to its piece hash and folding the inclusion proof
+  (the sibling hashes from the piece layer to the root, one fixed length per object) to
+  the pieces root. An object of one piece is padded only to the next power of two of its
+  blocks, as BEP 52 and libtorrent do. The prototype's pieces roots and piece layers are
+  identical to those libtorrent 2.1.2 computes for the same ciphertext (§8).
+- **Object root:** key commitment `C = SHA-256(0x03 ‖ "nuschel files/1 key" ‖ key)`;
+  `R = SHA-256(0x02 ‖ "nuschel files/1 root" ‖ piece_log2 ‖ object_len (u64 BE) ‖ C ‖
+  pieces root)`, which binds length, piece size and key to the BEP 52 tree. The message
+  carries the pieces root (§4.2); the server computes `R` from what `FileOpen` gives it
+  and reports it; recipients compute `R` from their key and compare.
+- **Why BEP 52:** each piece is exactly one AEAD chunk, so "this piece verifies" and
+  "this chunk decrypts" are the same unit; the tree is a published one with independent
+  implementations (libtorrent 2, Transmission 4, qBittorrent), so a BitTorrent v2 engine,
+  if one is ever embedded (§2.10), verifies the same pieces root as our own transfer; and
+  it costs nothing at run time (the same SHA-256 over every byte, three extra node hashes
+  per piece, proofs of the same size). BEP 52 has no domain-separation prefixes, unlike
+  the RFC 9162 tree this replaces. That is safe here: the tree is perfect (padded to a
+  power of two), every leaf is at the same depth, proofs have one fixed length, and `R`
+  binds the length, so an inner node cannot pass for a leaf.
 - **Primitives:** ChaCha20-Poly1305, SHA-256 and the random keys come from ring, the TLS
   provider in both the session and `nuscheld`, so the format adds no crate and no new
   security exception (SECURITY.md). ChaCha20-Poly1305 is what e2ee.md §6.8 named; SHA-256
-  rather than BLAKE3 because the tree is our own over 64 KiB leaves either way and ring
-  has it with hardware acceleration.
+  rather than BLAKE3 because BEP 52 uses it and ring has it with hardware acceleration.
 - **The root is not secret.** It is a hash of ciphertext under a random key, so the server
   learns nothing from it, and it lets the server verify uploads chunk by chunk (D9's
-  "verify the hash at completion" becomes "verify every chunk on arrival") without the
+  "verify the hash at completion" becomes "verify every piece on arrival") without the
   key.
 - **The root binds the key.** ChaCha20-Poly1305 does not commit to its key: one
   ciphertext can be built to decrypt validly under two keys (multi-key collisions, as in
   partitioning-oracle attacks). One MLS message gives every member the same key, but an
   owner may reference one object from several messages and could hand out different keys
-  for it, so recipients would see different files under one object id. With `C` in the
-  root, a wrong key fails verification of the first piece. The server gets `C` with the
-  root in `FileOpen` and verifies with both; `C` reveals nothing useful about a random
-  256-bit key.
+  for it, so recipients would see different files under one object id. With `C` in `R`,
+  a recipient whose key differs from the one the object was opened with computes another
+  `R` than the server reports and refuses the attachment before decrypting anything. The
+  server gets `C` in `FileOpen`; it reveals nothing useful about a random 256-bit key.
 
 ### 4.2 Keys and metadata in the message
 
@@ -644,10 +834,10 @@ arrive together with one `seq`. Each is a `FileRef`:
 struct {
   opaque object_id[16];      // random, server-assigned (§9); also listed for the server
   opaque key[32];
-  opaque root[32];
+  opaque pieces_root[32];    // BEP 52 root of the ciphertext object
   uint64 object_len;         // padded, as the server knows it
   uint64 file_len;           // true length, <= object_len
-  uint8  chunk_log2;         // 16
+  uint8  piece_log2;         // 16: 64 KiB pieces of 65,520 plaintext bytes
   opaque name<1..255>;       // UTF-8; shown as offered, sanitised on save
   opaque media_type<0..127>; // the sender's claim; never trusted for rendering
   uint16 width; uint16 height; // images and videos, 0 otherwise
@@ -660,7 +850,7 @@ struct {
   needed) and of the archive record, whose hash the envelope carries (e2ee.md §6.6).
   The server sees only the list of object ids in `ChatSend.attachments`, which it needs
   for authorisation and reference counting. Receivers check that the list matches the
-  envelope, and that the root and length the server reports for each object
+  envelope, and that the `R` and length the server reports for each object
   (`FileStatus`) match the `FileRef`; a mismatch is shown as a delivery problem, never
   silently trusted. (A sender who gave the server another root than its message only
   makes its own attachment fail to download.)
@@ -701,7 +891,8 @@ struct {
   with the permission to send in that conversation. Files need no new ACL bit (a stock
   ACL editor would drop it, extension.md §5); a channel setting `files` (`on` by default,
   or `off`), set with `ChannelSettings` and Write like retention, turns them off.
-- **Serve, keep, release, end:** only the owner.
+- **Keep, release, end:** only the owner. **Serve:** the owner's device, and devices
+  that hold the whole object and whose account may read a referencing message (§2.10).
 - **Unregistered users** have no account to own an object or be charged, and no durable
   identity to resume with, so they cannot open, keep or share objects; their Nuschel
   client sends files as magic-wormhole codes, as on a stock server. They may download
@@ -720,11 +911,11 @@ Token buckets keyed as in `page_limits.rs`, charged once bytes are sent: the acc
 registered users, the network (IPv4 /24, IPv6 /56) for unregistered ones.
 
 - Relay bytes (`files.relay_bytes_per_minute`, default 6 GiB, about 850 Mbit/s, with a
-  burst of the same). The owner's bucket pays for the first pull of each piece, read-ahead
-  and kept uploads included; each recipient's bucket pays for what is sent to it,
-  including pieces served from the cache, and for pieces pulled again because they had
-  been evicted before it took them. A recipient that asks out of step therefore spends its
-  own budget, not the owner's.
+  burst of the same). The bucket of the source a piece came from pays for its first
+  pull, read-ahead and kept uploads included; each recipient's bucket pays for what is
+  sent to it, including pieces served from the cache, and for pieces pulled again
+  because they had been evicted before it took them. A recipient that asks out of step
+  therefore spends its own budget, not the source's.
 - Unregistered users' downloads always count per network, as their history pages do.
   For registered users a per-network bucket (`files.network_relay_bytes_per_minute`) is
   **off by default**, for operators with open self-registration who see many accounts
@@ -771,8 +962,8 @@ which the user can see and change.
 
 Kept ciphertext lives in files under `state_directory/files/` (`ab/cd/<object id hex>`,
 0600, opened with `O_NOFOLLOW`), written by `nuscheld`'s relay task: it never parses
-their contents. Beside the blob, `<id>.tree` keeps every tree node the server has
-learned: each piece's leaf hash and the nodes of its proof, at most two hashes per piece.
+their contents. Beside the blob, `<id>.tree` keeps the piece layer and every node above
+it that the server has learned from proofs, at most two hashes per piece.
 With them the server can prove any piece it holds, so recipients can download a kept
 object while its upload is still running. The bitmap of stored pieces is in the database
 with the object record. Large blobs in PostgreSQL `bytea` would bloat backups and
@@ -823,7 +1014,7 @@ images) and the file card (`apps/desktop/src/transfer.rs::card`: kind tile, name
 | --- | --- | --- |
 | Preparing | "Preparing · 40 %" | Cancel |
 | Uploading (kept) | "Uploading · 40 % · 12 MB/s · 2 min left" | Pause, Cancel |
-| Shared (live) | "From this device · waiting for downloads" or "Sending to 3 people · 40 %" | Keep on the server, Stop sharing |
+| Shared (live) | "From this device · waiting for downloads" or "Sending to 3 people · 40 %"; "also shared by 2 others" once recipients help | Keep on the server, Stop sharing (for everyone, helpers included) |
 | Paused | "Paused: no connection, retrying in 5 s", "Paused: the server is busy", "Paused: limited by the server" | Retry now, Cancel |
 | On the server | "On the server" | Release (owner) |
 | Failed | The reason ("the file changed on your disk since you sent it", "the server refused it: …") | Retry (re-sends as a new object), Remove |
@@ -843,17 +1034,23 @@ owner's other devices show its live shares as "From your other device".
 | Kept, uploading | "Alice is uploading · 40 %" | Download (follows the upload) |
 | Kept, upload paused | "Alice's upload is paused (her device is offline) · 40 %" | Download when available |
 | Kept | (thumbnail for images) | Download; images up to 8 MB download on their own (Settings) |
-| Live, owner online | "From Alice's computer" | Download |
-| Live, owner offline | "Alice's device with this file is offline" | Download when available |
+| Live, a source online | "From Alice's computer", or "From Alice and 2 others" | Download |
+| Live, no source online | "Nobody who has this file is online" (or "Alice's device is offline" when she is the only source) | Download when available |
 | Live, owner not responding | "Alice's device is not responding; trying again" | Cancel |
 | Downloading | "Downloading · 40 % · 3.1 of 7.8 GB" | Pause, Cancel |
 | Paused | "Paused: waiting for Alice's device", "Paused: no connection" | Resume, Cancel |
-| Saved | "Saved as name.mkv" | Open, Show in folder |
+| Saved | "Saved as name.mkv"; "Helping share it" while this device is a source | Open, Show in folder, Stop helping |
 | Ended | "No longer available" | |
 
 Cancel asks whether to keep the partial file for later. Downloads write `name.part` beside
-the chosen destination and rename it when every chunk is verified. Images keep their
+the chosen destination and rename it when every piece is verified. Images keep their
 final size from the message's width and height while loading.
+
+Deleting a message with a live attachment says what it does: "Delete for everyone also
+stops everyone sharing the file. Copies people have already downloaded stay with them."
+Settings has "Help share files I received" (on; §2.10) next to "Direct connections for
+file transfers" and the upload limit. The rail's "Sharing 3,214 files" counts the
+device's shares, its own and the ones it helps with, from one query (§3.5).
 
 ### 6.4 Accessibility
 
@@ -887,7 +1084,7 @@ Stock clients do not speak `files/1`; the server makes their copy of a message
   desktop sends images to stock servers today.
 - **Wormhole bridge.** When `ChatAck` reports stock clients in the conversation's live
   audience, the owner's client also offers the file through the existing transfer worker
-  and sends the code with `FileStockCode`. The server checks it with the same functions
+  and sends the code with `FileStockOffer`. The server checks it with the same functions
   as the client (`nuschel_core::transfer::valid_code`, `valid_url`) and posts
   `📎 name (size) — receive with magic-wormhole: wormhole receive CODE` (with
   `--relay-url=…` when the rendezvous is not the public one), in the exact format
@@ -898,6 +1095,27 @@ Stock clients do not speak `files/1`; the server makes their copy of a message
   seconds apart, charged to the owner's text bucket (`messagelimit`/`messageburst`), so the
   bridge cannot be used to flood. The card shows "also offered to Mumble users via
   magic-wormhole" (open question 4).
+- **Codes do not survive a restart, so restarts re-offer on purpose, not all at once.**
+  A code cannot outlive the client that made it: magic-wormhole 0.8.1 draws a fresh
+  random `side` for every rendezvous connection (`RendezvousServer::connect`, with no way
+  to supply one), the SPAKE2 secret behind the PAKE message already in the mailbox exists
+  only in memory, and the mailbox server deletes a mailbox about 11 minutes after its last
+  listener leaves (it prunes every 10 minutes) and refuses a third side as "crowded". A
+  waiting code also needs its client connected to the rendezvous server the whole time.
+  So after a restart:
+  - nothing is posted at startup;
+  - a share gets a fresh code automatically only if its message is recent (at most a day
+    old, the existing offer lifetime) **and** a stock session that received the message's
+    stock copy is still in the conversation's live audience; stock users who arrived later
+    never saw the message and get nothing;
+  - those codes go out as **one digest per conversation** ("📎 Files from Alice still on
+    offer:" and one line per file in the `format_offer` form), at most the five newest
+    shares, at most once every ten minutes per conversation (`FileStockOffer`, charged once
+    to the sender's text bucket);
+  - older shares, or more of them, are offered only when the sender asks: "Offer to Mumble
+    users again" on the card, which posts one code for that file;
+  - each waiting code holds a rendezvous connection, so the client keeps at most 16 at once
+    (a setting); a code picked up is replaced as today, at least two seconds apart.
 - **What the bridge gives up.** The bytes behind a wormhole code are whatever the owner's
   client sends; neither the server nor Nuschel users can check that they match the
   object (extension.md §4 made the stock copy server-made to avoid exactly this for
@@ -911,17 +1129,22 @@ Stock clients do not speak `files/1`; the server makes their copy of a message
 
 ## 8. Implementation outline
 
-1. `nuschel-files`: the object format, key commitment, proofs, Padmé (§4.1). Done as a
-   prototype: a pure library on ring (no I/O), 14 tests including RFC 9162 tree shapes
-   for 1–260 leaves against a naive implementation, tampering and wrong-key cases, and
-   frozen roots and a commitment that a separate Python implementation reproduces.
+1. `nuschel-files`: the object format with the BEP 52 tree, key commitment, proofs,
+   Padmé (§4.1). Done as a prototype: a pure library on ring (no I/O), tested against a
+   naive BEP 52 implementation for many piece counts, tampering and wrong-key cases, and
+   frozen values that a separate Python implementation reproduces. **Interoperable:**
+   v2-only torrents made by libtorrent 2.1.2 with 64 KiB pieces from the same ciphertext
+   have the same pieces root and piece layer, for the frozen objects and for 60 random
+   files from 16 bytes to 2.2 MB (single- and multi-piece).
 2. Server: object records, references and reference counting with retention and
    erasure, `FileOpen`, `ChatSend.attachments`, the bulk connection with tickets, kept
    uploads by pull, downloads of kept objects, quotas and the disk reserve.
 3. Client: preparation, the bulk connection in `nuschel-session`, persisted shares and
    downloads, the composer and card states of §6, the Transfers panel.
-4. Live transfers: `FileServe`, wants, coalescing, the piece cache, availability pushes,
-   throttling; then the hint exchange, racing and the direct path (§2.2–§2.4).
+4. Live transfers: persisted sources and on-demand bulk connections (§3.5), wants,
+   coalescing, the piece cache, availability pushes, throttling; then the hint exchange,
+   racing and the direct path (§2.2–§2.4); then recipients as sources with several
+   sources per download and deletion ending every source (§2.10).
 5. Keep and release; the stock bridge.
 6. End-to-end: `FileRef`s in envelopes and archive records (with e2ee.md phase 4d).
 7. Later: UDP hole punching as a further direct candidate type (str0m's ICE or QUIC),
@@ -930,9 +1153,11 @@ Stock clients do not speak `files/1`; the server makes their copy of a message
 Tests follow the server's pattern: loopback tests between `nuschel-session` and
 `nuscheld` for every state of §6 (owner restart mid-transfer, recipient restart, server
 restart, owner switching devices, file changed on disk, quota exhausted, access revoked
-mid-transfer, coalescing with several recipients), fuzzing of the new frames
-(`extension_messages`) and of chunk and proof decoding, and a NixOS VM test with a 2 GB
-file over a lossy link.
+mid-transfer, coalescing with several recipients, several sources with one failing,
+deletion while transfers run, a stock user present across a sender's restart), a test
+that a device with 10,000 shares logs in with the same messages and time as one with
+none, fuzzing of the new frames (`extension_messages`) and of piece and proof decoding,
+and a NixOS VM test with a 2 GB file over a lossy link.
 
 ## 9. Wire messages
 
@@ -947,14 +1172,17 @@ allowed").
 
 | Type | Message | Fields | Cap |
 | --- | --- | --- | --- |
-| 0x4E40 | `FileOpen` | `request_id`, `idempotency_key` (16), `object_len` (u64), `chunk_log2` (16), `root` (32), `key_commitment` (32), `keep` (bool) | 160 B |
+| 0x4E40 | `FileOpen` | `request_id`, `idempotency_key` (16), `object_len` (u64), `piece_log2` (16), `pieces_root` (32), `key_commitment` (32), `keep` (bool); the server computes `R` | 160 B |
 | 0x4E41 | `FileOpened` | `request_id`, `object_id` (16, random), `kept` (accepted for storage) | 64 B |
 | 0x4E42 | `FileQuery` | `request_id`, `object_ids` (≤ 64), `watch` (push changes while subscribed; ≤ 1,024 watched per connection) | 1.2 KiB |
-| 0x4E43 | `FileStatus` | per object: `object_id`, `object_len`, `root`, `key_commitment`, `state` (uploading, kept, live, offline, not responding, ended), `kept_pieces` (a count, for progress); reply and push | 10 KiB |
+| 0x4E43 | `FileStatus` | per object: `object_id`, `object_len`, `R`, `state` (uploading, kept, live, available, unavailable, not responding, ended), `sources` (how many are online), `kept_pieces` (a count, for progress); reply and push | 10 KiB |
 | 0x4E44 | `FileChange` | `request_id`, `object_id`, `action` (keep, release, end) → `Done` | 64 B |
 | 0x4E45 | `BulkTicket` | `request_id`, `serve_only` → reply with `ticket` (32), `expires_ms`, and a serve token (32) when asked (§3.4) | 96 B |
-| 0x4E46 | `FileStockCode` | `object_id`, `conversation`, `code` (≤ 64), `rendezvous` (≤ 256); compatible mode only | 512 B |
-| 0x4E47 | `FileConnect` | `object_id`, `transfer_id` (16), `sealed` hints (≤ 1 KiB: role, ≤ 16 candidates, certificate pin, direct allowed); relayed between recipient and owner after authorisation | 1.2 KiB |
+| 0x4E46 | `FileStockOffer` | `conversation`, entries (≤ 5: `object_id`, `code` ≤ 64, `rendezvous` ≤ 256); one message to the stock sessions that received those messages' stock copies; compatible mode only | 2 KiB |
+| 0x4E47 | `FileConnect` | `object_id`, `transfer_id` (16), `sealed` hints (≤ 1 KiB: role, ≤ 16 candidates, certificate pin, direct allowed); relayed between a recipient and a source after authorisation | 1.2 KiB |
+| 0x4E48 | `FileHold` | `request_id`, `object_id`: this device has the whole object and helps share it; sent once, persisted by the server (§2.10) → `Done` | 64 B |
+| 0x4E49 | `FileServe` | `request_id`, `stop` or `restore`: object ids (≤ 1,024); only for changes, never at login (§3.5) → `Done` | 20 KiB |
+| 0x4E4A | `BulkWanted` | server → source: open a bulk connection, a request is waiting (no fields) | 8 B |
 
 `ChatSend` and `Message` gain `repeated Attachment attachments` (≤ 200 objects: 100 files
 and their thumbnails), `Attachment { object_id, file_ref }`, with `file_ref` (the encoded
@@ -969,11 +1197,10 @@ uses only `FileWant`, `FileChunk` and `FileHalt` between recipient and owner
 | --- | --- | --- | --- |
 | 0x4E50 | `BulkHello` | `ticket` (32) or serve token (32); the only frame accepted first | 64 B |
 | 0x4E51 | `BulkWelcome` | `max_window` (pieces), `observed` (the client's address as the server sees it) | 64 B |
-| 0x4E52 | `FileServe` | `serve`, `stop`: object ids (≤ 1024 in all) | 20 KiB |
-| 0x4E53 | `FilePull` | server → owner: `object_id`, `ranges` (≤ 64 × first, count) | 1 KiB |
-| 0x4E54 | `FileWant` | recipient → server or owner: `object_id`, `ranges` (≤ 64), `window` (≤ 256); no ranges cancels | 1 KiB |
-| 0x4E55 | `FileChunk` | `object_id`, `index` (u32), `data` (≤ 65,552), `proof` (≤ 32 × 32) | 67 KiB |
-| 0x4E56 | `FileHalt` | `object_id`, `reason` (offline, not responding, throttled, ended, not_found), `retry_after_ms` | 64 B |
+| 0x4E52 | `FilePull` | server → source: `object_id`, `ranges` (≤ 64 × first, count) | 1 KiB |
+| 0x4E53 | `FileWant` | recipient → server or source: `object_id`, `ranges` (≤ 64), `window` (≤ 256); no ranges cancels | 1 KiB |
+| 0x4E54 | `FileChunk` | `object_id`, `index` (u32), `data` (one piece, ≤ 65,536), `proof` (≤ 32 × 32) | 67 KiB |
+| 0x4E55 | `FileHalt` | `object_id`, `reason` (unavailable, not responding, throttled, ended, not_found), `retry_after_ms` | 64 B |
 
 `FileWant.ranges` are the next pieces the recipient wants, in the order it wants them;
 they need not list everything missing. The sender sends from them, at most `window` pieces
@@ -1005,20 +1232,22 @@ delivered and simply counted.
 - **extension.md §8:** `files/1` has two classes; `upload_id` becomes `object_id`
   (server-assigned, owned by the account, the same role); the relay-only mode becomes
   the live class, sent directly when possible and through the relay and its piece cache
-  otherwise, with the budgets of §5.2; hashes are verified per chunk. The rest of §8
+  otherwise, from the sender or from recipients who help share it, with the budgets of
+  §5.2; hashes are verified per piece. The rest of §8
   (authorisation by referencing message, no cross-user deduplication, quota reserved at
   start, reference counting, no trusted MIME types) stands; its global quota is
   `files.global_quota`, off by default behind the free-disk reserve (§5.3).
-- **e2ee.md §6.8:** the "hash of the ciphertext" is the Merkle root of §4.1 (SHA-256,
-  RFC 9162 shape) and commits to the key; objects are padded (Padmé); attachments ride
-  in the `chat` envelope as a list of `FileRef`s rather than a separate `file` envelope;
-  the same format serves live objects, and the file key also keys their hint exchange
+- **e2ee.md §6.8:** the "hash of the ciphertext" is BEP 52's SHA-256 tree over 16 KiB
+  blocks of the ciphertext (§4.1), bound to the key and length in the object root;
+  objects are padded (Padmé); attachments ride in the `chat` envelope as a list of
+  `FileRef`s rather than a separate `file` envelope; the same format serves live objects,
+  served by recipients too, and the file key also keys their hint exchange
   and direct connections.
 - **SECURITY.md**, when implemented: the bulk connection, blob store and piece cache
   under `nuscheld`; on the client, the bulk connection and the direct path in the
   session (a TCP listener only during a race, TLS with pinned per-transfer
-  certificates), which reads offered files and writes downloads only to the path the
-  user chose; no new worker and no new crypto dependency.
+  certificates), which reads offered and helped files and writes downloads only to the
+  path the user chose; no new worker and no new crypto dependency.
 
 ## 11. Decisions by the user (2026-11-11)
 
@@ -1050,6 +1279,11 @@ The user answered the questions this section asked:
    peers limited to those with `can_read`), whether the object format can match
    BitTorrent v2's SHA-256 Merkle tree over 16 KiB blocks so that rqbit verifies the
    same root, and how a deletion makes peers stop seeding.
+
+Where the design follows them: 1 in §1.2 and §5.3; 2 in §3.5 (shares cost nothing at
+rest, with the costs); 3 in §2.2–§2.4; 4 in §7 (what a restart re-offers, and why codes
+cannot survive one); 5 in §2.10 (sources, deletion, privacy, and the rqbit evaluation)
+and §4.1 (the BEP 52 tree).
 
 The original questions follow for reference.
 

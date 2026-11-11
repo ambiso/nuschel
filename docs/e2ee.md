@@ -981,14 +981,17 @@ Consequences:
 ### 6.8 Files
 
 **The design is [docs/files.md](files.md)** (2026-11-11), which supersedes this section
-where they differ. What changes: the "hash of the ciphertext" is a Merkle root over the
-encrypted chunks (SHA-256, RFC 9162 shape) that also commits to the key, so every chunk is
-verified on arrival, by recipients and by the server, which needs no key for it; objects
+where they differ. What changes: the "hash of the ciphertext" is BitTorrent v2's SHA-256
+tree (BEP 52) over 16 KiB blocks of the encrypted object, bound to the key and length in
+an object root, so every 64 KiB piece (one encrypted chunk) is verified on arrival, by
+recipients and by the server, which needs no key for it; objects
 are padded to Padmé length; attachments travel as a list of `FileRef`s in the `chat`
 envelope and its archive record instead of a separate `file` envelope; `upload_id`
 becomes `object_id`; the same format serves *live* files, sent from the sender's device
-directly or through the server's relay and never stored, which the sender can later keep
-on the server without re-encrypting; the file key also seals the connection hints and
+directly or through the server's relay and never stored, and by recipients who already
+have them (a private swarm of members, which the sender's deletion ends), which the sender
+can later keep on the server without re-encrypting; the file key also seals the
+connection hints and
 pins the certificates of direct connections, so the server cannot read the hints or put
 itself in the middle. The rest below stands.
 
