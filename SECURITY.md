@@ -257,6 +257,13 @@ inside a worker's is refused. Server passwords are never saved. Access tokens st
 `servers.json` with their bookmarks: they are shared channel passwords, not
 credentials of your identity, but leave them out of a public dotfiles repository.
 
+The crypto worker acquires an exclusive OS lock on a persistent `keys/store.lock`
+before reading or creating its store key, for file and supplied keys alike. It holds
+the descriptor until exit; contention or an unavailable lock fails closed. The lock
+file is never removed on release, so another worker cannot acquire a different inode
+while the first still owns the store. Linux tests cover process-death release and
+restart persistence; native Windows/macOS contention tests remain open.
+
 Moving an earlier version's profile keeps these boundaries: the storage worker gets
 the data folder as a whole only while an earlier version's history in it could not
 be moved, and then nothing else moves into it and everything is used where it was;

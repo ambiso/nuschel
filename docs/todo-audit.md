@@ -61,6 +61,15 @@ design task, not silently folded into the small ownership-lock fix.
   container KVM creation, disk/RAM preflight and immutable registry metadata checks
   passed. The [guest evidence gates](ios-vm.md) remain open: no Apple media, macOS
   boot, SwiftUI rendering, XCTest or Rust library linkage was demonstrated.
+- Crypto-store exclusion now acquires a persistent OS lock before any key/state
+  access and holds it for the store lifetime. All 49 crypto-worker tests passed,
+  including cross-process contention and crash release, key-access ordering,
+  independent directories and link/MLS restarts. An independent source review found
+  no concrete issue. Native Windows/macOS locking behavior still needs runtime
+  validation. This supersedes the pre-fix missing-lock finding in the source ledger.
+- The scoped crypto build used Nix per-crate derivations, added approximately
+  312 MiB of apparent outputs and left zero scratch data; it created no Cargo target.
+  Nix ran with two cores and two jobs. No new dependency or unsafe block was added.
 - SDK, Windows migration, fuzzing and architecture prose now describe the existing
   implementation and its limits. Nix option formatting and whitespace checks passed.
 

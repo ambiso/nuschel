@@ -2600,5 +2600,36 @@
       "justfile",
       "docs/clients.md"
     ]
+  },
+  "post_audit_resolutions": {
+    "crypto_store_exclusion": {
+      "finding": "S03",
+      "status": "implemented and verified",
+      "change": "ymqkyqrz",
+      "tests": {
+        "passed": 49,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "scope": "Linux runtime; Windows/macOS contention and crash release remain untested"
+    },
+    "rtc_aws_lc": {
+      "finding": "S17",
+      "status": "remains open",
+      "verified_command": "cargo tree --locked --offline -p nuschl-rtc -i aws-lc-rs"
+    },
+    "ios_environment": {
+      "status": "host prerequisites verified; guest proof remains open",
+      "host_tests_passed": 14,
+      "macos_boot": false,
+      "swiftui_rendering": false,
+      "xctest": false,
+      "rust_simulator_link": false
+    },
+    "release_tooling": {
+      "status": "flake-pinned helper tools and two-core Nix invocations; actionlint passed",
+      "release_published": false
+    }
   }
 }

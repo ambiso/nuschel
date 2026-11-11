@@ -233,8 +233,13 @@ Later (reported):
       grants, including the broad data-folder Modify grant (`session/rename.rs`,
       sandbox retirement mock regressions; SECURITY.md, "Where secrets live").
 - [ ] Validate migration from an actual earlier Windows installation in the VM.
-- [ ] Crypto worker: exclusive ownership of `keys/` across processes, acquired before
-      key/state access and held until exit. Separate instances must fail closed.
+- [x] Crypto worker: exclusive `keys/` ownership through a persistent `store.lock`,
+      acquired before either key source is read/created and retained until exit.
+      Contention and OS lock failures fail closed. All 49 crypto-worker tests pass,
+      including cross-process contention/crash release and drop-before-reopen
+      link/MLS fixtures; no new dependencies or unsafe code.
+- [ ] Exercise the new crypto-store contention/crash paths on Windows/macOS;
+      the current runtime evidence is Linux only.
 - [x] Unread indicators (channel and DM counts, red for mentions; a pill and a red
       count on the server rail). Remember the last channel and rejoin it on start.
 - [x] Runs of routine activity lines (joins, moves, connects, disconnects) collapse into
