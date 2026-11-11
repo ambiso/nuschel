@@ -1,0 +1,43 @@
+[package]
+name = "nuschel-kt"
+description = "Key transparency for Nuschel servers: a verifiable key directory and its client-side checks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The directory backend (docs/e2ee.md §5.2). Default features are off: no auditing
+# helpers (`public_auditing`), no WhatsApp configuration; the directory uses akd's
+# current configuration (`experimental`) with a Nuschel domain label.
+akd = { version = "0.13.0", default-features = false, features = [
+  "experimental",
+  "parallel_vrf",
+] }
+akd_core = { version = "0.13.0", default-features = false, features = [
+  "vrf",
+  "experimental",
+  # Only because akd 0.13 re-exports `akd_core::proto` unconditionally and does not
+  # build without it. Nothing here parses protobuf: proofs use this crate's codec.
+  "protobuf",
+] }
+# Not used directly: selects BLAKE3's portable Rust implementation for akd (no C or
+# assembly; docs/e2ee.md §9).
+blake3 = { version = "1.8.7", default-features = false, features = ["pure"] }
+async-trait = "0.1.92"
+ed25519-dalek = { version = "2.2.0", default-features = false, features = [
+  "std",
+  "zeroize",
+] }
+sha2 = "0.10.9"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["rt", "sync"] }
+zeroize = "1.9.1"
+
+[dev-dependencies]
+hex = "0.4.3"
+tokio = { version = "1.54.1", features = ["macros", "rt", "rt-multi-thread"] }
