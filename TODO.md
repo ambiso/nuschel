@@ -124,7 +124,7 @@ Later (reported):
 - [ ] Managed config follow-ups: a NixOS option for `/etc/xdg/nuschel/managed.json`;
       system-wide managed config on Windows/macOS; evaluation-time checks for nested
       settings; a way to dismiss the startup error notice.
-- [x] XDG Base Directory layout (crates/session/src/layout.rs, README "Where Nuschel
+- [x] XDG Base Directory layout (crates/session/src/layout.rs, docs/desktop.md "Where Nuschel
       keeps its files"): configuration only in `$XDG_CONFIG_HOME/nuschel` (settings,
       bookmarks, managed.json); identity, end-to-end keys, history and security records
       in `$XDG_DATA_HOME/nuschel`, each worker's folder apart; last channels and the
@@ -884,11 +884,20 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
 
 - [x] Release workflow (one Linux runner, cross builds) with signed in-place updates
       for Windows and macOS.
-- [ ] Store `UPDATE_SIGNING_KEY` as a repository secret and back the key up.
+- [ ] Store `UPDATE_SIGNING_KEY` as a repository secret and back the key up. It is
+      the minisign secret key that release.yml uses to sign `update.json`, whose
+      public half (`crates/update/update-key.pub`) is built into the app: it protects
+      in-app updates and the workflow cannot publish without it. It is not operating
+      system code signing (below), and is needed either way.
 - [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
       updates itself where it was unpacked.
-- [ ] macOS Developer ID signing and notarisation with `rcodesign` (needs an Apple
-      Developer account); until then first start needs "Open Anyway".
+- Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The
+  README and docs/install.md explain the first start without it.
+  - [ ] macOS Developer ID signing and notarisation with `rcodesign` (needs an Apple
+        Developer account); until then the app is only ad-hoc signed and the first
+        start needs **Privacy & Security → Open Anyway**.
+  - [ ] Windows Authenticode signing; until then SmartScreen asks on the first start
+        (**More info → Run anyway**) and Smart App Control blocks Nuschel.
 - [ ] Third-party notices and attribution; walk through the release gates in `SECURITY.md`.
 - [ ] Mobile, web and terminal clients (user, 2026-11-11): decided, see
       docs/clients.md. Then:
