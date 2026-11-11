@@ -1,0 +1,44 @@
+Nuschl patch of ratatui-image 11.1.0
+
+Original ratatui-image is MIT licensed; retain LICENSE and its copyright notices.
+Registry checksum: 9593d10c61ec2007f429d1fafc4f4a19fecdbae4d06b531a2d505227fb82f5ea
+Upstream revision: d8f08379465ed8e174c1d25cd60cbcfcbcbb39f1
+Source: https://github.com/ratatui/ratatui-image
+
+The private src/protocol/sixel/encoder.rs adapts the indexed SIXEL band framing
+and opacity mask from icy_sixel 0.5.1, choosing its MIT license option.
+Copyright (c) 2025 Mike Krüger
+Complete license: LICENSE-icy_sixel-MIT
+Registry checksum: 4bfb5a63225620b59df34a235d1fb56ff7b766909c3212a8ff927511a22b181d
+Upstream revision: 7baecc1bbb18ddf0ff0de83d296b4509a1b64b0f
+Original path: crates/icy_sixel/src/encoder.rs
+Source: https://github.com/mkrueger/icy_sixel
+License retrieved from that exact revision's LICENSE-MIT.
+
+Nuschl modifications (2026-11-11): replace base64-simd with base64 0.22; replace
+icy_sixel/quantette with an exact adaptive palette for <=256 colors and otherwise
+color_quant 1.1.0 NeuQuant; checked dimensions/exact RGBA length, bounded encoded
+output and safe number formatting. Keep ratatui-image 11.1's public widget APIs
+and SIXEL raster/band/transparency/slicing format. The no-longer-used SIXEL
+source-format decoder and SIMD quantizer implementation are not included.
+NeuQuant supplies an adaptive palette, not a fixed 3-3-2 color cube. Upstream
+binary alpha semantics remain; callers should precompose partial alpha against
+the intended background to preserve formula antialiasing.
+
+color_quant 1.1.0 is an existing MIT-licensed dependency (Piston Developers);
+its source and license remain with that dependency, rather than copied here.
+Registry checksum: 3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b
+
+Safety scope: the private quantization/framing module forbids unsafe code and
+base64 0.22 also forbids it. This is NOT a zero-unsafe transitive claim. Existing
+image buffer views, PNG/zlib/checksum implementations and terminal OS bindings
+still use internal unsafe code. The consuming application must validate bounded
+worker RGBA, never decode source image formats here, cap its render/cache sizes,
+and retain those narrowly reviewed renderer/system-service exceptions. Keep
+chafa-dyn/chafa-static and image-defaults disabled for Nuschl.
+
+Vendoring omits upstream Cargo.lock, registry bookkeeping and showcase.gif. The
+library source, public API, examples, benchmark, build script and original
+manifest are otherwise retained; Cargo.toml and Cargo.toml.orig reflect this
+small dependency substitution. Tests use generated fixtures; upstream tests
+expecting unpublished assets are outside the focused vendor-safety filter.
