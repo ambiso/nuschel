@@ -69,7 +69,8 @@ class Bus:
         self.busctl = busctl
 
     def __call__(self, *arguments):
-        result = subprocess.run([self.busctl, f"--address={self.address}", "--json=short", *arguments],
+        # After "--", arguments such as -1 are values, not options.
+        result = subprocess.run([self.busctl, f"--address={self.address}", "--json=short", "--", *arguments],
                                 capture_output=True, text=True, timeout=10)
         if result.returncode:
             raise RuntimeError(result.stderr.strip())
@@ -103,6 +104,14 @@ class Node:
         """x, y, width and height in window coordinates."""
         return self.call("Component", "GetExtents", "u", "1")[0]
 
+    def centre(self):
+        x, y, width, height = self.extents()
+        return x + width // 2, y + height // 2
+
+    def press(self):
+        """The default action, as a screen reader activates a control."""
+        assert self.call("Action", "DoAction", "i", "0")[0] is not False, f"{self.name!r} refused its action"
+
 
 def snapshot(application):
     """(depth, node, role, name) for the whole tree. Nodes that disappear while
@@ -121,6 +130,16 @@ def snapshot(application):
             visit(child, depth + 1)
     visit(application, 0)
     return entries
+
+
+def items(application):
+    """Every node of an application in one call, from the Cache interface that
+    screen readers keep their copy of the tree with: (node, role, name, states),
+    without the hierarchy. Much faster than snapshot() for finding controls."""
+    data = application.bus("call", application.destination, "/org/a11y/atspi/cache", "org.a11y.atspi.Cache",
+                           "GetItems")[0]
+    return [(Node(application.bus, destination, path), ROLES.get(role, f"role {role}"), name, states[0])
+            for (destination, path), _, _, _, _, _, name, role, _, states in data]
 
 
 def start_registry(at_spi, env, spawn):
@@ -223,11 +242,20 @@ class AccessibilityTest:
                              or key.startswith(("AT_SPI", "NO_AT_BRIDGE", "XDG_RUNTIME"))}
                 raise AssertionError(f"{error}; registered applications: {names}; accessibility bus "
                                      f"{registry.bus.address}; environment: {variables}\n{logs}")
+            if not self.shell:
+                # A bare X server has no window manager to give the window the
+                # input focus, and without it nothing in the window is focused
+                # for AT-SPI (GrabFocus below would focus nothing a screen
+                # reader can see). Focus it as a window manager would.
+                subprocess.run(["xdotool", "search", "--sync", "--onlyvisible", "--name", "^Nuschel",
+                                "windowfocus", "--sync"], env=env, check=True, timeout=30)
 
             def ready():
                 nodes = snapshot(nuschel)
                 names = {name for _, _, _, name in nodes}
-                return nodes if "Ada Lovelace" in " ".join(names) and "Send" in names else None
+                # The voice controls come once the desktop knows it joined, which
+                # can be after the server has told the peer.
+                return nodes if "Ada Lovelace" in " ".join(names) and {"Send", "Disconnect"} <= names else None
             nodes = eventually(ready, "the accessibility tree did not fill in", timeout=30)
             self.write_tree(nodes, "tree.txt")
             self.check_tree(nodes)
