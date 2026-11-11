@@ -1129,6 +1129,23 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       ID before issuing real credentials (a shared parent RP ID also authorizes
       qualifying subdomains). macOS signing/associated-domain prerequisites remain
       deferred; browser recovery is still required.
+- [ ] **Encrypted preferences sync** (user, 2026-11-11): an optional personal vault
+      on nuschl.eu (self-hostable) stores ciphertext for server bookmarks, appearance,
+      friends/nicknames and selected settings under the device-sync key (§3.7 of
+      docs/e2ee.md). Signed/versioned changes, per-field merges and deletion records
+      must handle offline devices and concurrent desktop/mobile edits. Keep audio
+      devices, microphone/active-call state, auto-connect choices, private device
+      keys, MLS ratchets and system-managed policy local. Device linking can enable
+      sync without backup; browser passkey recovery or a written key can restore
+      access, and opting out of recovery remains allowed.
+      **Concurrent sessions are a prerequisite:** one Nuschel account must admit
+      distinct authenticated devices without the current Mumble-style ghost kick
+      (apps/server/src/auth.rs). Do not clone an installation's crypto state or
+      private device keys. Legacy registered accounts remain single-connection;
+      offer explicit single-device use or separate device accounts/certificates
+      and names, with their permission implications. Never silently auto-connect
+      synced bookmarks on every device or start a reconnect/kick loop. Queued after
+      the rename; the vault and concurrent-device login are not implemented yet.
 - [ ] Knocking (user, 2026-11-11): someone who may not enter a voice or chat channel
       knocks; online users with **Move and Enter** in that channel get a notice with
       Admit / Decline (knocks rate-limited). Admitting grants temporary Enter, Speak,
