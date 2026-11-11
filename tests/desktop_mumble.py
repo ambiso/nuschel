@@ -465,7 +465,10 @@ class DesktopTest:
     def check_private_reconnect(self, pin, session):
         """Keep one private view open across a recipient's new online session;
         a different certificate in the old slot must not get the message."""
-        self.click_node(self.wait_for("tree item", "DesktopPeer", partial=True))
+        # A private-conversation row remains after the person disconnects;
+        # only the user row (without the @ prefix) proves online presence.
+        online_label = lambda label: label == "DesktopPeer" or label.startswith("DesktopPeer,")
+        self.click_node(self.wait_for("tree item", online_label))
         self.wait_for("list", "Messages with @ DesktopPeer")
         self.type_message("PRIVATEBEFORERECONNECT")
         self.xdo("key", "Return")
@@ -480,7 +483,7 @@ class DesktopTest:
             self.peer = Client(self.args.binaries, self.args.host, self.args.port, pin,
                                "DesktopPeer", self.root / "peer")
             self.peer.send(kind="join", channel=2)
-            self.wait_for("tree item", "DesktopPeer", partial=True)
+            self.wait_for("tree item", online_label)
             self.type_message("PRIVATEAFTERRECONNECT")
             self.xdo("key", "Return")
             self.peer.wait(lambda e: e["kind"] == "text" and e["body"] == "PRIVATEAFTERRECONNECT")
@@ -490,7 +493,7 @@ class DesktopTest:
             replacement.close()
         self.peer.close()
         self.peer = None
-        eventually(lambda: self.absent("tree item", "DesktopPeer", partial=True), "recipient stayed online")
+        eventually(lambda: self.absent("tree item", online_label), "recipient stayed online")
         self.type_message("PRIVATECOMPOSERKEPT")
         self.xdo("key", "Return")
         self.wait_for("push button", "Dismiss notice")
@@ -498,6 +501,7 @@ class DesktopTest:
         eventually(lambda: self.absent("push button", "Dismiss notice"), "notice could not be dismissed")
         # Sending again still fails, but an idle application must expire the
         # notice on its own rather than wait for another connection event.
+        self.click_node(self.wait_for("entry", "Message"))
         self.xdo("key", "Return")
         self.wait_for("push button", "Dismiss notice")
         eventually(lambda: self.absent("push button", "Dismiss notice"), "notice never expired", timeout=15)
@@ -508,6 +512,7 @@ class DesktopTest:
                        and e["user"]["channel"] == 2)
         self.peer.send(kind="direct", session=session, body="PRIVATEINCOMINGAFTERRECONNECT")
         eventually(lambda: self.has_message("PRIVATEINCOMINGAFTERRECONNECT"), "incoming private text did not refresh the view")
+        self.click_node(self.wait_for("entry", "Message"))
         self.xdo("key", "Return")
         self.peer.wait(lambda e: e["kind"] == "text" and e["body"] == "PRIVATECOMPOSERKEPT")
         self.capture("private-recipient-reconnected")

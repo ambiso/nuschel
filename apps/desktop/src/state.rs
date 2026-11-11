@@ -187,6 +187,7 @@ struct Outgoing {
     key: (String, u32),
     /// Freeze identity while an image is prepared; the online session may change.
     context: (String, Option<u64>),
+    private: bool,
     text: String,
     attachments: Vec<Attachment>,
     /// The server's image and text limits.
@@ -1863,6 +1864,7 @@ impl Desktop {
                     .as_ref()
                     .map(|peer| peer.instance),
             ),
+            private: server.channels[channel].is_direct(),
             text,
             attachments: self.attachments.remove(&key).unwrap_or_default(),
             limits: (limits.1.min(MAX_CONTENT_BYTES), limits.2),
@@ -1902,10 +1904,11 @@ impl Desktop {
                         .map(|position| {
                             let target = server.message_target(position)?;
                             let channel = &server.channels[position];
-                            if channel.is_direct()
-                                && channel.storage_key != batch.context.0
-                                && channel.direct_peer.as_ref().map(|peer| peer.instance)
-                                    != batch.context.1
+                            if channel.is_direct() != batch.private
+                                || (batch.private
+                                    && channel.storage_key != batch.context.0
+                                    && channel.direct_peer.as_ref().map(|peer| peer.instance)
+                                        != batch.context.1)
                             {
                                 return Err(nuschel_core::model::RECIPIENT_UNAVAILABLE_NOTICE);
                             }
