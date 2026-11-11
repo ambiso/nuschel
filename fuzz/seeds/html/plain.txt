@@ -1,0 +1,5 @@
+plain text with ```rust
+fn main() {}
+``` and https://example.com/a?b=1, done.
+
+Second paragraph.

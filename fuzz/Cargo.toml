@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: EUPL-1.2
+# libFuzzer targets; needs nightly and cargo-fuzz, so it is its own workspace,
+# outside the default build: `cargo +nightly fuzz run html` from this directory.
+[package]
+name = "nuschel-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "EUPL-1.2"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+nuschel-content = { path = "../crates/content" }
+nuschel-core = { path = "../crates/core" }
+
+[[bin]]
+name = "html"
+path = "fuzz_targets/html.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1

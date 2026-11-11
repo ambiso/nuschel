@@ -1,0 +1,53 @@
+// SPDX-License-Identifier: EUPL-1.2
+//! Hostile legacy HTML and plain text through the content worker's conversion
+//! into a document, as messages, comments and channel descriptions take it:
+//! nothing may panic, and every span must lie inside its text, in order, with
+//! an allowed link target.
+#![no_main]
+
+use libfuzzer_sys::fuzz_target;
+use nuschel_content::{ContentRenderer, MAX_URL_BYTES};
+use nuschel_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument};
+use std::sync::OnceLock;
+
+fn renderer() -> &'static ContentRenderer {
+    static RENDERER: OnceLock<ContentRenderer> = OnceLock::new();
+    RENDERER.get_or_init(|| ContentRenderer::new().expect("the bundled theme loads"))
+}
+
+fn check(document: &MessageDocument) {
+    for block in &document.blocks {
+        let ContentBlock::Text { text, spans, .. } = block else {
+            continue;
+        };
+        assert!(!text.contains(EMBED), "a marker was left in the text");
+        let mut end = 0;
+        for span in spans {
+            assert!(end <= span.start && span.start < span.end && span.end <= text.len());
+            assert!(text.is_char_boundary(span.start) && text.is_char_boundary(span.end));
+            if let Some(url) = &span.link {
+                assert!(nuschel_core::allowed_link(url) && url.len() <= MAX_URL_BYTES);
+                assert!(!url.contains(|c: char| c.is_control() || c.is_whitespace()));
+            }
+            end = span.end;
+        }
+    }
+}
+
+fuzz_target!(|data: &[u8]| {
+    let Ok(source) = std::str::from_utf8(data) else {
+        return;
+    };
+    let renderer = renderer();
+    // Legacy HTML becomes the text history stores, which renders as a document.
+    if let Ok(stored) = renderer.legacy_plain_text(source) {
+        assert!(stored.len() <= MAX_CONTENT_BYTES);
+        if let Ok(document) = renderer.render(&stored) {
+            check(&document);
+        }
+    }
+    // Plain messages (and stored text) render directly.
+    if let Ok(document) = renderer.render(source) {
+        check(&document);
+    }
+});
