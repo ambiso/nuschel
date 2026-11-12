@@ -1,0 +1,10 @@
+{
+  "format": 1,
+  "application_id": "org.nuschl.Nuschl",
+  "runtime": "org.freedesktop.Platform",
+  "architecture": "x86_64",
+  "branch": "26.08",
+  "commit": "df26daaf9d07610b4a72cc4585566194051275ac68396597b06474396f66427c",
+  "repository": "https://dl.flathub.org/repo/",
+  "repository_descriptor": "https://dl.flathub.org/repo/flathub.flatpakrepo"
+}
