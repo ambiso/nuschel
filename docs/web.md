@@ -40,9 +40,11 @@ strict; anything else closes the tunnel.
   Teredo, NAT64 and other special ranges (IPv4-mapped IPv6 is checked as IPv4),
   and connects only to an address it checked, so a name cannot change its answer
   in between (no DNS rebinding). `allow_networks` admits a LAN or test network;
-  `deny_networks` adds ranges. On NixOS the kernel refuses the same ranges to the
-  relay's unit (`IPAddressDeny`), except for configured DNS resolvers needed
-  to look up public destinations.
+  `deny_networks` adds ranges. On NixOS a separate kernel filter denies major
+  private/special ranges for the relay's unit (`IPAddressDeny`), except for
+  configured DNS resolvers needed to look up public destinations. The relay's
+  more detailed destination checks remain authoritative; the two deny lists
+  are not identical.
 - The destination is a Mumble server: it answers the unencrypted 12-byte Mumble
   ping (then datagrams go over UDP), or, failing that, a TLS handshake. Either way
   the client's first bytes must be a TLS ClientHello record and the server's first
@@ -88,7 +90,7 @@ services.nuschl-web = {
   # appLinks.android = [ { package = "org.nuschl.android"; certificateFingerprints = [ "…" ]; } ];
   # appLinks.apple = [ "TEAMID.org.nuschl.Nuschl" ];
   # relay.ports = [ "64738-64799" "10000-20000" ];
-  # relay.resolverAddresses = [ "127.0.0.1" ]; # for a custom DNS setup
+  # relay.resolverAddresses = [ "127.0.0.55" ]; # if your dedicated DNS resolver listens here
 };
 ```
 
@@ -111,11 +113,29 @@ leads.
 
 When systemd-resolved is enabled, the relay unit allows its dedicated
 `127.0.0.53` stub through the kernel IP filter. For Unbound or another private
-resolver, set `relay.resolverAddresses` to the address it listens on; this
-changes only the systemd IP filter, not the relay's destination policy.
+resolver, set `relay.resolverAddresses` to the addresses the system DNS client
+actually uses. The resolver must already listen there; configure its address
+and the system's DNS client (for example `/etc/resolv.conf`) separately. This
+option neither starts a resolver nor changes DNS selection. An explicit list
+replaces the resolved default; an empty list disables that exception. When
+resolved is disabled the default list is empty. These addresses change only
+the systemd IP filter, not the relay's destination policy.
 Systemd permits every port on an allowed address, so a dedicated resolver
 address gives a narrower exception than `127.0.0.1`, where other services may
-also listen.
+also listen. The example `127.0.0.55` avoids resolved's usual `.53` and `.54`
+listeners; it is not a newly installed resolver. `relay.allowNetworks` remains
+the separate explicit destination allowance and is combined with resolver
+exceptions only in the kernel filter. Adding a DNS exception alone never
+permits tunneling to a private/loopback resolver address.
+These kernel controls depend on cgroup eBPF support; the application checks are
+enforced independently. The address-based precedence and scope are documented
+in [systemd's network controls](https://github.com/systemd/systemd/blob/v259/man/systemd.resource-control.xml#L675-L767).
+
+`nix eval --impure --json --file tests/web_dns_module.nix` evaluates the actual
+NixOS module for six configurations: resolved off/on, custom resolvers, an
+explicit empty list, overlapping LAN/DNS exceptions and an explicit destination
+deny setting. It checks unchanged kernel deny/hardening settings and verifies
+that DNS-only exceptions leave the generated application relay config identical.
 
 `nix build .#checks.x86_64-linux.vm-web` boots the module (plain HTTP, no ACME in a
 VM), checks the site, the landing page, its headers, the app-link files and that

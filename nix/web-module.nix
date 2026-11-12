@@ -193,13 +193,15 @@ in
         type = lib.types.listOf lib.types.str;
         default = lib.optionals config.services.resolved.enable [ "127.0.0.53" ];
         defaultText = lib.literalExpression ''lib.optionals config.services.resolved.enable [ "127.0.0.53" ]'';
-        example = [ "127.0.0.1" ];
+        example = [ "127.0.0.55" ];
         description = ''
           DNS resolver addresses exempted from the relay unit's kernel IP filter.
           This does not permit the relay to tunnel to those addresses: its own
           destination checks still apply. Systemd's IP allowance covers every
           port on each address, so prefer a resolver on a dedicated address.
           Set this for a local or private resolver such as Unbound, if needed.
+          The resolver must already listen there and be configured in the
+          system's DNS client; this option does not start or select a resolver.
         '';
       };
       allowedOrigins = lib.mkOption {
@@ -332,7 +334,8 @@ in
           "@system-service"
           "~@privileged"
         ];
-        # No server-side request forgery, even if the relay's own checks failed.
+        # Additional private/special-network boundary. The address-wide DNS/LAN
+        # exceptions below do not replace the relay's application checks.
         IPAddressDeny = refusedNetworks;
         # DNS must remain reachable even when the resolver is on loopback.
         # The relay's destination policy still rejects private/local targets.
