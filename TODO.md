@@ -633,6 +633,12 @@ Later (reported):
       attachment/transfer lane; native-first
       scope and safe preview/save authority are being reviewed. Web attachments
       and modern persistent/resumable file delivery remain separately open.
+- [ ] Reap crash-orphaned original-image snapshots with a bounded, profile-owned
+      cache lifecycle. Normal Arc/drop cancellation cleanup is covered by the
+      image-quality work; a process crash can leave read-only staging files.
+      Coordinate single-profile ownership, live viewers/offers and symlink-safe
+      deletion; never broadly remove user files or other active profiles' data.
+      Keep stale disk usage separate from the live 64 MiB staging allowance.
 - [ ] Large file transfers peer to peer, not stored on the server: the server only
       relays (perhaps a small chunk cache, content-defined chunking); resumable
       across restarts and lost connections; clearly shown while still uploading.
@@ -1021,6 +1027,22 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       Assigned to the shared owner after the current send-limit handoff in a new
       audio workspace; Claude's separate slider/threshold-helper edits must stay
       disjoint. Existing short DSP checks do not establish long-idle stability.
+      User later confirms the symptom and correlation with not speaking, with
+      both UI and worker running from
+      `/nix/store/ci7hdskm7ja8mg45xc9ihws7ddq8adiw-nuschl-0.1.0` (worker SHA-256
+      `2c11ffc534e4a67c59a57858e0a2ae7c2b528ce3dc287307d0bb87d6e73960eb`).
+      Retain this exact baseline even if restarting the current build changes it.
+- [ ] Compare [earshot](https://github.com/pykeio/earshot) with RNNoise speech
+      probability for VAD (user, 2026-11-12), as part of the long-idle audit.
+      Pin/audit source, licence, dependencies and unsafe use; "pure Rust" alone
+      does not establish memory safety. Benchmark at matched false-positive and
+      missed-speech rates, quiet voices, first-syllable/cold+warm latency, long
+      silence/noise drift, CPU and state memory. Include the complete safe
+      48 kHz/10 ms to 16 kHz/16 ms adaptation cost and detector context, with
+      the same gate policy distinguished from detector-only scoring. Retain
+      RNNoise denoising independently of the selected VAD. No production backend
+      switch before measured evidence and memory-safety review. Assigned to the
+      VAD owner; initial work is an isolated comparison harness.
 - [ ] Complete receive/output parity against stock Mumble with independent PCM
       and device proofs before claiming 1:1 quality. The stereo/gain source
       checkpoint preserves native/browser LR and volume; independent native
