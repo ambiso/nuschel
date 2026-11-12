@@ -71,9 +71,14 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   latest signed manifest's 30-day maximum expiry, including unchanged binaries.
   The tag-create workflow is not that refresh path. Keep expiry/clock errors
   actionable; do not add an automatic signing cron or waive expiry.
-- [ ] Rerun the migrated updater in the private Windows VM with a separately
-  compiled temporary public fixture pair, including both LPAC verifiers. Current
-  Linux worker proof does not renew the old minisign Windows regression evidence.
+- [x] Run the hybrid native library fixture in the private Windows VM: both
+  individually featured LPAC verifiers, temporary keys, bound forged answers,
+  corrupt siblings, bounded output/stalls, and loopback fetch/apply/cleanup pass.
+  See [proof and limits](windows-hybrid-update.md); this is not desktop GUI proof.
+- [ ] Correct the GUI harness's omitted verifier binaries and unowned-process
+  stopping, then rerun the actual Windows update/restart flow with a separately
+  built temporary-public-trust source. The old minisign GUI evidence does not
+  establish the current hybrid desktop path.
 - [ ] Review README/install/security/release notes against the final artifacts:
   early-development status; compatible TLS/Mumble voice; MLS experiments and
   historical-key limits; no completed RTC video/screen-sharing claim; Linux via

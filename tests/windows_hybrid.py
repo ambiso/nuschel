@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import uuid
@@ -55,6 +56,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     run = uuid.uuid4().hex
     binaries = [args.ed25519, args.mldsa44, args.fixture]
+    if hashlib.sha256(args.ed25519.read_bytes()).digest() == hashlib.sha256(args.mldsa44.read_bytes()).digest():
+        raise ValueError("test requires distinct single-algorithm verifier binaries")
     names = [f"hybrid-{run}-{index}.exe" for index in range(3)]
     for path, name in zip(binaries, names):
         vm("push", str(path), name)
@@ -91,6 +94,13 @@ try {
   $stderr.Result
   "FIXTURE_EXIT_CODE=$code"
   if ($code -ne 0) { throw "native hybrid fixture rejected ($code)" }
+  $mapping = 'HKCU:\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings'
+  Get-ChildItem $mapping | ForEach-Object {
+    $profile = (Get-ItemProperty $_.PSPath).Moniker
+    if ($profile -eq 'nuschl.update.ed25519' -or $profile -eq 'nuschl.update.mldsa44') {
+      "LPAC_PROFILE|$profile|$($_.PSChildName)"
+    }
+  }
 } finally {
   Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -104,11 +114,15 @@ try {
     for expected in EXPECTED:
         if expected not in output:
             raise RuntimeError("missing actual native proof stage: " + expected)
+    profiles = dict(re.findall(r"^LPAC_PROFILE\|(nuschl\.update\.(?:ed25519|mldsa44))\|(S-1-15-2-[0-9-]+)\r?$", output, re.M))
+    if set(profiles) != {"nuschl.update.ed25519", "nuschl.update.mldsa44"} or len(set(profiles.values())) != 2:
+        raise RuntimeError("distinct actual update AppContainer profile identities were not observed")
     report = {"guest_state": str(state), "guest_status": status, "stages": EXPECTED,
+              "lpac_profiles": profiles,
               "keys": "generated only inside a temporary guest directory; no production trust enrollment",
               "binaries": [{"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
                            for path in binaries],
-              "limits": ["Windows VM, not physical hardware or macOS", "No desktop UI restart proof from this fixture", "LPAC uses production profiles and both fixed algorithm launchers"]}
+              "limits": ["Windows VM, not physical hardware or macOS", "No desktop UI restart proof from this fixture", "LPAC uses production profiles and both fixed algorithm launchers", "Observed Winsock initialization denial 10107 is handled narrowly; this is not a socket-level success/denial claim"]}
     (args.output / "proof.json").write_text(json.dumps(report, indent=2) + "\n")
     print("Native Windows hybrid verifier, LPAC fault boundaries and loopback install passed.")
 

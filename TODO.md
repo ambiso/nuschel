@@ -914,9 +914,19 @@ listed below. Plugin data remains the explicit gap.
       deafened, WASAPI device lists, microphone and echo tests, autostart, updates. It
       found the console window beside the app. Real hardware and macOS remain.
 - [x] Windows VM control harness (`windows_vm.py`) and scripted updater regression
-      (`windows_update.py`). The earlier updater VM evidence used minisign; the
-      migrated hybrid fixture needs a separately compiled temporary public pair
-      and a new native LPAC verification/install rerun (not yet performed).
+      (`windows_update.py`, historical minisign GUI evidence). The new native
+      hybrid fixture passes in Windows 11 build 26200: both fixed engines and
+      LPAC roles, strict bound replies/corrupt siblings, bounded stalls/output,
+      and guest-loopback library fetch/apply/cleanup. Network initialization is
+      denied before a socket exists; distinct SIDs and image deletion are
+      supplementary evidence. See docs/windows-hybrid-update.md.
+- [ ] Correct the Windows GUI updater harness before rerunning it: its initial
+      four-program copy omits both required verifier EXEs and other helpers, and
+      its blanket `Get-Process nuschl | Stop-Process` can kill unowned guest
+      processes. Stage the complete required payload, isolate install/profile
+      directories and track/stop only owned PIDs. Then build a separate source
+      embedding only a temporary fixture public pair and prove actual desktop
+      update/restart; native library install proof does not cover that flow.
 - [ ] Complete unattended Windows desktop/audio/sandbox regression orchestration
       and add UDP (the existing guest-forward voice check used the TCP tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
@@ -1405,8 +1415,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       ML-DSA-44 in two confined fixed-algorithm processes; raw bytes, full public
       pair, expiry and persisted anti-rollback state are bound. No minisign or
       adjacent writable-key fallback. Actual Linux workers, a loopback install,
-      strict signer/artifact regressions and workflow syntax are tested; native
-      Windows/macOS hybrid runtime proof and an actual release remain separate.
+      strict signer/artifact regressions and workflow syntax are tested. Native
+      Windows hybrid verifier/LPAC/library-install proof now passes; the Windows
+      desktop update/restart flow, macOS native proof and an actual release remain.
 - [ ] Enroll the production public pair in `crates/update/update-trust.json`, back
       up the independent private seeds and explicitly provision the matching
       `UPDATE_HYBRID_SIGNING_KEY` repository secret with the reviewed operator
@@ -1450,8 +1461,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       scope/roots/features, original notice/source hashes, updater file limits and
       both verifier binaries in every desktop distribution; run the release gates
       in `SECURITY.md`/docs/release-notices.md. Current metadata proofs do not imply
-      an actual GitHub release/CI run, Windows/macOS hybrid updater execution or
-      hardware/accessibility proof.
+      an actual GitHub release/CI run, Windows desktop update/restart, macOS hybrid
+      updater execution or hardware/accessibility proof.
 - [ ] Mobile, web and terminal clients (user, 2026-11-11): decided, see
       docs/clients.md. Then:
   - [x] The headless client SDK in `crates/client` (commands in, updates out; the

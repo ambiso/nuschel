@@ -1,0 +1,163 @@
+{
+  "guest_state": "/home/ambiso/vms/nuschel-windows",
+  "guest_status": {
+    "qemu": true,
+    "agent_seen_seconds_ago": 4.685730218887329
+  },
+  "stages": [
+    "PASS: actual desktop Tokio spawn_blocking context retains strict two-worker acceptance",
+    "PASS: two real confined engines, either-component corruption, raw bytes, wrong pair, absent trust, legacy/downgrade, expiry, duplicate fields",
+    "PASS: actual sandbox file/write/network probes, mandatory AND despite one forged answer, bounded output and timeout/reaping",
+    "PASS: private HTTP hybrid manifest -> remembered version -> checked download -> atomic install -> cleanup"
+  ],
+  "lpac_profiles": {
+    "nuschl.update.ed25519": "S-1-15-2-1989256401-3508689084-1431988978-1814057566-1231614371-3620298582-839552138",
+    "nuschl.update.mldsa44": "S-1-15-2-374717483-368650577-3729692836-1784765076-2849111345-3774312655-894586323"
+  },
+  "keys": "generated only inside a temporary guest directory; no production trust enrollment",
+  "binaries": [
+    {
+      "path": "/nix/store/bpsbizfig7g3p2xjk6lhadgsx159z80j-rust_nuschl-update-worker-0.1.0-x86_64-w64-mingw32/bin/nuschl-update-verify-ed25519.exe",
+      "sha256": "d36187a199ad9633e054378b21dcb764c5928eabdc73955e7499cce0eaef7cde"
+    },
+    {
+      "path": "/nix/store/jddwli1bhmlm9q64kyw39h3scj9m9bs9-rust_nuschl-update-worker-0.1.0-x86_64-w64-mingw32/bin/nuschl-update-verify-mldsa44.exe",
+      "sha256": "2a26dcb4e44b67d7f702638d111be83c5725566869b473048520d48b6fa44e38"
+    },
+    {
+      "path": "/nix/store/p09yx6j5gd4q0vv6rjm9wfd3qnmkgzby-rust_nuschl-update-worker-0.1.0-x86_64-w64-mingw32/bin/nuschl-update-runtime-fixture.exe",
+      "sha256": "7e4c7c46c3d86f85fdba7e255f28cb38a72b873bcc2ddd5bfc1deb2043e3280a"
+    }
+  ],
+  "limits": [
+    "Windows VM, not physical hardware or macOS",
+    "No desktop UI restart proof from this fixture",
+    "LPAC uses production profiles and both fixed algorithm launchers",
+    "Observed Winsock initialization denial 10107 is handled narrowly; this is not a socket-level success/denial claim"
+  ],
+  "date": "2026-11-12",
+  "base": "220539e8",
+  "runtime_source": "fdae3d82",
+  "platform": {
+    "os": "Windows 11 Enterprise Evaluation 25H2",
+    "build": "26200",
+    "powershell": "5.1.26100.6584",
+    "qemu": "11.1.2",
+    "vcpus": 2,
+    "memory_mib": 6144,
+    "rust": "1.99.1"
+  },
+  "confinement": {
+    "network": "QEMU restrict=on; authenticated harness guest forward only",
+    "audio": "HDA none synthetic backend; no host devices",
+    "source_keys": "generated in guest temporary directory only",
+    "physical_hardware_tested": false
+  },
+  "production_trust": {
+    "keys": 0,
+    "sha256": "d6ad4266f8de5d48b9264944510c9799ff62ec21507c54fc94644e381c99c945",
+    "modified": false
+  },
+  "build": {
+    "route": "test-only per-crate cross expression",
+    "first_cold_derivations": 188,
+    "minimum_tmp_free_bytes": 22476144640,
+    "nix_cores": 2,
+    "nix_max_jobs": 2,
+    "client_scratch": "disk-backed; does not move daemon scratch",
+    "native_dll_staging": false
+  },
+  "logs": {
+    "successful_guest": "~/.cache/nuschl-windows-hybrid-proof/native-4/guest.log",
+    "initial_failures_retained": [
+      "cross-build-missing-pthread.log",
+      "cross-build-exe-suffix.log",
+      "cross-build-windows-import-library.log",
+      "native-1/guest.log",
+      "native-2/guest.log",
+      "native-3/guest.log"
+    ]
+  },
+  "imports": [
+    {
+      "binary": "nuschl-update-verify-ed25519.exe",
+      "bytes": 3222399,
+      "dlls": [
+        "KERNEL32.dll",
+        "msvcrt.dll",
+        "ntdll.dll",
+        "USERENV.dll",
+        "WS2_32.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "bcryptprimitives.dll",
+        "advapi32.dll",
+        "api-ms-win-security-base-l1-2-2.dll",
+        "kernel32.dll",
+        "psapi.dll",
+        "ole32.dll",
+        "api-ms-win-core-winrt-error-l1-1-0.dll",
+        "kernel32.dll",
+        "oleaut32.dll",
+        "advapi32.dll",
+        "kernel32.dll",
+        "userenv.dll"
+      ]
+    },
+    {
+      "binary": "nuschl-update-verify-mldsa44.exe",
+      "bytes": 2942301,
+      "dlls": [
+        "KERNEL32.dll",
+        "msvcrt.dll",
+        "ntdll.dll",
+        "USERENV.dll",
+        "WS2_32.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "bcryptprimitives.dll",
+        "advapi32.dll",
+        "api-ms-win-security-base-l1-2-2.dll",
+        "kernel32.dll",
+        "psapi.dll",
+        "ole32.dll",
+        "api-ms-win-core-winrt-error-l1-1-0.dll",
+        "kernel32.dll",
+        "oleaut32.dll",
+        "advapi32.dll",
+        "kernel32.dll",
+        "userenv.dll"
+      ]
+    },
+    {
+      "binary": "nuschl-update-runtime-fixture.exe",
+      "bytes": 6454738,
+      "dlls": [
+        "kernel32.dll",
+        "ntdll.dll",
+        "userenv.dll",
+        "ws2_32.dll",
+        "ADVAPI32.dll",
+        "bcrypt.dll",
+        "KERNEL32.dll",
+        "msvcrt.dll",
+        "ntdll.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "bcryptprimitives.dll",
+        "advapi32.dll",
+        "api-ms-win-core-synch-l1-2-0.dll",
+        "api-ms-win-security-base-l1-2-2.dll",
+        "kernel32.dll",
+        "psapi.dll",
+        "ole32.dll",
+        "api-ms-win-core-winrt-error-l1-1-0.dll",
+        "kernel32.dll",
+        "oleaut32.dll",
+        "kernel32.dll",
+        "advapi32.dll",
+        "kernel32.dll",
+        "ntdll.dll",
+        "userenv.dll",
+        "ws2_32.dll"
+      ]
+    }
+  ]
+}

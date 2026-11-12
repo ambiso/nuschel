@@ -146,8 +146,10 @@ same parent deadline; this change does not establish a native CPU/memory limit
 there. Windows uses distinct LPAC profiles (`nuschl.update.ed25519` and
 `nuschl.update.mldsa44`), no capabilities/files, 256 MiB/five CPU seconds, inherited
 standard pipes only, and kill-on-close parent/job containment. Windows/macOS
-package discovery includes both workers; **new hybrid Windows LPAC and macOS
-Seatbelt runtime tests have not been run**. Cross compilation is not that proof.
+package discovery includes both workers. The hybrid verifier/LPAC and library
+installation path passed in a private Windows 11 VM on 2026-11-12 (below); the
+actual desktop update/restart flow and macOS Seatbelt runtime remain unproved.
+Cross compilation alone is not runtime proof.
 
 Only each engine's own signature is sent to it. The transcript necessarily
 contains the full **public** pair, not the other signature or any private seed.
@@ -170,6 +172,20 @@ real desktop Tokio `spawn_blocking` caller context: an entered Handle is handled
 by a dedicated scoped verifier thread, not by rejecting legitimate checks or
 nesting a runtime. Thread/child failures remain fail-closed.
 
+The same fixture now runs natively in Windows with two separately featured
+verifier EXEs. Test-only fault EXEs call the production LPAC bootstrap first;
+both roles must return a correct bound forged answer after denied private-file
+read/write attempts, while a corrupt sibling still rejects. Actual oversized
+output and stalled children fail within the case budget; the total less-than-10s
+assertion includes up to one second for asynchronous Windows Job image cleanup.
+Image deletion is supplementary cleanup evidence, not an inside-the-job limit
+inspection. The observed LPAC profiles have distinct SIDs. Winsock initialization
+returns 10107 before a socket exists: the adapter catches only the exact pinned
+std assertion, requires the child to continue and return its bound reply, and
+fails on every other panic. This proves network initialization unavailable under
+LPAC, not a socket-level denial result. Private guest-loopback signed fetch,
+download, apply and cleanup also pass. See [Windows proof](../../docs/windows-hybrid-update.md).
+
 ```sh
 nix build .#update-verifier-ed25519 .#update-verifier-mldsa44 \
   .#update-runtime-fixture .#checks.x86_64-linux.update-unit \
@@ -182,9 +198,12 @@ python3 tests/update_release.py --signer /nix/store/…/bin/nuschl-update-sign
 The Python tests use temporary fixture keys and real signing/verification CLI,
 plus synthetic tar/metadata/notices to test release-gate mechanics. They do not
 establish legal completeness or run GitHub publication. The Windows updater
-harness now requires a separately built fixture tree embedding its temporary
-public pair, with explicit fixture secret/public inputs; copying a public key
-beside a production executable cannot authorize an update.
+harness requires a separately built fixture tree embedding its temporary public
+pair, with explicit fixture secret/public inputs; copying a public key beside a
+production executable cannot authorize an update. Do not run its current GUI
+script yet: it omits required verifier EXEs from the initial install and stops
+unowned guest Nuschl processes. Those harness defects and the new GUI restart
+proof remain queued separately from the successful native library fixture.
 
 Downloadable CI payloads first run `release/check-notices.py`; failed gates still
 upload diagnostic logs, while binary/static-web payloads remain blocked.
