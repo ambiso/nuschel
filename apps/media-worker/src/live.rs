@@ -1508,7 +1508,7 @@ where
                     .saturating_duration_since(timestamp.callback);
                 played
                     .stamper
-                    .anchor(clock.now_shifted(converter.reference_delay(), ahead));
+                    .anchor(converter.reference_time(clock.now_shifted(Duration::ZERO, ahead)));
                 let (dry, handed) = converter.pull(data, &mut ring, &mut played.samples);
                 played.stamper.advance(handed);
                 if dry {

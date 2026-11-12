@@ -56,8 +56,12 @@ fn dump() {
         let count = chunks[cursor % chunks.len()].min(output_frames as usize - output.len() / 2);
         let mut chunk = vec![0_f32; count * 2];
         let delay = converter.reference_delay().as_nanos();
+        let played_ns = 1_000_000_000 + output.len() as u64 / 2 * 1_000_000_000 / u64::from(rate);
+        let reference_time = converter.reference_time(played_ns);
+        let start = std::time::Instant::now();
         let (_, generated) = converter.pull(&mut chunk, &mut ring, &mut reference);
-        stamps.push(serde_json::json!({"device_start":output.len()/2, "device_frames":count, "reference_delay_ns":delay, "reference_buffered_frames":generated}));
+        let elapsed = start.elapsed().as_nanos();
+        stamps.push(serde_json::json!({"device_start":output.len()/2, "device_frames":count, "reference_delay_ns":delay, "reference_time_ns":reference_time, "pull_ns":elapsed, "reference_buffered_frames":generated}));
         output.extend(chunk);
         cursor += 1;
     }

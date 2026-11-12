@@ -2,7 +2,7 @@
 //! Allocation-free device-rate playback. Initialized before opening the stream.
 //! Source positions are exact Speex rational-rate state, never rounded 10 ms blocks.
 use crate::{dsp::RATE, mixer::MAX_MIX_SAMPLE, reference::ReferenceConverter};
-use cpal::{FromSample, SizedSample};
+use cpal::{FromSample, Sample, SizedSample};
 use rtrb::{Consumer, Producer};
 use speexdsp_resampler::State;
 use std::time::Duration;
@@ -79,6 +79,10 @@ impl PlaybackConverter {
     /// playback-filter delay is already in the waveform, so do not add it again.
     pub(crate) fn reference_delay(&self) -> Duration {
         self.reference.timestamp_delay()
+    }
+
+    pub(crate) fn reference_time(&self, playback_time: u64) -> u64 {
+        playback_time.saturating_sub(self.reference_delay().as_nanos() as u64)
     }
 
     /// No locks, allocation or future output prefetch. Returns underrun and
@@ -417,7 +421,10 @@ mod tests {
                     .all(|value| value.is_finite() && value.abs() <= 1.)
             );
             for frame in output[output.len() - 64..].chunks_exact(2) {
-                assert!((frame[0]-.25).abs() < 1e-4 && (frame[1]+.125).abs() < 1e-4, "{rate}: {frame:?}");
+                assert!(
+                    (frame[0] - 0.25).abs() < 1e-4 && (frame[1] + 0.125).abs() < 1e-4,
+                    "{rate}: {frame:?}"
+                );
             }
             while let Ok(value) = reference.pop() {
                 assert!(value.is_finite() && value.abs() <= 1.);
