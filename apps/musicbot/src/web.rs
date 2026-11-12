@@ -984,7 +984,8 @@ mod tests {
         }
         let response = slash(Path("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA".into()))
             .await
-            .unwrap()
+            .ok()
+            .expect("valid UUID redirect")
             .into_response();
         assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
         assert_eq!(
