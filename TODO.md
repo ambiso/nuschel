@@ -1,9 +1,10 @@
 # Nuschl TODO
 
-Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
-and output fidelity, and hybrid update readiness**. Independent owners now cover
-iOS environment readiness, sparse server-configuration limits and the native
-ACL/group editor.
+Current focus (user, 2026-11-12): **server-operator setup, desktop rail/footer
+spacing and the native ACL/group editor**. Browser configuration/send-limit fixes
+are integrated with combined checks running; the iOS installer remains quarantined
+after a whole-file checksum mismatch. Audio fidelity, unmute latency and hybrid
+update readiness retain their remaining gates below.
 The relay DNS/kernel checks and explicit-deny correction are integrated.
 The measured playback clipping correction and SuperUser bootstrap guide
 are integrated. Transmit quality evidence and the exact native welcome-domain
@@ -1575,6 +1576,15 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
    - [x] Persist channel listeners for registered users (2026-11-11): stored with
          their volume, restored after `ServerSync` with Listen and the limits checked
          again (Murmur does not check), removed with the user or channel.
+   - [ ] Review the supplied combined NixOS deployment and provide a server
+         operator guide (user, 2026-11-12). Cover imports, ACME/DNS/80+443,
+         interface-scoped TCP+UDP 64738, selected fullchain/renewal, browser relay
+         DNS/egress, agenix/runtime SuperUser credentials and named admin bootstrap,
+         persistent storage/backups and optional witness two-stage public-key
+         setup/client policy. The provided compatible-mode host/origin/share URL
+         and ACME selection align. Explain settings assumed elsewhere; cohosted
+         witness state shares a failure/trust domain. Private module evaluation
+         and source/CLI checks, without changing the separately managed deployment.
    - [x] TLS reload on SIGHUP and `minimum_tls_version = "1.3"` (2026-11-11): new
          handshakes get the new certificate, a broken one keeps the old one. The
          NixOS module's manual `certificateFile` credentials are copied at start,
