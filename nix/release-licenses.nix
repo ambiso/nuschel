@@ -52,6 +52,13 @@ let
             if not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}', name):
                 raise SystemExit('invalid packaged root')
             command.extend(['-p', name])
+        features = target.get('features', [])
+        if (not isinstance(features, list) or len(features) > 32 or len(set(features)) != len(features)
+                or any(not re.fullmatch(r'[a-zA-Z0-9_-]{1,100}/[a-zA-Z0-9_-]{1,100}', feature)
+                       or feature.split('/')[0] not in names for feature in features)):
+            raise SystemExit('invalid runtime feature roots')
+        if features:
+            command.extend(['--features', ','.join(features)])
         tree = subprocess.run(command, check=True, capture_output=True, text=True, timeout=120).stdout
         for line in tree.splitlines():
             if not line.strip(): continue

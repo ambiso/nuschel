@@ -3,7 +3,7 @@
 The README has the short version. This page has the details: the Nix package and
 the Home Manager module, the Windows and macOS downloads, how releases are made and
 signed, and how Nuschl updates itself. No release has been published yet; the
-first tag will make one ([How releases are made](#how-releases-are-made)).
+first publication still requires enrolled signing trust and complete notices ([How releases are made](#how-releases-are-made)).
 
 ## Nix and NixOS
 
@@ -146,15 +146,15 @@ when echo cancellation records what the speakers play ([desktop.md](desktop.md#v
 Windows and macOS copies check for a newer release 20 seconds after start and every
 six hours (**Settings → General → Check for updates**), and show a banner when one
 exists. They verify the manifest's signature, accept only newer versions, refuse a
-manifest released before the newest they have seen (so an old signed manifest cannot
-be replayed), download each file into a staging folder inside the installation and
+manifest released before the newest they have seen, require unexpired v2 metadata, download each file into a staging folder inside the installation and
 check its hash, and swap the files by renaming, rolling back on failure; old files are
 removed on the next start. The code is in `crates/update`.
 
 ## How releases are made
 
 Tagging `vX.Y.Z` (matching the workspace version) runs
-`.github/workflows/release.yml` on one Linux runner. The flake cross-compiles the
+`.github/workflows/release.yml`, which calls three independent read-only platform
+build jobs before a separate publication job. The flake cross-compiles the
 Windows build (MinGW) and a universal `Nuschl.app` (zig and a pinned SDK, ad-hoc
 signed with `rcodesign`), so no Windows or macOS runner is needed. The workflow
 zips both, publishes every file of each installation as its own release asset, and
@@ -162,11 +162,17 @@ writes `update.json`, which lists every file with its size and SHA-256.
 
 Two different kinds of signing are involved:
 
-- **The update manifest is signed** with minisign. The repository secret
-  `UPDATE_SIGNING_KEY` holds the secret key; its public half,
-  `crates/update/update-key.pub`, is built into the app, which accepts only
-  manifests that verify against it. This is what protects in-app updates, and the
-  workflow needs the secret to publish a release.
+- **The update manifest requires Ed25519 AND ML-DSA-44**. The repository secret
+  `UPDATE_HYBRID_SIGNING_KEY` holds the private pair; only public pairs compiled
+  from `crates/update/update-trust.json` can authorize runtime updates. Two
+  separately confined fixed-algorithm workers must both accept `update.json.sig`
+  over the exact raw `update.json`. There is no minisign/adjacent-key fallback.
+  The public store is deliberately unenrolled and no secret has been provisioned
+  by this implementation, so publication remains blocked. Missing/incomplete
+  runtime notices also block signing. See the [operator and verification
+  instructions](../apps/update-worker/README.md). Metadata expires within 30 days;
+  trusted periodic refresh is necessary even if binaries do not change. No
+  automatic refresh/publication job has been added.
 - **The programs are not code-signed** for the operating systems: no Authenticode
   certificate for Windows and no Developer ID or notarisation for macOS, so
   SmartScreen and Gatekeeper treat downloads as described above. Developer ID

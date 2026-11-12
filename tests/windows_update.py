@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: EUPL-1.2
 """In-place update of the Windows build, in the VM from windows_vm.py.
 
-    windows_update.py RESULT_WINDOWS --output DIR [--rsign PATH]
+    windows_update.py RESULT_WINDOWS --output DIR --secret-file FIXTURE_SECRET --public-file FIXTURE_PUBLIC --signer SIGNER
 
-Installs RESULT_WINDOWS/bin/*.exe into a per-user folder in the guest, with a
-throwaway minisign key as `update-key.pub` beside it (the release key is not
-used). Publishes a signed "9.9.9" through the harness (the same programs plus a
+Installs RESULT_WINDOWS/bin/*.exe into a per-user folder in the guest. This
+MUST be a separately built fixture source tree embedding the provided temporary
+hybrid public pair in crates/update/update-trust.json. No adjacent key or runtime
+trust override exists. Never use production private keys for this harness. Publishes a signed "9.9.9" through the harness (the same programs plus a
 marker file), starts Nuschl with NUSCHL_UPDATE_URL pointing at it, clicks
 "Update and restart" and "Restart now", and checks that the files were swapped,
 the marker arrived, a new process runs and the old files are cleaned up.
@@ -107,7 +108,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("build", type=Path, help="the .#windows result")
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--rsign", default=shutil.which("rsign") or "rsign")
+    parser.add_argument("--signer", required=True)
+    parser.add_argument("--secret-file", type=Path, required=True, help="temporary fixture pair only")
+    parser.add_argument("--public-file", type=Path, required=True, help="same fixture pair embedded when building the guest app")
     args = parser.parse_args()
     try:
         exercise_update(args)
@@ -122,8 +125,8 @@ def exercise_update(args):
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="nuschl-update-") as temporary:
         root = Path(temporary)
-        subprocess.run([args.rsign, "generate", "-W", "-p", str(root / "test.pub"), "-s", str(root / "test.secret"),
-                        "-c", "Nuschl update test key"], check=True, capture_output=True)
+        subprocess.run([args.signer, "key-status", "--secret-file", str(args.secret_file),
+                        "--public-file", str(args.public_file)], check=True, capture_output=True)
         staging = root / "release"
         (staging / "licenses").mkdir(parents=True)
         for program in sorted((args.build / "bin").glob("*.exe")):
@@ -133,13 +136,13 @@ def exercise_update(args):
         published = root / "published"
         subprocess.run([sys.executable, str(REPO / "release" / "make-update.py"), "--version", "9.9.9",
                         "--base-url", f"http://127.0.0.1:{UPDATE_PORT}/", "--platform", f"windows-x86_64={staging}",
-                        "--output", str(published), "--sign-key", str(root / "test.secret"), "--rsign", args.rsign],
+                        "--output", str(published), "--sign-key", str(args.secret_file),
+                        "--public-key", str(args.public_file), "--signer", args.signer],
                        check=True, capture_output=True)
         artifact_names = []
         for artifact in sorted(published.iterdir()):
             artifact_names.append(artifact.name)
             vm("push", str(artifact), artifact.name)
-        vm("push", str(root / "test.pub"), "update-key.pub")
     names = "@(" + ",".join("'" + name + "'" for name in artifact_names) + ")"
     print(guest(FILE_SERVER.replace("__FILES__", names).replace("__PORT__", str(UPDATE_PORT))), flush=True)
     print(guest(r'''
@@ -150,7 +153,6 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 foreach ($f in "nuschl.exe","nuschl-content-worker.exe","nuschl-media-worker.exe","nuschl-storage-worker.exe") {
   Get-NuschlTestFile -Name "install--$f" -OutFile "$dir\$f"
 }
-Get-NuschlTestFile -Name "update-key.pub" -OutFile "$dir\update-key.pub"
 $env:NUSCHL_UPDATE_URL = "http://127.0.0.1:18765/"
 $p = Start-Process "$dir\nuschl.exe" -ArgumentList "--profile-dir","C:\nuschl-update-profile" -PassThru
 "started $($p.Id)"

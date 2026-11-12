@@ -1,81 +1,96 @@
 # SPDX-License-Identifier: EUPL-1.2
-#
-# Tag vX.Y.Z (matching the workspace version) to publish a release. Everything
-# is built by the Nix flake on one Linux runner: Windows with MinGW, macOS
-# (x86_64 + arm64, lipo'd and ad-hoc signed) with zig and the pinned SDK, so no
-# macOS runner is needed. The signed update.json lets installed copies update
-# themselves (crates/update).
-#
-# Needs the repository secret UPDATE_SIGNING_KEY: the unencrypted minisign
-# secret key whose public half is crates/update/update-key.pub.
+# Publication is separate from read-only reusable builds. No key generation,
+# enrollment, legacy-signature fallback or absent-secret bypass exists here.
 name: Release
-
 on:
   push:
     tags: ["v*"]
-
 permissions:
   contents: read
-
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
-  release:
+  builds:
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+  publish:
+    needs: builds
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-
       - uses: cachix/install-nix-action@2126ae7fc54c9df00dd18f7f18754393182c73cd # v31.9.1
-
-      - name: The tag matches the workspace version
+        with:
+          extra_nix_config: |
+            cores = 2
+            max-jobs = 2
+            build-dir = /nix/var/nix/builds
+      - name: Prepare disk-backed Nix scratch
+        run: sudo mkdir -p /nix/var/nix/builds
+      - name: Require exact tag and enrolled hybrid trust before secret access
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+          python3 - <<'PY'
+          import json, os, pathlib, re, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?', version) or os.environ['GITHUB_REF_NAME'] != 'v' + version:
+              raise SystemExit('tag must match the source workspace version')
+          trust = json.loads(pathlib.Path('crates/update/update-trust.json').read_text())
+          if trust.get('format') != 2 or trust.get('algorithm') != 'ed25519+mldsa44' or not trust.get('keys'):
+              raise SystemExit('production hybrid public pair has not been enrolled; publication is blocked')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('VERSION=' + version + '\n')
+          PY
+      # SHA verified against the official actions/download-artifact v4.3.0 tag.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.builds.outputs.windows-artifact }}
+          path: artifacts/windows
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.builds.outputs.macos-artifact }}
+          path: artifacts/macos
+      - name: Validate same-run artifacts, install paths, hybrid helpers and actual notices
+        run: |
+          python3 release/prepare-artifacts.py \
+            --artifact windows-x86_64=artifacts/windows \
+            --artifact macos-universal=artifacts/macos \
+            --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --version "$VERSION" --output install
+      - name: Build the explicit offline signer
+        run: nix build .#update-signer -o result-update-signer --cores 2 --max-jobs 2 -L
+      - name: Match the CI pair, sign exact v2 bytes and verify before publication
+        env:
+          UPDATE_HYBRID_SIGNING_KEY: ${{ secrets.UPDATE_HYBRID_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$UPDATE_HYBRID_SIGNING_KEY" ]]; then
+            echo 'UPDATE_HYBRID_SIGNING_KEY is absent; publication is blocked.' >&2
             exit 1
           fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-
-      - name: Build for Windows (cross)
-        run: nix build .#windows -o result-windows -L --cores 2
-
-      - name: Build for macOS (cross, universal app)
-        run: nix build .#macos-app -o result-macos -L --cores 2
-
-      - name: Arrange the installations
-        run: |
-          mkdir -p install/windows/licenses dist
-          cp result-windows/bin/*.exe install/windows/
-          cp result-windows/share/licenses/nuschl/EUPL-1.2 install/windows/licenses/
-          cp -r result-macos/Nuschl.app install/Nuschl.app
-          chmod -R u+w install
-          (cd install/windows && nix shell --cores 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zip -c zip -qr "../../dist/nuschl-$VERSION-windows-x86_64.zip" .)
-          (cd install && nix shell --cores 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zip -c zip -qry "../dist/nuschl-$VERSION-macos-universal.zip" Nuschl.app)
-
-      - name: Signed update manifest
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: |
-          key="$RUNNER_TEMP/update-key.secret"
+          umask 077
+          key="$RUNNER_TEMP/update-v2.secret.json"
           trap 'rm -f "$key"' EXIT
-          printf '%s\n' "$UPDATE_SIGNING_KEY" > "$key"
-          nix shell --cores 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#rsign2 nixpkgs#python3 -c python3 release/make-update.py \
-            --version "$VERSION" \
+          printf '%s\n' "$UPDATE_HYBRID_SIGNING_KEY" > "$key"
+          unset UPDATE_HYBRID_SIGNING_KEY
+          python3 release/make-update.py --version "$VERSION" \
             --base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
             --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME" \
-            --platform windows-x86_64=install/windows \
-            --platform macos-universal=install/Nuschl.app \
-            --output dist --sign-key "$key"
-          nix shell --cores 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#rsign2 -c rsign verify -p crates/update/update-key.pub -x dist/update.json.minisig dist/update.json
-
-      - name: Publish
+            --platform windows-x86_64=install/windows --platform macos-universal=install/Nuschl.app \
+            --output dist --sign-key "$key" --public-key crates/update/update-trust.json \
+            --signer result-update-signer/bin/nuschl-update-sign
+      - name: Arrange portable archives from the checked installation trees
+        run: |
+          (cd install/windows && nix shell --cores 2 --max-jobs 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zip -c zip -qr "../../dist/nuschl-$VERSION-windows-x86_64.zip" .)
+          (cd install && nix shell --cores 2 --max-jobs 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zip -c zip -qr "../dist/nuschl-$VERSION-macos-universal.zip" Nuschl.app)
+      - name: Publish only fully prepared artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

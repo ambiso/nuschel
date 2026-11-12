@@ -93,7 +93,14 @@ Exported PKCS#12 identities are written owner-only (0600) and atomically. On eve
 platform the storage worker's writable folder is a dedicated `history/` folder (see
 "Where secrets live"). The updater refuses a signed manifest whose release
 time or version is older than the newest it has accepted; a client that never saw a
-newer manifest can still be offered an older one, and withheld releases go unnoticed.
+newer manifest can still be offered an older unexpired one, and withheld releases
+are not discovered automatically. Signed v2 metadata expires within 30 days; the
+local clock also gates acceptance. Two separately confined fixed-algorithm
+Ed25519/ML-DSA-44 workers must both succeed. Trust is embedded only, currently
+unenrolled; no adjacent writable key or minisign fallback is accepted. The
+[updater boundary and proof limits](apps/update-worker/README.md#confinement-and-actual-proof)
+include shared parent/OS/compiler/hash dependencies and the CI signing authority.
+New hybrid Windows/macOS native runtime proof remains outstanding.
 
 `nuschld admin` administers the server offline, through the storage worker, with
 no network interface; an operator lock (a `flock` beside a SQLite file, an advisory

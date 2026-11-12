@@ -99,8 +99,6 @@
             || lib.hasSuffix "emoji.txt" path
             # Frozen identity vectors are compiled into the all-target tests.
             || lib.hasInfix "/test-vectors/" path
-            # The release signing key the updater trusts.
-            || lib.hasSuffix "update-key.pub" path
             # Vendored GPUI crates keep their shaders, headers and README.
             || lib.hasInfix "/vendor/gpui-pre" path
             # Vendored libraries also include their README in rustdoc. Cargo's
@@ -257,9 +255,11 @@
         updateSigner = crates.project.workspaceMembers."nuschl-update-worker".build.override {
           features = [ "signer" ];
         };
-        updateVerifier = feature: crates.project.workspaceMembers."nuschl-update-worker".build.override {
-          features = [ feature ];
-        };
+        updateVerifier =
+          feature:
+          crates.project.workspaceMembers."nuschl-update-worker".build.override {
+            features = [ feature ];
+          };
         updateEdVerifier = updateVerifier "ed25519";
         updateMlVerifier = updateVerifier "mldsa44";
         # Explicit fixture executable, not part of the distributed payload.
@@ -297,7 +297,15 @@
             }
             ''
               mkdir -p "$out/bin"
-              for crate in ${lib.concatStringsSep " " (crates.binaries ++ [ updateEdVerifier updateMlVerifier ])}; do
+              for crate in ${
+                lib.concatStringsSep " " (
+                  crates.binaries
+                  ++ [
+                    updateEdVerifier
+                    updateMlVerifier
+                  ]
+                )
+              }; do
                 for program in "$crate"/bin/*; do
                   cp "$program" "$out/bin/"
                 done
@@ -516,7 +524,8 @@
           );
           update-unit = crates.project.workspaceMembers."nuschl-update".build.override { runTests = true; };
           update-crypto = crates.project.workspaceMembers."nuschl-update-worker".build.override {
-            features = [ "signer" ]; runTests = true;
+            features = [ "signer" ];
+            runTests = true;
           };
           fmt = craneLib.cargoFmt { inherit src; };
           deny = craneLib.cargoDeny (

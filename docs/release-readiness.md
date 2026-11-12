@@ -1,8 +1,9 @@
 # First alpha release readiness
 
 Source audit: 2026-11-11, baseline `15a733bf`. This is a release checklist,
-not a new platform test result. The hybrid updater is being implemented in a
-separate change; the baseline still uses minisign. Recheck the final integrated
+not a new platform test result. The original baseline used minisign; the current hybrid runtime is described in
+[the update worker README](../apps/update-worker/README.md), with Linux actual-worker
+proof and explicit remaining platform/enrollment gates. Recheck the final integrated
 commit and record the actual CI run before publishing.
 
 The chosen first release is the normal `0.1.0` release, described as an early
@@ -36,8 +37,9 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
 - [ ] Enrol the real hybrid public key pair in source, retain protected backups,
   and provision the matching CI signing secret using the reviewed tool. No key
   material or secret availability was verified by this audit. The implementation
-  owner will specify the final key format and secret name; `UPDATE_SIGNING_KEY`
-  and `update-key.pub` describe the baseline, not the pending hybrid contract.
+  owner tool now specifies the private v2 JSON format and
+  `UPDATE_HYBRID_SIGNING_KEY`; `crates/update/update-trust.json` deliberately has no
+  enrolled public pair. No legacy-key fallback remains.
 - [x] Choose `0.1.0` as the normal early-preview version. The eventual tag must be
   `v0.1.0`, matching the workspace and package versions; this decision has not
   created that tag.
@@ -49,6 +51,13 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   `packageLayout` includes several vendored/font licences, while baseline Windows
   and Mac packaging copies only EUPL-1.2. Passing `cargo deny` is not a complete
   attribution inventory. Inspect the exact final archives, including helper files.
+  The publisher now rejects missing/incomplete/mismatched bundled inventories;
+  this is a gate, not proof the remaining notices were recovered. Use the source
+  `release/notice-roots.json` (including both verifier features and all three WASM
+  roots). Recover unresolved upstream/native/asset terms, then compact notices
+  into a combined payload plus provenance/index: copying a per-crate tree can
+  exceed the updater's existing 256-file installation bound. Do not truncate
+  notices or silently increase that bound.
 - [ ] Run the final integrated formatting, Clippy, dependency/advisory, unit and
   private interoperability/confinement checks. CI package builds do not replace
   private NixOS/Windows VM evidence or native Mac testing. Record remaining native
@@ -57,6 +66,13 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   complete installation file sets and hashes, and exercise update installation
   with disposable profiles. Hybrid migration invalidates the old minisign fixture
   as proof for the new signature path.
+- [ ] Implement and document an operator metadata refresh procedure before the
+  latest signed manifest's 30-day maximum expiry, including unchanged binaries.
+  The tag-create workflow is not that refresh path. Keep expiry/clock errors
+  actionable; do not add an automatic signing cron or waive expiry.
+- [ ] Rerun the migrated updater in the private Windows VM with a separately
+  compiled temporary public fixture pair, including both LPAC verifiers. Current
+  Linux worker proof does not renew the old minisign Windows regression evidence.
 - [ ] Review README/install/security/release notes against the final artifacts:
   early-development status; compatible TLS/Mumble voice; MLS experiments and
   historical-key limits; no completed RTC video/screen-sharing claim; Linux via

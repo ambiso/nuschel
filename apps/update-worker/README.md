@@ -1,18 +1,22 @@
-# Hybrid update signing (implementation in progress)
+# Hybrid update verification and signing
 
-The explicit operator tool implements key generation, public-only export and
-secret/public matching. It uses RustCrypto `ml-dsa` 0.1.2 for ML-DSA-44 and
-`ed25519-dalek` 2.2.0 for Ed25519. The `ed25519` crate supplies signature types and
-traits; it is not itself the Ed25519 implementation. No identity/MLS provider has
-been changed. The current tool is a separate process; its asymmetric engines are
-not dependencies of the UI/updater parent.
+The updater accepts **Ed25519 AND ML-DSA-44**, using RustCrypto
+`ed25519-dalek` 2.2.0 and `ml-dsa` 0.1.2. Each fixed verifier executable is
+built with only its algorithm feature. The HTTP/UI updater parent does not link
+these update-signature engines. No identity/MLS provider has changed.
 
-This checkpoint does **not** finish the update migration. Two independently
-confined fixed-algorithm verification subprocesses, the parent's mandatory AND,
-strict v2 manifest/expiry handling, CI publication and Windows fixture migration
-remain necessary before a hybrid updater release. The old minisign path is not
-an acceptable fallback for that release. No production key is enrolled by this
-code or by its tests, and no CI secret has been created.
+`nuschl-update-verify-ed25519` and `nuschl-update-verify-mldsa44` receive one
+bounded binary request through stdin, verify their own public component/signature
+against the identical pair-bound transcript, and exit. The parent requires both
+successful exits and exact request-bound replies. It discovers fixed filenames
+beside the application; neither the manifest nor an adjacent key file chooses a
+worker or trust root. There is no minisign fallback. Production accepts only
+`crates/update/update-trust.json` compiled into the program; that file deliberately
+has **no enrolled keys**. No production secret or CI enrollment was created.
+
+The operator tool supports `keygen`, `public-key`, `key-status`, `sign`, and
+`verify`. It is an explicit offline/CI tool, excluded from client payloads. Its
+combined verification is a publication check, not the runtime's process boundary.
 
 ## Concrete operator step (execute only when enrollment is approved)
 
@@ -34,8 +38,8 @@ nix run --cores 2 --max-jobs 2 .#update-signer -- key-status \
 
 Both commands print only the public algorithm/version and stable key-pair ID.
 The public file contains the complete public pair and no seed fields. Review
-and enroll that public-only file as `crates/update/update-trust.json` once the
-runtime migration is complete. That file deliberately contains no enrolled keys
+and enroll that public-only file as `crates/update/update-trust.json` after reviewing the
+final integrated migration. That file deliberately contains no enrolled keys
 yet. Never enroll the private file. Root-key rotation
 will require explicitly pinned pair sets and an overlap release, not a public
 key supplied by an untrusted download.
@@ -88,7 +92,101 @@ validation. Run the pinned advisory/license/ownership checks before release.
 
 The first-party code forbids unsafe. `hybrid-array`, curve/hash backends and
 other transitive code can execute unsafe; this is why production verification
-will use separate capability-limited algorithm processes rather than a new UI
+uses separate capability-limited algorithm processes rather than a new UI
 crypto exception. Independent process results reduce a single verifier memory
 corruption's authority; shared dependencies, OS, build pipeline and trusted
 parent remain common-mode limits and are not made independent by this format.
+
+
+## Signing a prepared manifest
+
+```sh
+nix run --cores 2 --max-jobs 2 .#update-signer -- sign \
+  --secret-file /private/path/update-v2.secret.json \
+  --public-file crates/update/update-trust.json \
+  --manifest dist/update.json --signature-file dist/update.json.sig
+nix run --cores 2 --max-jobs 2 .#update-signer -- verify \
+  --public-file crates/update/update-trust.json \
+  --manifest dist/update.json --signature-file dist/update.json.sig
+```
+
+`sign` refuses an existing output and requires the private pair to match an
+explicitly enrolled public pair. It signs exact bounded raw bytes, including
+whitespace. `verify` also checks strict manifest v2 semantics and expiry. The
+release helper uses both operations; it never generates/enrolls a key. The secret
+file must be in an operator-controlled directory; on Windows protect that
+directory with appropriate ACLs (Unix mode 0600 is not a Windows ACL policy).
+
+Manifests require `format: 2`, `algorithm: "ed25519+mldsa44"`, `released`,
+`expires`, semantic version and bounded platform file lists. Recursive duplicate
+JSON keys, including escaped aliases and duplicate platform map entries, unknown
+fields, noncanonical signature envelopes, unsafe/case-colliding paths and
+credential-bearing URLs fail closed. Each platform has at most 256 files of at
+most 512 MiB; the raw manifest is at most 256 KiB. File URLs require HTTPS, except
+literal-loopback HTTP for private fixtures. Signed release time/version cannot
+move backwards in persisted update state. Expiry is rechecked before download
+and before installation.
+
+Validity is at most 30 days, with at most five minutes of future clock skew.
+Operators must refresh/re-sign the latest metadata before expiry even when
+binaries have not changed, using a nondecreasing version and release time. The
+current tag-create workflow does not implement that refresh operation or an
+automatic signing cron. Expired metadata produces an actionable check-for-current-
+release error; a wrong clock can also reject an otherwise valid release. An
+unseen withheld newer release remains undetectable; expiry limits how long an
+old manifest can remain acceptable.
+
+## Confinement and actual proof
+
+Linux uses a distinct one-shot bubblewrap namespace per engine, no network or
+home/data directory, read-only runtime libraries/worker, empty environment,
+256 MiB address-space limit, five CPU seconds and a six-second parent wall-clock
+deadline. macOS uses the existing deny-default content Seatbelt profile with the
+same parent deadline; this change does not establish a native CPU/memory limit
+there. Windows uses distinct LPAC profiles (`nuschl.update.ed25519` and
+`nuschl.update.mldsa44`), no capabilities/files, 256 MiB/five CPU seconds, inherited
+standard pipes only, and kill-on-close parent/job containment. Windows/macOS
+package discovery includes both workers; **new hybrid Windows LPAC and macOS
+Seatbelt runtime tests have not been run**. Cross compilation is not that proof.
+
+Only each engine's own signature is sent to it. The transcript necessarily
+contains the full **public** pair, not the other signature or any private seed.
+A compromised verifier can fabricate its own reply; it cannot substitute for the
+other verifier's success. The parent, SHA-256/transcript code, OS/kernel, compiler,
+shared dependency defects and a CI signer holding both seeds remain common
+failure boundaries. This is not a claim of protection against two compromised
+engines or a compromised application installation.
+
+Native focused tests cover framing/strict parsing/expiry/rollback/installation
+and both crypto engines. The disk-only `nuschl-update-runtime-fixture` executes
+both real independently built Linux workers with temporary keys, rejects either
+corrupt half/raw-byte changes/wrong pair/legacy/v1/expired/duplicate input, proves
+mandatory AND despite one forged reply, probes private file/write/host-network
+confinement, enforces output/deadline/reaping, and completes a private loopback
+HTTP download/install/cleanup. It is available only with the `runtime-fixture`
+feature and is not distributed with the signer or clients.
+
+```sh
+nix build .#update-verifier-ed25519 .#update-verifier-mldsa44 \
+  .#update-runtime-fixture .#checks.x86_64-linux.update-unit \
+  .#checks.x86_64-linux.update-crypto --cores 2 --max-jobs 2
+# Run the fixture outside the Nix build sandbox with disk TMPDIR and these
+# output paths: nuschl-update-runtime-fixture ED_VERIFIER ML_VERIFIER PYTHON
+python3 tests/update_release.py --signer /nix/store/…/bin/nuschl-update-sign
+```
+
+The Python tests use temporary fixture keys and real signing/verification CLI,
+plus synthetic tar/metadata/notices to test release-gate mechanics. They do not
+establish legal completeness or run GitHub publication. The Windows updater
+harness now requires a separately built fixture tree embedding its temporary
+public pair, with explicit fixture secret/public inputs; copying a public key
+beside a production executable cannot authorize an update.
+
+Publication reuses independent SHA-named build artifacts and checks repository,
+commit, run ID, platform, version, hashes, safe tar members and mandatory worker
+presence before accessing a signing secret. Earlier successful attempts from the
+same run/commit are allowed; future/foreign attempts fail. Missing/incomplete
+bundled runtime notices also block signing. **That attribution packaging gate is
+not complete**: upstream/native/asset notice recovery and compact payloads that
+respect the 256-file installation bound remain queued. No release is ready merely
+because hybrid signatures work. No tag/push/dispatch/deploy was performed.
