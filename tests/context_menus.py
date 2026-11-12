@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -169,6 +170,40 @@ def actions(args, root, shell, application, bot, murmur):
         )
         assert target.process.poll() is None, "fixture target was actually moderated"
 
+    def observe_idle():
+        frames = args.output / "frames.log"
+        if not frames.exists():
+            return None
+        time.sleep(3)
+        desktop_log = args.output / "desktop.log"
+        reveals = desktop_log.read_text().count("layout region received reveal")
+        count = len(frames.read_text().splitlines())
+        started = quiet_since = time.monotonic()
+        start_us = time.monotonic_ns() // 1000
+        longest = 0.0
+        while time.monotonic() - started < 8:
+            time.sleep(0.1)
+            now = time.monotonic()
+            current = len(frames.read_text().splitlines())
+            if current != count:
+                longest = max(longest, now - quiet_since)
+                quiet_since, count = now, current
+            longest = max(longest, now - quiet_since)
+        result = {
+            "start_us": start_us,
+            "end_us": time.monotonic_ns() // 1000,
+            "observed_seconds": time.monotonic() - started,
+            "longest_quiet_seconds": longest,
+            "new_focus_reveals": desktop_log.read_text().count(
+                "layout region received reveal"
+            )
+            - reveals,
+        }
+        assert longest >= 2, "menu never has a continuous two-second quiet interval"
+        assert result["new_focus_reveals"] == 0, "idle menu repeated focus reveal work"
+        (args.output / "idle.json").write_text(json.dumps(result, indent=2) + "\n")
+        return result
+
     def close_profile():
         dialog = eventually(
             lambda: named("Details", "dialog"), "profile dialog missing"
@@ -252,6 +287,7 @@ def actions(args, root, shell, application, bot, murmur):
                 assert last.focused
                 assert_visible(last, current, "last action after idle transport update")
                 record["retained_after_transport_update"] = True
+                record["idle"] = observe_idle()
             shell.move(*point(last))
             shell.screenshot(args.output / f"context-menu-{width}-{zoom}-last.png")
             shell.key("Return")
@@ -312,6 +348,58 @@ def actions(args, root, shell, application, bot, murmur):
             shell.click(g["x"] + g["width"] - 15, g["y"] + 70)
             eventually(lambda: menu() is None, "outside click did not dismiss menu")
             record["reading_keys_and_dismissal"] = True
+            if width == 1280:
+                message = eventually(
+                    lambda: next(
+                        (
+                            node
+                            for node, role, name, _ in items(application)
+                            if role == "list item" and "Normal control Nuschl" in name
+                        ),
+                        None,
+                    ),
+                    "control message absent",
+                )
+                x, y, w, h = message.extents()
+                g = geometry()
+                shell.click(g["x"] + x + w - 3, g["y"] + y + h - 3, button=3)
+                current = eventually(menu, "right-edge message menu absent")
+                assert inside(current.extents(), viewport()), (
+                    "message popup escaped right window edge"
+                )
+                assert named("Copy message", "menu item", current)
+                record["right_edge_message_popup"] = current.extents()
+                close_menu()
+        frames = args.output / "frames.log"
+        if frames.exists():
+            # Drain the collector's last completed draw without changing its
+            # original timestamp; the idle interval has already ended.
+            g = geometry()
+            shell.place("Nuschl", g["x"], g["y"], 901, 800)
+            time.sleep(0.3)
+            origin = re.search(
+                r"origin Instant \{ tv_sec: (\d+), tv_nsec: (\d+) \}",
+                frames.read_text(),
+            )
+            assert origin
+            origin_us = int(origin[1]) * 1_000_000 + int(origin[2]) // 1000
+            idle = next((row["idle"] for row in records if row.get("idle")), None)
+            if idle:
+                events = []
+                for line in frames.read_text().splitlines()[1:]:
+                    fields = line.split()
+                    at = origin_us + int(fields[1])
+                    if idle["start_us"] <= at <= idle["end_us"]:
+                        events.append(
+                            {
+                                "kind": fields[0],
+                                "at_us": at,
+                                "values": list(map(int, fields[2:])),
+                            }
+                        )
+                (args.output / "idle-events.json").write_text(
+                    json.dumps(events, indent=2) + "\n"
+                )
         return {
             "passed": True,
             "cases": records,
