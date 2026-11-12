@@ -39,7 +39,11 @@ Current integration checkpoint (2026-11-12):
   while the overload 44.1 kHz stock-order gate deliberately remains failing.
   See `docs/context-menus.md`, `docs/opus-encoding-quality.md` and
   `docs/output-quality.md`. This does not establish complete input/output or
-  physical Windows/macOS fidelity. Combined runtime proof is recorded separately.
+  physical Windows/macOS fidelity. The exact combined web App/SDK passes the
+  private-Murmur voice/text/order/privacy test: 21 audio packets produce zero
+  state snapshots, audible RMS is 0.06777 and deafen RMS is zero. Source/build
+  outputs, unchanged authority hashes and runtime limits are recorded in
+  `~/.cache/nuschl-integration-20261112/authority-audio/handoff.json`.
 - **Combined Linux/web distributions passed at `39ea7132`.** Actual packages
   include clocked browser playout with both reviewed cross-port fixes, hash-only
   document delivery, loss/CELT/DTX/FEC/framing corrections, stereo/headroom/mono
@@ -1081,17 +1085,14 @@ listed below. Plugin data remains the explicit gap.
       leases. This is a separate source finding, not covered by menu geometry,
       semantic context-menu focus, or original server/connection target guards.
 - [x] Close the enqueue-to-consume authority gap for delayed native actions.
-      Source review finds that the native command queue survives automatic
-      reconnects, while numeric user/channel targets are checked only for current
-      existence. UI-only generation checks cannot prevent queued work reaching a
-      replacement presence. Bind bounded target-instance envelopes at enqueue and
-      revalidate them in the session actor, including current known permissions.
-      Administrative panels need the same original-target binding as prompts;
-      installed whisper targets must remain bound for subsequent voice packets.
-      If a whisper target expires, drop voice until an explicit new selection;
-      never fall back to normal channel broadcast. These are source findings,
-      now covered by the integrated authority lane's focused regressions and
-      private proof. Known cached numeric permissions are
+      The former native queue could survive automatic reconnect with only numeric
+      target existence checks. Bounded target-instance envelopes now bind work at
+      enqueue and revalidate in the session actor, including current known
+      permissions. Administrative panels retain the same original-target binding
+      as prompts; installed whisper targets stay bound for subsequent voice
+      packets. Expired whisper targets suspend voice until explicit reselection,
+      with no fallback to channel broadcast. Focused regressions and private
+      proofs cover these integrated guards. Known cached numeric permissions are
       rechecked locally; Nuschl edit/delete ownership and moderator authorization
       remain authoritative server decisions, with exact conversation coverage.
       No local message-ownership cache is required or claimed.
