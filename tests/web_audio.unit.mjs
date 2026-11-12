@@ -179,3 +179,32 @@ test("legal 120 ms packets keep their complete tail across the initial hold",()=
   const tail=new Float32Array(960);mixer.render(tail);assert.ok(tail.every(v=>v===.25));
   const next=new Float32Array(5760);mixer.render(next);assert.ok(next.every(v=>v===.5));
 });
+
+test("wide worklet sums opposing headroom before clipping, with gain frozen per frame",()=>{
+  const mixer=new PcmMixer();mixer.configure("wide",true);
+  for(const [speaker,value] of [[1,1.5],[2,-1.25]])
+    assert.ok(mixer.enqueue({epoch:"wide",speaker,samples:new Float32Array(960).fill(value)}));
+  const left=new Float32Array(960),right=new Float32Array(960);
+  mixer.render(left,right);mixer.render(left,right);
+  assert.ok(left.every(v=>v===.25));assert.deepEqual(left,right);
+  // Finite f32 ×4 must not first overflow into f32, nor turn cancellation NaN.
+  mixer.configure("wide",true);
+  const max=3.4028234663852886e38;
+  for(let speaker=0;speaker<MAX_SPEAKERS;speaker++)
+    assert.ok(mixer.enqueue({epoch:"wide",speaker,samples:new Float32Array(960).fill(speaker%2?max:-max),volume:4}));
+  mixer.render(left,right);mixer.render(left,right);
+  assert.ok(left.every(v=>v===0));assert.deepEqual(left,right);
+  mixer.configure("wide",true);
+  assert.ok(mixer.enqueue({epoch:"wide",speaker:1,samples:new Float32Array(960).fill(max),volume:4}));
+  mixer.render(left);mixer.render(left);assert.ok(left.every(v=>v===1));
+  for(const value of [NaN,Infinity,-Infinity])
+    assert.equal(mixer.enqueue({epoch:"wide",speaker:1,samples:new Float32Array(960).fill(value)}),false);
+  mixer.configure("wide",true);
+  for(const volume of [.25,.5])assert.ok(mixer.enqueue({epoch:"wide",speaker:1,samples:new Float32Array(128).fill(2),volume}));
+  mixer.render(new Float32Array(960));
+  const changing=new Float32Array(256);mixer.render(changing);
+  assert.ok(changing.slice(0,128).every(v=>v===.5));assert.ok(changing.slice(128).every(v=>v===1));
+  const scratch=[mixer.left,mixer.right];
+  mixer.render(left,right);assert.equal(mixer.left,scratch[0]);assert.equal(mixer.right,scratch[1]);
+  const tooLarge=new Float32Array(MAX_QUEUED_SAMPLES+1).fill(1);mixer.render(tooLarge);assert.ok(tooLarge.every(v=>v===0));
+});

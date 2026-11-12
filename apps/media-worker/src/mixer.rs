@@ -26,10 +26,18 @@ const MAX_DECODED: usize = 20 * FRAME;
 /// Larger than any Opus packet a client sends (Mumble limits them too).
 const MAX_OPUS_BYTES: usize = 1024;
 
+/// Gain is frozen with decoded audio, but applied only in the wide accumulator.
+/// Finite f32 PCM × gain≤4 × 128 speakers cannot overflow f64.
+#[derive(Clone, Copy)]
+struct QueuedFrame {
+    samples: [f32; 2],
+    gain: f32,
+}
+
 struct Speaker {
     decoder: OpusDecoder,
     jitter: JitterBuffer,
-    pcm: VecDeque<[f32; 2]>,
+    pcm: VecDeque<QueuedFrame>,
     volume: f32,
     last_packet: Instant,
 }
@@ -76,20 +84,15 @@ impl Speaker {
     }
 
     fn extend(&mut self, samples: &[f32]) {
-        let volume = self.volume;
-        // Malformed packets can decode far outside full scale (libopus does the
-        // same); clamp per speaker so one bad stream cannot swamp the mix.
-        self.pcm.extend(samples.chunks_exact(2).map(|frame| {
-            let scaled = |sample: f32| {
-                let value = sample * volume;
-                if value.is_finite() {
-                    value.clamp(-1., 1.)
-                } else {
-                    0.
-                }
-            };
-            [scaled(frame[0]), scaled(frame[1])]
-        }));
+        self.pcm
+            .extend(samples.chunks_exact(2).map(|frame| QueuedFrame {
+                samples: [frame[0], frame[1]].map(
+                    |sample: f32| {
+                        if sample.is_finite() { sample } else { 0. }
+                    },
+                ),
+                gain: self.volume,
+            }));
         // Never accumulate more than 200 ms of decoded audio per speaker.
         let excess = self.pcm.len().saturating_sub(MAX_DECODED);
         self.pcm.drain(..excess);
@@ -184,15 +187,15 @@ impl Mixer {
     }
 
     /// Add one frame of every speaker's audio to `mix`.
-    pub fn mix(&mut self, mix: &mut [[f32; 2]; FRAME]) {
+    pub fn mix(&mut self, mix: &mut [[f64; 2]; FRAME]) {
         for speaker in self.speakers.values_mut() {
             speaker.fill(&mut self.scratch);
             for (out, sample) in mix
                 .iter_mut()
                 .zip(speaker.pcm.drain(..speaker.pcm.len().min(FRAME)))
             {
-                out[0] += sample[0];
-                out[1] += sample[1];
+                out[0] += f64::from(sample.samples[0]) * f64::from(sample.gain);
+                out[1] += f64::from(sample.samples[1]) * f64::from(sample.gain);
             }
         }
     }
@@ -208,6 +211,16 @@ impl Mixer {
     #[cfg(test)]
     fn speakers(&self) -> Vec<(u32, u32)> {
         self.speakers.keys().copied().collect()
+    }
+}
+
+/// All voice and local-effect contributors reach this boundary before clipping.
+/// The device converter retains a separate guard for filter overshoot.
+pub fn finish(wide: &[[f64; 2]; FRAME], mono: &[f64; FRAME], out: &mut [[f32; 2]; FRAME]) {
+    for ((voices, effect), output) in wide.iter().zip(mono).zip(out) {
+        for channel in 0..2 {
+            output[channel] = (voices[channel] + effect).clamp(-1., 1.) as f32;
+        }
     }
 }
 
@@ -255,8 +268,8 @@ mod tests {
     }
 
     /// The loudest sample over `frames` mixed frames.
-    fn peak(mixer: &mut Mixer, frames: usize) -> f32 {
-        let mut loudest = 0_f32;
+    fn peak(mixer: &mut Mixer, frames: usize) -> f64 {
+        let mut loudest = 0_f64;
         for _ in 0..frames {
             let mut frame = [[0.; 2]; FRAME];
             mixer.mix(&mut frame);
@@ -266,6 +279,67 @@ mod tests {
                 .fold(loudest, |peak, sample| peak.max(sample.abs()));
         }
         loudest
+    }
+
+    fn queued(mixer: &mut Mixer, key: (u32, u32), frames: &[[f32; 2]], gain: f32) {
+        let mut speaker = Speaker::new(Instant::now()).unwrap();
+        speaker.volume = gain;
+        speaker.extend(&frames.iter().flatten().copied().collect::<Vec<_>>());
+        mixer.speakers.insert(key, speaker);
+    }
+
+    #[test]
+    fn opposing_headroom_and_effects_are_summed_before_one_mix_clip() {
+        let mut mixer = Mixer::default();
+        queued(&mut mixer, (1, 1), &[[1.5, -1.5]; FRAME], 1.);
+        queued(&mut mixer, (2, 1), &[[-1.25, 1.25]; FRAME], 1.);
+        let mut wide = [[0.; 2]; FRAME];
+        let mut out = [[0.; 2]; FRAME];
+        let count = allocation_counter::measure(|| {
+            mixer.mix(&mut wide);
+            finish(&wide, &[0.; FRAME], &mut out);
+        });
+        assert_eq!(count.count_total, 0);
+        assert!(out.iter().all(|frame| *frame == [0.25, -0.25]));
+        // A voice sum above full scale must still cancel against local effects.
+        finish(&[[1.5, 2.]; FRAME], &[-1.25; FRAME], &mut out);
+        assert!(out.iter().all(|frame| *frame == [0.25, 0.75]));
+    }
+
+    #[test]
+    fn gain_is_frozen_per_frame_and_finite_extremes_never_overflow_the_sum() {
+        assert_eq!(std::mem::size_of::<QueuedFrame>(), 12);
+        let mut mixer = Mixer::default();
+        for speaker in 0..MAX_SPEAKERS {
+            let sign = if speaker % 2 == 0 { 1. } else { -1. };
+            queued(
+                &mut mixer,
+                (speaker as u32, 1),
+                &[[sign * f32::MAX, sign * 1.5]; FRAME],
+                4.,
+            );
+        }
+        let mut wide = [[0.; 2]; FRAME];
+        mixer.mix(&mut wide);
+        assert!(wide.iter().all(|frame| *frame == [0., 0.]));
+        let mut speaker = Speaker::new(Instant::now()).unwrap();
+        speaker.volume = 4.;
+        speaker.extend(&[f32::MAX, -f32::MAX, f32::NAN, f32::INFINITY]);
+        speaker.volume = 0.;
+        speaker.extend(&[1.5, -1.25]);
+        mixer.clear();
+        mixer.speakers.insert((1, 1), speaker);
+        mixer.mix(&mut wide);
+        assert_eq!(
+            wide[0],
+            [f64::from(f32::MAX) * 4., -f64::from(f32::MAX) * 4.]
+        );
+        assert_eq!(wide[1], [0.; 2]);
+        assert_eq!(wide[2], [0.; 2]);
+        assert!(wide.iter().flatten().all(|sample| sample.is_finite()));
+        let mut out = [[0.; 2]; FRAME];
+        finish(&wide, &[0.; FRAME], &mut out);
+        assert_eq!(out[0], [1., -1.]);
     }
 
     #[test]
@@ -353,3 +427,7 @@ mod tests {
         assert!(mixer.speakers().is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "mixer_fixture.rs"]
+mod mixer_fixture;

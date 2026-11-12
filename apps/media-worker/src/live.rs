@@ -181,6 +181,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut skip_window = true;
     let mut capture_frame = [0.; FRAME];
     let mut mix = [[0.; 2]; FRAME];
+    let mut wide_mix = [[0_f64; 2]; FRAME];
+    let mut probe_frame = [0_f32; FRAME];
     let mut mono_effects = [0.; FRAME];
     // Local test mode (Settings): capture and process, but never encode or send.
     let mut preview = false;
@@ -456,28 +458,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         while open.playback.slots() >= FRAME
             && RING - open.playback.slots() < controller.playback_samples()
         {
-            mix.fill([0.; 2]);
+            wide_mix.fill([0.; 2]);
             mono_effects.fill(0.);
-            mixer.mix(&mut mix);
+            mixer.mix(&mut wide_mix);
             if loopback {
                 for (out, sample) in mono_effects
                     .iter_mut()
                     .zip(looped.drain(..looped.len().min(FRAME)))
                 {
-                    *out += sample;
+                    *out += f64::from(sample);
                 }
             }
             if let Some(probe) = probe.as_mut() {
-                probe.render(&mut mono_effects);
+                probe_frame.fill(0.);
+                probe.render(&mut probe_frame);
+                for (out, sample) in mono_effects.iter_mut().zip(&probe_frame) {
+                    *out += f64::from(*sample);
+                }
             }
             // Effects join the output here, so the canceller's reference (a
             // recording of the device, or what this ring hands it) has them.
             effects.mix(&mut mono_effects, Instant::now());
-            for (frame, effect) in mix.iter_mut().zip(&mono_effects) {
-                for sample in frame {
-                    *sample = (*sample + effect).clamp(-1., 1.);
-                }
-            }
+            crate::mixer::finish(&wide_mix, &mono_effects, &mut mix);
             let (pushed, _) = open.playback.push_partial_slice(&mix);
             if pushed.len() < FRAME {
                 break;

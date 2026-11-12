@@ -325,7 +325,7 @@ impl Effects {
     }
 
     /// Add the playing sounds to `out`.
-    pub fn mix(&mut self, out: &mut [f32], now: Instant) {
+    pub fn mix(&mut self, out: &mut [f64], now: Instant) {
         for slot in &mut self.voices {
             let Some(voice) = slot else {
                 continue;
@@ -343,7 +343,7 @@ impl Effects {
                     }
                     None => 1.,
                 };
-                *out += sample * voice.gain * fade;
+                *out += f64::from(*sample) * f64::from(voice.gain) * f64::from(fade);
                 voice.position += 1;
             }
             if voice.position >= samples.len() || voice.fading == Some(0) {
@@ -467,7 +467,7 @@ mod tests {
     fn mixing_applies_the_volume_and_never_allocates() {
         let mut effects = Effects::new();
         let now = Instant::now();
-        let mut frame = [0.1_f32; crate::dsp::FRAME];
+        let mut frame = [0.1_f64; crate::dsp::FRAME];
         let counted = allocation_counter::measure(|| {
             effects.play(Sound::Message, 0.5, now);
             effects.mix(&mut frame, now);
@@ -479,7 +479,7 @@ mod tests {
         assert_eq!(counted.count_total, 0, "mixing allocated");
         let message = &effects.sounds[Sound::Message as usize];
         for (mixed, sample) in frame.iter().zip(message) {
-            assert!((mixed - (0.1 + 0.5 * sample)).abs() < 1e-7);
+            assert!((mixed - (0.1 + 0.5 * f64::from(*sample))).abs() < 1e-7);
         }
         // The volume is at most 1; nothing plays at 0 or NaN.
         effects.play(Sound::Connected, 7., now);
@@ -512,11 +512,14 @@ mod tests {
         let bound = largest_step(unmuted) + largest_step(muted) + 1e-6;
         let mut previous = before[before.len() - 1];
         for sample in &out {
-            assert!((sample - previous).abs() <= bound, "a discontinuity");
+            assert!(
+                (sample - previous).abs() <= f64::from(bound),
+                "a discontinuity"
+            );
             previous = *sample;
         }
         assert!(
-            (out[FADE + 10] - muted[FADE + 10]).abs() < 1e-6,
+            (out[FADE + 10] - f64::from(muted[FADE + 10])).abs() < 1e-6,
             "only the new sound is left"
         );
         assert_eq!(effects.voices.iter().flatten().count(), 1);

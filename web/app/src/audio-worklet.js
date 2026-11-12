@@ -10,7 +10,13 @@ export const MAX_QUEUED_SAMPLES = 9600;
 // Shared with the real processor tests: finite, bounded FIFO per speaker. An
 // overflow discards the oldest queued samples, never accumulating stale audio.
 export class PcmMixer {
-  constructor() { this.epoch = ""; this.enabled = false; this.speakers = new Map(); }
+  constructor() {
+    this.epoch = ""; this.enabled = false; this.speakers = new Map();
+    // Persistent wide sums: render never allocates PCM scratch or accumulates
+    // into f32 output until every contributor has been summed.
+    this.left = new Float64Array(MAX_QUEUED_SAMPLES);
+    this.right = new Float64Array(MAX_QUEUED_SAMPLES);
+  }
   configure(epoch, enabled) {
     this.epoch = typeof epoch === "string" && epoch.length <= 200 ? epoch : "";
     this.enabled = Boolean(enabled && this.epoch);
@@ -26,7 +32,7 @@ export class PcmMixer {
     if (!state) {
       if (this.speakers.size >= MAX_SPEAKERS) return false;
       // Size/read/hold are FRAMES, storage is interleaved LR; 200 ms cap.
-      state = {data:new Float32Array(MAX_QUEUED_SAMPLES * 2), read:0, size:0, idle:0, hold:AUDIO_FRAME};
+      state = {data:new Float32Array(MAX_QUEUED_SAMPLES * 2), gains:new Float32Array(MAX_QUEUED_SAMPLES), read:0, size:0, idle:0, hold:AUDIO_FRAME};
       this.speakers.set(speaker,state);
     }
     const overflow = Math.max(0,state.size + frames - MAX_QUEUED_SAMPLES);
@@ -34,10 +40,11 @@ export class PcmMixer {
     state.size -= overflow;
     for (let i=0;i<frames;i++) {
       const at=((state.read + state.size + i) % MAX_QUEUED_SAMPLES) * 2;
+      state.gains[at/2] = volume;
       for(let channel=0;channel<2;channel++) {
-        // Gain before full-scale protection: finite codec overshoot can safely
-        // become quiet audio. Do not clip it irreversibly before attenuation.
-        state.data[at+channel] = Math.max(-1,Math.min(1,samples[i*channels+(channels===2?channel:0)] * volume));
+        // Store unscaled finite PCM. Multiplication happens as f64 during mix;
+        // even the largest finite f32 sample ×4 cannot overflow that sum.
+        state.data[at+channel] = samples[i*channels+(channels===2?channel:0)];
       }
     }
     state.size += frames; state.idle = 0;
@@ -45,23 +52,26 @@ export class PcmMixer {
   }
   remove(speaker) { this.speakers.delete(speaker); }
   render(left,right=null) {
-    left.fill(0);right?.fill(0);
-    if (!this.enabled) return;
+    if (!this.enabled || left.length > MAX_QUEUED_SAMPLES || (right && right.length !== left.length)) {
+      left.fill(0);right?.fill(0);return;
+    }
+    this.left.fill(0,0,left.length);this.right.fill(0,0,left.length);
     for (const [speaker,state] of this.speakers) {
       const offset=Math.min(left.length,state.hold);state.hold-=offset;
       const length = Math.min(left.length-offset,state.size);
       for(let i=0;i<length;i++) {
         const at=((state.read+i)%MAX_QUEUED_SAMPLES)*2;
-        if(right){left[offset+i]+=state.data[at];right[offset+i]+=state.data[at+1];}
-        else left[offset+i]+=(state.data[at]+state.data[at+1])*.5;
+        const gain=state.gains[at/2];
+        this.left[offset+i]+=state.data[at]*gain;
+        this.right[offset+i]+=state.data[at+1]*gain;
       }
       state.read=(state.read+length)%MAX_QUEUED_SAMPLES;state.size-=length;
       state.idle=state.size===0?state.idle+left.length:0;
       if(state.idle>AUDIO_RATE) this.speakers.delete(speaker);
     }
     for(let i=0;i<left.length;i++) {
-      left[i]=Math.max(-1,Math.min(1,left[i]));
-      if(right)right[i]=Math.max(-1,Math.min(1,right[i]));
+      left[i]=Math.max(-1,Math.min(1,right?this.left[i]:(this.left[i]+this.right[i])*.5));
+      if(right)right[i]=Math.max(-1,Math.min(1,this.right[i]));
     }
   }
 }

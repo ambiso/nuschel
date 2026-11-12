@@ -379,15 +379,45 @@ and `reference-filter-dsp-regressions.log` under the owned output-quality cache.
 These scoped results support the reconstruction fix; they do not erase the
 prior failed trials or establish general AEC reliability across devices/load.
 
-## Remaining per-speaker headroom defect
+## Per-speaker headroom correction
 
-Both native `Speaker::extend` and Worklet enqueue still clip each gain-adjusted
-speaker before summing. Opposing samples 1.5 and -1.25 consequently become zero
+The former native `Speaker::extend` and Worklet enqueue clipped each gain-adjusted
+speaker before summing. Opposing samples 1.5 and -1.25 consequently became zero
 instead of 0.25. Stock Mumble sums gain-adjusted contributors before its final
-output clip. The separate follow-up will retain raw finite PCM plus bounded
-per-frame gain, multiply and accumulate in f64, and apply full-scale protection
-after all voice/effect contributors. Callback storage/work must remain bounded;
-nonfinite input is never accepted as audio.
+output clip. Both paths now retain raw finite PCM plus bounded per-frame gain,
+multiply and accumulate in f64, then clip the final mix. Native local effects,
+loopback and probe audio also enter that wide sum before the 48 kHz mix boundary;
+the device converter separately guards filter overshoot. Native decoded
+nonfinite values become silence; the Worklet rejects nonfinite chunks. Finite
+f32 extremes times gain≤4 and the existing speaker caps cannot overflow f64.
+No arbitrary amplitude cutoff is imposed on finite decoded headroom.
+
+`tests/output_headroom.py` generates two independent legal ±0.99 stereo sources
+with reference libopus, then compares the actual native decoder/jitter/mixer
+against an independently summed and final-clipped reference. At gain 3/2.5,
+decoded peaks reach 1.6275/1.6267 but the mixed native PCM agrees at 119.21 dB
+fixed gain. The computed old per-speaker clipping algorithm scores only
+0.00073 dB. The real `PlaybackProcessor` running in Node produces exactly the
+independent sum from those reference-decoded streams. Units also cover
+opposing constants, local-effect cancellation, maximum finite f32 ×4,
+nonfinite rejection, frame-frozen gain and zero native mix allocations.
+All 60 native tests pass (four explicit/old diagnostics ignored); 14 Node audio
+units pass. Evidence: `headroom-independent/proof.json` and the associated logs.
+
+Queue duration remains 200 ms: native raw/gain frames use 12 instead of 8 bytes,
+adding at most 4,915,200 bytes across 128 fully occupied queues. Browser PCM,
+gains and persistent wide scratch retain 1,996,800 bytes at 16 speakers, versus
+1,228,800 bytes for the old PCM arrays. The render loop allocates no PCM scratch
+and iterates the speaker map once per block, never once per sample. Mix-only
+paired microbenchmarks on this machine measured roughly 5.3–5.7 → 6.9–7.7 µs per
+native 480-frame block with 16 speakers. Node measured 8.2–8.6 → 9.3–9.9 µs per 128-frame/16-speaker block. Those trials
+are recorded separately in `headroom-cpu-node.json`; native trials and exact
+source hashes are in `headroom-cpu-native.json`. These exclude decode/enqueue
+and are component cost measurements, not browser/device deadline guarantees.
+The unchanged original private DSP suite also passes after the wide mix: echo
+46 dB/0% sent, double-talk 0.7 dB/100% gate, clipping detection and effects
+isolation/6 dB volume (`headroom-dsp.log`). This does not close full live
+multispeaker, loss/jitter or perceptual parity.
 
 ## Remaining reference decoder setting
 

@@ -660,12 +660,15 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       stock setting, then identify the smallest safe control/API change. Current
       reference fixtures use libopus defaults; they do not close this setting gap.
 
-- [ ] Preserve legitimate per-speaker decoded headroom until the final mix.
-      Native Speaker::extend and Worklet enqueue currently clip each speaker to
-      ±1: opposing 1.5 and -1.25 become zero instead of 0.25. Add independent
-      two-stream cancellation/headroom fixtures, then defer clipping until the
-      final output with finite validation and bounded wide accumulation. This is
-      separate from the corrected gain-before-clipping case.
+- [x] Preserve legitimate per-speaker decoded headroom until the final mix.
+      Native and browser queues now store raw finite PCM with per-frame gain,
+      multiply/sum in f64, then clip after all contributors (including native
+      local effects). Opposing 1.5/-1.25 recovers 0.25; finite f32MAX×4 stays bounded.
+      Independent legal-source/two-stream libopus sums match native at 119.21 dB
+      and actual Worklet exactly; 60 native/14 Node units pass. Same 200 ms frame
+      limits, zero native mix allocations, bounded persistent browser scratch;
+      measured CPU/memory cost is documented in `docs/output-quality.md`.
+      Full reference-Mumble multispeaker/loss/device parity remains open.
 
 
 ### Optional local speech (requested 2026-11-11)
