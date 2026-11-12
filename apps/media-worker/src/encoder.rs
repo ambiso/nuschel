@@ -16,6 +16,9 @@ pub fn live() -> Result<OpusEncoder, opus_pure::Error> {
 }
 
 #[cfg(test)]
+mod cvbr;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use opus_pure::{OpusDecoder, RateControl, packet};
