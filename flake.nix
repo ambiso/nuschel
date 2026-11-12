@@ -633,11 +633,24 @@
               pkgs.util-linux
             ];
           };
+          # exchange.rs has its own main (harness=false); the unit-test leaf
+          # alone compiles it under libtest and reports zero tests.
+          ipc-exchange = import ./nix/ipc-exchange-check.nix {
+            inherit pkgs toolchain;
+            ipc = crates.project.workspaceMembers."nuschl-ipc".build;
+          };
+          ipc-exchange-negative-controls = pkgs.linkFarm "nuschl-ipc-exchange-negative-controls" (
+            lib.mapAttrsToList (name: path: {
+              inherit name path;
+            }) self.checks.${system}.ipc-exchange.negativeControls
+          );
           update-unit = crates.project.workspaceMembers."nuschl-update".build.override { runTests = true; };
           # Scoped unit-test leaves over the cached per-crate graph (no Cargo target).
           desktop-unit = crates.project.workspaceMembers."nuschl".build.override { runTests = true; };
           core-unit = crates.project.workspaceMembers."nuschl-core".build.override { runTests = true; };
-          media-unit = crates.project.workspaceMembers."nuschl-media-worker".build.override { runTests = true; };
+          media-unit = crates.project.workspaceMembers."nuschl-media-worker".build.override {
+            runTests = true;
+          };
           update-crypto = crates.project.workspaceMembers."nuschl-update-worker".build.override {
             features = [ "signer" ];
             runTests = true;

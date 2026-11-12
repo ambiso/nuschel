@@ -2179,6 +2179,22 @@ listed below. Plugin data remains the explicit gap.
 
 ### 7. Tests (own servers only)
 
+- [x] Run the `harness = false` IPC exchange as its actual diagnostic in Nix,
+      rather than accepting libtest's zero-test result. The flake's
+      `ipc-exchange` and `ipc-exchange-negative-controls` checks exercise real
+      crash/garbled-reply/hang/linger requests and four confined launches.
+      Final combined-source run takes 7.108 s, with no observed descendants alive
+      after 100 ms of cleanup grace. All five negative controls reject their
+      intended broken setup. This proves eventual fixture cleanup, not atomic
+      tree-exit or released concurrency credit; supervisor adoption stays open.
+- [ ] Audit and automate meaningful test entry points in Nix/CI. The current
+      hosted build workflow runs packaging, formatting, dependency policy and
+      static Mac verification, but does not invoke the native test leaves,
+      Clippy or VM suites. Inventory manual Python/JS/harness=false diagnostics
+      against their callers before treating test files as executed coverage;
+      some are imported fixtures rather than independent suites. Add bounded
+      cached test jobs and relevant negative controls, and retain actual run
+      evidence. Do not trigger giant cold all-workspace builds to fill this gap.
 - [x] Stock Mumble GUI and Nuschl client in a private VM channel with two-way voice
       and chat (`stock_client.py`).
 - [ ] Two-stock-client GUI baseline to independently validate the fixture.
@@ -3168,6 +3184,15 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           automatic render loops or stale-job rebinding. Notification previews
           and mentions also need an exact rendered-receipt completion hook;
           `[Preparing message…]` is not the received message's preview.
+          Review of `5aede0ea` also finds that reconnect recovery can overwrite
+          readable derivatives with permanent busy rows, while failure handles
+          evict successful previews. Fix bounded admission/refill without
+          mutating refused rows; preserve valid derivatives on rerender timeout,
+          make canceled resident work retryable, and use monotonic bounded
+          queue/execution deadlines. Actual 4,500-row/unsaved-message recovery
+          stress remains failing; unit failure tokens do not prove readability.
+          Investigate completion-ACK starvation under the 128-RPC limit with
+          an actual negative control before reserving bounded control credit.
     - [ ] Close the source-audited parity gaps before claiming desktop parity:
           export real SDK unread counts (current badge/jump fixtures inject a
           field absent from real snapshots); reconnect/backoff and saved-server

@@ -41,6 +41,21 @@ Other VM checks run with `nix build --cores 2 .#checks.x86_64-linux.<name>`:
 looking at changes run in a private headless GNOME Shell (`tests/screenshots.py`,
 tests/README.md).
 
+The worker exchange diagnostic has its own `main` (`harness = false`). Run:
+
+```sh
+nix build --cores 2 --max-jobs 1 \
+  .#checks.x86_64-linux.ipc-exchange \
+  .#checks.x86_64-linux.ipc-exchange-negative-controls
+```
+
+This exercises crash, malformed reply, timeout and lingering-worker recovery
+with real bubblewrap/prlimit. The
+ordinary IPC unit-test leaf compiles this fixture under libtest and reports zero
+tests for it. This check requires a working sandbox and rejects a substituted
+successful executable; it checks eventual cleanup, not atomic worker-tree exit
+or platform-wide confinement.
+
 ## Packages and cross builds
 
 The Linux package (`nix build .#default`, also used by the VM tests) is built per
