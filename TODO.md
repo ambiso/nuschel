@@ -4,8 +4,8 @@ Current focus (user, 2026-11-12): the **long-idle VAD correction is integrated**
 live user retesting and broader quiet-speech/AEC coverage remain the leading audio
 gate. Unmute onset delay and the brief playback gap on every mute/unmute remain
 open. Intermittent Windows duplex dropouts are under investigation, with evidence
-that the affected machine also lags in another game. Configurable bitrate controls
-have been brought forward into a separate coordinated implementation lane.
+that the affected machine also lags in another game. Shared configurable bitrate
+controls are integrated with the scoped desktop/browser evidence below.
 Native volume sliders/meter, font rendering, desktop Markdown and the chat scrollbar
 are integrated with scoped checks below; image quality and memory reductions still
 have separate reviewable checkpoints. Voice-host ACME, rail/footer spacing,
@@ -39,6 +39,13 @@ its remaining work and verification limits until the fix is integrated and its
 relevant checks pass. Keep newly discovered blockers visible even when they are
 outside the current task's scope.
 
+New user priorities (2026-11-13): finish the music-bot integration after its
+real-session recovery and NixOS service checks, implement sender-generated link
+previews on legacy Mumble and compatible Nuschl servers, and independently review
+the privately supplied image-privacy report. The report and detailed review
+evidence stay outside Git; Codex and Claude reviewers work independently. Address
+verified findings with synthetic regression cases before integrating image quality.
+
 Concurrent coordination (user, 2026-11-12): Claude Code session `nuschel-8e`
 works alongside Codex through `~/.cache/nuschl-coordination/to-claude.md` and
 `to-codex.md`, with an active reply-file watcher. Claude owns the received-audio
@@ -60,6 +67,24 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Shared bitrate controls are integrated from `7b0faad9` with the reviewed
+  sidecar correction `eb437627`.** Desktop/web Settings and TUI `/bitrate` offer
+  64/96/128/192/256 kb/s (128 default), show effective rates/reasons, respect live
+  destination limits and share the lowest active encoder target. The reviewed
+  eight native leaves pass 570 tests (11 ignored); final merged IPC passes 22
+  (one ignored) plus its real diagnostic. Fresh merged-code GPUI/private-Pulse/
+  two-Murmur checks pass hot rates, retained capture/worker, shared 48k,
+  server-forced 16k and zero-budget transmission with playback retained. The
+  actual merged App/private relay/Murmur passes 128→256→48k and below-minimum
+  silence, persistence and no Settings overflow at 320/390/1200 pixels. Both
+  Voice quality and Microphone processing sections remain present. Native
+  choices use versioned sidecars so the released reader keeps privacy settings;
+  managed handwritten fallback migration is no-clobber and fails before rewriting
+  the main settings file. These are synthetic Linux/Chromium results, not new
+  Windows/macOS/physical audio, Safari/iOS, fidelity or full legacy-GUI proof.
+  Narrow 760px/175% timeline wrapping and voice-card scrolling remain open.
+  Evidence: `~/.cache/nuschl-bitrate-final/`, `~/.cache/nuschl-bitrate-web-final/`
+  and `~/.cache/nuschl-next/bitrate-review/handoff.json`.
 - **Native distro audio configuration is available inside the media sandbox
   (`934d508f`).** Only media receives the present read-only public defaults at
   `/usr/share/pipewire` and `/usr/share/alsa`. The exact rebuilt FHS desktop's
@@ -686,6 +711,20 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Implement sender-generated link previews on both legacy Mumble and
+      compatible Nuschl servers (user reiterated 2026-11-13). Current main has
+      only the policy/model library and design, not Open Graph extraction,
+      fetching or composer/receiver cards. Default global policy is Off;
+      Direct requires opt-in and ProxyRequired must never fall back to direct
+      DNS/connections. The sender alone fetches HTML/image/redirects, with bounded
+      isolated processing, exact draft/generation/policy binding and a Remove
+      action that suppresses late results. Receivers and servers fetch nothing.
+      Send one logical message: bounded legacy HTML/embedded-image projection
+      within server limits, or negotiated atomic typed metadata/history on
+      compatible servers. Preserve text sending on failure and unsupported
+      encryption capabilities; never silently offer original image files.
+      Leave RFC 6903 extensible and unimplemented. See docs/link-previews.md;
+      Claude is preparing disjoint implementation/API ownership before edits.
 - [ ] Implement image sending in the web app (user, 2026-11-12: cannot share
       images). Support file selection, paste/drop, bounded preview and removal,
       original-target/generation binding and draft retention on refusal. Reuse
@@ -2099,7 +2138,7 @@ listed below. Plugin data remains the explicit gap.
       in Nuschl. Fix upstream in cpal or list them through the PulseAudio API.
 - [x] Audio settings: input/output device, transmission mode, VAD threshold with meter,
       PTT key, processing toggles and per-device override.
-- [ ] Shared Opus bitrate controls in desktop, TUI and web for legacy Mumble and
+- [x] Shared Opus bitrate controls in desktop, TUI and web for legacy Mumble and
       nuschl servers. Persist the requested target; show the effective encoder
       target and why it is limited. Respect each destination's advertised bandwidth,
       including packet/transport overhead, and recompute on server updates/reconnect.
@@ -2108,11 +2147,14 @@ listed below. Plugin data remains the explicit gap.
       Mumble framing/transport reserve. Tiny budgets disable capture, not playback.
       Live changes reject over-budget frames and update isolated encoders;
       browser route epochs also revoke prior queued media.
-      Persistent controls/effective-rate UI and the full private-server matrix
-      remain open; synthetic codec/budget regressions cover the default slice.
-      Reprioritized by the user on 2026-11-12: Claude's dedicated bitrate lane is
-      preparing shared API ownership before editing the native/browser/TUI paths;
-      no configurable controls are integrated yet.
+      Persistent controls/effective-rate UI and private-server checks are now
+      integrated as recorded above. The first implementation's wider server
+      matrix remains tied to its frozen source; final merged Windows/macOS,
+      stock GUI/1.3 and physical-device proofs remain required. Versioned
+      sidecars preserve downgrade compatibility; unsupported hard-link migration
+      fails before rewriting legacy settings, rather than replacing an existing
+      valid/future/corrupt sidecar. Source quality and CBR/transient behavior
+      remain separate verification tasks below.
 - [ ] Complete input-fidelity encoder verification (user, 2026-11-12).
       Audio activation is integrated as `95a1a27f`: all native/browser production
       TX factories use Audio, retaining the 128k requested target, server budget

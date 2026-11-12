@@ -18,8 +18,9 @@ For each, the client's `/bitrate` must name the requested and effective
 targets and the reason, every frame the peer receives must fit the effective
 per-frame allowance, a requested change must keep the same media worker and
 capture stream (an encoder-only reconfiguration), a budget too small for
-voice must stop capture but not playback, and settings.json must hold
-`voice_bitrate` only while it differs from the default.
+  voice must stop transmission to that server but not playback, and the
+  versioned voice-quality.json must persist the request without adding a key
+  that makes released readers reject settings.json.
 
     python3 tests/bitrate_matrix.py <binaries> --murmur <mumble-server> \\
         --pulse-bin <pulseaudio>/bin --output <directory> [--murmur14 <mumble-server>]

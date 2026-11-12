@@ -331,6 +331,26 @@ Decided with the user on 2026-11-11: they often listen to several voice channels
 once and very rarely speak in more than one. So: **listen anywhere, speak in one place
 by default.**
 
+Choose the requested voice bitrate in **Settings → Voice quality** on desktop
+and web, or `/bitrate 128` in the TUI (`/bitrate` shows the current rates).
+The choices are 64, 96, 128, 192 and 256 kb/s, with 128 kb/s as the default.
+Each server's voice status shows its effective rate and any limiting reason.
+The server's advertised bandwidth includes transport: Nuschl reserves 24 kb/s
+for that overhead before selecting the Opus target. When several servers receive
+the microphone, they share the lowest allowed target. A server that permits less
+than the codec minimum after overhead receives no microphone packets; playback
+continues. Changing only the rate reconfigures the encoder without replacing the
+native capture stream.
+
+Native requests live in the versioned `voice-quality.json` beside the other
+configuration files. Home Manager's `settings.voice_bitrate` writes
+`managed-voice-quality.json`; its value is in bits per second. Keep this setting
+out of handwritten `settings.json` and `managed.json`: unknown keys cause the
+released 0.1.0 reader to set aside or ignore the whole file, privacy settings
+included. The browser
+keeps its request in this browser's local storage. These controls select mono
+voice quality; the separate stereo music preset is still planned.
+
 - **One media worker for the app**, owned by the native driver (`native/media.rs`),
   not one per connection. Each connected server attaches to it as a *stream*; the
   worker keys its speakers by (stream, session), since session numbers are per server,
