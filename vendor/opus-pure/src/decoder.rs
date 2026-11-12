@@ -347,6 +347,8 @@ impl OpusDecoder {
     /// Also drives the cross-fade at a SILK<->CELT mode switch, where libopus
     /// calls it for 5 ms of *previous*-mode audio (see [`Self::fill_transition`]).
     fn decode_plc(&mut self, frame_size: usize, output: &mut [f32]) -> Result<usize> {
+        // opus_decode_frame reports zero entropy range for PLC/DTX.
+        self.last_range = 0;
         // "Avoids trying to run the PLC on sizes other than 2.5 (CELT), 5
         // (CELT), 10, or 20" (opus_decoder.c:344): a request longer than 20 ms
         // is concealed in 20 ms pieces, because 20 ms is the longest frame CELT
@@ -398,6 +400,7 @@ impl OpusDecoder {
             self.celt_dec
                 .conceal_lost_bands(frame_size, output, 0, self.celt_end_band);
             self.prev_mode = Some(mode);
+            self.prev_redundancy = false;
             return Ok(frame_size);
         }
 
@@ -464,6 +467,7 @@ impl OpusDecoder {
         }
 
         self.prev_mode = Some(mode);
+        self.prev_redundancy = false;
         Ok(frame_size)
     }
 
@@ -942,6 +946,11 @@ impl OpusDecoder {
         if packet_frame_size == 0 || frame_size < packet_frame_size {
             return self.decode_plc(frame_size, output);
         }
+        // opus_decode_frame treats zero- and one-byte coded payloads as DTX,
+        // including when the caller requested redundant decoding.
+        if frames[0].len() <= 1 {
+            return self.decode_plc(frame_size, output);
+        }
 
         // The redundancy lives in the packet's FIRST frame; anything the request
         // covers ahead of it has no redundant copy and is concealed instead.
@@ -1132,6 +1141,31 @@ impl OpusDecoder {
         // the packet actually held. Treating it as the exact output length
         // instead stretched a 20 ms packet across whatever buffer it was given.
         let frame_size = frame_count * packet_frame_samples;
+
+        // RFC 6716 permits empty frames (including inside padded CBR packets).
+        // libopus opus_decode_frame also treats a one-byte payload as PLC/DTX.
+        // Handle those before changing layer/channel/rate state: concealment
+        // must use the previous actual decoding mode, not this packet's TOC.
+        // For a mixed packet, decode each ordinary payload through the existing
+        // single-frame path. The bounded stack buffer adds no heap allocation;
+        // recursion stops there because that payload is longer than one byte.
+        if frame_payloads.iter().any(|payload| payload.len() <= 1) {
+            let mut single = [0u8; 1276];
+            single[0] = toc & !3;
+            for (index, payload) in frame_payloads.iter().enumerate() {
+                let base = index * packet_frame_samples * self.channels;
+                let region = &mut output[base..base + packet_frame_samples * self.channels];
+                if payload.len() <= 1 {
+                    self.decode_plc(packet_frame_samples, region)?;
+                } else {
+                    single[1..payload.len() + 1].copy_from_slice(payload);
+                    self.decode_impl(&single[..payload.len() + 1], packet_frame_samples, region)?;
+                }
+            }
+            self.frame_size = frame_size;
+            self.stream_channels = packet_channels;
+            return Ok(frame_size);
+        }
 
         self.frame_size = frame_size;
         self.stream_channels = packet_channels;
