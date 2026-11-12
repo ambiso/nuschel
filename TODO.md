@@ -2,8 +2,9 @@
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
 and output fidelity, and hybrid update readiness**. Independent owners now cover
-browser jitter/PLC, shared desktop document-link interaction and the Windows
-desktop updater harness. Remaining capture/device latency checks stay open below.
+browser jitter/admission, CELT concealment and the Windows desktop updater plus
+metadata-refresh procedure. Shared desktop document-link interaction is integrated;
+its hash-only fetch/render follow-up and remaining capture/device checks stay open.
 Server reordering and the desktop layout foundation have scoped proofs integrated;
 web image attachments, modern identity/archive flows and full parity remain open.
 The rename/build-cache cleanup is complete. Publication remains behind signing,
@@ -691,6 +692,38 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       through PLC/FEC; libopus updates `OPUS_GET_LAST_PACKET_DURATION` after
       those calls. This pre-existing API difference is separate from the fixed
       PCM/range behavior. Check consumers before changing its public semantics.
+- [ ] Correct loss duration after aggregated packets in the shared native/browser
+      jitter policy (active browser-audio owner). After a 120 ms packet followed by
+      a packet at sequence 13, only 10 ms is missing; the inherited policy instead
+      conceals 120 ms and skips the queued packet. Bound concealment/FEC to the
+      nearest future sequence and verify 10/20 ms gaps, reordering and terminators.
+      Preserve the frozen failing trace and explain intentional changes to the
+      previously exact native-policy baseline; do not retune adaptive latency.
+- [ ] Correct CELT PLC after aggregated short frames (active codec owner). A
+      120 ms packet made of 10 ms frames followed by a 20 ms loss produces only
+      28.21 dB agreement with independent libopus, despite correct clock/gain.
+      The decoder must retain the accepted TOC's internal-frame duration for
+      concealment chunking separately from aggregate packet duration. A bounded
+      private-field fix is under test; retain the original failure and require
+      prior codec regressions before integration. Public duration API semantics
+      and direct 8/12 kHz resampling remain separate open issues above.
+- [ ] Reject complete malformed Opus framing before native/browser jitter or
+      speaker-state admission (active browser-audio owner). The frozen `09 00`
+      case shortens the predicted concealment span and displaces a subsequent
+      valid packet; decoder-level rejection alone does not protect the queue.
+      The reviewed allocation-free `packet::validate` API is integrated, but
+      callers still need to invoke it before sequence/time/gain state changes.
+      Preserve admission failure evidence and test valid packets after rejection.
+- [ ] Complete browser sample-clock playout integration (active browser-audio
+      owner; isolated Worklet controller delegated and awaiting integration).
+      Keep RX authorization separate from TX epochs so mic mute/bitrate changes
+      preserve listening; deafen/route/connection revocation must flush playback.
+      Wire the bounded direct codec-worker/Worklet port with one unacknowledged
+      render, exact epoch/generation/request/frame matching, bounded packet
+      admission and late/stalled reply handling. The old 1,000 packet/s aggregate
+      limit cannot admit 16 legitimate 100 packet/s speakers. Verify 48 kHz context,
+      variable-duration packets, stream ends/restarts, suspend/resume, privacy and
+      actual confined-browser playback under production CSP before closing this.
 - [x] Match Mumble's explicit `OPUS_SET_PHASE_INVERSION_DISABLED(1)` receive
       setting. The pinned, minimally patched opus-pure 0.2.3 exposes its existing
       synthesis control with upstream/generic defaults unchanged; only native
@@ -970,6 +1003,14 @@ listed below. Plugin data remains the explicit gap.
       cross/archive helpers too: current `crossCommon` enables both Cargo engine
       features in one workspace build, so individually featured native test
       products do not establish packaged dependency/byte equivalence.
+- [ ] Preserve an explicitly selected profile across desktop updater relaunch
+      (active Windows/updater owner). Production `relaunch()` currently drops
+      `--profile-dir`, so a successful install/hash/PID check can silently restart
+      into the default profile. Record an absolute explicit profile at startup
+      and forward only that argument. Verify relative paths, spaces/Unicode,
+      unchanged anti-rollback state and actual Windows GUI restart; the earlier
+      mechanical-only GUI run does not establish profile continuity. A narrow
+      source fix and fresh successful guest proof await review/integration.
 - [ ] Complete unattended Windows desktop/audio/sandbox regression orchestration
       and add UDP (the existing guest-forward voice check used the TCP tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
