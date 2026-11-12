@@ -56,7 +56,12 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
         x, y = node.centre(); shell.click(g["x"] + x, g["y"] + y, button=button)
     def select(which):
         find(names[which] + ";", prefix=True).press()
-        eventually(lambda: find(names[which] + ";", prefix=True).call("Accessible", "GetState")[0][0] & (1 << 23), "text selection did not change")
+        try:
+            eventually(lambda: find(names[which] + ";", prefix=True).call("Accessible", "GetState")[0][0] & (1 << 23), "text selection did not change")
+        except AssertionError:
+            (args.output/"selection-failure.json").write_text(json.dumps({"requested":which,"cache":[{"role":role,"name":name,"states":states} for _,role,name,states in items(app)],"bookmarks":json.loads((profile/"config/servers.json").read_text()),"windows":shell.windows()},indent=2)+"\n")
+            shot("status-selection-failure")
+            raise
     def state(which, status, channel=None):
         label = names[which] + (" #" + channel if channel else "") + ": " + status
         eventually(lambda: any(name == label for _, _, name, _ in items(app)), "voice state absent: " + label)
@@ -169,7 +174,21 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
         find("Undeafen").press(); eventually(lambda: not own("beta")["self_deafened"], "reconnect undeafen failed")
     if own("beta")["self_muted"]:
         find("Unmute").press(); eventually(lambda: not own("beta")["self_muted"], "reconnect explicit unmute failed")
+    retained_alpha = find(names["alpha"] + ";", prefix=True)
     point(find("Offline earlier;", prefix=True), button=3); find("Edit server…", "menu item").press(); find("Remove saved server").press()
+    eventually(lambda: named("dialog", "Add or connect to a Mumble server") is None
+               and named("push button", "Offline earlier;", True) is None,
+               "removal did not finish rendering")
+    select("beta")
+    # Retain the actual pre-removal accessible object, then invoke it AFTER the
+    # new render. Runtime-index identity would silently retarget it to Beta.
+    retained_alpha.press()
+    eventually(lambda: find(names["alpha"] + ";", prefix=True).call("Accessible", "GetState")[0][0] & (1 << 23),
+               "retained Alpha object retargeted after earlier bookmark removal")
+    beta = find(names["beta"] + ";", prefix=True)
+    beta.call("Component", "GrabFocus"); shell.key("Return")
+    eventually(lambda: find(names["beta"] + ";", prefix=True).call("Accessible", "GetState")[0][0] & (1 << 23),
+               "keyboard rail activation selected the wrong server")
     select("alpha"); find("Go to " + names["beta"], prefix=True).press()
     eventually(lambda: find(names["beta"] + ";", prefix=True).call("Accessible", "GetState")[0][0] & (1 << 23), "voice row navigated through stale runtime index")
     record("earlier-server-removed")
@@ -178,6 +197,7 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
         return w > 0 and h > 0 and x >= ox-1 and y >= oy-1 and x+w <= ox+ow+1 and y+h <= oy+oh+1
     select("beta"); edit("beta")
     entry=find("Server name","entry"); entry.call("Component","GrabFocus")
+    assert entry.call("Text", "GetText", "ii", "0", "-1")[0] == names["beta"], "rail context edit targeted another server"
     shell.chord("Control_L","a")
     names["beta"] = "Voice Beta " + "Überraschung " * 7
     # The private shell's synthetic keyboard does not implement an IME.

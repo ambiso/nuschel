@@ -273,11 +273,21 @@ pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<A
 pub(crate) struct Target {
     server: String,
     generation: u64,
+    endpoint: std::sync::Arc<(String, u16, String, Option<String>)>,
     own: Option<(u32, u64)>,
     channel: Option<(u32, u64)>,
 }
 
 impl Target {
+    fn endpoint(server: &ServerView) -> std::sync::Arc<(String, u16, String, Option<String>)> {
+        std::sync::Arc::new((
+            server.bookmark.host.clone(),
+            server.bookmark.port,
+            server.bookmark.username.clone(),
+            server.bookmark.certificate_sha256.clone(),
+        ))
+    }
+
     fn capture(server: &ServerView) -> Self {
         let own = server.own_session.and_then(|id| server.users.get(&id));
         let channel = own.and_then(|user| {
@@ -289,6 +299,7 @@ impl Target {
         Self {
             server: server.id.clone(),
             generation: server.generation,
+            endpoint: Self::endpoint(server),
             own: own.map(|user| (user.session, user.instance)),
             channel: channel.map(|channel| (channel.id, channel.instance)),
         }
@@ -299,18 +310,27 @@ impl Target {
     }
 
     fn resolve_in(&self, servers: &[ServerView]) -> Option<usize> {
-        servers
-            .iter()
-            .position(|server| server.id == self.server)
-            .filter(|index| {
-                let server = &servers[*index];
-                server.generation == self.generation
-                    && self.own
-                        == server
-                            .own_session
-                            .and_then(|id| server.users.get(&id))
-                            .map(|user| (user.session, user.instance))
-            })
+        self.resolve_connection_in(servers).filter(|index| {
+            let server = &servers[*index];
+            self.own
+                == server
+                    .own_session
+                    .and_then(|id| server.users.get(&id))
+                    .map(|user| (user.session, user.instance))
+        })
+    }
+
+    /// A privacy stop applies to the named connection even if an automatic
+    /// reconnect replaced its own presence while retaining this generation.
+    fn resolve_connection_in(&self, servers: &[ServerView]) -> Option<usize> {
+        servers.iter().position(|server| {
+            server.id == self.server
+                && server.generation == self.generation
+                && server.bookmark.host == self.endpoint.0
+                && server.bookmark.port == self.endpoint.1
+                && server.bookmark.username == self.endpoint.2
+                && server.bookmark.certificate_sha256 == self.endpoint.3
+        })
     }
 
     fn resolve_place(&self, client: &Client) -> Option<usize> {
@@ -382,6 +402,7 @@ pub(crate) fn places(this: &Desktop) -> Vec<Place> {
                 target: Target {
                     server: server.id.clone(),
                     generation: server.generation,
+                    endpoint: Target::endpoint(server),
                     own: server
                         .own_session
                         .and_then(|id| server.users.get(&id))
@@ -744,7 +765,7 @@ pub fn second_server_dialog(this: &Desktop, cx: &mut Context<Desktop>) -> Option
 impl Desktop {
     /// The footer's microphone or headphones button, on the server in front.
     pub(crate) fn set_mute_target(&mut self, target: &Target, deafen: bool) {
-        if let Some(index) = target.resolve(&self.client) {
+        if let Some(index) = target.resolve_connection_in(&self.client.servers) {
             let server = &self.client.servers[index];
             let enabling = if deafen {
                 server.deafened
@@ -821,6 +842,7 @@ mod tests {
                 target: Target {
                     server: "a".into(),
                     generation: 3,
+                    endpoint: Target::endpoint(&server("a")),
                     own: None,
                     channel: None,
                 },
@@ -833,6 +855,7 @@ mod tests {
                 target: Target {
                     server: "b".into(),
                     generation: 7,
+                    endpoint: Target::endpoint(&server("b")),
                     own: None,
                     channel: None,
                 },
@@ -885,8 +908,19 @@ mod tests {
         assert_eq!(target.resolve_in(&servers), Some(0));
         servers[0].users.get_mut(&1).unwrap().instance += 1;
         assert_eq!(target.resolve_in(&servers), None);
+        assert_eq!(
+            target.resolve_connection_in(&servers),
+            Some(0),
+            "a same-generation privacy stop must not wait for the old presence"
+        );
+        servers[0].bookmark.host = "changed.example.invalid".into();
+        assert_eq!(target.resolve_connection_in(&servers), None);
+        servers[0].bookmark.host = "127.0.0.1".into();
+        servers[0].generation += 1;
+        assert_eq!(target.resolve_connection_in(&servers), None);
         servers[0] = server("replacement");
         assert_eq!(target.resolve_in(&servers), None);
+        assert_eq!(target.resolve_connection_in(&servers), None);
     }
 
     #[test]
