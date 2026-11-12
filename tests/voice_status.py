@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """User transitions, independent two-server state and native status presentation."""
 import json
+import signal
 import time
 from accessibility import items
 from local_murmur import eventually
@@ -68,7 +69,18 @@ def run(args, root, shell, registry, bots, profile, second_port, second_pin, sho
     assert not alpha_packets, "push-to-talk idle unexpectedly transmitted"
     if any("Talking on" in name for name in initial["visible_names"]):
         failures.append("idle microphone destination is labeled Talking on with no transmitted packets")
-    find("Deafen").press(); eventually(lambda: own("beta")["self_deafened"] and own("beta")["self_muted"], "secondary deafen not acknowledged")
+    # Force a real ACK delay in the owned server, without network/worker state
+    # injection. The local intent/paint must remain truthful until it resumes.
+    murmur.process.send_signal(signal.SIGSTOP)
+    try:
+        find("Deafen").press()
+        state("beta", "Deafened · awaiting server", "Root")
+        assert not own("beta")["self_deafened"], "stopped server unexpectedly acknowledged"
+        assert "Deafened · awaiting server" in find(names["beta"] + ";",prefix=True).name
+        record("pending-deafen-real-ack-delay")
+    finally:
+        murmur.process.send_signal(signal.SIGCONT)
+    eventually(lambda: own("beta")["self_deafened"] and own("beta")["self_muted"], "secondary deafen not acknowledged")
     deaf = record("secondary-deafened")
     if not any(names["beta"] in label for label in deaf["voice_links"]):
         failures.append("secondary deafened connected server has no voice destination row")

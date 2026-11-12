@@ -204,12 +204,8 @@ pub fn rail_ring(this: &Desktop, server: &ServerView, radius: f32) -> Option<Any
     })
 }
 
-/// The badge at a rail button's lower left: a microphone on the talk server,
-/// headphones where you listen, breathing while someone talks there.
-pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<AnyElement> {
-    let (_, live, pulse) = this.voice_motion.values(&server.id);
-    let state = projected(&this.client, server, this.push_muted);
-    let (name, foreground, background) = match state {
+fn badge_style(state: State, live: f32, pulse: f32) -> Option<(&'static str, Rgba, Rgba)> {
+    Some(match state {
         State::MicrophoneEnabled
         | State::Speaking
         | State::Muted
@@ -228,11 +224,19 @@ pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<A
             mix(TEXT_MUTED, WHITE, pulse),
             mix(ELEVATED, SUCCESS, pulse * 0.85),
         ),
-        State::Deafened | State::ServerDeafened => {
+        State::Deafened | State::DeafenedPending | State::ServerDeafened => {
             ("headphones-off", color(TEXT_MUTED), color(ELEVATED))
         }
         _ => return None,
-    };
+    })
+}
+
+/// The badge at a rail button's lower left: a microphone on the talk server,
+/// headphones where you listen, breathing while someone talks there.
+pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<AnyElement> {
+    let (_, live, pulse) = this.voice_motion.values(&server.id);
+    let state = projected(&this.client, server, this.push_muted);
+    let (name, foreground, background) = badge_style(state, live, pulse)?;
     Some(
         div()
             .id(("voice-badge", index))
@@ -813,7 +817,9 @@ impl Desktop {
 
 #[cfg(test)]
 mod tests {
-    use super::{Place, SecondServerPrompt, ServerView, State, Status, Target, summary};
+    use super::{
+        Place, SecondServerPrompt, ServerView, State, Status, Target, badge_style, summary,
+    };
     use nuschl_client::conversation::ConversationState;
     use nuschl_core::{bookmark::ServerBookmark, model::User};
 
@@ -912,5 +918,24 @@ mod tests {
         servers[0] = server("a");
         servers[1].generation += 1;
         assert_eq!(prompt.resolve_in(&servers, &routes), None);
+    }
+    #[test]
+    fn pending_deafen_keeps_the_same_privacy_badge_as_acknowledged_deafen() {
+        for state in [
+            State::Deafened,
+            State::DeafenedPending,
+            State::ServerDeafened,
+        ] {
+            assert_eq!(badge_style(state, 1., 1.).unwrap().0, "headphones-off");
+        }
+        assert_eq!(
+            badge_style(State::MutedPending, 0., 0.).unwrap().0,
+            "mic-off"
+        );
+        assert_eq!(
+            badge_style(State::ListeningPending, 0., 0.).unwrap().0,
+            "headphones"
+        );
+        assert!(badge_style(State::Reconnecting, 1., 1.).is_none());
     }
 }
