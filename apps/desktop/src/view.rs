@@ -1689,9 +1689,10 @@ fn conversation(
     let channel = &server.channels[channel_index];
     let is_channel = matches!(channel.target, TextTarget::Channel(_));
     let connected = server.status == Status::Connected;
-    let in_this_voice = server
-        .voice_channel()
-        .is_some_and(|voice| channel.target == TextTarget::Channel(voice));
+    let in_this_voice = connected
+        && server
+            .voice_channel()
+            .is_some_and(|voice| channel.target == TextTarget::Channel(voice));
     let anchor = this.anchor.frame();
     // The timeline in order: activity lines among the messages, by time.
     let messages = &channel.timeline.messages;
@@ -1889,7 +1890,9 @@ fn conversation(
     } else if !server.has_mumble_voice() {
         "End-to-end voice is not available yet on this server.".into()
     } else if in_this_voice {
-        "You are talking here".to_string()
+        crate::voice::projected(&this.client, server, this.push_muted)
+            .label()
+            .to_string()
     } else if connected {
         "Double-click the channel or use Join voice to talk here".to_string()
     } else {
