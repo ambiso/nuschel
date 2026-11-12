@@ -9,7 +9,10 @@ use crate::{
     theme::*,
 };
 use gpui_kit::{
-    base::input::{Input, InputState},
+    base::{
+        FocusTrapElement, Scrollbar, ScrollbarMode,
+        input::{Input, InputState},
+    },
     prelude::*,
     *,
 };
@@ -1270,6 +1273,99 @@ fn percent_encode(segment: &str) -> String {
         .collect()
 }
 
+struct MenuSurfaceState {
+    scroll: ScrollHandle,
+    focus: FocusHandle,
+}
+
+/// Every context menu shares one finite, zoom-aware scroll and focus boundary.
+/// Retained handles survive ordinary re-renders; opening a different menu gets
+/// a fresh scope. No row measures its label or starts a scrolling timer.
+#[derive(IntoElement)]
+struct MenuSurface {
+    identity: SharedString,
+    position: Point<Pixels>,
+    rows: Vec<AnyElement>,
+}
+
+impl RenderOnce for MenuSurface {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let state = window.use_keyed_state(self.identity, cx, |window, cx| {
+            let focus = cx.focus_handle();
+            focus.focus(window, cx);
+            MenuSurfaceState {
+                scroll: ScrollHandle::new(),
+                focus,
+            }
+        });
+        let state = state.read(cx);
+        let viewport = window.viewport_size();
+        let width = (viewport.width - px(16.)).max(px(0.)).min(px(320.));
+        let height = (viewport.height - px(16.)).max(px(0.));
+        let content_height = (height - px(10.)).max(px(0.));
+        deferred(
+            anchored()
+                .position(self.position)
+                .snap_to_window_with_margin(px(8.))
+                .child(
+                    div()
+                        .id("context-menu")
+                        .role(Role::Menu)
+                        .aria_label("Context menu")
+                        .track_focus(&state.focus)
+                        .tab_stop(false)
+                        .w(width)
+                        .max_h(height)
+                        .p_1()
+                        .relative()
+                        .rounded(px(8.))
+                        .bg(color(APP))
+                        .border_1()
+                        .border_color(color(BORDER_STRONG))
+                        .shadow_lg()
+                        .child(
+                            crate::layout::scrollable(
+                                "context-menu-actions",
+                                "Context menu actions",
+                                state.scroll.clone(),
+                            )
+                            .tab_stop(false)
+                            .max_h(content_height)
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .pr(px(12.))
+                                    .flex()
+                                    .flex_col()
+                                    .children(self.rows),
+                            ),
+                        )
+                        .child(
+                            div().absolute().inset_0().child(
+                                Scrollbar::vertical(&state.scroll)
+                                    .id("context-menu-scrollbar")
+                                    .mode(ScrollbarMode::Always)
+                                    .styles(|styles| {
+                                        styles
+                                            .track(|track| {
+                                                track.width(px(8.)).bg(color(APP).into())
+                                            })
+                                            .thumb(|thumb| {
+                                                thumb
+                                                    .width(px(4.))
+                                                    .bg(color(BORDER_STRONG))
+                                                    .radius(px(2.))
+                                            })
+                                    }),
+                            ),
+                        )
+                        .focus_trap("context-menu-focus", &state.focus),
+                ),
+        )
+    }
+}
+
 pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     let menu = this.menu.as_ref()?;
     let entries = this.menu_entries(menu);
@@ -1281,6 +1377,7 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
         .enumerate()
         .map(|(index, entry)| match entry {
             Entry::Separator => div()
+                .flex_shrink_0()
                 .my_1()
                 .h(px(1.))
                 .bg(color(BORDER_STRONG))
@@ -1289,6 +1386,8 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 .id(("menu-note", index))
                 .role(Role::Label)
                 .aria_label(note)
+                .min_w_0()
+                .flex_shrink_0()
                 .px_2()
                 .py(px(6.))
                 .text_xs()
@@ -1303,12 +1402,14 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             } => {
                 let key_action = action.clone();
                 let foreground = if danger { DANGER_HOVER } else { TEXT };
-                div()
+                let control = div()
                     .id(("menu-item", index))
                     .group(SharedString::from(format!("menu-item-{index}")))
                     .role(Role::MenuItem)
                     .aria_label(label.clone())
                     .tab_index(0)
+                    .min_w_0()
+                    .flex_shrink_0()
                     .px_2()
                     .py(px(6.))
                     .rounded(px(5.))
@@ -1323,17 +1424,27 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                             .bg(color(if danger { DANGER } else { ACCENT }))
                             .text_color(color(WHITE))
                     })
+                    .focus(move |style| {
+                        style
+                            .bg(color(if danger { DANGER } else { ACCENT }))
+                            .text_color(color(WHITE))
+                    })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.menu = None;
+                        window.focus(&this.window_focus, cx);
                         action(this, window, cx);
                         cx.notify();
                     }))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                        if event.keystroke.key == "enter" || event.keystroke.key == "space" {
+                        if !event.keystroke.modifiers.modified()
+                            && (event.keystroke.key == "enter" || event.keystroke.key == "space")
+                        {
                             this.menu = None;
+                            window.focus(&this.window_focus, cx);
                             key_action(this, window, cx);
                             cx.notify();
+                            cx.stop_propagation();
                         }
                     }))
                     .child(
@@ -1347,11 +1458,11 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                         }),
                     )
                     .child(
-                        div()
-                            .flex_1()
+                        crate::layout::flexible()
+                            .whitespace_normal()
                             .child(text!(label).with_id(("menu-label", index))),
-                    )
-                    .into_any_element()
+                    );
+                crate::layout::focusable(("menu-focus", index), control)
             }
             Entry::Volume { of, volume } => {
                 let what = match &of {
@@ -1363,6 +1474,8 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     .id(("menu-volume", index))
                     .role(Role::Slider)
                     .aria_label(format!("{what} {:.0}%", volume * 100.))
+                    .min_w_0()
+                    .flex_shrink_0()
                     .px_2()
                     .py_1()
                     .flex()
@@ -1372,7 +1485,7 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(icon("volume", 15., color(TEXT_MUTED)))
                     .child(
-                        div().flex_1().child(
+                        crate::layout::flexible().child(
                             text!(format!("{what} {:.0}%", volume * 100.))
                                 .with_id(("volume-label", index)),
                         ),
@@ -1410,39 +1523,37 @@ pub fn menu(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
             .inset_0()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
                     this.menu = None;
+                    window.focus(&this.window_focus, cx);
                     cx.notify();
                 }),
             )
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
                     this.menu = None;
+                    window.focus(&this.window_focus, cx);
                     cx.notify();
                 }),
             )
-            .child(deferred(
-                anchored()
-                    .position(menu.position)
-                    .snap_to_window_with_margin(px(8.))
-                    .child(
-                        div()
-                            .id("context-menu")
-                            .role(Role::Menu)
-                            .min_w(px(220.))
-                            .max_w(px(320.))
-                            .p_1()
-                            .rounded(px(8.))
-                            .bg(color(APP))
-                            .border_1()
-                            .border_color(color(BORDER_STRONG))
-                            .shadow_lg()
-                            .flex()
-                            .flex_col()
-                            .children(rows),
-                    ),
-            ))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    this.menu = None;
+                    window.focus(&this.window_focus, cx);
+                    cx.notify();
+                    cx.stop_propagation();
+                }
+            }))
+            .child(MenuSurface {
+                identity: format!(
+                    "context-menu:{}:{:?}:{:?}",
+                    menu.server, menu.target, menu.position
+                )
+                .into(),
+                position: menu.position,
+                rows,
+            })
             .into_any_element(),
     )
 }
