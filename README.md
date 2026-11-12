@@ -188,6 +188,9 @@ Windows and macOS builds are cross-compiled on Linux (`nix build .#windows`,
 cover in [tests/README.md](tests/README.md), how it fits together in
 [docs/architecture.md](docs/architecture.md), and what is next in [TODO.md](TODO.md).
 
+Releases are [prepared, signed and published locally](docs/local-release.md).
+CI can build and check packages without receiving the release signing key.
+
 ## AI assistance
 
 Most of Nuschl's own code and documentation was written with AI assistance.
