@@ -3611,25 +3611,42 @@ mod tests {
             2,
             "changed hash while open fetches new body"
         );
-        client.open_comment(0, 7, None);
-        assert_eq!(
-            recorder.rendered.lock().unwrap().len(),
-            1,
-            "repeated opens cannot queue unchanged pending rendering"
-        );
-        client.retain_comment_interest(None);
-        client.open_comment(0, 7, Some(&body));
-        assert_eq!(
-            recorder.rendered.lock().unwrap().len(),
-            1,
-            "matching prepared UI source must reuse its document"
-        );
         client.handle(rendered_comment(&id, &body));
         assert!(
             !client
                 .take_updates()
                 .iter()
                 .any(|update| matches!(update, Update::Rendered { .. }))
+        );
+    }
+
+    #[test]
+    fn prepared_comment_source_is_reused_and_uncached_pending_body_is_not_resubmitted() {
+        let (mut client, recorder, id) = connected();
+        let body = "<b>Existing complete profile comment</b>";
+        client.handle(document_event(
+            &id,
+            ServerEvent::User(comment_user(7, 70, &"ab".repeat(20), Some(body))),
+        ));
+        assert_eq!(client.servers[0].users[&7].comment.as_deref(), Some(body));
+        client.open_comment(0, 7, Some(body));
+        assert!(
+            recorder.rendered.lock().unwrap().is_empty(),
+            "matching prepared source must skip parsing a present body"
+        );
+        client.retain_comment_interest(None);
+        client.open_comment(0, 7, Some("outdated cached source"));
+        assert_eq!(
+            recorder.rendered.lock().unwrap().as_slice(),
+            &[(id, 1, RenderKey::Comment(7), body.into())],
+            "a wrong cached source must render the present current body"
+        );
+        client.open_comment(0, 7, None);
+        client.open_comment(0, 7, Some("outdated cached source"));
+        assert_eq!(
+            recorder.rendered.lock().unwrap().len(),
+            1,
+            "repeated opens must not resubmit the same pending body"
         );
     }
 
