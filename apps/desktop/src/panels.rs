@@ -251,14 +251,22 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 if let (Some(udp), Some(tcp)) = (stats.udp_ping_ms, stats.tcp_ping_ms) {
                     rows.push(row("Ping", format!("UDP {udp:.0} ms · TCP {tcp:.0} ms"), 8));
                 }
-                if let Some(from) = &stats.from_client {
+                for (label, packets, id) in [
+                    ("Packets to server", stats.from_client.as_ref(), 9),
+                    ("Packets to client", stats.from_server.as_ref(), 16),
+                ] {
                     rows.push(row(
-                        "Packets to server",
-                        format!(
-                            "{} good · {} late · {} lost",
-                            from.good, from.late, from.lost
+                        label,
+                        packets.map_or_else(
+                            || "Not reported".into(),
+                            |packets| {
+                                format!(
+                                    "{} good · {} late · {} lost",
+                                    packets.good, packets.late, packets.lost
+                                )
+                            },
                         ),
-                        9,
+                        id,
                     ));
                 }
                 if let Some(bandwidth) = stats.bandwidth {
@@ -435,7 +443,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                     ),
                     6,
                 ));
-                let total = (stats.good + stats.lost).max(1);
+                let total = (f64::from(stats.good) + f64::from(stats.lost)).max(1.);
                 rows.push(row(
                     "UDP from server",
                     format!(
@@ -443,7 +451,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                         stats.good,
                         stats.late,
                         stats.lost,
-                        stats.lost as f32 * 100. / total as f32,
+                        f64::from(stats.lost) * 100. / total,
                         stats.resync
                     ),
                     7,
