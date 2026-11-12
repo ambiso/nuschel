@@ -92,6 +92,15 @@ def main():
         for name in ("web.test", "witness.test", "voice.test"):
             run("systemctl", "start", f"acme-order-renew-{name}.service")
             assert property_of(f"acme-order-renew-{name}.service", "Result") == "success"
+            # Separate VM clocks can differ by a second just after issuance.
+            # Wait only for this public leaf's real validity start; retain
+            # ordinary OpenSSL time/chain verification and bound clock skew.
+            start = run("openssl", "x509", "-in", f"/var/lib/acme/{name}/cert.pem",
+                        "-noout", "-startdate").stdout.decode().strip()
+            remaining = ssl.cert_time_to_seconds(start.removeprefix("notBefore=")) - time.time()
+            assert remaining <= 10, f"issuer/client clock skew exceeds fixture budget: {remaining}s"
+            if remaining > 0:
+                time.sleep(remaining + .05)
             run("openssl", "verify", "-CAfile", str(directory / "issuer.pem"), "-untrusted",
                 f"/var/lib/acme/{name}/fullchain.pem", f"/var/lib/acme/{name}/cert.pem")
         records.append("real lego HTTP01 issuance for separate voice/web/witness certificates")
