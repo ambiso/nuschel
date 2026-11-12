@@ -170,11 +170,12 @@ impl Shared {
                         .welcomes
                         .borrow_mut()
                         .begin(&server, generation, &source);
-                    let view =
-                        self.welcomes
-                            .borrow()
-                            .view(&server, generation, Some(&source), true);
-                    if let Some(view) = view {
+                    let revision = self
+                        .welcomes
+                        .borrow()
+                        .view(&server, generation, Some(&source), true)
+                        .map(|view| view.token.clone());
+                    if let Some(revision) = revision {
                         let refused = self
                             .jobs
                             .borrow_mut()
@@ -182,7 +183,7 @@ impl Shared {
                                 Origin::Welcome {
                                     server: server.clone(),
                                     generation,
-                                    revision: view.token.clone(),
+                                    revision: revision.clone(),
                                 },
                                 &source,
                                 SourceMode::Legacy,
@@ -190,12 +191,9 @@ impl Shared {
                             )
                             .is_err();
                         if refused {
-                            self.welcomes.borrow_mut().fail(
-                                &server,
-                                generation,
-                                &view.token,
-                                &source,
-                            );
+                            self.welcomes
+                                .borrow_mut()
+                                .fail(&server, generation, &revision, &source);
                             document = MessageDocument {
                                 blocks: vec![ContentBlock::text(
                                     "[Server welcome could not be prepared. Reconnect to retry.]",
