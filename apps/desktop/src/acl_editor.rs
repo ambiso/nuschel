@@ -119,20 +119,25 @@ impl Editor {
 }
 
 fn invalidate_lookup(editor: &mut Editor, member: bool) {
-    if editor
+    let pending = editor
         .lookup
         .as_ref()
-        .is_some_and(|lookup| lookup.selection.member == member)
-    {
+        .is_some_and(|lookup| lookup.selection.member == member);
+    let resolved = editor
+        .resolved
+        .as_ref()
+        .is_some_and(|resolved| resolved.selection.member == member);
+    if pending {
         editor.lookup = None;
         editor.lookup_timeout = None;
     }
-    if editor
-        .resolved
-        .as_ref()
-        .is_some_and(|resolved| resolved.selection.member == member)
-    {
+    if resolved {
         editor.resolved = None;
+    }
+    if pending || resolved {
+        editor.state.error = false;
+        editor.state.message =
+            "The account input or selection changed. Resolve it again before applying.".into();
     }
 }
 fn lookup_selection(editor: &Editor, member: bool) -> Option<LookupSelection> {
@@ -191,6 +196,9 @@ fn sync_lookup(this: &mut Desktop, token: u64, index: usize, cx: &mut Context<De
     if lookup_selection(editor, lookup.selection.member) != Some(lookup.selection)
         || current.trim() != lookup.input
     {
+        editor.state.error = false;
+        editor.state.message =
+            "The account selection changed. Resolve it again before applying.".into();
         return;
     }
     match reply.result {
@@ -420,6 +428,16 @@ pub fn render_stale(editor: &Editor, cx: &mut Context<Desktop>) -> AnyElement {
     let Some(draft) = editor.state.draft() else {
         return body.into_any_element();
     };
+    if editor.selected_rule.is_some() {
+        let field = editor.target.read(cx).value();
+        body = body.child(note(
+            "acl-stale-target-field",
+            format!(
+                "Retained target field: {}",
+                field.chars().take(512).collect::<String>()
+            ),
+        ));
+    }
     body = body
         .child(note(
             "acl-stale-dirty",
@@ -486,6 +504,55 @@ pub fn render_stale(editor: &Editor, cx: &mut Context<Desktop>) -> AnyElement {
         }
     }
     body.into_any_element()
+}
+
+fn target_pending(editor: &Editor, cx: &Context<Desktop>) -> bool {
+    let Some((_, entry)) = editor.rule() else {
+        return false;
+    };
+    if entry.inherited {
+        return false;
+    }
+    let field = editor.target.read(cx).value();
+    let value: &str = field.as_ref();
+    if editor.target_user {
+        let proposed = selected_account(editor, value, false);
+        proposed.is_none() || proposed != entry.user_id || entry.group.is_some()
+    } else {
+        entry.user_id.is_some() || entry.group.as_deref().unwrap_or("") != value
+    }
+}
+fn require_applied_target(this: &mut Desktop, token: u64, cx: &Context<Desktop>) -> bool {
+    let Some(editor) = active_editor(this, token) else {
+        return false;
+    };
+    if target_pending(editor, cx) {
+        editor.state.error = true;
+        editor.state.message="Apply or discard the edited rule target before saving or selecting another rule. No permissions were sent.".into();
+        false
+    } else {
+        true
+    }
+}
+fn discard_target(this: &mut Desktop, token: u64, window: &mut Window, cx: &mut Context<Desktop>) {
+    let Some(editor) = active_editor(this, token) else {
+        return;
+    };
+    let Some((_, entry)) = editor.rule() else {
+        return;
+    };
+    let user = entry.user_id.is_some();
+    let value = entry
+        .user_id
+        .map(|id| format!("#{id}"))
+        .unwrap_or_else(|| entry.group.clone().unwrap_or_default());
+    invalidate_lookup(editor, false);
+    editor.target_user = user;
+    editor
+        .target
+        .update(cx, |input, cx| input.set_value(value, window, cx));
+    editor.state.error = false;
+    editor.state.message = "Target edit discarded.".into();
 }
 
 fn active_editor(this: &mut Desktop, token: u64) -> Option<&mut Editor> {
@@ -573,6 +640,9 @@ fn send(this: &mut Desktop, token: u64, command: Command) -> Result<(), String> 
     })
 }
 fn query(this: &mut Desktop, token: u64, kind: DraftRequest, cx: &mut Context<Desktop>) {
+    if kind == DraftRequest::Check && !require_applied_target(this, token, cx) {
+        return;
+    }
     let request = request_id();
     let channel = match this.panel.as_ref() {
         Some(Panel::Acl {
@@ -843,6 +913,16 @@ fn selected_rule(
     window: &mut Window,
     cx: &mut Context<Desktop>,
 ) {
+    if active_editor(this, token).is_some_and(|editor| {
+        editor
+            .selected_rule
+            .is_some_and(|(current, _)| current == index)
+    }) {
+        return;
+    }
+    if !require_applied_target(this, token, cx) {
+        return;
+    }
     if let Some(editor) = active_editor(this, token) {
         let Some(row) = editor
             .state
@@ -920,6 +1000,7 @@ fn row_button(
 pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyElement {
     let token = editor.token;
     let pending = editor.state.pending().is_some();
+    let unapplied = target_pending(editor, cx);
     let header = div()
         .flex()
         .flex_wrap()
@@ -927,7 +1008,7 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
         .gap_2()
         .child(styled_button(
             SharedString::from(format!("acl-reload-{token}")),
-            if editor.dirty {
+            if editor.dirty || unapplied {
                 "Reload and discard draft"
             } else {
                 "Reload"
@@ -969,7 +1050,7 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
                 }))
                 .child(text!(editor.state.message.clone()).with_id("acl-status")),
         )
-        .when(editor.dirty, |body| {
+        .when(editor.dirty || unapplied, |body| {
             body.child(note("acl-dirty", "Unsaved changes"))
         });
     let Some(draft) = editor.state.draft() else {
@@ -1091,6 +1172,10 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
             "Add rule",
             Tone::Secondary,
             move |this, window, cx| {
+                if !require_applied_target(this, token, cx) {
+                    cx.notify();
+                    return;
+                }
                 let mut selected = None;
                 change(this, token, |editor| {
                     if let Some(draft) = editor.state.draft_mut() {
@@ -1154,6 +1239,23 @@ fn rule_detail(
         .flex()
         .flex_col()
         .gap_2()
+        .when(target_pending(editor, cx), |detail| {
+            detail
+                .child(note(
+                    "acl-unapplied-target",
+                    "This target edit has not been applied to the rule.",
+                ))
+                .child(styled_button(
+                    SharedString::from(format!("acl-discard-target-{token}-{id}")),
+                    "Discard target edit",
+                    Tone::Secondary,
+                    move |this, window, cx| {
+                        discard_target(this, token, window, cx);
+                        cx.notify();
+                    },
+                    cx,
+                ))
+        })
         .child(
             div().flex().flex_wrap().gap_2().children(
                 [(false, "Group expression"), (true, "Registered user")]
@@ -1245,7 +1347,7 @@ fn rule_detail(
                         };
                         let value = match this.panel.as_ref() {
                             Some(Panel::Acl { editor, .. }) => {
-                                editor.target.read(cx).value().trim().to_string()
+                                editor.target.read(cx).value().to_string()
                             }
                             _ => return,
                         };
