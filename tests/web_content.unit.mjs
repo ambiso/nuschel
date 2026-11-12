@@ -6,7 +6,8 @@ import {readFile} from "node:fs/promises";
 import * as protocol from "../web/app/src/content-protocol.js";
 const {MAX_IMAGE_INPUT,validateDocument,validateReply}=protocol;
 // Fresh test module realm, not an exported production reset/owner bypass.
-const source=(await readFile(new URL("../web/app/src/content-service.js",import.meta.url),"utf8"))
+const ownerSource=(await readFile(new URL("../web/app/src/worker-owner.js",import.meta.url),"utf8")).replace(/^export /gm,"");
+const source=ownerSource+"\n"+(await readFile(new URL("../web/app/src/content-service.js",import.meta.url),"utf8"))
   .replace(/^import .*;\n/gm,"").replaceAll("import.meta.url",'"https://fixture.invalid/content-service.js"').replace(/^export /gm,"");
 const rendered=text=>JSON.stringify({marked_text:text,plain_text:text,document:{blocks:[{kind:"text",text}]}});
 class Clock {

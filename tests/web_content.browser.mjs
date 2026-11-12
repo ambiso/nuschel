@@ -36,6 +36,7 @@ const {chromium}=await import(pathToFileURL(playwright).href);
 const csp="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const paths = new Map([
   ["/content-service.js",join(source,"web/app/src/content-service.js")],
+  ["/worker-owner.js",join(source,"web/app/src/worker-owner.js")],
   ["/content-protocol.js",join(source,"web/app/src/content-protocol.js")],
   ["/content-worker.js",join(source,"web/app/src/content-worker.js")],
   ["/fixture.mjs",join(source,"tests/web_content.fixture.mjs")],
