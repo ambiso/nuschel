@@ -62,6 +62,9 @@ enum Event {
     Request(LiveMediaRequest),
     DeviceError(String),
     Closed,
+    /// Windows: time to service the open devices (see [`Ticker`]).
+    #[cfg(windows)]
+    Tick,
 }
 
 struct Devices {
@@ -150,6 +153,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         let _ = input_tx.send(Event::Closed);
     });
+    // Windows rounds the receive timeout below up to its 15.6 ms timer tick;
+    // this ticker wakes the loop on time instead (see `Ticker`). Without it
+    // (the thread could not start) the loop keeps its own timeout.
+    #[cfg(windows)]
+    let mut ticker = Ticker::start(tx.clone(), || Event::Tick, SERVICE_PERIOD);
     let mut output = io::stdout().lock();
     let mut settings = AudioSettings::default();
     let encoder = crate::encoder::live()?;
@@ -278,6 +286,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     retry_at = Instant::now() + Duration::from_secs(2);
                 }
             }
+        }
+        #[cfg(windows)]
+        if let Some(ticker) = ticker.as_mut() {
+            ticker.run_while(devices.is_some());
         }
         // Open devices are serviced every few milliseconds; without them the
         // worker waits for the supervisor or its next attempt to open them.
@@ -448,6 +460,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             Some(Event::Request(LiveMediaRequest::EndStream { stream })) => {
                 mixer.end_stream(stream)
+            }
+            // Serviced below, exactly as after the timeout.
+            #[cfg(windows)]
+            Some(Event::Tick) => {
+                if let Some(ticker) = &ticker {
+                    ticker.received();
+                }
             }
             None => {}
         }
@@ -680,6 +699,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     output.flush()?;
+    // Stop and join the ticker before exiting (dropping it does both).
+    #[cfg(windows)]
+    drop(ticker);
     if devices.is_some() {
         // Dropping native streams can block; the OS closes them with the process.
         std::process::exit(0);
@@ -1520,6 +1542,109 @@ fn device_buffer(supported: &cpal::SupportedBufferSize) -> cpal::BufferSize {
     }
 }
 
+/// How often open devices are serviced when the platform cannot be relied
+/// on to end a short receive timeout on time.
+#[cfg(any(windows, test))]
+const SERVICE_PERIOD: Duration = Duration::from_millis(4);
+
+/// Wakes the worker loop every [`SERVICE_PERIOD`] while devices are open.
+///
+/// The loop waits with `recv_timeout`, which on Windows ends at the system
+/// timer tick (15.625 ms unless a process raises the resolution): a 4 ms
+/// timeout serviced the devices every 15.6 to 31 ms. `std::thread::sleep`
+/// uses a high-resolution waitable timer (Windows 10 1803 and later), also
+/// inside the worker's AppContainer, so this thread's sleeps end on time.
+///
+/// At most one wakeup is queued: `pending` stays set until the loop takes it,
+/// and a full queue (which wakes the loop anyway) drops it. While no devices
+/// are open the thread parks. Dropping the ticker stops and joins the thread.
+#[cfg(any(windows, test))]
+struct Ticker {
+    state: Arc<TickerState>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    running: bool,
+}
+
+#[cfg(any(windows, test))]
+struct TickerState {
+    pending: std::sync::atomic::AtomicBool,
+    running: std::sync::atomic::AtomicBool,
+    stop: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(any(windows, test))]
+impl Ticker {
+    /// `None` if the thread cannot be started.
+    fn start<T: Send + 'static>(
+        tx: SyncSender<T>,
+        tick: fn() -> T,
+        period: Duration,
+    ) -> Option<Self> {
+        use std::sync::atomic::AtomicBool;
+        let state = Arc::new(TickerState {
+            pending: AtomicBool::new(false),
+            running: AtomicBool::new(false),
+            stop: AtomicBool::new(false),
+        });
+        let shared = state.clone();
+        let thread = std::thread::Builder::new()
+            .name("media-service-tick".into())
+            .spawn(move || {
+                while !shared.stop.load(Ordering::Acquire) {
+                    if !shared.running.load(Ordering::Acquire) {
+                        std::thread::park();
+                        continue;
+                    }
+                    std::thread::sleep(period);
+                    if shared.pending.swap(true, Ordering::AcqRel) {
+                        continue;
+                    }
+                    match tx.try_send(tick()) {
+                        Ok(()) => {}
+                        Err(mpsc::TrySendError::Full(_)) => {
+                            shared.pending.store(false, Ordering::Release);
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => return,
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self {
+            state,
+            thread: Some(thread),
+            running: false,
+        })
+    }
+
+    /// Tick while `running` (devices are open); otherwise park the thread.
+    fn run_while(&mut self, running: bool) {
+        if running == self.running {
+            return;
+        }
+        self.running = running;
+        self.state.running.store(running, Ordering::Release);
+        if let (true, Some(thread)) = (running, &self.thread) {
+            thread.thread().unpark();
+        }
+    }
+
+    /// The loop took the queued wakeup; the next one may be queued.
+    fn received(&self) {
+        self.state.pending.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(any(windows, test))]
+impl Drop for Ticker {
+    fn drop(&mut self) {
+        self.state.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
+            let _ = thread.join();
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "output_fixture.rs"]
 mod output_fixture;
@@ -1657,6 +1782,77 @@ mod tests {
             device_buffer(&SupportedBufferSize::Unknown),
             BufferSize::Fixed(480)
         );
+    }
+
+    #[test]
+    fn service_ticker_queues_at_most_one_wakeup_and_parks_while_idle() {
+        let (tx, rx) = mpsc::sync_channel::<u8>(16);
+        let mut ticker = Ticker::start(tx, || 1, Duration::from_millis(1)).expect("ticker thread");
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(rx.try_iter().count(), 0, "no wakeups before devices open");
+        ticker.run_while(true);
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(
+            rx.try_iter().count(),
+            1,
+            "one wakeup however long the loop is busy"
+        );
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(
+            rx.try_iter().count(),
+            0,
+            "a wakeup not yet taken holds back the next"
+        );
+        ticker.received();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)), Ok(1));
+        ticker.received();
+        ticker.run_while(false);
+        // At most the wakeup of a sleep already under way, then nothing.
+        std::thread::sleep(Duration::from_millis(30));
+        let _ = rx.try_iter().count();
+        ticker.received();
+        std::thread::sleep(Duration::from_millis(40));
+        assert_eq!(rx.try_iter().count(), 0, "a parked ticker sends nothing");
+        let stopping = Instant::now();
+        drop(ticker);
+        assert!(
+            stopping.elapsed() < Duration::from_secs(1),
+            "dropping stops and joins it"
+        );
+    }
+
+    #[test]
+    fn service_ticker_never_blocks_on_a_full_queue_and_ends_with_the_loop() {
+        let (tx, rx) = mpsc::sync_channel::<u8>(1);
+        tx.send(0).unwrap();
+        let mut ticker = Ticker::start(tx, || 1, Duration::from_millis(1)).expect("ticker thread");
+        ticker.run_while(true);
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(rx.recv(), Ok(0));
+        // The wakeup a full queue refused did not stay pending.
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)), Ok(1));
+        drop(rx);
+        std::thread::sleep(Duration::from_millis(20));
+        let stopping = Instant::now();
+        drop(ticker);
+        assert!(stopping.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn service_ticker_wakes_at_its_period_while_running() {
+        let (tx, rx) = mpsc::sync_channel::<u8>(16);
+        let mut ticker = Ticker::start(tx, || 1, SERVICE_PERIOD).expect("ticker thread");
+        ticker.run_while(true);
+        let started = Instant::now();
+        let mut wakeups = 0;
+        while started.elapsed() < Duration::from_millis(400) {
+            if rx.recv_timeout(Duration::from_secs(1)).is_ok() {
+                ticker.received();
+                wakeups += 1;
+            }
+        }
+        // 100 at exactly 4 ms; generous for loaded test machines.
+        assert!((20..=101).contains(&wakeups), "{wakeups} wakeups in 400 ms");
     }
 
     #[test]
