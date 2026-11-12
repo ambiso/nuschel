@@ -152,6 +152,15 @@ enum Input {
     Acl {
         channel: u32,
     },
+    AclDraft {
+        channel: u32,
+        request: u64,
+    },
+    LookupAccount {
+        channel: u32,
+        request: u64,
+        name: String,
+    },
     Join {
         channel: u32,
     },
@@ -785,6 +794,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 Ok(Input::RegisteredUsers) => Command::QueryRegisteredUsers,
                 Ok(Input::Bans) => Command::QueryBans,
                 Ok(Input::Acl { channel }) => Command::QueryAcl(channel),
+                Ok(Input::AclDraft { channel, request }) => {
+                    Command::QueryAclDraft { channel, request }
+                }
+                Ok(Input::LookupAccount {
+                    channel,
+                    request,
+                    name,
+                }) => Command::LookupAccount {
+                    channel,
+                    request,
+                    name,
+                },
                 Ok(Input::Join { channel }) => Command::Join(channel),
                 Ok(Input::Text { channel, body }) => Command::SendText {
                     target: TextTarget::Channel(channel),
@@ -961,6 +982,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 SessionEvent::RegisteredUsers(users) => json!({"kind":"registered_users", "users":users}),
                 SessionEvent::Bans(bans) => json!({"kind":"bans", "bans":bans}),
                 SessionEvent::Acl(acl) => json!({"kind":"acl", "acl":acl}),
+                SessionEvent::AccountReply(reply) => match reply.result {
+                    Ok(account) => json!({"kind":"account_reply","request":reply.request,"account":account}),
+                    Err(error) => json!({"kind":"account_reply","request":reply.request,"error":error}),
+                },
+                SessionEvent::AclReply(reply) => match reply.result {
+                    Ok(acl) => json!({"kind":"acl_reply", "request":reply.request, "acl":acl}),
+                    Err(error) => json!({"kind":"acl_reply", "request":reply.request, "error":error}),
+                },
                 SessionEvent::UserNames(names) => json!({"kind":"user_names", "names":names}),
                 SessionEvent::UnsupportedCodec { session } => json!({"kind":"unsupported_codec", "session":session}),
                 SessionEvent::Outbox { sent, total } => json!({"kind":"outbox", "sent":sent, "total":total}),

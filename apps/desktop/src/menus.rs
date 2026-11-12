@@ -402,11 +402,16 @@ impl Desktop {
                 MenuTarget::User(session) => view.users.get(&session).map(|user| user.channel),
                 MenuTarget::Server | MenuTarget::Image | MenuTarget::Message => None,
             };
-            for channel in channel.into_iter().chain([0]) {
-                if !view.permissions.contains_key(&channel) {
-                    let _ = self
-                        .driver
-                        .command(&view.id, Command::RequestPermissions(channel));
+            let wanted = channel
+                .into_iter()
+                .chain([0])
+                .collect::<std::collections::BTreeSet<_>>();
+            let now = crate::state::monotonic_ms();
+            for channel in wanted {
+                let view = &mut self.client.servers[server];
+                if view.begin_permission_query(channel, now) {
+                    let origin = ActionOrigin::capture(view, MenuTarget::Channel(channel));
+                    origin.run(self, Command::RequestPermissions(channel));
                 }
             }
         }
@@ -1322,9 +1327,10 @@ impl Desktop {
                     ));
                 }
                 let write = server.may(channel, perm::WRITE);
+                let edit_acl = write || server.may(0, perm::WRITE);
                 let create = server.may(channel, perm::MAKE_CHANNEL)
                     || server.may(channel, perm::MAKE_TEMP_CHANNEL);
-                if connected && (write || create) {
+                if connected && (write || create || edit_acl) {
                     entries.push(Entry::Separator);
                 }
                 if connected && create {
@@ -1349,31 +1355,22 @@ impl Desktop {
                             this.open_channel_editor(index, channel, window, cx)
                         },
                     ));
+                }
+                if connected && edit_acl {
                     entries.push(item(
                         "Edit permissions…",
                         "shield",
-                        move |this, index, _, _| {
-                            this.client.servers[index].acl = None;
-                            this.run(index, Command::QueryAcl(channel));
-                            this.panel = Some(Panel::Acl {
-                                origin: ActionOrigin::capture(
-                                    &this.client.servers[index],
-                                    MenuTarget::Channel(channel),
-                                ),
-                                server: index,
-                                channel,
-                            });
+                        move |this, index, window, cx| {
+                            crate::acl_editor::open(this, index, channel, window, cx)
                         },
                     ));
-                    if channel != 0 {
-                        entries.push(danger(
-                            "Remove channel",
-                            "window-close",
-                            move |this, index, _, _| {
-                                this.run(index, Command::RemoveChannel(channel))
-                            },
-                        ));
-                    }
+                }
+                if connected && write && channel != 0 {
+                    entries.push(danger(
+                        "Remove channel",
+                        "window-close",
+                        move |this, index, _, _| this.run(index, Command::RemoveChannel(channel)),
+                    ));
                 }
                 push_context_actions(
                     &mut entries,
@@ -1527,7 +1524,12 @@ impl Desktop {
         entries
     }
 
-    pub(crate) fn reconcile_delayed_actions(&mut self) {
+    pub(crate) fn reconcile_delayed_actions(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.panel.as_ref(),Some(Panel::Acl {origin,..}) if origin.live_index(self).is_none())
+        {
+            crate::acl_editor::retain_stale(self, cx);
+            return;
+        }
         if let Some(panel) = self.panel.as_ref() {
             let index = panel.origin().and_then(|origin| match panel {
                 Panel::Connection { .. } => origin.local_index(self),

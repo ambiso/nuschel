@@ -21,6 +21,7 @@ struct Focusable {
     id: ElementId,
     child: Stateful<Div>,
     outset: Pixels,
+    handle: Option<FocusHandle>,
 }
 
 impl RenderOnce for Focusable {
@@ -28,7 +29,7 @@ impl RenderOnce for Focusable {
         let key = SharedString::from(format!("{}:focus-reveal", self.id));
         let trace = key.clone();
         let state = window.use_keyed_state(key, cx, |window, cx| {
-            let handle = cx.focus_handle();
+            let handle = self.handle.unwrap_or_else(|| cx.focus_handle());
             let subscription = cx.on_focus(
                 &handle,
                 window,
@@ -90,6 +91,24 @@ pub fn focusable_with_outset(
         id: id.into(),
         child,
         outset,
+        handle: None,
+    }
+    .into_any_element()
+}
+
+/// Reveal a virtualized list using its retained keyboard-navigation handle.
+/// The caller owns the handle for this control's lifetime; its element key must
+/// change when that lifetime ends, just like other retained focus state.
+pub fn focusable_with_handle(
+    id: impl Into<ElementId>,
+    handle: FocusHandle,
+    child: Stateful<Div>,
+) -> AnyElement {
+    Focusable {
+        id: id.into(),
+        child,
+        outset: px(0.),
+        handle: Some(handle),
     }
     .into_any_element()
 }

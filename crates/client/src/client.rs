@@ -24,7 +24,55 @@ use nuschl_core::{
     bookmark::{CachedChannel, ServerBookmark},
 };
 use nuschl_protocol::nuschl::{self, v1};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Cosmetic labels never change account IDs or ACL completeness. Bound scan,
+/// deduplication, command count and attempts for both legacy and draft replies.
+fn fetch_acl_names(
+    platform: &dyn Platform,
+    server: &mut ServerState,
+    acl: &nuschl_core::model::Acl,
+) {
+    if server.acl_name_budget == 0 {
+        return;
+    }
+    let mut ids = BTreeSet::new();
+    let limit = server.acl_name_budget.min(128);
+    for id in acl
+        .entries
+        .iter()
+        .filter_map(|entry| entry.user_id)
+        .chain(acl.groups.iter().flat_map(|group| {
+            group
+                .add
+                .iter()
+                .chain(&group.remove)
+                .chain(&group.inherited_members)
+                .copied()
+        }))
+        .take(4096)
+    {
+        if !server.user_names.contains_key(&id) && !server.acl_name_requests.contains(&id) {
+            ids.insert(id);
+            if ids.len() == limit {
+                break;
+            }
+        }
+    }
+    if ids.is_empty() {
+        return;
+    }
+    // Failed enqueues consume attempt budget too: repeated remote snapshots
+    // cannot continuously hammer a full command queue. Explicit lookup remains.
+    server.acl_name_budget -= ids.len();
+    let ids: Vec<_> = ids.into_iter().collect();
+    if platform
+        .request(&server.id, Request::QueryUserNames(ids.clone()))
+        .is_ok()
+    {
+        server.acl_name_requests.extend(ids);
+    }
+}
 
 fn metadata_authority(
     server: &ServerState,
@@ -456,6 +504,7 @@ impl Client {
                     self.comment_interest = None;
                 }
                 clear_welcome(server, &mut self.updates);
+                server.clear_acl_cache();
                 server.generation = generation;
                 server.muted = true;
                 server.deafened = deafened;
@@ -1584,6 +1633,7 @@ impl Client {
                     if server.status == Status::Connected && !server.deafened {
                         self.platform.chime(Sound::Disconnected);
                     }
+                    server.clear_acl_cache();
                     server.status = Status::Connecting;
                     clear_welcome(server, &mut self.updates);
                     server.own_session = None;
@@ -2302,8 +2352,10 @@ impl Client {
             } => {
                 if flush {
                     server.permissions.clear();
+                    server.permission_queries.clear();
                 }
                 if channel != u32::MAX {
+                    server.permission_queries.remove(&channel);
                     server.permissions.insert(channel, permissions);
                 }
             }
@@ -2360,26 +2412,26 @@ impl Client {
             ServerEvent::ContextActions(actions) => server.context_actions = actions,
             ServerEvent::RegisteredUsers(users) => server.registered_users = Some(users),
             ServerEvent::Bans(bans) => server.bans = Some(bans),
-            ServerEvent::Acl(acl) => {
-                let unknown: Vec<u32> = acl
-                    .entries
-                    .iter()
-                    .filter_map(|entry| entry.user_id)
-                    .chain(
-                        acl.groups
-                            .iter()
-                            .flat_map(|group| group.add.iter().copied()),
-                    )
-                    .filter(|id| !server.user_names.contains_key(id))
-                    .collect();
-                if !unknown.is_empty() {
-                    let _ = self
-                        .platform
-                        .request(&server.id, Request::QueryUserNames(unknown));
+            ServerEvent::AccountReply(reply) => server.account_reply = Some(reply),
+            ServerEvent::AclReply(reply) => {
+                if let Ok(acl) = &reply.result {
+                    fetch_acl_names(self.platform.as_ref(), server, acl);
+                    server.acl = Some(acl.clone());
                 }
+                server.acl_reply = Some(reply);
+            }
+            ServerEvent::Acl(acl) => {
+                fetch_acl_names(self.platform.as_ref(), server, &acl);
                 server.acl = Some(acl);
             }
-            ServerEvent::UserNames(names) => server.user_names.extend(names),
+            ServerEvent::UserNames(names) => {
+                for (id, name) in names {
+                    if !server.user_names.contains_key(&id) && server.user_names.len() >= 4096 {
+                        server.user_names.pop_first();
+                    }
+                    server.user_names.insert(id, name);
+                }
+            }
             ServerEvent::Outbox { sent, total } => {
                 server.outbox = (sent < total).then_some((sent, total));
             }
@@ -2404,6 +2456,7 @@ impl Client {
                 }
                 server.expansion.remove(&id);
                 server.permissions.remove(&id);
+                server.permission_queries.remove(&id);
                 let cached = server.bookmark.cached_channels.len();
                 server
                     .bookmark
@@ -2705,6 +2758,7 @@ mod tests {
     /// A platform that records what the client asked of it.
     #[derive(Default)]
     struct Recorder {
+        reject_requests: std::sync::atomic::AtomicBool,
         metadata: Mutex<Vec<nuschl_core::model::MetadataAuthority>>,
         requests: Mutex<Vec<(String, Request)>>,
         pages: Mutex<Vec<(String, HistoryTicket, Page)>>,
@@ -2722,7 +2776,14 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((server.to_owned(), request));
-            Ok(())
+            if self
+                .reject_requests
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                Err("test command queue full".into())
+            } else {
+                Ok(())
+            }
         }
         fn request_metadata(
             &self,
@@ -2780,6 +2841,146 @@ mod tests {
         }
     }
 
+    #[test]
+    fn acl_label_resolution_is_bounded_deduplicated_and_preserves_full_membership() {
+        use nuschl_core::{
+            admin::AclReply,
+            model::{Acl, AclGroup},
+        };
+        let (mut client, recorder, id) = connected();
+        recorder.requests.lock().unwrap().clear();
+        let acl = Acl {
+            channel: 0,
+            inherit_acls: true,
+            entries: vec![],
+            groups: vec![AclGroup {
+                name: "large".into(),
+                inherited: true,
+                inherit: true,
+                inheritable: true,
+                add: (0..8192).collect(),
+                remove: vec![1; 8192],
+                inherited_members: (10000..18192).collect(),
+            }],
+        };
+        for request in 1..=32 {
+            let event = if request % 2 == 0 {
+                ServerEvent::Acl(acl.clone())
+            } else {
+                ServerEvent::AclReply(AclReply {
+                    request,
+                    result: Ok(acl.clone()),
+                })
+            };
+            client.handle(Input::Server {
+                server: id.clone(),
+                generation: 1,
+                event,
+            });
+        }
+        let requests = recorder.requests.lock().unwrap();
+        let batches: Vec<_> = requests
+            .iter()
+            .filter_map(|(_, request)| {
+                if let Request::QueryUserNames(ids) = request {
+                    Some(ids)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(batches.len(), 8);
+        assert!(batches.iter().all(|batch| batch.len() == 128));
+        let all: Vec<_> = batches
+            .iter()
+            .flat_map(|batch| batch.iter().copied())
+            .collect();
+        assert_eq!(all.len(), 1024);
+        assert_eq!(all.iter().copied().collect::<BTreeSet<_>>().len(), 1024);
+        assert_eq!(
+            client.servers[0].acl.as_ref(),
+            Some(&acl),
+            "labels must not truncate group members"
+        );
+        assert_eq!(client.servers[0].acl_name_requests.len(), 1024);
+        drop(requests);
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::UserNames((0..5000).map(|id| (id, format!("user {id}"))).collect()),
+        });
+        assert_eq!(client.servers[0].user_names.len(), 4096);
+    }
+
+    #[test]
+    fn duplicate_acl_labels_and_full_command_queue_do_not_create_a_retry_flood() {
+        use nuschl_core::model::{Acl, AclGroup};
+        let (mut client, recorder, id) = connected();
+        recorder.requests.lock().unwrap().clear();
+        let mut acl = Acl {
+            channel: 0,
+            inherit_acls: true,
+            entries: vec![],
+            groups: vec![AclGroup {
+                name: "duplicates".into(),
+                inherited: false,
+                inherit: true,
+                inheritable: true,
+                add: vec![77; 8192],
+                remove: vec![77; 8192],
+                inherited_members: vec![77; 8192],
+            }],
+        };
+        for _ in 0..8 {
+            client.handle(Input::Server {
+                server: id.clone(),
+                generation: 1,
+                event: ServerEvent::Acl(acl.clone()),
+            });
+        }
+        let queries = || {
+            recorder
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, request)| matches!(request, Request::QueryUserNames(_)))
+                .count()
+        };
+        assert_eq!(queries(), 1, "successful outstanding IDs are deduplicated");
+        recorder
+            .reject_requests
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        acl.groups[0].add = (1000..9192).collect();
+        for _ in 0..32 {
+            client.handle(Input::Server {
+                server: id.clone(),
+                generation: 1,
+                event: ServerEvent::Acl(acl.clone()),
+            });
+        }
+        assert_eq!(
+            queries(),
+            9,
+            "failed enqueues also consume the bounded per-connection attempt budget"
+        );
+        assert_eq!(
+            client.servers[0].acl_name_requests.len(),
+            1,
+            "failed IDs remain available to explicit lookup"
+        );
+        assert_eq!(client.servers[0].acl_name_budget, 0);
+        client.handle(Input::Reconnecting {
+            server: id,
+            generation: 1,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "owned test disconnect".into(),
+        });
+        assert!(client.servers[0].acl_name_requests.is_empty());
+        assert_eq!(client.servers[0].acl_name_budget, 1024);
+    }
+
     /// A client connected as `andi` (session 1, in channel 2) to a server
     /// with channels 2 and 3 under the root.
     fn connected() -> (Client, Arc<Recorder>, String) {
@@ -2819,6 +3020,69 @@ mod tests {
         client.settle();
         client.take_updates();
         (client, recorder, id)
+    }
+
+    #[test]
+    fn permission_reads_deduplicate_bound_retry_and_drop_stale_cache_on_flush_or_channel_reuse() {
+        let (mut client, _, id) = connected();
+        for channel in &mut client.servers[0].channels {
+            channel.instance = u64::from(channel.id) + 10;
+        }
+        client.servers[0].permissions.clear();
+        assert!(client.servers[0].begin_permission_query(2, 0));
+        assert!(!client.servers[0].begin_permission_query(2, 1));
+        assert!(!client.servers[0].begin_permission_query(2, 1999));
+        assert!(client.servers[0].begin_permission_query(2, 2000));
+        assert!(
+            !client.servers[0].begin_permission_query(2, 100000),
+            "no per-frame or unlimited timeout retries"
+        );
+        client.servers[0].permissions.insert(0, 1); // previously known root Write
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Permissions {
+                channel: 2,
+                permissions: 0,
+                flush: true,
+            },
+        });
+        assert_eq!(client.servers[0].permissions.get(&2), Some(&0));
+        assert!(
+            !client.servers[0].permissions.contains_key(&0),
+            "root is unknown after a child-only flush"
+        );
+        assert!(
+            !client.servers[0].begin_permission_query(2, 100001),
+            "a known denial is not polled repeatedly"
+        );
+        assert!(client.servers[0].begin_permission_query(3, 100001));
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::ChannelRemoved(3),
+        });
+        assert!(!client.servers[0].permission_queries.contains_key(&3));
+        client.handle(Input::Server {
+            server: id.clone(),
+            generation: 1,
+            event: ServerEvent::Channel(Channel {
+                id: 3,
+                instance: 99,
+                parent: Some(0),
+                name: "Replacement".into(),
+                ..Default::default()
+            }),
+        });
+        assert!(client.servers[0].begin_permission_query(3, 100002));
+        client.handle(Input::Reconnecting {
+            server: id,
+            generation: 1,
+            attempt: 1,
+            delay_secs: 1,
+            reason: "owned permission fixture".into(),
+        });
+        assert!(client.servers[0].permission_queries.is_empty());
     }
 
     #[test]

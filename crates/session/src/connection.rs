@@ -10,6 +10,7 @@ use crate::{
 };
 use bytes::Bytes;
 use nuschl_core::MAX_CONTENT_BYTES;
+use nuschl_core::admin::{AccountReply, AclReply, RegisteredAccount, group_has_local_definition};
 use nuschl_protocol::{
     ControlFrame, MAX_CONTROL_BYTES, control as proto,
     crypt::CryptState,
@@ -202,6 +203,8 @@ pub enum SessionEvent {
     RegisteredUsers(Vec<RegisteredUser>),
     Bans(Vec<Ban>),
     Acl(Acl),
+    AclReply(AclReply),
+    AccountReply(AccountReply),
     /// Resolved names for registered user ids (ACL editor).
     UserNames(BTreeMap<u32, String>),
     /// A voice packet from a legacy codec Nuschl does not decode.
@@ -310,8 +313,19 @@ pub enum Command {
     QueryBans,
     UpdateBans(Vec<Ban>),
     QueryAcl(u32),
+    /// One correlated query per channel, retained until a reply or reconnect.
+    QueryAclDraft {
+        channel: u32,
+        request: u64,
+    },
     UpdateAcl(Acl),
     QueryUserNames(Vec<u32>),
+    QueryUserIds(Vec<String>),
+    LookupAccount {
+        channel: u32,
+        request: u64,
+        name: String,
+    },
     /// Mark a channel read up to `seq` (Nuschl servers; synced to the
     /// account's other devices).
     MarkRead {
@@ -558,7 +572,9 @@ impl Command {
             Self::Join(id)
             | Self::RemoveChannel(id)
             | Self::RequestPermissions(id)
-            | Self::QueryAcl(id) => {
+            | Self::QueryAcl(id)
+            | Self::QueryAclDraft { channel: id, .. }
+            | Self::LookupAccount { channel: id, .. } => {
                 channels.insert(*id);
             }
             Self::CreateChannel { parent, .. } => {
@@ -623,6 +639,8 @@ impl Command {
             | Self::QueryRegisteredUsers
             | Self::UpdateRegisteredUsers(_)
             | Self::QueryBans
+            | Self::QueryUserNames(_)
+            | Self::QueryUserIds(_)
             | Self::UpdateBans(_)
             | Self::SelectVoiceTarget(_)
             | Self::SelectVoiceTargetAt { .. }
@@ -1025,11 +1043,16 @@ impl Outbox {
     }
     /// When the next waiting message may leave (a millisecond late, so the
     /// bucket has certainly leaked enough by then).
-    fn due(&self) -> Option<Instant> {
+    fn slot_due(&self) -> Instant {
         let excess = (self.level + 1.0 - self.capacity()).max(0.0);
-        (!self.waiting.is_empty()).then(|| {
-            self.at + Duration::from_secs_f64(excess / self.leak_rate()) + Duration::from_millis(1)
-        })
+        self.at + Duration::from_secs_f64(excess / self.leak_rate()) + Duration::from_millis(1)
+    }
+    fn due(&self) -> Option<Instant> {
+        (!self.waiting.is_empty()).then(|| self.slot_due())
+    }
+    fn ready(&mut self, now: Instant) -> bool {
+        self.leak(now);
+        self.level + 1.0 <= self.capacity()
     }
     /// The progress to report, if any; an empty outbox starts a new run.
     fn progress(&mut self) -> Option<SessionEvent> {
@@ -1247,6 +1270,10 @@ pub async fn run(
                 },
                 command = commands.recv() => {
                     let Some(command) = command else { break; };
+                    if acl_control(&command).is_some() {
+                        state.enqueue_admin(command,&events).await?;
+                        continue;
+                    }
                     let request_id = match &command {
                         Command::Scoped { command, .. } => match command.as_ref() {
                             Command::Nuschl(request) => Some(request.request_id()),
@@ -1254,7 +1281,24 @@ pub async fn run(
                         },
                         _ => None,
                     };
+                    let admin_refusal = match &command {
+                        Command::Scoped {authority,command} => {
+                            let request=match command.as_ref() {Command::QueryAclDraft {request,channel}=>Some((*request,*channel,false)),Command::LookupAccount {request,channel,..}=>Some((*request,*channel,true)),_=>None};
+                            request.map(|(request,channel,account)| {
+                                let reason=if state.own_session!=Some(authority.own.0) {"The original connection's user session changed."}
+                                else if state.users.get(&authority.own.0).is_none_or(|own|own.instance!=authority.own.1) {"The original connection's user presence changed."}
+                                else if !authority.channels.iter().any(|(id,instance)|*id==channel && state.channels.get(id).is_some_and(|current|current.instance==*instance)) {"The original channel was replaced or was not covered by this action."}
+                                else if !state.command_permitted(command) {"You no longer have permission to edit this channel."}
+                                else {"The original action authority changed. Reopen permissions on the intended channel."};
+                                (request,account,reason)
+                            })
+                        },_=>None,
+                    };
                     let Some(command) = state.authorize(command) else {
+                        if let Some((request,account,reason))=admin_refusal {
+                            if account {emit(&events,SessionEvent::AccountReply(AccountReply {request,result:Err(reason.into())})).await?;}
+                            else {emit(&events,SessionEvent::AclReply(AclReply {request,result:Err(reason.into())})).await?;}
+                        }
                         if let Some(request_id) = request_id {
                             emit(&events, SessionEvent::Nuschl(NuschlEvent::Error(nuschl::error(request_id, v1::error::Code::NotFound, 0)))).await?;
                         }
@@ -1316,6 +1360,9 @@ pub async fn run(
                             emit(&events, SessionEvent::Transport(stats)).await?;
                         }
                     }
+                },
+                _ = time::sleep_until(state.admin_due().unwrap_or_else(Instant::now)), if state.admin_due().is_some() => {
+                    state.dispatch_admin(&events).await?;
                 },
                 _ = time::sleep_until(state.outbox.due().unwrap_or_else(Instant::now)), if state.outbox.due().is_some() => {
                     state.flush_outbox(&events).await?;
@@ -1462,6 +1509,96 @@ fn kt_reply(
     Ok(Some(frame))
 }
 
+fn resolved_account(
+    name: &str,
+    query: &proto::QueryUsers,
+) -> Result<RegisteredAccount, &'static str> {
+    // A one-name query has zero or one canonical pair. Do not accept unrelated
+    // bulk/partial data as the fresh result of this explicit lookup.
+    if query.ids.len() != query.names.len() || query.ids.len() > 1 {
+        return Err("The server returned an invalid registered-account lookup response.");
+    }
+    match query.ids.first().zip(query.names.first()) {
+        Some((&id, canonical))
+            if id != u32::MAX
+                && canonical.len() <= 512
+                && canonical.to_lowercase() == name.to_lowercase() =>
+        {
+            Ok(RegisteredAccount {
+                id,
+                name: canonical.clone(),
+            })
+        }
+        _ => Err("No registered account with that name was found."),
+    }
+}
+
+struct AccountLookup {
+    request: u64,
+    name: String,
+    channel: (u32, u64),
+    own: (u32, u64),
+    barrier: u64,
+    waiting_reply: bool,
+}
+
+struct PendingAdmin {
+    command: Command,
+    bytes: usize,
+}
+
+fn acl_control(command: &Command) -> Option<&Command> {
+    let command = match command {
+        Command::Scoped { command, .. } => command.as_ref(),
+        command => command,
+    };
+    matches!(
+        command,
+        Command::QueryAcl(_) | Command::QueryAclDraft { .. } | Command::UpdateAcl(_)
+    )
+    .then_some(command)
+}
+fn admin_ticket(command: &Command) -> Option<(u64, bool)> {
+    let command = match command {
+        Command::Scoped { command, .. } => command.as_ref(),
+        command => command,
+    };
+    match command {
+        Command::QueryAclDraft { request, .. } => Some((*request, false)),
+        Command::LookupAccount { request, .. } => Some((*request, true)),
+        _ => None,
+    }
+}
+async fn refuse_admin(
+    ticket: Option<(u64, bool)>,
+    message: &str,
+    events: &mpsc::Sender<SessionEvent>,
+) -> Result<(), Error> {
+    match ticket {
+        Some((request, false)) => {
+            emit(
+                events,
+                SessionEvent::AclReply(AclReply {
+                    request,
+                    result: Err(message.into()),
+                }),
+            )
+            .await
+        }
+        Some((request, true)) => {
+            emit(
+                events,
+                SessionEvent::AccountReply(AccountReply {
+                    request,
+                    result: Err(message.into()),
+                }),
+            )
+            .await
+        }
+        None => emit(events, SessionEvent::Notice(message.into())).await,
+    }
+}
+
 struct State {
     udp: Option<Udp>,
     tcp_ping: PingStats,
@@ -1489,6 +1626,13 @@ struct State {
     /// Installed explicit targets retain authority through later voice packets.
     voice_authorities: BTreeMap<u32, CommandAuthority>,
     permissions: BTreeMap<u32, u32>,
+    /// Never expire/delete an unresolved query: a late wire reply has no ticket
+    /// and must not be attributed to a replacement draft or reused channel ID.
+    acl_queries: BTreeMap<u32, (u64, Option<u64>)>,
+    admin_pending: std::collections::VecDeque<PendingAdmin>,
+    admin_bytes: usize,
+    account_lookup: Option<AccountLookup>,
+    deferred_name_queries: Vec<proto::QueryUsers>,
     context_actions: BTreeMap<String, ContextAction>,
     unsupported_codec: BTreeSet<u32>,
     /// Bytes of comments, descriptions and avatars in `users` and `channels`.
@@ -1535,6 +1679,11 @@ impl Default for State {
             voice_route: Default::default(),
             voice_authorities: BTreeMap::new(),
             permissions: BTreeMap::new(),
+            acl_queries: BTreeMap::new(),
+            admin_pending: std::collections::VecDeque::new(),
+            admin_bytes: 0,
+            account_lookup: None,
+            deferred_name_queries: Vec::new(),
             context_actions: BTreeMap::new(),
             unsupported_codec: BTreeSet::new(),
             blob_bytes: 0,
@@ -1565,6 +1714,269 @@ impl State {
         }
         self.welcome_source = Some(source.clone());
         emit(events, SessionEvent::Welcome(source)).await
+    }
+
+    fn admin_due(&self) -> Option<Instant> {
+        (!self.admin_pending.is_empty()).then(|| self.outbox.slot_due())
+    }
+    /// Keep semantic commands and the ORIGINAL authority until actual dispatch.
+    /// No pre-authorized/serialized frames wait behind the shared rate bucket.
+    async fn enqueue_admin(
+        &mut self,
+        command: Command,
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        let ticket = admin_ticket(&command);
+        let Some(inner) = acl_control(&command) else {
+            return refuse_admin(ticket, "Unsupported ACL command.", events).await;
+        };
+        let channel = match inner {
+            Command::QueryAcl(channel) | Command::QueryAclDraft { channel, .. } => *channel,
+            Command::UpdateAcl(acl) => acl.channel,
+            _ => unreachable!(),
+        };
+        let bytes = match inner {
+            Command::UpdateAcl(acl) => {
+                if nuschl_core::admin::validate_snapshot(acl).is_err() {
+                    return refuse_admin(
+                        ticket,
+                        "This ACL exceeds the safe send limits; no rules were sent.",
+                        events,
+                    )
+                    .await;
+                }
+                acl.entries
+                    .iter()
+                    .fold(4096usize, |bytes, entry| {
+                        bytes
+                            .saturating_add(64)
+                            .saturating_add(entry.group.as_ref().map_or(0, String::len))
+                    })
+                    .saturating_add(acl.groups.iter().fold(0usize, |bytes, group| {
+                        bytes
+                            .saturating_add(128)
+                            .saturating_add(group.name.len())
+                            .saturating_add(
+                                6usize.saturating_mul(
+                                    group
+                                        .add
+                                        .len()
+                                        .saturating_add(group.remove.len())
+                                        .saturating_add(group.inherited_members.len()),
+                                ),
+                            )
+                    }))
+            }
+            _ => 4096,
+        };
+        if bytes > MAX_CONTROL_BYTES
+            || self.admin_pending.len() >= 16
+            || self.admin_bytes.saturating_add(bytes) > 16 * 1024 * 1024
+        {
+            return refuse_admin(
+                ticket,
+                "The bounded ACL send queue is full. Your draft is retained; wait before retrying.",
+                events,
+            )
+            .await;
+        }
+        let command = match command {
+            command @ Command::Scoped { .. } => command,
+            command => {
+                // Diagnostic/legacy callers select the current actor lifetime.
+                // Never synthesize replacement authority for a supplied envelope.
+                let own = self
+                    .own_session
+                    .and_then(|id| self.users.get(&id).map(|own| (id, own.instance)));
+                let instance = self.channels.get(&channel).map(|channel| channel.instance);
+                let (Some(own), Some(instance)) = (own, instance) else {
+                    return refuse_admin(
+                        ticket,
+                        "The original connection or channel is unavailable.",
+                        events,
+                    )
+                    .await;
+                };
+                Command::Scoped {
+                    authority: CommandAuthority {
+                        own,
+                        subject: Some(ActionSubject::Channel(channel, instance)),
+                        users: vec![own],
+                        channels: vec![(channel, instance)],
+                        conversations: Vec::new(),
+                        accounts: Vec::new(),
+                    },
+                    command: Box::new(command),
+                }
+            }
+        };
+        if let Command::Scoped { authority, .. } = &command {
+            if authority
+                .users
+                .len()
+                .saturating_add(authority.channels.len())
+                .saturating_add(authority.conversations.len())
+                .saturating_add(authority.accounts.len())
+                > MAX_ACTION_TARGETS
+            {
+                return refuse_admin(
+                    ticket,
+                    "The ACL action authority exceeds its bounded target limit.",
+                    events,
+                )
+                .await;
+            }
+        }
+        self.admin_pending
+            .push_back(PendingAdmin { command, bytes });
+        self.admin_bytes += bytes;
+        Ok(())
+    }
+    async fn dispatch_admin(&mut self, events: &mpsc::Sender<SessionEvent>) -> Result<(), Error> {
+        if self.admin_pending.is_empty() || !self.outbox.ready(Instant::now()) {
+            return Ok(());
+        }
+        let pending = self.admin_pending.pop_front().unwrap();
+        self.admin_bytes -= pending.bytes;
+        let ticket = admin_ticket(&pending.command);
+        let Some(command) = self.authorize(pending.command) else {
+            return refuse_admin(ticket,"The original ACL action expired or its permissions changed. Reopen permissions on the intended channel.",events).await;
+        };
+        self.command(command, events).await
+    }
+
+    async fn query_acl(
+        &mut self,
+        channel: u32,
+        request: Option<u64>,
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        let error = if self.account_lookup.is_some() {
+            Some(
+                "A registered-account lookup is unresolved. Wait for its reply or reconnect before querying ACLs.",
+            )
+        } else if self.acl_queries.contains_key(&channel) {
+            Some(
+                "An earlier ACL query for this channel is still unresolved. Wait for its reply or reconnect before reloading.",
+            )
+        } else if self.acl_queries.len() >= 128 {
+            Some("Too many unresolved ACL queries. Reconnect before opening another editor.")
+        } else if !self.channels.contains_key(&channel) {
+            Some("The original channel no longer exists.")
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            if let Some(request) = request {
+                emit(
+                    events,
+                    SessionEvent::AclReply(AclReply {
+                        request,
+                        result: Err(error.into()),
+                    }),
+                )
+                .await?;
+            } else {
+                emit(events, SessionEvent::Notice(error.into())).await?;
+            }
+            return Ok(());
+        }
+        let instance = self.channels[&channel].instance;
+        self.acl_queries.insert(channel, (instance, request));
+        self.queue(
+            kind::ACL,
+            &proto::Acl {
+                channel_id: channel,
+                query: Some(true),
+                ..Default::default()
+            },
+        );
+        Ok(())
+    }
+
+    fn ping_message(&self, timestamp: u64) -> proto::Ping {
+        let stats = self.transport();
+        proto::Ping {
+            timestamp: Some(timestamp),
+            good: Some(stats.good),
+            late: Some(stats.late),
+            lost: Some(stats.lost),
+            resync: Some(stats.resync),
+            udp_packets: Some(stats.udp.packets),
+            tcp_packets: Some(stats.tcp.packets),
+            udp_ping_avg: Some(stats.udp.average_ms),
+            udp_ping_var: Some(stats.udp.variance_ms),
+            tcp_ping_avg: Some(stats.tcp.average_ms),
+            tcp_ping_var: Some(stats.tcp.variance_ms),
+        }
+    }
+    fn lookup_valid(&self, lookup: &AccountLookup) -> bool {
+        self.own_session == Some(lookup.own.0)
+            && self
+                .users
+                .get(&lookup.own.0)
+                .is_some_and(|own| own.instance == lookup.own.1)
+            && self
+                .channels
+                .get(&lookup.channel.0)
+                .is_some_and(|channel| channel.instance == lookup.channel.1)
+            && (self
+                .permissions
+                .get(&lookup.channel.0)
+                .is_none_or(|bits| bits & crate::model::permission::WRITE != 0)
+                || self
+                    .permissions
+                    .get(&0)
+                    .is_none_or(|bits| bits & crate::model::permission::WRITE != 0))
+    }
+    fn queue_names(&mut self, query: proto::QueryUsers) {
+        if self.account_lookup.is_some() {
+            if self.deferred_name_queries.len() < 16 {
+                self.deferred_name_queries.push(query);
+            }
+        } else {
+            self.queue(kind::QUERY_USERS, &query);
+        }
+    }
+    fn release_name_queries(&mut self) {
+        let queries = std::mem::take(&mut self.deferred_name_queries);
+        for query in queries {
+            self.queue(kind::QUERY_USERS, &query);
+        }
+    }
+    async fn lookup_account(
+        &mut self,
+        channel: u32,
+        request: u64,
+        name: String,
+        events: &mpsc::Sender<SessionEvent>,
+    ) -> Result<(), Error> {
+        let own = self
+            .own_session
+            .and_then(|id| self.users.get(&id).map(|user| (id, user.instance)));
+        let instance = self.channels.get(&channel).map(|channel| channel.instance);
+        if self.account_lookup.is_some()
+            || !self.acl_queries.is_empty()
+            || own.is_none()
+            || instance.is_none()
+            || name.trim().is_empty()
+            || name.len() > 512
+        {
+            return emit(events,SessionEvent::AccountReply(AccountReply {request,result:Err("The original channel is unavailable or an earlier administration lookup is unresolved. Wait for its response or reconnect.".into())})).await;
+        }
+        let barrier = (1_u64 << 63) | next_user_instance();
+        self.account_lookup = Some(AccountLookup {
+            request,
+            name: name.trim().into(),
+            channel: (channel, instance.unwrap()),
+            own: own.unwrap(),
+            barrier,
+            waiting_reply: false,
+        });
+        // The high timestamp namespace is never used for RTT. Preserve ALL
+        // transport counters: Mumble servers overwrite missing fields with zero.
+        self.queue(kind::PING, &self.ping_message(barrier));
+        Ok(())
     }
 
     fn encrypted_server(&self) -> bool {
@@ -1751,10 +2163,13 @@ impl State {
                     p::MAKE_CHANNEL
                 },
             ),
-            Command::EditChannel { channel, .. }
-            | Command::RemoveChannel(channel)
-            | Command::QueryAcl(channel) => may(*channel, p::WRITE),
-            Command::UpdateAcl(acl) => may(acl.channel, p::WRITE),
+            Command::EditChannel { channel, .. } | Command::RemoveChannel(channel) => {
+                may(*channel, p::WRITE)
+            }
+            Command::QueryAcl(channel)
+            | Command::QueryAclDraft { channel, .. }
+            | Command::LookupAccount { channel, .. } => may(*channel, p::WRITE) || may(0, p::WRITE),
+            Command::UpdateAcl(acl) => may(acl.channel, p::WRITE) || may(0, p::WRITE),
             Command::LinkChannels {
                 channel,
                 add,
@@ -2519,17 +2934,9 @@ impl State {
                     query: Some(false),
                 },
             ),
-            Command::QueryAcl(channel) => {
-                if self.channels.contains_key(&channel) {
-                    self.queue(
-                        kind::ACL,
-                        &proto::Acl {
-                            channel_id: channel,
-                            query: Some(true),
-                            ..Default::default()
-                        },
-                    );
-                }
+            Command::QueryAcl(channel) => self.query_acl(channel, None, events).await?,
+            Command::QueryAclDraft { channel, request } => {
+                self.query_acl(channel, Some(request), events).await?
             }
             Command::UpdateAcl(acl) => self.queue(
                 kind::ACL,
@@ -2539,7 +2946,7 @@ impl State {
                     groups: acl
                         .groups
                         .into_iter()
-                        .filter(|group| !group.inherited)
+                        .filter(group_has_local_definition)
                         .map(|group| proto::acl::ChanGroup {
                             name: group.name,
                             inherited: Some(false),
@@ -2600,15 +3007,23 @@ impl State {
                 }
                 self.outbound.push(request.frame());
             }
-            Command::QueryUserNames(ids) => {
-                self.queue(
-                    kind::QUERY_USERS,
-                    &proto::QueryUsers {
-                        ids: ids.into_iter().take(1024).collect(),
-                        names: Vec::new(),
-                    },
-                );
-            }
+            Command::QueryUserNames(ids) => self.queue_names(proto::QueryUsers {
+                ids: ids.into_iter().take(1024).collect(),
+                names: Vec::new(),
+            }),
+            Command::QueryUserIds(names) => self.queue_names(proto::QueryUsers {
+                ids: Vec::new(),
+                names: names
+                    .into_iter()
+                    .take(128)
+                    .filter(|name| !name.is_empty() && name.len() <= 512)
+                    .collect(),
+            }),
+            Command::LookupAccount {
+                channel,
+                request,
+                name,
+            } => self.lookup_account(channel, request, name, events).await?,
             Command::SendText {
                 target,
                 body,
@@ -3153,6 +3568,31 @@ impl State {
             },
             kind::PING => {
                 let ping: proto::Ping = decode(&frame)?;
+                if self.account_lookup.as_ref().is_some_and(|lookup| {
+                    !lookup.waiting_reply && ping.timestamp == Some(lookup.barrier)
+                }) {
+                    let valid = self
+                        .account_lookup
+                        .as_ref()
+                        .is_some_and(|lookup| self.lookup_valid(lookup));
+                    if valid {
+                        let lookup = self.account_lookup.as_mut().unwrap();
+                        lookup.waiting_reply = true;
+                        let name = lookup.name.clone();
+                        self.queue(
+                            kind::QUERY_USERS,
+                            &proto::QueryUsers {
+                                ids: Vec::new(),
+                                names: vec![name],
+                            },
+                        );
+                    } else {
+                        let lookup = self.account_lookup.take().unwrap();
+                        emit(events,SessionEvent::AccountReply(AccountReply {request:lookup.request,result:Err("The original connection or channel changed during account lookup.".into())})).await?;
+                        self.release_name_queries();
+                    }
+                    return Ok(());
+                }
                 let now = now_ms() as u64;
                 if let Some(timestamp) = ping.timestamp.filter(|sent| *sent <= now) {
                     self.tcp_ping.record((now - timestamp) as f32);
@@ -3791,45 +4231,99 @@ impl State {
             }
             kind::ACL => {
                 let acl: proto::Acl = decode(&frame)?;
-                emit(
-                    events,
-                    SessionEvent::Acl(Acl {
-                        channel: acl.channel_id,
-                        inherit_acls: acl.inherit_acls.unwrap_or(true),
-                        groups: acl
-                            .groups
-                            .into_iter()
-                            .take(1024)
-                            .map(|group| AclGroup {
-                                name: bounded(group.name, 256),
-                                inherited: group.inherited.unwrap_or(true),
-                                inherit: group.inherit.unwrap_or(true),
-                                inheritable: group.inheritable.unwrap_or(true),
-                                add: group.add,
-                                remove: group.remove,
-                                inherited_members: group.inherited_members,
-                            })
-                            .collect(),
-                        entries: acl
-                            .acls
-                            .into_iter()
-                            .take(4096)
-                            .map(|entry| AclEntry {
-                                apply_here: entry.apply_here.unwrap_or(true),
-                                apply_subs: entry.apply_subs.unwrap_or(true),
-                                inherited: entry.inherited.unwrap_or(true),
-                                user_id: entry.user_id,
-                                group: entry.group.map(|group| bounded(group, 256)),
-                                grant: entry.grant.unwrap_or(0),
-                                deny: entry.deny.unwrap_or(0),
-                            })
-                            .collect(),
-                    }),
-                )
-                .await?;
+                let pending = self.acl_queries.remove(&acl.channel_id);
+                let complete = acl.groups.len() <= 1024
+                    && acl.acls.len() <= 4096
+                    && acl.groups.iter().all(|group| {
+                        group.name.len() <= 256
+                            && group
+                                .add
+                                .len()
+                                .saturating_add(group.remove.len())
+                                .saturating_add(group.inherited_members.len())
+                                <= 8192
+                    })
+                    && acl
+                        .acls
+                        .iter()
+                        .all(|entry| entry.group.as_ref().is_none_or(|group| group.len() <= 256));
+                let current_instance = self
+                    .channels
+                    .get(&acl.channel_id)
+                    .map(|channel| channel.instance);
+                let value = Acl {
+                    channel: acl.channel_id,
+                    inherit_acls: acl.inherit_acls.unwrap_or(true),
+                    groups: acl
+                        .groups
+                        .into_iter()
+                        .take(1024)
+                        .map(|group| AclGroup {
+                            name: bounded(group.name, 256),
+                            inherited: group.inherited.unwrap_or(true),
+                            inherit: group.inherit.unwrap_or(true),
+                            inheritable: group.inheritable.unwrap_or(true),
+                            add: group.add,
+                            remove: group.remove,
+                            inherited_members: group.inherited_members,
+                        })
+                        .collect(),
+                    entries: acl
+                        .acls
+                        .into_iter()
+                        .take(4096)
+                        .map(|entry| AclEntry {
+                            apply_here: entry.apply_here.unwrap_or(true),
+                            apply_subs: entry.apply_subs.unwrap_or(true),
+                            inherited: entry.inherited.unwrap_or(true),
+                            user_id: entry.user_id,
+                            group: entry.group.map(|group| bounded(group, 256)),
+                            grant: entry.grant.unwrap_or(0),
+                            deny: entry.deny.unwrap_or(0),
+                        })
+                        .collect(),
+                };
+                match pending {
+                    Some((instance, Some(request))) => {
+                        let result = if current_instance != Some(instance) {
+                            Err("The original channel no longer exists. Reopen its editor.".into())
+                        } else if !complete {
+                            Err("This ACL exceeds the safe editor limits. It was not loaded or made editable.".into())
+                        } else {
+                            Ok(value)
+                        };
+                        emit(events, SessionEvent::AclReply(AclReply { request, result })).await?;
+                    }
+                    Some((instance, None)) if current_instance != Some(instance) => {}
+                    _ => emit(events, SessionEvent::Acl(value)).await?,
+                }
             }
             kind::QUERY_USERS => {
                 let query: proto::QueryUsers = decode(&frame)?;
+                if self
+                    .account_lookup
+                    .as_ref()
+                    .is_some_and(|lookup| lookup.waiting_reply)
+                {
+                    let lookup = self.account_lookup.take().unwrap();
+                    let result = if !self.lookup_valid(&lookup) {
+                        Err(
+                            "The original connection or channel changed during account lookup."
+                                .into(),
+                        )
+                    } else {
+                        resolved_account(&lookup.name, &query).map_err(str::to_owned)
+                    };
+                    emit(
+                        events,
+                        SessionEvent::AccountReply(AccountReply {
+                            request: lookup.request,
+                            result,
+                        }),
+                    )
+                    .await?;
+                    self.release_name_queries();
+                }
                 emit(
                     events,
                     SessionEvent::UserNames(
@@ -3837,6 +4331,7 @@ impl State {
                             .ids
                             .into_iter()
                             .zip(query.names)
+                            .filter(|(id, _)| *id != u32::MAX)
                             .take(4096)
                             .map(|(id, name)| (id, bounded(name, 512)))
                             .collect(),
@@ -4341,6 +4836,546 @@ pub mod fuzzing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_registered_lookup_refuses_partial_bulk_unrelated_and_unknown_pairs() {
+        let pair = |ids, names: Vec<&str>| proto::QueryUsers {
+            ids,
+            names: names.into_iter().map(str::to_owned).collect(),
+        };
+        assert_eq!(
+            resolved_account("Alice", &pair(vec![99], vec!["ALICE"]))
+                .unwrap()
+                .id,
+            99
+        );
+        for query in [
+            pair(vec![1, 99], vec!["Alice"]),
+            pair(vec![1, 99], vec!["Alice", "Bob"]),
+            pair(vec![u32::MAX], vec!["Alice"]),
+            pair(vec![99], vec!["Different account"]),
+            pair(vec![], vec![]),
+        ] {
+            assert!(
+                resolved_account("Alice", &query).is_err(),
+                "must not bind {query:?}"
+            );
+        }
+        assert!(
+            resolved_account(
+                &"x".repeat(513),
+                &proto::QueryUsers {
+                    ids: vec![99],
+                    names: vec!["x".repeat(513)]
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn registered_lookup_drains_old_names_preserves_ping_stats_and_serializes_queries() {
+        let mut state = State {
+            own_session: Some(7),
+            ..Default::default()
+        };
+        let (tx, mut rx) = mpsc::channel(64);
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(0),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .handle(
+                frame(
+                    kind::USER_STATE,
+                    proto::UserState {
+                        session: Some(7),
+                        name: Some("Operator".into()),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        state.tcp_ping.record(12.5);
+        state
+            .lookup_account(0, 10, "Alice".into(), &tx)
+            .await
+            .unwrap();
+        let lookup = state.account_lookup.as_ref().unwrap();
+        let barrier = lookup.barrier;
+        assert_ne!(barrier & (1 << 63), 0);
+        let (_, body) = state.outbound.last().unwrap();
+        let ping = proto::Ping::decode(body.as_slice()).unwrap();
+        assert_eq!(
+            ping,
+            state.ping_message(barrier),
+            "barrier must carry every transport counter"
+        );
+        assert_eq!(ping.tcp_packets, Some(1));
+        for id in 0..32 {
+            state
+                .command(Command::QueryUserNames(vec![id]), &tx)
+                .await
+                .unwrap();
+        }
+        assert_eq!(state.deferred_name_queries.len(), 16);
+        assert_eq!(
+            state.outbound.len(),
+            1,
+            "automatic name queries cannot overtake the barrier"
+        );
+        state.query_acl(0, Some(20), &tx).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 20,
+                result: Err(_)
+            })
+        ));
+        state
+            .handle(
+                frame(
+                    kind::QUERY_USERS,
+                    proto::QueryUsers {
+                        ids: vec![1],
+                        names: vec!["Alice".into()],
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(rx.try_recv().unwrap(), SessionEvent::UserNames(_)),
+            "old cached names are labels only"
+        );
+        let packets = state.tcp_ping.packets;
+        state
+            .handle(
+                frame(
+                    kind::PING,
+                    proto::Ping {
+                        timestamp: Some(barrier),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            state.tcp_ping.packets, packets,
+            "barrier must not pollute RTT"
+        );
+        let (kind, body) = state.outbound.last().unwrap();
+        assert_eq!(*kind, kind::QUERY_USERS);
+        assert_eq!(
+            proto::QueryUsers::decode(body.as_slice()).unwrap().names,
+            vec!["Alice"]
+        );
+        state
+            .lookup_account(0, 11, "Alice".into(), &tx)
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                rx.try_recv().unwrap(),
+                SessionEvent::AccountReply(AccountReply {
+                    request: 11,
+                    result: Err(_)
+                })
+            ),
+            "unresolved lane is never reassigned"
+        );
+        state
+            .handle(
+                frame(
+                    kind::QUERY_USERS,
+                    proto::QueryUsers {
+                        ids: vec![99],
+                        names: vec!["ALICE".into()],
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        match rx.try_recv().unwrap() {
+            SessionEvent::AccountReply(AccountReply {
+                request: 10,
+                result: Ok(account),
+            }) => assert_eq!(account.id, 99),
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(state.account_lookup.is_none());
+        assert!(state.deferred_name_queries.is_empty());
+        assert_eq!(
+            state
+                .outbound
+                .iter()
+                .filter(|(kind, _)| *kind == kind::QUERY_USERS)
+                .count(),
+            17
+        );
+    }
+
+    #[tokio::test]
+    async fn registered_lookup_retains_expired_reservation_and_rejects_channel_reuse() {
+        let mut state = State {
+            own_session: Some(7),
+            ..Default::default()
+        };
+        let (tx, mut rx) = mpsc::channel(32);
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(0),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .handle(
+                frame(
+                    kind::USER_STATE,
+                    proto::UserState {
+                        session: Some(7),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        state
+            .lookup_account(0, 1, "Offline Alice".into(), &tx)
+            .await
+            .unwrap();
+        let barrier = state.account_lookup.as_ref().unwrap().barrier;
+        // UI timeout/close cannot cancel this untagged legacy transaction.
+        state
+            .lookup_account(0, 2, "Offline Bob".into(), &tx)
+            .await
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AccountReply(AccountReply {
+                request: 2,
+                result: Err(_)
+            })
+        ));
+        state.channels.get_mut(&0).unwrap().instance += 1;
+        state
+            .handle(
+                frame(
+                    kind::PING,
+                    proto::Ping {
+                        timestamp: Some(barrier),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AccountReply(AccountReply {
+                request: 1,
+                result: Err(_)
+            })
+        ));
+        assert!(state.account_lookup.is_none());
+        assert!(
+            state
+                .outbound
+                .iter()
+                .all(|(kind, _)| *kind != kind::QUERY_USERS)
+        );
+    }
+
+    #[tokio::test]
+    async fn acl_query_reservations_prevent_reopen_timeout_and_channel_reuse_retargeting() {
+        let mut state = State::default();
+        let (tx, mut rx) = mpsc::channel(64);
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(7),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        let original = state.channels[&7].instance;
+        state.query_acl(7, Some(100), &tx).await.unwrap();
+        assert_eq!(state.outbound.len(), 1);
+        // A closed/expired UI request does not cancel this reservation. Reopen
+        // and retry must not consume its eventual reply under a newer ticket.
+        state.query_acl(7, Some(101), &tx).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 101,
+                result: Err(_)
+            })
+        ));
+        assert_eq!(state.outbound.len(), 1);
+        state
+            .handle(
+                frame(kind::CHANNEL_REMOVE, proto::ChannelRemove { channel_id: 7 }),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(7),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert_ne!(state.channels[&7].instance, original);
+        drain(&mut rx).await;
+        state.query_acl(7, Some(102), &tx).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 102,
+                result: Err(_)
+            })
+        ));
+        state
+            .handle(
+                frame(
+                    kind::ACL,
+                    proto::Acl {
+                        channel_id: 7,
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 100,
+                result: Err(_)
+            })
+        ));
+        assert!(state.acl_queries.is_empty());
+        state.query_acl(7, Some(103), &tx).await.unwrap();
+        state
+            .handle(
+                frame(
+                    kind::ACL,
+                    proto::Acl {
+                        channel_id: 7,
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 103,
+                result: Ok(_)
+            })
+        ));
+        // Unsolicited replies have no draft ticket and cannot reset a draft.
+        state
+            .handle(
+                frame(
+                    kind::ACL,
+                    proto::Acl {
+                        channel_id: 7,
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(rx.try_recv().unwrap(), SessionEvent::Acl(_)));
+        assert!(
+            State::default().acl_queries.is_empty(),
+            "reconnect owns a fresh query lane"
+        );
+    }
+
+    #[tokio::test]
+    async fn draft_acl_replies_refuse_lossy_snapshots_and_bound_unresolved_queries() {
+        let mut state = State::default();
+        let (tx, mut rx) = mpsc::channel(8);
+        state
+            .handle(
+                frame(
+                    kind::CHANNEL_STATE,
+                    proto::ChannelState {
+                        channel_id: Some(7),
+                        ..Default::default()
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        drain(&mut rx).await;
+        for acl in [
+            proto::Acl {
+                channel_id: 7,
+                acls: vec![proto::acl::ChanAcl::default(); 4097],
+                ..Default::default()
+            },
+            proto::Acl {
+                channel_id: 7,
+                groups: vec![proto::acl::ChanGroup {
+                    name: "g".repeat(257),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            proto::Acl {
+                channel_id: 7,
+                acls: vec![proto::acl::ChanAcl {
+                    group: Some("g".repeat(257)),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            proto::Acl {
+                channel_id: 7,
+                groups: vec![proto::acl::ChanGroup {
+                    name: "huge".into(),
+                    add: vec![1; 8193],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ] {
+            state.query_acl(7, Some(9), &tx).await.unwrap();
+            state.handle(frame(kind::ACL, acl), &tx).await.unwrap();
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                SessionEvent::AclReply(AclReply {
+                    request: 9,
+                    result: Err(_)
+                })
+            ));
+        }
+        state.acl_queries = (100..228)
+            .map(|id| (id, (id as u64, Some(id as u64))))
+            .collect();
+        state.query_acl(7, Some(10), &tx).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 10,
+                result: Err(_)
+            })
+        ));
+        assert_eq!(state.acl_queries.len(), 128);
+    }
+
+    #[tokio::test]
+    async fn acl_wire_preserves_inherited_group_overrides_and_unknown_permission_bits() {
+        let mut state = State {
+            own_session: Some(7),
+            ..Default::default()
+        };
+        let (tx, _rx) = mpsc::channel(8);
+        let pristine = AclGroup {
+            name: "inherited".into(),
+            inherited: true,
+            inherit: true,
+            inheritable: true,
+            add: vec![],
+            remove: vec![],
+            inherited_members: vec![123],
+        };
+        let mut override_group = pristine.clone();
+        override_group.name = "overridden".into();
+        override_group.remove.push(123);
+        override_group.add.push(9876);
+        let mut private = pristine.clone();
+        private.name = "not-inheritable".into();
+        private.inheritable = false;
+        state
+            .command(
+                Command::UpdateAcl(Acl {
+                    channel: 0,
+                    inherit_acls: false,
+                    groups: vec![pristine, override_group, private],
+                    entries: vec![AclEntry {
+                        apply_here: false,
+                        apply_subs: true,
+                        inherited: false,
+                        user_id: Some(9876),
+                        group: None,
+                        grant: 0x8000_0008,
+                        deny: 0x4000_0000,
+                    }],
+                }),
+                &tx,
+            )
+            .await
+            .unwrap();
+        let (kind, body) = state.outbound.pop().unwrap();
+        assert_eq!(kind, kind::ACL);
+        let acl = proto::Acl::decode(body.as_slice()).unwrap();
+        assert_eq!(
+            acl.groups
+                .iter()
+                .map(|group| group.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["overridden", "not-inheritable"]
+        );
+        assert_eq!(acl.groups[0].add, vec![9876]);
+        assert_eq!(acl.groups[0].remove, vec![123]);
+        assert!(
+            acl.groups
+                .iter()
+                .all(|group| group.inherited_members.is_empty())
+        );
+        assert_eq!(acl.acls[0].grant, Some(0x8000_0008));
+        assert_eq!(acl.acls[0].deny, Some(0x4000_0000));
+        assert_eq!(acl.acls[0].user_id, Some(9876));
+        assert_eq!(acl.acls[0].apply_here, Some(false));
+    }
 
     #[tokio::test]
     async fn sparse_config_preserves_full_limits_and_reconnect_defaults() {
@@ -5746,6 +6781,324 @@ mod delayed_action_authority_tests {
             command: Box::new(command),
         }
     }
+    fn acl_lease() -> CommandAuthority {
+        CommandAuthority {
+            own: (1, 11),
+            subject: Some(ActionSubject::Channel(5, 45)),
+            users: vec![(1, 11)],
+            channels: vec![(5, 45)],
+            conversations: Vec::new(),
+            accounts: Vec::new(),
+        }
+    }
+    fn acl_update() -> Command {
+        Command::UpdateAcl(Acl {
+            channel: 5,
+            inherit_acls: true,
+            groups: Vec::new(),
+            entries: vec![AclEntry {
+                apply_here: true,
+                apply_subs: true,
+                inherited: false,
+                user_id: Some(202),
+                group: None,
+                grant: 8,
+                deny: 0,
+            }],
+        })
+    }
+
+    #[test]
+    fn root_administrators_can_edit_acl_but_do_not_gain_other_channel_actions() {
+        let mut state = observed();
+        state.permissions.insert(0, crate::model::permission::WRITE);
+        state.permissions.insert(5, 0);
+        for command in [
+            Command::QueryAclDraft {
+                channel: 5,
+                request: 1,
+            },
+            acl_update(),
+            Command::LookupAccount {
+                channel: 5,
+                request: 2,
+                name: "Offline".into(),
+            },
+        ] {
+            assert!(state.authorize(scoped(acl_lease(), command)).is_some());
+        }
+        assert!(
+            state
+                .authorize(scoped(acl_lease(), Command::RemoveChannel(5)))
+                .is_none()
+        );
+        state.permissions.remove(&0);
+        assert!(
+            state.authorize(scoped(acl_lease(), acl_update())).is_some(),
+            "unknown root alternative is left to authoritative server rejection"
+        );
+        state.permissions.insert(0, 0);
+        assert!(state.authorize(scoped(acl_lease(), acl_update())).is_none());
+        assert!(
+            state
+                .authorize(scoped(
+                    acl_lease(),
+                    Command::QueryAclDraft {
+                        channel: 5,
+                        request: 3
+                    }
+                ))
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn paced_acl_commands_reauthorize_channel_presence_permissions_and_incomplete_envelopes()
+    {
+        for change in 0..4 {
+            let mut state = observed();
+            let (tx, mut rx) = mpsc::channel(16);
+            state.outbox.level = state.outbox.capacity();
+            let mut lease = acl_lease();
+            if change == 3 {
+                lease.channels.clear();
+            }
+            state
+                .enqueue_admin(
+                    scoped(
+                        lease.clone(),
+                        Command::QueryAclDraft {
+                            channel: 5,
+                            request: 70,
+                        },
+                    ),
+                    &tx,
+                )
+                .await
+                .unwrap();
+            state
+                .enqueue_admin(scoped(lease, acl_update()), &tx)
+                .await
+                .unwrap();
+            state.dispatch_admin(&tx).await.unwrap();
+            assert!(
+                state.outbound.is_empty(),
+                "full credit must defer semantic controls"
+            );
+            match change {
+                0 => state.channels.get_mut(&5).unwrap().instance += 1,
+                1 => state.users.get_mut(&1).unwrap().instance += 1,
+                2 => {
+                    state.permissions.insert(5, 0);
+                    state.permissions.insert(0, 0);
+                }
+                _ => {}
+            }
+            state.outbox.at -= Duration::from_secs(10);
+            state.dispatch_admin(&tx).await.unwrap();
+            state.dispatch_admin(&tx).await.unwrap();
+            assert!(
+                state.outbound.is_empty(),
+                "expired/incomplete queued controls must emit no ACL frame"
+            );
+            assert!(state.acl_queries.is_empty());
+            assert_eq!(state.admin_bytes, 0);
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                SessionEvent::AclReply(AclReply {
+                    request: 70,
+                    result: Err(_)
+                })
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn paced_acl_writes_preserve_fifo_and_shared_credit_without_delaying_privacy() {
+        let mut state = observed();
+        let (tx, mut rx) = mpsc::channel(16);
+        state.outbox.level = state.outbox.capacity();
+        state
+            .enqueue_admin(scoped(acl_lease(), acl_update()), &tx)
+            .await
+            .unwrap();
+        state
+            .enqueue_admin(
+                scoped(
+                    acl_lease(),
+                    Command::QueryAclDraft {
+                        channel: 5,
+                        request: 80,
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .command(
+                Command::SetSelf {
+                    muted: true,
+                    deafened: true,
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(state.outbound.first(), Some((kind::USER_STATE, _))),
+            "privacy must bypass admin waiting"
+        );
+        assert!(state.local_muted && state.local_deafened);
+        state.outbound.clear();
+        state.dispatch_admin(&tx).await.unwrap();
+        assert!(state.outbound.is_empty());
+        state.outbox.at = Instant::now();
+        state.outbox.level = state.outbox.capacity(); // enough for exactly one control after refill
+        state.outbox.at -= Duration::from_secs_f64(1.3);
+        state.dispatch_admin(&tx).await.unwrap();
+        assert_eq!(state.outbound.len(), 1);
+        let write = proto::Acl::decode(state.outbound[0].1.as_slice()).unwrap();
+        assert_eq!(write.query, Some(false));
+        assert_eq!(write.acls[0].user_id, Some(202));
+        state.dispatch_admin(&tx).await.unwrap();
+        assert_eq!(
+            state.outbound.len(),
+            1,
+            "verification waits for the next credit"
+        );
+        state.outbox.at -= Duration::from_secs_f64(1.3);
+        state.dispatch_admin(&tx).await.unwrap();
+        assert_eq!(state.outbound.len(), 2);
+        assert_eq!(
+            proto::Acl::decode(state.outbound[1].1.as_slice())
+                .unwrap()
+                .query,
+            Some(true)
+        );
+        state
+            .handle(
+                ControlFrame {
+                    kind: kind::ACL,
+                    payload: proto::Acl {
+                        channel_id: 5,
+                        ..Default::default()
+                    }
+                    .encode_to_vec()
+                    .into(),
+                },
+                &tx,
+            )
+            .await
+            .unwrap();
+        assert!(
+            std::iter::from_fn(|| rx.try_recv().ok()).any(|event| matches!(
+                event,
+                SessionEvent::AclReply(AclReply {
+                    request: 80,
+                    result: Ok(_)
+                })
+            ))
+        );
+        assert!(state.admin_due().is_none());
+    }
+
+    #[tokio::test]
+    async fn admin_queue_bounds_count_and_body_bytes_and_never_overtakes_lookup_barrier() {
+        let mut state = observed();
+        let (tx, mut rx) = mpsc::channel(32);
+        for request in 0..17 {
+            state
+                .enqueue_admin(
+                    scoped(
+                        acl_lease(),
+                        Command::QueryAclDraft {
+                            channel: 5,
+                            request,
+                        },
+                    ),
+                    &tx,
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(state.admin_pending.len(), 16);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 16,
+                result: Err(_)
+            })
+        ));
+        assert!(state.outbound.is_empty());
+        state.admin_pending.clear();
+        state.admin_bytes = 0;
+        let groups = (0..160)
+            .map(|index| AclGroup {
+                name: format!("g{index}"),
+                inherited: false,
+                inherit: true,
+                inheritable: true,
+                add: (0..8192).collect(),
+                remove: vec![],
+                inherited_members: vec![],
+            })
+            .collect();
+        let body = Acl {
+            channel: 5,
+            inherit_acls: true,
+            entries: vec![],
+            groups,
+        };
+        for _ in 0..3 {
+            state
+                .enqueue_admin(scoped(acl_lease(), Command::UpdateAcl(body.clone())), &tx)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            state.admin_pending.len(),
+            2,
+            "byte cap must bind before command-count cap"
+        );
+        assert!(state.admin_bytes <= 16 * 1024 * 1024);
+        assert!(matches!(rx.try_recv().unwrap(), SessionEvent::Notice(_)));
+        state.admin_pending.clear();
+        state.admin_bytes = 0;
+        state
+            .enqueue_admin(
+                scoped(
+                    acl_lease(),
+                    Command::QueryAclDraft {
+                        channel: 5,
+                        request: 90,
+                    },
+                ),
+                &tx,
+            )
+            .await
+            .unwrap();
+        state
+            .lookup_account(5, 91, "Offline Alice".into(), &tx)
+            .await
+            .unwrap();
+        assert_eq!(state.outbound[0].0, kind::PING);
+        state.dispatch_admin(&tx).await.unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            SessionEvent::AclReply(AclReply {
+                request: 90,
+                result: Err(_)
+            })
+        ));
+        assert_eq!(
+            state.outbound.len(),
+            1,
+            "an ACL response must not create unsolicited names after the barrier"
+        );
+        assert!(state.acl_queries.is_empty());
+    }
+
     #[tokio::test]
     async fn readonly_stats_never_retargets_reused_session_or_reconnected_own_presence() {
         let mut state = observed();

@@ -1358,7 +1358,7 @@ impl Desktop {
             return;
         }
         self.client.remove_server(&id);
-        self.reconcile_delayed_actions();
+        self.reconcile_delayed_actions(cx);
         self.ui.remove(&id);
         self.form = None;
         if !self.client.servers.is_empty() {
@@ -2259,7 +2259,8 @@ impl Desktop {
                         }
                     }
                     self.client.handle(input);
-                    self.reconcile_delayed_actions();
+                    self.reconcile_delayed_actions(cx);
+                    crate::acl_editor::sync(self, cx);
                 }
                 Err(Native::OwnIdentity(result)) => self.own_identity.apply(*result),
                 Err(Native::Identity {
