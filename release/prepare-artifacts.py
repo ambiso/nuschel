@@ -104,9 +104,7 @@ def verify_notices(root, policy):
         raise ValueError("no actual notice payload")
 
 
-def prepare(directory, platform, output, *, repository, commit, run_id, attempt, version, policy):
-    if platform not in ROOTS:
-        raise ValueError("unsupported platform")
+def evidence(directory, platform, *, repository, commit, run_id, attempt, version, filenames):
     info = load(directory / "build-info.json")
     expected = {"repository": repository, "commit": commit, "run_id": run_id,
                 "platform": platform, "version": version, "host": "x86_64-linux",
@@ -122,16 +120,24 @@ def prepare(directory, platform, output, *, repository, commit, run_id, attempt,
         raise ValueError("missing bounded artifact checksums")
     sums = {}
     for line in sums_path.read_text().splitlines():
-        match = re.fullmatch(r"([0-9a-f]{64})  (install.tar|build-info.json)", line)
+        match = re.fullmatch(r"([0-9a-f]{64})  (" + "|".join(re.escape(name) for name in filenames) + ")", line)
         if not match or match[2] in sums:
             raise ValueError("ambiguous artifact checksums")
         sums[match[2]] = match[1]
-    if set(sums) != {"install.tar", "build-info.json"}:
+    if set(sums) != set(filenames):
         raise ValueError("incomplete artifact checksums")
     for name, sha in sums.items():
         path = directory / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 4 * 1024**3 or digest(path) != sha:
             raise ValueError("artifact digest/size mismatch")
+    return info
+
+
+def prepare(directory, platform, output, *, repository, commit, run_id, attempt, version, policy):
+    if platform not in ROOTS:
+        raise ValueError("unsupported platform")
+    info = evidence(directory, platform, repository=repository, commit=commit, run_id=run_id,
+                    attempt=attempt, version=version, filenames=("install.tar", "build-info.json"))
     # Preflight every member before extracting anything. A fixed root and
     # regular-only archive eliminate symlink/hardlink ordering and traversal.
     with tarfile.open(directory / "install.tar", "r:") as archive:
@@ -169,6 +175,55 @@ def prepare(directory, platform, output, *, repository, commit, run_id, attempt,
     return info
 
 
+def prepare_linux(directory, output, *, repository, commit, run_id, attempt, version, policy):
+    filenames = ("web-site.tar", "nix-paths.json", "INSTALL-NIX.txt", "flake.lock", "build-info.json")
+    info = evidence(directory, "linux-nix", repository=repository, commit=commit, run_id=run_id,
+                    attempt=attempt, version=version, filenames=filenames)
+    if digest(directory / "flake.lock") != digest(Path(__file__).resolve().parents[1] / "flake.lock"):
+        raise ValueError("Linux reference artifact has a foreign lock file")
+    paths = load(directory / "nix-paths.json", 1024 * 1024)
+    if isinstance(paths, dict):
+        records = list(paths.items())
+    elif isinstance(paths, list) and all(isinstance(item, dict) for item in paths):
+        records = [(item.get("path"), item) for item in paths]
+    else:
+        raise ValueError("invalid Nix evidence container")
+    if len(records) != 4:
+        raise ValueError("Linux evidence must cover desktop/server/relay/web outputs")
+    for path, item in records:
+        if (not isinstance(path, str) or not re.fullmatch(r"/nix/store/[0-9abcdfghijklmnpqrsvwxyz]{32}-[A-Za-z0-9+._-]+", path) or
+                not isinstance(item, dict) or not isinstance(item.get("narHash"), str) or
+                not re.fullmatch(r"sha256-[A-Za-z0-9+/]{43}=", item["narHash"])):
+            raise ValueError("invalid Nix output evidence")
+    destination = output / "web-site"
+    if destination.exists():
+        raise ValueError("web destination already exists")
+    destination.mkdir(parents=True)
+    with tarfile.open(directory / "web-site.tar", "r:") as archive:
+        members, names, total = [], set(), 0
+        for member in archive:
+            name = member.name[2:] if member.name.startswith("./") else member.name
+            if name in ("", ".") and member.isdir():
+                continue
+            relative = checked_relative(name.rstrip("/"))
+            if (len(members) >= 32768 or not (member.isfile() or member.isdir()) or
+                    member.size > 64 * 1024**2 or str(relative).lower() in names):
+                raise ValueError("unsafe/duplicate/oversized web archive")
+            names.add(str(relative).lower())
+            total += member.size
+            if total > 512 * 1024**2:
+                raise ValueError("oversized static web bundle")
+            member.name = str(relative)
+            members.append(member)
+        archive.extractall(destination, members=members, filter="data")
+    if not (destination / "index.html").is_file() or not (destination / "app/index.html").is_file():
+        raise ValueError("static web bundle lacks landing/client entry points")
+    # All three WASM roots and JS/assets need actual notice bytes. Existing
+    # Temml-only notices do not substitute for the pipeline's full inventory.
+    verify_notices(destination / "licenses/nuschl", policy)
+    return info
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", action="append", required=True)
@@ -189,10 +244,12 @@ def main():
         if not separator or platform in seen:
             raise ValueError("duplicate artifact")
         seen.add(platform)
-        prepare(Path(path), platform, args.output, repository=args.repository, commit=args.commit,
-                run_id=args.run_id, attempt=args.attempt, version=args.version, policy=policy)
-    if seen != set(ROOTS):
-        raise ValueError("both platform artifacts are mandatory")
+        operation = prepare_linux if platform == "linux-nix" else prepare
+        extra = {} if platform == "linux-nix" else {"platform": platform}
+        operation(Path(path), output=args.output, repository=args.repository, commit=args.commit,
+                  run_id=args.run_id, attempt=args.attempt, version=args.version, policy=policy, **extra)
+    if seen != set(ROOTS) | {"linux-nix"}:
+        raise ValueError("Linux/web, Windows and macOS artifacts are mandatory")
     print("same-source build artifacts, hybrid workers and bounded notice payloads verified")
 
 

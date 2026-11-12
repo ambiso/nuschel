@@ -162,6 +162,55 @@ class ReleaseGates(unittest.TestCase):
         (notices/"crates/ml-dsa-0.1.0/LICENSE").write_text("tampered"); repack()
         with self.assertRaises(ValueError): self.accept(directory)
 
+    def test_attribution_cannot_silently_expand_the_installation_file_budget(self):
+        directory, install, _, repack = self.package()
+        for index in range(257):
+            (install / f"notice-{index}.txt").write_text("Synthetic notice entry")
+        repack()
+        with self.assertRaisesRegex(ValueError, "256-file"):
+            self.accept(directory)
+        self.assertFalse((self.root/"extracted").exists())
+
+    def linux_package(self):
+        directory, _, notices, _ = self.package()
+        site = self.root/"static-site"
+        (site/"app").mkdir(parents=True)
+        (site/"index.html").write_text("synthetic landing")
+        (site/"app/index.html").write_text("synthetic client")
+        shutil.copytree(notices, site/"licenses/nuschl")
+        with tarfile.open(directory/"web-site.tar", "w") as archive:
+            archive.add(site, arcname=".")
+        info = json.loads((directory/"build-info.json").read_text())
+        info["platform"] = "linux-nix"
+        (directory/"build-info.json").write_text(json.dumps(info))
+        (directory/"nix-paths.json").write_text(json.dumps({"/nix/store/" + "a"*32 + "-fixture-" + str(i): {"narHash":"sha256-"+"A"*43+"="} for i in range(4)}))
+        (directory/"INSTALL-NIX.txt").write_text("Synthetic Nix-only evidence, not a portable Linux binary")
+        shutil.copyfile(REPO/"flake.lock", directory/"flake.lock")
+        def sums():
+            (directory/"SHA256SUMS").write_text("".join(prepare.digest(directory/name)+"  "+name+"\n" for name in ("web-site.tar", "nix-paths.json", "INSTALL-NIX.txt", "flake.lock", "build-info.json")))
+        sums()
+        return directory, site, sums
+
+    def accept_linux(self, directory):
+        return prepare.prepare_linux(directory, self.root/"extracted", repository="fixture/project", commit="a"*40,
+                                     run_id="123", attempt=2, version="0.1.0", policy=self.policy)
+
+    def test_linux_web_bundle_and_nix_references_keep_source_scope(self):
+        directory, _, _ = self.linux_package()
+        self.assertEqual(self.accept_linux(directory)["platform"], "linux-nix")
+        self.assertTrue((self.root/"extracted/web-site/app/index.html").is_file())
+
+    def test_linux_foreign_lock_and_missing_wasm_notices_rejected(self):
+        directory, site, sums = self.linux_package()
+        original = (directory/"flake.lock").read_bytes()
+        (directory/"flake.lock").write_bytes(b"foreign source"); sums()
+        with self.assertRaises(ValueError): self.accept_linux(directory)
+        (directory/"flake.lock").write_bytes(original)
+        (site/"licenses/nuschl/THIRD-PARTY.json").unlink()
+        with tarfile.open(directory/"web-site.tar", "w") as archive: archive.add(site,arcname=".")
+        sums()
+        with self.assertRaises(ValueError): self.accept_linux(directory)
+
     def test_paths_and_https_policy(self):
         for value in ("../escape", "a//b", "CON.txt", "dir/nul", "a.", "a/../b", "A\\b", ".NUSCHL-OLD/file"):
             with self.assertRaises(ValueError, msg=value): make.safe_path(value)

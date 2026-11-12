@@ -49,7 +49,9 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
   downloadable CI artifact; publication must require all intended jobs to pass.
 - [ ] Finish the existing dependency attribution/notices release gate. Linux's
   `packageLayout` includes several vendored/font licences, while baseline Windows
-  and Mac packaging copies only EUPL-1.2. Passing `cargo deny` is not a complete
+  and Mac packaging copies only EUPL-1.2. The deployable web tar must include the
+  full runtime inventory at `licenses/nuschl/THIRD-PARTY.json`, including actual
+  client/audio/content WASM and JS/assets, beyond its existing Temml notices. Passing `cargo deny` is not a complete
   attribution inventory. Inspect the exact final archives, including helper files.
   The publisher now rejects missing/incomplete/mismatched bundled inventories;
   this is a gate, not proof the remaining notices were recovered. Use the source

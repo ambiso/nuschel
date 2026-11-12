@@ -56,11 +56,16 @@ jobs:
         with:
           name: ${{ needs.builds.outputs.macos-artifact }}
           path: artifacts/macos
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.builds.outputs.linux-artifact }}
+          path: artifacts/linux
       - name: Validate same-run artifacts, install paths, hybrid helpers and actual notices
         run: |
           python3 release/prepare-artifacts.py \
             --artifact windows-x86_64=artifacts/windows \
             --artifact macos-universal=artifacts/macos \
+            --artifact linux-nix=artifacts/linux \
             --repository "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --version "$VERSION" --output install
@@ -90,6 +95,14 @@ jobs:
         run: |
           (cd install/windows && nix shell --cores 2 --max-jobs 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zip -c zip -qr "../../dist/nuschl-$VERSION-windows-x86_64.zip" .)
           (cd install && nix shell --cores 2 --max-jobs 2 --inputs-from "$GITHUB_WORKSPACE" nixpkgs#zip -c zip -qr "../dist/nuschl-$VERSION-macos-universal.zip" Nuschl.app)
+      - name: Include checked static web assets and Nix-only Linux references
+        run: |
+          cp artifacts/linux/web-site.tar "dist/nuschl-$VERSION-web-site.tar"
+          cp artifacts/linux/nix-paths.json "dist/nuschl-$VERSION-linux-nix.json"
+          cp artifacts/linux/INSTALL-NIX.txt dist/INSTALL-NIX.txt
+          cp artifacts/linux/flake.lock dist/flake.lock
+          cp artifacts/linux/build-info.json "dist/nuschl-$VERSION-linux-build-info.json"
+          (cd dist && sha256sum nuschl-*.zip nuschl-*-web-site.tar nuschl-*-linux-nix.json nuschl-*-linux-build-info.json INSTALL-NIX.txt flake.lock update.json update.json.sig > SHA256SUMS)
       - name: Publish only fully prepared artifacts
         env:
           GH_TOKEN: ${{ github.token }}

@@ -963,6 +963,23 @@ mod tests {
     }
 
     #[test]
+    fn update_verifiers_have_distinct_lpac_profiles_without_external_authority() {
+        let ed = super::windows_policies::update(false);
+        let ml = super::windows_policies::update(true);
+        assert_ne!(ed.profile, ml.profile);
+        assert_eq!(ed.profile, "nuschl.update.ed25519");
+        assert_eq!(ml.profile, "nuschl.update.mldsa44");
+        for policy in [ed, ml] {
+            assert!(policy.less_privileged);
+            assert!(policy.capabilities.is_empty());
+            assert!(policy.writable.is_empty());
+            assert!(policy.file.is_none());
+            assert_eq!(policy.cpu_seconds, Some(5));
+            assert_eq!(policy.memory, 256 * 1024 * 1024);
+        }
+    }
+
+    #[test]
     fn windows_policies_grant_only_what_each_worker_needs() {
         use super::{windows_limits, windows_policies as policy};
         use std::path::Path;

@@ -158,7 +158,11 @@ build jobs before a separate publication job. The flake cross-compiles the
 Windows build (MinGW) and a universal `Nuschl.app` (zig and a pinned SDK, ad-hoc
 signed with `rcodesign`), so no Windows or macOS runner is needed. The workflow
 zips both, publishes every file of each installation as its own release asset, and
-writes `update.json`, which lists every file with its size and SHA-256.
+writes `update.json`, which lists every Windows/macOS installation file with its
+size and SHA-256. It also publishes the validated deployable static web bundle,
+Linux Nix installation references, source lock file and build evidence. These
+are clearly labelled; there is no portable Linux executable archive. Current
+missing/incomplete runtime notices still block publication, including web assets.
 
 Two different kinds of signing are involved:
 

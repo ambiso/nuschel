@@ -522,6 +522,13 @@
               cargoClippyExtraArgs = "--all-targets -- --deny warnings";
             }
           );
+          update-ipc-policy = crates.project.workspaceMembers."nuschl-ipc".build.override {
+            runTests = true;
+            testInputs = [
+              pkgs.bubblewrap
+              pkgs.util-linux
+            ];
+          };
           update-unit = crates.project.workspaceMembers."nuschl-update".build.override { runTests = true; };
           update-crypto = crates.project.workspaceMembers."nuschl-update-worker".build.override {
             features = [ "signer" ];

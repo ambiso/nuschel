@@ -158,7 +158,8 @@ failure boundaries. This is not a claim of protection against two compromised
 engines or a compromised application installation.
 
 Native focused tests cover framing/strict parsing/expiry/rollback/installation
-and both crypto engines. The disk-only `nuschl-update-runtime-fixture` executes
+and both crypto engines (12 updater, 5 crypto/key-tool and 19 IPC policy tests;
+one pre-existing confinement test remains ignored in that IPC unit harness). The disk-only `nuschl-update-runtime-fixture` executes
 both real independently built Linux workers with temporary keys, rejects either
 corrupt half/raw-byte changes/wrong pair/legacy/v1/expired/duplicate input, proves
 mandatory AND despite one forged reply, probes private file/write/host-network
@@ -185,8 +186,12 @@ beside a production executable cannot authorize an update.
 Publication reuses independent SHA-named build artifacts and checks repository,
 commit, run ID, platform, version, hashes, safe tar members and mandatory worker
 presence before accessing a signing secret. Earlier successful attempts from the
-same run/commit are allowed; future/foreign attempts fail. Missing/incomplete
-bundled runtime notices also block signing. **That attribution packaging gate is
+same run/commit are allowed; future/foreign attempts fail. All three platform jobs must pass. Linux's validated build evidence and static
+web tar are included as release assets: they are Nix references and a deployable
+web bundle, never a portable Linux binary archive. Their metadata/hashes/lock file
+are checked before copying; the static bundle also requires the full runtime
+notice inventory at `licenses/nuschl/THIRD-PARTY.json`, covering all three WASM
+roots and actual JS/asset terms. Missing/incomplete bundled notices block signing. **That attribution packaging gate is
 not complete**: upstream/native/asset notice recovery and compact payloads that
 respect the 256-file installation bound remain queued. No release is ready merely
 because hybrid signatures work. No tag/push/dispatch/deploy was performed.

@@ -156,6 +156,7 @@ deny = [
     "nuschl-media-worker",
     "nuschl-storage-worker",
     "nuschl-transfer-worker",
+    "nuschl-update-worker",
   ], reason = "The one first-party crate with unsafe code (Win32 AppContainer launch) runs only as the workers' own launch stage" },
   { name = "nuschl-identity", wrappers = [
     "nuschl-kt",
