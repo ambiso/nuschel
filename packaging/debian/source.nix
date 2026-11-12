@@ -33,6 +33,7 @@ in pkgs.runCommand "nuschl-debian-source-${version}-${debianRevision}" {
   EOF
   python3 ${./source-notices.py} --source "$PWD" --vendor "$PWD/.cargo/registry-source" \
     --output SOURCE-NOTICES.json > "$out/source-notice-summary.json"
+  cat "$out/source-notice-summary.json"
   # This input is a frozen tracked VCS tree; no binaries/private caches are used.
   export NUSCHL_SOURCE_REVISION=${pkgs.lib.escapeShellArg sourceRevision}
   python3 - <<'PY'
@@ -55,6 +56,7 @@ in pkgs.runCommand "nuschl-debian-source-${version}-${debianRevision}" {
   cp ${./rules} debian/rules
   chmod 755 debian/rules
   cp ${./control.in} debian/control
+  chmod u+w debian/control
   cp ${projectRoot}/LICENSE debian/copyright
   cp -a ${desktopFiles}/share/. debian/prepared-desktop/share/
   cp ${appstreamXML} debian/prepared-desktop/share/metainfo/org.nuschl.Nuschl.metainfo.xml
