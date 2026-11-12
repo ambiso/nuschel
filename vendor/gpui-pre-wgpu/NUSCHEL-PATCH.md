@@ -32,10 +32,15 @@ at that weight (`weight_coords` for swash's scaler and metrics). Faces
 cosmic-text falls back to for missing glyphs are instanced at the weight the
 glyph was shaped with. Static faces and regular text are unchanged.
 
-Upstream's unit tests need Zed's bundled fonts (`assets/fonts`), which are
-not vendored; they are compiled out (`cfg(nuschel_upstream_font_assets)`).
-`nuschel_tests` covers the patches; its tests with real fonts read DejaVu and
-Adwaita font files from `NUSCHEL_TEST_FONT_DIRS` and are skipped without it.
+Tests. `nuschel_tests` in `src/cosmic_text_system.rs` covers the patches; its
+tests with real fonts read DejaVu and Adwaita font files from
+`NUSCHEL_TEST_FONT_DIRS` and are skipped without it. Upstream's tests are kept
+as they are, but this crate's test target does not build here (it did not
+before these patches either): `cosmic_text_system::tests` include Zed's
+bundled fonts (`assets/fonts`) and the renderer's tests need dev-dependencies,
+none of which are vendored. Running `nuschel_tests` therefore takes a
+throwaway build that gates those upstream modules out of its own copy of the
+source; the source here is not changed for it.
 
 Drop this copy once upstream allows emoji fonts, resolves generic families
 and draws variable fonts at the requested weight.

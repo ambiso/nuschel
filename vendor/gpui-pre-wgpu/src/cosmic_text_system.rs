@@ -1417,10 +1417,7 @@ fn check_is_known_emoji_font(postscript_name: &str) -> bool {
     postscript_name == "NotoColorEmoji"
 }
 
-// Nuschel patch: upstream's tests include Zed's bundled fonts
-// (`assets/fonts`), which are not vendored; they are compiled out so that
-// `nuschel_tests` below can build. Set the cfg with those fonts in place.
-#[cfg(all(test, nuschel_upstream_font_assets))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
