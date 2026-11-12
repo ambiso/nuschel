@@ -137,22 +137,36 @@ pub async fn prepare_contents(
         })
         .collect();
     match exchange(executable, &requests).await {
-        Ok(results) => results
-            .into_iter()
-            .zip(messages)
-            .map(
-                |(result, (text, legacy_html))| match (result, legacy_html) {
-                    (Ok(ContentResponse::Prepared(prepared)), true) => Some(prepared),
-                    (Ok(ContentResponse::Rendered(document)), false) => Some(PreparedContent {
-                        source: text.clone(),
-                        document,
-                    }),
-                    _ => None,
-                },
-            )
-            .collect(),
+        Ok(results) => prepared_each(results, messages),
         Err(_) => vec![None; messages.len()],
     }
+}
+
+/// The replies to [`prepare_contents`], each as [`prepare_content`] takes
+/// it: `None` for one that failed, is of the wrong kind or holds a document
+/// over its budgets (`within_limits`), each on its own, so one message's
+/// reply never decides another's.
+fn prepared_each(
+    results: Vec<Result<ContentResponse, Error>>,
+    messages: &[(String, bool)],
+) -> Vec<Option<PreparedContent>> {
+    results
+        .into_iter()
+        .zip(messages)
+        .map(
+            |(result, (text, legacy_html))| match (result, legacy_html) {
+                (Ok(response @ ContentResponse::Prepared(_)), true) => prepared(response).ok(),
+                (Ok(response @ ContentResponse::Rendered(_)), false) => {
+                    let document = rendered(response).ok()?;
+                    Some(PreparedContent {
+                        source: text.clone(),
+                        document,
+                    })
+                }
+                _ => None,
+            },
+        )
+        .collect()
 }
 
 /// Decode an avatar in the sandboxed content worker; returns an Image document.
@@ -204,8 +218,15 @@ pub async fn prepare_content(
         });
     }
     let html = text.to_owned();
-    match one(executable, ContentRequest::LegacyHtml { html }).await? {
-        ContentResponse::Prepared(prepared) => Ok(prepared),
+    prepared(one(executable, ContentRequest::LegacyHtml { html }).await?)
+}
+
+/// Prepared legacy text from the worker, refused unless its document is
+/// within its budgets (`within_limits`), as [`rendered`] refuses a rendered
+/// one, before anything converts, copies or lays it out.
+fn prepared(response: ContentResponse) -> Result<PreparedContent, Error> {
+    match response {
+        ContentResponse::Prepared(prepared) if prepared.document.within_limits() => Ok(prepared),
         _ => Err(Error::InvalidResponse),
     }
 }
@@ -223,12 +244,124 @@ fn rendered(response: ContentResponse) -> Result<MessageDocument, Error> {
 /// converts, copies or lays it out.
 #[cfg(test)]
 mod rendered_tests {
-    use super::{Error, rendered};
-    use crate::ContentResponse;
-    use nuschl_core::{ContentBlock, MAX_CONTENT_BYTES, MessageDocument};
+    use super::{Error, prepared, prepared_each, rendered};
+    use crate::{ContentResponse, PreparedContent};
+    use nuschl_core::{ContentBlock, MAX_BLOCKS, MAX_CONTENT_BYTES, MessageDocument, TextRole};
 
     fn reply(blocks: Vec<ContentBlock>) -> Result<MessageDocument, Error> {
         rendered(ContentResponse::Rendered(MessageDocument { blocks }))
+    }
+
+    /// Over budget: breaks counting more line breaks than a message holds
+    /// together, and 513 blocks of every kind (the one block budget).
+    fn malformed() -> [Vec<ContentBlock>; 2] {
+        let text = || ContentBlock::text("x");
+        let lines = |count| ContentBlock::Break { count };
+        let breaks = vec![
+            text(),
+            lines(MAX_CONTENT_BYTES as u32 / 2),
+            text(),
+            lines(MAX_CONTENT_BYTES as u32 / 2),
+            text(),
+            lines(1),
+        ];
+        let kinds = [
+            ContentBlock::Text {
+                text: "h".into(),
+                spans: Vec::new(),
+                role: TextRole::Heading(1),
+            },
+            ContentBlock::Code {
+                language: None,
+                runs: Vec::new(),
+            },
+            ContentBlock::Math {
+                source: "$$x$$".into(),
+                tex: "x".into(),
+            },
+            text(),
+        ];
+        let blocks = (0..MAX_BLOCKS + 1)
+            .flat_map(|index| [kinds[index % kinds.len()].clone(), lines(2)])
+            .collect();
+        [breaks, blocks]
+    }
+
+    fn honest() -> Vec<ContentBlock> {
+        vec![
+            ContentBlock::Break { count: 2 },
+            ContentBlock::text("a"),
+            ContentBlock::Break { count: 0 },
+            ContentBlock::Math {
+                source: "$$x$$".into(),
+                tex: "x".into(),
+            },
+        ]
+    }
+
+    fn prepared_reply(blocks: Vec<ContentBlock>) -> ContentResponse {
+        ContentResponse::Prepared(PreparedContent {
+            source: "stored".into(),
+            document: MessageDocument { blocks },
+        })
+    }
+
+    /// One prepared reply (stock HTML) over its budgets is a typed failure.
+    #[test]
+    fn a_malformed_prepared_reply_is_refused() {
+        for blocks in malformed() {
+            assert!(matches!(
+                prepared(prepared_reply(blocks)),
+                Err(Error::InvalidResponse)
+            ));
+        }
+        let honest_reply = prepared(prepared_reply(honest())).unwrap();
+        assert_eq!(honest_reply.source, "stored");
+        assert_eq!(honest_reply.document.blocks, honest());
+    }
+
+    /// In a batch, each malformed reply is refused on its own; the others
+    /// pass unchanged.
+    #[test]
+    fn a_batch_refuses_each_malformed_reply_on_its_own() {
+        let [breaks, blocks] = malformed();
+        let messages: Vec<(String, bool)> = [
+            ("a", true),
+            ("b", false),
+            ("c", true),
+            ("d", false),
+            ("e", true),
+            ("f", false),
+        ]
+        .map(|(text, html)| (text.to_owned(), html))
+        .into();
+        let results = vec![
+            Ok(prepared_reply(honest())),
+            Ok(ContentResponse::Rendered(MessageDocument {
+                blocks: breaks,
+            })),
+            Ok(prepared_reply(blocks.clone())),
+            Ok(ContentResponse::Rendered(MessageDocument {
+                blocks: honest(),
+            })),
+            Err(Error::InvalidResponse),
+            Ok(ContentResponse::Rendered(MessageDocument { blocks })),
+        ];
+        let shown: Vec<Option<(String, Vec<ContentBlock>)>> = prepared_each(results, &messages)
+            .into_iter()
+            .map(|prepared| prepared.map(|prepared| (prepared.source, prepared.document.blocks)))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                Some(("stored".to_owned(), honest())),
+                None,
+                None,
+                Some(("d".to_owned(), honest())),
+                None,
+                None,
+            ]
+        );
     }
 
     #[test]
