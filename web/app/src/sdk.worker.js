@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: EUPL-1.2
-// The only WASM/session/parser/storage owner. No DOM or HTML is used here.
+// The SDK/session/storage owner. Complex parsing stays in the content Worker.
 import init, { WebClient } from "./sdk/nuschl_client_wasm.js";
 import { openHistory } from "./history.js";
 import { restoreOrder } from "./server-order.js";

@@ -54,9 +54,30 @@ must not let a finished render or prepared outgoing image cross destinations.
 Outgoing attachment state must remain until the SDK acknowledges the matching
 send, and a newer destination/draft revision must reject an old image result.
 
-The isolated codec and service are implemented here; the SDK ticket bridge and
-App paste/attachment controls are a coordinated consumer change. Their
-end-to-end completion is not inferred from codec tests.
+The browser SDK now issues the content requests and validates their completion.
+`Client::receive_message` returns the exact allocated timeline serial and source
+revision, including for unsaved messages; detached history admission deliberately
+has no serial. No source is correlated by body or timestamp. The browser adapter
+also captures the channel's process-local wire instance before later queued
+channel changes. Background conversations remain eligible; selecting another
+conversation does not cancel otherwise valid received content.
+
+New IndexedDB rows store original source and an explicit `plain`/`legacy` mode.
+Existing rows without a mode remain `marked`, their previously normalized
+representation. No migration discards them or claims to reconstruct lost original
+HTML. A cached/offline channel becoming a fresh live instance issues one new
+history request and HistoryTicket; old replies/jobs are never rebound. Stock
+Mumble has no durable channel UUID, so this does not strengthen the historical
+identity of a numeric channel across separate connections.
+
+Ordinary snapshots carry bounded plain derivatives, source revisions and opaque
+content tokens. A validated document crosses once into the UI cache, rather than
+cloning its RGBA into every snapshot. Rehydration resolves the original SDK lease
+and checks its retained source digest; a worker cannot choose a new destination.
+The image-picker/composer and larger-image viewer are separate consumers, and
+are not implied by the broker tests. Deferred notification preview/mention
+completion is still a separate parity follow-up; a placeholder is not content
+on which notification or poll authority may be based.
 
 ## Bounds and recovery
 
@@ -108,14 +129,61 @@ logical retirement prevents new posts/results from reentering the service while
 the native worker may still run. It does not guarantee that previously submitted
 work/network traffic has ceased. A future consumer should show safe source
 fallback and explicit reload for this unavailable owner; automatic replacement
-requires its own aggregate ownership bound. The SDK broker and App recovery UX
-remain separate work, and are not activated by this guard.
+requires its own aggregate ownership bound. The broker turns valid current failures into inert failure documents. Temporary
+queue/cache pressure offers explicit retry. A retired ContentService instead
+shows reload guidance and disables impossible retry. No error invokes a parser
+in the SDK or UI, and no automatic replacement owner is created.
 
 The Nix content module links with a 256 MiB maximum linear memory. This bounds
 the WASM heap, not total browser process memory or the caller's original file.
 JavaScript queue/reply/pixel limits are checked separately. CPU deadlines rely
 on the outside adapter remaining schedulable; they are not a browser OS CPU
 quota. Rendering and image work must not be moved into the TLS/voice Worker.
+
+## Broker, cache and outgoing images
+
+The SDK broker bounds pending work to 128 requests and 8 MiB of logical retained
+source/transport copies, with at most four requests posted to the UI. Posted
+cancellation retains its SDK reservation until a UI completion acknowledgment;
+that acknowledgment is distinct from the ContentService's real codec ACK and
+its separately retained concurrency credit. A stalled UI cannot manufacture
+unbounded replacement posts. Replies are bounded to 2 MiB before serde parsing
+and independently checked for block/count/text/span/UTF-8/link/pixel limits.
+Worker-selected image sources are rejected.
+
+The UI has one 16 MiB, 256-entry derivative LRU shared by timeline and welcome
+views. Serialized strings/object counts, decoded pixels and canvas/viewer copies
+are conservatively charged. Mounted views pin that charge; admission under a
+fully pinned budget becomes an explicit negative result instead of an automatic
+rehydration loop. Disposing the bridge permanently consumes its page owner and
+keeps retained view charges; disposal is not evidence that native canvases or a
+Worker have exited. SDK derivative metadata is separately capped at 4096 handles
+and 16 MiB of plain derivatives, with evicted model derivatives cleared. Refused
+work retains only bounded retry metadata and a source digest, not another raw
+source copy.
+
+The send API is `image_begin({context, caption, attachment_revision,
+draft_revision})`, using the current snapshot's mandatory `content_context`.
+It returns a ticket and remaining HTML/input budgets. Only the UI/content codec
+receives selected file bytes. `image_send({ticket, attachment_revision,
+draft_revision, html, thumbnail})` accepts a fixed PNG/JPEG data-image element
+and validated thumbnail pixels, never arbitrary HTML. The SDK combines only its
+captured, escaped caption into the same message. Navigation, connection/channel
+replacement, own/peer presence, revisions and current limits are rechecked at
+actual enqueue. `image_cancel(ticket)` revokes the matching lease. Failure keeps
+the draft/attachment with its consumer.
+
+The fixed image grammar allows a conservative stripped-src text-budget check
+without an HTML parser in the SDK; the separate whole-image UTF-16 cap and
+256 KiB local wire ceiling also apply. `sent_to_transport` means local transport
+admission, not a Mumble server delivery acknowledgment. TLS writes preserve
+rustls's 64 KiB buffer and drain between partial plaintext writes. Each complete
+application frame remains contiguous; bounded TLS chunks/queues and a combined
+WebSocket-buffer preflight prevent unbounded pending transport. Local Sent/echo
+events bind to their entire frame's successfully enqueued record boundary.
+Later partial failure closes that connection without retrying a partial frame;
+independently received peer text remains valid. Dropped unsent TLS records never
+advance the admitted/drained boundary.
 
 ## Verification
 
@@ -202,3 +270,26 @@ fifteen-second startup deadlines, and no automatic fatal-owner replacement.
 After extraction all seventeen content units and the complete actual-WASM
 code/image/canary plus normal/throwing-termination browser proofs pass again;
 see `~/.cache/nuschl-math-retirement/content-browser/proof.json`.
+
+## Broker integration evidence
+
+The focused client-WASM suite covers source/revision/receipt admission, raw-mode
+history, canceled/stalled SDK transport credit, typed reply rejection, image
+leases/caps, partial/no-progress TLS output and transport-pressure admission.
+Its owned TLS-relay fixture sends a 200,000-character text and a valid synthetic
+PNG data-image above 200,000 characters in one pending batch, then checks exact,
+separate received messages. It exercises TLS and framing rather than an image
+codec or a production server. The optional stock-Murmur native test is explicitly
+ignored unless invoked with its owned `NUSCHL_TEST_MURMUR` executable; absence of
+that environment is an error when explicitly invoked, never a passing test.
+
+`tests/web_broker.browser.mjs SITE RELAY HOST PORT OUTPUT.png` drives the actual
+built App through an owned loopback relay/stock Murmur in a device-free Chromium
+wrapper. One scene delays a real codec result across reconnect: the old SDK
+ticket is refused, a new history request restores the row, and only one codec
+Worker exists. Another substitutes a permanently stalled Worker and checks
+safe failure documents, explicit reload guidance, no privileged render fallback,
+no replacement Worker and no microphone capture. The separate desktop/mobile
+Markdown smoke checks live and IndexedDB-restored newlines, blank lines, code
+highlighting, safe links and resource canaries. These are confined Chromium
+results, not physical mobile or OS process-isolation claims.

@@ -516,11 +516,10 @@ async fn an_unknown_certificate_is_the_users_decision() {
 }
 
 #[tokio::test]
+#[ignore = "requires an owned stock Murmur executable in NUSCHL_TEST_MURMUR"]
 async fn logs_in_to_murmur() {
-    let Some(binary) = std::env::var_os("NUSCHL_TEST_MURMUR") else {
-        eprintln!("NUSCHL_TEST_MURMUR is not set; skipping the Murmur run");
-        return;
-    };
+    let binary = std::env::var_os("NUSCHL_TEST_MURMUR")
+        .expect("Explicit stock-Murmur test requires NUSCHL_TEST_MURMUR pointing to the owned fixture executable");
     let root = tempfile::tempdir().expect("temporary directory");
     let port = std::net::TcpListener::bind("127.0.0.1:0")
         .expect("bind")

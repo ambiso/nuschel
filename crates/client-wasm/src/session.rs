@@ -59,12 +59,12 @@ pub enum Event {
     Opened { udp: bool },
     /// What the SDK models.
     Server(ServerEvent),
-    /// Bounded legacy welcome markup; rendered only in the SDK worker.
+    /// Bounded legacy welcome markup; rendered only in the content worker.
     Welcome(String),
     /// The certificate is neither pinned nor vouched for: the user decides.
     Certificate { sha256: String, changed: bool },
-    /// Bounded legacy text. The platform renders and persists it before
-    /// reporting a Message to the shared SDK; the relay never sees plaintext.
+    /// Bounded original text. The platform persists it before SDK admission;
+    /// credential-free rendering follows. The relay never sees plaintext.
     Text {
         target: TextTarget,
         /// Original wire channel lifetime, captured before later queued states.
