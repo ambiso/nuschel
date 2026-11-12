@@ -224,7 +224,7 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
                 if let Some(bandwidth) = stats.bandwidth {
                     rows.push(row(
                         "Bandwidth",
-                        format!("{:.1} kbit/s", bandwidth as f32 / 1000.),
+                        format!("{:.1} kbit/s", f64::from(bandwidth) / 125.0),
                         10,
                     ));
                 }

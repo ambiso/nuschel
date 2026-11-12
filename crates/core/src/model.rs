@@ -230,6 +230,7 @@ pub struct UserStats {
     pub address: Option<String>,
     pub online_seconds: Option<u32>,
     pub idle_seconds: Option<u32>,
+    /// Mumble UserStats traffic rate in bytes per second; server limits use bits per second.
     pub bandwidth: Option<u32>,
     pub udp_ping_ms: Option<f32>,
     pub tcp_ping_ms: Option<f32>,
