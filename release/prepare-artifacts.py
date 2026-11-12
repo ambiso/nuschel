@@ -49,10 +49,22 @@ def checked_relative(value):
     return path
 
 
-def verify_notices(root, policy):
+def notice_scope(policy, scope):
+    scopes = load(Path(__file__).with_name("notice-scopes.json"))
+    if scope not in scopes:
+        raise ValueError("unknown source-selected notice scope")
+    targets = scopes[scope]["targets"]
+    selected = [item for item in policy if item["target"] in targets]
+    if len(selected) != len(targets) or {item["target"] for item in selected} != set(targets):
+        raise ValueError("scope targets absent or duplicated in the source authority")
+    return selected, set(scopes[scope]["external_components"])
+
+
+def verify_notices(root, policy, scope="all"):
+    selected, expected_external = notice_scope(policy, scope)
     report = load(root / "THIRD-PARTY.json", 8 * 1024 * 1024)
     if (report.get("format") not in (1, 2) or report.get("unresolved") != [] or
-            report.get("roots_by_target") != policy):
+            report.get("roots_by_target") != selected or report.get("bundle_scope") != scope):
         raise ValueError("missing/incomplete/mismatched runtime attribution scope")
     source = Path(__file__).resolve().parents[1]
     workspace = {tomllib.loads(path.read_text())["package"]["name"]
@@ -87,15 +99,17 @@ def verify_notices(root, policy):
                 raise ValueError("missing compact notice reference")
             return index[name]["sha256"]
         return digest(path)
-    for bundled, original in (("EUPL-1.2", "LICENSE"), ("Mumble-BSD", "crates/protocol/proto/LICENSE.mumble"),
-                              ("NewCMMath-GUST-Font-License", "crates/math/fonts/GUST-FONT-LICENSE.txt")):
+    project_files = [("EUPL-1.2", "LICENSE"), ("Mumble-BSD", "crates/protocol/proto/LICENSE.mumble")]
+    if "newcm-math-font" in expected_external:
+        project_files.append(("NewCMMath-GUST-Font-License", "crates/math/fonts/GUST-FONT-LICENSE.txt"))
+    for bundled, original in project_files:
         if notice_hash(root / bundled) != digest(source / original):
             raise ValueError("first-party/protocol/font notice differs from the source")
     packages = report.get("packages")
     if not isinstance(packages, list) or not 1 <= len(packages) <= 8192:
         raise ValueError("missing bounded runtime package inventory")
-    required = {(item["target"], name) for item in policy for name in item["packages"]}
-    required.update((item["target"], name) for item in policy
+    required = {(item["target"], name) for item in selected for name in item["packages"]}
+    required.update((item["target"], name) for item in selected
                     if any("update-worker/" in f for f in item.get("features", []))
                     for name in ("ed25519-dalek", "ml-dsa"))
     found = set()
@@ -115,7 +129,11 @@ def verify_notices(root, policy):
         name, version = package["name"], package["version"]
         if not re.fullmatch(r"[A-Za-z0-9_.+-]{1,128}", name + "-" + version):
             raise ValueError("invalid notice package identity")
-        for target in package["targets"]:
+        targets = package["targets"]
+        if (not isinstance(targets, list) or not targets or len(targets) != len(set(targets)) or
+                not set(targets) <= {item["target"] for item in selected}):
+            raise ValueError("package targets differ from the expected source-selected scope")
+        for target in targets:
             found.add((target, name))
         if type(package["first_party"]) is not bool or (package["first_party"] and
                 (name not in workspace or package.get("license") != "EUPL-1.2" or package.get("source") != "project-path")):
@@ -126,10 +144,8 @@ def verify_notices(root, policy):
     if not required <= found:
         raise ValueError("runtime roots or hybrid engines absent from attribution inventory")
     components = report.get("external_components", [])
-    expected = {"rust-standard-library", "mingw-w64-runtime", "gcc-runtime",
-                "newcm-math-font", "syntect-default-assets", "web-runtime-assets"}
-    if not expected <= {item["name"] for item in components}:
-        raise ValueError("required native/font/web runtime notice families absent")
+    if len(components) != len(expected_external) or {item["name"] for item in components} != expected_external:
+        raise ValueError("missing/extra native/font/web runtime notice families for the expected scope")
     for item in components:
         checked_relative(item["name"])
         if not item.get("files"):
@@ -207,7 +223,7 @@ def prepare(directory, platform, output, *, repository, commit, run_id, attempt,
         if not (binaries / (name + suffix)).is_file():
             raise ValueError("missing application or fixed hybrid verifier")
     notices = root / "licenses" if platform == "windows-x86_64" else root / "Contents/Resources/licenses"
-    verify_notices(notices, policy)
+    verify_notices(notices, policy, platform)
     return info
 
 
@@ -256,7 +272,7 @@ def prepare_linux(directory, output, *, repository, commit, run_id, attempt, ver
         raise ValueError("static web bundle lacks landing/client entry points")
     # All three WASM roots and JS/assets need actual notice bytes. Existing
     # Temml-only notices do not substitute for the pipeline's full inventory.
-    verify_notices(destination / "licenses/nuschl", policy)
+    verify_notices(destination / "licenses/nuschl", policy, "web")
     return info
 
 

@@ -52,7 +52,7 @@ class CompactNotices(unittest.TestCase):
             stream.seek(index["offset"])
             self.assertEqual(stream.read(index["size"]), original)
         self.assertEqual(report["unresolved"], [])
-        fixture.prepare.verify_notices(output, self.fixture.policy)
+        fixture.prepare.verify_notices(output, self.fixture.policy, "windows-x86_64")
         self.assertEqual(len(list(output.iterdir())), 2)
 
     def test_hundreds_of_notices_fit_the_existing_installation_budget(self):
@@ -73,7 +73,7 @@ class CompactNotices(unittest.TestCase):
         path.write_text(json.dumps(source))
         output, report = self.output()
         self.assertEqual(report["unresolved"], source["unresolved"])
-        with self.assertRaises(ValueError): fixture.prepare.verify_notices(output, self.fixture.policy)
+        with self.assertRaises(ValueError): fixture.prepare.verify_notices(output, self.fixture.policy, "windows-x86_64")
 
     def test_payload_tamper_cannot_be_hidden_by_only_updating_the_outer_hash(self):
         output, report = self.output()
@@ -85,7 +85,7 @@ class CompactNotices(unittest.TestCase):
         report["notice_payload"]["sha256"] = fixture.prepare.digest(path)
         (output/"THIRD-PARTY.json").write_text(json.dumps(report))
         with self.assertRaisesRegex(ValueError, "byte-range hash"):
-            fixture.prepare.verify_notices(output, self.fixture.policy)
+            fixture.prepare.verify_notices(output, self.fixture.policy, "windows-x86_64")
 
     def test_missing_overlapping_and_foreign_notice_references_fail_closed(self):
         output, report = self.output()
@@ -98,7 +98,7 @@ class CompactNotices(unittest.TestCase):
             if mode == "oversized": report["notice_files"][key]["size"] = 128 * 1024**2
             if mode == "traversal": report["notice_files"]["../escape"] = report["notice_files"].pop(key)
             (output/"THIRD-PARTY.json").write_text(json.dumps(report))
-            with self.assertRaises(ValueError, msg=mode): fixture.prepare.verify_notices(output, self.fixture.policy)
+            with self.assertRaises(ValueError, msg=mode): fixture.prepare.verify_notices(output, self.fixture.policy, "windows-x86_64")
 
     def test_inspected_file_hash_mismatch_and_symlink_are_not_packaged(self):
         (self.notices/"crates/ml-dsa-0.1.0/LICENSE").write_text("changed after inventory")

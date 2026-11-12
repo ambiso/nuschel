@@ -47,7 +47,7 @@ class ReleaseGates(unittest.TestCase):
         self.cli("keygen", "--secret-file", secret, "--public-file", public)
         return secret, public
 
-    def package(self, platform="windows-x86_64", attempt="1"):
+    def package(self, platform="windows-x86_64", attempt="1", notice_scope=None):
         install = self.root / "source" / prepare.ROOTS[platform]
         binaries = install if platform == "windows-x86_64" else install / "Contents/MacOS"
         binaries.mkdir(parents=True)
@@ -61,26 +61,28 @@ class ReleaseGates(unittest.TestCase):
             shutil.copyfile(REPO / original, notices / bundled)
         # Synthetic inventory: validates gate mechanics only, never attribution
         # completeness for the real app or any upstream license choice.
+        scope = notice_scope or platform
+        selected, external_names = prepare.notice_scope(self.policy, scope)
         targets = {}
-        for item in self.policy:
+        for item in selected:
             for name in item["packages"]:
                 targets.setdefault(name, []).append(item["target"])
-        native = [item["target"] for item in self.policy if item["features"]]
+        native = [item["target"] for item in selected if item["features"]]
         packages = [{"name": name, "version": "0.1.0", "license": "EUPL-1.2", "source": "project-path",
                      "first_party": True, "targets": triples, "files": []} for name, triples in targets.items()]
-        for name in ("ed25519-dalek", "ml-dsa"):
+        for name in (("ed25519-dalek", "ml-dsa") if native else ()):
             path = notices / "crates" / (name + "-0.1.0") / "LICENSE"
             path.parent.mkdir(parents=True)
             path.write_text("Synthetic gate fixture notice. No real license assurance.\n")
             packages.append({"name": name, "version": "0.1.0", "first_party": False, "targets": native,
                              "files": [{"path": "LICENSE", "sha256": prepare.digest(path)}]})
         external = []
-        for name in ("rust-standard-library", "mingw-w64-runtime", "gcc-runtime", "newcm-math-font", "syntect-default-assets", "web-runtime-assets"):
+        for name in sorted(external_names):
             path = notices / "external" / name / "NOTICE"
             path.parent.mkdir(parents=True)
             path.write_text("Synthetic gate fixture only.\n")
             external.append({"name": name, "files": [{"path": "NOTICE", "sha256": prepare.digest(path)}]})
-        (notices / "THIRD-PARTY.json").write_text(json.dumps({"format": 1, "unresolved": [], "roots_by_target": self.policy,
+        (notices / "THIRD-PARTY.json").write_text(json.dumps({"format": 1, "bundle_scope": scope, "unresolved": [], "roots_by_target": selected,
                                                               "packages": packages, "external_components": external}))
         directory = self.root / "artifact"
         directory.mkdir()
@@ -156,6 +158,16 @@ class ReleaseGates(unittest.TestCase):
         report_path.unlink(); repack()
         with self.assertRaises(ValueError): self.accept(directory)
 
+    def test_artifact_cannot_choose_another_scope_or_omit_a_mac_slice(self):
+        directory, _, notices, repack = self.package(platform="macos-universal")
+        path = notices/"THIRD-PARTY.json"
+        original = json.loads(path.read_bytes())
+        for change in ({"bundle_scope":"web"}, {"roots_by_target":original["roots_by_target"][:1]},
+                       {"bundle_scope":"all", "roots_by_target":self.policy}):
+            path.write_text(json.dumps(original | change)); repack()
+            with self.assertRaises(ValueError): self.accept(directory, "macos-universal")
+            shutil.rmtree(self.root/"extracted")
+
     def test_missing_verifier_and_notice_bytes_fail(self):
         directory, install, notices, repack = self.package()
         (install/"nuschl-update-verify-mldsa44.exe").unlink(); repack()
@@ -175,7 +187,7 @@ class ReleaseGates(unittest.TestCase):
         self.assertFalse((self.root/"extracted").exists())
 
     def linux_package(self):
-        directory, _, notices, _ = self.package()
+        directory, _, notices, _ = self.package(notice_scope="web")
         site = self.root/"static-site"
         (site/"app").mkdir(parents=True)
         (site/"index.html").write_text("synthetic landing")
@@ -216,7 +228,7 @@ class ReleaseGates(unittest.TestCase):
 
     def test_ci_notice_gate_runs_the_same_source_policy_before_payload_upload(self):
         _, _, notices, _ = self.package()
-        command = [sys.executable, str(REPO/"release/check-notices.py"), str(notices)]
+        command = [sys.executable, str(REPO/"release/check-notices.py"), "--scope", "windows-x86_64", str(notices)]
         good = subprocess.run(command, capture_output=True, text=True, timeout=10)
         self.assertEqual(good.returncode, 0, good.stderr)
         (notices/"THIRD-PARTY.json").unlink()

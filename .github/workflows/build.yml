@@ -112,6 +112,13 @@ jobs:
             .#checks.x86_64-linux.audit .#checks.x86_64-linux.crate2nix-current \
             2>&1 | tee "$RUNNER_TEMP/build-logs/policy.log"
 
+      - name: Retain the complete all-target source notice inventory for audit
+        if: always()
+        run: |
+          nix build .#release-license-inventory -o result-license-audit --cores 2 --max-jobs 2 -L 2>&1 | tee "$RUNNER_TEMP/build-logs/license-audit.log"
+          mkdir -p "$RUNNER_TEMP/build-logs/license-inventory"
+          cp -R result-license-audit/share/licenses/nuschl/. "$RUNNER_TEMP/build-logs/license-inventory/"
+
       - name: Arrange Nix evidence and static web site
         run: |
           mkdir -p dist
@@ -142,7 +149,9 @@ jobs:
           (cd dist && sha256sum build-info.json >> SHA256SUMS)
 
       - name: Require actual complete runtime notice evidence before payload upload
-        run: python3 release/check-notices.py result-web-site/licenses/nuschl
+        run: |
+          python3 release/check-notices.py --scope linux-nix result-linux/share/licenses/nuschl
+          python3 release/check-notices.py --scope web result-web-site/licenses/nuschl
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -156,7 +165,7 @@ jobs:
       - name: Remove only this job's result roots before cache GC
         if: always()
         run: |
-          for result in result-linux result-server result-web-relay result-web-site; do
+          for result in result-linux result-server result-web-relay result-web-site result-license-audit; do
             if [[ -L "$result" ]]; then rm "$result"; fi
           done
 
@@ -256,7 +265,7 @@ jobs:
           (cd dist && sha256sum build-info.json >> SHA256SUMS)
 
       - name: Require actual complete runtime notice evidence before payload upload
-        run: python3 release/check-notices.py install/windows/licenses
+        run: python3 release/check-notices.py --scope windows-x86_64 install/windows/licenses
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -369,7 +378,7 @@ jobs:
           (cd dist && sha256sum build-info.json >> SHA256SUMS)
 
       - name: Require actual complete runtime notice evidence before payload upload
-        run: python3 release/check-notices.py install/Nuschl.app/Contents/Resources/licenses
+        run: python3 release/check-notices.py --scope macos-universal install/Nuschl.app/Contents/Resources/licenses
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

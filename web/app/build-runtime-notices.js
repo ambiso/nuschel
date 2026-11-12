@@ -112,6 +112,12 @@ export function bundledRuntimeNotices() {
   function plugin(phase, emit = false) {
     return {
       name: `nuschl-runtime-notices-${phase}`, apply: "build", configResolved,
+      buildStart() {
+        if (emit) {
+          packages.clear(); cargo.clear(); chunks.length = 0;
+          lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
+        }
+      },
       generateBundle(_options, bundle) {
         collect(phase, bundle);
         if (!emit) return;

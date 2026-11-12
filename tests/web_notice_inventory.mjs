@@ -35,8 +35,7 @@ function setup() {
   fs.writeFileSync(path.join(root, 'worker.js'), `import {value} from 'fake-worker'; postMessage(value());`);
   return root;
 }
-async function compile(root) {
-  const notices = bundledRuntimeNotices();
+async function compile(root, notices = bundledRuntimeNotices()) {
   await build({ root, configFile: false, logLevel: 'silent', plugins: [notices.main],
     worker: { format: 'es', plugins: () => [notices.worker()] },
     build: { target: 'es2022', assetsInlineLimit: 0, minify: false } });
@@ -69,5 +68,19 @@ test('real compilation refuses absent required license text and lock identity dr
     lock.packages['node_modules/fake-worker'].version = '2.0.0';
     fs.writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify(lock));
     await assert.rejects(compile(root), /absent or ambiguous/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('reusing the real build config does not retain removed worker/dependency evidence', async () => {
+  const root = setup();
+  try {
+    const notices = bundledRuntimeNotices();
+    await compile(root, notices);
+    fs.writeFileSync(path.join(root, 'main.js'), `import {value} from 'fake-main'; console.log(value());`);
+    await compile(root, notices);
+    const report = JSON.parse(fs.readFileSync(path.join(root, 'dist/licenses/npm/BUNDLED-NPM.json')));
+    assert.ok(!report.packages.some((entry) => entry.name === 'fake-worker'));
+    assert.ok(!report.chunks.some((entry) => entry.phase === 'worker'));
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

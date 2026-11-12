@@ -8,6 +8,7 @@
   craneLib,
   projectRoot,
   rootsByTarget,
+  scope ? "all",
   # Pinned toolchain/native-runtime notices are outside Cargo's dependency graph.
   # [{ name; version; source; files = [{ name; path; }]; }]
   externalNotices ? [ ],
@@ -204,8 +205,9 @@ let
     assets = [
         ('LICENSE', 'EUPL-1.2'),
         ('crates/protocol/proto/LICENSE.mumble', 'Mumble-BSD'),
-        ('crates/math/fonts/GUST-FONT-LICENSE.txt', 'NewCMMath-GUST-Font-License'),
     ]
+    if any(name == 'nuschl-math-worker' for name, _ in selected):
+        assets.append(('crates/math/fonts/GUST-FONT-LICENSE.txt', 'NewCMMath-GUST-Font-License'))
     for source_path, name in assets:
         copy_text(source / source_path, out / name)
     external_entries = []
@@ -253,7 +255,7 @@ let
     for name in sorted(required_external - external_names):
         issue((name, 'toolchain'), 'pinned non-Cargo runtime notices have not been supplied')
     report = {
-        'format': 1, 'scope': 'normal non-proc-macro dependency union of explicit packaged roots/targets',
+        'format': 1, 'bundle_scope': os.environ['NOTICE_SCOPE'], 'scope': 'normal non-proc-macro dependency union of explicit packaged roots/targets',
         'roots_by_target': targets, 'packages': entries, 'unresolved': issues,
         'external_components': external_entries,
         'curated_evidence_policies': curated_policies, 'source_archives': source_archives,
@@ -280,6 +282,7 @@ let
     nativeBuildInputs = [ pkgs.python3 ];
     doCheck = false;
     ROOTS_FILE = roots;
+    NOTICE_SCOPE = scope;
     EXTERNAL_NOTICES = external;
     buildPhaseCargoCommand = ''
       cargo metadata --locked --offline --format-version 1 > metadata.json

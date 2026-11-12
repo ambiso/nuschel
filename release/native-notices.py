@@ -53,34 +53,39 @@ def selected_archive(path, selected):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--rustc', type=Path, required=True)
-    parser.add_argument('--rust-docs', type=Path, required=True)
-    parser.add_argument('--gcc-source', type=Path, required=True)
-    parser.add_argument('--mingw-source', type=Path, required=True)
-    parser.add_argument('--gcc-version', required=True)
-    parser.add_argument('--mingw-version', required=True)
+    parser.add_argument('--component', choices=['all','rust-standard-library','gcc-runtime','mingw-w64-runtime'], default='all')
+    parser.add_argument('--rustc', type=Path)
+    parser.add_argument('--rust-docs', type=Path)
+    parser.add_argument('--gcc-source', type=Path)
+    parser.add_argument('--mingw-source', type=Path)
+    parser.add_argument('--gcc-version')
+    parser.add_argument('--mingw-version')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    raw = subprocess.check_output([args.rustc, '-vV'], timeout=10, text=True)
-    fields = dict(line.split(': ', 1) for line in raw.splitlines() if ': ' in line)
-    revision = fields['commit-hash']
-    if len(revision) != 40:
-        raise ValueError('missing exact Rust compiler revision')
-    rust = [('COPYRIGHT-library.html', (args.rust_docs/'COPYRIGHT-library.html').read_bytes())]
-    rust += [('licenses/'+path.name, path.read_bytes()) for path in sorted((args.rust_docs/'licenses').iterdir()) if path.is_file()]
-    if len(rust) < 5:
-        raise ValueError('missing standard-library license set')
-    write_component(args.output, 'rust-standard-library', fields['release'],
-                    'https://github.com/rust-lang/rust/tree/'+revision+' (pinned toolchain COPYRIGHT-library.html and accompanying complete license set)', rust)
-    (args.output/'rust-standard-library/RUSTC.txt').write_text(raw)
-    gcc = selected_archive(args.gcc_source, {'COPYING.RUNTIME', 'COPYING3'})
-    write_component(args.output, 'gcc-runtime', args.gcc_version,
-                    'https://ftp.gnu.org/gnu/gcc/gcc-'+args.gcc_version+'/gcc-'+args.gcc_version+'.tar.xz', gcc)
-    mingw = selected_archive(args.mingw_source, {'COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt',
-                                                'mingw-w64-libraries/winpthreads/COPYING'})
-    write_component(args.output, 'mingw-w64-runtime', args.mingw_version,
-                    'https://sourceforge.net/projects/mingw-w64/files/mingw-w64/mingw-w64-release/mingw-w64-v'+args.mingw_version+'.tar.bz2', mingw)
+    if args.component in ('all', 'rust-standard-library'):
+        raw = subprocess.check_output([args.rustc, '-vV'], timeout=10, text=True)
+        fields = dict(line.split(': ', 1) for line in raw.splitlines() if ': ' in line)
+        revision = fields['commit-hash']
+        if len(revision) != 40:
+            raise ValueError('missing exact Rust compiler revision')
+        rust = [('COPYRIGHT-library.html', (args.rust_docs/'COPYRIGHT-library.html').read_bytes())]
+        rust += [('licenses/'+path.name, path.read_bytes()) for path in sorted((args.rust_docs/'licenses').iterdir()) if path.is_file()]
+        if len(rust) < 5:
+            raise ValueError('missing standard-library license set')
+        write_component(args.output, 'rust-standard-library', fields['release'],
+                        'https://github.com/rust-lang/rust/tree/'+revision+' (pinned toolchain COPYRIGHT-library.html and accompanying complete license set)', rust)
+        (args.output/'rust-standard-library/RUSTC.txt').write_text(raw)
+    if args.component in ('all', 'gcc-runtime'):
+        gcc = selected_archive(args.gcc_source, {'COPYING.RUNTIME', 'COPYING3'})
+        write_component(args.output, 'gcc-runtime', args.gcc_version,
+                        'https://ftp.gnu.org/gnu/gcc/gcc-'+args.gcc_version+'/gcc-'+args.gcc_version+'.tar.xz', gcc)
+    if args.component in ('all', 'mingw-w64-runtime'):
+        mingw = selected_archive(args.mingw_source, {'COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt',
+                                                    'mingw-w64-libraries/winpthreads/COPYING'})
+        write_component(args.output, 'mingw-w64-runtime', args.mingw_version,
+                        'https://sourceforge.net/projects/mingw-w64/files/mingw-w64/mingw-w64-release/mingw-w64-v'+args.mingw_version+'.tar.bz2', mingw)
     for name, archive in [('gcc-runtime', args.gcc_source), ('mingw-w64-runtime', args.mingw_source)]:
+        if args.component not in ('all', name): continue
         result = hashlib.sha256()
         with archive.open('rb') as stream:
             while block := stream.read(1024 * 1024): result.update(block)

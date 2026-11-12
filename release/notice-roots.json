@@ -22,6 +22,28 @@
     ]
   },
   {
+    "target": "aarch64-unknown-linux-gnu",
+    "packages": [
+      "nuschl",
+      "nuschl-cli",
+      "nuschl-tui",
+      "nuschld",
+      "nuschl-witness",
+      "nuschl-web-relay",
+      "nuschl-content-worker",
+      "nuschl-crypto-worker",
+      "nuschl-math-worker",
+      "nuschl-media-worker",
+      "nuschl-storage-worker",
+      "nuschl-transfer-worker",
+      "nuschl-update-worker"
+    ],
+    "features": [
+      "nuschl-update-worker/ed25519",
+      "nuschl-update-worker/mldsa44"
+    ]
+  },
+  {
     "target": "x86_64-pc-windows-gnu",
     "packages": [
       "nuschl",

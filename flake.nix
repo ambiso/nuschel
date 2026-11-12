@@ -164,7 +164,27 @@
         buildDeps =
           args: craneLib.buildDepsOnly ((builtins.removeAttrs args [ "src" ]) // { inherit dummySrc; });
         cargoArtifacts = buildDeps common;
-        webClient = import ./nix/web-client.nix { inherit pkgs lib toolchain; };
+        webClient = import ./nix/web-client.nix {
+          inherit pkgs lib toolchain;
+          releaseNotices = releaseNotices.web.bundle;
+        };
+        releaseNotices = import ./nix/release-notices.nix {
+          inherit pkgs toolchain craneLib;
+          projectRoot = ./.;
+          webRuntimeNotices = webClient.runtimeNotices;
+        };
+        nativeNoticeScope =
+          if pkgs.stdenv.hostPlatform.isDarwin then
+            "macos-universal"
+          else if pkgs.stdenv.hostPlatform.rust.rustcTarget == "aarch64-unknown-linux-gnu" then
+            "linux-aarch64-nix"
+          else
+            "linux-nix";
+        nativeNoticeBundle = (releaseNotices.forScope nativeNoticeScope).bundle;
+        installNativeNotices = ''
+          mkdir -p "$out/share/licenses/nuschl"
+          cp -R ${nativeNoticeBundle}/share/licenses/nuschl/. "$out/share/licenses/nuschl/"
+        '';
         serverCommon = common // {
           pname = "nuschld";
           cargoExtraArgs = "-p nuschld -p nuschl-storage-worker";
@@ -178,6 +198,7 @@
         witnessPackage = pkgs.runCommand "nuschl-witness-0.1.0" { meta.mainProgram = "nuschl-witness"; } ''
           install -Dm755 ${crates.project.workspaceMembers.nuschl-witness.build}/bin/nuschl-witness "$out/bin/nuschl-witness"
           install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
+          ${installNativeNotices}
         '';
         rtcPackage = craneLib.buildPackage (
           rtcCommon
@@ -195,6 +216,7 @@
             postInstall = ''
               install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
               install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschl/Mumble-BSD"
+              ${installNativeNotices}
             '';
           }
         );
@@ -209,6 +231,7 @@
           install -Dm644 ${./vendor/ratatui-image/LICENSE-icy_sixel-MIT} "$out/share/licenses/nuschl/sixel-encoder-MIT"
           install -Dm644 ${./vendor/ratatui-image/NOTICE} "$out/share/licenses/nuschl/ratatui-image-NOTICE"
           install -Dm644 ${./crates/math/fonts/GUST-FONT-LICENSE.txt} "$out/share/licenses/nuschl/NewCMMath-GUST-Font-License"
+          ${installNativeNotices}
         ''
         + lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
           runtimeFlags=(--prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath buildInputs}"
@@ -359,6 +382,7 @@
                 exit 1
               fi
               install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
+              cp -R ${releaseNotices.windows.bundle}/share/licenses/nuschl/. "$out/share/licenses/nuschl/"
             '';
           }
         );
@@ -434,6 +458,8 @@
               app="$out/Nuschl.app"
               mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
               cp ${macUniversal}/bin/* "$app/Contents/MacOS/"
+              mkdir -p "$app/Contents/Resources/licenses"
+              cp -R ${releaseNotices.macos.bundle}/share/licenses/nuschl/. "$app/Contents/Resources/licenses/"
               chmod 755 "$app"/Contents/MacOS/*
               cat > "$app/Contents/Info.plist" <<PLIST
               <?xml version="1.0" encoding="UTF-8"?>
@@ -487,12 +513,21 @@
         packages.web-wasm = webClient.wasm;
         packages.web-audio-wasm = webClient.audioWasm;
         packages.web-content-wasm = webClient.contentWasm;
+        packages.web-runtime-notices = webClient.runtimeNotices;
+        packages.release-license-inventory = releaseNotices.all.inventory;
+        packages.release-license-compact-inventory = releaseNotices.all.compactInventory;
+        packages.release-notices-linux = releaseNotices.linux.bundle;
+        packages.release-notices-windows = releaseNotices.windows.bundle;
+        packages.release-notices-macos = releaseNotices.macos.bundle;
+        packages.release-notices-web = releaseNotices.web.bundle;
         # Keep share-link routes at the root; the Svelte client lives at /app/.
         packages.web-site = pkgs.runCommand "nuschl-web-site" { } ''
           cp -R ${./web/site} "$out"
           chmod -R u+w "$out"
           mkdir -p "$out/app"
           cp -R ${webClient.app}/. "$out/app/"
+          mkdir -p "$out/licenses/nuschl"
+          cp -R ${releaseNotices.web.bundle}/share/licenses/nuschl/. "$out/licenses/nuschl/"
         '';
         apps.rtc-probe =
           (flake-utils.lib.mkApp {

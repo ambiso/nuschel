@@ -4,25 +4,38 @@
   pkgs,
   toolchain,
   projectRoot,
+  webRuntimeNotices ? null,
 }:
 let
   cross = pkgs.pkgsCross.mingwW64;
   gcc = cross.stdenv.cc.cc;
   mingw = cross.windows.mingw_w64;
-  native =
-    pkgs.runCommand "nuschl-native-runtime-notices" { nativeBuildInputs = [ pkgs.python3 ]; }
-      ''
-        python3 ${../release/native-notices.py} \
-          --rustc ${toolchain}/bin/rustc --rust-docs ${toolchain}/share/doc/rust \
-          --gcc-source ${gcc.src} --gcc-version ${gcc.version} \
-          --mingw-source ${mingw.src} --mingw-version ${mingw.version} --output "$out"
-      '';
+  native = {
+    rust-standard-library =
+      pkgs.runCommand "nuschl-rust-standard-library-notices" { nativeBuildInputs = [ pkgs.python3 ]; }
+        ''
+          python3 ${../release/native-notices.py} --component rust-standard-library \
+            --rustc ${toolchain}/bin/rustc --rust-docs ${toolchain}/share/doc/rust --output "$out"
+        '';
+    gcc-runtime =
+      pkgs.runCommand "nuschl-gcc-runtime-notices" { nativeBuildInputs = [ pkgs.python3 ]; }
+        ''
+          python3 ${../release/native-notices.py} --component gcc-runtime \
+            --gcc-source ${gcc.src} --gcc-version ${gcc.version} --output "$out"
+        '';
+    mingw-w64-runtime =
+      pkgs.runCommand "nuschl-mingw-runtime-notices" { nativeBuildInputs = [ pkgs.python3 ]; }
+        ''
+          python3 ${../release/native-notices.py} --component mingw-w64-runtime \
+            --mingw-source ${mingw.src} --mingw-version ${mingw.version} --output "$out"
+        '';
+  };
   runtime = name: version: files: {
     inherit name version;
     source = "Exact pinned toolchain/source archive; see bundled ${name}/PROVENANCE.json and source hashes";
     files = map (file: {
       name = file;
-      path = "${native}/${name}/${file}";
+      path = "${native.${name}}/${name}/${file}";
     }) files;
   };
   newcm = projectRoot + "/release/licenses/newcm";
@@ -83,5 +96,22 @@ in
           inherit sha256;
         }) syntaxAssets.packed_assets_sha256;
       }
-    ];
+    ]
+    ++ pkgs.lib.optional (webRuntimeNotices != null) {
+      name = "web-runtime-assets";
+      version = "locked-rendered-main-and-workers";
+      source = "Actual Vite emitted npm owners, existing Temml ancestry and generated WASM/Cargo source identities";
+      files =
+        map
+          (file: {
+            name = file;
+            path = "${webRuntimeNotices}/${file}";
+          })
+          [
+            "NOTICES.txt"
+            "BUNDLED-NPM.json"
+            "WASM-PROVENANCE.json"
+            "PACKAGE-LOCK.json"
+          ];
+    };
 }

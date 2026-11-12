@@ -7,10 +7,13 @@ independently even if this gate refuses a binary/static-web artifact.
 from pathlib import Path
 import runpy
 import sys
+import argparse
 
-if len(sys.argv) != 2:
-    raise SystemExit("usage: check-notices.py ACTUAL_BUNDLED_NOTICE_DIRECTORY")
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--scope", choices=["all", "linux-nix", "linux-aarch64-nix", "windows-x86_64", "macos-universal", "web"], required=True)
+parser.add_argument("directory", type=Path)
+args = parser.parse_args()
 source = Path(__file__).resolve().parent
 policy = runpy.run_path(str(source / "prepare-artifacts.py"))
-policy["verify_notices"](Path(sys.argv[1]), policy["load"](source / "notice-roots.json"))
+policy["verify_notices"](args.directory, policy["load"](source / "notice-roots.json"), args.scope)
 print("source-scoped runtime notice inventory and actual bundled bytes verified")

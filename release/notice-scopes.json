@@ -1,0 +1,73 @@
+{
+  "all": {
+    "targets": [
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-pc-windows-gnu",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "wasm32-unknown-unknown"
+    ],
+    "external_components": [
+      "rust-standard-library",
+      "gcc-runtime",
+      "mingw-w64-runtime",
+      "newcm-math-font",
+      "syntect-default-assets",
+      "web-runtime-assets"
+    ]
+  },
+  "linux-nix": {
+    "targets": [
+      "x86_64-unknown-linux-gnu"
+    ],
+    "external_components": [
+      "rust-standard-library",
+      "newcm-math-font",
+      "syntect-default-assets"
+    ]
+  },
+  "windows-x86_64": {
+    "targets": [
+      "x86_64-pc-windows-gnu"
+    ],
+    "external_components": [
+      "rust-standard-library",
+      "gcc-runtime",
+      "mingw-w64-runtime",
+      "newcm-math-font",
+      "syntect-default-assets"
+    ]
+  },
+  "macos-universal": {
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin"
+    ],
+    "external_components": [
+      "rust-standard-library",
+      "newcm-math-font",
+      "syntect-default-assets"
+    ]
+  },
+  "web": {
+    "targets": [
+      "wasm32-unknown-unknown"
+    ],
+    "external_components": [
+      "rust-standard-library",
+      "syntect-default-assets",
+      "web-runtime-assets"
+    ]
+  },
+  "linux-aarch64-nix": {
+    "targets": [
+      "aarch64-unknown-linux-gnu"
+    ],
+    "external_components": [
+      "rust-standard-library",
+      "newcm-math-font",
+      "syntect-default-assets"
+    ]
+  }
+}
