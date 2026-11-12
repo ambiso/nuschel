@@ -42,9 +42,9 @@ works alongside Codex through `~/.cache/nuschl-coordination/to-claude.md` and
 `to-codex.md`, with an active reply-file watcher. Claude owns the received-audio
 attenuation audit, an independent read-only simplification/correctness review,
 the separate volume-slider/VAD-meter implementation, installer authentication
-and poll-design lanes. Claude now also has active isolated Markdown implementation,
-font review, legacy poll implementation and image-quality review agents; a Talking
-UI plan is ready for implementation allocation. Codex owns the urgent VAD change,
+and poll-design lanes. Claude has frozen isolated Markdown, font, legacy poll,
+Talking UI and image-quality checkpoints with branch-specific proofs awaiting
+integration. A separate read-only RAM audit is running. Codex owns the urgent VAD change,
 independent speech/onset validation, native PipeWire default-source correction
 and queue/integration. Implement
 in isolated jj workspaces with explicit file/function ownership; exchange frozen
@@ -70,6 +70,13 @@ Current integration checkpoint (2026-11-12):
   metadata fallback is included; its source/API proofs are separate from the
   noise classification finding. Evidence:
   `~/.cache/nuschl-integration-20261112/vad-fix/handoff.json`.
+- [ ] Clear the existing Rust 1.99 Clippy style blockers separately from the
+  urgent VAD change: `question_mark` in `core/admin.rs:338`, `collapsible_if` in
+  `core/preview.rs:143`, and `chunks_exact_to_as_chunks` in media-worker
+  `capture_queue.rs:103` and `mixer.rs:103`. Actual `clippy-driver -D warnings`
+  fails at these compilation lints; passing functional tests and packages are
+  not a full Clippy pass. Evidence:
+  `~/.cache/nuschl-next/vad-drift/clippy-handoff.json`.
 
 
 - **Native voice-status and stable server controls are integrated through
@@ -683,6 +690,14 @@ Later (reported):
       regressions. Also retain hidden-tray Escape loss, intake reservations,
       reconnect/partial-offer behavior and EXIF orientation as explicit work;
       no image-quality completion claim until the corrected artifact is checked.
+      Corrected branch `81bfb3c9` passes 103 desktop tests and its private GUI
+      proof, including received-cache eviction and independent conversation
+      progress; root integration remains open. Reconnect can still discard a
+      queued Original after a caption/inline image has been sent, or leave a
+      dead posted offer. Validate all origins before any batch send, retain
+      snapshots on failure and retire offers visibly within the same conversation.
+      Phone JPEG orientation is still ignored by preview/rendition decoding;
+      preserve Original bytes while applying orientation to derived images.
 - [ ] Reap crash-orphaned original-image snapshots with a bounded, profile-owned
       cache lifecycle. Normal Arc/drop cancellation cleanup is covered by the
       image-quality work; a process crash can leave read-only staging files.
@@ -831,7 +846,8 @@ Later (reported):
       or image buffers, unnecessary eager workers and allocation churn; prioritize
       simple measured reductions without sacrificing isolation, paging, audio
       latency, accessibility or image correctness. Use owned fixtures and preserve
-      before/after evidence. Queued behind the urgent VAD fix.
+      before/after evidence. A read-only Claude lane has started on isolated
+      fixtures; product changes remain behind the urgent VAD fix.
 - [ ] With a screen reader, 1000 loaded messages cost about 4–5 ms per frame (labels
       plus AccessKit work); still 60 fps.
 - [x] Friends and local nicknames by certificate hash (heart marker, nickname shown
