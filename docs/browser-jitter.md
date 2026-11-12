@@ -117,9 +117,11 @@ browser plumbing, this exposed two separate existing defects, retained with
   constants must stay unchanged.
 - Ordered lossless 24 kbit SILK with in-band FEC already matches reference libopus
   at only 6.30 dB. First two packets are exact; the third falls to 0.08 dB, as LBRR
-  likely activates. The frozen direct OpusDecoder probe reproduces this without
-  jitter or persistent output buffers. This is a codec defect investigation,
-  not evidence of a scheduling problem. No gate has been weakened.
+  was initially suspected. The frozen direct OpusDecoder probe reproduced this
+  without jitter or persistent output buffers. Subsequent independent analysis
+  identified valid padded one-byte DTX, corrected separately in the integrated
+  codec; the ordered 48 kHz fixture is now bit-exact. See `opus-silk.md`. The
+  original failure remains evidence; no gate has been weakened.
 
 The non-loss variable-duration case covers every 10 ms multiple through 120 ms and
 passes at 140.9 dB with exact block lengths/gain. Diagnostic flags explicitly
