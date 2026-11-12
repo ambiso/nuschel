@@ -24,30 +24,34 @@ struct Focusable {
 
 impl RenderOnce for Focusable {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let state = window.use_keyed_state(
-            SharedString::from(format!("{}:focus-reveal", self.id)),
-            cx,
-            |window, cx| {
-                let handle = cx.focus_handle();
-                let subscription = cx.on_focus(&handle, window, |state: &mut FocusState, _, cx| {
+        let key = SharedString::from(format!("{}:focus-reveal", self.id));
+        let trace = key.clone();
+        let state = window.use_keyed_state(key, cx, |window, cx| {
+            let handle = cx.focus_handle();
+            let subscription =
+                cx.on_focus(&handle, window, move |state: &mut FocusState, _, cx| {
+                    tracing::debug!(control = %trace, "layout control received focus");
                     state.reveal.set(true);
                     cx.notify();
                 });
-                FocusState {
-                    handle,
-                    reveal: Rc::default(),
-                    _focus: subscription,
-                }
-            },
-        );
+            FocusState {
+                handle,
+                reveal: Rc::default(),
+                _focus: subscription,
+            }
+        });
         let state = state.read(cx);
-        let handle = state.handle.clone();
+        // Div does not apply its tab_index metadata to an explicitly tracked
+        // handle; retain keyboard reachability when supplying our own handle.
+        let handle = state.handle.clone().tab_stop(true).tab_index(0);
         let observed = state.handle.clone();
         let reveal = state.reveal.clone();
+        let trace = self.id.clone();
         self.child.track_focus(&handle).relative().child(
             canvas(
                 move |bounds, window, _| {
                     if reveal.replace(false) && observed.is_focused(window) {
+                        tracing::debug!(control = %trace, ?bounds, "layout control requested reveal");
                         window.request_autoscroll(bounds);
                     }
                 },
@@ -194,6 +198,7 @@ pub fn scrollable(id: &'static str, label: &'static str, handle: ScrollHandle) -
                 let mut offset = reveal.offset();
                 let prior = offset;
                 offset.y = (offset.y - dy).clamp(-reveal.max_offset().y, px(0.));
+                tracing::debug!(region = id, ?target, ?clip, before = ?prior, after = ?offset, max = ?reveal.max_offset(), "layout region received reveal");
                 if offset != prior {
                     reveal.set_offset(offset);
                     window.refresh();

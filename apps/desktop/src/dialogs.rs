@@ -282,6 +282,7 @@ pub fn modal(
 ) -> AnyElement {
     this.modal_shown.set(Some(id));
     if this.modal_seen.get() != Some(id) {
+        tracing::debug!(dialog = id, previous = ?this.modal_seen.get(), "reset dialog scroll");
         this.modal_scroll.set_offset(point(px(0.), px(0.)));
         this.nested.forget_all();
     }
@@ -342,11 +343,8 @@ pub fn nested_list(
     content: Div,
     cx: &mut Context<Desktop>,
 ) -> Stateful<Div> {
-    div()
-        .id(id)
+    crate::layout::scrollable(id, id, this.nested.handle(id))
         .max_h(max_height)
-        .overflow_y_scroll()
-        .track_scroll(&this.nested.handle(id))
         .child(
             content.on_scroll(cx.listener(move |this, event, window, cx| {
                 this.scroll_modal(Some(id), event, window, cx)

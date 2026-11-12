@@ -87,6 +87,13 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
                 dismiss.call("Component","GrabFocus")
                 eventually(lambda:inside(dismiss.extents(),stack.extents()),"focusing a clipped Dismiss did not reveal it")
                 entry["focused_action_revealed"] = True
+                if label == "wide" and percent == 125:
+                    stack.call("Component", "GrabFocus");shell.key("End")
+                    eventually(lambda:not inside(dismiss.extents(),stack.extents()),"Tab probe did not begin with clipped action")
+                    shell.key("Tab")
+                    eventually(lambda:dismiss.focused,"Tab skipped the first notice action")
+                    eventually(lambda:inside(dismiss.extents(),stack.extents()),"Tab focus did not reveal the clipped action")
+                    entry["tab_revealed"] = True
             suggestion.call("Component","GrabFocus")
             eventually(lambda:inside(suggestion.extents(),stack.extents()),"secondary notice action was not revealed")
             entry["secondary_action"] = suggestion.extents()
@@ -148,7 +155,17 @@ def run(args, root, shell, registry, bots, profile, port, pin, shot):
         cancel.call("Component","GrabFocus")
         records.append({"modal":"Server diagnostic","width":width,"zoom":percent,"cancel":cancel.extents(),"dialog":dialog.extents(),"focused":cancel.focused})
         report.write_text(json.dumps(records,indent=2));shot(f"server-form-{width}-{percent}")
-        eventually(lambda:inside(cancel.extents(),dialog.extents()),"server form Cancel was not revealed")
+        try:
+            eventually(lambda:inside(cancel.extents(),dialog.extents()),"server form Cancel was not revealed",timeout=5)
+        except AssertionError:
+            records.append({"modal":"Server post-focus failure","cancel":cancel.extents(),"dialog":dialog.extents(),"focused":cancel.focused})
+            report.write_text(json.dumps(records,indent=2));shot(f"server-post-focus-{width}-{percent}")
+            dialog.call("Component","GrabFocus");shell.key("End");time.sleep(.7)
+            records.append({"modal":"Server manual End diagnostic","cancel":cancel.extents(),"dialog":dialog.extents(),"focused":cancel.focused})
+            shell.key("Home");time.sleep(.3);cancel.call("Component","GrabFocus");time.sleep(.7)
+            records.append({"modal":"Server re-focus diagnostic","cancel":cancel.extents(),"dialog":dialog.extents(),"focused":cancel.focused})
+            report.write_text(json.dumps(records,indent=2));shot(f"server-refocus-{width}-{percent}")
+            raise
         records.append({"modal":"Server form","width":width,"zoom":percent,"cancel":cancel.extents(),"dialog":dialog.extents()})
         cancel.press()
         eventually(lambda:named("dialog","Add or connect to a Mumble server") is None,"Cancel did not close server form")
