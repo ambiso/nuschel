@@ -100,9 +100,10 @@ Ed25519/ML-DSA-44 workers must both succeed. Trust is embedded only, currently
 unenrolled; no adjacent writable key or minisign fallback is accepted. The
 [updater boundary and proof limits](apps/update-worker/README.md#confinement-and-actual-proof)
 include shared parent/OS/compiler/hash dependencies and the CI signing authority.
-Hybrid verifier/LPAC and library-install proof exists in a private Windows 11 VM;
-the actual desktop update/restart flow and macOS Seatbelt runtime proof remain
-outstanding. See [Windows proof and limits](docs/windows-hybrid-update.md).
+Hybrid verifier/LPAC, library-install and desktop update/restart proof exist on
+recorded fixture sources in a private Windows 11 VM, including exact owned profile
+and persisted update-state continuity. Current-head archive checks and macOS
+Seatbelt runtime proof remain outstanding. See [Windows proof and limits](docs/windows-hybrid-update.md).
 
 `nuschld admin` administers the server offline, through the storage worker, with
 no network interface; an operator lock (a `flock` beside a SQLite file, an advisory

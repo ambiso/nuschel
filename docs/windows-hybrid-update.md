@@ -37,7 +37,8 @@ evidence alongside the real launcher calls, not a token-attestation mechanism.
 Finally, a dedicated guest-loopback HTTP fixture provides the signed manifest,
 signature and synthetic program. The native library remembers its version,
 downloads and checks it, applies the installation, and cleans up. This does not
-launch or restart the desktop application. The source and binary hashes are in
+launch or restart the desktop application; that separate proof is described below.
+The native source and binary hashes are in
 [the reviewed proof record](reviews/2026-11-12-windows-hybrid.json).
 
 To reproduce, first boot an explicitly selected existing disposable guest using
@@ -64,23 +65,64 @@ rebuilds used three cached leaf products. Five-second scratch monitoring kept
 at least 22.47 GB free in `/tmp`; the client TMPDIR was disk-backed, while Nix's
 daemon scratch retained its default location. All build failures were retained.
 
-The following remain open: actual desktop GUI update/restart using a separately
-built temporary-public-trust source, final Windows distribution archive proof,
-physical Windows hardware, and native macOS Seatbelt/updater proof. Before the
-GUI harness may run, it must install both verifier EXEs with every required helper
-and use unique owned install/profile directories and PIDs. A separate source
-checkpoint corrects the historical four-file initial copy and blanket same-name
-process stopping: the full nine-program/notice payload is required, run IDs scope
-paths, file offers and listener jobs, and only matching executable paths may be
-stopped. Five host tests and a real guest test using two same-name managed
-stand-ins at different paths pass; the foreign-path sentinel survives. No desktop
-or update ran in that preflight. Child-only environment configuration avoids
-leaving the harness agent pointed at a fixture update server. Owned UIA focus and
-the legacy button coordinates remain to be checked in the actual GUI flow.
+## GUI flow and profile regression
+
+The GUI harness first received complete-payload and ownership corrections: all
+nine programs and actual packaged notices are required, run IDs scope paths,
+file offers and listener jobs, and only matching executable paths may be stopped.
+Six host cases and a real guest test using two same-name managed stand-ins at
+different paths pass; the foreign-path sentinel survives. The additional host
+case preserves Nix's read-only source notices while making only the copied staging
+directories writable for a synthetic delivery marker. No desktop or update runs
+in that preflight. Child-only environment configuration avoids leaving the harness
+agent pointed at a fixture update server.
+
+An exact tracked `4382aa2f` source archive, with only a temporary public trust
+document added outside the repository, produced the first GUI fixture. Its two
+official-feature helper EXEs passed the full native adversarial suite, and the GUI
+applied/restarted and checked every file. Review caught a real production bug:
+relaunch discarded `--profile-dir` and opened the guest's default profile. That run
+does not establish owned-profile continuity and remains retained as failure
+evidence. The private guest's default data was not deleted to hide the problem.
+
+The separate fixed source `3f1657d5` changes only `apps/desktop/src/update.rs` and
+one initialization hook in `main.rs`. It remembers the typed explicit profile as
+an absolute native path and supplies it through `Command` arguments. It does not
+replay one-shot URL, offer or autostart arguments. Default-profile behavior stays
+unchanged. All 82 native desktop unit tests pass, including actual profile
+normalization, spaces/Unicode and Unix non-UTF8 argument preservation.
+
+The strengthened `963f8382` harness starts the app with the **relative**
+`profiles\profile µ` under its unique owned install. After signed installation
+and the real Restart button, it verifies the new process's exact **absolute**
+profile argument and an unchanged SHA-256 of that profile's persisted update
+state. PIDs change from 508 to 3604 with no old PID retained, all 16 signed installed
+files match their manifest hashes, the marker arrives, and staging/retired files
+are removed. Owned UIA focus and the actual button geometry pass. The three
+screenshots show the offer, installed state and clean restarted application.
+The fixed build's eight helper/worker EXEs are byte-identical to the original
+official-feature products that passed the full native suite; only the desktop
+EXE changes. The [GUI proof record](reviews/2026-11-12-windows-gui-update.json)
+retains exact package/source, snapshot, cache, import and binary hashes.
+
+The dependency phase took 575 seconds and produced a 954 MiB CargoArtifacts
+archive. The fixed-source desktop/native-unit build took 370 seconds. Its private
+scratch override reuses those validated artifacts only after complete dependency
+environment comparison showed identical dummy source, toolchain, features and
+link inputs; only the source-specific notice postInstall/output paths differed.
+The new notice postInstall remains intact. No production builder was changed.
+Both phases used two cores/jobs and the five-second 8 GiB scratch guard; at least
+22.47 GB remained free. Original and fixed source snapshots are distinct and
+immutable. The private seeds stayed in a sibling mode-0600 key file, never in
+either source archive, Nix store, guest or public proof. Only temporary public
+trust entered the fixture source. The app had no configured server/voice session.
 
 The official cross builder currently enables both verifier Cargo features in one
 workspace build. Its entry points are fixed to their respective algorithm, but
 these individually featured test products do not prove feature-graph or binary
-equivalence for the eventual official archive. Exact packaged-helper/import and
-archive/runtime validation remains a release gate. The old minisign GUI run does
-not renew evidence for the current hybrid updater.
+equivalence for every eventual official archive. Exact packaged-helper/import and
+archive/runtime validation remains a release gate after later changes, including
+the separately integrated audio fixes outside this snapshot. Physical Windows
+hardware, native macOS Seatbelt/updater execution, production enrollment and an
+actual release remain separate. The old minisign GUI run is not used as evidence
+for this current hybrid path.

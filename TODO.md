@@ -997,19 +997,19 @@ listed below. Plugin data remains the explicit gap.
       isolates install/profile/listener/files by run ID, and stops only PIDs at
       the owned executable path. Five host cases and an actual Windows same-name
       foreign-path sentinel test pass (`windows_update_test.py --guest`).
-- [ ] Build a separate source embedding only a temporary fixture public pair and
-      prove actual Windows desktop update/restart. Revalidate the UIA-owned focus
-      and legacy update-button geometry on that build; native library installation
-      and harness preflight do not cover the GUI flow. Validate the exact official
-      cross/archive helpers too: current `crossCommon` enables both Cargo engine
-      features in one workspace build, so individually featured native test
-      products do not establish packaged dependency/byte equivalence.
-- [ ] Preserve an explicitly selected profile across updater restart. The first
-      GUI run applied/restarted and verified all files but revealed that relaunch
-      dropped `--profile-dir` and opened the default guest profile. A profile-only
-      absolute native-argument fix is under verification; do not replay one-shot
-      URLs, offers or autostart. The strengthened harness must prove exact owned
-      relative/space/Unicode profile selection and update-state continuity.
+- [x] Build a separate temporary-public-trust source and prove the actual Windows
+      GUI update/restart in the private VM. UIA-owned focus and the update-button
+      geometry pass; both exact official-feature helper EXEs pass the full native
+      adversarial fixture. The GUI verifies all 16 installed signed files, disjoint
+      old/new PIDs and retired/staging cleanup. See docs/windows-hybrid-update.md
+      for exact app/harness sources; later audio/source changes still need final
+      integrated distribution/archive checks.
+- [x] Preserve an explicitly selected profile across updater restart. The first
+      run caught dropped `--profile-dir`; the fix remembers only that typed path,
+      normalizes it absolute and uses native Command arguments without replaying
+      URLs, offers or autostart. 82 native units and the actual Windows GUI pass:
+      initial relative space/Unicode profile becomes the exact absolute restarted
+      profile and its persisted update-state SHA remains unchanged.
 - [ ] Complete unattended Windows desktop/audio/sandbox regression orchestration
       and add UDP (the existing guest-forward voice check used the TCP tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
@@ -1499,8 +1499,9 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       pair, expiry and persisted anti-rollback state are bound. No minisign or
       adjacent writable-key fallback. Actual Linux workers, a loopback install,
       strict signer/artifact regressions and workflow syntax are tested. Native
-      Windows hybrid verifier/LPAC/library-install proof now passes; the Windows
-      desktop update/restart flow, macOS native proof and an actual release remain.
+      Windows hybrid verifier/LPAC/library-install and desktop update/restart proof
+      now pass on reviewed fixture sources. macOS native proof, final integrated
+      distribution/archive checks and an actual release remain.
 - [ ] Enroll the production public pair in `crates/update/update-trust.json`, back
       up the independent private seeds and explicitly provision the matching
       `UPDATE_HYBRID_SIGNING_KEY` repository secret with the reviewed operator
@@ -1550,8 +1551,8 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       scope/roots/features, original notice/source hashes, updater file limits and
       both verifier binaries in every desktop distribution; run the release gates
       in `SECURITY.md`/docs/release-notices.md. Current metadata proofs do not imply
-      an actual GitHub release/CI run, Windows desktop update/restart, macOS hybrid
-      updater execution or hardware/accessibility proof.
+      an actual GitHub release/CI run, current-head Windows archive proof, macOS
+      hybrid updater execution or hardware/accessibility proof.
 - [ ] Mobile, web and terminal clients (user, 2026-11-11): decided, see
       docs/clients.md. Then:
   - [x] The headless client SDK in `crates/client` (commands in, updates out; the

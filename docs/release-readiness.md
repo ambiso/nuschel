@@ -83,11 +83,15 @@ permissions, playback and self-update. Mark the Mac artifact untested/experiment
 - [x] Correct the GUI harness's omitted verifier binaries and unowned-process
   stopping. Complete-payload host tests and actual guest same-name foreign-path
   process preservation pass; install/profile/listener/file namespaces are unique.
-- [ ] Run the actual Windows update/restart flow with a separately built temporary-
-  public-trust source, including owned focus and button geometry. Validate the
-  exact official cross/archive helpers: the builder still enables both engine
-  features together, unlike the individually featured native proof products.
-  The old minisign GUI evidence does not establish the current hybrid path.
+- [x] Run the actual Windows update/restart flow with separately built temporary-
+  public-trust sources, owned focus/button geometry, complete installed hashes and
+  cleanup. Fix the discovered lost-profile restart and prove exact absolute
+  selection from a relative space/Unicode profile plus unchanged update-state SHA.
+  Exact official-feature helper bytes also pass the native adversarial suite.
+- [ ] Validate final current-head cross/archive products after later changes.
+  The builder still enables both engine features together; the recorded fixture
+  executes those exact products but does not claim independent feature graphs or
+  equivalence to every subsequent package. macOS runtime remains separate.
 - [ ] Review README/install/security/release notes against the final artifacts:
   early-development status; compatible TLS/Mumble voice; MLS experiments and
   historical-key limits; no completed RTC video/screen-sharing claim; Linux via
