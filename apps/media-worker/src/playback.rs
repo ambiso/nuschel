@@ -442,7 +442,7 @@ mod tests {
                 .push_entire_slice(&[[0.2, -0.1]; 4096])
                 .unwrap();
             let (mut full, mut full_out) = RingBuffer::<f32>::new(3);
-            let (mut roomy, _roomy_out) = RingBuffer::<f32>::new(8192);
+            let (mut roomy, _roomy_out) = RingBuffer::<f32>::new(32768);
             let mut overflow = PlaybackConverter::new(2, rate);
             let mut ordinary = PlaybackConverter::new(2, rate);
             let mut total_device = 0_u64;

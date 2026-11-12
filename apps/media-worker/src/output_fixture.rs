@@ -82,3 +82,84 @@ fn dump() {
         .unwrap();
     }
 }
+
+#[test]
+#[ignore = "explicit synthetic source for device/fallback/AEC proof"]
+fn echo_source() {
+    let mut probe = crate::probe::EchoProbe::new();
+    let mut output = Vec::new();
+    for _ in 0..800 {
+        let mut source = [0_f32; FRAME];
+        probe.render(&mut source);
+        let effects = source.map(|sample| f64::from(sample) * 12.);
+        let mut wide = [[0_f64; 2]; FRAME];
+        crate::mixer::finish(2, &[[0.; 2]; FRAME], &effects, &mut wide);
+        output.extend(
+            wide.iter()
+                .flatten()
+                .flat_map(|sample| sample.to_le_bytes()),
+        );
+    }
+    std::fs::write(std::env::var_os("NUSCHL_ECHO_SOURCE").unwrap(), output).unwrap();
+}
+
+#[test]
+#[ignore = "explicit device-free fallback reference plus independent synthetic room"]
+fn fallback_echo() {
+    let load = |name| {
+        let path = std::env::var_os(name).unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() <= 16 * 1024 * 1024);
+        let raw = std::fs::read(path).unwrap();
+        assert_eq!(raw.len() % 4, 0);
+        let samples: Vec<_> = raw
+            .chunks_exact(4)
+            .map(|sample| f32::from_le_bytes(sample.try_into().unwrap()))
+            .collect();
+        assert!(
+            samples
+                .iter()
+                .all(|sample| sample.is_finite() && sample.abs() <= 1.)
+        );
+        samples
+    };
+    let render = load("NUSCHL_ECHO_REFERENCE");
+    let mic = load("NUSCHL_ECHO_MIC");
+    assert_eq!(render.len(), mic.len() * 2);
+    assert_eq!(mic.len() % FRAME, 0);
+    let settings = nuschl_core::audio::AudioSettings {
+        noise_suppression: false,
+        automatic_gain: false,
+        ..Default::default()
+    };
+    let mut chain = crate::dsp::CapturePipeline::with_reference(&settings, true, 2);
+    chain.set_delay_hint(40);
+    chain.set_far_end(true);
+    let (mut before, mut after, mut sent, mut measured) = (0., 0., 0, 0);
+    for (index, frame) in mic.chunks_exact(FRAME).enumerate() {
+        chain.render(&render[index * 2 * FRAME..(index + 1) * 2 * FRAME]);
+        let mut output: [f32; FRAME] = frame.try_into().unwrap();
+        let result = chain.process(&mut output, false, true);
+        if (300..600).contains(&index) {
+            before += frame
+                .iter()
+                .map(|sample| f64::from(*sample).powi(2))
+                .sum::<f64>();
+            after += output
+                .iter()
+                .map(|sample| f64::from(*sample).powi(2))
+                .sum::<f64>();
+            sent += usize::from(result.transmit);
+            measured += 1;
+        }
+    }
+    assert!(before > 1e-4, "room must contain a real echo signal");
+    let reduction = 10. * (before / after.max(1e-30)).log10();
+    let transmitted = sent as f64 / measured as f64;
+    let report = serde_json::json!({"reduction_db":reduction,"transmitted":transmitted,"measured_frames":measured,"host_devices":false,"kind":"actual fallback reference plus independent C room; direct production AEC pipeline"});
+    std::fs::write(
+        std::env::var_os("NUSCHL_ECHO_RESULT").unwrap(),
+        serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
+    assert!(reduction >= 15. && transmitted <= 0.25, "{report}");
+}
