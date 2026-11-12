@@ -117,7 +117,7 @@
       </label>
       <DuckingPanel player={index} />
     {/if}
-    {#if track}<SongRating library={track.library} songId={track.id} title={track.title} namespace={store.browseKey} placement="above" />{/if}
+    {#if track}<SongRating library={track.library} songId={track.id} title={track.title} namespace={store.browseKey} />{/if}
   </div>
 </footer>
 

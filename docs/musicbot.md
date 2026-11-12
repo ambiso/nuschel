@@ -45,9 +45,9 @@ bot in Mumble. It works with any Mumble server, stock Murmur as well as `nuschld
 - **Library history.** Playback also appears in the configured Subsonic account's
   history and play counts. Shared channels count as one play; independent queues
   count separately. The submission rules are described below.
-- **Ratings.** Use **Rate** on the playing song, a library track or a History
-  entry to save one to five stars, or clear its rating. Listeners share the
-  configured library account; the latest saved rating replaces the previous one.
+- **Ratings.** Click one of the five stars on the playing song, a library track
+  or a History entry to save its rating. Click the star for the current rating
+  again to clear it. Listeners share the configured library account.
 - **Ducking.** While somebody in a channel speaks, the queue playing there gets
   quieter (by default to 30 % of its volume) and comes back 0.8 s after the last
   speech. It fades down in about 60 ms and up in about half a second, so nothing
@@ -368,21 +368,23 @@ against Murmur in a VM, then the same script.
 
 ## Song ratings
 
-Open **Rate**, choose one to five stars and press **Save rating**. **Clear rating**
-removes the rating using the standard Subsonic
+Click a star to save one to five stars immediately. Click the star for the current
+rating again to clear it using the standard Subsonic
 [`setRating`](https://opensubsonic.netlify.app/docs/endpoints/setrating) value 0.
-Controls are available in the player bar, library song lists and playback History.
+Stars appear inline in the player bar, library song lists and playback History.
 
 Navidrome stores ratings per account. The bot uses the configured library account,
 including the account associated with an API key. All listeners and queues using
 that account share its rating; the latest saved choice wins. Ratings remain in
 the library server across bot restarts.
 
-An open control reads the current backend rating and follows changes from other
-listeners. Reopening it also picks up edits made directly in Navidrome. Reads are
-on demand, so unopened song rows and playback progress do not cause rating calls.
-Reconnecting closes stale controls; tracks from a removed library cannot be rated.
-A failed write shows an error and requires **Reload rating** before another try.
+Visible stars load the current backend rating and follow changes from other
+listeners. Offscreen rows wait until they are visible, and all star controls share
+two client-side read slots. Playback progress does not reload ratings. Redisplaying
+a track also picks up edits made directly in Navidrome.
+Reconnecting disables stale controls until fresh ratings arrive; tracks from a
+removed library cannot be rated. A failed write keeps the last confirmed rating
+and shows **Retry**, which reloads the backend value before another star can be saved.
 
 Verified against real Navidrome 0.64.2 with two independent browser listeners:
 all five ratings and clearing, player/library/history controls, live updates,
@@ -493,9 +495,9 @@ require a valid viewer link and use the same bounded, authenticated library
 requests as browsing. They are independent of queue selection.
 
 State/SSE includes `rating_revision`, advanced only after a successful backend
-write. Open controls use it to reload the authoritative rating. The counter is
+write. Visible stars use it to reload the authoritative rating. The counter is
 local to a bot run; ratings are fetched from the library rather than queue or
-history snapshots. After a failed write, reload the current rating before trying again.
+history snapshots. After a failed write, **Retry** reloads the current rating.
 
 `POST command` accepts JSON tagged by `command`: `pause`, `resume`, `skip`,
 `clear`, `seek` (`position_ms`), `volume`, `ducking`, `remove`, `move`, `add`, and

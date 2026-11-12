@@ -1,37 +1,45 @@
 <!-- SPDX-License-Identifier: EUPL-1.2 -->
 <script>
+  import { onMount } from "svelte";
   import { store } from "../store.svelte.js";
   import { resource } from "../resource.svelte.js";
+  import { getRating } from "../rating.js";
   import { postJSON, query } from "../api.js";
 
-  let { library, songId, title, namespace, enabled = true, placement = "below" } = $props();
-  let open = $state(false);
+  let { library, songId, title, namespace, enabled = true } = $props();
+  let root = $state();
+  let visible = $state(false);
   let pending = $state(false);
   let writeError = $state("");
-  let draft = $state(0);
-  let root = $state();
-  let button = $state();
+  let confirmed = $state(null);
+  let preview = $state(null);
   let mutation = null;
-  const id = $props.id();
   const current = $derived(enabled && typeof songId === "string" && songId.length > 0
     && store.browseItemCurrent({ library, namespace }));
-  // Keep reloads tied to primitive identity and rating revision.
   const key = $derived(current ? JSON.stringify([namespace, library, songId]) : null);
   const url = $derived(key === null ? null : query("api/rating", { library, id: songId }));
   const revision = $derived(store.snapshot?.rating_revision ?? 0);
   const namespaceSignal = $derived(store.browseSignal);
   const result = resource(() => {
-    if (!open || pending) return null;
+    if (!visible || pending) return null;
     revision;
     return url;
-  }, () => namespaceSignal);
+  }, () => namespaceSignal, getRating);
   const rating = $derived(result.data?.rating ?? null);
   const validRating = $derived(Number.isInteger(rating) && rating >= 0 && rating <= 5);
   const readError = $derived(result.error || (result.data !== null && !validRating ? "The library returned an invalid rating." : null));
+  const error = $derived(writeError || readError);
+  const editable = $derived(current && !pending && !result.loading && !error && confirmed !== null);
+  const shown = $derived(preview ?? confirmed ?? 0);
+
+  onMount(() => {
+    const observer = new IntersectionObserver(([entry]) => { visible = entry.isIntersecting; });
+    observer.observe(root);
+    return () => observer.disconnect();
+  });
 
   $effect(() => {
-    const value = rating;
-    if (value !== null) draft = value;
+    if (validRating) confirmed = rating;
   });
 
   $effect(() => {
@@ -42,31 +50,13 @@
       mutation = null;
       pending = false;
       writeError = "";
-      draft = 0;
-      open = false;
+      confirmed = null;
+      preview = null;
     };
     signal?.addEventListener("abort", invalidate, { once: true });
     return () => {
       signal?.removeEventListener("abort", invalidate);
       invalidate();
-    };
-  });
-
-  $effect(() => {
-    if (!open) return;
-    const pointerdown = (event) => {
-      if (!root.contains(event.target)) open = false;
-    };
-    const keydown = (event) => {
-      if (event.key !== "Escape") return;
-      open = false;
-      button.focus();
-    };
-    document.addEventListener("pointerdown", pointerdown);
-    document.addEventListener("keydown", keydown);
-    return () => {
-      document.removeEventListener("pointerdown", pointerdown);
-      document.removeEventListener("keydown", keydown);
     };
   });
 
@@ -76,9 +66,9 @@
     result.reload();
   }
 
-  async function save(value) {
-    if (!current || !open || pending || result.loading || readError || writeError || !validRating
-      || !Number.isInteger(value) || value < 0 || value > 5) return;
+  async function save(star) {
+    if (!editable) return;
+    const value = confirmed === star ? 0 : star;
     const target = key;
     const controller = new AbortController();
     const signal = namespaceSignal;
@@ -86,11 +76,11 @@
     signal?.addEventListener("abort", abort, { once: true });
     mutation = controller;
     pending = true;
+    preview = null;
     writeError = "";
     const active = () => mutation === controller && !controller.signal.aborted && current && key === target;
     try {
       await postJSON("api/rating", { library, id: songId, rating: value }, controller.signal);
-      // Read the backend after a successful write.
       if (active()) result.reload();
     } catch (failure) {
       if (active()) writeError = failure instanceof Error ? failure.message : String(failure);
@@ -104,77 +94,36 @@
   }
 </script>
 
-<div class="rating" bind:this={root} draggable="false">
-  <button
-    class="toggle"
-    bind:this={button}
-    disabled={!current}
-    aria-label="Rate {title} in the shared library account"
-    aria-expanded={open && current}
-    aria-controls="{id}-panel"
-    title={library == null ? "This track's library is unavailable" : "Shared library rating"}
-    onclick={() => (open = !open)}
-  >Rate</button>
-  {#if open && current}
-    <div class="panel" class:above={placement === "above"} id="{id}-panel" role="group" aria-label="Shared library rating for {title}" aria-busy={pending || result.loading}>
-      <strong>Shared library rating</strong>
-      <p class="explanation muted">Shared by listeners using this library account. The latest rating wins.</p>
-      {#if pending}
-        <p role="status">Saving to the shared library…</p>
-      {:else if result.loading}
-        <p class="muted" role="status">Loading current library rating…</p>
-      {:else if readError}
-        <p class="error" role="alert">Could not load rating: {readError}</p>
-      {:else if validRating}
-        <p role="status">Current rating: {rating === 0 ? "Unrated (0)" : `${rating} of 5 stars`}</p>
-      {/if}
-      {#if writeError}
-        <p class="error" role="alert">Rating write was not confirmed: {writeError}. Reload the current rating before trying again.</p>
-      {/if}
-      {#if !pending && (readError || writeError)}
-        <button onclick={reload}>Reload rating</button>
-      {/if}
-      <label for="{id}-value">New rating</label>
-      <select id="{id}-value" bind:value={draft} disabled={pending || result.loading || !!readError || !!writeError || !validRating}>
-        <option value={0}>0 — Unrated</option>
-        <option value={1}>1 star — ★</option>
-        <option value={2}>2 stars — ★★</option>
-        <option value={3}>3 stars — ★★★</option>
-        <option value={4}>4 stars — ★★★★</option>
-        <option value={5}>5 stars — ★★★★★</option>
-      </select>
-      <div class="actions">
-        <button class="primary" disabled={pending || result.loading || !!readError || !!writeError || !validRating} onclick={() => save(draft)}>Save rating</button>
-        <button disabled={pending || result.loading || !!readError || !!writeError || !validRating || rating === 0} onclick={() => save(0)}>Clear rating</button>
-      </div>
-    </div>
+<div class="rating" bind:this={root} role="group" aria-label="Shared library rating for {title}" aria-busy={pending || result.loading} draggable="false">
+  <div class="stars" title={library == null ? "This track's library is unavailable" : "Shared library rating. Click the selected star again to clear."}>
+    {#each [1, 2, 3, 4, 5] as star (star)}
+      <button
+        class="star"
+        class:filled={star <= shown}
+        disabled={!editable}
+        aria-label="{star} {star === 1 ? 'star' : 'stars'}"
+        aria-pressed={confirmed === star}
+        title={confirmed === star ? "Clear rating" : `Rate ${star} ${star === 1 ? 'star' : 'stars'}`}
+        onpointerenter={(event) => { if (editable && event.pointerType === "mouse") preview = star; }}
+        onpointerleave={() => (preview = null)}
+        onclick={() => save(star)}
+      ><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="m12 3 2.8 5.7 6.3.9-4.55 4.45 1.07 6.3L12 17.4l-5.62 2.95 1.07-6.3L2.9 9.6l6.3-.9Z" /></svg></button>
+    {/each}
+  </div>
+  <span class="visually-hidden" role="status">{pending ? "Saving rating…" : result.loading ? "Loading rating…" : confirmed === null ? "Rating unavailable" : confirmed === 0 ? "Unrated" : `${confirmed} of 5 stars`}</span>
+  {#if error && !pending}
+    <span class="feedback error" role="alert" title={error}>Rating unavailable. <button class="retry" onclick={reload}>Retry</button></span>
   {/if}
 </div>
 
 <style>
-  .rating { position: relative; flex: none; }
-  .toggle { padding: 0.3rem 0.5rem; font-size: 0.8rem; }
-  .panel {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 0.4rem);
-    z-index: 30;
-    width: min(19rem, calc(100vw - 1.5rem));
-    max-height: calc(100dvh - 9rem);
-    overflow-y: auto;
-    display: grid;
-    gap: 0.4rem;
-    padding: 0.9rem;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface);
-    box-shadow: var(--shadow);
-    font-size: 0.875rem;
-    overflow-wrap: anywhere;
-  }
-  .panel.above { top: auto; bottom: calc(100% + 0.6rem); }
-  p { margin: 0; }
-  .explanation { font-size: 0.8rem; }
-  select { width: 100%; min-width: 0; }
-  .actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .rating { flex: none; max-width: 100%; }
+  .stars { display: flex; width: max-content; }
+  .star { display: grid; place-items: center; width: 24px; height: 28px; padding: 2px; border: none; border-radius: 4px; background: transparent; color: var(--muted); }
+  .star.filled { color: var(--warning); }
+  .star svg { display: block; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
+  .star.filled svg { fill: currentColor; }
+  .star:hover:not(:disabled) { background: var(--surface-hover); }
+  .feedback { display: block; max-width: 15rem; font-size: 0.75rem; overflow-wrap: anywhere; }
+  .retry { padding: 0; border: none; background: transparent; color: inherit; text-decoration: underline; font-size: inherit; }
 </style>

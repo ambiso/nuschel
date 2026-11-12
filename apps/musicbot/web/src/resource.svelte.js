@@ -17,7 +17,7 @@ class Resource {
  * a null URL loads nothing. An optional namespace signal aborts and clears old data
  * synchronously on invalidation, before a reconnect can expose another library.
  */
-export function resource(url, signal = () => null) {
+export function resource(url, signal = () => null, load = getJSON) {
   const r = new Resource();
   $effect(() => {
     r.revision;
@@ -40,7 +40,7 @@ export function resource(url, signal = () => null) {
     r.loading = true;
     r.error = null;
     r.data = null;
-    getJSON(path, controller.signal).then(
+    load(path, controller.signal).then(
       (data) => {
         if (controller.signal.aborted) return;
         r.data = data;
