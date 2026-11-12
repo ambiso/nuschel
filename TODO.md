@@ -600,12 +600,20 @@ Later (reported):
       2026-11-12). Provide creation, voting and readable results; persist poll
       definitions/votes on Nuschl servers and reconcile reconnects, concurrent
       devices and duplicate events using stable identities. Define single/multiple
-      choice, changing votes, closing/deleting and moderation permissions. Keep
+      choice, changing votes, deletion and moderation permissions. Keep
       native/web presentation accessible and bounded. Preserve MLS confidentiality
       where enabled; legacy Mumble clients need an honest readable fallback, with
       no unsupported claim of authoritative legacy voting. Claude Code is
-      investigating the smallest shared model/transport slice in a separate
-      workspace; implementation ownership is pending review.
+      investigating the shared model/transport slice in a separate workspace;
+      protocol/server/UI ownership is pending review. User decisions relayed
+      through the coordinated Claude session: votes are public to poll readers,
+      with results visible before voting and a View votes action showing voters
+      per option; no anonymous voting and no poll-closing feature. Author and
+      moderators may delete polls. Compatible servers post coalesced/throttled
+      readable status updates for legacy clients. MLS late-joiner results may
+      remain explicitly incomplete until the archive is read. Remove the earlier
+      close/final-count design; do not silently discard valid ballots to enforce
+      an arbitrary retained-vote cap.
 - [x] Typing indicators on Nuschl servers (`typing/1`, 2026-11-11): "Ada is typing…"
       in the composer's footer line (no layout shift), a polite live region; Settings →
       Privacy turns sending off. Stock Mumble servers: none (`PluginDataTransmission`
@@ -991,6 +999,8 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       listed below. Private synthetic timings do not complete this investigation.
       User confirms about two seconds unable to trigger VAD after unmute on
       `/nix/store/xvrd2w91l46qaaya8slp3rcsn8ww69jv-nuschl-0.1.0`.
+      Packaged worker SHA-256 is
+      `f91d2943012555d7e48fff0ef7ba58c4ade8f2ef3a65e7e2ba2aa47e9dade3e7`.
       Trace worker start/first PCM, detector cold-state probability/gate and
       permission/ACK-to-send separately on this exact build. The long-idle
       false-trigger symptom also persists; neither is claimed fixed by the
@@ -1524,7 +1534,10 @@ listed below. Plugin data remains the explicit gap.
       Percent/readouts and accessible values must describe the actual gain;
       dragging must not cause synchronous disk/IPC work on every pointer event.
       Keep VAD sensitivity on its own appropriate scale. Claude Code owns the
-      independent design/implementation lane; not yet implemented.
+      independent implementation lane. Source and private scenes are frozen
+      for review; shared gate-floor constant, per-open Settings callback lifetime,
+      nonfinite values, perceptual sound-volume scale and quit/final-save checks
+      are being tightened before integration. No per-pointer synchronous writes.
 - [ ] Add a live input/activity meter directly above VAD sensitivity (user,
       2026-11-12). Show whether speech opens the actual voice gate; distinguish
       microphone level from a probability-based VAD threshold rather than drawing
@@ -1533,6 +1546,11 @@ listed below. Plugin data remains the explicit gap.
       and never open the microphone solely by visiting Settings. Bound meter
       update work and verify with private synthetic input, not host capture.
       Claude Code owns this alongside the slider work; not yet implemented.
+      The explicit local microphone test must say speech gate open/closed rather
+      than imply network transmission. Bind readings to preview/capture lifetime;
+      distinguish processed level from raw input and expose independent test
+      capture clearly while calls are muted. Share threshold/floor definitions
+      with the worker; the remaining live-call meter is a separate future scope.
 - [x] Restore desktop rail/footer spacing (user, 2026-11-12): Add-a-server's
       bottom edge currently touches the window, and Settings/mute/deafen have no
       gaps. The rail now has matching top/bottom padding and the compact control
