@@ -33,17 +33,22 @@ class Reference(Speex):
 
 
 def invoke(binary, name, environment):
+    env = dict(os.environ)
+    env.pop('NUSCHL_OUTPUT_DROP_REFERENCE', None)
+    env.update(environment)
     return subprocess.run([str(binary), '--ignored', '--exact', 'live::output_fixture::'+name],
-        env=os.environ | environment, capture_output=True, check=True, timeout=60)
+        env=env, capture_output=True, check=True, timeout=60)
 
 
-def render(binary, source, rate, chunks, root):
+def render(binary, source, rate, chunks, root, reference_active=True):
     root.mkdir(parents=True, exist_ok=True)
     before, after, reference = root/'input.f64le', root/'device.f32le', root/'reference.f32le'
     np.asarray(source, dtype='<f8').tofile(before)
-    invoke(binary, 'dump', {'NUSCHL_OUTPUT_INPUT': str(before), 'NUSCHL_OUTPUT_OUTPUT': str(after),
+    environment = {'NUSCHL_OUTPUT_INPUT': str(before), 'NUSCHL_OUTPUT_OUTPUT': str(after),
         'NUSCHL_OUTPUT_REFERENCE': str(reference), 'NUSCHL_OUTPUT_FORMAT': 'f64le',
-        'NUSCHL_OUTPUT_RATE': str(rate), 'NUSCHL_OUTPUT_CHUNKS': chunks})
+        'NUSCHL_OUTPUT_RATE': str(rate), 'NUSCHL_OUTPUT_CHUNKS': chunks}
+    if not reference_active: environment['NUSCHL_OUTPUT_DROP_REFERENCE'] = '1'
+    invoke(binary, 'dump', environment)
     return (np.fromfile(after, dtype='<f4').reshape(-1, 2),
         np.fromfile(reference, dtype='<f4').reshape(-1, 2),
         json.loads(reference.with_suffix('.json').read_text()))
@@ -77,6 +82,7 @@ def main():
     parser.add_argument('--speex-library', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--echo', action='store_true')
+    parser.add_argument('--benchmark', action='store_true')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     c = Reference(args.speex_library)
@@ -123,7 +129,34 @@ def main():
                 'room_truth': 'independent C reverse-SRC of actual clipped device PCM',
                 'source_peak': float(np.max(abs(source))), 'clipped_device_samples': int(np.sum(abs(actual) == 1)),
                 'clock': clock(stamps, rate, c.input_latency(rate))})
-    report = {'passed': True, 'host_devices': False, 'network': False, 'cases': cases, 'echo': echoes,
+    benchmarks = []
+    if args.benchmark:
+        source = sources()[0][1][:48000]
+        for rate in (44100, 48000, 96000):
+            rows = []
+            control = None
+            for repeat in range(3):
+                for active in ([True, False] if repeat%2 == 0 else [False, True]):
+                    root = args.output/f'cost-{rate}-{repeat}-{active}'
+                    actual, reference, stamps = render(args.converter_test, source, rate, '480', root, active)
+                    if control is None: control = actual
+                    else: assert np.array_equal(control, actual), 'fallback lifecycle changed device waveform'
+                    if not active:
+                        assert len(reference) == 0
+                        assert all(stamp['reference_buffered_frames'] == 0 for stamp in stamps)
+                        assert len(set(stamp['reference_delay_ns'] for stamp in stamps)) == 1, 'unused reverse filter advanced'
+                    costs = [stamp['pull_ns'] for stamp in stamps[10:]]
+                    rows.append({'repeat':repeat,'fallback_active':active,'calls':len(costs),
+                        'p50_pull_ns':int(np.percentile(costs,50)), 'p95_pull_ns':int(np.percentile(costs,95)),
+                        'max_pull_ns':max(costs)})
+            summary = []
+            for active in (False, True):
+                selected = [row for row in rows if row['fallback_active'] == active]
+                summary.append({'fallback_active':active,'median_p95_pull_ns':float(np.median([row['p95_pull_ns'] for row in selected])),
+                    'max_pull_ns':max(row['max_pull_ns'] for row in selected)})
+            benchmarks.append({'rate':rate,'device_frames_per_callback':480,'device_audio_bit_exact':True,
+                'order':'alternating paired3repeats','rows':rows,'summary':summary})
+    report = {'passed': True, 'host_devices': False, 'network': False, 'cases': cases, 'echo': echoes, 'callback_benchmarks':benchmarks,
         'limits': ['Direct production fallback/AEC pipeline with synthetic C room; not an opened CPAL fallback device',
             'Native worker/system-monitor private-Pulse proof is separate', 'No general hardware or non48k AEC reliability claim']}
     (args.output/'proof.json').write_text(json.dumps(report, indent=2)+'\n')
