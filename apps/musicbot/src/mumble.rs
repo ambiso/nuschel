@@ -7,6 +7,7 @@ use crate::{
     tokens::Owner,
 };
 use nuschl_core::audio::SILENT_OPUS;
+use nuschl_ipc::musicbot::{Ducker, Unavailable, speech_threshold};
 use nuschl_legacy_html::escape_html;
 use nuschl_protocol::voice::VoicePacket;
 use nuschl_session::{
@@ -76,20 +77,23 @@ impl Connection {
 /// Keeps the connection up, reconnecting with growing pauses.
 pub async fn run(bot: Arc<Bot>, index: usize) {
     let mut pause = Duration::from_secs(1);
-    let mut detector = nuschl_ipc::musicbot::Client::new(
-        nuschl_ipc::musicbot::Role::Duck,
-        bot.codec_worker.clone(),
-    );
+    let mut detector = Ducker::new(bot.codec_worker.clone());
     loop {
         let started = Instant::now();
         let error = match session(&bot, index, &mut detector).await {
             Ok(()) => "disconnected".to_owned(),
             Err(error) => error,
         };
-        if let Err(error) = detector.close().await {
+        // The next session is a genuinely new one: only now do detector
+        // failures and quarantined talkers reset.
+        if let Err(Unavailable(error)) = detector.new_session().await {
+            tracing::error!(
+                "{}: speech detector exit unconfirmed: {error}",
+                bot.connections[index].name
+            );
             bot.connections[index].update(&bot.changes, |status| {
                 *status = Status {
-                    error: Some(error),
+                    error: Some(DETECTOR_UNAVAILABLE.to_owned()),
                     ..Status::default()
                 };
             });
@@ -214,11 +218,7 @@ impl Drop for AbortSession {
     }
 }
 
-async fn session(
-    bot: &Arc<Bot>,
-    index: usize,
-    detector: &mut nuschl_ipc::musicbot::Client,
-) -> Result<(), String> {
+async fn session(bot: &Arc<Bot>, index: usize, detector: &mut Ducker) -> Result<(), String> {
     let config = &bot.config.channels[index];
     let connection = &bot.connections[index];
     let profile = Profile::open(Some(
@@ -303,19 +303,26 @@ async fn session(
                         .as_ref()
                         .map(|subscription| (subscription.player, bot.players[subscription.player].state().ducking))
                         .filter(|(_, ducking)| ducking.enabled);
+                    // A detector failure whose exit was confirmed costs only this
+                    // packet, never the connection; an unconfirmed one ends it.
                     match ducking {
                         Some((player, ducking)) => {
-                            if detector.hear(packet.sender, packet.opus.clone(), nuschl_ipc::musicbot::speech_threshold(ducking.sensitivity)).await? {
+                            let suspended = detector.suspended();
+                            let threshold = speech_threshold(ducking.sensitivity);
+                            if detector.hear(packet.sender, &packet.opus, threshold).await.map_err(unavailable)? {
                                 bot.players[player].heard_speech();
                             }
+                            if detector.suspended() != suspended {
+                                publish(bot, index, &view, detector);
+                            }
                         }
-                        // Nothing to duck: nothing to decode.
-                        None => detector.clear().await?,
+                        // Nothing to duck: the detector is retired once, then nothing is sent.
+                        None => detector.disable().await.map_err(unavailable)?,
                     }
                     continue;
                 }
                 if let SessionEvent::UserRemoved(session) = &event {
-                    detector.forget(*session).await?;
+                    detector.forget(*session).await.map_err(unavailable)?;
                 }
                 let previous_bandwidth = view.max_bandwidth;
                 handle(bot, index, &commands, &mut view, event);
@@ -324,21 +331,7 @@ async fn session(
                 {
                     bot.players[subscription.player].update_bandwidth(index, view.max_bandwidth);
                 }
-                connection.update(&bot.changes, |status| {
-                    status.connected = view.own.is_some();
-                    status.listeners = view.listeners();
-                    status.channel = view
-                        .own_channel()
-                        .and_then(|id| view.channels.get(&id))
-                        .map(|channel| channel.name.clone());
-                    if status.connected {
-                        status.error = view.problem.clone().or_else(|| {
-                            (status.listeners > 0
-                                && bitrate_for_bandwidth(bot.config.audio.bitrate, view.max_bandwidth) == 0)
-                                .then(|| "The server bandwidth is too low to transmit music.".to_owned())
-                        });
-                    }
-                });
+                publish(bot, index, &view, detector);
             }
             changed = attached.changed() => {
                 if changed.is_err() {
@@ -361,6 +354,37 @@ async fn session(
         let _ = running.await;
     }
     result
+}
+
+const DETECTOR_UNAVAILABLE: &str =
+    "The speech detector could not be stopped; ducking is unavailable on this connection.";
+
+fn unavailable(Unavailable(error): Unavailable) -> String {
+    tracing::error!("speech detector exit unconfirmed: {error}");
+    DETECTOR_UNAVAILABLE.to_owned()
+}
+
+/// The connection's state for the web page, with at most one fixed detector notice.
+fn publish(bot: &Bot, index: usize, view: &View, detector: &Ducker) {
+    bot.connections[index].update(&bot.changes, |status| {
+        status.connected = view.own.is_some();
+        status.listeners = view.listeners();
+        status.channel = view
+            .own_channel()
+            .and_then(|id| view.channels.get(&id))
+            .map(|channel| channel.name.clone());
+        if status.connected {
+            status.error = view
+                .problem
+                .clone()
+                .or_else(|| {
+                    (status.listeners > 0
+                        && bitrate_for_bandwidth(bot.config.audio.bitrate, view.max_bandwidth) == 0)
+                        .then(|| "The server bandwidth is too low to transmit music.".to_owned())
+                })
+                .or_else(|| detector.notice().map(str::to_owned));
+        }
+    });
 }
 
 async fn next_packet(

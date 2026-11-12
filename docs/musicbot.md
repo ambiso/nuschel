@@ -178,7 +178,15 @@ The bot starts that worker only from its fixed place beside itself
 - Encode: one lazy persistent child per player, one 20 ms request at a time.
   It uses Opus Audio, constrained VBR, and at most 992 encoded bytes per reply.
 - Duck: one lazy persistent child per Mumble connection, one packet at a time,
-  at most 1 KiB per packet and 64 retained speaker states.
+  at most 1 KiB per packet and 64 retained speaker states. A request that fails
+  (a crash, a malformed reply, the 2-second deadline) costs only that packet once
+  the child's exit is confirmed: the Mumble connection stays up, the talker whose
+  packet was in flight is ignored for the rest of the session (poison input is not
+  retried), and after three such failures ducking stops until the next Mumble
+  session, with one notice on the page. Nothing else (no ducking or settings
+  change) resets this. When ducking is off, the child is retired once and later
+  packets send nothing. Only an exit that cannot be confirmed ends the session; the
+  connection then stays down rather than start a second detector.
 
 Each role also has bubblewrap namespace supervision processes. These are process
 costs, not additional user audio streams. Children have no audio

@@ -447,9 +447,30 @@ pub async fn read_response(output: &mut ChildStdout, id: u64) -> Result<Response
     Ok(reply.payload)
 }
 
+/// Why a codec request failed.
+#[derive(Debug)]
+pub enum Failure {
+    /// No codec process is held any more: the failed child's exit was
+    /// confirmed (or none started), so a later request may start another.
+    Recovered(String),
+    /// The child's exit could not be confirmed: the client keeps owning it
+    /// and starts no replacement while it does.
+    Retained(String),
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Recovered(message) | Self::Retained(message) => formatter.write_str(message),
+        }
+    }
+}
+
 /// One unique mutable owner per encoder/connection; no request queue or spawned
 /// per-request tasks. A cancelled future leaves `busy` set and must retire the
 /// old process before another request. Failure to reap never creates a new one.
+/// The request deadline bounds only the exchange; reaping a failed child is
+/// awaited separately and completely.
 pub struct Client {
     role: Role,
     executable: PathBuf,
@@ -480,19 +501,33 @@ impl Client {
         self.process.is_some()
     }
 
-    async fn request(&mut self, request: Request) -> Result<Response, String> {
+    /// Ends the current child after `error`: recovered only once its exit is
+    /// confirmed. A malformed or failed owner is never reused, even when
+    /// termination itself fails; a later request retries the reaping.
+    async fn end(&mut self, error: String) -> Failure {
+        self.busy = true;
+        match self.close().await {
+            Ok(()) => Failure::Recovered(error),
+            Err(unconfirmed) => Failure::Retained(unconfirmed),
+        }
+    }
+
+    async fn request(&mut self, request: Request) -> Result<Response, Failure> {
         if self.busy {
-            self.close().await?;
+            self.close().await.map_err(Failure::Retained)?;
         }
         if self.process.is_none() {
-            self.process = Some(spawn(&self.executable, self.role).await?);
+            let process = spawn(&self.executable, self.role)
+                .await
+                .map_err(Failure::Recovered)?;
+            self.process = Some(process);
             self.next = 1;
         }
         let id = self.next;
-        self.next = self
-            .next
-            .checked_add(1)
-            .ok_or("codec request ids exhausted")?;
+        let Some(next) = self.next.checked_add(1) else {
+            return Err(self.end("codec request ids exhausted".into()).await);
+        };
+        self.next = next;
         self.busy = true;
         let process = self.process.as_mut().unwrap();
         let exchange = async {
@@ -504,48 +539,50 @@ impl Client {
                 self.busy = false;
                 Ok(response)
             }
-            result => {
-                // Keep process/credit if this cannot confirm termination.
-                self.close().await?;
-                Err(match result {
-                    Ok(Err(error)) => error,
-                    _ => "codec worker did not answer in time".into(),
-                })
-            }
+            Ok(Err(error)) => Err(self.end(error).await),
+            Err(_) => Err(self.end("codec worker did not answer in time".into()).await),
         }
     }
 
-    async fn unexpected<T>(&mut self) -> Result<T, String> {
-        // Quarantine a malformed owner even when termination itself fails.
-        // A subsequent request must retry reaping, never reuse this protocol.
-        self.busy = true;
-        self.close().await?;
-        Err("codec worker returned an unexpected response".into())
+    async fn unexpected<T>(&mut self) -> Result<T, Failure> {
+        Err(self
+            .end("codec worker returned an unexpected response".into())
+            .await)
     }
 
     pub async fn encode(&mut self, samples: Vec<f32>, bitrate: u32) -> Result<Vec<u8>, String> {
         if !valid_pcm(&samples) || samples.iter().any(|v| v.abs() > 1.) {
             return Err("invalid encoder PCM".into());
         }
-        match self.request(Request::Encode { samples, bitrate }).await? {
+        let response = self
+            .request(Request::Encode { samples, bitrate })
+            .await
+            .map_err(|failure| failure.to_string())?;
+        match response {
             Response::Packet { opus } if !opus.is_empty() && opus.len() <= MAX_OPUS_BYTES => {
                 Ok(opus)
             }
             Response::Error { message } => Err(message),
-            _ => self.unexpected().await,
+            _ => self
+                .unexpected()
+                .await
+                .map_err(|failure: Failure| failure.to_string()),
         }
     }
+    /// A damaged packet (empty, oversized, or with an invalid threshold) is
+    /// not speech and costs no request.
     pub async fn hear(
         &mut self,
         sender: u32,
         opus: Vec<u8>,
         threshold: f32,
-    ) -> Result<bool, String> {
-        if opus.len() > MAX_VOICE_BYTES
+    ) -> Result<bool, Failure> {
+        if opus.is_empty()
+            || opus.len() > MAX_VOICE_BYTES
             || !threshold.is_finite()
             || !(0.0..=1.0).contains(&threshold)
         {
-            return Err("invalid ducking input".into());
+            return Ok(false);
         }
         match self
             .request(Request::Hear {
@@ -556,11 +593,10 @@ impl Client {
             .await?
         {
             Response::Speech { active } => Ok(active),
-            Response::Error { message } => Err(message),
             _ => self.unexpected().await,
         }
     }
-    pub async fn forget(&mut self, sender: u32) -> Result<(), String> {
+    pub async fn forget(&mut self, sender: u32) -> Result<(), Failure> {
         if !self.started() {
             return Ok(());
         }
@@ -570,13 +606,123 @@ impl Client {
         if !self.started() {
             return Ok(());
         }
-        self.ack(Request::Clear).await
+        self.ack(Request::Clear)
+            .await
+            .map_err(|failure| failure.to_string())
     }
-    async fn ack(&mut self, request: Request) -> Result<(), String> {
+    async fn ack(&mut self, request: Request) -> Result<(), Failure> {
         match self.request(request).await? {
             Response::Ack => Ok(()),
-            Response::Error { message } => Err(message),
             _ => self.unexpected().await,
+        }
+    }
+}
+
+/// Recovered speech-detector failures one Mumble session tolerates before
+/// ducking stops for the rest of it.
+pub const DUCK_FAILURES: usize = 3;
+
+/// Ending the speech detector could not be confirmed. Its process stays owned;
+/// ducking is unavailable and the connection must not start another detector.
+#[derive(Debug)]
+pub struct Unavailable(pub String);
+
+/// The speech detector of one Mumble connection: a lazy confined duck child
+/// whose failures never cost the connection. A failed request whose child
+/// exit was confirmed costs only that packet: its sender is quarantined, so
+/// poison input is never retried, and after `DUCK_FAILURES` such failures
+/// ducking stops until the next Mumble session (`new_session`). Only an
+/// unconfirmed exit is reported, as `Unavailable`.
+pub struct Ducker {
+    client: Client,
+    /// At most `DUCK_FAILURES` senders: each one is a recovered failure.
+    quarantined: Vec<u32>,
+    failures: usize,
+}
+
+impl Ducker {
+    pub fn new(executable: PathBuf) -> Self {
+        Self {
+            client: Client::new(Role::Duck, executable),
+            quarantined: Vec::new(),
+            failures: 0,
+        }
+    }
+
+    /// Whether a duck child currently exists.
+    pub fn running(&self) -> bool {
+        self.client.started()
+    }
+
+    pub fn suspended(&self) -> bool {
+        self.failures >= DUCK_FAILURES
+    }
+
+    /// The one fixed status line while ducking is suspended.
+    pub fn notice(&self) -> Option<&'static str> {
+        self.suspended().then_some(
+            "Ducking stopped on this connection after the speech detector failed three times; \
+             it resumes after the next reconnection.",
+        )
+    }
+
+    /// A genuinely new Mumble session: the old child is retired and its
+    /// failures and quarantine are forgotten. Nothing else resets them.
+    pub async fn new_session(&mut self) -> Result<(), Unavailable> {
+        self.client.close().await.map_err(Unavailable)?;
+        self.quarantined.clear();
+        self.failures = 0;
+        Ok(())
+    }
+
+    /// One voice packet of `sender`; true when it holds speech.
+    pub async fn hear(
+        &mut self,
+        sender: u32,
+        opus: &[u8],
+        threshold: f32,
+    ) -> Result<bool, Unavailable> {
+        if self.suspended() || self.quarantined.contains(&sender) {
+            return Ok(false);
+        }
+        match self.client.hear(sender, opus.to_vec(), threshold).await {
+            Ok(active) => Ok(active),
+            Err(failure) => self.failed(Some(sender), failure).map(|()| false),
+        }
+    }
+
+    /// `sender` left; its detector state goes (the quarantine stays).
+    pub async fn forget(&mut self, sender: u32) -> Result<(), Unavailable> {
+        if self.suspended() {
+            return Ok(());
+        }
+        match self.client.forget(sender).await {
+            Ok(()) => Ok(()),
+            Err(failure) => self.failed(None, failure),
+        }
+    }
+
+    /// Nobody needs ducking: retire the child once. While it is not running,
+    /// this and later packets send nothing.
+    pub async fn disable(&mut self) -> Result<(), Unavailable> {
+        if self.client.started() {
+            self.client.close().await.map_err(Unavailable)?;
+        }
+        Ok(())
+    }
+
+    fn failed(&mut self, sender: Option<u32>, failure: Failure) -> Result<(), Unavailable> {
+        match failure {
+            Failure::Retained(unconfirmed) => Err(Unavailable(unconfirmed)),
+            Failure::Recovered(_) => {
+                if let Some(sender) = sender
+                    && !self.quarantined.contains(&sender)
+                {
+                    self.quarantined.push(sender);
+                }
+                self.failures = self.failures.saturating_add(1);
+                Ok(())
+            }
         }
     }
 }
@@ -931,6 +1077,48 @@ mod tests {
             error,
             "playback cannot start more than 180 minutes into a song"
         );
+    }
+
+    #[test]
+    fn an_unconfirmed_exit_is_unavailable_and_recovered_ones_are_bounded() {
+        let mut ducker = Ducker::new(PathBuf::from("/nonexistent/nuschl-musicbot-codec-worker"));
+        assert!(matches!(
+            ducker.failed(Some(1), Failure::Retained("cannot reap".into())),
+            Err(Unavailable(_))
+        ));
+        assert_eq!(ducker.failures, 0);
+        for sender in [7, 7, 8] {
+            ducker
+                .failed(Some(sender), Failure::Recovered("died".into()))
+                .unwrap();
+        }
+        assert!(ducker.suspended() && ducker.notice().is_some());
+        assert_eq!(ducker.quarantined, [7, 8]);
+    }
+
+    #[tokio::test]
+    async fn a_missing_worker_suspends_ducking_instead_of_retrying_forever() {
+        let mut ducker = Ducker::new(PathBuf::from("/nonexistent/nuschl-musicbot-codec-worker"));
+        let packet = nuschl_core::audio::SILENT_OPUS;
+        for sender in 0..10 {
+            assert!(!ducker.hear(sender, &packet, 0.6).await.unwrap());
+        }
+        // Three failed launches, each quarantining its sender, then nothing.
+        assert!(ducker.suspended() && !ducker.running());
+        assert_eq!(ducker.quarantined, [0, 1, 2]);
+        // Damaged input costs no request at all.
+        let mut fresh = Ducker::new(PathBuf::from("/nonexistent/nuschl-musicbot-codec-worker"));
+        for opus in [Vec::new(), vec![1; MAX_VOICE_BYTES + 1]] {
+            assert!(!fresh.hear(1, &opus, 0.6).await.unwrap());
+        }
+        assert!(!fresh.hear(1, &packet, f32::NAN).await.unwrap());
+        assert_eq!(fresh.failures, 0);
+        // Only a new session resets the count.
+        fresh.disable().await.unwrap();
+        ducker.disable().await.unwrap();
+        assert!(ducker.suspended());
+        ducker.new_session().await.unwrap();
+        assert!(!ducker.suspended() && ducker.quarantined.is_empty());
     }
 
     #[tokio::test]

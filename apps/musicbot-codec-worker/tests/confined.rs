@@ -5,10 +5,10 @@
 //! input, and a worker stopped with SIGSTOP. The tests run one at a time, and
 //! each checks that no confined worker outlives its supervisor.
 #![cfg(target_os = "linux")]
-use nuschl_ipc::musicbot::{self, DecodeLimits, Media};
+use nuschl_ipc::musicbot::{self, DecodeLimits, Ducker, Media, RESPONSE_TIMEOUT};
 use std::{
     io::{self, Cursor, Read},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
@@ -295,4 +295,117 @@ async fn a_seek_beyond_the_limit_starts_no_worker() {
     );
     assert!(frames.is_empty());
     assert!(workers("decode").is_empty());
+}
+
+fn signal(name: &str, pid: u32) {
+    let sent = std::process::Command::new("kill")
+        .args([format!("-{name}"), pid.to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success(), "kill -{name} {pid}");
+}
+
+/// The one confined duck worker that exists now.
+fn duck_worker() -> u32 {
+    let [pid] = workers("duck")[..] else {
+        panic!("expected exactly one duck worker");
+    };
+    pid
+}
+
+/// Stops the worker, then kills it while the next request is in flight.
+fn die_mid_request(pid: u32) -> tokio::task::JoinHandle<()> {
+    signal("STOP", pid);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        signal("KILL", pid);
+    })
+}
+
+#[tokio::test]
+async fn detector_failures_cost_packets_never_the_connection() {
+    let _one = ONE_AT_A_TIME.lock().await;
+    let silence = nuschl_core::audio::SILENT_OPUS;
+    let threshold = musicbot::speech_threshold(50);
+    let mut ducker = Ducker::new(PathBuf::from(WORKER));
+    assert!(!ducker.hear(1, &silence, threshold).await.unwrap());
+    assert!(ducker.running());
+    let first = duck_worker();
+
+    // A worker that dies while answering sender 7: one recovered failure,
+    // its exit confirmed, no error for the connection.
+    let killing = die_mid_request(first);
+    let started = Instant::now();
+    assert!(!ducker.hear(7, &silence, threshold).await.unwrap());
+    killing.await.unwrap();
+    assert!(
+        started.elapsed() < RESPONSE_TIMEOUT,
+        "an exit is not a timeout"
+    );
+    assert!(!ducker.running() && !ducker.suspended());
+    none_left("duck").await;
+
+    // The poison sender is never retried: nothing starts.
+    for _ in 0..5 {
+        assert!(!ducker.hear(7, &silence, threshold).await.unwrap());
+        assert!(!ducker.running());
+    }
+    assert!(workers("duck").is_empty());
+
+    // Other talkers get a fresh worker.
+    assert!(!ducker.hear(8, &silence, threshold).await.unwrap());
+    let second = duck_worker();
+    assert_ne!(second, first);
+
+    // A stalled worker: the request deadline, then a separately awaited reap.
+    signal("STOP", second);
+    let started = Instant::now();
+    assert!(!ducker.hear(9, &silence, threshold).await.unwrap());
+    let elapsed = started.elapsed();
+    assert!(elapsed >= RESPONSE_TIMEOUT && elapsed < RESPONSE_TIMEOUT * 3);
+    assert!(!ducker.running() && !ducker.suspended());
+    none_left("duck").await;
+
+    // The third recovered failure suspends ducking for this session.
+    assert!(!ducker.hear(12, &silence, threshold).await.unwrap());
+    let killing = die_mid_request(duck_worker());
+    assert!(!ducker.hear(10, &silence, threshold).await.unwrap());
+    killing.await.unwrap();
+    assert!(ducker.suspended() && ducker.notice().is_some());
+    none_left("duck").await;
+    for sender in [11, 12, 13] {
+        assert!(!ducker.hear(sender, &silence, threshold).await.unwrap());
+        ducker.forget(sender).await.unwrap();
+    }
+    assert!(!ducker.running() && workers("duck").is_empty());
+
+    // Only a genuinely new session resets failures and the quarantine.
+    ducker.new_session().await.unwrap();
+    assert!(!ducker.suspended() && ducker.notice().is_none());
+    assert!(!ducker.hear(7, &silence, threshold).await.unwrap());
+    assert!(ducker.running());
+    ducker.disable().await.unwrap();
+    none_left("duck").await;
+}
+
+#[tokio::test]
+async fn disabling_retires_the_detector_once_and_later_packets_send_nothing() {
+    let _one = ONE_AT_A_TIME.lock().await;
+    let silence = nuschl_core::audio::SILENT_OPUS;
+    let mut ducker = Ducker::new(PathBuf::from(WORKER));
+    assert!(
+        !ducker
+            .hear(1, &silence, musicbot::speech_threshold(50))
+            .await
+            .unwrap()
+    );
+    duck_worker();
+    ducker.disable().await.unwrap();
+    assert!(!ducker.running());
+    none_left("duck").await;
+    // Ducking stays off: each later packet only asks to disable again.
+    for _ in 0..50 {
+        ducker.disable().await.unwrap();
+    }
+    assert!(!ducker.running() && workers("duck").is_empty());
 }
