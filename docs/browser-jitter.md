@@ -128,3 +128,29 @@ passes at 140.9 dB with exact block lengths/gain. Diagnostic flags explicitly
 expect the two known failures only for frozen-source evidence; final strict runs
 must pass without those flags. Browser FEC parity cannot be called complete while
 the codec defect remains.
+
+
+## Separate lost-span correction
+
+The shared pull now caps a predicted missing span by a nearer queued future
+sequence. FEC is selected only at that exact endpoint. Packet targets,
+catch-up thresholds and concealment budgets are unchanged. Shared/native
+regressions cover 120→10/20 transitions, arrival reorder and terminators.
+The historical 19,881-pull exact trace belongs to the extraction/generic
+checkpoints; current bug-case traces intentionally differ. The first changed
+trace and dependency identity are recorded in `jitter-gap-trace/proof.json`.
+
+The independent clock/gain/next-packet contract now passes both 120→missing 10/20
+cases. With the separately fixed codec candidate, missing 10 ms also passes 87.6 dB
+PCM, but missing 20 ms is still only 28.21 dB despite correct timing. The 35 dB gate
+is unchanged. That separate CELT PLC edge is owned by the codec investigator;
+there is no final codec parity claim here.
+
+Full-framing admission has its own preserved failure: malformed 0900 arrives
+after a following valid packet was already queued. The current renderer decodes
+or errors on the malformed payload, shortens the clock span and plays the valid
+packet early. It scores 6.34 dB against independently specified sample-clock
+output. `admission-frozen/proof.json` retains the events, raw/reference PCM and
+rejection/error/timing/gain results. A public stateless framing wrapper has been
+reviewed separately; caller admission is the next separate correction, not a
+hidden decoder reset or PLC-policy redesign.

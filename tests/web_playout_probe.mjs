@@ -15,13 +15,12 @@ try {
   if(fields[0]==="P"||fields[0]==="B"){
    assert.equal(fields.length,6);assert.ok(/^(?:[0-9a-f]{2}){1,1024}$/.test(fields[5]));
    const push=()=>receiver.push(BigInt(fields[1]),Uint8Array.from(Buffer.from(fields[5],"hex")),fields[4]==="1",Number(fields[3]),BigInt(fields[2]));
-   if(fields[0]==="B")assert.throws(push);else push();
-  } else if(fields[0]==="R"||fields[0]==="E"){
-   let samples;
-   if(fields[0]==="E"){assert.throws(()=>receiver.render());samples=new Float32Array();}
-   else samples=receiver.render();
+   if(fields[0]==="B"){let error=false;try{push();}catch{error=true;}metadata.push({event:"push",sequence:fields[1],error});}else push();
+  } else if(fields[0]==="R"||fields[0]==="E"||fields[0]==="A"){
+   let samples,error=false;
+   try { samples=receiver.render(); } catch(failure) { if(fields[0]==="R")throw failure;error=true;samples=new Float32Array(); }
    assert.ok(samples.length===0||samples.length===960);assert.ok(metadata.length<2000);
-   metadata.push({tick:Number(fields[1]),samples:samples.length,kind:receiver.last_render_kind(),gain:receiver.gain()});
+   metadata.push({tick:Number(fields[1]),samples:samples.length,kind:receiver.last_render_kind(),gain:receiver.gain(),error});
    output.push(Buffer.from(samples.length?samples.buffer:new Float32Array(960).buffer));
   } else if(fields[0]==="C")receiver.reset();
   else throw new Error("invalid fixture event");

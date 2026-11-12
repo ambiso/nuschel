@@ -18,10 +18,12 @@ def main():
     parser.add_argument('--rustc',required=True,type=Path)
     parser.add_argument('--core-rlib',required=True,type=Path)
     parser.add_argument('--output',required=True,type=Path)
+    parser.add_argument('--expect-correctness-change',action='store_true',help='reviewed gap-duration fix, not a retuned target')
     args=parser.parse_args()
     args.output.mkdir(parents=True,exist_ok=True)
     root=Path(__file__).resolve().parents[1]
     results=[]
+    traces=[]
     for name,module in [('frozen',args.baseline),('shared-adapter',root/'apps/media-worker/src/jitter.rs')]:
         directory=args.output/name;directory.mkdir(exist_ok=True)
         source=module.read_bytes()
@@ -32,10 +34,15 @@ def main():
             '--extern',f'nuschl_audio_jitter={args.core_rlib}','-o',str(executable)],check=True,timeout=30)
         trace=subprocess.check_output([str(executable)],timeout=20)
         (directory/'trace.txt').write_bytes(trace)
+        traces.append(trace.decode().splitlines())
         results.append({'name':name,'source_sha256':hashlib.sha256(source).hexdigest(),
             'trace_sha256':hashlib.sha256(trace).hexdigest(),'pulls':trace.count(b'\n')})
-    assert results[0]['trace_sha256']==results[1]['trace_sha256'],'native policy changed'
-    proof={'seed':'0x12345678','arrivals':10000,'exact_policy_trace':True,'cases':results,
+    exact=results[0]['trace_sha256']==results[1]['trace_sha256']
+    if args.expect_correctness_change:assert not exact,'expected reviewed correctness change missing'
+    else:assert exact,'native policy changed'
+    proof={'seed':'0x12345678','arrivals':10000,'exact_policy_trace':exact,'expected_correctness_change':args.expect_correctness_change,'cases':results,
+        'core_rlib_sha256':hashlib.sha256(args.core_rlib.read_bytes()).hexdigest(),
+        'first_difference':next(({'pull':i,'frozen':a,'candidate':b} for i,(a,b) in enumerate(zip(*traces)) if a!=b),None),
         'scope':'Policy equivalence only; independent reference codec/loss fixtures are separate.'}
     (args.output/'proof.json').write_text(json.dumps(proof,indent=2)+'\n')
     print(json.dumps(proof))

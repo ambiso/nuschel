@@ -694,13 +694,12 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       through PLC/FEC; libopus updates `OPUS_GET_LAST_PACKET_DURATION` after
       those calls. This pre-existing API difference is separate from the fixed
       PCM/range behavior. Check consumers before changing its public semantics.
-- [ ] Correct loss duration after aggregated packets in the shared native/browser
-      jitter policy (active browser-audio owner). After a 120 ms packet followed by
-      a packet at sequence 13, only 10 ms is missing; the inherited policy instead
-      conceals 120 ms and skips the queued packet. Bound concealment/FEC to the
-      nearest future sequence and verify 10/20 ms gaps, reordering and terminators.
-      Preserve the frozen failing trace and explain intentional changes to the
-      previously exact native-policy baseline; do not retune adaptive latency.
+- [x] Bound shared/native loss advancement by the nearer known future packet.
+      After 120 ms followed by a 10/20 ms sequence hole, conceal only that exact
+      span instead of skipping the queued packet. Independent frame/gain/next
+      sequence checks and regression units pass; no target/catch-up/concealment
+      budget retuning. Historical extraction trace equality remains scoped to
+      that checkpoint; this correction intentionally changes those bug cases.
 - [ ] Verify integrated CELT PLC correction through native/browser playout.
       A 120 ms packet of 10 ms CELT frames followed by a 20 ms loss previously
       gave only 28.21 dB agreement with independent libopus. The private accepted

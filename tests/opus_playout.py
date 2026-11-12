@@ -69,13 +69,26 @@ def scenarios(reference):
     var=make_case('10-through120ms',packets,[(seq,seq*10,i,i==len(durations)-1) for i,seq in enumerate(seqs)],
         [(3+seq,'packet',i,count) for i,(seq,count) in enumerate(zip(seqs,durations))],sum(durations)+8,[.5]*len(durations))
     long=reference.aggregate(base[:12],12)[0]
-    short=reference.aggregate(base[12:14],2)[0]
+    short=reference.aggregate(base[13:15],2)[0]
+    short20=reference.aggregate(base[14:16],2)[0]
     # The small lost interval MUST NOT expand to the preceding120 ms duration.
     gap=make_case('120ms-then-missing10ms', [long,short],[(0,0,0,False),(13,130,1,True)],
         [(13,'packet',0,12),(25,'fec',1,1),(26,'packet',1,2)],32,[.25,1.])
     ordered=make_case('ordered-FEC-enabled',voice,[(i*2,i*20,i,i==23) for i in range(24)],
         [(2+i*2,'packet',i,2) for i in range(24)],52,gains)
-    return [ordered,fixed,var,gap]
+    gap20=make_case('120ms-then-missing20ms',[long,short20],[(0,0,0,False),(14,140,1,True)],
+        [(14,'packet',0,12),(26,'fec',1,2),(28,'packet',1,2)],34,[.25,1.])
+    valid=reference.aggregate(base[:2],2)[0]
+    long_after=reference.aggregate(base[2:14],12)[0]
+    following=reference.aggregate(base[20:22],2)[0]
+    rejected=make_case('malformed-before-queued-valid',[valid,long_after,following,b'\x09\x00'],
+        [(0,0,0,False),(2,20,1,False),(20,140,2,True),(16,145,3,False)],
+        [(2,'packet',0,2),(4,'packet',1,12),(16,'fec',2,6),(22,'packet',2,2)],28,[.5,.25,1.,4.])
+    rejected['bad_pushes']=[3]
+    rejected['allow_render_errors']=True
+    ordered=make_case('ordered-FEC-enabled',voice,[(i*2,i*20,i,i==23) for i in range(24)],
+        [(2+i*2,'packet',i,2) for i in range(24)],52,gains)
+    return [ordered,fixed,var,gap,gap20,rejected]
 
 
 def oracle(reference, case):
@@ -85,6 +98,10 @@ def oracle(reference, case):
         for tick,kind,index,duration in case['operations']:
             if kind=='reset':decoder.reset();continue
             packet=case['packets'][index]
+            if kind=='error':
+                try: decoder.decode(packet,frames=duration*TICK,fec=True)
+                except ValueError: continue
+                raise AssertionError('malformed FEC must fail reference decoding')
             pcm=decoder.decode(None if kind=='plc' else packet,frames=duration*TICK if kind!='packet' else 5760,fec=kind=='fec')
             assert len(pcm)==duration*TICK*2,(case['name'],kind,len(pcm))
             if kind=='packet':gain=case['gains'][index]
@@ -101,6 +118,7 @@ def main():
     parser.add_argument('--wasm',type=Path)
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--expect-gap-failure',action='store_true')
+    parser.add_argument('--expect-malformed-failure',action='store_true',help='frozen decoder validation mismatch only')
     parser.add_argument('--expect-codec-failure',action='store_true',help='frozen-source diagnostic only; retains passed=false evidence')
     args=parser.parse_args();args.output.mkdir(parents=True,exist_ok=True)
     assert args.native_probe or args.wasm
@@ -109,12 +127,14 @@ def main():
         expected,gain_expected,size_expected=oracle(reference,case)
         commands=[]
         pushes=sorted(case['pushes'],key=lambda item:item[1]);cursor=0
+        error_ticks={tick for tick,kind,_,_ in case['operations'] if kind=='error'}
         for tick in range(case['ticks']):
+            if tick in case.get('reset_ticks',[]): commands.append('C')
             while cursor<len(pushes) and pushes[cursor][1]<=tick*10:
                 seq,at,index,end=pushes[cursor]
-                commands.append(f'P {seq} {at*1000} {case["gains"][index]} {int(end)} {case["packets"][index].hex()}')
+                commands.append(f'{"B" if index in case.get("bad_pushes",[]) else "P"} {seq} {at*1000} {case["gains"][index]} {int(end)} {case["packets"][index].hex()}')
                 cursor+=1
-            commands.append(f'R {tick}')
+            commands.append(f'{"E" if tick in error_ticks else "A" if case.get("allow_render_errors") else "R"} {tick}')
         source=args.output/(case['name']+'.events');source.write_text('\n'.join(commands)+'\n')
         write_pcm(args.output/(case['name']+'-reference.f32le'),expected)
         for engine in ['native','wasm']:
@@ -122,22 +142,33 @@ def main():
             output=args.output/f'{case["name"]}-{engine}.f32le';metadata_path=output.with_suffix('.json')
             if engine=='native':
                 result=subprocess.run([str(args.native_probe),str(source),str(output)],capture_output=True,text=True,check=True,timeout=20)
-                metadata=[dict(zip(['tick','samples','kind','gain'],[int(a),int(b),int(c),float(d)])) for a,b,c,d in (line.split() for line in result.stdout.splitlines())]
+                metadata=[]
+                for line in result.stdout.splitlines():
+                    fields=line.split()
+                    if fields[0]=='P':metadata.append({'event':'push','sequence':fields[1],'error':bool(int(fields[2]))})
+                    else:
+                        a,b,c,d,e=fields
+                        metadata.append(dict(zip(['tick','samples','kind','gain','error'],[int(a),int(b),int(c),float(d),bool(int(e))])))
                 metadata_path.write_text(json.dumps(metadata)+'\n')
             else:
                 subprocess.run(['node','tests/web_playout_probe.mjs',str(args.wasm),str(source),str(output),str(metadata_path)],check=True,timeout=20)
                 metadata=json.loads(metadata_path.read_text())
+            push_events=[row for row in metadata if row.get('event')=='push']
+            metadata=[row for row in metadata if row.get('event')!='push']
+            rejections_match=len(push_events)==len(case.get('bad_pushes',[])) and all(row['error'] for row in push_events)
             metrics=compare(expected,read_pcm(output))
             sizes=[row['samples'] for row in metadata];gains=[row['gain'] for row in metadata]
             sizes_match=sizes==size_expected
             gain_match=all(gains[i]==gain_expected[i] for i,size in enumerate(size_expected) if size)
-            passed=metrics['fixed_gain_snr_db']>=35 and sizes_match and gain_match
-            results.append({'case':case['name'],'engine':engine,'metrics':metrics,'sizes_match':sizes_match,'gain_match':gain_match,'passed':passed})
+            errors_match=all(bool(row['error'])==(row['tick'] in error_ticks) for row in metadata)
+            passed=metrics['fixed_gain_snr_db']>=35 and sizes_match and gain_match and errors_match and rejections_match
+            results.append({'case':case['name'],'engine':engine,'metrics':metrics,'sizes_match':sizes_match,'gain_match':gain_match,'errors_match':errors_match,'rejections_match':rejections_match,'passed':passed})
     proof={'reference':str(args.opus_library),'fixed_gain':True,'delay_fitted':False,'cases':results,'passed':all(row['passed'] for row in results)}
     (args.output/'proof.json').write_text(json.dumps(proof,indent=2)+'\n');print(json.dumps(proof),flush=True)
     for row in results:
-        if args.expect_codec_failure and row['case'] in ('ordered-FEC-enabled','loss-reorder-fec-plc-restart'):assert not row['passed'],'known codec failure must reproduce'
-        elif args.expect_gap_failure and row['case']=='120ms-then-missing10ms':assert not row['passed'],'frozen bug must reproduce'
+        if args.expect_malformed_failure and row['case']=='malformed-before-queued-valid':assert not row['passed'],'malformed decoder mismatch must reproduce'
+        elif args.expect_codec_failure and row['case'] in ('ordered-FEC-enabled','loss-reorder-fec-plc-restart'):assert not row['passed'],'known codec failure must reproduce'
+        elif args.expect_gap_failure and row['case'] in ('120ms-then-missing10ms','120ms-then-missing20ms'):assert not row['passed'],'frozen bug must reproduce'
         else:assert row['passed'],row
 
 

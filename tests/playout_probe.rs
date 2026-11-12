@@ -29,26 +29,27 @@ fn main() {
                     fields[2].parse().unwrap(),
                 );
                 if fields[0] == "B" {
-                    assert!(result.is_err());
+                    println!("P {} {}", fields[1], u8::from(result.is_err()));
                 } else {
                     result.unwrap();
                 }
             }
-            "R" | "E" => {
+            "R" | "E" | "A" => {
                 let result = receiver.render();
-                let samples = if fields[0] == "E" {
-                    assert!(result.is_err());
-                    Vec::new()
+                let failed = result.is_err();
+                let samples = if fields[0] != "R" {
+                    result.unwrap_or_default()
                 } else {
                     result.unwrap()
                 };
                 assert!(samples.is_empty() || samples.len() == 960);
                 println!(
-                    "{} {} {} {}",
+                    "{} {} {} {} {}",
                     fields[1],
                     samples.len(),
                     receiver.last_render_kind(),
-                    receiver.gain()
+                    receiver.gain(),
+                    u8::from(failed)
                 );
                 let zeros = [0_f32; 960];
                 let samples = if samples.is_empty() {

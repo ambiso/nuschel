@@ -196,7 +196,15 @@ impl<P: Clone> JitterBuffer<P> {
             self.next = None;
             return Pull::Idle;
         }
-        let frames = self.frames_per_packet;
+        // Packet duration can change. Never conceal past the next known
+        // packet merely because the preceding packet happened to be longer.
+        let frames = self
+            .packets
+            .range(next + 1..)
+            .next()
+            .map_or(self.frames_per_packet, |(following, _)| {
+                self.frames_per_packet.min(following - next)
+            });
         self.next = Some(next + frames);
         let fec = self
             .packets
@@ -209,6 +217,28 @@ impl<P: Clone> JitterBuffer<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_packet_loss_stops_at_the_nearer_10_or_20_ms_future_packet() {
+        for gap in [1, 2] {
+            let mut buffer = JitterBuffer::default();
+            // Arrival reorder must not change the exact missing sequence span.
+            buffer.push(12 + gap, vec![20], true, Duration::ZERO);
+            buffer.push(0, vec![120], false, Duration::from_millis(1));
+            assert!(matches!(buffer.pull(), Pull::Packet { opus, .. } if opus == [120]));
+            buffer.observe_frames(12);
+            assert_eq!(
+                buffer.pull(),
+                Pull::Lost {
+                    fec: Some(vec![20]),
+                    frames: gap
+                }
+            );
+            assert!(matches!(buffer.pull(), Pull::Packet { opus, end:true } if opus == [20]));
+            buffer.observe_frames(2);
+            assert_eq!(buffer.pull(), Pull::Idle);
+        }
+    }
 
     #[test]
     fn decoded_long_and_changing_durations_advance_from_the_packet_origin() {
@@ -371,8 +401,8 @@ mod tests {
     #[test]
     fn jitter_raises_the_target_and_excess_is_dropped() {
         let start = Duration::ZERO;
-        let mut steady = JitterBuffer::default();
-        let mut jittery = JitterBuffer::default();
+        let mut steady: JitterBuffer = JitterBuffer::default();
+        let mut jittery: JitterBuffer = JitterBuffer::default();
         for index in 0..50_u64 {
             steady.push(
                 index * 2,
@@ -390,7 +420,7 @@ mod tests {
         }
         assert!(jittery.target_ms() > steady.target_ms() + 20.);
         // A burst of 50 packets (1 s) collapses to about target + catch-up window.
-        let mut burst = JitterBuffer::default();
+        let mut burst: JitterBuffer = JitterBuffer::default();
         for index in 0..50_u64 {
             burst.push(index * 2, vec![], false, start);
         }

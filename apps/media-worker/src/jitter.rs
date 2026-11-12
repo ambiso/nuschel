@@ -42,6 +42,24 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn variable_duration_loss_preserves_the_next_native_packet() {
+        let now = Instant::now();
+        let mut buffer = JitterBuffer::default();
+        buffer.push(0, vec![120], false, now);
+        buffer.push(13, vec![20], true, now + Duration::from_millis(130));
+        assert!(matches!(buffer.pull(), Pull::Packet { .. }));
+        buffer.observe_frames(12);
+        assert_eq!(
+            buffer.pull(),
+            Pull::Lost {
+                fec: Some(vec![20]),
+                frames: 1
+            }
+        );
+        assert!(matches!(buffer.pull(), Pull::Packet { end: true, .. }));
+    }
+
+    #[test]
     fn decoded_long_and_changing_durations_advance_from_the_packet_origin() {
         let mut buffer = JitterBuffer::default();
         let now = Instant::now();
