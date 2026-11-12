@@ -12,20 +12,21 @@ import array
 import json
 import math
 import os
-from pathlib import Path
 import re
 import struct
 import subprocess
 import threading
 import time
+from itertools import pairwise
+from pathlib import Path
 
+from local_murmur import Murmur, free_port
 from media_live import Pulse
 from mumble_client import Client, ReferenceOpus, certificate_pin
-from local_murmur import Murmur, free_port
 
 
 class Worker:
-    def __init__(self, binary, pulse, log, peer=None):
+    def __init__(self, binary, pulse, log, peer=None, environment=None):
         self.start = time.monotonic()
         self.events = []
         self.log = log
@@ -43,6 +44,7 @@ class Worker:
                 "NUSCHL_AUDIO_BACKEND": "pulse",
                 "NUSCHL_AUDIO_TIMING": "1",
                 "PATH": os.environ.get("PATH", ""),
+                **(environment or {}),
             },
         )
         self.reader = threading.Thread(target=self.read, daemon=True)
@@ -165,17 +167,17 @@ def measure(binary, pulse, root, reference, current, peer=None):
                 worker.send(
                     {"kind": "set_state", "epoch": 1, "muted": False, "deafened": False}
                 )
-                packets = lambda: [
+                packets = lambda worker=worker: [
                     (t, e)
                     for t, e in worker.events
                     if e["kind"] == "packet" and not e["end"]
                 ]
-                worker.wait(lambda: len(packets()) >= 6)
+                worker.wait(lambda packets=packets: len(packets()) >= 6)
                 emitted = packets()
                 network_ms = None
                 if peer:
                     worker.wait(
-                        lambda: any(
+                        lambda worker=worker: any(
                             sequence == worker.first_wire_sequence
                             for sequence, _ in peer.audio_times
                         )
@@ -190,6 +192,27 @@ def measure(binary, pulse, root, reference, current, peer=None):
                     ) * 1000
                 pcm = reference.decode([e["opus"] for _, e in emitted[:6]])
                 rms = math.sqrt(sum(v * v for v in pcm) / len(pcm))
+                assert len(pcm) == 6 * 960
+                levels = [
+                    math.sqrt(sum(v * v for v in pcm[i * 960 : (i + 1) * 960]) / 960)
+                    for i in range(6)
+                ]
+                usable = next(
+                    (i for i, level in enumerate(levels) if level > 0.001), None
+                )
+                assert usable is not None, "no usable PCM in the first six packets"
+                usable_network_ms = None
+                if peer:
+                    sequence = worker.first_wire_sequence + 2 * usable
+                    worker.wait(
+                        lambda sequence=sequence: any(
+                            seq == sequence for seq, _ in peer.audio_times
+                        )
+                    )
+                    usable_network_ms = (
+                        next(at for seq, at in peer.audio_times if seq == sequence)
+                        - worker.start
+                    ) * 1000
                 assert rms > 0.001 and all(math.isfinite(v) for v in pcm), (
                     "first encoded PCM was not usable"
                 )
@@ -208,9 +231,7 @@ def measure(binary, pulse, root, reference, current, peer=None):
                     assert emitted[0][0] < 0.09, (mode, emitted[0][0], stages)
                 if current:
                     # Newly approved speech may be prefixed but never flooded.
-                    intervals = [
-                        (b[0] - a[0]) * 1000 for a, b in zip(emitted, emitted[1:])
-                    ]
+                    intervals = [(b[0] - a[0]) * 1000 for a, b in pairwise(emitted)]
                     assert min(intervals) > 8, intervals
                     worker.send(
                         {
@@ -220,7 +241,7 @@ def measure(binary, pulse, root, reference, current, peer=None):
                             "deafened": False,
                         }
                     )
-                    worker.wait(lambda: worker.process.poll() is not None)
+                    worker.wait(lambda worker=worker: worker.process.poll() is not None)
                     endings = [
                         e
                         for _, e in worker.events
@@ -235,6 +256,9 @@ def measure(binary, pulse, root, reference, current, peer=None):
                         "trial": trial,
                         "first_packet_ms": emitted[0][0] * 1000,
                         "first_private_murmur_echo_ms": network_ms,
+                        "first_usable_packet_ms": emitted[usable][0] * 1000,
+                        "first_usable_private_murmur_echo_ms": usable_network_ms,
+                        "first_six_packet_rms": levels,
                         "rms": rms,
                         "stages_ms": stages,
                     }
@@ -345,6 +369,7 @@ def main():
                     "--rate=48000",
                     "--channels=1",
                     "--latency-msec=20",
+                    "--process-time-msec=10",
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,

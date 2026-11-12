@@ -35,18 +35,24 @@ def first_pcm(pulse, path):
             "--rate=48000",
             "--channels=1",
             "--latency-msec=10",
+            "--process-time-msec=10",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
     result = queue.Queue()
-    thread = threading.Thread(
-        target=lambda: result.put(recorder.stdout.read(480 * 4)), daemon=True
-    )
+    started = time.monotonic()
+
+    def read():
+        first = recorder.stdout.read(480 * 4)
+        first_ms = (time.monotonic() - started) * 1000
+        result.put((first + recorder.stdout.read((2 * 48000 - 480) * 4), first_ms))
+
+    thread = threading.Thread(target=read, daemon=True)
     thread.start()
     try:
-        data = result.get(timeout=5)
-        assert len(data) == 480 * 4
+        data, first_ms = result.get(timeout=5)
+        assert len(data) == 2 * 48000 * 4
         path.write_bytes(data)
         pcm = array.array("f")
         pcm.frombytes(data)
@@ -56,11 +62,13 @@ def first_pcm(pulse, path):
         )
         return {
             "samples": len(pcm),
+            "first_callback_samples": 480,
+            "first_independent_pcm_ms": first_ms,
             "rms": rms,
             "max": max(abs(v) for v in pcm),
             "sha256": hashlib.sha256(data).hexdigest(),
             "path": str(path),
-            "source": "explicit private mic.monitor; first10ms from independent libpulse recorder",
+            "source": "explicit private mic.monitor; first2s beginning with the first10ms from independent libpulse recorder",
         }
     finally:
         recorder.kill()
@@ -84,6 +92,8 @@ def main():
         "noise_amplitude": 0.01,
         "source_marker_sha256": hashlib.sha256(data).hexdigest(),
         "requirement": "zero transmitted packets for steady noise",
+        "producer": "pacat --latency-msec=20 --process-time-msec=10, float32le48k mono",
+        "consumer": "parec --latency-msec=10 --process-time-msec=10, float32le48k mono",
     }
     for label, binary in (("baseline", args.baseline_worker), ("current", args.worker)):
         root = args.output / label
@@ -103,6 +113,7 @@ def main():
                     "--rate=48000",
                     "--channels=1",
                     "--latency-msec=20",
+                    "--process-time-msec=10",
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
@@ -133,7 +144,9 @@ def main():
             worker.send(
                 {"kind": "set_state", "epoch": 1, "muted": False, "deafened": False}
             )
-            worker.wait(lambda: "first_processed_pcm" in worker.log.read_text())
+            worker.wait(
+                lambda worker=worker: "first_processed_pcm" in worker.log.read_text()
+            )
             time.sleep(2)
             packets = [
                 e["opus"]

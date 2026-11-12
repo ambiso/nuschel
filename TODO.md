@@ -734,11 +734,15 @@ listed below. Plugin data remains the explicit gap.
       destination changes. The combined worker currently restarts, interrupting
       listening; separate playback lifetime/capabilities without retaining a muted
       microphone stream or replaying old capture into another destination.
-- [ ] Fix the existing fresh-noise VAD false positive: `tests/unmute_noise.py`
-      transmits deterministic white noise with both baseline and updated workers.
-      Keep its strict zero-packet assertion and raw first-source PCM/reference
-      evidence; do not hide it with startup suppression, weaker noise tests or
-      another unmute delay.
+- [ ] Investigate the phase-sensitive fresh-noise VAD false positive: `tests/unmute_noise.py`
+      can transmit deterministic white noise with old and updated workers;
+      some old-worker phases stayed closed, so distinguish source/callback phase
+      from classifier behavior with identical-frame replay.
+      Explicit low-latency controls can pass with zero packets on both paths;
+      same-input diagnostic replay can admit noise with zero-reference AEC on.
+      Keep strict zero-packet assertions and raw source/reference evidence; do
+      not hide the context-dependent result with startup suppression, weaker
+      noise tests or another unmute delay.
 - [x] Connection status: ping, UDP/TCP indicator, packet loss.
 - [x] Error/reject dialogs from section 4.
 - [x] AT-SPI accessibility coverage through GPUI AccessKit (`tests/accessibility.py`,
