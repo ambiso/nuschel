@@ -258,8 +258,8 @@ pub enum SendError {
     Nothing,
     /// Longer than any server takes.
     TooLong,
-    /// Not sent; the server's notice says why.
-    Refused,
+    /// Not sent; the precise reason is also shown as a temporary notice.
+    Refused(String),
 }
 
 mod share;
@@ -275,6 +275,7 @@ pub struct SecondServer {
 }
 
 struct PendingSend {
+    notice_lease: Option<u64>,
     conversation: Conversation,
     target: TextTarget,
     body: String,
@@ -409,7 +410,7 @@ impl Client {
                 && let Some((expired, _)) = server.notice_expires.take()
                 && server.notice.as_ref() == Some(&expired)
             {
-                server.notice = None;
+                server.dismiss_notice();
                 expired_any = true;
             }
         }
@@ -513,13 +514,13 @@ impl Client {
                 server.status = Status::Connecting;
                 server.security = SessionSecurity::Unknown;
                 server.certificate = None;
-                server.notice = None;
+                server.dismiss_notice();
                 // It joins the channel you were last in there.
                 let id = server.id.clone();
                 let seats = seats(&self.servers);
                 self.voice.connecting(&id, &seats);
             }
-            Err(error) => server.notice = Some(error),
+            Err(error) => server.set_notice(error),
         }
     }
 
@@ -581,7 +582,7 @@ impl Client {
         }
         self.passwords.remove(&server.id);
         if let Some(lost) = server.lost_messages() {
-            server.notice = Some(lost);
+            server.set_notice(lost);
         }
         if self
             .sending
@@ -634,8 +635,8 @@ impl Client {
     /// returns the question to ask ([`SecondServer`]).
     pub fn set_mute(&mut self, index: usize, deafen: bool) -> Option<SecondServer> {
         if !self.servers[index].has_mumble_voice() {
-            self.servers[index].notice =
-                Some("End-to-end voice is not available yet on this server.".into());
+            self.servers[index]
+                .set_notice("End-to-end voice is not available yet on this server.".into());
             return None;
         }
         let server = &self.servers[index];
@@ -682,8 +683,8 @@ impl Client {
     /// well (`both`), or only there.
     pub fn speak_here(&mut self, index: usize, both: bool) {
         if !self.servers[index].has_mumble_voice() {
-            self.servers[index].notice =
-                Some("End-to-end voice is not available yet on this server.".into());
+            self.servers[index]
+                .set_notice("End-to-end voice is not available yet on this server.".into());
             return;
         }
         let id = self.servers[index].id.clone();
@@ -695,8 +696,8 @@ impl Client {
     /// a live microphone moves along.
     pub fn use_voice_here(&mut self, index: usize) {
         if !self.servers[index].has_mumble_voice() {
-            self.servers[index].notice =
-                Some("End-to-end voice is not available yet on this server.".into());
+            self.servers[index]
+                .set_notice("End-to-end voice is not available yet on this server.".into());
             return;
         }
         let id = self.servers[index].id.clone();
@@ -759,7 +760,7 @@ impl Client {
                 deafened: change.deafened,
             };
             if let Err(error) = self.platform.request(&server.id, request) {
-                server.notice = Some(error);
+                server.set_notice(error);
             }
         }
     }
@@ -769,7 +770,7 @@ impl Client {
     pub fn join(&mut self, index: usize, channel: u32) {
         let server = &mut self.servers[index];
         if let Err(error) = self.platform.request(&server.id, Request::Join(channel)) {
-            server.notice = Some(error);
+            server.set_notice(error);
             return;
         }
         let id = server.id.clone();
@@ -1104,19 +1105,22 @@ impl Client {
         }
         let server = &mut self.servers[server];
         if server.status != Status::Connected {
-            server.notice = Some("Connect before sending a message.".into());
-            return Err(SendError::Refused);
+            return Err(SendError::Refused(server.refuse_send(
+                "Connect before sending a message.".into(),
+                self.now_ms,
+            )));
         }
         let (target, expected_peer) = match server.message_target(channel) {
             Ok(target) => target,
             Err(reason) => {
-                server.notice = Some(reason.into());
-                server.notice_expires = Some((reason.into(), self.now_ms.saturating_add(10_000)));
-                return Err(SendError::Refused);
+                return Err(SendError::Refused(
+                    server.refuse_send(reason.into(), self.now_ms),
+                ));
             }
         };
         let channel = &server.channels[channel];
         let pending = PendingSend {
+            notice_lease: server.send_refusal_lease(),
             conversation: Conversation {
                 server: server.id.clone(),
                 channel: channel.id,
@@ -1126,16 +1130,17 @@ impl Client {
         };
         let request = if server.mls {
             let Some(conversation) = channel.conversation else {
-                server.notice = Some("End-to-end encryption is being set up.".into());
-                return Err(SendError::Refused);
+                return Err(SendError::Refused(server.refuse_send(
+                    "End-to-end encryption is being set up.".into(),
+                    self.now_ms,
+                )));
             };
             if let Some(reason) = channel
                 .encryption
                 .as_ref()
                 .and_then(|state| state.blocked.clone())
             {
-                server.notice = Some(reason);
-                return Err(SendError::Refused);
+                return Err(SendError::Refused(server.refuse_send(reason, self.now_ms)));
             }
             Request::SendEncrypted {
                 conversation,
@@ -1155,10 +1160,7 @@ impl Client {
                 self.typing_sent = None;
                 Ok(())
             }
-            Err(error) => {
-                server.notice = Some(error);
-                Err(SendError::Refused)
-            }
+            Err(error) => Err(SendError::Refused(server.refuse_send(error, self.now_ms))),
         }
     }
 
@@ -1418,6 +1420,9 @@ impl Client {
                     })
                     && let Some(pending) = self.sending.take()
                 {
+                    if let Some(index) = self.current(&server, generation) {
+                        self.servers[index].clear_sent_refusal(pending.notice_lease);
+                    }
                     self.updates.push(Update::Sent {
                         conversation: pending.conversation,
                         body: pending.body,
@@ -1431,7 +1436,7 @@ impl Client {
             } => {
                 if let Some(index) = self.current(&server, generation) {
                     self.sending = None;
-                    self.servers[index].notice = Some(reason);
+                    self.servers[index].refuse_send(reason, self.now_ms);
                 }
             }
             Input::SearchResults { request, result } => {
@@ -1501,7 +1506,7 @@ impl Client {
                 reason,
             } => {
                 if let Some(server) = self.servers.iter_mut().find(|entry| entry.id == server) {
-                    server.notice = Some(format!(
+                    server.set_notice(format!(
                         "The message was not {}: {reason}",
                         if delete { "deleted" } else { "edited" }
                     ));
@@ -1608,7 +1613,7 @@ impl Client {
                 if let Some(index) = self.current(&server, generation) {
                     let lost = self.servers[index].lost_messages();
                     self.disconnect(index);
-                    self.servers[index].notice = Some(
+                    self.servers[index].set_notice(
                         lost.map_or_else(|| reason.clone(), |lost| format!("{reason} {lost}")),
                     );
                     if let Some(kind) =
@@ -1642,7 +1647,7 @@ impl Client {
                     clear_welcome(server, &mut self.updates);
                     server.own_session = None;
                     if let Some(lost) = server.lost_messages() {
-                        server.notice = Some(lost);
+                        server.set_notice(lost);
                     }
                     server.users.clear();
                     server.talking.clear();
@@ -2165,7 +2170,7 @@ impl Client {
                 }
             }
             ServerEvent::ChatFailed { key, reason } => {
-                server.notice = Some(format!("A message was not sent: {reason}"));
+                server.set_notice(format!("A message was not sent: {reason}"));
                 if !server.settle_pending(key, None) {
                     server.acked.insert(key, None);
                 }
@@ -2582,8 +2587,8 @@ impl Client {
                 server.legacy_voice.remove(&session);
             }
             ServerEvent::Notice(message) | ServerEvent::PermissionDenied(message) => {
-                server.notice_expires = Some((message.clone(), self.now_ms.saturating_add(10_000)));
-                server.notice = Some(message);
+                server.set_notice(message.clone());
+                server.notice_expires = Some((message, self.now_ms.saturating_add(10_000)));
                 if self
                     .sending
                     .as_ref()
@@ -2710,7 +2715,7 @@ impl Client {
                 channel: current,
             });
         } else {
-            server.notice = Some(format!("Channel /{} was not found.", path.join("/")));
+            server.set_notice(format!("Channel /{} was not found.", path.join("/")));
         }
     }
 
@@ -2844,6 +2849,134 @@ mod tests {
         ) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn synchronous_refusals_return_their_exact_reason_and_expire_without_scraping_notices() {
+        for case in 0..5 {
+            let (mut client, recorder, _) = connected();
+            client.open(0, 2).unwrap();
+            client.set_time(500);
+            client.servers[0].set_notice("unrelated sentinel".into());
+            let (_, channel) = client.selected_indices().unwrap();
+            let expected = match case {
+                0 => {
+                    client.servers[0].status = Status::Disconnected;
+                    "Connect before sending a message."
+                }
+                1 => {
+                    client.servers[0].channels[channel].target = TextTarget::Direct(99);
+                    nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE
+                }
+                2 => {
+                    client.servers[0].mls = true;
+                    "End-to-end encryption is being set up."
+                }
+                3 => {
+                    client.servers[0].mls = true;
+                    client.servers[0].channels[channel].conversation = Some([1; 16]);
+                    client.servers[0].channels[channel].encryption =
+                        Some(crate::conversation::EncryptionState {
+                            security: SessionSecurity::Unknown,
+                            description: "test".into(),
+                            blocked: Some("New key requires verification.".into()),
+                            epoch: 3,
+                        });
+                    "New key requires verification."
+                }
+                _ => {
+                    recorder
+                        .reject_requests
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    "test command queue full"
+                }
+            };
+            assert_eq!(
+                client.send_text("hello".into()),
+                Err(SendError::Refused(expected.into()))
+            );
+            assert_eq!(client.servers[0].notice.as_deref(), Some(expected));
+            assert!(client.servers[0].send_refusal_lease().is_some());
+            assert!(!client.set_time(10_499));
+            assert!(client.set_time(10_500));
+            assert!(client.servers[0].notice.is_none());
+        }
+        let (mut client, _, _) = connected();
+        client.open(0, 2).unwrap();
+        client.servers[0].set_notice("sentinel".into());
+        assert_eq!(client.send_text("".into()), Err(SendError::Nothing));
+        assert_eq!(
+            client.send_text("x".repeat(MAX_CONTENT_BYTES + 1)),
+            Err(SendError::TooLong)
+        );
+        assert_eq!(client.servers[0].notice.as_deref(), Some("sentinel"));
+    }
+
+    #[test]
+    fn only_matching_sent_clears_its_old_refusal_and_never_a_newer_identical_notice() {
+        for replacement in 0..4 {
+            let (mut client, recorder, id) = connected();
+            client.open(0, 2).unwrap();
+            recorder
+                .reject_requests
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(
+                client.send_text("hello".into()),
+                Err(SendError::Refused("test command queue full".into()))
+            );
+            recorder
+                .reject_requests
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+            client.send_text("hello".into()).unwrap();
+            match replacement {
+                1 => client.servers[0].set_notice("test command queue full".into()),
+                2 => client.servers[0].dismiss_notice(),
+                3 => {
+                    assert!(client.set_time(10_000));
+                }
+                _ => {}
+            }
+            let sent = |generation, body: &str| Input::Sent {
+                server: id.clone(),
+                generation,
+                target: TextTarget::Channel(2),
+                body: body.into(),
+            };
+            client.handle(sent(0, "hello"));
+            client.handle(sent(1, "other"));
+            assert!(
+                client.sending(),
+                "stale/unmatched send must not release pending state"
+            );
+            client.handle(sent(1, "hello"));
+            assert!(!client.sending());
+            assert_eq!(
+                client.servers[0].notice.as_deref(),
+                (replacement == 1).then_some("test command queue full")
+            );
+        }
+        let (mut client, _, id) = connected();
+        client.open(0, 2).unwrap();
+        client.handle(Input::SendFailed {
+            server: id.clone(),
+            generation: 0,
+            reason: "stale".into(),
+        });
+        assert!(client.servers[0].notice.is_none());
+        client.handle(Input::SendFailed {
+            server: id.clone(),
+            generation: 1,
+            reason: "refused".into(),
+        });
+        assert_eq!(client.servers[0].notice.as_deref(), Some("refused"));
+        client.send_text("next".into()).unwrap();
+        client.handle(Input::Sent {
+            server: id,
+            generation: 1,
+            target: TextTarget::Channel(2),
+            body: "next".into(),
+        });
+        assert!(client.servers[0].notice.is_none());
     }
 
     #[test]
@@ -3316,7 +3449,7 @@ mod tests {
             generation: 1,
             event: ServerEvent::Notice("old transient".into()),
         });
-        client.servers[0].notice = Some("a newer problem".into());
+        client.servers[0].set_notice("a newer problem".into());
         client.set_time(20_100);
         assert_eq!(client.servers[0].notice.as_deref(), Some("a newer problem"));
         client.servers[0].dismiss_notice();
@@ -3336,7 +3469,7 @@ mod tests {
         client.servers[0].users.insert(4, old.clone());
         let channel = client.open_direct(0, 4).unwrap();
         client.open(0, channel).unwrap();
-        client.servers[0].notice = Some(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
+        client.servers[0].set_notice(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
         let current = User {
             session: 9,
             instance: 11,

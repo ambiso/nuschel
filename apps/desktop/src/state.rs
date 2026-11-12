@@ -651,9 +651,7 @@ impl Desktop {
                 cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(url));
             }
             Ok(None) => {}
-            Err(error) => {
-                self.client.servers[index].notice = Some(format!("No share link: {error}"))
-            }
+            Err(error) => self.client.servers[index].set_notice(format!("No share link: {error}")),
         }
         cx.notify();
     }
@@ -2469,7 +2467,7 @@ impl Desktop {
                 peer: Some(peer),
             } => {
                 if let Some(notice) = view.notices.last() {
-                    self.client.servers[index].notice = Some(notice.clone());
+                    self.client.servers[index].set_notice(notice.clone());
                 }
                 if let Some(ui) = self.ui.get_mut(server) {
                     ui.e2ee.insert(peer, view);
@@ -2477,7 +2475,7 @@ impl Desktop {
             }
             nuschl_session::mls::MlsEvent::Failed(reason)
             | nuschl_session::mls::MlsEvent::NotSent { reason, .. } => {
-                self.client.servers[index].notice = Some(reason);
+                self.client.servers[index].set_notice(reason);
             }
             _ => {}
         }
@@ -2514,7 +2512,7 @@ impl Desktop {
         };
         let alarmed = ui.identity.alarm.is_some();
         if let Some(notice) = ui.identity.apply_named(event, name) {
-            state.notice = Some(notice);
+            state.set_notice(notice);
         }
         // A new alarm interrupts: it is shown as a dialog until acknowledged.
         if !alarmed && ui.identity.alarm.is_some() && self.panel.is_none() {

@@ -182,12 +182,12 @@ impl Desktop {
             (servers.rendezvous != PUBLIC_RENDEZVOUS).then(|| servers.rendezvous.clone());
         let server = &mut self.client.servers[index];
         if server.mls {
-            server.notice = Some("File offers are not supported on encrypted servers yet.".into());
+            server.set_notice("File offers are not supported on encrypted servers yet.".into());
             cx.notify();
             return;
         }
         if server.status != Status::Connected {
-            server.notice = Some("Connect before offering a file.".into());
+            server.set_notice("Connect before offering a file.".into());
             cx.notify();
             return;
         }
@@ -196,11 +196,11 @@ impl Desktop {
             let size = match std::fs::metadata(&path) {
                 Ok(metadata) if metadata.is_file() => metadata.len(),
                 Ok(_) => {
-                    server.notice = Some("Only files can be offered, not folders.".into());
+                    server.set_notice("Only files can be offered, not folders.".into());
                     continue;
                 }
                 Err(error) => {
-                    server.notice = Some(format!("Cannot read {}: {error}", path.display()));
+                    server.set_notice(format!("Cannot read {}: {error}", path.display()));
                     continue;
                 }
             };
@@ -217,7 +217,7 @@ impl Desktop {
                 Ok(worker) if worker.commands.try_send(request).is_ok() => worker,
                 Ok(_) => continue,
                 Err(error) => {
-                    server.notice = Some(format!("File transfer is unavailable: {error}"));
+                    server.set_notice(format!("File transfer is unavailable: {error}"));
                     continue;
                 }
             };

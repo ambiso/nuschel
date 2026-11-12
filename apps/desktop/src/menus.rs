@@ -475,7 +475,7 @@ impl Desktop {
         if let Some(view) = self.client.servers.get_mut(server)
             && let Err(error) = self.driver.command(&view.id, command)
         {
-            view.notice = Some(error);
+            view.set_notice(error);
         }
     }
 
@@ -765,7 +765,7 @@ impl Desktop {
             Ok(()) => view.whisper = Some(label),
             Err(error) => {
                 view.whisper = Some("Voice suspended; select a target again".into());
-                view.notice = Some(error);
+                view.set_notice(error);
             }
         }
     }
@@ -780,7 +780,7 @@ impl Desktop {
             Ok(()) => view.whisper = None,
             Err(error) => {
                 view.whisper = Some("Voice suspended; select normal talking again".into());
-                view.notice = Some(error);
+                view.set_notice(error);
             }
         }
     }

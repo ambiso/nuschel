@@ -803,32 +803,12 @@ impl WebClient {
     }
 
     pub fn send_text(&mut self, body: String) -> Result<(), String> {
-        let selected = self.client.selected_indices().map(|(index, _)| {
-            let server = &self.client.servers[index];
-            (server.id.clone(), server.generation)
-        });
         self.client.send_text(body).map_err(|reason| match reason {
             nuschl_client::SendError::Nothing => {
                 "Choose a conversation, enter a message, and wait for any previous send.".into()
             }
             nuschl_client::SendError::TooLong => "Message exceeds the 256 KiB client limit.".into(),
-            // Refused assigns a fresh notice for this synchronous attempt. The
-            // other variants do not, so they must never reuse an older notice.
-            nuschl_client::SendError::Refused => self
-                .client
-                .selected_indices()
-                .and_then(|(index, _)| {
-                    let server = &self.client.servers[index];
-                    selected
-                        .as_ref()
-                        .filter(|(id, generation)| {
-                            id == &server.id && *generation == server.generation
-                        })
-                        .and(server.notice.clone())
-                })
-                .unwrap_or_else(|| {
-                    "Message was not sent; choose its conversation and reconnect.".into()
-                }),
+            nuschl_client::SendError::Refused(reason) => reason,
         })
     }
 

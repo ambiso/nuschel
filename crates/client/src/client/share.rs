@@ -119,7 +119,7 @@ impl Client {
         let bytes = nuschl_core::share::decode_token(&token);
         let Some(bytes) = bytes.filter(|_| server.has(capability::SHARE)) else {
             if server.pending_channel.is_empty() {
-                server.notice = Some("This server cannot open share links.".into());
+                server.set_notice("This server cannot open share links.".into());
             }
             return self.join_pending(index);
         };
@@ -200,10 +200,10 @@ impl Client {
         let server = &mut self.servers[index];
         match request {
             ShareRequest::Create { .. } => {
-                server.notice = Some(format!("No share link: {}", error.detail));
+                server.set_notice(format!("No share link: {}", error.detail));
             }
             ShareRequest::Resolve { .. } if server.pending_channel.is_empty() => {
-                server.notice = Some("This share link no longer works.".into());
+                server.set_notice("This share link no longer works.".into());
             }
             // The link's channel path may still lead somewhere.
             ShareRequest::Resolve { .. } => self.join_pending(index),

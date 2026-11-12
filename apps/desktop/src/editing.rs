@@ -159,12 +159,12 @@ impl Desktop {
             None => view.changeable(channel_view).is_some() && view.own_user_id().is_some(),
         };
         if !editable {
-            self.client.servers[server].notice =
-                Some(if self.client.servers[server].status == Status::Connected {
-                    "This message can no longer be edited.".into()
-                } else {
-                    "Connect again to save your edit; Escape discards it.".into()
-                });
+            let reason = if self.client.servers[server].status == Status::Connected {
+                "This message can no longer be edited.".into()
+            } else {
+                "Connect again to save your edit; Escape discards it.".into()
+            };
+            self.client.servers[server].set_notice(reason);
             cx.notify();
             return;
         }
@@ -172,7 +172,7 @@ impl Desktop {
             return;
         }
         if text.len() > nuschl_protocol::nuschl::MAX_CONTENT_BYTES {
-            self.client.servers[server].notice = Some("The edited message exceeds 64 KiB.".into());
+            self.client.servers[server].set_notice("The edited message exceeds 64 KiB.".into());
             return;
         }
         let Some(conversation) = channel_view.conversation else {
@@ -190,7 +190,7 @@ impl Desktop {
             Ok(()) => {
                 self.cancel_edit(window, cx);
             }
-            Err(error) => self.client.servers[server].notice = Some(error),
+            Err(error) => self.client.servers[server].set_notice(error),
         }
         cx.notify();
     }
@@ -252,7 +252,7 @@ impl Desktop {
             moderator: view.moderates(channel_view),
         };
         if let Err(error) = self.client.change_message(change) {
-            self.client.servers[server].notice = Some(error);
+            self.client.servers[server].set_notice(error);
         }
     }
 }

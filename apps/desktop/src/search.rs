@@ -307,12 +307,11 @@ impl Desktop {
         let (position, id) = match located {
             Ok(Located::Found { position, id }) => (position, id),
             Ok(Located::Reopen { .. }) => {
-                self.client.servers[index].notice =
-                    Some(nuschl_client::search::OPENS_ONLINE.into());
+                self.client.servers[index].set_notice(nuschl_client::search::OPENS_ONLINE.into());
                 return;
             }
             Err(notice) => {
-                self.client.servers[index].notice = Some(notice.into());
+                self.client.servers[index].set_notice(notice.into());
                 return;
             }
         };

@@ -126,6 +126,8 @@ pub struct ServerState {
     pub deafened: bool,
     pub notice: Option<String>,
     pub(crate) notice_expires: Option<(String, u64)>,
+    notice_revision: u64,
+    send_refusal: Option<u64>,
     pub audio_status: String,
     /// Current connection's original HTML, used to validate worker renderings;
     /// UIs display its document, never this source or worker storage markers.
@@ -234,6 +236,8 @@ impl ServerState {
             deafened: false,
             notice: None,
             notice_expires: None,
+            notice_revision: 0,
+            send_refusal: None,
             audio_status: "Audio disconnected".into(),
             welcome: None,
             certificate: None,
@@ -726,9 +730,38 @@ impl ServerState {
         ))
     }
 
+    /// Replace a notice, invalidating any previous send-refusal lease even
+    /// when the new text is identical. Frontends may read `notice` directly;
+    /// production writers use these helpers to preserve its lifetime.
+    pub fn set_notice(&mut self, notice: String) {
+        self.notice_revision = self.notice_revision.wrapping_add(1);
+        self.notice = Some(notice);
+        self.notice_expires = None;
+        self.send_refusal = None;
+    }
+
+    pub(crate) fn refuse_send(&mut self, reason: String, now_ms: u64) -> String {
+        self.set_notice(reason.clone());
+        self.notice_expires = Some((reason.clone(), now_ms.saturating_add(10_000)));
+        self.send_refusal = Some(self.notice_revision);
+        reason
+    }
+
+    pub(crate) fn send_refusal_lease(&self) -> Option<u64> {
+        self.send_refusal
+    }
+
+    pub(crate) fn clear_sent_refusal(&mut self, lease: Option<u64>) {
+        if lease.is_some() && lease == self.send_refusal && lease == Some(self.notice_revision) {
+            self.dismiss_notice();
+        }
+    }
+
     pub fn dismiss_notice(&mut self) {
+        self.notice_revision = self.notice_revision.wrapping_add(1);
         self.notice = None;
         self.notice_expires = None;
+        self.send_refusal = None;
     }
 
     pub fn has_temporary_notice(&self) -> bool {
@@ -1030,7 +1063,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        server.notice = Some(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
+        server.set_notice(nuschl_core::model::RECIPIENT_UNAVAILABLE_NOTICE.into());
         assert_eq!(
             server.message_target(position),
             Ok((TextTarget::Direct(9), Some(12)))

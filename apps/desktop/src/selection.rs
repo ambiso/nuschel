@@ -361,10 +361,8 @@ impl Desktop {
                         self.browse_channel(index, channel, window, cx);
                         self.run(index, Command::Join(channel));
                     }
-                    None => {
-                        self.client.servers[index].notice =
-                            Some(format!("Channel /{} was not found.", url.channel.join("/")))
-                    }
+                    None => self.client.servers[index]
+                        .set_notice(format!("Channel /{} was not found.", url.channel.join("/"))),
                 }
             }
             Some((index, Status::Connecting)) => {

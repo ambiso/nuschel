@@ -801,12 +801,7 @@ impl App {
                     self.warn("Open a conversation first (Ctrl+K, or /go NAME).");
                 }
             }
-            Err(nuschl_client::SendError::Refused) => {
-                let notice = self
-                    .selected()
-                    .and_then(|(server, _)| self.client.servers[server].notice.clone());
-                self.warn(notice.unwrap_or_else(|| "The message was not sent.".into()));
-            }
+            Err(nuschl_client::SendError::Refused(reason)) => self.warn(reason),
         }
     }
 
