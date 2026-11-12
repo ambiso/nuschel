@@ -111,8 +111,8 @@ def actions(args, root, shell, application, bot, murmur):
             shell.key("Escape")
             eventually(lambda: menu() is None, "Escape did not dismiss menu")
 
-    def open_user():
-        row = eventually(
+    def target_row():
+        return eventually(
             lambda: next(
                 (
                     node
@@ -123,6 +123,9 @@ def actions(args, root, shell, application, bot, murmur):
             ),
             "long-named user missing",
         )
+
+    def open_user():
+        row = target_row()
         shell.click(*point(row), button=3)
         try:
             current = eventually(menu, "user menu missing", timeout=5)
@@ -355,17 +358,28 @@ def actions(args, root, shell, application, bot, murmur):
             # focusing a clipped AT-SPI node is not used to fake visibility.
             current = open_user()
             first = control("Profile and connection", current)
+            before_background = target_row().extents()
             shell.wheel(*point(current), -60)
             assert_visible(first, current, "pointer first action")
+            time.sleep(0.2)
+            assert target_row().extents() == before_background, (
+                "popup wheel scrolled background channel tree"
+            )
             shell.click(*point(first))
             close_profile()
             record["first_pointer_activation"] = True
             current = open_user()
             last = control("Ban…", current)
+            before_background = target_row().extents()
             shell.wheel(*point(current), 80)
             assert_visible(last, current, "pointer last action")
+            time.sleep(0.2)
+            assert target_row().extents() == before_background, (
+                "popup wheel escaped at its scroll boundary"
+            )
             shell.click(*point(last))
             cancel_prompt()
+            record["background_wheel_isolation"] = True
             record["last_pointer_activation"] = True
             current = open_user()
             first = control("Profile and connection", current)

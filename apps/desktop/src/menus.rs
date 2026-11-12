@@ -1319,6 +1319,7 @@ impl RenderOnce for MenuSurface {
                             .id("context-menu")
                             .role(Role::Menu)
                             .aria_label("Context menu")
+                            .occlude()
                             .w(width)
                             .max_h(height)
                             .p_1()
