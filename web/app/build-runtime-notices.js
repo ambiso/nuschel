@@ -8,14 +8,15 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const cargoDirectories = new Map([
+const mainCargoDirectories = [
   ["src/sdk/", "nuschl-client-wasm"],
   ["src/audio-codec/", "nuschl-audio-wasm"],
   ["src/content-codec/", "nuschl-content-wasm"],
-]);
+];
 const slash = (value) => value.split(path.sep).join("/");
 
-export function bundledRuntimeNotices() {
+export function bundledRuntimeNotices({ wasmDirectories = mainCargoDirectories, ancestryNotices = true } = {}) {
+  const cargoDirectories = new Map(wasmDirectories);
   let root;
   let lock;
   const packages = new Map();
@@ -138,9 +139,9 @@ export function bundledRuntimeNotices() {
           generated_wasm_cargo_roots: [...cargo].sort(),
           packaged_wasm_build_roots: [...cargoDirectories.values()].sort(),
           limits: ["Source graph evidence, not a legal assurance or a dump-regeneration claim.",
-            "Generated WASM/glue terms come from the source-authoritative Cargo runtime inventory.",
+            ...(cargoDirectories.size ? ["Generated WASM/glue terms come from the source-authoritative Cargo runtime inventory."] : []),
             "Complete upstream notice files are retained even when they describe more than the rendered helper subset.",
-            "Existing Temml/KaTeX/React ancestry notices remain in licenses/temml-*."] };
+            ...(ancestryNotices ? ["Existing Temml/KaTeX/React ancestry notices remain in licenses/temml-*."] : [])] };
         this.emitFile({ type: "asset", fileName: "licenses/npm/BUNDLED-NPM.json", source: JSON.stringify(evidence, null, 2) + "\n" });
       },
     };

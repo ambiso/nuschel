@@ -23,6 +23,7 @@ platform decisions reversible without duplicating the session model.
 | `nuschl-content-worker` | Parse and highlight untrusted content | Credentials, microphone, user files, network |
 | `nuschl-media-worker` | Audio device adapters, DSP, Opus | Server credentials, history database, arbitrary files, network |
 | `nuschl-storage-worker` | Own the explicitly selected history database | Server credentials, microphone, network |
+| `nuschl-musicbot` | Credential/network parent for Subsonic playback, queues/history and authenticated web controls; fixed isolated decode/encode/duck child roles handle codecs/DSP (docs/musicbot.md) | Parent: codec/DSP execution, GPUI, user private identity keys; children: credentials, network, audio devices, state files |
 
 Worker dependencies are restricted with cargo-deny's wrapper rules. The shell and
 server exchange typed commands and results with workers rather than linking the

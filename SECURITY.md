@@ -40,6 +40,7 @@ or raw pointers also needs review. Dependency changes must include that assessme
 | Global shortcuts (`ashpd` portal; `global-hotkey` on Windows/macOS) | System-wide push-to-talk | Desktop shell; press/release of one bound key only |
 | Typst (`typst`, `typst-render`) | Typesetting LaTeX formulas; Typst is a scripting language with file, package, plugin and data access | Math worker only; formulas reach it as math markup from Nuschl's own converter, checked to contain no code; a world with one file and no packages, clock or system fonts; a library without `read`, `plugin`, `image`, the data loaders, `eval` and `std`; limits and a deadline per formula (docs/math.md) |
 | `psm` (assembly, through `stacker`) | Typst's evaluator grows its stack on deep recursion | Only through `stacker` and `typst-eval`, in the math worker |
+| Music and voice decoding in `nuschl-musicbot` (Symphonia, rubato, opus-pure, nnnoiseless) | Song demux/decoding, resampling, Opus encoding and incoming-voice ducking contain native/SIMD internals | Fixed decode/encode/duck child roles only. The credential-bearing parent fetches opaque bytes, validates bounded replies and routes encoded packets. Linux children use the existing IPC namespace/filesystem sandbox with no network, home, profile, audio services or inherited credentials; startup fails closed without confinement. No unsafe codec/DSP call is authorized in the parent. See docs/musicbot.md for limits and platform proof. |
 
 The `cargo-deny` wrapper rules enforce ownership for the named top-level dependencies.
 They do not automatically audit every transitive crate, dynamic system library, or new
@@ -272,6 +273,7 @@ else in it. Folders are created 0700, files 0600.
 | Settings, bookmarks with accepted certificate pins and access tokens, `managed.json` | `$XDG_CONFIG_HOME/nuschl/` | the main process only |
 | Last channels, update check state | `$XDG_STATE_HOME/nuschl/` | the main process only |
 | Channel trees and server icons (server-controlled, bounded when read) | `$XDG_CACHE_HOME/nuschl/` | the main process only |
+| Music bot certificates, authenticated links, queues and playback history | `/var/lib/nuschl-musicbot/` under the NixOS module | the bot only, with a private systemd state directory; `queues.json` contains current/queued tracks and up to 1,000 history entries per queue with who queued them, start/end times and playback outcomes; `tokens.json` contains bearer links. Any valid link can read history; public Mumble comments contain only the public instance address and instructions |
 
 The content, math, media and transfer workers get none of these folders. The storage
 and crypto workers' folders are siblings, so neither reaches the other's, the

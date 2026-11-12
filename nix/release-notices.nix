@@ -6,6 +6,7 @@
   craneLib,
   projectRoot,
   webRuntimeNotices,
+  musicbotRuntimeNotices,
 }:
 let
   inherit (pkgs) lib;
@@ -38,9 +39,14 @@ let
       );
       external = import ./release-external-notices.nix {
         inherit pkgs toolchain projectRoot;
-        # A native package must not gain a web/NPM build dependency for notices.
+        # Only products that actually ship a frontend depend on its notices.
         webRuntimeNotices =
           if builtins.elem "web-runtime-assets" policy.external_components then webRuntimeNotices else null;
+        musicbotRuntimeNotices =
+          if builtins.elem "musicbot-web-runtime-assets" policy.external_components then
+            musicbotRuntimeNotices
+          else
+            null;
       };
       externalNotices = builtins.filter (
         item: builtins.elem item.name policy.external_components

@@ -86,6 +86,33 @@ pub fn math_sandbox_command(executable: &Path) -> Result<Command, Error> {
     Ok(windows_worker(executable, &windows_policies::math()))
 }
 
+/// Musicbot codec roles have no audio-service, state-directory or network
+/// capabilities. They are persistent; their owner applies operation-specific
+/// deadlines and reaps a failed child before admitting a replacement.
+#[cfg(target_os = "linux")]
+pub fn musicbot_codec_sandbox_command(
+    executable: &Path,
+    arguments: &[OsString],
+) -> Result<Command, Error> {
+    Ok(Sandbox::new(executable, &[PERSISTENT_MEMORY.into()])?.run(arguments))
+}
+
+#[cfg(target_os = "macos")]
+pub fn musicbot_codec_sandbox_command(
+    executable: &Path,
+    arguments: &[OsString],
+) -> Result<Command, Error> {
+    sandbox_exec(seatbelt::CONTENT, executable, arguments)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn musicbot_codec_sandbox_command(_: &Path, _: &[OsString]) -> Result<Command, Error> {
+    // Keep cross compilation working, but never run an unrestricted fallback.
+    Err(Error::MissingSandboxHelper(
+        "musicbot codec containment on this platform",
+    ))
+}
+
 /// Seconds of wall-clock time, and on Linux of CPU time, a request may take.
 fn budget(request: &ContentRequest) -> u64 {
     match request {
@@ -174,6 +201,178 @@ pub async fn decode_avatar(executable: &Path, encoded: &[u8]) -> Result<MessageD
     use base64::Engine as _;
     let image = base64::engine::general_purpose::STANDARD.encode(encoded);
     rendered(one(executable, ContentRequest::Avatar { image }).await?)
+}
+
+/// Decode artwork through the existing content sandbox. This future must run
+/// to completion in an owned supervisor task: caller cancellation is not exit.
+/// On any error, process capacity remains occupied until actual kill/reaping.
+/// The only returned authority is validated RGBA, never worker source/URLs.
+pub async fn thumbnail(
+    executable: &Path,
+    encoded: &[u8],
+    max_width: u32,
+    max_height: u32,
+) -> Result<nuschl_core::ContentBlock, Error> {
+    use base64::Engine as _;
+    if encoded.len() > crate::MAX_THUMBNAIL_INPUT_BYTES
+        || max_width == 0
+        || max_height == 0
+        || max_width > crate::MAX_THUMBNAIL_EDGE
+        || max_height > crate::MAX_THUMBNAIL_EDGE
+    {
+        return Err(Error::InvalidResponse);
+    }
+    let request = ContentRequest::Thumbnail {
+        image: base64::engine::general_purpose::STANDARD.encode(encoded),
+        max_width,
+        max_height,
+    };
+    let mut frame = Vec::new();
+    write_frame(&mut frame, &Envelope::new(1, request))?;
+    let mut child = spawn(executable, &[5])?;
+    let _containment = match contain(&child) {
+        Ok(guard) => guard,
+        Err(error) => {
+            reap_thumbnail(&mut child).await;
+            return Err(error);
+        }
+    };
+    let reply = match (child.stdin.take(), child.stdout.take()) {
+        (Some(mut input), Some(mut output)) => {
+            let exchange = async {
+                let write = async move {
+                    input.write_all(&frame).await?;
+                    input.shutdown().await?;
+                    io::Result::Ok(())
+                };
+                let read = async {
+                    let maximum =
+                        (max_width as usize * max_height as usize * 4).div_ceil(3) * 4 + 4096;
+                    let reply = read_thumbnail_reply(&mut output, maximum).await?;
+                    if reply.request_id != 1 {
+                        return Err(Error::InvalidResponse);
+                    }
+                    Ok(reply.payload)
+                };
+                let (_, response) =
+                    tokio::try_join!(async { write.await.map_err(Error::from) }, read)?;
+                Ok::<_, Error>(response)
+            };
+            let result = timeout(Duration::from_secs(5), exchange)
+                .await
+                .map_err(|_| Error::Timeout)
+                .and_then(|result| result);
+            if result.is_ok() {
+                let finish = async {
+                    let mut extra = [0];
+                    if output.read(&mut extra).await? != 0 {
+                        return Err(Error::InvalidResponse);
+                    }
+                    if !child.wait().await?.success() {
+                        return Err(Error::InvalidResponse);
+                    }
+                    Ok(())
+                };
+                match timeout(Duration::from_secs(2), finish).await {
+                    Ok(Ok(())) => result,
+                    Ok(Err(error)) => Err(error),
+                    Err(_) => Err(Error::Timeout),
+                }
+            } else {
+                result
+            }
+        }
+        _ => Err(Error::InvalidResponse),
+    };
+    // A failed wait/kill must not release a caller's process credit. Never
+    // replace this owner; a supervising HTTP task can time out independently.
+    reap_thumbnail(&mut child).await;
+    validated_thumbnail(reply?, max_width, max_height)
+}
+
+async fn read_thumbnail_reply(
+    output: &mut tokio::process::ChildStdout,
+    maximum: usize,
+) -> Result<Envelope<ContentResponse>, Error> {
+    let size = output.read_u32().await? as usize;
+    if size == 0 || size > maximum {
+        return Err(Error::Frame(crate::Error::TooLarge));
+    }
+    let mut bytes = vec![0; size];
+    output.read_exact(&mut bytes).await?;
+    let response: Envelope<ContentResponse> = serde_json::from_slice(&bytes)?;
+    if response.version != PROTOCOL_VERSION {
+        return Err(Error::InvalidResponse);
+    }
+    Ok(response)
+}
+
+async fn reap_thumbnail(child: &mut Child) {
+    loop {
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        // Unlike start_kill, kill().await waits for the actual process exit.
+        if child.kill().await.is_ok() {
+            return;
+        }
+        if child.wait().await.is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn validated_thumbnail(
+    response: ContentResponse,
+    max_width: u32,
+    max_height: u32,
+) -> Result<nuschl_core::ContentBlock, Error> {
+    use base64::Engine as _;
+    let ContentResponse::Rendered(mut document) = response else {
+        return Err(Error::InvalidResponse);
+    };
+    if document.blocks.len() != 1 {
+        return Err(Error::InvalidResponse);
+    }
+    let nuschl_core::ContentBlock::Image {
+        width,
+        height,
+        rgba,
+        source: _,
+    } = document.blocks.pop().unwrap()
+    else {
+        return Err(Error::InvalidResponse);
+    };
+    if width == 0
+        || height == 0
+        || width > max_width
+        || height > max_height
+        || width > crate::MAX_THUMBNAIL_EDGE
+        || height > crate::MAX_THUMBNAIL_EDGE
+    {
+        return Err(Error::InvalidResponse);
+    }
+    let count = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .filter(|n| *n <= crate::MAX_THUMBNAIL_RGBA_BYTES)
+        .ok_or(Error::InvalidResponse)?;
+    if rgba.len() != count.div_ceil(3) * 4 {
+        return Err(Error::InvalidResponse);
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&rgba)
+        .map_err(|_| Error::InvalidResponse)?;
+    if bytes.len() != count {
+        return Err(Error::InvalidResponse);
+    }
+    Ok(nuschl_core::ContentBlock::Image {
+        width,
+        height,
+        rgba,
+        source: None,
+    })
 }
 
 /// Decode a server's website icon in the sandboxed content worker.
@@ -1237,5 +1436,48 @@ mod tests {
             "/usr/bin/touch",
             &[&format!("{home}/nuschl-sandbox-escape")]
         ));
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_validation_tests {
+    use super::*;
+    use nuschl_core::ContentBlock;
+    fn image(width: u32, height: u32, rgba: &str) -> ContentBlock {
+        ContentBlock::Image {
+            width,
+            height,
+            rgba: rgba.to_owned(),
+            source: Some("https://never-fetch.invalid/private".into()),
+        }
+    }
+    fn reply(blocks: Vec<ContentBlock>) -> ContentResponse {
+        ContentResponse::Rendered(MessageDocument { blocks })
+    }
+    #[test]
+    fn thumbnail_reply_has_one_bounded_image_and_no_source_authority() {
+        let output = validated_thumbnail(reply(vec![image(1, 1, "AQIDBA==")]), 300, 300).unwrap();
+        assert!(matches!(
+            output,
+            ContentBlock::Image {
+                source: None,
+                width: 1,
+                height: 1,
+                ..
+            }
+        ));
+        for blocks in [
+            vec![],
+            vec![image(1, 1, "AQIDBA=="), image(1, 1, "AQIDBA==")],
+            vec![image(0, 1, "")],
+            vec![image(401, 1, "AQIDBA==")],
+            vec![image(1, 1, "AQID")],
+            vec![image(1, 1, "AQIDBB==")],
+            vec![image(1, 1, "https://not-pixels.invalid")],
+        ] {
+            assert!(validated_thumbnail(reply(blocks), 400, 400).is_err());
+        }
+        assert!(validated_thumbnail(reply(vec![image(2, 1, "AQIDBAUGBwg=")]), 1, 1).is_err());
+        assert!(validated_thumbnail(ContentResponse::Rejected("no".into()), 1, 1).is_err());
     }
 }
