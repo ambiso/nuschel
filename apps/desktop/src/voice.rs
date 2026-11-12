@@ -159,7 +159,9 @@ pub fn projected(client: &Client, server: &ServerView, push_muted: bool) -> Stat
         server_muted: own.is_some_and(|user| user.muted),
         server_deafened: own.is_some_and(|user| user.deafened),
         suppressed: own.is_some_and(|user| user.suppressed),
-        acknowledged: own.is_some_and(|user| !user.self_muted && !user.self_deafened),
+        acknowledged: own.is_some_and(|user| {
+            user.self_muted == server.muted && user.self_deafened == server.deafened
+        }),
         transmit_budget: server
             .limits
             .as_ref()
@@ -211,6 +213,7 @@ pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<A
         State::MicrophoneEnabled
         | State::Speaking
         | State::Muted
+        | State::MutedPending
         | State::ServerMuted
         | State::Suppressed
         | State::NoTransmitBudget
@@ -220,7 +223,7 @@ pub fn rail_badge(this: &Desktop, index: usize, server: &ServerView) -> Option<A
             mix(TEXT_MUTED, WHITE, live),
             mix(ELEVATED, SUCCESS, live),
         ),
-        State::Listening => (
+        State::Listening | State::ListeningPending => (
             "headphones",
             mix(TEXT_MUTED, WHITE, pulse),
             mix(ELEVATED, SUCCESS, pulse * 0.85),

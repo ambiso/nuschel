@@ -43,9 +43,12 @@ pub enum State {
     Unsupported,
     EndToEnd,
     Deafened,
+    DeafenedPending,
     ServerDeafened,
     Listening,
+    ListeningPending,
     Muted,
+    MutedPending,
     ServerMuted,
     Suppressed,
     NoTransmitBudget,
@@ -70,13 +73,25 @@ impl Facts {
             Availability::Available => {}
         }
         if self.deafened {
-            State::Deafened
+            if self.acknowledged {
+                State::Deafened
+            } else {
+                State::DeafenedPending
+            }
         } else if self.server_deafened {
             State::ServerDeafened
         } else if !self.destination {
-            State::Listening
+            if self.acknowledged {
+                State::Listening
+            } else {
+                State::ListeningPending
+            }
         } else if self.muted {
-            State::Muted
+            if self.acknowledged {
+                State::Muted
+            } else {
+                State::MutedPending
+            }
         } else if self.server_muted {
             State::ServerMuted
         } else if self.suppressed {
@@ -107,9 +122,12 @@ impl State {
             Self::Unsupported => "Voice unavailable: Opus unsupported",
             Self::EndToEnd => "Voice unavailable: encrypted session",
             Self::Deafened => "Deafened",
+            Self::DeafenedPending => "Deafened · awaiting server",
             Self::ServerDeafened => "Deafened by server",
             Self::Listening => "Listening",
+            Self::ListeningPending => "Listening · awaiting server",
             Self::Muted => "Microphone destination · muted",
+            Self::MutedPending => "Microphone destination · muted · awaiting server",
             Self::ServerMuted => "Microphone destination · server muted",
             Self::Suppressed => "Microphone destination · suppressed",
             Self::NoTransmitBudget => "Microphone unavailable: server bandwidth",
@@ -297,5 +315,43 @@ mod tests {
             .state(),
             State::Listening
         );
+    }
+    #[test]
+    fn local_privacy_is_effective_while_remote_acknowledgement_is_pending() {
+        for (facts, expected) in [
+            (
+                Facts {
+                    muted: true,
+                    acknowledged: false,
+                    sending: true,
+                    ..live()
+                },
+                State::MutedPending,
+            ),
+            (
+                Facts {
+                    muted: true,
+                    deafened: true,
+                    acknowledged: false,
+                    sending: true,
+                    ..live()
+                },
+                State::DeafenedPending,
+            ),
+            (
+                Facts {
+                    destination: false,
+                    acknowledged: false,
+                    sending: true,
+                    ..live()
+                },
+                State::ListeningPending,
+            ),
+        ] {
+            assert_eq!(facts.state(), expected);
+            assert!(!facts.state().microphone_enabled());
+            assert!(!facts.state().speaking());
+            assert!(facts.state().label().contains("awaiting server"));
+        }
     }
 }
