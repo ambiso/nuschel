@@ -90,9 +90,24 @@ try{
     await page.getByRole("button",{name:"Send",exact:true}).click();await page.waitForFunction(n=>__welcomeProof.allResults.length>n,count);
     const reply=await page.evaluate(()=>__welcomeProof.allResults.at(-1));assert.equal(!reply.error,allowed);
     if(allowed){await page.locator("article").filter({hasText:`wire-ack:${++acks}`}).waitFor();await page.waitForFunction(()=>document.querySelector("#message").value==="");}
-    else assert.equal(await composer.inputValue(),body,"rejection erased draft");
+    else {
+      assert.equal(await composer.inputValue(),body,"rejection erased draft");assert.ok(await composer.isEditable());
+      assert.match(reply.error,/Message exceeds this server's \d+-byte limit/);
+      await page.getByRole("alert").filter({hasText:reply.error}).waitFor();
+    }
   }
   await configure({3:1,4:128,5:256,6:12,7:0});await send("x".repeat(129),false);
+  const diagnostics=[];
+  async function diagnostic(id,body){
+    const before=await page.evaluate(()=>__welcomeProof.allResults.length);
+    await page.evaluate(({id,body})=>__welcomeSdk.postMessage({id,method:"send_text",args:[body]}),{id,body});
+    await page.waitForFunction(n=>__welcomeProof.allResults.length>n,before);
+    const reply=await page.evaluate(()=>__welcomeProof.allResults.at(-1));diagnostics.push(reply);return reply.error;
+  }
+  assert.match(await diagnostic("fixture-empty",""),/Choose a conversation/);
+  assert.match(await diagnostic("fixture-global","x".repeat(256*1024+1)),/256 KiB client limit/);
+  assert.equal(await composer.inputValue(),"x".repeat(129));
+
   await configure({1:24_000,6:24});assert.equal(await composer.inputValue(),"x".repeat(129));await send("x".repeat(129),false);
   await configure({4:256});assert.equal(await composer.inputValue(),"x".repeat(129));await send("x".repeat(129),true);
   await configure({4:16});await send("<&>\n",false);
@@ -100,10 +115,10 @@ try{
   await configure({3:0,4:4});await send("<&>\n",true);
   await configure({4:0,5:0,6:0});await send("x".repeat(5001),true);
   await unlink(resolve(output,"control.json"));
-  await nav(page,async()=>{await page.getByRole("button",{name:"Disconnect",exact:true}).click();await page.getByRole("button",{name:"Connect",exact:true}).click();await page.waitForFunction(()=>document.querySelector(".server-connection .status")?.textContent==="Connected");});
+  await nav(page,async()=>{await page.getByRole("button",{name:"Disconnect",exact:true}).click();assert.match(await diagnostic("fixture-disconnected","inactive"),/Connect before sending/);await page.getByRole("button",{name:"Connect",exact:true}).click();await page.waitForFunction(()=>document.querySelector(".server-connection .status")?.textContent==="Connected");});
   await send("x".repeat(5001),false);await send("x".repeat(5000),true);
   const proof=await page.evaluate(()=>__welcomeProof);assert.equal(proof.captures,0);assert.deepEqual(proof.violations,[]);assert.deepEqual(errors,[]);assert.deepEqual(canaries,[]);
   await page.screenshot({path:resolve(output,"configuration-390.png")});
-  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,wire_acknowledgements:acks,checks:["independent private TLS/protobuf configuration", "actual App rejected128+1-byte body", "sparse bandwidth/max-user update preserves cap", "draft survives rejection and asynchronous cap increase", "escaped HTML/newline wire17-byte boundary", "plain UTF-8 wire4-byte boundary", "explicitzero enables above5000 within app ceiling", "reconnect resets conservative5000 default", "no capture/CSP/canary"]},null,2));console.log("Configuration App proof passed");
+  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,diagnostics,wire_acknowledgements:acks,checks:["independent private TLS/protobuf configuration", "actual App rejected128+1-byte body", "sparse bandwidth/max-user update preserves cap", "draft survives rejection and asynchronous cap increase", "escaped HTML/newline wire17-byte boundary", "plain UTF-8 wire4-byte boundary", "explicit zero enables above 5000 within app ceiling", "reconnect resets conservative5000 default", "no capture/CSP/canary"]},null,2));console.log("Configuration App proof passed");
 }catch(error){await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,pages:await Promise.all(pages.map(page=>page.evaluate(()=>({body:document.body.textContent,proof:__welcomeProof})).catch(()=>null)))},null,2));throw error;}
 finally{for(const context of contexts)await context.close();await browser.close();for(const socket of tunnels)socket.destroy();await new Promise(done=>server.close(done));}
