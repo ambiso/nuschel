@@ -43,6 +43,8 @@
       nixosModules.web = import ./nix/web-module.nix { inherit self; };
       # The key-transparency auditor (docs/witness.md).
       nixosModules.witness = import ./nix/witness-module.nix { inherit self; };
+      # The Mumble music bot for Subsonic servers (docs/musicbot.md).
+      nixosModules.musicbot = import ./nix/musicbot-module.nix { inherit self; };
       homeModules.default = import ./nix/home-manager.nix { inherit self; };
       homeManagerModules.default = self.homeModules.default;
     }
@@ -191,6 +193,7 @@
             }
           );
         cargoArtifacts = buildDeps common;
+        musicbotWeb = import ./nix/musicbot-web.nix { inherit pkgs lib; };
         webClient = import ./nix/web-client.nix {
           inherit pkgs lib toolchain;
           releaseNotices = releaseNotices.web.bundle;
@@ -199,6 +202,7 @@
           inherit pkgs toolchain craneLib;
           projectRoot = ./.;
           webRuntimeNotices = webClient.runtimeNotices;
+          musicbotRuntimeNotices = "${musicbotWeb}/licenses/runtime";
         };
         nativeNoticeScope =
           if pkgs.stdenv.hostPlatform.isDarwin then
@@ -217,6 +221,22 @@
           install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
           ${installNativeNotices}
         '';
+        musicbotNoticeScope = "musicbot-${pkgs.stdenv.hostPlatform.rust.rustcTarget}";
+        musicbotNotices = releaseNotices.forScope musicbotNoticeScope;
+        musicbotPackage =
+          pkgs.runCommand "nuschl-musicbot-0.1.0"
+            {
+              nativeBuildInputs = [ pkgs.makeWrapper ];
+              meta.mainProgram = "nuschl-musicbot";
+            }
+            ''
+              install -Dm755 ${crates.project.workspaceMembers.nuschl-musicbot.build}/bin/nuschl-musicbot "$out/bin/nuschl-musicbot"
+              install -Dm644 ${./LICENSE} "$out/share/licenses/nuschl/EUPL-1.2"
+              install -Dm644 ${./crates/protocol/proto/LICENSE.mumble} "$out/share/licenses/nuschl/Mumble-BSD"
+              mkdir -p "$out/share/licenses/nuschl"
+              cp -R ${musicbotNotices.bundle}/share/licenses/nuschl/. "$out/share/licenses/nuschl/"
+              wrapProgram "$out/bin/nuschl-musicbot" --set-default NUSCHL_MUSICBOT_WEB ${musicbotWeb}
+            '';
         rtcNoticeScope = "rtc-probe-${pkgs.stdenv.hostPlatform.rust.rustcTarget}";
         rtcNotices = releaseNotices.forScope rtcNoticeScope;
         rtcPackage =
@@ -555,6 +575,9 @@
           drv = updateSigner;
           exePath = "/bin/nuschl-update-sign";
         };
+        packages.musicbot = musicbotPackage;
+        packages.musicbot-web = musicbotWeb;
+        packages.release-notices-musicbot = musicbotNotices.bundle;
         packages.windows = windowsPackage;
         packages.windows-update-ed25519 = windowsVerifiers.ed25519;
         packages.windows-update-mldsa44 = windowsVerifiers.mldsa44;
@@ -724,6 +747,14 @@
               relay = crates.project.workspaceMembers."nuschl-web-relay".build;
               module = self.nixosModules.web;
             };
+            # The music bot under its module, against Murmur and a fake library
+            # (`nix build .#checks.x86_64-linux.vm-musicbot`).
+            vm-musicbot = import ./nix/vm-musicbot.nix {
+              inherit pkgs;
+              musicbot = musicbotPackage;
+              cli = crates.project.workspaceMembers.nuschl-cli.build;
+              module = self.nixosModules.musicbot;
+            };
             vm-smoke = import ./nix/vm-smoke.nix {
               inherit pkgs;
               nuschl = package;
@@ -749,6 +780,7 @@
               pkgs.taplo
               pkgs.jujutsu
               pkgs.python3
+              pkgs.nodejs
             ]
             ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               pkgs.bubblewrap
