@@ -40,6 +40,7 @@ print(json.dumps({'uid':os.geteuid(),'host_controls_unwritable':True,'effective_
         sys.executable, "-c", check], text=True))
     assert parent_checks["uid"] == uid
     parent_network = (Path("/proc") / str(parent) / "ns/net").readlink()
+    parent_pid_namespace = (Path("/proc") / str(parent) / "ns/pid").readlink()
     children = []
     for process in Path("/proc").iterdir():
         if not process.name.isdecimal():
@@ -48,9 +49,11 @@ print(json.dumps({'uid':os.geteuid(),'host_controls_unwritable':True,'effective_
             command = (process / "cmdline").read_bytes().split(b"\0")
             if command[:2] != [b"/worker", b"--codec-worker"]:
                 continue
+            assert command[2] in [b"decode", b"encode", b"duck"] and command[3:] == [b""]
             cgroup = (process / "cgroup").read_text()
             assert "nuschl-musicbot.service" in cgroup
             assert (process / "ns/net").readlink() != parent_network
+            assert (process / "ns/pid").readlink() != parent_pid_namespace
             assert not (process / "root/etc/musicbot/key").exists()
             assert not (process / "root/var/lib/private/nuschl-musicbot").exists()
             assert not (process / "root/run/credentials").exists()
@@ -60,7 +63,7 @@ print(json.dumps({'uid':os.geteuid(),'host_controls_unwritable':True,'effective_
             limits = (process / "limits").read_text()
             assert "1073741824" in next(line for line in limits.splitlines() if line.startswith("Max address space"))
             children.append({"pid": int(process.name), "role": command[2].decode(),
-                             "network_namespace_separate": True, "credentials_absent": True,
+                             "network_namespace_separate": True, "pid_namespace_separate": True, "credentials_absent": True,
                              "stdio_only": True, "address_space_bytes": 1073741824})
         except FileNotFoundError:
             # Exited between enumeration and inspection; not a positive proof.
