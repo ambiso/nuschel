@@ -63,10 +63,13 @@ static PROFILE: OnceLock<Option<PathBuf>> = OnceLock::new();
 /// Retain only the typed persistent profile selection. Startup URLs, offers
 /// and autostart are one-shot actions and must not replay on an update restart.
 pub fn remember_profile(path: Option<&Path>) -> std::io::Result<()> {
-    let profile = path.map(std::path::absolute).transpose()?;
     PROFILE
-        .set(profile)
+        .set(normalize_profile(path)?)
         .map_err(|_| std::io::Error::other("the startup profile was already recorded"))
+}
+
+fn normalize_profile(path: Option<&Path>) -> std::io::Result<Option<PathBuf>> {
+    path.map(std::path::absolute).transpose()
 }
 
 /// Set once at start, from `Profile::update_state_path`.
@@ -129,7 +132,7 @@ mod tests {
     #[test]
     fn explicit_relative_space_and_unicode_profile_is_absolute_and_one_native_argument() {
         let relative = Path::new("relative profile µ");
-        let absolute = std::path::absolute(relative).unwrap();
+        let absolute = normalize_profile(Some(relative)).unwrap().unwrap();
         assert!(absolute.is_absolute());
         let command = relaunch_command(Path::new("nuschl"), Some(&absolute));
         let arguments: Vec<_> = command.get_args().map(OsString::from).collect();
