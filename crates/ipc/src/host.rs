@@ -1263,3 +1263,46 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod thumbnail_validation_tests {
+    use super::*;
+    use nuschl_core::ContentBlock;
+    fn image(width: u32, height: u32, rgba: &str) -> ContentBlock {
+        ContentBlock::Image {
+            width,
+            height,
+            rgba: rgba.to_owned(),
+            source: Some("https://never-fetch.invalid/private".into()),
+        }
+    }
+    fn reply(blocks: Vec<ContentBlock>) -> ContentResponse {
+        ContentResponse::Rendered(MessageDocument { blocks })
+    }
+    #[test]
+    fn thumbnail_reply_has_one_bounded_image_and_no_source_authority() {
+        let output = validated_thumbnail(reply(vec![image(1, 1, "AQIDBA==")]), 300, 300).unwrap();
+        assert!(matches!(
+            output,
+            ContentBlock::Image {
+                source: None,
+                width: 1,
+                height: 1,
+                ..
+            }
+        ));
+        for blocks in [
+            vec![],
+            vec![image(1, 1, "AQIDBA=="), image(1, 1, "AQIDBA==")],
+            vec![image(0, 1, "")],
+            vec![image(401, 1, "AQIDBA==")],
+            vec![image(1, 1, "AQID")],
+            vec![image(1, 1, "AQIDBB==")],
+            vec![image(1, 1, "https://not-pixels.invalid")],
+        ] {
+            assert!(validated_thumbnail(reply(blocks), 400, 400).is_err());
+        }
+        assert!(validated_thumbnail(reply(vec![image(2, 1, "AQIDBAUGBwg=")]), 1, 1).is_err());
+        assert!(validated_thumbnail(ContentResponse::Rejected("no".into()), 1, 1).is_err());
+    }
+}
