@@ -417,7 +417,9 @@ def actions(args, root, shell, application, bot, murmur):
             assert menu() is None
             current = open_user()
             g = geometry()
-            shell.click(g["x"] + g["width"] - 15, g["y"] + 70)
+            # Stay inside the application surface, clear of the native resize
+            # gutter; a click on the compositor desktop is not a layer event.
+            shell.click(g["x"] + 60, g["y"] + 120)
             eventually(lambda: menu() is None, "outside click did not dismiss menu")
             record["reading_keys_and_dismissal"] = True
             if width == 1280:
