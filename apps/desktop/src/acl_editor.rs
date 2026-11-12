@@ -230,9 +230,28 @@ fn local_editor(this: &mut Desktop, token: u64) -> Option<&mut Editor> {
     }
 }
 
-fn inputs_readonly(editor: &Editor, readonly: bool, cx: &mut Context<Desktop>) {
-    for input in [&editor.target, &editor.group_name, &editor.member] {
-        input.update(cx, |input, cx| input.set_readonly(readonly, cx));
+fn inputs_readonly(editor: &Editor, busy: bool, cx: &mut Context<Desktop>) {
+    let target = busy || editor.rule().is_none_or(|(_, entry)| entry.inherited);
+    let member = busy
+        || editor
+            .selected_group
+            .and_then(|(index, id)| {
+                editor
+                    .state
+                    .draft()?
+                    .groups()
+                    .get(index)
+                    .filter(|row| row.id == id)
+            })
+            .is_none();
+    for (input, readonly) in [
+        (&editor.target, target),
+        (&editor.group_name, busy),
+        (&editor.member, member),
+    ] {
+        if input.read(cx).is_readonly() != readonly {
+            input.update(cx, |input, cx| input.set_readonly(readonly, cx));
+        }
     }
 }
 
@@ -785,7 +804,6 @@ pub fn sync(this: &mut Desktop, cx: &mut Context<Desktop>) {
             "apply correlated ACL draft response"
         );
         let write = editor.state.receive(&reply);
-        inputs_readonly(editor, write.is_some(), cx);
         if write.is_none() && !editor.state.error {
             editor.selected_rule = None;
             editor.selected_group = None;
@@ -794,6 +812,7 @@ pub fn sync(this: &mut Desktop, cx: &mut Context<Desktop>) {
             editor.resolved = None;
             editor.lookup_timeout = None;
         }
+        inputs_readonly(editor, write.is_some(), cx);
         editor.dirty = editor.state.draft().is_some_and(|draft| draft.dirty());
         write
     };
@@ -1032,6 +1051,9 @@ fn row_button(
 }
 
 pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyElement {
+    // Only three fixed UI properties are observed here. No draft/member scan,
+    // task or notification occurs when the already-bound mode is unchanged.
+    inputs_readonly(editor, editor.state.pending().is_some(), cx);
     let token = editor.token;
     let pending = editor.state.pending().is_some();
     let unapplied = target_pending(editor, cx);
