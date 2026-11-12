@@ -1010,6 +1010,10 @@ listed below. Plugin data remains the explicit gap.
       URLs, offers or autostart. 82 native units and the actual Windows GUI pass:
       initial relative space/Unicode profile becomes the exact absolute restarted
       profile and its persisted update-state SHA remains unchanged.
+- [ ] Investigate the secret-free VM bootstrap Run dialog left behind in one
+      restart screenshot after the agent was ready. Focusing the exact owned app
+      makes final captures reliable, but does not establish that automatic
+      bootstrap dialog cleanup is solved; do not dismiss arbitrary guest windows.
 - [ ] Complete unattended Windows desktop/audio/sandbox regression orchestration
       and add UDP (the existing guest-forward voice check used the TCP tunnel).
 - [x] Windows and macOS sandbox profiles for media, storage and content workers.
@@ -1537,6 +1541,17 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       Keep notice inventory/vendoring tools distinct from compiled package
       builders. Cache cleanup being complete does not mean this migration is done;
       serialize flake/graph edits with the release-notice and codec owners.
+- [ ] Keep source-dependent notice/runtime postInstall hooks out of Crane's
+      buildDepsOnly cache key. The profile-only fix changed no dependency inputs,
+      yet the unused notice postInstall path invalidated a 954 MiB artifact and
+      would repeat the nine-minute dependency build. Its private proof safely
+      reused identical-input artifacts; the production builder is not fixed.
+- [ ] Build official cross updater verifier outputs with separate algorithm
+      features, matching the native per-crate policy. `crossCommon` currently
+      enables both together: actual fixed-entry-point runtime tests pass, but do
+      not establish independent feature graphs. Resolve the test-only Windows
+      crate2nix executable-suffix/import-library/static-pthread adaptations before
+      relying on that route for official products; recheck actual final helpers.
 - [ ] Windows installer (Start menu entry, uninstall); today the zip is portable and
       updates itself where it was unpacked.
 - Deferred (user, 2026-11-11: **no Windows or macOS code signing for now**). The
