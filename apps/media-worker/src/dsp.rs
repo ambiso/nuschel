@@ -63,6 +63,19 @@ fn stream() -> StreamConfig {
     StreamConfig::new(RATE, 1)
 }
 
+#[cfg(test)]
+pub(crate) fn diagnostic_thresholds(
+    settings: &AudioSettings,
+    open: f32,
+    close: f32,
+) -> impl FnMut(f32, f32) -> bool {
+    assert!((0.0..=1.0).contains(&close) && close < open && open <= 1.);
+    let mut gate = Gate::new(settings);
+    gate.open_threshold = open;
+    gate.close_threshold = close;
+    move |voice, level| gate.update(voice, level, false, false)
+}
+
 impl CapturePipeline {
     #[cfg(test)]
     pub fn new(settings: &AudioSettings, echo_cancellation: bool) -> Self {
@@ -404,6 +417,62 @@ mod tests {
             state ^= state << 5;
             amplitude * ((state as f32 / u32::MAX as f32) * 2. - 1.)
         })
+    }
+
+    #[test]
+    fn speech_detector_keeps_its_state_and_preprocessing_tap_across_settings_changes() {
+        let base = AudioSettings {
+            automatic_gain: false,
+            noise_suppression: false,
+            ..Default::default()
+        };
+        let mut reference = CapturePipeline::new(&base, false);
+        let mut changing = CapturePipeline::new(&base, false);
+        let mut fresh = CapturePipeline::new(&base, false);
+        let mut differs_from_cold = false;
+        for index in 0..400 {
+            if matches!(index, 100 | 200 | 300) {
+                changing.configure(&AudioSettings {
+                    automatic_gain: index != 300,
+                    noise_suppression: index != 200,
+                    ..base.clone()
+                });
+            }
+            let input = speech_like(index);
+            let expected = reference.process(&mut input.clone(), false, false).voice;
+            let actual = changing.process(&mut input.clone(), false, false).voice;
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "AGC/NS configuration must not reset or change the classifier input"
+            );
+            if index >= 100 {
+                let cold = fresh.process(&mut input.clone(), false, false).voice;
+                differs_from_cold |= cold.to_bits() != expected.to_bits();
+            }
+        }
+        assert!(
+            differs_from_cold,
+            "the state-retention control must exercise nontrivial detector history"
+        );
+    }
+
+    #[test]
+    fn steady_capture_processing_and_periodic_vad_reset_do_not_allocate() {
+        let mut pipeline = CapturePipeline::new(&AudioSettings::default(), false);
+        for index in 0..200 {
+            pipeline.process(&mut speech_like(index), false, false);
+        }
+        let allocation = allocation_counter::measure(|| {
+            // Cross multiple internal 1.5 s RNN resets, not just one warm frame.
+            for index in 200..600 {
+                pipeline.process(&mut speech_like(index), false, false);
+            }
+        });
+        assert_eq!(
+            allocation.count_total, 0,
+            "detector/capture processing must remain allocation-free after startup"
+        );
     }
 
     /// Diagnostic replay on two instances of this build's DSP; not a general
