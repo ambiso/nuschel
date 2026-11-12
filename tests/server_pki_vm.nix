@@ -2,13 +2,12 @@
 # Build only `.driver`, then execute it with a disk-backed TMPDIR/output directory.
 {
   projectRoot ? ../.,
-  packagePath ? "/nix/store/n3cw1mrbi7c7wzb1ry0qhd70vw18r2ik-nuschl-0.1.0",
-  trustedCaFile ? null,
+  packagePath,
+  trustedCaFile,
 }:
 let
   flake = builtins.getFlake (toString projectRoot);
   pkgs = flake.inputs.nixpkgs.legacyPackages.x86_64-linux;
-  lib = pkgs.lib;
   # Reuse an already-built package, including its complete runtime closure.
   # This tiny wrapper cannot request a Cargo build.
   package = pkgs.runCommand "nuschl-cached-pki-vm-package" { } ''

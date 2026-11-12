@@ -264,6 +264,38 @@ issuer, missing intermediate and strict pins). These fixtures do not contact a
 public ACME service or change host trust/configuration. The module fixture alone
 does not execute systemd lifecycle/UID mounts; those require a NixOS VM.
 
+The standalone `tests/server_pki_vm.nix` driver covers those installed-unit
+boundaries: DynamicUser/group access, the read-only runtime mount, scoped PID1
+credentials, invalid bootstrap followed by automatic startup recovery, renewal
+through the real ACME post-run hook and privileged HUP, retained connections,
+invalid-update retention, and intentional stop. Only the issuer command is
+replaced with an offline marker; the timer is accelerated to five seconds and a
+one-second helper pre-step permits inspection of its credential mount. Actual
+public issuance and challenge-provider behavior remain outside this test.
+
+Use an already built package containing `nuschld` and `nuschl-storage-worker`.
+Only the public fixture CA enters the store; keep its private key and VM runtime
+outside the checkout. Build the driver, not the VM test derivation, so the running
+VM and its sparse disk can use disk-backed scratch:
+
+```sh
+cachedPackage=/nix/store/your-already-built-nuschl-package
+pkiWork=$(mktemp -d "${XDG_CACHE_HOME:-$HOME/.cache}/nuschl-pki-vm.XXXXXXXX")
+mkdir -p "$pkiWork/tmp" "$pkiWork/work" "$pkiWork/output"
+python3 tests/server_pki_vm.py prepare --directory "$pkiWork/fixture"
+driver=$(nix build --impure --file tests/server_pki_vm.nix driver \
+  --argstr packagePath "$cachedPackage" \
+  --argstr trustedCaFile "$pkiWork/fixture/root.pem" \
+  --cores 2 --max-jobs 2 --no-link --print-out-paths)
+cd "$pkiWork/work"
+TMPDIR="$pkiWork/tmp" NUSCHL_PKI_FIXTURE_DIRECTORY="$pkiWork/fixture" \
+  "$driver/bin/nixos-test-driver" --output_directory "$pkiWork/output"
+```
+
+Client `TMPDIR` does not relocate Nix daemon build scratch. Inspect the driver
+dry run and available daemon scratch before building; this test does not require
+rebuilding the server package, kernel, QEMU, or systemd when those are cached.
+
 ## Importing a Murmur server
 
 `nuschld admin import-murmur PATH` (or the flag `--import-murmur PATH`) moves a

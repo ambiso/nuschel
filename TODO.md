@@ -932,17 +932,20 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
          so replacing those still needs a restart. The integrated ACME helper
          publishes renewed material for reload; its real systemd lifecycle remains
          a separate verification gate.
-   - [ ] Prove the integrated ACME certificate lifecycle in an actual NixOS systemd
+   - [x] Prove the integrated ACME certificate lifecycle in an actual NixOS systemd
          service: DynamicUser/UID access, credential replacement, renewal/recovery,
          SIGHUP handoff, restart and intentional manual stop. Module evaluation,
-         private helper and server tests passed through `acacf`; they do not prove
-         the installed unit lifecycle or that credentials stay readable after renewal.
+         private helper and server tests passed through `acacf`. The standalone
+         cached-package VM passed all installed-unit cases (2026-11-12), including
+         a held authenticated TLS stream across HUP and an intentional stop across
+         renewal hooks, accelerated timer runs and the restart backoff. The private
+         issuer is offline; real public ACME/challenge-provider operation is untested.
          Current pinned nixpkgs (`4fe25e12`, 2026-11-12) no longer generates
          `acme-finished-<host>.target`: `acme-<host>.service` now provides the
          bootstrap pair and `acme-order-renew-<host>.service` performs issuance
          and the post-run hook. The standalone cached-package VM reproduced
          the missing-target failure. The publisher now depends on the generated
-         `acme-<host>.service`; the unchanged lifecycle test is being repeated.
+         `acme-<host>.service`; the lifecycle test passes with that dependency.
    - [x] IP obfuscation in logs (2026-11-11): `obfuscate = true`, HMAC-SHA256 tokens
          under a per-start key (Murmur's 32-bit key is reversible).
    - [x] CA-verified ("strong") certificates (2026-11-11):
