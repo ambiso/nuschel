@@ -61,7 +61,7 @@ async function open(username,fault="",width=1280) {
  const page=await context.newPage();
  await page.addInitScript(()=>{
   globalThis.captureCalls=0;navigator.mediaDevices.getUserMedia=()=>{captureCalls++;return Promise.reject(new Error("No capture in broker fixture"));};
-  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[]};
+  const fixture=globalThis.brokerFixture={sdk:null,last:null,work:[],replies:[],pending:new Map(),workers:[],completions:[],codec:[],snapshots:0,snapshot_bytes:0};
   const NativeWorker=globalThis.Worker;
   globalThis.Worker=class extends NativeWorker {
    constructor(...args) {
@@ -70,7 +70,7 @@ async function open(username,fault="",width=1280) {
     if(!String(args[0]).includes("sdk.worker-"))return;
     fixture.sdk=this;
     this.addEventListener("message",({data})=>{
-     if(data?.kind==="state")fixture.last=data;
+     if(data?.kind==="state"){fixture.last=data;fixture.snapshots++;fixture.snapshot_bytes+=new TextEncoder().encode(JSON.stringify(data)).length;}
      if(data?.kind==="content_work")for(const operation of data.operations){fixture.work.push(operation);if(fixture.work.length>128)fixture.work.shift();}
      if(data?.kind==="result"&&fixture.pending.has(data.id)) {
       fixture.replies.push({request:fixture.pending.get(data.id),value:data.value,error:data.error});fixture.pending.delete(data.id);
@@ -109,7 +109,7 @@ async function send(page,text) {
  await page.getByRole("button",{name:"Send",exact:true}).click();
  await page.waitForFunction(()=>document.querySelector("textarea")?.value==="");
 }
-const result={passed:false,artifact:root,stale:null,retired:null,expiry:null,recovery:null,stress:process.argv[7]==="stress"};
+const result={passed:false,artifact:root,stale:null,retired:null,expiry:null,recovery:null,stress:process.argv[7]==="stress",throughput:[]};
 try {
  const stale=await open("broker-stale","delay");
  await send(stale,"stale-source-canary");
@@ -200,6 +200,7 @@ try {
   await rpc(recovery,"disconnect",0);await rpc(recovery,"connect",0);
   await recovery.waitForFunction(()=>brokerFixture.last?.servers[0].status==="connected"&&brokerFixture.last.timeline.messages.length>=101,null,{timeout:20000});
   for(let channel=0;channel<5;channel++) {
+   const metric=await recovery.evaluate(()=>({at:performance.now(),snapshots:brokerFixture.snapshots,bytes:brokerFixture.snapshot_bytes}));
    await rpc(recovery,"open",0,channel);
    await recovery.waitForFunction(channel=>brokerFixture.last?.timeline?.channel===channel&&!brokerFixture.last.timeline.loading&&brokerFixture.last.timeline.messages.length>=100,channel);
    for(let page=1;page<=8;page++) {
@@ -211,6 +212,7 @@ try {
     const diagnostic=await recovery.evaluate(()=>({channel:brokerFixture.last?.timeline?.channel,count:brokerFixture.last?.timeline?.messages.length,missing:brokerFixture.last?.timeline?.messages.filter(message=>!message.content_token&&!message.content_failed).slice(0,4),work:brokerFixture.work.slice(-10).map(({kind,request})=>({kind,request})),reply:brokerFixture.replies.slice(-4)}));
     console.error("recovery-diagnostic",JSON.stringify(diagnostic));result.recovery_failure=diagnostic;throw error;
    }
+   result.throughput.push(await recovery.evaluate(({channel,metric})=>({channel,messages:brokerFixture.last.timeline.messages.length,milliseconds:performance.now()-metric.at,snapshots:brokerFixture.snapshots-metric.snapshots,snapshot_bytes:brokerFixture.snapshot_bytes-metric.bytes}),{channel,metric}));
   }
   // Inactive row survives another real connection/lifetime change; then an
   // actual user reopen rebuilds its original-source lease, without IDB success.

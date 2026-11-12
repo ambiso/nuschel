@@ -7,9 +7,22 @@ import {MAX_REPLY, textBytes, validateDocument} from "./content-protocol.js";
 export const DOCUMENT_BYTES = 16 * 1024 * 1024;
 export const DOCUMENT_COUNT = 256;
 const listeners = new Set();
+const tokenListeners = new Map();
 let version = 0, active, consumed = false;
 export const documents = {subscribe(run) { listeners.add(run); run(version); return () => listeners.delete(run); }};
-function changed() { version++; for (const run of listeners) run(version); }
+function changed(token) {
+  version++; for (const run of listeners) run(version);
+  if(token===undefined)for(const group of tokenListeners.values())for(const run of group)run();
+  else for(const run of tokenListeners.get(token)??[])run();
+}
+// Observers follow mounted rows, not every cached handle. Release is mandatory
+// on unmount/token replacement; an accepted derivative wakes only its owner.
+export function observeDocument(token,run) {
+  const key=typeof token==="string"?token:null;
+  let group=tokenListeners.get(key);if(!group){group=new Set();tokenListeners.set(key,group);}
+  group.add(run);run();let held=true;
+  return()=>{if(!held)return;held=false;group.delete(run);if(!group.size)tokenListeners.delete(key);};
+}
 function minimumCharge(document) {
   const encoded=textBytes(JSON.stringify(document),MAX_REPLY).length;
   let pixels=0,spans=0,runs=0;
@@ -61,7 +74,7 @@ export class ContentBridge {
   constructor(command,{service=new ContentService()}={}) {
     if(consumed)throw new Error("The content bridge already consumed its page-lifetime owner. Reload to reconnect.");
     consumed=true;
-    this.command=command;this.service=service;this.pending=new Map();this.missing=new Set();this.denied=new Set();this.welcomes=new Map();this.disposed=false;active=this;
+    this.command=command;this.service=service;this.pending=new Map();this.missing=new Set();this.denied=new Set();this.welcomes=new Map();this.disposed=false;this.reportedRetirement=false;active=this;
   }
   rehydrate(token) {
     if(this.disposed||this.service.retired||this.denied.has(token)||this.missing.has(token))return;
@@ -71,7 +84,11 @@ export class ContentBridge {
   }
   deny(token) {
     if(this.denied.size>=512)this.denied.delete(this.denied.values().next().value);
-    this.denied.add(token);changed();
+    this.denied.add(token);this.notify(token);
+  }
+  notify(token) {
+    changed(token);
+    if(this.service.retired&&!this.reportedRetirement){this.reportedRetirement=true;changed();}
   }
   retry(token) {
     if(this.disposed||this.service.retired)return;
@@ -101,7 +118,7 @@ export class ContentBridge {
       textBytes(raw,MAX_REPLY);
       const accepted=JSON.parse(raw);
       if(accepted&&Object.keys(accepted).length===4&&typeof accepted.failed==="boolean") {
-        if(cache.insert(accepted.token,accepted.document,accepted.charge,accepted.failed))changed();
+        if(cache.insert(accepted.token,accepted.document,accepted.charge,accepted.failed))this.notify(accepted.token);
         else this.deny(accepted.token); // never turn pinned-cache pressure into a re-render loop
       }
     } catch { this.deny(id); /* Original source remains in the SDK for explicit retry. */ }
@@ -128,5 +145,6 @@ export class ContentBridge {
     // and permanently consume this page owner; disposal is not an exit ACK or
     // permission to manufacture another 16 MiB of derivative capacity.
     if(active===this)active=null;
+    changed();
   }
 }

@@ -2,12 +2,21 @@
 <script>
   import { initials, avatarColor } from "./presentation.js";
   import TypedDocument from "./TypedDocument.svelte";
-  import {documents,contentDocument,retainDocument,contentFailed,contentUnavailable,retryContent} from "./content-bridge.js";
+  import {observeDocument,contentDocument,retainDocument,contentFailed,contentUnavailable,retryContent} from "./content-bridge.js";
   let { message } = $props();
-  const content = $derived.by(() => { $documents; return contentDocument(message.content_token) ?? message.document; });
-  const failed = $derived.by(() => { $documents; return message.content_failed || contentFailed(message.content_token); });
-  const unavailable = $derived.by(() => { $documents; return contentUnavailable(); });
-  $effect(() => retainDocument(message.content_token,message.content_failed));
+  const token = $derived(message.content_token);
+  const serverFailed = $derived(message.content_failed);
+  let prepared = $state(null), cacheFailed = $state(false), unavailable = $state(false);
+  const content = $derived(prepared ?? message.document);
+  const failed = $derived(serverFailed || cacheFailed);
+  $effect(() => {
+    const current=token;
+    const stop=observeDocument(current,()=>{
+      prepared=contentDocument(current);cacheFailed=contentFailed(current);unavailable=contentUnavailable();
+    });
+    const release=retainDocument(current,serverFailed);
+    return()=>{stop();release();};
+  });
   const date = $derived(new Date(Number(message.at_ms)));
 </script>
 <article class:outgoing={message.outgoing}>

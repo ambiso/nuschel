@@ -2,21 +2,18 @@
 // The SDK/session/storage owner. Complex parsing stays in the content Worker.
 import init, { WebClient } from "./sdk/nuschl_client_wasm.js";
 import { openHistory } from "./history.js";
+import { createContentPublication } from "./content-publication.js";
 import { restoreOrder } from "./server-order.js";
 let client;
 let history;
 let saved = null;
 let storageQueue = Promise.resolve();
-let queued = false;
 let started = false;
 let orderQueue = Promise.resolve();
 let orderCommitActive = false;
 function fail(reason) { postMessage({ kind: "error", message: String(reason?.message || reason) }); }
-function wake() {
-  if (queued) return;
-  queued = true;
-  queueMicrotask(() => { queued = false; refresh(); });
-}
+const publication=createContentPublication(refresh);
+const wake=publication.wake;
 let audioQueued = false;
 function wakeAudio() {
   if (audioQueued) return;
@@ -122,6 +119,7 @@ onmessage = async ({ data }) => {
       if (data.id !== undefined) postMessage({ kind: "result", id: data.id, value });
       // Encoding is frequent; its route has already been admitted in Rust.
       if (data.method === "voice_packet") return;
+      if(data.method === "content_complete" || data.method === "content_request") { publication.content(); return; }
     }
     wake();
   } catch (reason) {
@@ -129,5 +127,6 @@ onmessage = async ({ data }) => {
     // revoked internal packets without turning them into user-facing toasts.
     if (data?.id === undefined && (data?.method === "voice_packet" || data?.method === "audio_ready")) return;
     postMessage({ kind: "result", id: data?.id, error: String(reason?.message || reason) });
+    wake(); // errors/navigation never wait behind derivative publication
   }
 };

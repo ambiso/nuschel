@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 import test from "node:test";
 import assert from "node:assert/strict";
-import {DocumentCache,ContentBridge,contentDocument,retainDocument} from "./content-bridge.js";
+import {DocumentCache,ContentBridge,contentDocument,retainDocument,observeDocument} from "./content-bridge.js";
 const document={blocks:[{kind:"text",text:"safe",spans:[]}]};
 
 test("global derivative credit follows pinned documents until actual release",()=>{
@@ -41,9 +41,14 @@ test("only the SDK accepted reply becomes visible, with no credential metadata i
     assert.equal(bridge.handle({kind:"content_work",operations:[{kind:"render",request:"7",mode:"legacy",source:"<b>safe</b>"}]}),true);
     assert.deepEqual(calls,[{mode:"legacy",source:"<b>safe</b>"}]);
     assert.equal(contentDocument("7"),null);
+    let own=0,other=0;
+    const stopOwn=observeDocument("7",()=>own++),stopOther=observeDocument("8",()=>other++);
     finish({marked_text:"safe",plain_text:"safe",document});
     await new Promise(resolve=>setImmediate(resolve));
     assert.deepEqual(contentDocument("7"),document);
+    assert.equal(own,2);assert.equal(other,1,"unrelated mounted row is not invalidated");
+    stopOwn();stopOwn();stopOther();
+    bridge.deny("7");assert.equal(own,2,"unmounted observer is released");assert.equal(other,1);
     const release=retainDocument("7");release();
   } finally {bridge.dispose();}
   assert.deepEqual(contentDocument("7"),document);
