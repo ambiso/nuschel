@@ -90,7 +90,11 @@ sockets. Input is an owned 997 Hz WAV supplied through Chromium's fake capture
 device. Output uses a null AudioContext sink, with an ALSA null fallback and
 unavailable private Pulse/PipeWire sockets. Worklet PCM is measured in the
 browser; an independent libopus decoder verifies the wire data's 997 Hz
-carrier. No physical microphone or speaker is part of this fixture.
+carrier. No physical microphone or speaker is part of this fixture. For browser
+text/layout tests, pass `--font-dir` with an explicit Nix store font directory.
+The wrapper builds an owned fontconfig and font cache; it never mounts host
+font configuration. This is necessary for meaningful textarea/layout behavior
+in the otherwise minimal filesystem.
 
 The controller fixture and the separate production App fixture prove different
 layers. Controller success alone does not establish UI control correctness,
@@ -108,3 +112,12 @@ An independent libopus 1.6.1 decoder verified 27 wire packets (25,920 finite
 samples) against the owned 997 Hz input. No CSP violations, foreign-origin
 requests or browser errors were observed. This is a controller integration
 result; production App control tests are recorded separately.
+
+The separate packaged App run also passed real Join/Unmute/Mute/Deafen/Enable
+sound/Stop audio controls with the same confined synthetic input and null
+output. It measured nonzero playback and exact silence after deafen, preserved
+chat after stopping audio, verified multiline messages in browser storage, and
+cleared the composer after the SDK send acknowledgment. A 400 ms audio-only
+window delivered 20 packets without replacing the full Svelte state snapshot.
+These Chromium results do not establish mobile Safari audio or background-tab
+behavior.
