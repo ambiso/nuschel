@@ -27,9 +27,19 @@ CONTROL = "Normal control <b>Nuschl</b><br/>Second control: <a href='https://exa
 
 def run(args):
     args.output.mkdir(parents=True, exist_ok=True)
+    if getattr(args, "document_links", False):
+        import document_link_regression as scenario
+
+        if not args.pulse_bin:
+            raise ValueError(
+                "--document-links needs --pulse-bin for isolated idle proof"
+            )
+    else:
+        scenario = None
+    welcome_html = WELCOME + (scenario.WELCOME_EXTRA if scenario else "")
     (prepared,) = exchange(
         args.binaries / "nuschl-content-worker",
-        [{"kind": "legacy_html", "html": WELCOME}],
+        [{"kind": "legacy_html", "html": welcome_html}],
     )
     (args.output / "worker.json").write_text(json.dumps(prepared, indent=2) + "\n")
     assert prepared["status"] == "prepared"
@@ -41,10 +51,12 @@ def run(args):
         murmur.ini.write_text(
             murmur.ini.read_text().replace(
                 'welcometext="Welcome to the <b>Nuschl</b> screenshot server."',
-                f'welcometext="{WELCOME}"',
+                f'welcometext="{welcome_html}"',
             )
         )
         murmur.seed()
+        if scenario:
+            scenario.seed_description(murmur.database)
         murmur.start()
         shell = GnomeSession(
             args.gnome_shell, 1440, 900, log=(args.output / "gnome.log").open("w")
@@ -78,7 +90,9 @@ def run(args):
                 root / "bot",
             )
             welcome = bot.wait(lambda event: event["kind"] == "welcome")
-            assert welcome["body"] == WELCOME, welcome
+            assert welcome["body"] == welcome_html, welcome
+            if scenario:
+                bot.send(kind="comment", text=scenario.COMMENT)
             (args.output / "server-welcome.json").write_text(
                 json.dumps(welcome, indent=2) + "\n"
             )
@@ -107,6 +121,48 @@ def run(args):
                 "PIPEWIRE_REMOTE": str(root / "no-pipewire"),
             }
             env.pop("NO_AT_BRIDGE", None)
+            if args.pulse_bin:
+                # The media sandbox binds this session-owned runtime endpoint.
+                pulse = shell.runtime / "pulse"
+                pulse.mkdir(mode=0o700, exist_ok=True)
+                assert not (pulse / "native").exists(), (
+                    "unexpected preexisting private audio"
+                )
+                script = pulse / "default.pa"
+                script.write_text(
+                    f"load-module module-native-protocol-unix socket={pulse / 'native'} auth-anonymous=1\n"
+                    "load-module module-null-sink sink_name=speakers rate=48000\n"
+                    "load-module module-null-sink sink_name=microphone rate=48000\n"
+                    "set-default-sink speakers\nset-default-source microphone.monitor\n"
+                )
+                spawn(
+                    [
+                        str(args.pulse_bin / "pulseaudio"),
+                        "--daemonize=no",
+                        "--use-pid-file=no",
+                        "--exit-idle-time=-1",
+                        "-n",
+                        f"--file={script}",
+                    ],
+                    shell.environment()
+                    | {
+                        "PULSE_RUNTIME_PATH": str(pulse),
+                        "PULSE_STATE_PATH": str(pulse / "state"),
+                        "DBUS_SESSION_BUS_ADDRESS": f"unix:path={root}/no-pulse-bus",
+                    },
+                    "pulse.log",
+                )
+                eventually(
+                    lambda: (pulse / "native").exists(), "private null audio missing"
+                )
+                env.update(
+                    PULSE_SERVER=f"unix:{pulse}/native",
+                    NUSCHL_AUDIO_BACKEND="pulseaudio",
+                    PULSE_SINK="speakers",
+                    PULSE_SOURCE="microphone.monitor",
+                )
+            if scenario:
+                env.update(scenario.configure_handler(shell, root, args.output))
             app = subprocess.Popen(
                 [
                     str(args.binaries / "nuschl"),
@@ -193,6 +249,10 @@ def run(args):
                 "welcome_document_rendered": not args.expect_markers,
                 "public_urls_activated": False,
             }
+            if scenario:
+                proof["document_links"] = scenario.run_actions(
+                    args, root, shell, application, bot, murmur
+                )
             (args.output / "proof.json").write_text(json.dumps(proof, indent=2) + "\n")
             print(json.dumps(proof))
         finally:
@@ -216,6 +276,8 @@ if __name__ == "__main__":
     parser.add_argument("--murmur", type=Path, required=True)
     parser.add_argument("--at-spi", type=Path, required=True)
     parser.add_argument("--gnome-shell", type=Path)
+    parser.add_argument("--pulse-bin", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--expect-markers", action="store_true")
+    parser.add_argument("--document-links", action="store_true")
     run(parser.parse_args())
