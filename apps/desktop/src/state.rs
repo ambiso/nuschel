@@ -247,10 +247,14 @@ pub struct Desktop {
     /// What the system configuration (managed.json) sets; read-only here.
     pub managed: ManagedSettings,
     pub settings_open: bool,
+    /// New each time Settings opens (see `slider::Owner`).
+    pub settings_invocation: u64,
     /// Theme, fonts and zoom (see crate::appearance).
     pub appearance: crate::appearance::Appearance,
     /// The local audio check, alive while Settings is open.
     pub preview: Option<crate::preview::PreviewView>,
+    /// Slider edits heard but not yet saved (see `preview_setting`).
+    pub slider_edits: crate::slider::Edits,
     /// Whether Nuschl starts at login, read from the system when Settings opens.
     pub autostart: Option<bool>,
     pub update: crate::update::UpdateState,
@@ -530,8 +534,10 @@ impl Desktop {
             settings,
             managed,
             settings_open: false,
+            settings_invocation: 0,
             appearance: crate::appearance::Appearance::new(window, cx),
             preview: None,
+            slider_edits: Default::default(),
             autostart: None,
             update: Default::default(),
             viewer: None,
@@ -603,6 +609,26 @@ impl Desktop {
             crate::update::cleanup();
             desktop.services.schedule_update_checks();
         }
+        // A slider edit heard but not yet saved (mid-drag, or within half a
+        // second of a key) is saved when Nuschl quits. Closing the last window
+        // may release this view before the quit observers run, so its release
+        // saves too; a second commit finds nothing pending.
+        cx.on_app_quit(|this, _| {
+            this.commit_settings();
+            async {}
+        })
+        .detach();
+        cx.on_release(|this, _| this.commit_settings()).detach();
+        // Leaving the window ends a slider edit too: a drag's release (lost
+        // when the compositor takes the pointer, or given elsewhere) and the
+        // next key may never come here. What was heard is saved, and a later
+        // move or release of that drag finds nothing to continue.
+        cx.observe_window_activation(window, |this, window, _| {
+            if !window.is_window_active() {
+                this.commit_settings();
+            }
+        })
+        .detach();
         desktop
     }
     /// Check for an update now (Settings) rather than on the schedule.
@@ -1389,6 +1415,9 @@ impl Desktop {
         }
     }
     pub fn open_settings(&mut self) {
+        if !self.settings_open {
+            self.settings_invocation += 1;
+        }
         self.settings_open = true;
         self.autostart = Some(crate::autostart::enabled());
         self.driver
@@ -1399,6 +1428,7 @@ impl Desktop {
         }
     }
     pub fn close_settings(&mut self) {
+        self.commit_settings();
         self.settings_open = false;
         self.appearance.close_picker();
         self.shortcuts.recording = None;
@@ -1421,6 +1451,7 @@ impl Desktop {
             self.services.preview(crate::preview::Command::Set {
                 capture,
                 loopback: loopback && capture,
+                generation: preview.generation,
             });
         }
     }
@@ -1452,7 +1483,9 @@ impl Desktop {
             preview.test_opened_capture = !preview.capture;
             preview.capture = true;
             preview.echo_test = crate::preview::EchoTestState::Running;
-            self.services.preview(crate::preview::Command::EchoTest);
+            self.services.preview(crate::preview::Command::EchoTest {
+                generation: preview.generation,
+            });
         }
     }
     pub fn stop_echo_test(&mut self) {
@@ -1461,7 +1494,10 @@ impl Desktop {
             if std::mem::take(&mut preview.test_opened_capture) {
                 preview.close_capture();
             }
-            self.services.preview(crate::preview::Command::StopEchoTest);
+            self.services
+                .preview(crate::preview::Command::StopEchoTest {
+                    generation: preview.generation,
+                });
         }
     }
     pub fn update_settings(&mut self, change: impl FnOnce(&mut ClientSettings)) {
@@ -1481,6 +1517,74 @@ impl Desktop {
         self.client.preferences = nuschl_client::native::preferences(&settings);
         self.settings = settings;
         self.sync_global_shortcuts();
+    }
+    /// A slider's value, heard but not saved (`commit_settings` saves): memory
+    /// and the driver's settings change, so playback volumes apply from the
+    /// next packet; a sensitivity reaches the media worker at most ten times a
+    /// second (see `slider::Edits`). Only the settings `slider::Setting` names
+    /// come this way. The people preferences, the shortcuts and the relay rule
+    /// read none of them, so nothing else `update_settings` does is needed,
+    /// now or at the commit; managed values stay in place as there.
+    pub fn preview_setting(
+        &mut self,
+        setting: &crate::slider::Setting,
+        value: f32,
+        input: crate::slider::Input,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(settings) =
+            crate::slider::previewed(&self.settings, &self.managed, setting, value)
+        else {
+            return;
+        };
+        self.settings = settings;
+        let effects =
+            self.slider_edits
+                .changed(setting.reaches_worker(), input, std::time::Instant::now());
+        self.apply_slider_effects(effects);
+        self.settle_settings_soon(cx);
+    }
+    /// Save what slider previews changed, once, after the media worker has
+    /// heard the last of it. It writes the settings in memory as they are:
+    /// it names no person or server, so it cannot apply to another one.
+    pub fn commit_settings(&mut self) {
+        let effects = self.slider_edits.commit(std::time::Instant::now());
+        self.apply_slider_effects(effects);
+    }
+    pub(crate) fn apply_slider_effects(&mut self, effects: crate::slider::Effects) {
+        if effects.driver {
+            self.driver.apply_settings(self.settings.clone());
+        }
+        if effects.save
+            && let Err(error) = self.profile.save_settings(&self.settings, &self.managed)
+        {
+            self.error = Some(format!("Could not save settings: {error}"));
+        }
+    }
+    /// While slider edits are pending, look at them ten times a second: a
+    /// held sensitivity reaches the worker, keys are saved once idle, and a
+    /// drag whose menu or Settings closed is saved.
+    fn settle_settings_soon(&mut self, cx: &mut Context<Self>) {
+        if !self.slider_edits.arm() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(crate::slider::TICK).await;
+                let pending = this.update(cx, |this, _| {
+                    let (menu, settings) = this.slider_owners();
+                    let effects = this.slider_edits.tick(std::time::Instant::now(), |owner| {
+                        owner.alive(menu, settings)
+                    });
+                    this.apply_slider_effects(effects);
+                    this.slider_edits.armed()
+                });
+                if !matches!(pending, Ok(true)) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
     pub fn set_push_to_talk(&mut self, active: bool) {
         if self.ptt_active != active {

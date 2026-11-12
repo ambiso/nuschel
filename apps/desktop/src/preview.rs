@@ -15,15 +15,28 @@ use tokio::{
 /// An echo test that has not answered by then has failed (no microphone).
 const TEST_DEADLINE: Duration = Duration::from_secs(12);
 
+/// A new reading generation, unique in this process (see `PreviewView::generation`).
+fn next_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// What Settings asks of its audio check. Each carries the view's reading
+/// generation as it was sent; readings come back marked with the latest.
 #[derive(Debug)]
 pub enum Command {
     /// Open or close the microphone, and play the processed voice back.
     Set {
         capture: bool,
         loopback: bool,
+        generation: u64,
     },
-    EchoTest,
-    StopEchoTest,
+    EchoTest {
+        generation: u64,
+    },
+    StopEchoTest {
+        generation: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -32,6 +45,8 @@ pub enum Event {
         level_db: f32,
         voice: f32,
         transmitting: bool,
+        /// The generation of the last command the check had when it measured.
+        generation: u64,
     },
     Devices {
         inputs: Vec<AudioDevice>,
@@ -44,6 +59,20 @@ pub enum Event {
     },
     Status(String),
     EchoTest(Result<EchoReport, String>),
+    /// The worker that measured the last reading is gone (a new microphone
+    /// or route, or it stopped): the reading no longer describes anything.
+    Stale,
+}
+
+/// One measurement of the microphone test, about ten a second.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reading {
+    /// Input level, dBFS.
+    pub level_db: f32,
+    /// Speech probability, 0..=1.
+    pub voice: f32,
+    /// Whether the voice gate is open.
+    pub transmitting: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -67,9 +96,13 @@ pub enum EchoTestState {
 pub struct PreviewView {
     pub capture: bool,
     pub loopback: bool,
-    pub level_db: f32,
-    pub voice: f32,
-    pub transmitting: bool,
+    /// The latest reading of the current microphone, none when there is
+    /// nothing current to show (shown as "—").
+    pub reading: Option<Reading>,
+    /// Readings belong to this: new for each Settings audio check and each
+    /// time the microphone closes, so readings still queued from an earlier
+    /// test or an earlier opening of Settings are never shown.
+    pub generation: u64,
     pub inputs: Vec<AudioDevice>,
     pub outputs: Vec<AudioDevice>,
     pub input: Option<String>,
@@ -89,10 +122,8 @@ impl Default for PreviewView {
         Self {
             capture: false,
             loopback: false,
-            // Silence until the first measurement, not a full meter.
-            level_db: -100.,
-            voice: 0.,
-            transmitting: false,
+            reading: None,
+            generation: next_generation(),
             inputs: Vec::new(),
             outputs: Vec::new(),
             input: None,
@@ -114,11 +145,19 @@ impl PreviewView {
                 level_db,
                 voice,
                 transmitting,
+                generation,
             } => {
-                self.level_db = level_db;
-                self.voice = voice;
-                self.transmitting = transmitting;
+                // A reading still on its way from a stopped test, or from an
+                // earlier Settings, is not shown.
+                if self.capture && generation == self.generation {
+                    self.reading = Some(Reading {
+                        level_db,
+                        voice,
+                        transmitting,
+                    });
+                }
             }
+            Event::Stale => self.reading = None,
             Event::Devices {
                 inputs,
                 outputs,
@@ -128,6 +167,10 @@ impl PreviewView {
                 noise,
                 reference,
             } => {
+                if input != self.input {
+                    // Measured on the previous microphone.
+                    self.reading = None;
+                }
                 self.reference = reference;
                 self.inputs = inputs;
                 self.outputs = outputs;
@@ -152,13 +195,13 @@ impl PreviewView {
         }
     }
 
-    /// The microphone is off: no level, no playback of it.
+    /// The microphone is off: no reading, no playback of it, and readings
+    /// measured before now are no longer shown when they arrive.
     pub fn close_capture(&mut self) {
         self.capture = false;
         self.loopback = false;
-        self.level_db = -100.;
-        self.voice = 0.;
-        self.transmitting = false;
+        self.reading = None;
+        self.generation = next_generation();
     }
 }
 
@@ -190,11 +233,14 @@ pub async fn run(
     // The echo test opened the microphone: close it again when the test ends
     // (PreviewView tracks the same).
     let mut test_opened_capture = false;
+    // The generation of the last command, which readings are marked with.
+    let mut generation = 0;
     loop {
         tokio::select! {
             command = commands.recv() => match command {
                 None => break,
-                Some(Command::Set { capture: wanted, loopback: play_back }) => {
+                Some(Command::Set { capture: wanted, loopback: play_back, generation: latest }) => {
+                    generation = latest;
                     loopback = play_back;
                     test_opened_capture = false;
                     if !wanted {
@@ -211,7 +257,8 @@ pub async fn run(
                         let _ = media.commands.try_send(LiveMediaRequest::Preview { capture, loopback });
                     }
                 }
-                Some(Command::EchoTest) => {
+                Some(Command::EchoTest { generation: latest }) => {
+                    generation = latest;
                     test_deadline = Some(Instant::now() + TEST_DEADLINE);
                     if !capture {
                         capture = true;
@@ -225,7 +272,8 @@ pub async fn run(
                         test_pending = true;
                     }
                 }
-                Some(Command::StopEchoTest) => {
+                Some(Command::StopEchoTest { generation: latest }) => {
+                    generation = latest;
                     test_deadline = None;
                     test_pending = false;
                     // A new worker ends the test sound at once.
@@ -240,6 +288,7 @@ pub async fn run(
                 if !audio.same_route(&applied) {
                     media.take();
                     retry = Instant::now();
+                    send(Event::Stale);
                 } else if audio != applied && let Some(media) = &media {
                     configure(media, &audio);
                 }
@@ -270,7 +319,7 @@ pub async fn run(
                 send(Event::EchoTest(Err("The echo test needs a working microphone and speakers.".into())));
             },
             event = async { media.as_mut().unwrap().events.recv().await }, if media.is_some() => match event {
-                Some(LiveMediaEvent::Level { level_db, voice, transmitting }) => send(Event::Level { level_db, voice, transmitting }),
+                Some(LiveMediaEvent::Level { level_db, voice, transmitting }) => send(Event::Level { level_db, voice, transmitting, generation }),
                 Some(LiveMediaEvent::Devices { inputs, outputs, input, output, echo, noise, reference }) => {
                     send(Event::Devices { inputs, outputs, input, output, echo, noise, reference });
                 }
@@ -291,6 +340,7 @@ pub async fn run(
                         }
                     } else {
                         media.take();
+                        send(Event::Stale);
                         retry = Instant::now() + Duration::from_millis(if message.starts_with("Audio reconnecting") { 2000 } else { 200 });
                         if test_deadline.take().is_some() {
                             // No sound system: say so now rather than at the deadline.
@@ -306,6 +356,7 @@ pub async fn run(
                     // The worker exited without a word (it could not start, or crashed).
                     tracing::debug!("settings audio worker exited");
                     media.take();
+                    send(Event::Stale);
                     retry = Instant::now() + Duration::from_secs(1);
                     send(Event::Status("The audio worker stopped; retrying…".into()));
                 }
@@ -314,5 +365,77 @@ pub async fn run(
     }
     if let Some(media) = media {
         let _ = media.commands.try_send(LiveMediaRequest::Shutdown);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn level(view: &PreviewView, level_db: f32) -> Event {
+        Event::Level {
+            level_db,
+            voice: 0.8,
+            transmitting: true,
+            generation: view.generation,
+        }
+    }
+
+    fn devices(input: Option<&str>) -> Event {
+        Event::Devices {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            input: input.map(Into::into),
+            output: None,
+            echo: EchoSource::None,
+            noise: None,
+            reference: None,
+        }
+    }
+
+    #[test]
+    fn readings_clear_when_they_no_longer_describe_the_microphone() {
+        let mut view = PreviewView::default();
+        view.apply(level(&view, -20.));
+        assert_eq!(view.reading, None, "no reading without the test running");
+        view.capture = true;
+        view.apply(devices(Some("mic")));
+        view.apply(level(&view, -20.));
+        assert_eq!(view.reading.map(|reading| reading.level_db), Some(-20.));
+        // The same microphone again (a device list refresh) keeps it.
+        view.apply(devices(Some("mic")));
+        assert!(view.reading.is_some());
+        // Another microphone (a route change) does not.
+        view.apply(devices(Some("headset")));
+        assert_eq!(view.reading, None);
+        view.apply(level(&view, -30.));
+        view.apply(Event::Stale);
+        assert_eq!(view.reading, None, "a replaced worker's reading");
+        view.apply(level(&view, -30.));
+        view.close_capture();
+        assert_eq!(view.reading, None, "the test stopped");
+        view.apply(level(&view, -10.));
+        assert_eq!(view.reading, None, "a late reading after the stop");
+    }
+
+    #[test]
+    fn readings_from_an_earlier_test_or_settings_never_come_back() {
+        let mut view = PreviewView::default();
+        view.capture = true;
+        let first = level(&view, -20.);
+        // Stop, then start again before the first test's readings arrive.
+        view.close_capture();
+        view.capture = true;
+        view.apply(first);
+        assert_eq!(view.reading, None, "a reading of the stopped test");
+        view.apply(level(&view, -25.));
+        assert_eq!(view.reading.map(|reading| reading.level_db), Some(-25.));
+        // Settings closed and opened again: a new view, a new generation.
+        let queued = level(&view, -15.);
+        let mut reopened = PreviewView::default();
+        reopened.capture = true;
+        assert_ne!(reopened.generation, view.generation);
+        reopened.apply(queued);
+        assert_eq!(reopened.reading, None, "a reading of the closed Settings");
     }
 }
