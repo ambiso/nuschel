@@ -305,6 +305,17 @@ Ground rules (see `SECURITY.md`, `tests/README.md`, `docs/architecture.md`):
 
 ## Now: open reports and review findings
 
+- [ ] Explicit relay destination denies must take precedence over configured
+      allow networks. The private DNS/BPF VM found `deny_networks` containing
+      `192.168.1.254/32` was bypassed by `allow_networks = ["192.168.1.0/24"]`:
+      the relay attempted a connection and returned Unreachable instead of
+      AddressRefused. Source review confirms `Policy::allows` checks allowed
+      networks before the combined explicit/built-in refusal list. Separate
+      explicit denies, check them first, then retain operator exceptions for
+      built-in private ranges. Cover overlapping IPv4/IPv6 and mapped addresses
+      plus the actual VM refusal; preserve the failing trial. Delegated to the
+      relay owner; keep open until integrated and verified.
+
 Reported while testing (2026-11-10/11):
 
 - [x] Persistent relay-only privacy: accessible/managed setting, no direct peer
@@ -1091,6 +1102,10 @@ listed below. Plugin data remains the explicit gap.
       Cover the supported desktop/web/TUI surfaces and server semantics with
       private stock-Mumble/nuschld interoperability, permission-denial controls,
       inheritance/order cases and persistence across reconnect/server restart.
+      Bound automatic registered-name lookup work globally, with IDs retained
+      when labels are unavailable; per-group caps must not multiply into an
+      unbounded request burst. Virtualize large rule/member lists or show one
+      selected item's details so model limits do not become per-frame UI work.
       Track offline admin-CLI ACL/group commands in the existing server follow-up.
 - [x] Users listed inside the channel tree with talking indicators and mute/deafen/
       suppress icons.
