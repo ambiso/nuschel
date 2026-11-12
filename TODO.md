@@ -1146,12 +1146,17 @@ listed below. Plugin data remains the explicit gap.
       Source is integrated; parent combined checks remain pending. See
       `docs/server-config.md` and `~/.cache/nuschl-server-config/handoff.json`.
       No image-send API implied.
-- [ ] Preserve precise browser text-send refusals in the composer error surface.
-      The shared client stores the Session's negotiated byte-limit reason, but
-      WebClient::send_text replaces it with a generic status/recipient error.
-      Surface the current refusal, distinguish empty/busy/global-size cases and
-      retain the editable draft. Do not reuse an unrelated stale server notice.
-      Assigned to the web owner after the separate protocol-limit checkpoint.
+- [ ] Integrate the precise browser send-refusal wrapper correction: actual
+      compiled App tests show exact 128/16/5000-byte reasons and retained editable
+      drafts; Nothing/global-too-long/disconnected diagnostics do not reuse old
+      notices. Same selected server ID/generation is checked; core/App APIs are
+      unchanged. Source is integrated; parent distribution checks remain pending.
+      See `~/.cache/nuschl-server-config/precise-handoff.json`.
+- [ ] Reset shared `ServerState.limits` on reconnect, or publish fresh initial
+      limits, when the new connection sends no ServerConfig. Source review finds
+      Client::connect keeps the prior snapshot although each adapter correctly
+      resets its enforcement defaults. Add a generation/stale-event model
+      regression; this is distinct from the verified adapter sparse-field fix.
 - [x] Integrate the separate central browser text-size correction: Settings
       previously changed body font size while rem-sized text kept the root's
       16px. `html` now uses the same preference variable; actual compiled App

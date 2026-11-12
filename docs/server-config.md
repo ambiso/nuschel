@@ -14,7 +14,7 @@ empty configuration does not emit Limits or change audio policy.
 | Recording | Allowed | Preserve false until an explicit true |
 | Bandwidth | Effective ServerSync value, existing 72000 bit/s fallback | Preserve the supplied value across unrelated updates |
 
-Fresh connections reset all fields. Native/default message and image lengths
+Fresh session instances reset all fields. Native/default message and image lengths
 match the pinned Mumble source (`35dce9e4801fe52b2217f0d9f421d17b0aaf3bb0`,
 `Global.cpp:119` and `MainWindow.cpp:3589`). Its `Messages.cpp::msgServerConfig`
 changes only present fields. `Server.cpp::isTextAllowed` treats zero as unlimited.
@@ -47,3 +47,26 @@ The original live-welcome `--check-send-cap` diagnostic now passes. Its earlier
 artifacts, source hashes, commands and current proofs are recorded in
 `~/.cache/nuschl-server-config/handoff.json`. These checks do not claim new GPUI,
 physical audio/device or broad browser parity verification.
+
+## Precise browser refusal messages
+
+The separate browser-wrapper correction preserves the core's refusal categories.
+Nothing-to-send/pending and global-too-long return distinct fixed reasons. Only
+Refused may read the fresh notice assigned by that synchronous core attempt,
+and only for the same selected server ID and generation. It never substitutes
+an old limit notice for an empty, oversized-global or disconnected attempt.
+No core API, App or SDK Worker behavior changed.
+
+The real App fixture checks the exact 128/16/5000-byte reasons, their visible
+alert, and retained editable drafts. It also checks empty, global 256 KiB and
+disconnected diagnostics after an earlier limit notice. Both this fixture and
+the original live-welcome diagnostic pass on the precise-error artifact.
+`~/.cache/nuschl-server-config/precise-final/cap-refusal-390.png` was visually
+reviewed; `precise-handoff.json` records exact source/artifact/test identity.
+
+A separate shared-model edge remains source-audited: Client::connect does not
+clear `ServerState.limits`. If a fresh server connection never sends ServerConfig,
+the adapter correctly enforces its fresh defaults but the shared/displayed
+limits can remain from the previous connection. Resetting or initially
+republishing that model needs a generation-aware regression; no shared-client
+source was changed in this work.

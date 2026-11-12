@@ -80,7 +80,7 @@ async function viewport(page,width,height){
   await page.evaluate(()=>new Promise(requestAnimationFrame));
 }
 try{
-  const page=await open("config-browser",390,844),composer=page.getByLabel("Message",{exact:true});let seq=0,acks=0;
+  const page=await open("config-browser",390,844),composer=page.getByLabel("Message",{exact:true});let seq=0,acks=0;const refusals=[];
   async function configure(fields){
     const temporary=resolve(output,"next-control.json");await writeFile(temporary,JSON.stringify({seq:++seq,fields}));await rename(temporary,resolve(output,"control.json"));
     await page.locator("article").filter({hasText:`config-applied:${seq}`}).waitFor();
@@ -94,9 +94,11 @@ try{
       assert.equal(await composer.inputValue(),body,"rejection erased draft");assert.ok(await composer.isEditable());
       assert.match(reply.error,/Message exceeds this server's \d+-byte limit/);
       await page.getByRole("alert").filter({hasText:reply.error}).waitFor();
+      refusals.push({reason:reply.error,source_bytes:new TextEncoder().encode(body).length,editable:await composer.isEditable()});
     }
   }
   await configure({3:1,4:128,5:256,6:12,7:0});await send("x".repeat(129),false);
+  await page.screenshot({path:resolve(output,"cap-refusal-390.png")});
   const diagnostics=[];
   async function diagnostic(id,body){
     const before=await page.evaluate(()=>__welcomeProof.allResults.length);
@@ -119,6 +121,6 @@ try{
   await send("x".repeat(5001),false);await send("x".repeat(5000),true);
   const proof=await page.evaluate(()=>__welcomeProof);assert.equal(proof.captures,0);assert.deepEqual(proof.violations,[]);assert.deepEqual(errors,[]);assert.deepEqual(canaries,[]);
   await page.screenshot({path:resolve(output,"configuration-390.png")});
-  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,diagnostics,wire_acknowledgements:acks,checks:["independent private TLS/protobuf configuration", "actual App rejected128+1-byte body", "sparse bandwidth/max-user update preserves cap", "draft survives rejection and asynchronous cap increase", "escaped HTML/newline wire17-byte boundary", "plain UTF-8 wire4-byte boundary", "explicit zero enables above 5000 within app ceiling", "reconnect resets conservative5000 default", "no capture/CSP/canary"]},null,2));console.log("Configuration App proof passed");
+  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,diagnostics,refusals,wire_acknowledgements:acks,checks:["independent private TLS/protobuf configuration", "actual App rejected128+1-byte body", "sparse bandwidth/max-user update preserves cap", "draft survives rejection and asynchronous cap increase", "escaped HTML/newline wire17-byte boundary", "plain UTF-8 wire4-byte boundary", "explicit zero enables above 5000 within app ceiling", "reconnect resets conservative5000 default", "no capture/CSP/canary"]},null,2));console.log("Configuration App proof passed");
 }catch(error){await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,pages:await Promise.all(pages.map(page=>page.evaluate(()=>({body:document.body.textContent,proof:__welcomeProof})).catch(()=>null)))},null,2));throw error;}
 finally{for(const context of contexts)await context.close();await browser.close();for(const socket of tunnels)socket.destroy();await new Promise(done=>server.close(done));}
