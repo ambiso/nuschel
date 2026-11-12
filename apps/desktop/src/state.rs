@@ -1451,6 +1451,7 @@ impl Desktop {
             self.services.preview(crate::preview::Command::Set {
                 capture,
                 loopback: loopback && capture,
+                generation: preview.generation,
             });
         }
     }
@@ -1482,7 +1483,9 @@ impl Desktop {
             preview.test_opened_capture = !preview.capture;
             preview.capture = true;
             preview.echo_test = crate::preview::EchoTestState::Running;
-            self.services.preview(crate::preview::Command::EchoTest);
+            self.services.preview(crate::preview::Command::EchoTest {
+                generation: preview.generation,
+            });
         }
     }
     pub fn stop_echo_test(&mut self) {
@@ -1491,7 +1494,10 @@ impl Desktop {
             if std::mem::take(&mut preview.test_opened_capture) {
                 preview.close_capture();
             }
-            self.services.preview(crate::preview::Command::StopEchoTest);
+            self.services
+                .preview(crate::preview::Command::StopEchoTest {
+                    generation: preview.generation,
+                });
         }
     }
     pub fn update_settings(&mut self, change: impl FnOnce(&mut ClientSettings)) {

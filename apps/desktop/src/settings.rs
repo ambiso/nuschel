@@ -286,13 +286,28 @@ fn meter_row(
         .into_any_element()
 }
 
+/// Whether you are in a call (connected with voice) but muted or deafened in
+/// every one: the microphone test records all the same, which the meter says.
+fn muted_in_calls(this: &Desktop) -> bool {
+    use nuschl_client::voice::Role;
+    let roles: Vec<Role> = (0..this.client.servers.len())
+        .map(|index| this.client.voice_role(index))
+        .collect();
+    roles.iter().any(|role| *role != Role::Offline) && !roles.contains(&Role::Talking)
+}
+
 /// What the local microphone test measures, above Sensitivity: the level of
 /// the processed input (the RMS, in dBFS, of what echo cancellation, noise
 /// suppression and gain leave, as the worker's `level_db`) against the gate's
 /// floor, the speech probability against the thresholds `sensitivity` gives,
 /// and whether the speech gate is open. Nothing is sent: these are not a
 /// call's transmissions. "—" when there is no current reading.
-fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> AnyElement {
+fn meter(
+    preview: &PreviewView,
+    sensitivity: f32,
+    transmit: TransmitMode,
+    muted_in_calls: bool,
+) -> AnyElement {
     let reading = preview.reading;
     let voice_activity = transmit == TransmitMode::VoiceActivity;
     let thresholds = nuschl_core::audio::gate_thresholds(sensitivity);
@@ -390,6 +405,26 @@ fn meter(preview: &PreviewView, sensitivity: f32, transmit: TransmitMode) -> Any
         .rounded(px(8.))
         .border_1()
         .border_color(color(BORDER))
+        // An explicitly started test is capture of its own: muting a call
+        // does not stop it, and the meter says so rather than imply it.
+        .when(muted_in_calls, |meter| {
+            meter.child(
+                div()
+                    .id("test-while-muted")
+                    .role(Role::Status)
+                    .aria_label("Muted in calls · this test still uses your microphone")
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(color(WARNING))
+                    .child(icon("mic-off", 14., color(WARNING)))
+                    .child(
+                        text!("Muted in calls · this test still uses your microphone")
+                            .with_id("test-while-muted-text"),
+                    ),
+            )
+        })
         .child(level)
         .child(probability)
         .child(
@@ -734,7 +769,12 @@ pub fn dialog(
     )];
     // Only while the microphone test runs: Settings alone opens no microphone.
     if let Some(preview) = this.preview.as_ref().filter(|preview| preview.capture) {
-        voice.push(meter(preview, audio.vad_sensitivity, transmit));
+        voice.push(meter(
+            preview,
+            audio.vad_sensitivity,
+            transmit,
+            muted_in_calls(this),
+        ));
     }
     if transmit == TransmitMode::VoiceActivity {
         let slider = labelled_slider(

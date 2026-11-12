@@ -33,7 +33,9 @@ Checks, with a screenshot of each state (look at them):
    menu stays open, one write), a key step and Delete back to 100 %; a drag
    whose menu is closed with Escape mid-drag is saved once and edits nothing
    after.
-6. Quitting within half a second of a key (the compositor closes the window
+6. While muted (or deafened) in a call, the running test says that it still
+   uses the microphone; unmuted, it does not.
+7. Quitting within half a second of a key (the compositor closes the window
    while Settings is open) still saves the key's value, exactly once.
 """
 import argparse
@@ -61,6 +63,7 @@ from mumble_client import Client, certificate_pin  # noqa: E402
 # AT-SPI roles the shared table lacks (atspi-constants.h).
 accessibility.ROLES.update({42: "progress bar", 51: "slider"})
 WIDTH, HEIGHT = 1280, 800
+MUTED_NOTE = "Muted in calls · this test still uses your microphone"
 RATE = 48000
 
 
@@ -287,6 +290,7 @@ class Scenes:
                       and e["user"]["channel"] == 2, timeout=40)
             time.sleep(2.0)
             self.menu(writes, settings_path)
+            self.mute_note()
             self.quit_mid_edit(writes, settings_path)
             writes.stop()
         finally:
@@ -335,6 +339,8 @@ class Scenes:
         eventually(lambda: "microphone.monitor" in self.recording() or None,
                    "Test microphone did not open the microphone", timeout=20)
         level = self.wait_for("progress bar", "Processed input level", "the meter did not appear")
+        # The first launch is deafened in its call: the test says it records anyway.
+        self.wait_for(None, MUTED_NOTE, "the meter did not say the test records while deafened")
         probability = self.wait_for("progress bar", "Speech probability", "no speech probability bar")
         eventually(lambda: self.find(None, "Speech gate closed"), "the gate state did not read Speech gate closed",
                    timeout=10)
@@ -519,6 +525,37 @@ class Scenes:
         self.shot("13-menu-closed-mid-drag")
         print(f"Escape mid-drag: the menu closed, the heard {heard:.1f} was saved once; moving on and releasing "
               "afterwards edited no one.", flush=True)
+
+    def microphone_test(self):
+        self.wait_for("push button", "Settings", "no Settings button").press()
+        self.wait_for("dialog", "Settings", "Settings did not open")
+        time.sleep(1.0)
+        self.wait_for("push button", "Test microphone", "no Test microphone button").press()
+        self.wait_for("progress bar", "Processed input level", "the meter did not appear")
+        eventually(lambda: self.find(None, "Speech gate closed"), "no reading", timeout=10)
+        time.sleep(1.0)
+
+    def close_settings(self):
+        self.shell.key("Escape")
+        eventually(lambda: self.find("dialog", "Settings") is None or None, "Settings did not close")
+        time.sleep(0.5)
+
+    def mute_note(self):
+        """Muting a call does not stop an explicitly started test, and the
+        meter says so; unmuted, there is nothing to say."""
+        self.microphone_test()
+        assert self.find(None, MUTED_NOTE), "muted in the call, the meter did not say the test still records"
+        self.shot("14-test-while-muted")
+        self.close_settings()
+        self.wait_for("push button", "Unmute", "no Unmute button").press()
+        self.wait_for("push button", "Mute", "Unmute did not unmute")
+        self.microphone_test()
+        assert self.find(None, MUTED_NOTE) is None, "unmuted, the meter still says muted in calls"
+        self.shot("15-test-unmuted")
+        self.close_settings()
+        self.wait_for("push button", "Mute", "no Mute button").press()
+        self.wait_for("push button", "Unmute", "Mute did not mute")
+        print(f"Muted in the call, the running test says {MUTED_NOTE!r}; unmuted, it does not.", flush=True)
 
     def quit_mid_edit(self, writes, settings_path):
         """A key's value is saved half a second after it; quitting sooner saves it too.
