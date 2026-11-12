@@ -680,15 +680,35 @@ fn fallback_for(font: &Font, fallback: &Font) -> Font {
 
 /// Nuschel patch: whether a family is asked for as monospace, so that its
 /// fallback is monospace too: the generic names, GPUI's own monospace family,
-/// and families named like code fonts ("… Mono", "… Code", "Courier …").
+/// and families with a code font's word in their name ("… Mono", "… Code",
+/// "Courier …", "Consolas"; also run together, as in "JetBrainsMono"). Whole
+/// words only: "Lucida Sans Unicode", "Encode Sans" and "Monotype Corsiva"
+/// are proportional.
 fn is_monospace_family(family: &str) -> bool {
-    let family = family.to_ascii_lowercase();
-    matches!(
-        family.as_str(),
-        "monospace" | "mono" | "ui-monospace" | ".zedmono" | "zed plex mono" | "lilex"
-    ) || ["mono", "code", "courier", "consol"]
-        .iter()
-        .any(|part| family.contains(part))
+    // Lowercase words, split where a lowercase letter meets an uppercase one too.
+    let mut words = String::with_capacity(family.len() + 4);
+    let mut after_lowercase = false;
+    for ch in family.chars() {
+        if after_lowercase && ch.is_uppercase() {
+            words.push(' ');
+        }
+        after_lowercase = ch.is_lowercase();
+        words.extend(ch.to_lowercase());
+    }
+    family.eq_ignore_ascii_case("lilex")
+        || words.split(|ch: char| !ch.is_alphanumeric()).any(|word| {
+            matches!(
+                word,
+                "mono"
+                    | "monospace"
+                    | "monospaced"
+                    | "code"
+                    | "courier"
+                    | "consolas"
+                    | "console"
+                    | "inconsolata"
+            )
+        })
 }
 
 /// The GPUI text layout subsystem.
@@ -1481,6 +1501,11 @@ mod font_resolution_tests {
             "Source Code Pro",
             "Courier New",
             "Consolas",
+            "Zed Plex Mono",
+            "JetBrainsMono Nerd Font",
+            "FiraCode Nerd Font",
+            "Inconsolata",
+            "Lucida Console",
         ] {
             assert!(is_monospace_family(family), "{family}");
         }
@@ -1491,6 +1516,10 @@ mod font_resolution_tests {
             "Adwaita Sans",
             "DejaVu Sans",
             "Arial",
+            "Lucida Sans Unicode",
+            "Arial Unicode MS",
+            "Encode Sans",
+            "Monotype Corsiva",
         ] {
             assert!(!is_monospace_family(family), "{family}");
         }

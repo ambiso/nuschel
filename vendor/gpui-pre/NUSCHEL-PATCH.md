@@ -34,9 +34,11 @@ bold and italic text in a missing family (Nuschel's defaults, "sans-serif" and
 "monospace", on Linux before `gpui-pre-wgpu` resolved generic families) came
 out as the fallback's regular face, and code came out proportional. A
 fallback now has the request's weight, style, features and fallbacks, with
-only the family changed. A monospace request (generic names, `.ZedMono`, Lilex, and families
-named "… Mono", "… Code", "Courier …" or "Consol…") first tries `.ZedMono`,
-the platform's generic "monospace" and common monospace families, then the
+only the family changed (each family is looked up by itself first, so a
+missing one is asked of the platform once). A monospace request (generic
+names, `.ZedMono`, Lilex, and families with the word "Mono", "Code",
+"Courier", "Consolas" or "Console" in their name) first tries `.ZedMono`, the
+platform's generic "monospace" and common monospace families, then the
 proportional stack; a proportional request no longer tries `.ZedMono` first
 (it stays last, so the set of candidates is unchanged).
 
