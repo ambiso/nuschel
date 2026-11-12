@@ -20,10 +20,10 @@ a newly opened dialog can then focus its own input.
 The popup occludes mouse interactions behind it. Wheel events must not scroll the
 channel browser or timeline behind the popup, including at a menu's scroll limits.
 Volume controls keep the menu open and use their existing control behavior.
-Permission filtering and the actions themselves are unchanged.
+Permission updates rebuild the available actions; the authority and focus rules below guard activation.
 
 The scroll/focus handles belong to the visible menu's retained element state,
-keyed by its target and invocation position. Ordinary transport/settings refreshes
+keyed by a fresh menu invocation ID. Ordinary transport/settings refreshes
 reuse them; they do not reset the scroll offset or refocus the reading region.
 The application adds no periodic autoscroll timer or label measurement. Shared
 focus reveal schedules work only on a new focus transition. The existing scrollbar
@@ -99,17 +99,14 @@ describe this private fixture; the baseline executable was not instrumented for
 a before/after performance comparison. `handoff.json` identifies exact commits,
 packages, traces, screenshots and limits.
 
-## Separate action-authority work
+## Scope of the earlier geometry proof
 
-This is a geometry/input-routing change, not proof of stale moderation authority.
-The queued follow-up must bind menu/prompt targets to server identity, connection
-generation and user presence/channel authority; old server-vector/session indexes
-alone are insufficient across removal/reconnect/session reuse. Another source-level
-follow-up checks semantic focus identity when permission/context-action updates
-insert or remove rows: current row/focus keys use vector indexes. These gates
-remain in TODO and were not exercised by a fixture with settled permissions.
-Windows/macOS native execution and physical assistive-reader validation also
-remain separate.
+The earlier geometry/input-routing evidence does not establish stale moderation
+safety. Server-vector and numeric session indexes alone are insufficient across
+removal, reconnect and reuse. The following follow-up adds original-target
+binding and semantic focus identity, with its own evidence and remaining limits.
+The retained geometry timing data is not a performance measurement of this later
+implementation.
 
 ## Delayed action authority and semantic focus
 
@@ -195,3 +192,29 @@ Source-level regressions separately cover index removal/reordering, own/session/
 channel reuse, missing semantic targets, enqueue failures and rapid voice intent.
 Verification results and their exact source/package paths belong in the retained
 handoff; the presence of this fixture alone is not a claim that it has passed.
+
+Final authority evidence (November 12) uses production source `dee316b8` and
+`/nix/store/9s6cpz4sy1hxms4i8hs8sik5fggras6n-nuschl-0.1.0`. All 87 desktop,
+107 client and 79 session units pass (the latter two each retain one existing
+ignored test). The exact native bundle passes the scoped actual-byte notice
+reader. The root-owned unchanged geometry matrix passes against that package at
+100/200%; its proof is under `~/.cache/nuschl-next/menu-authority-root/geometry`.
+
+`~/.cache/nuschl-next/menu-authority/gui3` passes the authority fixture. A real
+permission update moves Kick from index 12 to 11 while keyboard focus remains
+Kick. Removing focused Register does not activate the replacement and Tab
+recovers within the menu. Stock Murmur issues sessions `[5, 6, 7, 3]`, reusing
+original session 3 for another certificate: the captured Profile action refuses
+it and a fresh Profile succeeds. A retained harmless Create prompt refuses after
+automatic reconnect; a fresh prompt creates its channel and the desktop renders
+it. Screenshots were visually reviewed. `gui1` is a retained test-helper TLS
+startup failure; `gui2` passed before the screenshot wait was tightened. These
+are separate evidence directories, not overwritten trials.
+
+The actor rechecks cached numeric permissions where meaningful; Nuschl message
+edit/delete ownership and moderator decisions remain with the authoritative
+server, which has message provenance. Exact leased conversation IDs prevent
+retargeting without inventing a local ownership cache. Further TODOs retain
+non-menu callback binding, administrative draft/row identity, and bounded
+metadata rejection/retry acknowledgement. Windows/macOS native execution and
+browser actor-equivalent authority remain outside this Linux proof.

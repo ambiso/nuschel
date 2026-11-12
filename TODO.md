@@ -1038,6 +1038,25 @@ listed below. Plugin data remains the explicit gap.
       stale-action cases with private servers, then reject obsolete actions
       before dispatch. Channel actions need equivalent lifecycle review. This
       is a source-level finding; the menu geometry proof does not establish it.
+      Authority/focus implementation and private proof are ready for root review:
+      87 desktop, 107 client and 79 session units pass; real stock Murmur changes
+      permission row positions, reuses a session for another certificate, and
+      reconnects with a retained harmless prompt. Fresh controls succeed while
+      stale actions refuse. Keep these rows open until integrated source review.
+- [ ] Audit retained non-menu controls for original saved-server binding.
+      Source review still finds the whisper Stop banner in `view.rs` captures a
+      server vector index; `stop_whisper` resolves the current slot. Removing an
+      earlier bookmark can therefore change the target of a retained callback.
+      Bind single-server controls to saved ID/generation while preserving
+      deliberate persistent/global voice preferences. This is a separate source
+      finding; the menu/prompt/panel proof does not reproduce that UI race.
+- [ ] Review bounded metadata retry acknowledgement after an actor lease refusal.
+      The SDK marks a blob request sent once enqueue succeeds; a later native
+      actor refusal currently reports a generic notice. An own-presence change
+      without a generation/hash change may leave a selected description/avatar
+      request pending. This is a source-level audit, not a stock-Murmur runtime
+      reproduction. Preserve strict target guards and bound any own-epoch retry;
+      do not add per-frame retry loops.
 - [ ] Give mutable administrative panel drafts stable response/row identities.
       Source review finds ACL rules and ban-list controls use vector positions;
       replacing a response for the same server/channel while a panel remains
@@ -1056,7 +1075,11 @@ listed below. Plugin data remains the explicit gap.
       installed whisper targets must remain bound for subsequent voice packets.
       If a whisper target expires, drop voice until an explicit new selection;
       never fall back to normal channel broadcast. These are source findings,
-      pending focused regressions and private-server proof.
+      now covered by the authority lane's focused regressions and private proof,
+      pending reviewed root integration. Known cached numeric permissions are
+      rechecked locally; Nuschl edit/delete ownership and moderator authorization
+      remain authoritative server decisions, with exact conversation coverage.
+      No local message-ownership cache is required or claimed.
 - [ ] cpal's PipeWire host skips `Audio/Source/Virtual` nodes (e.g. filter-chain or
       EasyEffects outputs), so they can be used only as the system default, not picked
       in Nuschl. Fix upstream in cpal or list them through the PulseAudio API.

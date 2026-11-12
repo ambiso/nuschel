@@ -9,6 +9,7 @@ import json
 import socket
 import ssl
 import struct
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -36,10 +37,36 @@ def blob(tag, value):
 class Administrator:
     """Pinned TEST-ONLY loopback SuperUser; changes only the disposable ACL."""
 
-    def __init__(self, port, pin):
+    def __init__(self, port, pin, root):
+        certificate, key = root / "raw-admin.pem", root / "raw-admin-key.pem"
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-config",
+                "/dev/null",
+                "-subj",
+                "/CN=Private authority fixture",
+                "-days",
+                "1",
+                "-keyout",
+                str(key),
+                "-out",
+                str(certificate),
+            ],
+            check=True,
+            timeout=30,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
+        context.load_cert_chain(certificate, key)
         self.stream = context.wrap_socket(
             socket.create_connection(("127.0.0.1", port), timeout=5),
             server_hostname="localhost",
@@ -51,13 +78,22 @@ class Administrator:
         self.frames = collections.deque(maxlen=200)
         self.closed = False
         self.reader = threading.Thread(target=self.read, daemon=True)
-        self.reader.start()
         self.send(0, scalar(1, 0x010500))
         self.send(2, blob(1, b"SuperUser") + blob(2, b"nuschl-super") + scalar(5, 1))
-        eventually(
-            lambda: any(kind == 5 for kind, _ in self.frames),
-            "private SuperUser login missing",
-        )
+        self.reader.start()
+        try:
+            eventually(
+                lambda: any(kind == 5 for kind, _ in self.frames),
+                "private SuperUser login missing",
+            )
+        except BaseException as error:
+            evidence = [
+                {"kind": kind, "reject": repr(value) if kind == 4 else None}
+                for kind, value in self.frames
+            ]
+            self.close()
+            error.add_note(f"private SuperUser login evidence: {evidence}")
+            raise
 
     def send(self, kind, body):
         self.stream.sendall(struct.pack(">HI", kind, len(body)) + body)
@@ -105,7 +141,7 @@ def actions(args, root, shell, application, bot, murmur):
     target = Client(
         args.binaries, "127.0.0.1", murmur.port, pin, TARGET, root / "authority-target"
     )
-    admin = Administrator(murmur.port, pin)
+    admin = None
     replacement = observer = None
     records = {}
 
@@ -229,6 +265,7 @@ def actions(args, root, shell, application, bot, murmur):
         eventually(lambda: named("Details", "dialog") is None, "profile did not close")
 
     try:
+        admin = Administrator(murmur.port, pin, root)
         shell.key("Shift_L")
         shell.place("Nuschl", 40, 40, 1280, 800)
         # A real permission response removes an earlier action; retained keyboard
@@ -269,6 +306,35 @@ def actions(args, root, shell, application, bot, murmur):
             "kick_stayed_focused": True,
             "only_opened_and_cancelled_prompt": True,
         }
+        admin.permissions(ALL)
+        time.sleep(0.3)
+
+        current = open_menu(TARGET)
+        focused_register = action(f"Register {TARGET}", current)
+        focused_register.call("Component", "GrabFocus")
+        eventually(lambda: focused_register.focused, "Register did not receive focus")
+        admin.permissions(ALL & ~0x1 & ~0x40000)
+        eventually(
+            lambda: named(f"Register {TARGET}", "menu item", menu()) is None,
+            "focused Register was not removed",
+        )
+        shell.key("Return")
+        time.sleep(0.2)
+        assert dialog() is None, "removed focused action became another action"
+        shell.key("Tab")
+        eventually(
+            lambda: any(
+                node.focused
+                for node, role, _, _ in nodes(menu())
+                if role == "menu item"
+            ),
+            "Tab did not recover focus inside remaining menu",
+        )
+        records["removed_focused_action"] = {
+            "no_retargeted_activation": True,
+            "tab_recovered_inside_menu": True,
+        }
+        dismiss()
         admin.permissions(ALL)
         time.sleep(0.3)
 
@@ -376,6 +442,13 @@ def actions(args, root, shell, application, bot, murmur):
             "fresh_channel_created": True,
             "same_saved_server": True,
         }
+        eventually(
+            lambda: any(
+                role == "tree item" and label.startswith(fresh_name)
+                for _, role, label, _ in items(application)
+            ),
+            "fresh channel was not rendered by the desktop",
+        )
         shell.screenshot(args.output / "fresh-reconnect-control.png")
         return {
             "passed": True,
