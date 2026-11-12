@@ -1,8 +1,9 @@
 # Nuschl TODO
 
 Current focus (user, 2026-11-12): **unmute-to-first-speech latency, stereo receive
-and output fidelity, and hybrid update readiness**. Independent owners cover
-startup/capture latency, receive/playback reference fixtures and updater verification.
+and output fidelity, and hybrid update readiness**. Independent owners now cover
+browser jitter/PLC, shared desktop document-link interaction and native Windows
+hybrid updater proof. Remaining capture/device latency checks stay open below.
 Server reordering and the desktop layout foundation have scoped proofs integrated;
 web image attachments, modern identity/archive flows and full parity remain open.
 The rename/build-cache cleanup is complete. Publication remains behind signing,
@@ -17,6 +18,15 @@ outside the current task's scope.
 
 Current integration checkpoint (2026-11-12):
 
+- **Combined Linux/web distributions passed at `b8772408`.** Actual packages
+  include the welcome document fix, receive phase setting, stereo/headroom and
+  filtered conversion corrections, both update helpers and complete compact
+  notices. Formatting, deny, audit and generated-graph checks passed. The actual
+  packaged helpers passed sandbox/forgery/deadline/install fixtures; scoped notice
+  readers verified the packaged bytes. Later mono-device fold correction
+  `abe83021` passed 68 source tests and actual private mono/stereo/DSP checks;
+  it still needs final package assembly. This is local evidence, with no push,
+  release, production trust enrollment or native Windows/macOS execution implied.
 - **Desktop layout foundation is integrated through `12d6695c`.** Shared finite
   text/action lanes, one bounded notice stack, restored connection indicator,
   wrapped headers/footers, keyboard/pointer dismissal and nested focus reveal
