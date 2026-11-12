@@ -203,7 +203,8 @@ impl View {
     }
 }
 
-/// Codec failures must not leave the session actor detached and reconnectable.
+/// If the parent future itself is dropped, request cancellation as a last resort.
+/// Normal returns additionally join the actor before the reconnect loop continues.
 struct AbortSession(tokio::task::AbortHandle);
 impl Drop for AbortSession {
     fn drop(&mut self) {
@@ -259,6 +260,8 @@ async fn session(
     let mut view = View::default();
     let mut subscription: Option<Subscription> = None;
     let mut sequence = 0u64;
+    let mut completed = false;
+    let result = async {
     loop {
         let wanted = (view.own.is_some()
             && view.listeners() > 0
@@ -274,6 +277,7 @@ async fn session(
         }
         tokio::select! {
             result = &mut running => {
+                completed = true;
                 return match result {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(error)) => {
@@ -347,6 +351,14 @@ async fn session(
             },
         }
     }
+    }.await;
+    if !completed {
+        // An abort request is not completion. Retain the connection slot until
+        // the task has actually stopped, including on a detector IPC error.
+        running.abort();
+        let _ = running.await;
+    }
+    result
 }
 
 async fn next_packet(

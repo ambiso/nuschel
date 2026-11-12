@@ -19,6 +19,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+#[cfg(test)]
 pub const RATE: u32 = codec::RATE;
 pub const CHANNELS: usize = codec::CHANNELS;
 pub const FRAME: usize = codec::FRAME;
