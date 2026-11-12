@@ -71,6 +71,33 @@ async function nav(page,action){
   await action();
   if((await page.viewportSize()).width<=760)await page.keyboard.press("Escape");
 }
+async function fontPreference(){
+  const page=await open("font-browser",1280,800);
+  await page.getByLabel("Message",{exact:true}).fill("Actual message font preference");
+  await page.getByRole("button",{name:"Send",exact:true}).click();
+  const message=page.locator("article").filter({hasText:"Actual message font preference"}).locator(".text");
+  await message.waitFor();const sizes=[];
+  for(const size of [14,16,20]){
+    await page.getByRole("button",{name:"Settings",exact:true}).first().click();
+    await page.getByLabel("Text size",{exact:true}).selectOption(String(size));
+    await page.getByRole("button",{name:"Close settings",exact:true}).click();
+    await page.waitForFunction(expected=>getComputedStyle(document.documentElement).fontSize===`${expected}px`,size);
+    const measured=await message.evaluate(e=>({root:getComputedStyle(document.documentElement).fontSize,text:parseFloat(getComputedStyle(e).fontSize)}));
+    assert.equal(measured.root,`${size}px`);assert.ok(Math.abs(measured.text-size*.9)<.02);sizes.push({size,...measured});
+  }
+  await page.reload();
+  await page.waitForFunction(()=>document.querySelector(".server-connection .status")?.textContent==="Connected",null,{timeout:20000});
+  await message.waitFor();assert.equal(await page.evaluate(()=>getComputedStyle(document.documentElement).fontSize),"20px");
+  assert.ok(Math.abs(Number(await message.evaluate(e=>parseFloat(getComputedStyle(e).fontSize)))-18)<.02);
+  const bounds=[];
+  for(const[width,height]of [[320,640],[390,844],[1280,800]]){
+    await page.setViewportSize({width,height});
+    const layout=await page.evaluate(()=>{const box=e=>{const b=e.getBoundingClientRect();return{x:b.x,right:b.right,y:b.y,bottom:b.bottom,height:b.height}};return{width:innerWidth,pageWidth:document.documentElement.scrollWidth,panel:box(document.querySelector(".server-welcome")),dismiss:box(document.querySelector(".server-welcome>header button")),composer:box(document.querySelector(".composer"))};});
+    assert.ok(layout.pageWidth<=width);assert.ok(layout.dismiss.x>=0&&layout.dismiss.right<=width&&layout.dismiss.bottom<=layout.panel.bottom);assert.ok(layout.composer.bottom<=height+1);bounds.push(layout);
+    await page.screenshot({path:resolve(output,`welcome-real-20px-${width}.png`)});
+  }
+  return{sizes,persisted_after_reload:true,bounds};
+}
 try{
   const page=await open("welcome-browser",390,844),welcome=page.getByRole("region",{name:"Server welcome",exact:true});
   const bold=welcome.locator(".bold").filter({hasText:"something.de"});await bold.waitFor();
@@ -147,11 +174,12 @@ try{
   assert.equal(rootFontStress.root,"32px");assert.ok(rootFontStress.pageWidth<=320);
   assert.ok(rootFontStress.dismiss.x>=0&&rootFontStress.dismiss.right<=320&&rootFontStress.dismiss.bottom<=rootFontStress.panelBottom);
   await page.screenshot({path:resolve(output,"welcome-root-font-stress-320.png")});
+  const fontPreferenceProof=await fontPreference();
   const proof=await page.evaluate(()=>__welcomeProof);assert.equal(proof.documents.length,3);assert.equal(proof.captures,0);assert.deepEqual(proof.violations,[]);
   for(const state of proof.states)for(const server of state)assert.ok(!server.keys.includes("welcome")&&!server.keys.includes("document"));
   assert.deepEqual(errors,[]);assert.deepEqual(canaries,[]);
   assert.ok(requests.every(url=>url.startsWith(origin+"/")||url.startsWith(origin.replace("http:","ws:")+"/")));
-  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,geometries,longBounds,preferenceFonts,rootFontStress,document_deliveries:proof.documents.length,documents:proof.documents,checks:["private stock Murmur→real TLS/WASM SDK→typed App", "bold exact domain and safe explicit link", "escaped tags/newlines/highlighted code", "inert script/remote+same-origin images", "single document delivery per connection", "320/390/900/1280 bounded panel/fixed Dismiss/reachable composer", "keyboard body scroll+Dismiss", "reconnect refresh and stale token refusal", "draft preserved", "no capture/remote requests/CSP violations"]},null,2));
+  await writeFile(resolve(output,"proof.json"),JSON.stringify({passed:true,site,csp,geometries,longBounds,preferenceFonts,rootFontStress,fontPreferenceProof,document_deliveries:proof.documents.length,documents:proof.documents,checks:["private stock Murmur→real TLS/WASM SDK→typed App", "bold exact domain and safe explicit link", "escaped tags/newlines/highlighted code", "inert script/remote+same-origin images", "single document delivery per connection", "320/390/900/1280 bounded panel/fixed Dismiss/reachable composer", "keyboard body scroll+Dismiss", "reconnect refresh and stale token refusal", "draft preserved", "no capture/remote requests/CSP violations"]},null,2));
   console.log("Welcome App proof passed");
 }catch(error){await writeFile(resolve(output,"failure.json"),JSON.stringify({error:String(error),errors,canaries,pages:await Promise.all(pages.map(page=>page.evaluate(()=>({body:document.body.textContent,proof:__welcomeProof})).catch(()=>null)))},null,2));throw error;}
 finally{for(const context of contexts)await context.close();await browser.close();for(const socket of tunnels)socket.destroy();await new Promise(done=>server.close(done));}
