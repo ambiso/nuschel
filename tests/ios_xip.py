@@ -71,7 +71,7 @@ def read_at(stream, offset, length, total, maximum=None):
     return result
 
 
-def parse_toc(stream, total):
+def parse_envelope(stream, total):
     header = read_at(stream, 0, 28, total)
     magic, header_size, version, compressed_size, raw_size, algorithm = struct.unpack(
         ">IHHQQI", header)
@@ -107,6 +107,11 @@ def parse_toc(stream, total):
         encoded = re.sub(r"\s", "", cert.text or "")
         require(0 < len(encoded) <= 32768, "certificate exceeds limit")
         certificates.append(base64.b64decode(encoded, validate=True))
+    return toc, heap, certificates, sig_bytes, digest
+
+
+def parse_toc(stream, total):
+    toc, heap, certificates, sig_bytes, digest = parse_envelope(stream, total)
     entries = {}
     for item in toc.findall("file"):
         name = one(item, "name").text
