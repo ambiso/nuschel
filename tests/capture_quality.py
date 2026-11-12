@@ -13,7 +13,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
-from output_resample import Speex
+from output_reference import Reference as Speex
 from output_spectral import metrics, snr_pass, stft, write_wav
 
 
@@ -29,6 +29,7 @@ def main():
     parser.add_argument('--speex-library', type=Path, required=True)
     parser.add_argument('--source-revision', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--filtered', action='store_true', help='also require actual filtered capture timestamps and rational count')
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     c = Speex(args.speex_library)
@@ -67,9 +68,36 @@ def main():
             assert np.array_equal(outputs[0], outputs[1]), (stem, 'callback fragmentation changes PCM')
             assert len(outputs[0]) == 48000, (stem, len(outputs[0]))
             measured = metrics(np.repeat(reference[:, None], 2, axis=1), np.repeat(outputs[0][:, None], 2, axis=1), 48000)
+            clock_error = 0
+            if args.filtered:
+                for stamps in metadata:
+                    generated = 0
+                    filter_delay = round(c.input_latency(rate)*1e9/rate)
+                    for stamp in stamps:
+                        raw_capture = 1_000_000_000+stamp['device_start']*1_000_000_000//rate
+                        assert stamp['raw_capture_time_ns'] == raw_capture
+                        phase = stamp['device_start']*1_000_000_000//rate-generated*1_000_000_000//48000
+                        expected_time = raw_capture-max(0, filter_delay+phase)
+                        difference = abs(stamp['capture_time_ns']-expected_time)
+                        assert difference <= 1, (stem, stamp, expected_time)
+                        clock_error = max(clock_error, difference)
+                        expected_count = ((stamp['device_start']+stamp['device_frames'])*48000+rate-1)//rate
+                        assert stamp['queued'] == expected_count-generated, (stem, stamp)
+                        generated = expected_count
+                if name == 'impulse':
+                    peak = int(np.argmax(abs(outputs[1])))
+                    generated = 0
+                    represented = None
+                    for stamp in metadata[1]:
+                        if generated <= peak < generated+stamp['queued']:
+                            represented = stamp['capture_time_ns']+(peak-generated)*1_000_000_000//48000
+                            break
+                        generated += stamp['queued']
+                    actual_instant = 1_000_000_000+(rate//10)*1_000_000_000//rate
+                    assert represented is not None and abs(represented-actual_instant) <= 1_000_000_000//48000+2, (rate, represented, actual_instant)
             row = {'rate': rate, 'case': name, 'channels': channels, 'source_frequency': frequency,
                 'frames': len(outputs[0]), 'chunk_bit_exact': True, 'full_fixed_gain_reference': measured,
-                'reference_delay_output_frames': latency, 'passed': snr_pass(measured, 100) and measured['max_abs_error'] <= 2e-6,
+                'reference_delay_output_frames': latency, 'max_timestamp_error_ns':clock_error if args.filtered else None, 'passed': snr_pass(measured, 100) and measured['max_abs_error'] <= 2e-6,
                 'first_fragment_queued_frames': metadata[1][0]['queued'],
                 'actual_initial_peak': int(np.argmax(abs(outputs[0]))) if name == 'impulse' else None,
                 'reference_initial_peak': int(np.argmax(abs(reference))) if name == 'impulse' else None}
@@ -94,7 +122,7 @@ def main():
                 write_wav(args.output/(stem+'-actual.wav'), np.repeat(outputs[0][:, None], 2, axis=1), 48000)
                 write_wav(args.output/(stem+'-reference.wav'), np.repeat(reference[:, None], 2, axis=1), 48000)
     sha = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
-    report = {'passed': all(row['passed'] for row in rows), 'source_revision': args.source_revision,
+    report = {'passed': all(row['passed'] for row in rows), 'filtered_clock_gate':args.filtered, 'source_revision': args.source_revision,
         'host_devices': False, 'network': False, 'gain_fitted': False, 'delay_fitted': False,
         'reference': {'library': str(args.speex_library), 'sha256': sha(args.speex_library), 'quality': 3,
             'mumble_source': '35dce9e4801fe52b2217f0d9f421d17b0aaf3bb0/src/mumble/AudioInput.cpp:515,587',
