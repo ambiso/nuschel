@@ -1153,6 +1153,12 @@ listed below. Plugin data remains the explicit gap.
       This predates live welcome changes and is assigned to the separate config
       follow-up. Retaining image limits does not imply attachment sending exists.
       Retained failing diagnostic: `~/.cache/nuschl-live-welcome/browser-final/`.
+- [ ] Preserve precise browser text-send refusals in the composer error surface.
+      The shared client stores the Session's negotiated byte-limit reason, but
+      WebClient::send_text replaces it with a generic status/recipient error.
+      Surface the current refusal, distinguish empty/busy/global-size cases and
+      retain the editable draft. Do not reuse an unrelated stale server notice.
+      Assigned to the web owner after the separate protocol-limit checkpoint.
 - [x] Integrate the separate central browser text-size correction: Settings
       previously changed body font size while rem-sized text kept the root's
       16px. `html` now uses the same preference variable; actual compiled App
@@ -1247,6 +1253,13 @@ listed below. Plugin data remains the explicit gap.
       this until the unmodified default-rate, zero-settle matrix passes.
       Root Write must permit ACL editing on children whose local Write is denied,
       as both servers allow, without granting unrelated channel operations.
+      Also require explicit apply/discard for typed rule targets before save or
+      changing selection: the native prototype can display typed target text
+      while the underlying new rule still targets @all. Preserve per-row/open
+      identity and reject any stale form action; this correction is not integrated.
+      Document the legacy wire ambiguity for an inherited group with default
+      flags and empty local membership: it cannot distinguish an explicit empty
+      local definition from inherited-only state; stock Mumble omits it on save.
 - [x] Users listed inside the channel tree with talking indicators and mute/deafen/
       suppress icons.
 - [x] Context menus: user (direct message, local volume/mute, info, whisper), channel
