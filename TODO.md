@@ -706,7 +706,11 @@ Later (reported):
       One concrete extreme-configuration autoban deadline overflow is fixed in
       `ce6ae327` and staged in `fe54e117`: configuration rejects it, runtime
       admission checks before bookkeeping, and 137 server tests plus actual CLI/
-      loopback controls pass. Final packaged-server integration is pending.
+      loopback controls pass. The final merged Nix server package and formatting
+      pass; its ELF is byte-identical to the 137-test/loopback checkpoint, and
+      actual packaged startup/check-config reject the extreme value before state
+      creation while accepting the normal control. Evidence:
+      `~/.cache/nuschl-desktop-queue-integration/server-validation/handoff.json`.
       Remaining ranked work includes fallible server RNG/authoritative-state
       poison policy, unchecked public SDK positions and ID exhaustion; no blanket
       panic-free claim follows from this one correction.
