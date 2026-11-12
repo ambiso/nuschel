@@ -785,6 +785,8 @@ enum Last {
 
 /// Blocks being assembled from marked-up text.
 struct Expand {
+    /// A Markdown block construct or a block found no room in the budget.
+    refused: bool,
     out: Vec<ContentBlock>,
     /// Blocks other than breaks in `out`, and how many of `out` are accounted
     /// for (an image is pushed by [`Expand::image`] directly).
@@ -1003,10 +1005,19 @@ impl Expand {
         self.pending += trailing;
     }
 
-    /// Start a block of its own, unless there are too many already.
-    fn block(&mut self, role: TextRole) -> bool {
+    /// Whether `more` blocks fit in the one budget for every block
+    /// (`MAX_BLOCKS`): a step that ends the text before it, adds a block and
+    /// starts text after it asks for three, one that ends a text and starts
+    /// another for two. So the text that follows always has room, and no
+    /// document has more than `MAX_BLOCKS` blocks.
+    fn room(&mut self, more: usize) -> bool {
         self.account();
-        if self.blocks >= MAX_BLOCKS {
+        self.blocks + more <= MAX_BLOCKS
+    }
+
+    /// Start a block of its own, unless the budget has no room for it.
+    fn block(&mut self, role: TextRole) -> bool {
+        if !self.room(3) {
             return false;
         }
         self.end_block();
@@ -1019,6 +1030,7 @@ impl Expand {
         while !self.explicit
             && matches!(self.role, TextRole::Heading(_) | TextRole::Item { .. })
             && let Some(newline) = part.find('\n')
+            && self.room(2)
         {
             self.text.push_str(&part[..newline]);
             self.finish_block(false);
@@ -1057,7 +1069,7 @@ impl Expand {
             done = token.range.end;
             if token.display {
                 self.account();
-                if self.blocks + 2 >= MAX_BLOCKS {
+                if !self.room(3) {
                     self.visible(source);
                     continue;
                 }
@@ -1195,28 +1207,33 @@ impl Expand {
                 }
             }
             "quote" => {
-                if self.within_limit() {
+                if self.room(2) {
                     self.end_block();
                     self.quotes += 1;
                     self.rebase();
                 }
             }
             "/quote" => {
-                if self.within_limit() {
+                if self.room(2) {
                     self.end_block();
                     self.quotes = self.quotes.saturating_sub(1);
                     self.rebase();
                 }
             }
-            "hr" => self.rule(),
-            "data" => self.image(part),
+            "hr" => {
+                self.rule();
+            }
+            // Past the budget an image is its placeholder, as one that cannot
+            // be shown is.
+            "data" => {
+                if self.room(3) {
+                    self.image(part);
+                } else {
+                    self.visible("[image]");
+                }
+            }
             _ => {}
         }
-    }
-
-    fn within_limit(&mut self) -> bool {
-        self.account();
-        self.blocks < MAX_BLOCKS
     }
 
     /// A legacy heading or list item: one line, kept even when empty.
@@ -1225,14 +1242,27 @@ impl Expand {
         self.origin = Origin::Legacy;
     }
 
-    fn rule(&mut self) {
-        if self.block(TextRole::Rule) {
+    fn rule(&mut self) -> bool {
+        let took = self.block(TextRole::Rule);
+        if took {
             self.end_block();
         }
+        took
     }
 
-    /// A Markdown construct opens.
+    /// A Markdown construct opens. A block construct the budget has no room
+    /// for is refused (`refused`), with nothing changed, so the message can
+    /// go on as typed from there.
     fn open_construct(&mut self, construct: Construct) {
+        let needed = match construct {
+            Construct::Heading(_) | Construct::Item { .. } => 3,
+            Construct::Quote => 2,
+            _ => 0,
+        };
+        if needed > 0 && !self.room(needed) {
+            self.refused = true;
+            return;
+        }
         let took = match &construct {
             Construct::Emphasis => self.open(Open::Italic),
             Construct::Strong => self.open(Open::Bold),
@@ -1265,13 +1295,10 @@ impl Expand {
                 took
             }
             Construct::Quote => {
-                let took = self.within_limit();
-                if took {
-                    self.end_block();
-                    self.containers.push(TextRole::Quote);
-                    self.rebase();
-                }
-                took
+                self.end_block();
+                self.containers.push(TextRole::Quote);
+                self.rebase();
+                true
             }
         };
         self.constructs.push((construct, took));
@@ -1297,10 +1324,41 @@ impl Expand {
             Construct::Strike => self.close(|open| matches!(open, Open::Strike)),
             Construct::Code => self.close(|open| matches!(open, Open::Code)),
             Construct::Link(_) => self.close(|open| matches!(open, Open::Link(_, true))),
-            Construct::Heading(_) => self.finish_block(false),
+            // Without room for the text after it, the block goes on instead.
+            Construct::Heading(_) => {
+                if self.room(2) {
+                    self.finish_block(false);
+                }
+            }
             Construct::Item { .. } | Construct::Quote => {
                 self.containers.pop();
-                self.finish_block(false);
+                if self.room(2) {
+                    self.finish_block(false);
+                }
+            }
+        }
+    }
+
+    fn piece(&mut self, piece: &Piece) {
+        match piece {
+            Piece::Text(text, tokens) => self.text_with_math(text, tokens),
+            Piece::Marker(directive) => self.directive(directive),
+            Piece::Open(construct) => self.open_construct(construct.clone()),
+            Piece::Close => self.close_construct(),
+            Piece::Rule => {
+                if !self.room(3) {
+                    self.refused = true;
+                } else {
+                    self.rule();
+                }
+            }
+            Piece::Block(block) => {
+                if !self.room(3) {
+                    self.refused = true;
+                } else {
+                    self.end_block();
+                    self.push(block.clone());
+                }
             }
         }
     }
@@ -1309,6 +1367,7 @@ impl Expand {
 /// What `render` found: text, with the formula tokens in it, a directive of
 /// legacy marked-up text, a Markdown construct opening or closing (in
 /// nesting order), a rule, or a block.
+#[derive(Clone)]
 pub(crate) enum Piece {
     Text(String, Vec<Formula>),
     Marker(String),
@@ -1323,8 +1382,20 @@ pub(crate) enum Piece {
 /// become math spans or blocks (at most `formulas` of them), images and rules
 /// become blocks of their own, code passes through, and the line breaks
 /// between blocks become breaks. Unknown markers are dropped.
-pub(crate) fn expand(pieces: Vec<Piece>, formulas: usize) -> Vec<ContentBlock> {
+///
+/// Every block counts against one budget, `MAX_BLOCKS`. A legacy directive
+/// past it leaves its text in the block it is in (as always); a Markdown
+/// block construct or a code or math block past it ends the rendering
+/// there: the constructs still open close, and `rest(index)` gives the
+/// message from that piece on as typed (its source, directives kept), so
+/// nothing is left out or reordered.
+pub(crate) fn expand(
+    pieces: &[Piece],
+    formulas: usize,
+    rest: impl FnOnce(usize) -> Vec<Piece>,
+) -> Vec<ContentBlock> {
     let mut expand = Expand {
+        refused: false,
         out: Vec::with_capacity(pieces.len()),
         blocks: 0,
         seen: 0,
@@ -1349,20 +1420,22 @@ pub(crate) fn expand(pieces: Vec<Piece>, formulas: usize) -> Vec<ContentBlock> {
         budget: MAX_DOCUMENT_PIXELS_BYTES,
         formulas,
     };
-    for piece in pieces {
-        match piece {
-            Piece::Text(text, tokens) => expand.text_with_math(&text, &tokens),
-            Piece::Marker(directive) => expand.directive(&directive),
-            Piece::Open(construct) => expand.open_construct(construct),
-            Piece::Close => expand.close_construct(),
-            Piece::Rule => expand.rule(),
-            Piece::Block(block) => {
-                expand.end_block();
-                expand.push(block);
+    for (index, piece) in pieces.iter().enumerate() {
+        expand.piece(piece);
+        if expand.refused {
+            for _ in 0..expand.constructs.len() {
+                expand.close_construct();
             }
+            // As typed from here: only text and legacy directives, which
+            // stay within the budget where they are.
+            for piece in rest(index) {
+                expand.piece(&piece);
+            }
+            break;
         }
     }
     expand.finish_block(false);
+    debug_assert!(expand.blocks <= MAX_BLOCKS, "{} blocks", expand.blocks);
     if expand.blocks == 0 {
         expand.push(ContentBlock::text(""));
     } else if expand.pending > 0 {
@@ -1387,7 +1460,7 @@ pub(crate) fn marked_pieces(text: &str) -> Vec<Piece> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_LINKS, MAX_URL_BYTES};
+    use super::{MAX_BLOCKS, MAX_LINKS, MAX_URL_BYTES};
     use crate::{ContentRenderer, Error};
     use nuschl_core::{ContentBlock, EMBED, MAX_CONTENT_BYTES, MessageDocument, Style, TextRole};
 
@@ -1722,7 +1795,13 @@ mod tests {
             let source = format!("{}x{}", open.repeat(5_000), close.repeat(5_000));
             let document = html(&renderer, &source)?;
             assert!(
-                document.blocks.len() <= 600,
+                document.within_limits()
+                    && document
+                        .blocks
+                        .iter()
+                        .filter(|block| !block.is_break())
+                        .count()
+                        <= MAX_BLOCKS,
                 "{open}: {}",
                 document.blocks.len()
             );
@@ -1739,7 +1818,15 @@ mod tests {
                 _ => 0,
             })
             .sum();
-        assert!(spans <= 2048 && document.blocks.len() <= 513, "{spans}");
+        let blocks = document
+            .blocks
+            .iter()
+            .filter(|block| !block.is_break())
+            .count();
+        assert!(
+            spans <= 2048 && blocks <= MAX_BLOCKS,
+            "{spans} spans, {blocks} blocks"
+        );
         // Every visible character is still there, in one text or another.
         let text: String = document
             .blocks

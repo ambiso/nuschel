@@ -123,3 +123,24 @@ fn markdown_reaches_the_browser_with_its_line_breaks() {
         ])
     );
 }
+
+/// The browser codec and the desktop take the same documents: a message of
+/// 512 headings and 256 code blocks (4,608 bytes) used to make 768 blocks,
+/// which this boundary refused while the desktop drew them.
+#[test]
+fn markdown_at_the_block_budget_reaches_the_browser() {
+    let codec = ContentProcessor::new();
+    let source = "# a\n".repeat(512) + &"```\nx\n```\n".repeat(256);
+    let rendered: serde_json::Value =
+        serde_json::from_str(&codec.render_message(&source, "plain").unwrap()).unwrap();
+    let document: MessageDocument = serde_json::from_value(rendered["document"].clone()).unwrap();
+    let blocks = document
+        .blocks
+        .iter()
+        .filter(|block| !block.is_break())
+        .count();
+    assert!(
+        blocks <= nuschl_core::MAX_BLOCKS && document.within_limits(),
+        "{blocks}"
+    );
+}

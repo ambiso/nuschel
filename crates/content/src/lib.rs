@@ -377,7 +377,7 @@ impl ContentRenderer {
         let marked = markdown::Marked::new(source);
         if markdown::literal(&marked.visible) {
             return Ok(MessageDocument {
-                blocks: markup::expand(markup::marked_pieces(source), 0),
+                blocks: markup::expand(&markup::marked_pieces(source), 0, |_| Vec::new()),
             });
         }
         let mut translation = markdown::translate(&marked);
@@ -401,9 +401,11 @@ impl ContentRenderer {
                 }
             });
         }
-        let pieces = markdown::pieces(&marked, translation, made);
+        let (pieces, positions) = markdown::pieces(&marked, translation, made);
+        // Past the block budget, the rest of the message as typed.
+        let rest = |index| markdown::rest(&marked, &pieces, &positions, index);
         Ok(MessageDocument {
-            blocks: markup::expand(pieces, math::MAX_FORMULAS.saturating_sub(fences)),
+            blocks: markup::expand(&pieces, math::MAX_FORMULAS.saturating_sub(fences), rest),
         })
     }
 
@@ -866,7 +868,15 @@ mod tests {
         let document = ContentRenderer::new()?.render(&source)?;
         let code = |block: &&ContentBlock| matches!(block, ContentBlock::Code { .. });
         assert!(document.blocks.iter().filter(code).count() > 200);
-        assert!(document.blocks.len() <= 513, "{}", document.blocks.len());
+        let blocks = document
+            .blocks
+            .iter()
+            .filter(|block| !block.is_break())
+            .count();
+        assert!(
+            blocks <= markup::MAX_BLOCKS && document.within_limits(),
+            "{blocks}"
+        );
         Ok(())
     }
 

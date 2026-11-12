@@ -89,10 +89,13 @@ pub struct MessageDocument {
 
 impl MessageDocument {
     /// Whether a worker's document is within every budget its consumers rely
-    /// on; one that is not is malformed and refused before anything converts,
-    /// copies or lays it out.
+    /// on: at most [`MAX_BLOCKS`] blocks other than breaks, and its breaks
+    /// within theirs ([`MessageDocument::breaks_valid`]). One that is not is
+    /// malformed and refused before anything converts, copies or lays it out
+    /// (the desktop's and the browser's boundaries alike).
     pub fn within_limits(&self) -> bool {
-        self.breaks_valid()
+        let blocks = self.blocks.iter().filter(|block| !block.is_break()).count();
+        blocks <= MAX_BLOCKS && self.breaks_valid()
     }
 
     /// Whether the document's [`ContentBlock::Break`]s are within their
@@ -417,6 +420,19 @@ mod tests {
             }
             .breaks_valid()
         );
+    }
+
+    /// The desktop's and the browser's boundaries refuse a document of more
+    /// blocks than the worker makes (`within_limits`); breaks do not count.
+    #[test]
+    fn documents_have_one_budget_for_their_blocks() {
+        let document = |count: usize| MessageDocument {
+            blocks: (0..count)
+                .flat_map(|_| [ContentBlock::text("x"), ContentBlock::Break { count: 2 }])
+                .collect(),
+        };
+        assert!(document(MAX_BLOCKS).within_limits());
+        assert!(!document(MAX_BLOCKS + 1).within_limits());
     }
 
     #[test]

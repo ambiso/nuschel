@@ -643,6 +643,15 @@ Where the implementation departs from or adds to the plan:
   `html`) call `check` but were not built or run here (no warm fuzz target
   directory); the same checks run as unit tests over 10,000 generated messages,
   plain and as legacy text, and the spec table.
+- **Budgets (security review gates).** All breaks of a document together
+  count at most `MAX_BREAK_LINES` (= `MAX_CONTENT_BYTES`) line breaks; every
+  block counts against one budget of `MAX_BLOCKS`, and a Markdown block
+  construct or code/math block past it ends the rendering there, the rest of
+  the message shown as typed (legacy directives past it keep their text in
+  the block they are in, as before). `MessageDocument::within_limits` is
+  checked at the native worker boundary (`host::rendered`) and the browser
+  codec's (`constrain_document`); the desktop and TUI drop breaks over budget
+  before converting.
 - **Not done:** the optional "Copy Markdown" menu entry, rendered search
   snippets, and the `tests/tui_loopback.py` and `web_content.browser.mjs`
   rendered checks (the TUI and web draw breaks under unit tests; the native

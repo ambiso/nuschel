@@ -145,6 +145,9 @@ shown (`**word**` copies as `word`), with the message's lines.
   formula keeps it whole (`*$x$*`).
 - Nested quotes are drawn as one quote, a list inside a quote as a list, and
   levels 4 to 6 as level 3.
+- A message has at most 512 blocks (paragraphs, headings, list items, quotes,
+  rules, code blocks, formulas, images). Past them, the rest of the message is
+  shown as typed.
 - Stock clients' HTML gets the same rules on its visible text, so a message a
   Nuschl user sent looks the same on Murmur as on a Nuschl server; literal `*`
   from an old stock client can become emphasis.

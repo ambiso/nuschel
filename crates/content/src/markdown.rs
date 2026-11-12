@@ -237,6 +237,7 @@ pub enum Syntax {
 
 /// A block a construct makes: code (highlighted by the renderer) or a
 /// display formula from a `math` fence.
+#[derive(Clone)]
 pub enum Block {
     Code {
         language: Option<String>,
@@ -249,6 +250,7 @@ pub enum Block {
 }
 
 /// A point in the text where a construct opens or closes, or a rule stands.
+#[derive(Clone)]
 enum Point {
     Open(Construct),
     Close,
@@ -279,6 +281,7 @@ enum Frame {
 }
 
 /// The translation of a text's structure.
+#[derive(Clone)]
 pub struct Translation {
     /// What is hidden; ranges may overlap (a prefix in a setext underline).
     pub hidden: Vec<(Range<usize>, Syntax)>,
@@ -958,7 +961,7 @@ pub(crate) fn pieces(
     marked: &Marked<'_>,
     translation: Translation,
     made: Vec<ContentBlock>,
-) -> Vec<Piece> {
+) -> (Vec<Piece>, Vec<usize>) {
     let text: &str = &marked.visible;
     let mut hidden: Vec<Range<usize>> = Vec::with_capacity(translation.hidden.len());
     for (range, _) in translation.hidden {
@@ -977,12 +980,20 @@ pub(crate) fn pieces(
     let mut made = made.into_iter();
     let tokens = translation.tokens;
     let markers = &marked.markers;
-    let mut out = Vec::new();
+    // Each piece with where it starts in the visible text.
+    let mut out: Vec<(usize, Piece)> = Vec::new();
     let mut shown = String::new();
+    let mut shown_start = 0;
     let mut found: Vec<Token> = Vec::new();
-    let flush = |out: &mut Vec<Piece>, shown: &mut String, found: &mut Vec<Token>| {
+    let flush = |out: &mut Vec<(usize, Piece)>,
+                 shown: &mut String,
+                 found: &mut Vec<Token>,
+                 start: usize| {
         if !shown.is_empty() {
-            out.push(Piece::Text(std::mem::take(shown), std::mem::take(found)));
+            out.push((
+                start,
+                Piece::Text(std::mem::take(shown), std::mem::take(found)),
+            ));
         }
     };
     let (mut point, mut marker, mut skip, mut block, mut token) = (0, 0, 0, 0, 0);
@@ -1005,33 +1016,36 @@ pub(crate) fn pieces(
                 match &points[point].1 {
                     Point::Void => {}
                     Point::Open(construct) => {
-                        flush(&mut out, &mut shown, &mut found);
-                        out.push(Piece::Open(construct.clone()));
+                        flush(&mut out, &mut shown, &mut found, shown_start);
+                        out.push((points[point].0, Piece::Open(construct.clone())));
                     }
                     Point::Close => {
-                        flush(&mut out, &mut shown, &mut found);
-                        out.push(Piece::Close);
+                        flush(&mut out, &mut shown, &mut found, shown_start);
+                        out.push((points[point].0, Piece::Close));
                     }
                     Point::Rule => {
-                        flush(&mut out, &mut shown, &mut found);
-                        out.push(Piece::Rule);
+                        flush(&mut out, &mut shown, &mut found, shown_start);
+                        out.push((points[point].0, Piece::Rule));
                     }
                 }
                 point += 1;
                 continue;
             }
             Some(false) => {
-                flush(&mut out, &mut shown, &mut found);
-                out.push(Piece::Marker(markers[marker].1.to_owned()));
+                flush(&mut out, &mut shown, &mut found, shown_start);
+                out.push((
+                    markers[marker].0,
+                    Piece::Marker(markers[marker].1.to_owned()),
+                ));
                 marker += 1;
                 continue;
             }
             None => {}
         }
         if let Some(range) = blocks.get(block).filter(|range| range.start <= at) {
-            flush(&mut out, &mut shown, &mut found);
+            flush(&mut out, &mut shown, &mut found, shown_start);
             if let Some(made) = made.next() {
-                out.push(Piece::Block(made));
+                out.push((range.start, Piece::Block(made)));
             }
             at = at.max(range.end);
             block += 1;
@@ -1088,11 +1102,52 @@ pub(crate) fn pieces(
                 });
                 token += 1;
             }
+            if shown.is_empty() {
+                shown_start = at;
+            }
             shown.push_str(&text[at..next]);
         }
         at = next;
     }
-    flush(&mut out, &mut shown, &mut found);
+    flush(&mut out, &mut shown, &mut found, shown_start);
+    out.into_iter().map(|(at, piece)| (piece, at)).unzip()
+}
+
+/// The message from piece `index` on as typed, for when the block budget
+/// runs out there ([`crate::markup::expand`]): its visible text with nothing
+/// hidden and no formulas, and its directives where they stand (those
+/// already given before the piece are not given again).
+pub(crate) fn rest(
+    marked: &Marked<'_>,
+    pieces: &[Piece],
+    positions: &[usize],
+    index: usize,
+) -> Vec<Piece> {
+    let text: &str = &marked.visible;
+    let Some(&start) = positions.get(index) else {
+        return Vec::new();
+    };
+    let mut given = pieces[..index]
+        .iter()
+        .zip(&positions[..index])
+        .filter(|(piece, at)| matches!(piece, Piece::Marker(_)) && **at == start)
+        .count();
+    let mut out = Vec::new();
+    let mut at = start;
+    for (position, directive) in marked.markers.iter().filter(|(at, _)| *at >= start) {
+        if *position == start && given > 0 {
+            given -= 1;
+            continue;
+        }
+        if *position > at {
+            out.push(Piece::Text(text[at..*position].to_owned(), Vec::new()));
+            at = *position;
+        }
+        out.push(Piece::Marker((*directive).to_owned()));
+    }
+    if at < text.len() {
+        out.push(Piece::Text(text[at..].to_owned(), Vec::new()));
+    }
     out
 }
 
@@ -1139,9 +1194,45 @@ pub fn layout(source: &str) -> Layout {
         };
     }
     let translation = translate(&marked);
-    let mut hidden = translation.hidden;
+    // Where the block budget ran out, as `render` finds it: from there on
+    // the message is shown as typed, nothing hidden.
+    let made: Vec<ContentBlock> = translation
+        .blocks
+        .iter()
+        .map(|(_, block, _)| match block {
+            Block::Code { .. } => ContentBlock::Code {
+                language: None,
+                runs: Vec::new(),
+            },
+            Block::Math { source, tex } => ContentBlock::Math {
+                source: source.clone(),
+                tex: tex.clone(),
+            },
+        })
+        .collect();
+    let fences = made
+        .iter()
+        .filter(|block| matches!(block, ContentBlock::Math { .. }))
+        .count();
+    let (laid, positions) = pieces(&marked, translation.clone(), made);
+    let cut = std::cell::Cell::new(usize::MAX);
+    crate::markup::expand(&laid, MAX_FORMULAS.saturating_sub(fences), |index| {
+        cut.set(positions.get(index).copied().unwrap_or(usize::MAX));
+        rest(&marked, &laid, &positions, index)
+    });
+    let cut = cut.get();
+    let mut hidden: Vec<(Range<usize>, Syntax)> = translation
+        .hidden
+        .into_iter()
+        .filter(|(range, _)| range.start < cut)
+        .map(|(range, syntax)| (range.start..range.end.min(cut), syntax))
+        .collect();
     let mut blocks = Vec::new();
-    for (range, _, shown) in translation.blocks {
+    for (range, _, shown) in translation
+        .blocks
+        .into_iter()
+        .filter(|(range, ..)| range.start < cut)
+    {
         let mut at = range.start;
         for part in &shown {
             if part.start > at {
@@ -1159,7 +1250,11 @@ pub fn layout(source: &str) -> Layout {
         visible,
         hidden,
         blocks,
-        tokens: translation.tokens,
+        tokens: translation
+            .tokens
+            .into_iter()
+            .filter(|token| token.range.start < cut)
+            .collect(),
         urls,
         html,
         masked: translation.masked,
@@ -1865,10 +1960,64 @@ mod spec {
                 .filter(|block| !block.is_break())
                 .count();
             assert!(
-                blocks <= 2 * crate::markup::MAX_BLOCKS,
+                blocks <= crate::markup::MAX_BLOCKS,
                 "{unit:?}: {blocks} blocks"
             );
         }
+    }
+
+    /// One budget for every block, whatever makes it (headings, list
+    /// items, quotes, rules, code, formulas, images): past it, the rest of
+    /// the message is its source as typed, nothing left out or reordered.
+    /// The review's message: 512 headings and 256 code blocks in 4,608 bytes
+    /// made 768 blocks, which the browser's codec refused and the desktop
+    /// drew.
+    #[test]
+    fn every_block_counts_against_one_budget() {
+        let renderer = ContentRenderer::default();
+        let review = "# a\n".repeat(512) + &"```\nx\n```\n".repeat(256);
+        let mixed = "# h\n\n- i\n  - j\n\n$$x$$\n\n```\nc\n```\n\n> q\n\n---\n\n".repeat(160);
+        let html = "<h2>h</h2><pre>x</pre><ul><li>a</li></ul><hr/>".repeat(300);
+        let sources = [
+            review.clone(),
+            mixed,
+            "- a\n- b\n".repeat(600),
+            "x\n\n# h\n".repeat(600),
+            "```math\nx\n```\n".repeat(40) + &"```\nc\n```\n".repeat(600),
+            "a $$x$$ b\n".repeat(40) + &"> q\n\nz\n\n".repeat(600),
+            renderer.legacy_plain_text(&html).unwrap(),
+        ];
+        for source in &sources {
+            let document = renderer.render(source).unwrap();
+            let blocks = document
+                .blocks
+                .iter()
+                .filter(|block| !block.is_break())
+                .count();
+            let start: String = source.chars().take(40).collect();
+            assert!(
+                blocks <= crate::markup::MAX_BLOCKS,
+                "{start:?}: {blocks} blocks"
+            );
+            assert!(document.within_limits(), "{start:?}");
+            // Nothing is left out or reordered: the text shown is the
+            // message's, less exactly the syntax hidden before the budget ran
+            // out (`check`, invariant 1), and the last line is there as typed.
+            if let Err(error) = super::check(source, &document) {
+                panic!("{start:?}: {error}");
+            }
+        }
+        let document = renderer.render(&review).unwrap();
+        let Some(ContentBlock::Text { text, .. }) =
+            document.blocks.iter().rev().find(|block| !block.is_break())
+        else {
+            panic!("the last block is the rest of the message, as text");
+        };
+        assert!(
+            text.ends_with("```\nx\n```"),
+            "{:?}",
+            &text[text.len().saturating_sub(40)..]
+        );
     }
 
     /// The fuzz invariants over generated messages, as the fuzz targets
