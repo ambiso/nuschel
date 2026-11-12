@@ -23496,6 +23496,14 @@ rec {
             usesDefaultFeatures = false;
           }
           {
+            name = "sonora-agc2";
+            packageId = "sonora-agc2";
+          }
+          {
+            name = "sonora-simd";
+            packageId = "sonora-simd";
+          }
+          {
             name = "speexdsp-resampler";
             packageId = "speexdsp-resampler";
             usesDefaultFeatures = false;

@@ -7153,6 +7153,8 @@ dependencies = [
  "rtrb",
  "serde_json",
  "sonora",
+ "sonora-agc2",
+ "sonora-simd",
  "speexdsp-resampler",
 ]
 

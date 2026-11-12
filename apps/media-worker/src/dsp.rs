@@ -11,6 +11,7 @@ use sonora::{
     AudioProcessing, Config, StreamConfig,
     config::{AdaptiveDigital, EchoCanceller, GainController2, HighPassFilter},
 };
+use sonora_agc2::vad_wrapper::VoiceActivityDetectorWrapper;
 
 pub const RATE: u32 = 48_000;
 pub const FRAME: usize = 480;
@@ -41,6 +42,9 @@ pub struct CapturePipeline {
     echo_cancellation: bool,
     gain: Option<AudioProcessing>,
     denoise: Box<DenoiseState<'static>>,
+    /// Separate from AGC so settings changes never reset speech detection. The
+    /// existing WebRTC RNN sees the stable pre-NS/pre-gain microphone signal.
+    voice_detector: VoiceActivityDetectorWrapper,
     noise_suppression: bool,
     gate: Gate,
     input: [f32; FRAME],
@@ -89,6 +93,10 @@ impl CapturePipeline {
             echo_cancellation,
             gain: settings.automatic_gain.then(gain_stage),
             denoise: DenoiseState::new(),
+            voice_detector: VoiceActivityDetectorWrapper::new(
+                sonora_simd::detect_backend(),
+                RATE as i32,
+            ),
             noise_suppression: settings.noise_suppression,
             gate: Gate::new(settings),
             input: [0.; FRAME],
@@ -193,7 +201,12 @@ impl CapturePipeline {
         for (scaled, sample) in self.input.iter_mut().zip(frame.iter()) {
             *scaled = sample * SCALE;
         }
-        let voice = self.denoise.process_frame(&mut self.output, &self.input);
+        // RNNoise's speech output can confidently classify periodic machinery
+        // as speech. Keep its suppression, and use the WebRTC RNN that already
+        // ships with our gain controller for the independent voice decision.
+        // Its FloatS16 input is the same stable front-end tap, before NS/gain.
+        let voice = self.voice_detector.analyze(&self.input);
+        self.denoise.process_frame(&mut self.output, &self.input);
         if self.noise_suppression {
             for (sample, clean) in frame.iter_mut().zip(self.output.iter()) {
                 *sample = clean / SCALE;

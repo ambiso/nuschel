@@ -18,6 +18,8 @@ rtrb = "0.4"
 serde_json = "1.0.154"
 sonora = { version = "0.3.0", default-features = false }
 speexdsp-resampler = { version = "0.1.0", default-features = false }
+sonora-agc2 = "0.3.0"
+sonora-simd = "0.3.0"
 
 # The launch stage: on Windows the worker starts itself again inside its
 # AppContainer (nuschl_ipc::windows_sandbox).
