@@ -58,6 +58,22 @@ Current integration checkpoint (2026-11-12):
   end-to-end browser interoperability and capability checks prove them.
 - **ACME/PKI is active.** Trust/certificate handlers and shared history identity
   checks have a separate exclusive owner; ordering must not alter them.
+- **Audio corrections are integrated through `2e25ef54`.** Receive stereo,
+  gain-before-clipping, complete 120 ms packets, filtered playback/reference
+  conversion, Pulse capture startup and bounded VAD onset retention are present.
+  The combined media-worker checkpoint passed 64 tests (four explicit/baseline
+  diagnostics ignored); the unmute client checkpoint passed 91 (one baseline
+  ignored). Full distribution and private DSP checks for this combination remain
+  pending. Physical-device latency and complete Mumble output parity stay open
+  below. The requested transmit default is 128 kbit/s subject to server budgets;
+  UserStats bandwidth now converts bytes/s to bits/s correctly. Configurable
+  bitrate controls remain queued.
+- **Hybrid update verification is integrated through `d1480f2c`.** The earlier
+  `933bca05` Linux distribution built with both algorithm-specific helpers and
+  passed the real packaged-worker sandbox, corruption, timeout and install
+  fixture. This does not enroll production keys or prove native Windows/macOS
+  execution; complete scoped notices and cross-platform checks remain release
+  gates. Later audio corrections still need a fresh distribution build.
 - **Release remains gated.** Independent Linux, Windows, universal macOS and web
   artifacts, hybrid update verification, exact notices and final packaging must
   pass. Production public-key enrollment and CI secret provisioning remain
