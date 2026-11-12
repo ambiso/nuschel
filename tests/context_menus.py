@@ -159,7 +159,9 @@ def actions(args, root, shell, application, bot, murmur):
             shell.key("End")
             shell.type("B")
             eventually(
-                lambda: reason.text == "AsampleB",
+                lambda: (
+                    reason.call("Text", "GetText", "ii", "0", "-1")[0] == "AsampleB"
+                ),
                 "menu navigation stole prompt text editing",
             )
         eventually(
