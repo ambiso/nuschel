@@ -635,6 +635,28 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Implement image sending in the web app (user, 2026-11-12: cannot share
+      images). Support file selection, paste/drop, bounded preview and removal,
+      original-target/generation binding and draft retention on refusal. Reuse
+      bounded credential-free content/codec workers; respect server HTML/image/
+      message limits and preserve captions. Verify real private-server receipt,
+      history reload, mobile interaction and cancellation; keep unsupported
+      original-file transfer/quality parity explicit rather than silently losing
+      original bytes. Claude's web-UX lane prepares API/file ownership first.
+- [ ] Enlarge the web reconnect and mute/unmute controls (user, 2026-11-12).
+      Apply consistent control sizing and accessible hit targets, including the
+      adjacent deafen action where shared. Verify keyboard focus, long labels,
+      320/390 px layouts and browser zoom with no overlap or overflow; preserve
+      navigation and microphone-consent behavior. Coordinate composer/button
+      hunks with the separate bitrate settings row, without whole-file reformat.
+- [ ] Investigate weaker web echo cancellation (user, 2026-11-12). Obtain browser/
+      OS and same-device desktop comparison; current capture requests browser
+      AEC/NS/AGC and records applied track settings. Check actual applied effects,
+      playback reference/device routing and reconnect/mute recovery before adding
+      DSP. Do not double-cancel blindly or keep capture open while muted. Browser
+      synthetic constraints/route checks are not physical acoustic-quality proof;
+      host microphone/speaker tests require explicit current scope. Coordinate
+      audio.js changes with the bitrate owner. Read-only diagnosis is delegated.
 - [ ] Investigate laggy Windows audio (user, 2026-11-12). Both input and output
       intermittently stutter/drop out. Reported ping is 82 ms versus other
       participants' 7–20 ms, with zero reported late/lost packets toward the
