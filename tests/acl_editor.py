@@ -223,6 +223,7 @@ def actions(args, root, shell, application, bot, murmur):
         shell.chord("Control_L", "a")
         shell.type(value)
         time.sleep(0.2)
+        return node
 
     def text_contains(text):
         return any(text in label for _, _, label, _ in items(application))
@@ -283,6 +284,7 @@ def actions(args, root, shell, application, bot, murmur):
 
     open_acl()
     stale_save = wait("Save permissions", "push button")
+    stale_close = wait("Done", "push button")
     activate("Done")
     open_acl()
     try:
@@ -290,6 +292,12 @@ def actions(args, root, shell, application, bot, murmur):
     except RuntimeError:
         accepted = False
     assert accepted is False, "closed/reopened editor reused an old Save action"
+    try:
+        closed = stale_close.call("Action", "DoAction", "i", "0")[0]
+    except RuntimeError:
+        closed = False
+    assert closed is False, "old close action discarded a replacement editor"
+    assert named("Save permissions", "push button") is not None
     mark("close_reopen_stale_save_refused")
     type_field("New group name", "native-team")
     activate("Create group")
@@ -320,9 +328,29 @@ def actions(args, root, shell, application, bot, murmur):
     activate("Exclude inherited member")
     click_matching("Inheritable by subchannels")
     activate("Add rule")
+    target_field = type_field("ACL rule target", "native-team")
+    activate("Speak: unset")
+    activate("Save permissions")
+    eventually(
+        lambda: text_contains("Apply or discard the edited rule target"),
+        "unapplied displayed group was silently saved as @all",
+    )
+    activate("Inherited · @admin")
+    assert target_field.call("Text", "GetText", "ii", "0", "-1")[0] == "native-team", (
+        "selection discarded or retargeted the typed field"
+    )
+    admin = operator(root, pin)
+    try:
+        assert not local_rules(query_channel(admin, 1)), (
+            "blocked Save wrote an @all rule"
+        )
+    finally:
+        admin.close()
+    activate("Discard target edit")
+    assert target_field.call("Text", "GetText", "ii", "0", "-1")[0] == "all"
     type_field("ACL rule target", "native-team")
     activate("Apply target")
-    activate("Speak: unset")
+    mark("unapplied_target_save_and_selection_blocked_until_explicit_apply_or_discard")
     click_matching("Apply to subchannels")
     activate("Add rule")
     activate("Registered user")
@@ -331,6 +359,23 @@ def actions(args, root, shell, application, bot, murmur):
     eventually(
         lambda: text_contains(f"Resolved Offline member (#{IDS['offline']})"),
         "fresh rule account did not resolve",
+    )
+    type_field("ACL rule target", "Control sender")
+    activate("Apply target")
+    eventually(
+        lambda: text_contains("Resolve the registered account first"),
+        "changed input reused an earlier resolved principal",
+    )
+    activate("Add rule")
+    eventually(
+        lambda: text_contains("Apply or discard the edited rule target"),
+        "new rule silently discarded an unresolved target",
+    )
+    type_field("ACL rule target", "Offline member")
+    activate("Resolve account")
+    eventually(
+        lambda: text_contains(f"Resolved Offline member (#{IDS['offline']})"),
+        "replacement account lookup did not resolve",
     )
     activate("Apply target")
     activate("Speak: unset")

@@ -83,7 +83,7 @@ impl Panel {
     }
 }
 
-fn heading(title: String, cx: &mut Context<Desktop>) -> AnyElement {
+fn heading(title: String, acl_token: Option<u64>, cx: &mut Context<Desktop>) -> AnyElement {
     div()
         .p_6()
         .pb_4()
@@ -100,12 +100,14 @@ fn heading(title: String, cx: &mut Context<Desktop>) -> AnyElement {
                 .child(text!(title).with_id("panel-title")),
         )
         .child(styled_button(
-            "panel-done",
+            SharedString::from(acl_token.map(|token|format!("acl-close-{token}")).unwrap_or_else(||"panel-done".into())),
             "Done",
             Tone::Primary,
-            |this, _, cx| {
-                this.panel = None;
-                cx.notify();
+            move |this, _, cx| {
+                if acl_token.is_none() || matches!(this.panel.as_ref(),Some(Panel::Acl {editor,..}) if Some(editor.token)==acl_token) {
+                    this.panel = None;
+                    cx.notify();
+                }
             },
             cx,
         ))
@@ -777,7 +779,14 @@ pub fn panel(this: &Desktop, cx: &mut Context<Desktop>) -> Option<AnyElement> {
     let content = div()
         .flex()
         .flex_col()
-        .child(heading(title, cx))
+        .child(heading(
+            title,
+            match panel {
+                Panel::Acl { editor, .. } => Some(editor.token),
+                _ => None,
+            },
+            cx,
+        ))
         .child(body)
         .into_any_element();
     Some(modal(

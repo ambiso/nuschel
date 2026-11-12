@@ -534,10 +534,19 @@ fn require_applied_target(this: &mut Desktop, token: u64, cx: &Context<Desktop>)
         true
     }
 }
-fn discard_target(this: &mut Desktop, token: u64, window: &mut Window, cx: &mut Context<Desktop>) {
+fn discard_target(
+    this: &mut Desktop,
+    token: u64,
+    row: RowId,
+    window: &mut Window,
+    cx: &mut Context<Desktop>,
+) {
     let Some(editor) = active_editor(this, token) else {
         return;
     };
+    if editor.rule().is_none_or(|(id, _)| id != row) {
+        return;
+    }
     let Some((_, entry)) = editor.rule() else {
         return;
     };
@@ -824,7 +833,8 @@ fn name(view: &ServerView, id: u32) -> String {
         .map(|name| format!("{name} (#{id})"))
         .unwrap_or_else(|| format!("#{id}"))
 }
-fn resolve(this: &mut Desktop, token: u64, member: bool, cx: &mut Context<Desktop>) {
+fn resolve(this: &mut Desktop, token: u64, selection: LookupSelection, cx: &mut Context<Desktop>) {
+    let member = selection.member;
     let (value, selection, channel) = {
         let Some(editor) = active_editor(this, token) else {
             return;
@@ -832,9 +842,9 @@ fn resolve(this: &mut Desktop, token: u64, member: bool, cx: &mut Context<Deskto
         if editor.state.pending().is_some() {
             return;
         }
-        let Some(selection) = lookup_selection(editor, member) else {
+        if lookup_selection(editor, member) != Some(selection) {
             return;
-        };
+        }
         let input = if member {
             &editor.member
         } else {
@@ -1090,7 +1100,8 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
                         return None;
                     }
                     let view = this.client.servers.get(origin.live_index(this)?)?;
-                    let row = editor.state.draft()?.entries().get(index)?;
+                    let draft = editor.state.draft()?;
+                    let row = draft.entries().get(index)?;
                     let label = match row.value.user_id {
                         Some(id) => name(view, id),
                         None => format!("@{}", row.value.group.as_deref().unwrap_or("?")),
@@ -1100,7 +1111,11 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
                         format!(
                             "{}{}",
                             if row.value.inherited {
-                                "Inherited · "
+                                if draft.inherit_acls() {
+                                    "Inherited · "
+                                } else {
+                                    "Inactive inherited · "
+                                }
                             } else {
                                 ""
                             },
@@ -1215,6 +1230,27 @@ pub fn render(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> 
     body.into_any_element()
 }
 
+fn permission_state(entry: &AclEntry, bit: u32) -> &'static str {
+    match (entry.grant & bit != 0, entry.deny & bit != 0) {
+        (true, true) => "allow + deny",
+        (true, false) => "allow",
+        (false, true) => "deny",
+        _ => "unset",
+    }
+}
+fn unknown_permissions(entry: &AclEntry) -> Option<String> {
+    let known = permission::NAMED
+        .iter()
+        .fold(0, |bits, (bit, _)| bits | bit);
+    ((entry.grant | entry.deny) & !known != 0).then(|| {
+        format!(
+            "Additional permission bits retained: grant {:#010x}, deny {:#010x}",
+            entry.grant & !known,
+            entry.deny & !known
+        )
+    })
+}
+
 fn rule_detail(
     view: &ServerView,
     editor: &Editor,
@@ -1224,10 +1260,18 @@ fn rule_detail(
 ) -> AnyElement {
     let token = editor.token;
     if entry.inherited {
-        return note(
-            "acl-inherited-rule",
-            "This rule belongs to a parent channel. Edit it there, or change this channel's inheritance and add local rules.",
-        );
+        let mut detail=div().min_w_0().flex().flex_col().gap_2()
+            .child(note("acl-inherited-rule",if editor.state.draft().is_some_and(|draft|draft.inherit_acls()) {
+                "This rule belongs to an ancestor channel and is read-only here."
+            } else {"Parent ACL inheritance is disabled in this draft. This ancestor rule is inactive and read-only here."}))
+            .child(note("acl-inherited-scope",format!("Applies in its defining channel: {}; applies to its subchannels: {}",entry.apply_here,entry.apply_subs)))
+            .child(div().flex().flex_wrap().gap_2().children(permission::NAMED.iter().map(|&(bit,label)| {
+                note(SharedString::from(format!("acl-inherited-bit-{token}-{id}-{bit}")),format!("{label}: {}",permission_state(entry,bit)))
+            })));
+        if let Some(bits) = unknown_permissions(entry) {
+            detail = detail.child(note("acl-inherited-unknown", bits));
+        }
+        return detail.into_any_element();
     }
     let user = editor.target_user;
     let target_value = editor.target.read(cx).value().to_string();
@@ -1250,7 +1294,7 @@ fn rule_detail(
                     "Discard target edit",
                     Tone::Secondary,
                     move |this, window, cx| {
-                        discard_target(this, token, window, cx);
+                        discard_target(this, token, id, window, cx);
                         cx.notify();
                     },
                     cx,
@@ -1271,7 +1315,9 @@ fn rule_detail(
                             },
                             move |this, window, cx| {
                                 if let Some(editor) = active_editor(this, token) {
-                                    if editor.state.pending().is_some() {
+                                    if editor.state.pending().is_some()
+                                        || editor.rule().is_none_or(|(selected, _)| selected != id)
+                                    {
                                         return;
                                     }
                                     editor.target_user = mode;
@@ -1328,7 +1374,15 @@ fn rule_detail(
                         "Resolve account",
                         Tone::Secondary,
                         move |this, _, cx| {
-                            resolve(this, token, false, cx);
+                            resolve(
+                                this,
+                                token,
+                                LookupSelection {
+                                    member: false,
+                                    row: id,
+                                },
+                                cx,
+                            );
                             cx.notify();
                         },
                         cx,
@@ -1437,13 +1491,7 @@ fn rule_detail(
                         || *bit < permission::KICK
                 })
                 .map(|&(bit, label)| {
-                    let state = if entry.grant & bit != 0 {
-                        "allow"
-                    } else if entry.deny & bit != 0 {
-                        "deny"
-                    } else {
-                        "unset"
-                    };
+                    let state = permission_state(entry, bit);
                     styled_button(
                         SharedString::from(format!("acl-bit-{token}-{id}-{bit}")),
                         format!("{label}: {state}"),
@@ -1469,6 +1517,9 @@ fn rule_detail(
                 }),
         ),
     );
+    if let Some(bits) = unknown_permissions(entry) {
+        detail = detail.child(note("acl-unknown-bits", bits));
+    }
     detail
         .child(
             div()
@@ -1726,7 +1777,7 @@ fn groups(view: &ServerView, editor: &Editor, cx: &mut Context<Desktop>) -> AnyE
     let value = editor.member.read(cx).value().to_string();
     body=body.child(note("acl-resolved-member",selected_account(editor,&value,true).map(|id|format!("Resolved: {}",name(view,id))).unwrap_or_else(||"Resolve an offline or online registered account before adding it.".into())))
         .child(div().flex().flex_wrap().gap_2()
-            .child(styled_button(SharedString::from(format!("acl-resolve-member-{token}-{id}")),"Resolve member",Tone::Secondary,move|this,_,cx|{resolve(this,token,true,cx);cx.notify();},cx))
+            .child(styled_button(SharedString::from(format!("acl-resolve-member-{token}-{id}")),"Resolve member",Tone::Secondary,move|this,_,cx|{resolve(this,token,LookupSelection {member:true,row:id},cx);cx.notify();},cx))
             .children([(false,"Add member"),(true,"Exclude inherited member")].into_iter().map(|(exclude,label)| {
                 styled_button(SharedString::from(format!("acl-member-add-{token}-{id}-{exclude}")),label,Tone::Secondary,move|this,_,cx| {
                     let Some(origin)=origin(this,token) else{return;};let Some(index)=origin.live_index(this) else{return;};
