@@ -188,16 +188,61 @@ def float_wav(path, samples):
     path.write_bytes(b"RIFF"+struct.pack("<I",36+len(data))+b"WAVEfmt "+struct.pack("<I",16)+fmt+b"data"+struct.pack("<I",len(data))+data)
 
 
+def render_plots(inputs, output, profiles, bitrates):
+    for name in ["speech-like","music","transients","highband"]:
+        for bitrate in [rate for rate in bitrates if rate in [64000,128000]]:
+            source=np.fromfile(inputs/(name+".f32le"),dtype="<f4")
+            panels=[("Source (no normalization)",source)]
+            for profile in [p for p in PROFILES if p!="mumble" and p in profiles]:
+                delay=120 if profile.endswith("lowdelay") else 312
+                decoded=np.fromfile(inputs/f"{name}-{bitrate}-{profile}-rust.f32le",dtype="<f4")
+                panels.append((profile+" (Rust encoder)",decoded[delay:]))
+            if "mumble" in profiles:
+                decoded=np.fromfile(inputs/f"{name}-{bitrate}-mumble-libopus.f32le",dtype="<f4")
+                panels.append(("Mumble source policy (C encoder, s16/CBR; no capture preprocessing)",decoded[120:]))
+            fig,axes=plt.subplots(len(panels),1,figsize=(12,2.1*len(panels)),layout="constrained",sharex=True)
+            for axis,(label,pcm) in zip(axes,panels):
+                spectrum,_=spectrogram(pcm);image=axis.imshow(20*np.log10(np.maximum(spectrum.T,1e-7)),origin="lower",aspect="auto",extent=[0,len(pcm)/RATE,0,24],vmin=-100,vmax=0,cmap="magma")
+                axis.set_ylim(0,21);axis.set_ylabel("kHz");axis.set_title(label,loc="left",fontsize=10)
+            axes[-1].set_xlabel("seconds, aligned only by encoder-reported delay")
+            fig.colorbar(image,ax=axes,label="dBFS (identical scale)");fig.suptitle(f"TX {name}: {bitrate/1000:g} kbit/s; all packets decoded by independent libopus")
+            fig.savefig(output/f"{name}-{bitrate}-spectrogram.png",dpi=120);plt.close(fig)
+
+
+    required={"native-voip","native-audio","browser-voip","browser-audio","mumble"}
+    if {64000,128000}.issubset(bitrates) and required.issubset(profiles):
+        fig,axes=plt.subplots(6,2,figsize=(14,12),layout="constrained",sharex=True,sharey=True)
+        for column,(name,bitrate) in enumerate([("speech-like",64000),("music",128000)]):
+            panels=[("Source",np.fromfile(inputs/(name+".f32le"),dtype="<f4"))]
+            for profile in ["native-voip","native-audio","browser-voip","browser-audio"]:
+                data=np.fromfile(inputs/f"{name}-{bitrate}-{profile}-rust.f32le",dtype="<f4")[312:]
+                panels.append((profile+" (Rust)",data))
+            panels.append(("Mumble policy (C / CBR / s16)",np.fromfile(inputs/f"{name}-{bitrate}-mumble-libopus.f32le",dtype="<f4")[120:]))
+            for row,(label,pcm) in enumerate(panels):
+                spectrum,_=spectrogram(pcm);image=axes[row,column].imshow(20*np.log10(np.maximum(spectrum.T,1e-7)),origin="lower",aspect="auto",extent=[0,len(pcm)/RATE,0,24],vmin=-100,vmax=0,cmap="magma")
+                axes[row,column].set_ylim(0,21);axes[row,column].set_title(label,loc="left",fontsize=10)
+                if column==0:axes[row,column].set_ylabel("kHz")
+            axes[0,column].set_title(f"Source: {name}, {bitrate/1000:g} kbit/s",loc="left",fontsize=10)
+            axes[-1,column].set_xlabel("seconds (declared codec delay removed)")
+        fig.colorbar(image,ax=axes,label="dBFS; same scale, no gain normalization")
+        fig.suptitle("Synthetic TX codec comparison: all packets independently decoded by C libopus\nEncoder-only evidence; capture processing and perceptual equivalence are not established",fontsize=12)
+        fig.savefig(output/"summary.png",dpi=110);plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--probe", required=True, type=Path)
-    parser.add_argument("--opus-library", required=True, type=Path)
+    parser.add_argument("--probe", type=Path)
+    parser.add_argument("--opus-library", type=Path)
+    parser.add_argument("--replot", type=Path, help="read frozen PCM artifacts without re-encoding or altering their proof")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--bitrates", nargs="+", type=int, default=[24000,48000,64000,128000])
     parser.add_argument("--profiles", nargs="+", choices=PROFILES, default=PROFILES)
     args = parser.parse_args();args.output.mkdir(parents=True, exist_ok=True)
+    if args.replot:
+        render_plots(args.replot,args.output,args.profiles,args.bitrates);return
+    if not args.probe or not args.opus_library:parser.error("--probe and --opus-library are required for encoding")
     reference = CReference(args.opus_library)
-    results, plots = [], {}
+    results = []
     for name in ["speech-like","music","transients","highband"]:
         source = fixture(name);path=args.output/(name+".f32le");source.tofile(path);float_wav(args.output/(name+"-source.wav"),source)
         for bitrate in args.bitrates:
@@ -222,18 +267,8 @@ def main():
                             decoded.tofile(args.output/(label+"-"+engine+".f32le"))
                             if bitrate in [64000,128000] and engine=="rust":
                                 float_wav(args.output/(label+"-"+engine+".wav"),decoded)
-                                plots[(name,bitrate,profile)]=decoded[timing["lookahead_samples"]:]
         print(json.dumps({"fixture":name,"cases_so_far":len(results)}),flush=True)
-    for name in ["speech-like","music","transients","highband"]:
-        for bitrate in [rate for rate in args.bitrates if rate in [64000,128000]]:
-            source=fixture(name);profiles=[p for p in ["native-voip","native-audio","native-lowdelay","browser-voip","browser-audio","browser-lowdelay","mumble"] if p in args.profiles]
-            fig,axes=plt.subplots(len(profiles)+1,1,figsize=(12,2.1*(len(profiles)+1)),layout="constrained",sharex=True)
-            for axis,(label,pcm) in zip(axes,[("Source (no normalization)",source)]+[(p,plots[(name,bitrate,p)]) for p in profiles]):
-                spectrum,_=spectrogram(pcm);image=axis.imshow(20*np.log10(np.maximum(spectrum.T,1e-7)),origin="lower",aspect="auto",extent=[0,len(pcm)/RATE,0,24],vmin=-100,vmax=0,cmap="magma")
-                axis.set_ylim(0,21);axis.set_ylabel("kHz");axis.set_title(label,loc="left",fontsize=10)
-            axes[-1].set_xlabel("seconds, aligned only by encoder-reported delay")
-            fig.colorbar(image,ax=axes,label="dBFS (identical scale)");fig.suptitle(f"TX {name}: {bitrate/1000:g} kbit/s; Rust packets decoded by independent libopus")
-            fig.savefig(args.output/f"{name}-{bitrate}-spectrogram.png",dpi=120);plt.close(fig)
+    render_plots(args.output,args.output,args.profiles,args.bitrates)
     report={"completed":True,"reference_version":reference.version,"reference_library":str(args.opus_library),
             "reference_sha256":hashlib.sha256(args.opus_library.read_bytes()).hexdigest(),"source":"owned deterministic synthetic signals, seed0x4E555343; no speech corpus/hardware/network",
             "gain_fitted":False,"delay_fitted":False,"results":results,
