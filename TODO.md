@@ -820,7 +820,17 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       `VoicePlayout` already retains gain with each encoded packet and uses the
       preceding known gain for loss. Establish independent reordered/variable-gain
       native fixtures and define local volume-change semantics before aligning
-      the native path. This is a source-level finding, not a completed PCM proof.
+      the native path. Independent actual-Mixer/libopus PCM baseline now confirms
+      corruption: ordered4.63dB, reorder/FEC/PLC3.74dB, long-to-short loss−4.66/
+      −5.25dB and stale-control−.33dB, versus constant-gain323.78dB. The35dB
+      fixed-gain/unfitted-delay gate is unchanged. Preserve baseline evidence;
+      correction is active, not yet integrated/verified.
+- [ ] Define native live local gain/per-user mute behavior for already queued
+      audio. Current IPC carries a product sampled per forwarded packet; local
+      mute drops future packets upstream, but no per-user flush/live-gain worker
+      command exists. Typed gain fixes packet ownership, not immediate local
+      control. Review decoded/device queues and PLC tail before broader IPC work;
+      keep stream deafen/disconnect revocation and microphone consent separate.
 
 
 ### Optional local speech (requested 2026-11-11)

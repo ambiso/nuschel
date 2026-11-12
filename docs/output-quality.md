@@ -552,3 +552,26 @@ This does not establish the broader non-48 kHz SRC/final-clip ordering or full s
 Mumble filters before its device-output clip; Nuschl retains its existing 48 kHz
 mix clip before SRC and a separate post-filter device guard. Quantifying that
 staging under overload needs its own reference/fallback design and fixtures.
+
+## Native encoded-packet gain baseline (2026-11-12)
+
+At source `63b5c2de`, a device-free probe compiles the actual native Mixer and
+Instant adapter with the same reviewed decoder and uses a virtual receive clock.
+Independent libopus packet/FEC/PLC operations provide fixed-gain PCM at specified
+ticks; neither alignment nor gain is fitted. All source signals are synthetic.
+The constant-gain control agrees at 323.78 dB, while changing packet controls
+produce 4.63 dB (ordered), 3.74 dB (reorder/FEC/PLC), −4.66/−5.25 dB (120 ms then
+10/20 ms loss), and −0.33 dB when a late duplicate's unrelated gain is injected.
+The constant-gain 10–120 ms control remains 140.91 dB. The unchanged quality gate
+is 35 dB. This confirms actual mixed output corruption, not just a source
+suspicion. Preserve `~/.cache/nuschl-native-gain/baseline/` and its frozen probe.
+
+The IPC volume is currently one product: remote packet adjustment × local
+per-user gain × local server gain, sampled when the native client forwards a
+packet. Locally muted users are filtered upstream; no per-user worker flush or
+live gain command exists. Deafen/disconnect separately use EndStream/global
+state to revoke a stream. Correct packet gain ownership must not be described
+as instantaneous local mute/volume control: queued encoded/decoded/device audio
+needs its own explicit semantics and control lane. The following correction is
+limited to carrying each forwarded packet's already-sampled bounded gain through
+the native jitter queue, matching the browser's typed-payload precedent.
