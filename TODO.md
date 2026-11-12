@@ -758,6 +758,15 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       limits, zero native mix allocations, bounded persistent browser scratch;
       measured CPU/memory cost is documented in `docs/output-quality.md`.
       Full reference-Mumble multispeaker/loss/device parity remains open.
+- [ ] Audit native receive gain across encoded-packet reordering and FEC/PLC.
+      `Mixer::push` currently updates one `speaker.volume` on arrival, while the
+      jitter queue stores only Opus bytes; `Speaker::fill` freezes that latest
+      arrival's gain when decoding any queued packet or concealment. A later
+      packet's control can therefore affect earlier buffered audio. Browser
+      `VoicePlayout` already retains gain with each encoded packet and uses the
+      preceding known gain for loss. Establish independent reordered/variable-gain
+      native fixtures and define local volume-change semantics before aligning
+      the native path. This is a source-level finding, not a completed PCM proof.
 
 
 ### Optional local speech (requested 2026-11-11)
