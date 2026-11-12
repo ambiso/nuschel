@@ -157,7 +157,7 @@ impl Shared {
                     Input::Server {
                         server,
                         generation,
-                        event: ServerEvent::Welcome { source, document },
+                        event: nuschl_client::input::ServerEvent::Welcome { source, document },
                     }
                 }
                 Event::Certificate { sha256, changed } => Input::Certificate {
