@@ -48,7 +48,7 @@ try {
     await page.goto(link + '#/albums?library=0&list=newest');
     await pixel(page, [200, 80, 40, 255]);
     const before = await page.evaluate(() => ({
-      total: document.querySelectorAll('canvas').length,
+      total: document.querySelectorAll('.media-grid canvas').length,
       live: [...document.querySelectorAll('canvas')].filter(c => c.width > 0).length,
       bytes: [...document.querySelectorAll('canvas')].reduce((s,c) => s+c.width*c.height*4,0),
       overflow: document.documentElement.scrollWidth > innerWidth,
@@ -58,7 +58,7 @@ try {
     assert.ok(before.bytes <= 16*1024*1024);
     await page.screenshot({ path: `${output}/canvas-${width}.png` });
     await page.locator('#main-content').evaluate(node => { node.scrollTop = node.scrollHeight; });
-    await page.waitForFunction(() => document.querySelector('canvas').width === 0);
+    await page.waitForFunction(() => document.querySelector('.media-grid canvas').width === 0);
     await choose(page, 1);
     await pixel(page, [40, 80, 200, 255]);
     await clean(page, failures);
