@@ -409,7 +409,7 @@ def actions(args, root, shell, application, bot, murmur):
                 )
                 assert owner.focused, f"{label} lost its retained navigation focus"
                 assert inside(final.extents(), dialog.extents()), (
-                    f"last {label} row outside modal"
+                    f"last {label} row outside modal: {final.extents()} / {dialog.extents()}"
                 )
                 # Both endpoints are real pointer actions, not synthetic state writes.
                 shell.click(*point(final))
