@@ -994,7 +994,11 @@ The media worker uses per-speaker adaptive jitter buffers and Opus loss concealm
       compensating gain or change defaults without a targeted explanation.
 - [ ] Fix VAD becoming increasingly trigger-happy after a long period without
       speech, eventually transmitting background noise (user, 2026-11-12;
-      mechanism unconfirmed). Reproduce with long quiet periods and constant
+      mechanism unconfirmed; user says it may be a regression). Compare cached
+      older/current workers with identical frozen inputs, settings and time
+      windows; distinguish changed gate/packet decisions from gain/encoding
+      changes that make the same admitted noise more audible. Reproduce with
+      long quiet periods and constant
       controlled noise; trace raw/processed level, AGC gain, RNNoise speech
       probability, gate thresholds/hysteresis and transmitted packets over time.
       Compare AGC/NS/AEC controls and silence-to-speech recovery to distinguish
