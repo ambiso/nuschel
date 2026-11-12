@@ -37,6 +37,8 @@ const FINE_STEP: f32 = 0.01;
 pub enum Scale {
     /// A linear amplitude gain from 0 to [`MAX_GAIN`] on a cubic taper.
     Gain,
+    /// A linear amplitude from 0 to 1 on the same taper (sound effects).
+    Amplitude,
     /// A fraction 0..=1, linear (voice activity sensitivity).
     Fraction,
 }
@@ -46,7 +48,7 @@ impl Scale {
     pub fn max(self) -> f32 {
         match self {
             Scale::Gain => MAX_GAIN,
-            Scale::Fraction => 1.,
+            Scale::Amplitude | Scale::Fraction => 1.,
         }
     }
 
@@ -55,6 +57,7 @@ impl Scale {
         let value = if value.is_finite() { value.clamp(0., self.max()) } else { 0. };
         match self {
             Scale::Gain => (value / MAX_GAIN).cbrt(),
+            Scale::Amplitude => value.cbrt(),
             Scale::Fraction => value,
         }
     }
@@ -67,6 +70,7 @@ impl Scale {
         }
         match self {
             Scale::Gain => MAX_GAIN * position * position * position,
+            Scale::Amplitude => position * position * position,
             Scale::Fraction => position,
         }
     }
@@ -105,8 +109,10 @@ impl Scale {
     /// What a screen reader and the label say for `value`.
     pub fn text(self, value: f32) -> String {
         match self {
-            Scale::Gain if value <= 0. => "Muted".into(),
-            Scale::Gain => format!("{:.0} % ({:+.1} dB)", value * 100., 20. * value.log10()),
+            Scale::Gain | Scale::Amplitude if value <= 0. => "Muted".into(),
+            Scale::Gain | Scale::Amplitude => {
+                format!("{:.0} % ({:+.1} dB)", value * 100., 20. * value.log10())
+            }
             Scale::Fraction => format!("{:.0} %", value * 100.),
         }
     }
@@ -170,7 +176,8 @@ impl Setting {
     pub fn scale(&self) -> Scale {
         match self {
             Setting::UserVolume(_) | Setting::ServerVolume(_) => Scale::Gain,
-            Setting::Sensitivity | Setting::SoundVolume => Scale::Fraction,
+            Setting::SoundVolume => Scale::Amplitude,
+            Setting::Sensitivity => Scale::Fraction,
         }
     }
 
@@ -1052,6 +1059,45 @@ mod tests {
         for setting in &settings {
             assert!(previewed(&before, &ManagedSettings::default(), setting, 0.2).is_some());
         }
+    }
+
+    #[test]
+    fn sound_effects_use_the_volume_taper_within_their_own_range() {
+        let scale = Setting::SoundVolume.scale();
+        assert_eq!(scale, Scale::Amplitude);
+        assert_eq!(scale.max(), 1.);
+        assert_eq!((scale.value(0.), scale.value(1.)), (0., 1.));
+        assert_eq!((scale.position(0.), scale.position(1.)), (0., 1.));
+        // Settings stored 5 % steps (0.7 by default): each maps back to itself.
+        for step in 0..=20 {
+            let volume = step as f32 / 20.;
+            let back = scale.value(scale.position(volume));
+            assert!(
+                (back - volume).abs() <= volume * 1e-5 + 1e-7,
+                "{volume} → {back}"
+            );
+        }
+        for volume in [0.7_f32, 0.001, 1e-6, 0.333] {
+            let back = scale.value(scale.position(volume));
+            assert!((back - volume).abs() <= volume * 1e-5, "{volume} → {back}");
+        }
+        // The cubic taper, as for volumes: half the travel is −18 dB.
+        assert!((scale.value(0.5) - 0.125).abs() < 1e-7);
+        let mut previous = 0.;
+        for step in 1..=1000 {
+            let volume = scale.value(step as f32 / 1000.);
+            assert!(volume > previous && volume <= 1.);
+            previous = volume;
+        }
+        // No detent or stop inside its range; the ends are exact.
+        assert_eq!(scale.pointer_value(0.999), scale.value(0.999));
+        assert_eq!(scale.step(0.995, 10), 1.);
+        assert_eq!(scale.step(0.001, -11), 0.);
+        assert_eq!(Key::Max.apply(scale, 0.3, 0.7), 1.);
+        assert_eq!(Setting::SoundVolume.readout(0.7), "70 % (-3.1 dB)");
+        assert_eq!(Setting::SoundVolume.readout(0.), "Muted");
+        // Sensitivity alone stays linear.
+        assert_eq!(Setting::Sensitivity.scale(), Scale::Fraction);
     }
 
     #[test]
