@@ -300,7 +300,7 @@ fn muted_in_calls(this: &Desktop) -> bool {
 /// the processed input (the RMS, in dBFS, of what echo cancellation, noise
 /// suppression and gain leave, as the worker's `level_db`) against the gate's
 /// floor, the speech probability against the thresholds `sensitivity` gives,
-/// and whether the speech gate is open. Nothing is sent: these are not a
+/// and whether the voice gate is open. Nothing is sent: these are not a
 /// call's transmissions. "—" when there is no current reading.
 fn meter(
     preview: &PreviewView,
@@ -338,7 +338,7 @@ fn meter(
             &[(level_at(floor), TEXT)],
         ),
         format!(
-            "After echo cancellation, noise suppression and gain. Marked: {floor:.0} dBFS, below which the speech gate stays closed."
+            "After echo cancellation, noise suppression and gain. Marked: {floor:.0} dBFS, below which the voice gate stays closed."
         ),
         reading.map(|reading| {
             (
@@ -387,12 +387,12 @@ fn meter(
             TEXT_FAINT,
         ),
         (TransmitMode::Continuous, _) => (
-            "Continuous: no speech gate, everything you say is sent in calls".to_string(),
+            "Continuous: no voice gate, everything you say is sent in calls".to_string(),
             TEXT_FAINT,
         ),
         (_, None) => ("—".to_string(), TEXT_FAINT),
-        (_, Some(reading)) if reading.transmitting => ("Speech gate open".to_string(), SUCCESS),
-        (_, Some(_)) => ("Speech gate closed".to_string(), TEXT_FAINT),
+        (_, Some(reading)) if reading.transmitting => ("Voice gate open".to_string(), SUCCESS),
+        (_, Some(_)) => ("Voice gate closed".to_string(), TEXT_FAINT),
     };
     div()
         .id("microphone-activity")

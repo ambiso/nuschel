@@ -21,7 +21,7 @@ Checks, with a screenshot of each state (look at them):
    later; Delete resets it.
 3. The meter above Sensitivity while the test runs, fed by a private null
    microphone: silence, then a speech-like signal (dsp.rs' `speech_like`),
-   then silence again: "Speech gate closed", "Speech gate open", "Speech
+   then silence again: "Voice gate closed", "Voice gate open", "Speech
    gate closed". The processed input level and speech probability are progress bars
    with numeric values; the level bar marks the gate's floor (one constant
    in nuschl_core, which the worker's own unit test checks it uses).
@@ -342,32 +342,32 @@ class Scenes:
         # The first launch is deafened in its call: the test says it records anyway.
         self.wait_for(None, MUTED_NOTE, "the meter did not say the test records while deafened")
         probability = self.wait_for("progress bar", "Speech probability", "no speech probability bar")
-        eventually(lambda: self.find(None, "Speech gate closed"), "the gate state did not read Speech gate closed",
+        eventually(lambda: self.find(None, "Voice gate closed"), "the gate state did not read Voice gate closed",
                    timeout=10)
         time.sleep(1.5)
         assert re.search(r"Marked: -[0-9]+ dBFS", self.description(level)), self.description(level)
         silence = (self.value(level), self.description(level), self.value(probability), self.description(probability))
         self.shot("03-meter-silence")
         print(f"Microphone test, silence: level {silence[0]} ({silence[1]!r}); speech {silence[2]} "
-              f"({silence[3]!r}); Speech gate closed. Recording: {self.recording()}.", flush=True)
+              f"({silence[3]!r}); Voice gate closed. Recording: {self.recording()}.", flush=True)
         feeder = self.feed(8)
         try:
-            eventually(lambda: self.find(None, "Speech gate open"), "speech did not open the gate", timeout=10)
+            eventually(lambda: self.find(None, "Voice gate open"), "speech did not open the gate", timeout=10)
             time.sleep(0.6)
             speech = (self.value(level), self.description(level), self.value(probability),
                       self.description(probability))
             self.shot("04-meter-speech")
             print(f"Speech-like signal: level {speech[0]} ({speech[1]!r}); speech {speech[2]} ({speech[3]!r}); "
-                  "Speech gate open.", flush=True)
+                  "Voice gate open.", flush=True)
         finally:
             os.killpg(feeder.pid, signal.SIGTERM)
             feeder.wait(timeout=5)
-        eventually(lambda: self.find(None, "Speech gate closed"), "the gate did not close after the speech",
+        eventually(lambda: self.find(None, "Voice gate closed"), "the gate did not close after the speech",
                    timeout=10)
         time.sleep(1.0)
         after = (self.value(level), self.value(probability))
         self.shot("05-meter-silence-again")
-        print(f"Silence again: level {after[0]}, speech {after[1]}; Speech gate closed.", flush=True)
+        print(f"Silence again: level {after[0]}, speech {after[1]}; Voice gate closed.", flush=True)
 
         # A pointer drag: heard while held, one write after the release.
         slider = self.wait_for("slider", "Voice activity sensitivity", "no sensitivity slider")
@@ -532,7 +532,7 @@ class Scenes:
         time.sleep(1.0)
         self.wait_for("push button", "Test microphone", "no Test microphone button").press()
         self.wait_for("progress bar", "Processed input level", "the meter did not appear")
-        eventually(lambda: self.find(None, "Speech gate closed"), "no reading", timeout=10)
+        eventually(lambda: self.find(None, "Voice gate closed"), "no reading", timeout=10)
         time.sleep(1.0)
 
     def close_settings(self):
