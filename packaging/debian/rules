@@ -1,0 +1,31 @@
+#!/usr/bin/make -f
+# SPDX-License-Identifier: EUPL-1.2
+export CARGO_NET_OFFLINE = true
+export CARGO_BUILD_JOBS = 2
+export CARGO_TARGET_DIR = $(CURDIR)/debian/cargo-target
+export RUSTC = /usr/bin/rustc
+export CARGO = /usr/bin/cargo
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(CARGO) build --release --frozen -p nuschl -p nuschl-content-worker -p nuschl-crypto-worker -p nuschl-math-worker -p nuschl-media-worker -p nuschl-storage-worker -p nuschl-transfer-worker
+	$(CARGO) build --release --frozen -p nuschl-update-worker --no-default-features --features ed25519 --bin nuschl-update-verify-ed25519
+	$(CARGO) build --release --frozen -p nuschl-update-worker --no-default-features --features mldsa44 --bin nuschl-update-verify-mldsa44
+
+override_dh_auto_test:
+	$(CARGO) test --release --frozen -p nuschl-core -p nuschl-ipc -p nuschl-media-worker
+
+override_dh_auto_install:
+	install -d debian/nuschl/usr/lib/nuschl debian/nuschl/usr/bin debian/nuschl/usr/share/licenses/nuschl
+	for program in nuschl nuschl-content-worker nuschl-crypto-worker nuschl-math-worker nuschl-media-worker nuschl-storage-worker nuschl-transfer-worker nuschl-update-verify-ed25519 nuschl-update-verify-mldsa44; do install -m755 "$(CARGO_TARGET_DIR)/release/$$program" debian/nuschl/usr/lib/nuschl/; done
+	ln -s ../lib/nuschl/nuschl debian/nuschl/usr/bin/nuschl
+	cp -a debian/prepared-desktop/share/. debian/nuschl/usr/share/
+	cp -a debian/prepared-notices/. debian/nuschl/usr/share/licenses/nuschl/
+	install -m644 LICENSE debian/nuschl/usr/share/licenses/nuschl/EUPL-1.2
+	install -m644 crates/protocol/proto/LICENSE.mumble debian/nuschl/usr/share/licenses/nuschl/Mumble-BSD
+
+# No network fetching, rustup, signing tools or prebuilt client executables.
+override_dh_auto_clean:
+	rm -rf debian/cargo-target
