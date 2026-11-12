@@ -1220,6 +1220,13 @@ listed below. Plugin data remains the explicit gap.
 
 ### 6. Desktop UI for these features
 
+- [ ] Restore desktop rail/footer spacing (user, 2026-11-12): Add-a-server's
+      bottom edge currently touches the window, and Settings/mute/deafen have no
+      gaps. The rail now has matching top/bottom padding and the compact control
+      cluster an explicit gap; source is committed, private runtime proof pending.
+      Check positive bottom/control gutters and reachable unclipped controls at
+      small heights, narrow widths and real 100–200% zoom, preserving server-list
+      scrolling and outline gutters. Assigned to the web owner after send-refusal.
 - [ ] Full Mumble feature parity for ACLs and group membership (user, 2026-11-12).
       Provide complete ACL/group editors, including adding/removing/reordering
       rules, user and group targets, permission grant/deny, apply-here/apply-to-

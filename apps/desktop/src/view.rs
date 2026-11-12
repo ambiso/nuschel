@@ -397,7 +397,7 @@ fn server_rail(this: &Desktop, selected: Option<usize>, cx: &mut Context<Desktop
         .w(px(72.))
         .h_full()
         .flex_shrink_0()
-        .pt_3()
+        .py_3()
         .gap_2()
         .bg(color(RAIL))
         .flex()
@@ -1321,6 +1321,7 @@ fn user_panel(this: &Desktop, server: &ServerView, cx: &mut Context<Desktop>) ->
                 .flex_shrink_0()
                 .flex()
                 .items_center()
+                .gap_1()
                 .child(icon_button(
                     "open-settings",
                     "settings",
