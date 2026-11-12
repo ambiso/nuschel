@@ -543,6 +543,14 @@ Reported while testing (2026-11-10/11):
 
 Later (reported):
 
+- [ ] Add a visible chat-history scrollbar, matching the existing channel-list
+      affordance (user, 2026-11-12). Bind it to the retained virtualized timeline
+      scroll state; dragging, wheel and keyboard movement must preserve message
+      anchors, older/newer paging, unread position and jump-to-latest behavior.
+      Bound overflow/thumb geometry at narrow sizes and real zoom, with no full
+      history scans per frame. Verify native chat first and inspect browser chat
+      for the same missing affordance. Assigned to the UI owner immediately after
+      the in-flight voice-status regression/handoff; not yet implemented.
 - [ ] Polls in chat, like the requested Signal-style feature (user,
       2026-11-12). Provide creation, voting and readable results; persist poll
       definitions/votes on Nuschl servers and reconcile reconnects, concurrent
