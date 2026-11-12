@@ -60,6 +60,17 @@ checkpoints. A background filesystem watcher alone does not advance a session.
 
 Current integration checkpoint (2026-11-12):
 
+- **Windows media service pacing is integrated in `c6380f59`.** A Windows-only
+  4 ms ticker coalesces at most one wakeup, parks without devices and joins on
+  exit; thread-start failure retains the prior timeout fallback. The exact
+  merged native leaves reuse verified cached 92-test/9-ignored evidence, including
+  three ticker tests. All 324 reviewed media/dependency inputs match `83cc58cc`;
+  its 47-file Windows VM evidence manifest and actual worker hash verify.
+  Repeated A/B tests reduce median packet-timing error from about 4.45 to 1.2 ms
+  and p95 from about 13 to 4.5 ms. Capture/render glitches, roughly 3% packet
+  shortfall and longer gaps remain. This is prior exact-source VM evidence,
+  not a newly built merged Windows package or physical-device proof. Evidence:
+  `~/.cache/nuschl-next/windows-pacing-review/handoff.json`.
 - **Web control sizing and processing reports are integrated through
   `1aa71d69`.** Preserved `595d03c1` and `d3de0fa6` histories add consistent
   44 px connection/voice/profile hit targets and show the most recent browser
@@ -721,9 +732,13 @@ Later (reported):
       server; these observations do not establish incoming loss or its absence.
       Another game also lags on that machine, so a system-wide scheduling/driver
       issue is plausible; this is not a confirmed Nuschl regression. Read-only
-      source/simulation suggests timer granularity, callback priority and queue
-      recovery hypotheses; an owned Windows VM timing check is underway, with no
-      speculative DSP/buffer change allocated.
+      source/simulation led to real same-guest A/B evidence. The integrated
+      bounded ticker improves send pacing only. Verified-active reference
+      playback/capture and stock Mumble have zero measured glitches in this VM;
+      Mumble's control was not encoding/sending. Nuschl's callback threads remain
+      normal priority, whereas Mumble uses MMCSS Pro Audio. A minimal CPAL
+      scheduling/System32-loader mitigation lane is allocated separately, with
+      no buffer, DSP, VAD or Opus retuning authorized in that change.
       Bind the report to an exact build/device/output route.
       Compare Nuschl and stock Mumble using owned private servers and synthetic
       audio. Inspect WASAPI callback/buffer sizes, sample-rate conversion, bounded
@@ -731,6 +746,8 @@ Later (reported):
       reductions. Preserve the VAD fix, microphone consent and mute/deafen epochs;
       VM evidence must not be presented as physical-device proof. Record latency
       and discontinuities before/after any correction.
+      Current merged Windows artifact/runtime and physical-hardware results
+      remain open; stock Mumble used a 60 ms output buffer versus Nuschl's 22 ms.
 - [x] Show packet statistics in both directions in desktop user profiles
       (user, 2026-11-12; `f4073093`, integrated above). Already-parsed `from_server`
       now appears as "Packets to client"; missing counters say "Not reported".
@@ -793,6 +810,12 @@ Later (reported):
       after a wait error. Resolve that stale-PID risk through bounded common
       quarantine ownership before integration; do not silently leak unbounded
       SDK-created child handles or disable normal kill-on-drop protection.
+- [ ] Ensure cached crate2nix checks actually execute `harness = false`
+      diagnostics. The IPC exchange leaf currently compiles `exchange.rs` as
+      libtest and reports zero tests, so it does not prove crash/hang/garble/
+      linger recovery. A dedicated pinned-cache diagnostic check is allocated;
+      require real execution and a failing control. Keep explicit Windows VM
+      invocation of `confinement.exe` separate from Linux unit-test claims.
 - [x] Preserve browser selection/copy blank lines between Markdown blocks.
       Geometry is correct, but empty spacer elements lose those newlines in
       DOM selection. A scoped fix must preserve exact selected newlines and
@@ -2782,6 +2805,15 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
       grants and limits inside the child. Portal/proxy loss is not child-exit
       proof; quarantine rather than release credit or fall back to `--host`.
       Common supervisor migration must coordinate crypto idle/media retirement.
+      Pinned source review corrects the draft: portal >=3, trusted helpers under
+      `/app/libexec/nuschl`, setup grants bind the canonical host path, and
+      read-only file authority needs a read-only mount. An inherited O_RDONLY
+      file FD can be reopened writable through `/proc/self/fd`; do not pass it
+      as raw data FD 3. Sound permission can expose ALSA devices to media only.
+      WATCH_BUS sends SIGINT and does not guarantee whole-tree exit or add
+      `--die-with-parent`; actual exit/tree, FD/path, owner-loss and cancellation
+      canaries remain gates. Source/counterexample report:
+      `~/.cache/nuschl-flatpak/portal-research/W1-W10.md`.
 - [ ] Prepare Ubuntu PPA publication and a separately signed Debian APT
       repository (user, 2026-11-12). Nix should build `.deb`, source-package and
       repository tooling/artifacts; Launchpad itself builds source uploads,
@@ -3104,6 +3136,15 @@ Security review of the server plan and first code: docs/reviews/2026-11-11-serve
           image sending/viewing and combined integration remain open. Preserve
           original authenticated source/mode going forward: images already
           replaced with `[image]` in old browser history cannot be reconstructed.
+          Independent frozen-source review found three recovery/accounting gaps:
+          expired work can leave Preparing forever; stale-handle pruning can
+          return plain-preview credit while old inactive timelines retain the
+          derivative; evicted previews advertise reopening but loaded timelines
+          do not reload. Fix bounded receipt-bound failures/retry and retain
+          source format beside original source, including unsaved rows, without
+          automatic render loops or stale-job rebinding. Notification previews
+          and mentions also need an exact rendered-receipt completion hook;
+          `[Preparing message…]` is not the received message's preview.
     - [ ] Close the source-audited parity gaps before claiming desktop parity:
           export real SDK unread counts (current badge/jump fixtures inject a
           field absent from real snapshots); reconnect/backoff and saved-server
