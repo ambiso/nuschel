@@ -1,17 +1,15 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! A queue and its playback. Each player encodes once and sends the same Opus
 //! packets to every channel attached to it; with nobody attached it waits.
-#[cfg(test)]
-use crate::decode::RATE;
 use crate::{
     decode::{self, CHANNELS, Decoding, FRAME},
     subsonic::{Library, LibraryIdentity, Track},
 };
-#[cfg(test)]
-use opus_pure::{Application, OpusEncoder, RateControl};
+use nuschl_ipc::musicbot::{Client, Role};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, VecDeque},
+    path::PathBuf,
     sync::{Arc, Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -21,9 +19,6 @@ use tokio::{
 };
 
 const TICK: Duration = Duration::from_millis(20);
-/// Leave 32 bytes for Mumble framing within its 1 KiB voice packet limit.
-#[cfg(test)]
-const MUMBLE_OPUS_PACKET_BYTES: usize = 992;
 /// Mumble's per-packet overhead (IP, UDP, encryption, voice header), rounded
 /// up, at 50 packets per second.
 const OVERHEAD_BPS: u32 = 64 * 8 * 50;
@@ -587,8 +582,13 @@ impl Player {
     }
 
     /// Plays the queue for as long as the program runs.
-    pub async fn run(self: Arc<Self>, libraries: Arc<Vec<Library>>, configured_bitrate: u32) {
-        let mut encoder = crate::codec_host::Client::new(crate::codec::Role::Encode);
+    pub async fn run(
+        self: Arc<Self>,
+        libraries: Arc<Vec<Library>>,
+        configured_bitrate: u32,
+        codec_worker: PathBuf,
+    ) {
+        let mut encoder = Client::new(Role::Encode, codec_worker.clone());
         // At most one raw frame survives an asynchronous encode. A pause or
         // temporarily absent listener cannot consume it without advancing time.
         let mut held: Option<Vec<f32>> = None;
@@ -650,8 +650,9 @@ impl Player {
                         (playing.entry.track.clone(), start)
                     })
                 };
-                decoding =
-                    request.map(|(track, start)| decode::start(libraries.clone(), track, start));
+                decoding = request.map(|(track, start)| {
+                    decode::start(libraries.clone(), codec_worker.clone(), track, start)
+                });
                 underrun = 0;
                 deadline = None;
             }
@@ -780,7 +781,7 @@ impl Player {
 
     /// A frame of silence that closes the transmission, so clients stop
     /// showing the bot as talking.
-    async fn end(&self, encoder: &mut crate::codec_host::Client, bitrate: u32) {
+    async fn end(&self, encoder: &mut Client, bitrate: u32) {
         if let Ok(opus) = encoder.encode(vec![0.; FRAME * CHANNELS], bitrate).await {
             let _ = self.packets.send(Arc::new(Packet { opus, end: true }));
         }
@@ -1355,61 +1356,5 @@ mod tests {
         }));
         tokio::time::advance(ducking.hold).await;
         assert!(!player.ducked(&ducking));
-    }
-
-    #[test]
-    fn high_bitrate_transients_fit_mumble_packets() {
-        use nuschl_protocol::voice::{PROTOBUF_VERSION, VoicePacket, encode_voice};
-        let mut encoder = OpusEncoder::new(RATE as i32, CHANNELS, Application::Audio).unwrap();
-        encoder.bitrate_bps = 320_000;
-        encoder.rate_control = RateControl::ConstrainedVbr;
-        let mut decoder = opus_pure::OpusDecoder::new(RATE as i32, CHANNELS).unwrap();
-        let mut input = [0f32; FRAME * CHANNELS];
-        let mut output = [0u8; MUMBLE_OPUS_PACKET_BYTES];
-        let mut decoded = [0f32; FRAME * CHANNELS];
-        let mut random = 0x2545_f491_u32;
-        for frame in 0..600 {
-            for sample in 0..FRAME {
-                let t = (frame * FRAME + sample) as f32 / RATE as f32;
-                random ^= random << 13;
-                random ^= random >> 17;
-                random ^= random << 5;
-                let noise = random as f32 / u32::MAX as f32 - 0.5;
-                let attack = if frame % 17 < 3 { 0.65 } else { 0.02 };
-                let envelope = if frame % 31 < 12 { 0.75 } else { 0.12 };
-                let mut left = noise * attack;
-                let mut right = noise * attack * 0.8;
-                for partial in 1..=8 {
-                    let frequency = (110.0 + (frame / 31 % 4) as f32 * 55.0) * partial as f32;
-                    left += (t * frequency * std::f32::consts::TAU).sin() * envelope
-                        / partial as f32
-                        * 0.18;
-                    right += (t * frequency * 1.013 * std::f32::consts::TAU).sin() * envelope
-                        / partial as f32
-                        * 0.18;
-                }
-                input[sample * 2] = left;
-                input[sample * 2 + 1] = right;
-            }
-            let length = encoder.encode(&input, FRAME, &mut output).unwrap();
-            let packet = VoicePacket {
-                sender: 0,
-                sequence: u64::MAX - 1200 + frame as u64 * 2,
-                opus: output[..length].to_vec(),
-                end: frame == 599,
-                volume: 1.0,
-            };
-            for version in [0, PROTOBUF_VERSION] {
-                assert!(
-                    encode_voice(version, 31, &packet).is_ok(),
-                    "frame {frame}: {length} Opus bytes cannot be sent"
-                );
-            }
-            assert_eq!(
-                decoder.decode(&packet.opus, FRAME, &mut decoded).unwrap(),
-                FRAME,
-                "packet duration changed at frame {frame}"
-            );
-        }
     }
 }

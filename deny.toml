@@ -90,21 +90,25 @@ deny = [
   { name = "opus-pure", wrappers = [
     "nuschl-media-worker",
     "nuschl-audio-wasm",
-    "nuschl-musicbot",
-  ], reason = "Keep codec processing in the native media worker, separate browser audio worker WASM memory, and credential-free musicbot child roles (SECURITY.md)" },
+    "nuschl-musicbot-codec-worker",
+  ], reason = "Keep codec processing in the native media worker, separate browser audio worker WASM memory, and the credential-free music bot codec worker executable" },
   { name = "symphonia", wrappers = [
-    "nuschl-musicbot",
-  ], reason = "Only the confined musicbot decode child handles music formats; clients and the server never decode files" },
+    "nuschl-musicbot-codec-worker",
+  ], reason = "Only the confined music bot codec worker executable decodes music formats; the bot, clients and the server never decode files" },
   { name = "rubato", wrappers = [
-    "nuschl-musicbot",
-  ], reason = "Resampling music files belongs to the confined musicbot decode child" },
+    "nuschl-musicbot-codec-worker",
+  ], reason = "Resampling music files belongs to the confined music bot codec worker executable" },
+  { name = "audioadapter-buffers", wrappers = [
+    "nuschl-musicbot-codec-worker",
+    "rubato",
+  ], reason = "Resampler buffer adapters with unsafe internals; only the music bot codec worker and rubato use them" },
   { name = "sonora", wrappers = [
     "nuschl-media-worker",
   ], reason = "DSP runs outside the UI and network session" },
   { name = "nnnoiseless", wrappers = [
     "nuschl-media-worker",
-    "nuschl-musicbot",
-  ], reason = "Keep speech processing on the media execution path, and in the credential-free musicbot duck child" },
+    "nuschl-musicbot-codec-worker",
+  ], reason = "Keep speech processing on the media execution path, and in the credential-free music bot codec worker executable" },
   { name = "sqlx", wrappers = [
     "nuschl-storage",
   ], reason = "SQLx drivers, SQLite FFI, and database credentials are confined to storage" },

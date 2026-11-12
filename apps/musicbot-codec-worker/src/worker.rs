@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: EUPL-1.2
-//! Codec role entry points. Called before configuration or credentials load,
-//! after the parent has confined the process and given it only its IPC pipes.
-//! No role opens files, URLs, devices or a network connection.
-use crate::codec::{self, CHANNELS, FRAME, RATE, Request, Response, Role};
-use nuschl_ipc::Envelope;
+//! Codec role entry points. The credential-bearing bot starts this separate
+//! executable confined, with only its IPC pipes; it links no credentials,
+//! session, network or configuration code. No role opens files, URLs, devices
+//! or a network connection.
+use nuschl_ipc::{
+    Envelope,
+    musicbot::{self as codec, CHANNELS, FRAME, RATE, Request, Response, Role},
+};
 use opus_pure::{Application, OpusEncoder, RateControl};
 use std::io::{self, Read, Write};
 
@@ -61,7 +64,7 @@ fn decode(mut input: impl Read + Send + 'static, output: &mut impl Write) -> Res
         return reply(output, 1, error("audio format hint exceeds its budget"));
     }
     let mut failure = None;
-    let result = crate::decode_worker::decode_stream(
+    let result = crate::decode::decode_stream(
         input,
         mime.as_deref(),
         extension.as_deref(),
@@ -377,5 +380,62 @@ mod tests {
             unreachable!()
         };
         assert_eq!(message.len(), codec::MAX_ERROR_BYTES);
+    }
+
+    /// Leaves 32 bytes for Mumble framing within its 1 KiB voice packet limit.
+    #[test]
+    fn high_bitrate_transients_fit_mumble_packets() {
+        use nuschl_protocol::voice::{PROTOBUF_VERSION, VoicePacket, encode_voice};
+        let mut encoder = OpusEncoder::new(RATE as i32, CHANNELS, Application::Audio).unwrap();
+        encoder.bitrate_bps = 320_000;
+        encoder.rate_control = RateControl::ConstrainedVbr;
+        let mut decoder = opus_pure::OpusDecoder::new(RATE as i32, CHANNELS).unwrap();
+        let mut input = [0f32; FRAME * CHANNELS];
+        let mut output = [0u8; codec::MAX_OPUS_BYTES];
+        let mut decoded = [0f32; FRAME * CHANNELS];
+        let mut random = 0x2545_f491_u32;
+        for frame in 0..600 {
+            for sample in 0..FRAME {
+                let t = (frame * FRAME + sample) as f32 / RATE as f32;
+                random ^= random << 13;
+                random ^= random >> 17;
+                random ^= random << 5;
+                let noise = random as f32 / u32::MAX as f32 - 0.5;
+                let attack = if frame % 17 < 3 { 0.65 } else { 0.02 };
+                let envelope = if frame % 31 < 12 { 0.75 } else { 0.12 };
+                let mut left = noise * attack;
+                let mut right = noise * attack * 0.8;
+                for partial in 1..=8 {
+                    let frequency = (110.0 + (frame / 31 % 4) as f32 * 55.0) * partial as f32;
+                    left += (t * frequency * std::f32::consts::TAU).sin() * envelope
+                        / partial as f32
+                        * 0.18;
+                    right += (t * frequency * 1.013 * std::f32::consts::TAU).sin() * envelope
+                        / partial as f32
+                        * 0.18;
+                }
+                input[sample * 2] = left;
+                input[sample * 2 + 1] = right;
+            }
+            let length = encoder.encode(&input, FRAME, &mut output).unwrap();
+            let packet = VoicePacket {
+                sender: 0,
+                sequence: u64::MAX - 1200 + frame as u64 * 2,
+                opus: output[..length].to_vec(),
+                end: frame == 599,
+                volume: 1.0,
+            };
+            for version in [0, PROTOBUF_VERSION] {
+                assert!(
+                    encode_voice(version, 31, &packet).is_ok(),
+                    "frame {frame}: {length} Opus bytes cannot be sent"
+                );
+            }
+            assert_eq!(
+                decoder.decode(&packet.opus, FRAME, &mut decoded).unwrap(),
+                FRAME,
+                "packet duration changed at frame {frame}"
+            );
+        }
     }
 }

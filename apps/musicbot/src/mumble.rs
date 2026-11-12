@@ -5,7 +5,6 @@ use crate::{
     Bot,
     player::{Changes, Subscription, bitrate_for_bandwidth},
     tokens::Owner,
-    vad,
 };
 use nuschl_core::audio::SILENT_OPUS;
 use nuschl_legacy_html::escape_html;
@@ -77,7 +76,10 @@ impl Connection {
 /// Keeps the connection up, reconnecting with growing pauses.
 pub async fn run(bot: Arc<Bot>, index: usize) {
     let mut pause = Duration::from_secs(1);
-    let mut detector = crate::codec_host::Client::new(crate::codec::Role::Duck);
+    let mut detector = nuschl_ipc::musicbot::Client::new(
+        nuschl_ipc::musicbot::Role::Duck,
+        bot.codec_worker.clone(),
+    );
     loop {
         let started = Instant::now();
         let error = match session(&bot, index, &mut detector).await {
@@ -215,7 +217,7 @@ impl Drop for AbortSession {
 async fn session(
     bot: &Arc<Bot>,
     index: usize,
-    detector: &mut crate::codec_host::Client,
+    detector: &mut nuschl_ipc::musicbot::Client,
 ) -> Result<(), String> {
     let config = &bot.config.channels[index];
     let connection = &bot.connections[index];
@@ -303,7 +305,7 @@ async fn session(
                         .filter(|(_, ducking)| ducking.enabled);
                     match ducking {
                         Some((player, ducking)) => {
-                            if detector.hear(packet.sender, packet.opus.clone(), vad::threshold(ducking.sensitivity)).await? {
+                            if detector.hear(packet.sender, packet.opus.clone(), nuschl_ipc::musicbot::speech_threshold(ducking.sensitivity)).await? {
                                 bot.players[player].heard_speech();
                             }
                         }

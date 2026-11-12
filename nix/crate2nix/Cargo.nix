@@ -263,6 +263,16 @@ rec {
       # File a bug if you depend on any for non-debug work!
       debug = internal.debugCrate { inherit packageId; };
     };
+    "nuschl-musicbot-codec-worker" = rec {
+      packageId = "nuschl-musicbot-codec-worker";
+      build = internal.buildRustCrateWithFeatures {
+        packageId = "nuschl-musicbot-codec-worker";
+      };
+
+      # Debug support which might change between releases.
+      # File a bug if you depend on any for non-debug work!
+      debug = internal.debugCrate { inherit packageId; };
+    };
     "nuschl-protocol" = rec {
       packageId = "nuschl-protocol";
       build = internal.buildRustCrateWithFeatures {
@@ -23875,7 +23885,7 @@ rec {
           {
             name = "tokio";
             packageId = "tokio";
-            features = [ "io-util" "macros" "process" "time" "rt" ];
+            features = [ "io-util" "macros" "process" "time" "rt" "sync" ];
           }
           {
             name = "win32job";
@@ -24198,10 +24208,6 @@ rec {
         src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/musicbot; };
         dependencies = [
           {
-            name = "audioadapter-buffers";
-            packageId = "audioadapter-buffers";
-          }
-          {
             name = "axum";
             packageId = "axum";
             usesDefaultFeatures = false;
@@ -24221,11 +24227,6 @@ rec {
           {
             name = "md-5";
             packageId = "md-5 0.11.0";
-          }
-          {
-            name = "nnnoiseless";
-            packageId = "nnnoiseless";
-            usesDefaultFeatures = false;
           }
           {
             name = "nuschl-core";
@@ -24248,14 +24249,6 @@ rec {
             packageId = "nuschl-session";
           }
           {
-            name = "opus-pure";
-            packageId = "opus-pure";
-          }
-          {
-            name = "rubato";
-            packageId = "rubato";
-          }
-          {
             name = "serde";
             packageId = "serde";
             features = [ "derive" ];
@@ -24263,12 +24256,6 @@ rec {
           {
             name = "serde_json";
             packageId = "serde_json";
-          }
-          {
-            name = "symphonia";
-            packageId = "symphonia";
-            usesDefaultFeatures = false;
-            features = [ "aac" "alac" "flac" "isomp4" "mp3" "ogg" "pcm" "vorbis" "wav" ];
           }
           {
             name = "thiserror";
@@ -24315,6 +24302,64 @@ rec {
             name = "tokio";
             packageId = "tokio";
             features = [ "test-util" ];
+          }
+        ];
+
+      };
+      "nuschl-musicbot-codec-worker" = rec {
+        crateName = "nuschl-musicbot-codec-worker";
+        version = "0.1.0";
+        edition = "2024";
+        crateBin = [
+          {
+            name = "nuschl-musicbot-codec-worker";
+            path = "src/main.rs";
+            requiredFeatures = [ ];
+          }
+        ];
+        src = lib.cleanSourceWith { filter = sourceFilter;  src = ../../apps/musicbot-codec-worker; };
+        dependencies = [
+          {
+            name = "audioadapter-buffers";
+            packageId = "audioadapter-buffers";
+          }
+          {
+            name = "nnnoiseless";
+            packageId = "nnnoiseless";
+            usesDefaultFeatures = false;
+          }
+          {
+            name = "nuschl-ipc";
+            packageId = "nuschl-ipc";
+          }
+          {
+            name = "opus-pure";
+            packageId = "opus-pure";
+          }
+          {
+            name = "rubato";
+            packageId = "rubato";
+          }
+          {
+            name = "symphonia";
+            packageId = "symphonia";
+            usesDefaultFeatures = false;
+            features = [ "aac" "alac" "flac" "isomp4" "mp3" "ogg" "pcm" "vorbis" "wav" ];
+          }
+        ];
+        devDependencies = [
+          {
+            name = "nuschl-core";
+            packageId = "nuschl-core";
+          }
+          {
+            name = "nuschl-protocol";
+            packageId = "nuschl-protocol";
+          }
+          {
+            name = "tokio";
+            packageId = "tokio";
+            features = [ "macros" "rt" "sync" "time" ];
           }
         ];
 

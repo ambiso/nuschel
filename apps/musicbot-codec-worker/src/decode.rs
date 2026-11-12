@@ -27,7 +27,7 @@ use symphonia::core::{
     packet::Packet,
 };
 
-pub use crate::codec::{CHANNELS, FRAME, RATE};
+pub use nuschl_ipc::musicbot::{CHANNELS, FRAME, RATE};
 /// MP4 needs a seekable source, so it is downloaded first, up to this size.
 const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
 /// The longest Opus packet, 120 ms, per channel.

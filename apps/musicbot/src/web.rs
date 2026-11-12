@@ -1123,6 +1123,7 @@ mod tests {
             config,
             state_directory: directory.path().to_owned(),
             web_assets: None,
+            codec_worker: std::path::PathBuf::from("/nonexistent/nuschl-musicbot-codec-worker"),
             libraries: Arc::new(libraries),
             players: Vec::new(),
             connections: Vec::new(),

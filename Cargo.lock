@@ -7345,22 +7345,17 @@ dependencies = [
 name = "nuschl-musicbot"
 version = "0.1.0"
 dependencies = [
- "audioadapter-buffers",
  "axum",
  "clap",
  "futures-util",
  "md-5 0.11.0",
- "nnnoiseless",
  "nuschl-core",
  "nuschl-ipc",
  "nuschl-legacy-html",
  "nuschl-protocol",
  "nuschl-session",
- "opus-pure",
- "rubato",
  "serde",
  "serde_json",
- "symphonia",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -7369,6 +7364,21 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "uuid",
+]
+
+[[package]]
+name = "nuschl-musicbot-codec-worker"
+version = "0.1.0"
+dependencies = [
+ "audioadapter-buffers",
+ "nnnoiseless",
+ "nuschl-core",
+ "nuschl-ipc",
+ "nuschl-protocol",
+ "opus-pure",
+ "rubato",
+ "symphonia",
+ "tokio",
 ]
 
 [[package]]

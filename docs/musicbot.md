@@ -134,10 +134,15 @@ Credential availability and correctness, server reachability, certificates, chan
 existence and permissions still depend on the running deployment.
 
 
-For a source build, run `direnv exec . just musicbot-web`, then:
+For a source build, run `direnv exec . just musicbot-web`. The bot plays only
+with its codec worker in place beside it, so lay out a prefix as the package does:
 
 ```sh
-direnv exec . cargo run -p nuschl-musicbot -- \
+direnv exec . cargo build -p nuschl-musicbot -p nuschl-musicbot-codec-worker
+mkdir -p prefix/bin prefix/libexec/nuschl-musicbot
+cp target/debug/nuschl-musicbot prefix/bin/
+cp target/debug/nuschl-musicbot-codec-worker prefix/libexec/nuschl-musicbot/
+prefix/bin/nuschl-musicbot \
   --config musicbot.toml --state-directory DIR --web-assets apps/musicbot/web/dist
 ```
 
@@ -159,8 +164,12 @@ bot reconnects with growing pauses up to a minute.
 
 The parent owns Mumble TLS, Subsonic credentials, bearer links and queue metadata.
 It transports opaque library bytes; it does not call a decoder, resampler, voice
-classifier or encoder. Before configuration or credentials load, the same trusted
-executable can enter one fixed child role through versioned, size-capped IPC:
+classifier or encoder, and does not link one: the codec crates belong to the separate
+`nuschl-musicbot-codec-worker`, which `cargo-deny` alone allows to depend on them.
+The bot starts that worker only from its fixed place beside itself
+(`<prefix>/libexec/nuschl-musicbot/`; a missing worker fails the operation) as
+`--codec-worker <role>`, in one fixed role, through versioned, size-capped IPC
+(`nuschl_ipc::musicbot`):
 
 - Decode: one child for the current track of each active player. The parent streams
   bounded opaque chunks; the child returns exactly 20 ms of finite stereo PCM per
@@ -293,10 +302,13 @@ skipped and failed history, pagination, and restart recovery with libraries
 reordered or removed.
 
 ```sh
-cargo build -p nuschl-cli -p nuschl-musicbot
+cargo build -p nuschl-cli -p nuschl-musicbot -p nuschl-musicbot-codec-worker
+mkdir -p prefix/bin prefix/libexec/nuschl-musicbot
+cp target/debug/nuschl-cli target/debug/nuschl-musicbot prefix/bin/
+cp target/debug/nuschl-musicbot-codec-worker prefix/libexec/nuschl-musicbot/
 direnv exec . just musicbot-web
 python3 tests/with_local_murmur.py "$(nix build --inputs-from . nixpkgs#murmur --print-out-paths)/bin/mumble-server" \
-  tests/musicbot.py target/debug PORT --web-assets apps/musicbot/web/dist \
+  tests/musicbot.py prefix/bin PORT --web-assets apps/musicbot/web/dist \
   --espeak "$(nix build --inputs-from . nixpkgs#espeak-ng --print-out-paths)/bin/espeak-ng" \
   --opus-library "$(nix build --inputs-from . nixpkgs#libopus --print-out-paths)/lib/libopus.so"
 ```

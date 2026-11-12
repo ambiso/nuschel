@@ -76,6 +76,7 @@ username = "DJ2"
         connections,
         state_directory: directory.into(),
         web_assets: None,
+        codec_worker: std::path::PathBuf::from("/nonexistent/nuschl-musicbot-codec-worker"),
         tokens: Tokens::load(directory.join("tokens.json")).unwrap(),
         persistence: Mutex::new(()),
     }

@@ -1,18 +1,13 @@
 // SPDX-License-Identifier: EUPL-1.2
 //! A Mumble music bot: plays songs from Subsonic servers in one or more
 //! channels; people control the queues on a web page they get a link to.
-mod codec;
-mod codec_host;
-mod codec_worker;
 mod config;
 mod decode;
-mod decode_worker;
 mod mumble;
 mod persist;
 mod player;
 mod subsonic;
 mod tokens;
-mod vad;
 mod web;
 
 use clap::Parser;
@@ -53,6 +48,8 @@ pub struct Bot {
     pub config: Config,
     pub state_directory: PathBuf,
     pub web_assets: Option<PathBuf>,
+    /// The fixed codec worker beside this executable (`nuschl_ipc::musicbot::worker_path`).
+    pub codec_worker: PathBuf,
     pub libraries: Arc<Vec<Library>>,
     /// One per configured channel, in the same order; a channel can play another's.
     pub players: Vec<Arc<Player>>,
@@ -65,24 +62,6 @@ pub struct Bot {
 }
 
 fn main() -> ExitCode {
-    let arguments: Vec<_> = std::env::args_os().collect();
-    if arguments
-        .get(1)
-        .is_some_and(|argument| argument == "--codec-worker")
-    {
-        let role = (arguments.len() == 3)
-            .then(|| arguments[2].to_str().and_then(codec::Role::parse))
-            .flatten();
-        let Some(role) = role else {
-            return ExitCode::FAILURE;
-        };
-        // No logger, Tokio runtime, configuration, credentials, profile or
-        // listener is initialized in a restricted child role.
-        return match codec_worker::run(role) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::FAILURE,
-        };
-    }
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -129,6 +108,11 @@ async fn run(arguments: Arguments) -> Result<(), String> {
     let state_directory = arguments
         .state_directory
         .ok_or("--state-directory is required")?;
+    // Codecs run only in this separate, confined executable; nothing selects another.
+    let codec_worker = std::env::current_exe()
+        .ok()
+        .and_then(|executable| nuschl_ipc::musicbot::worker_path(&executable))
+        .ok_or("cannot locate the music codec worker")?;
     prepare_state_directory(&state_directory)
         .map_err(|error| format!("{}: {error}", state_directory.display()))?;
     let libraries = config
@@ -167,6 +151,7 @@ async fn run(arguments: Arguments) -> Result<(), String> {
     let bot = Arc::new(Bot {
         state_directory,
         web_assets: arguments.web_assets,
+        codec_worker,
         libraries: Arc::new(libraries),
         players,
         connections,
@@ -189,11 +174,11 @@ async fn run(arguments: Arguments) -> Result<(), String> {
         });
     }
     for player in &bot.players {
-        tokio::spawn(
-            player
-                .clone()
-                .run(bot.libraries.clone(), bot.config.audio.bitrate),
-        );
+        tokio::spawn(player.clone().run(
+            bot.libraries.clone(),
+            bot.config.audio.bitrate,
+            bot.codec_worker.clone(),
+        ));
     }
     for index in 0..bot.connections.len() {
         tokio::spawn(mumble::run(bot.clone(), index));

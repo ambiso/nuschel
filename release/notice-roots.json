@@ -22,7 +22,7 @@
     ],
     "standalone": {
       "musicbot": {
-        "packages": ["nuschl-musicbot", "nuschl-content-worker"],
+        "packages": ["nuschl-musicbot", "nuschl-musicbot-codec-worker", "nuschl-content-worker"],
         "features": []
       },
       "rtc-probe": {
@@ -56,7 +56,7 @@
     ],
     "standalone": {
       "musicbot": {
-        "packages": ["nuschl-musicbot", "nuschl-content-worker"],
+        "packages": ["nuschl-musicbot", "nuschl-musicbot-codec-worker", "nuschl-content-worker"],
         "features": []
       },
       "rtc-probe": {
@@ -102,7 +102,7 @@
     ],
     "standalone": {
       "musicbot": {
-        "packages": ["nuschl-musicbot", "nuschl-content-worker"],
+        "packages": ["nuschl-musicbot", "nuschl-musicbot-codec-worker", "nuschl-content-worker"],
         "features": []
       },
       "rtc-probe": {
@@ -131,7 +131,7 @@
     ],
     "standalone": {
       "musicbot": {
-        "packages": ["nuschl-musicbot", "nuschl-content-worker"],
+        "packages": ["nuschl-musicbot", "nuschl-musicbot-codec-worker", "nuschl-content-worker"],
         "features": []
       },
       "rtc-probe": {

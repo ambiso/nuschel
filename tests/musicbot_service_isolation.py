@@ -6,6 +6,7 @@ No arbitrary process target or secret reads: inspect the named fixture service,
 its child role metadata and absence of the public fixture credential path.
 """
 import json
+import os
 import sys
 from pathlib import Path
 import subprocess
@@ -41,6 +42,10 @@ print(json.dumps({'uid':os.geteuid(),'host_controls_unwritable':True,'effective_
     assert parent_checks["uid"] == uid
     parent_network = (Path("/proc") / str(parent) / "ns/net").readlink()
     parent_pid_namespace = (Path("/proc") / str(parent) / "ns/pid").readlink()
+    # Codecs run only in the separate worker executable, never in the bot's own.
+    bot = (Path("/proc") / str(parent) / "exe").resolve()
+    worker = os.stat(bot.parent.parent / "libexec/nuschl-musicbot/nuschl-musicbot-codec-worker")
+    bot_identity = (os.stat(bot).st_dev, os.stat(bot).st_ino)
     children = []
     for process in Path("/proc").iterdir():
         if not process.name.isdecimal():
@@ -50,6 +55,9 @@ print(json.dumps({'uid':os.geteuid(),'host_controls_unwritable':True,'effective_
             if command[:2] != [b"/worker", b"--codec-worker"]:
                 continue
             assert command[2] in [b"decode", b"encode", b"duck"] and command[3:] == [b""]
+            executable = os.stat(process / "exe")
+            assert (executable.st_dev, executable.st_ino) == (worker.st_dev, worker.st_ino)
+            assert (executable.st_dev, executable.st_ino) != bot_identity
             cgroup = (process / "cgroup").read_text()
             assert "nuschl-musicbot.service" in cgroup
             assert (process / "ns/net").readlink() != parent_network
@@ -66,7 +74,8 @@ print(json.dumps({'uid':os.geteuid(),'host_controls_unwritable':True,'effective_
             assert "1073741824" in next(line for line in limits.splitlines() if line.startswith("Max address space"))
             children.append({"pid": int(process.name), "role": command[2].decode(),
                              "network_namespace_separate": True, "pid_namespace_separate": True, "credentials_absent": True,
-                             "stdio_only": True, "address_space_bytes": 1073741824})
+                             "stdio_only": True, "address_space_bytes": 1073741824,
+                             "executable": "nuschl-musicbot-codec-worker"})
         except FileNotFoundError:
             # Exited between enumeration and inspection; not a positive proof.
             continue

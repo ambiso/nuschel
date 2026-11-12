@@ -32,12 +32,6 @@ const BLOCKS: usize = 15;
 /// bound for a server that invents sessions.
 const MAX_TALKERS: usize = 64;
 
-/// The speech probability a frame needs, from a sensitivity in percent
-/// (the mapping of the client's voice activation).
-pub fn threshold(sensitivity: u8) -> f32 {
-    0.9 - 0.6 * f32::from(sensitivity.min(100)) / 100.
-}
-
 /// Turns per-frame speech probabilities and levels into speech, per talker.
 #[derive(Default)]
 struct Gate {
@@ -149,6 +143,7 @@ fn level_db(frame: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nuschl_ipc::musicbot::speech_threshold;
     use opus_pure::{Application, OpusEncoder};
 
     /// Encodes mono 48 kHz audio into 20 ms Opus packets.
@@ -169,7 +164,7 @@ mod tests {
     fn speech_in(detector: &mut Detector, packets: &[Vec<u8>]) -> usize {
         packets
             .iter()
-            .filter(|packet| detector.hear(7, packet, threshold(50)))
+            .filter(|packet| detector.hear(7, packet, speech_threshold(50)))
             .count()
     }
 
@@ -246,18 +241,16 @@ mod tests {
     #[test]
     fn damaged_packets_and_too_many_talkers_are_ignored() {
         let mut detector = Detector::default();
-        assert!(!detector.hear(1, &[0xff; 3], threshold(100)));
+        assert!(!detector.hear(1, &[0xff; 3], speech_threshold(100)));
         for sender in 0..MAX_TALKERS as u32 + 10 {
-            detector.hear(sender, &nuschl_core::audio::SILENT_OPUS, threshold(50));
+            detector.hear(
+                sender,
+                &nuschl_core::audio::SILENT_OPUS,
+                speech_threshold(50),
+            );
         }
         assert_eq!(detector.talkers.len(), MAX_TALKERS);
         detector.forget(0);
         assert_eq!(detector.talkers.len(), MAX_TALKERS - 1);
-    }
-
-    #[test]
-    fn sensitivity_lowers_the_threshold() {
-        assert!(threshold(0) > threshold(50) && threshold(50) > threshold(100));
-        assert!((threshold(50) - 0.6).abs() < 1e-6);
     }
 }
