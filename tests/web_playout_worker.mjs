@@ -10,7 +10,7 @@ import * as protocol from "../web/app/src/audio-protocol.js";
 const directory=resolve(process.argv[2]||"");
 assert.ok(process.argv[2],"usage: node tests/web_playout_worker.mjs CODEC_DIRECTORY");
 const codec=await import(pathToFileURL(join(directory,"nuschl_audio_wasm.js")));
-codec.initSync({module:await readFile(join(directory,"nuschl_audio_wasm_bg.wasm"))});
+const wasm=codec.initSync({module:await readFile(join(directory,"nuschl_audio_wasm_bg.wasm"))});
 const source=(await readFile(new URL("../web/app/src/audio-codec.worker.js",import.meta.url),"utf8")).replace(/^import .*;\n/gm,"");
 const classes=new Map();globalThis.sampleRate=48000;
 globalThis.AudioWorkletProcessor=class{constructor(){this.port={sent:[],postMessage(value){this.sent.push(value);}};}};
@@ -54,6 +54,26 @@ test("both authorization orders survive WASM loading and require exact RX/G",asy
  }
 });
 
+test("new RX packets interleaved with either barrier order survive without old-RX replay",async()=>{
+ for(const mainFirst of [true,false]) {
+  const f=await fixture();f.authorize();f.wanted();f.pump();
+  f.packet(packets[0],0,4,8);f.packet(packets[1],2,4,8,"rx",2);
+  if(mainFirst)f.authorize("new");else{f.wanted("new",2);f.pump();}
+  if(!mainFirst)f.authorize("new");
+  f.packet(packets[2],0,.25,20,"new",3);f.packet(packets[3],2,.5,20,"new",4);
+  if(mainFirst){f.wanted("new",2);f.pump();}
+  f.render(1,480,"new",2);f.pump();
+  const reply=f.port.sent.at(-1);assert.equal(reply.speakers.length,1);assert.equal(reply.speakers[0].speaker,20);
+  assert.equal(reply.speakers[0].volume,.25);
+  // Disabled->enabled with the same RX also preserves freshly authorized data.
+  f.authorize("new",false,"tx2",false);f.wanted("new",3,false);f.pump();
+  f.authorize("new",false,"tx3",true);f.packet(packets[4],0,.75,30,"new",5);f.packet(packets[5],2,.75,30,"new",6);
+  f.wanted("new",4,true);f.pump();f.render(2,480,"new",4);f.pump();
+  assert.equal(f.port.sent.at(-1).speakers[0].speaker,30);
+  assert.equal(f.port.sent.at(-1).speakers[0].volume,.75);f.close();
+ }
+});
+
 test("TX configure preserves actual RX decoder/cache; RX revoke clears it",async()=>{
  const f=await fixture();f.authorize();f.wanted();f.pump();
  f.packet(packets[0],0,.25,1,"rx",1);f.packet(packets[1],2,.5,1,"rx",2);
@@ -92,7 +112,7 @@ test("packet/speaker budgets admit 16 legitimate 100pps streams but bound churn"
  const f=await fixture();f.authorize();f.wanted();f.pump();
  for(let tick=0;tick<100;tick++) {
   f.now(tick*10);
-  for(let speaker=0;speaker<16;speaker++)f.packet(packets[tick%8],tick*2,1,speaker,"rx",tick*16+speaker+1);
+  for(let speaker=0;speaker<16;speaker++)f.packet(new Uint8Array([0xf0,0xff,0xfe]),tick,1,speaker,"rx",tick*16+speaker+1);
  }
  assert.equal(f.messages.filter(m=>m.kind==="packet-queued").length,1600);
  assert.equal(f.messages.filter(m=>m.kind==="media-error").length,0);
@@ -123,4 +143,64 @@ test("actual Worklet/direct worker/WASM pipeline has one reserve and exact stere
  assert.ok(f.messages.every(m=>m.kind!=="decoded"),"no UI PCM traffic");
  const blocks=f.port.sent.filter(m=>m.kind==="playout");assert.ok(blocks.length>30);
  assert.ok(blocks.every(m=>m.speakers.length<=16));oracle.free();f.close();
+});
+
+
+test("16 active receivers have bounded actual-WASM memory and measured render work",async()=>{
+ const f=await fixture(),cost=[];f.authorize();f.wanted();f.pump();
+ const initialBytes=wasm.memory.buffer.byteLength;
+ for(let tick=0;tick<120;tick++) {
+  f.now(tick*10);
+  for(let speaker=0;speaker<16;speaker++)f.packet(new Uint8Array([0xf0,0xff,0xfe]),tick,1,speaker,"rx",tick*16+speaker+1);
+  const started=performance.now();f.render(tick+1,(tick+1)*480);f.pump();cost.push(performance.now()-started);
+  const reply=f.port.sent.at(-1);assert.equal(reply.kind,"playout");assert.ok(reply.speakers.length<=16);
+ }
+ const memoryBytes=wasm.memory.buffer.byteLength;assert.ok(memoryBytes<256*1024*1024);
+ cost.sort((a,b)=>a-b);
+ console.log(JSON.stringify({active_receivers:16,renders:120,wasm_memory_before:initialBytes,wasm_memory_peak:memoryBytes,
+  render_ms:{p50:cost[60],p95:cost[114],max:cost.at(-1)},scope:"Node actual-WASM silence packets, not a hardware/browser latency guarantee"}));
+ f.close();
+});
+
+// Test-side immutable 10 ms stereo packet from the independent libopus fixture
+// (tests/opus_playout.py, 64 kbit CELT restricted-lowdelay, phase control1).
+const ten=Uint8Array.from(Buffer.from("f49fd589d2f97065736f5bac893b0dd89b7ae42f02e91d10084ff7ecf209a8d2a5f01797028cfe0ced9e50e9a43a58690fa7dce6e7506e2f9fffacb03022744e538a81509e53c0d117c0930970f24c91","hex"));
+const long=Uint8Array.from([ten[0]|3,12,...Array.from({length:12},()=>Array.from(ten.slice(1))).flat()]);
+test("realized startup includes duration policy plus one transport block; single120ms/end/restart remains complete",async()=>{
+ const report=[];
+ for(const [name,packet,spacing,ended,expected] of [["10ms",ten,1,false,1920],["20ms",packets[0],2,false,1440],
+   ["120ms",long,12,false,6240],["single120ms-end",long,12,true,480]]) {
+  const f=await fixture(),p=new Processor();p.port.onmessage({data:{kind:"playout-port",port:f.remote}});
+  f.authorize();p.port.onmessage({data:{kind:"configure",epoch:"rx",enabled:true,clocked:true}});f.pump();
+  let first=null,blocks=0;
+  for(let tick=0;tick<40;tick++) {
+   f.now(tick*10);
+   if(ended?tick===0:tick%spacing===0)f.packet(packet,tick,.25,1,"rx",tick+1,ended);
+   p.process([],[[new Float32Array(480),new Float32Array(480)]]);f.pump();
+   const batch=f.port.sent.at(-1);
+   if(batch?.kind==="playout"&&batch.speakers.length){first??=batch.start_frame;blocks++;}
+  }
+  assert.equal(first,expected,name);if(ended)assert.equal(blocks,12,"all120ms cached frames survive end");
+  report.push({name,first_decoded_output_frame:first,receive_start_ms:first/48,decoded_blocks:blocks});
+  if(ended) {
+   f.packet(long,0,.5,1,"rx",100,true);let restarted=0;
+   for(let tick=40;tick<55;tick++) {f.now(tick*10);p.process([],[[new Float32Array(480),new Float32Array(480)]]);f.pump();
+    const batch=f.port.sent.at(-1);if(batch?.kind==="playout"&&batch.speakers.length){restarted++;assert.equal(batch.speakers[0].volume,.5);}}
+   assert.equal(restarted,12);
+  }
+  f.close();
+ }
+ console.log(JSON.stringify({realized_startup:report,scope:"explicit480-frame clock; excludes sender packetization/device/browser scheduling"}));
+});
+
+test("worst permitted duration performs at most one120ms decode per16 speakers per render",async()=>{
+ const f=await fixture();f.authorize();f.wanted();f.pump();
+ for(let speaker=0;speaker<16;speaker++)f.packet(long,0,.25,speaker,"rx",speaker+1,true);
+ const before=wasm.memory.buffer.byteLength,started=performance.now();f.render();f.pump();const elapsed=performance.now()-started;
+ const reply=f.port.sent.at(-1);assert.equal(reply.speakers.length,16);
+ assert.ok(reply.speakers.every(s=>s.samples.length===960&&s.samples.every(Number.isFinite)));
+ for(let tick=1;tick<12;tick++){f.now(tick*10);f.render(tick+1,(tick+1)*480);f.pump();assert.equal(f.port.sent.at(-1).speakers.length,16);}
+ f.render(13,6240);f.pump();assert.equal(f.port.sent.at(-1).speakers.length,0);
+ console.log(JSON.stringify({worst_case:{speakers:16,packet_ms:120,first_render_ms:elapsed,wasm_before:before,wasm_after:wasm.memory.buffer.byteLength},
+  scope:"bounded decode work, not a guaranteed10ms CPU deadline on every device"}));f.close();
 });

@@ -179,7 +179,8 @@ export class BrowserAudio {
   }
   resetMedia({preservePlayback=false}={}) {
     this.epoch=String(++this.revision);this.baseSequence=this.sequence;
-    this.encodeJobs.clear();this.txJobs.clear();
+    if(!this.worker)this.encodeJobs.clear();
+    this.txJobs.clear();
     if(!preservePlayback||!this.playbackEnabled()) {
       this.receiveEpoch="rx"+ ++this.receiveRevision;
       // Credits survive revocation until the worker actually acknowledges old
@@ -234,7 +235,7 @@ export class BrowserAudio {
     if(!this.captureRunning||!this.voice?.can_transmit||this.encodeJobs.size>=2||this.txJobs.size>=2||
         !(data.samples instanceof Float32Array)||data.samples.length!==FRAME||!Number.isSafeInteger(data.frame)||data.frame<0){credit();return;}
     const job=++this.job;
-    this.encodeJobs.set(job,{context:{...this.voice},started:performance.now(),sequence:this.baseSequence+BigInt(data.frame)*2n});
+    this.encodeJobs.set(job,{epoch:this.epoch,context:{...this.voice},started:performance.now(),sequence:this.baseSequence+BigInt(data.frame)*2n});
     this.worker.postMessage({kind:"encode",epoch:this.epoch,job,samples:data.samples},[data.samples.buffer]);
   }
   receive(packet) {
@@ -258,11 +259,13 @@ export class BrowserAudio {
     if(data.epoch===this.receiveEpoch&&data.kind==="playout-error") {
       this.fail(new Error(String(data.message||"Audio playout failed.").slice(0,200)));return;
     }
-    if(data.epoch!==this.epoch)return;
     if(data.kind==="encoded"||data.kind==="media-error"&&data.operation==="encode") {
-      const frame=this.encodeJobs.get(data.job);this.encodeJobs.delete(data.job);
+      const frame=this.encodeJobs.get(data.job);
+      if(!frame||frame.epoch!==data.epoch)return;
+      this.encodeJobs.delete(data.job);
+      if(data.epoch!==this.epoch)return;
       this.captureNode?.port.postMessage({kind:"credit",epoch:this.epoch});
-      if(frame&&data.kind==="encoded"&&this.captureRunning&&this.voice?.can_transmit&&!this.localBlocked&&
+      if(data.kind==="encoded"&&this.captureRunning&&this.voice?.can_transmit&&!this.localBlocked&&
           sameContext(frame.context,this.voice)&&performance.now()-frame.started<=120&&data.opus instanceof Uint8Array&&data.opus.length<=960) {
         this.sendPacket(frame.sequence,data.opus,false);
       }
@@ -305,6 +308,7 @@ export class BrowserAudio {
   async dispose() {
     this.stopCapture(true);this.workerReady=false;this.resetMedia();this.reportReady();this.disposed=true;
     clearInterval(this.watchdog);this.worker?.terminate();this.worker=null;
+    this.encodeJobs.clear();this.decodeJobs.clear();
     this.playbackNode?.port.postMessage({kind:"close"});
     this.captureNode?.disconnect();this.playbackNode?.disconnect();this.output?.disconnect();
     if(this.ctx){this.ctx.onstatechange=null;await this.ctx.close();}this.ctx=null;

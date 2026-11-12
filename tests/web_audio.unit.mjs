@@ -108,6 +108,28 @@ test("packet inbox stays bounded across stalls and rapid RX revoke/reopen until 
   audio.ctx=null;await audio.dispose();
 });
 
+test("stalled encoding stays globally bounded across TX epochs; stale/unsolicited ACK cannot grant capture credits",async()=>{
+  const sent=[],credits=[];const audio=new BrowserAudio();audio.syncVoice(voice());
+  audio.worker={postMessage:message=>sent.push(message),terminate:()=>{}};
+  audio.captureNode={port:{postMessage:message=>credits.push(message)},disconnect:()=>{}};
+  const frame=()=>({kind:"capture",epoch:audio.epoch,frame:0,samples:new Float32Array(960)});
+  audio.captureRunning=true;audio.captureFrame(frame());audio.captureFrame(frame());
+  const original=sent.filter(m=>m.kind==="encode");assert.equal(original.length,2);
+  for(let index=0;index<20;index++) {
+    audio.resetMedia();audio.captureRunning=true;audio.captureFrame(frame());audio.captureFrame(frame());
+  }
+  assert.equal(sent.filter(m=>m.kind==="encode").length,2);assert.equal(audio.encodeJobs.size,2);
+  const before=credits.length;
+  audio.workerMessage({kind:"encoded",epoch:audio.epoch,job:original[0].job,opus:new Uint8Array([0xf8,0xff,0xfe])});
+  audio.workerMessage({kind:"encoded",epoch:audio.epoch,job:99999,opus:new Uint8Array([0xf8,0xff,0xfe])});
+  assert.equal(credits.length,before);assert.equal(audio.encodeJobs.size,2);
+  audio.workerMessage({kind:"encoded",epoch:original[0].epoch,job:original[0].job,opus:new Uint8Array([0xf8,0xff,0xfe])});
+  assert.equal(credits.length,before,"old ACK cannot replenish current Worklet credits");
+  assert.equal(audio.encodeJobs.size,1);audio.captureFrame(frame());assert.equal(audio.encodeJobs.size,2);
+  audio.workerMessage({kind:"encoded",epoch:original[0].epoch,job:original[0].job,opus:new Uint8Array([0xf8,0xff,0xfe])});
+  assert.equal(audio.encodeJobs.size,2);await audio.dispose();
+});
+
 test("mic mute and bitrate reset TX only, but deafen/route changes revoke RX",async()=>{
   const messages=[],playback=[];const audio=new BrowserAudio();audio.syncVoice(voice());
   audio.ctx={state:"running",currentTime:0};audio.workerReady=true;audio.nodesReady=true;
@@ -165,7 +187,9 @@ test("authenticated route targets reach only the codec and budget updates invali
   assert.equal(messages.at(-1).bitrate,128000);
   audio.encodeJobs.set(1,{epoch:audio.epoch});const oldEpoch=audio.epoch;
   audio.syncVoice({...voice(),voice_generation:"9007199254740994",bitrate:24000});
-  assert.notEqual(audio.epoch,oldEpoch);assert.equal(audio.encodeJobs.size,0);
+  assert.notEqual(audio.epoch,oldEpoch);assert.equal(audio.encodeJobs.size,1,"unacknowledged old work retains its global inbox credit");
+  audio.workerMessage({kind:"encoded",epoch:oldEpoch,job:1,opus:new Uint8Array([0xf8,0xff,0xfe])});
+  assert.equal(audio.encodeJobs.size,0);
   assert.equal(messages.at(-1).bitrate,24000);
   assert.ok(audio.captureEnabled());
   audio.syncVoice({...voice(),voice_generation:"9007199254740995",bitrate:0,can_transmit:false});

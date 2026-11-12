@@ -43,7 +43,11 @@ function direct(data) {
       if(data.epoch===wanted.epoch&&data.enabled===wanted.enabled)ready();
       return;
     }
-    if(wanted)freeSpeakers(); // explicit rebuffer/revocation, not a TX change
+    // Main may authorize/queue a new RX before this port's barrier arrives.
+    // It already flushed the previous authorization: do not discard fresh data
+    // merely because another port's old wanted tuple still exists.
+    if(wanted&&data.epoch===receiveEpoch&&(!data.enabled||
+        wanted.epoch===data.epoch&&wanted.enabled===data.enabled))freeSpeakers();
     wanted={epoch:data.epoch,enabled:data.enabled,clock_generation:data.clock_generation};
     lastStart=null;ready();return;
   }
@@ -115,7 +119,11 @@ onmessage=({data})=>{
     if(data.kind==="close"){encoder?.free();encoder=null;freeSpeakers();port?.close();port=null;close();return;}
     if(!loaded)return;
     if(data.kind==="decode"){packet(data);return;}
-    if(data.epoch!==epoch)return;
+    if(data.epoch!==epoch) {
+      if(data.kind==="encode"&&validEpoch(data.epoch)&&positive(data.job))
+        postMessage({kind:"media-error",operation:"encode",epoch:data.epoch,job:data.job,message:"Capture epoch revoked"});
+      return;
+    }
     if(data.kind==="encode") {
       if(!enabled||!encoder||!positive(data.job)||!(data.samples instanceof Float32Array)||data.samples.length!==FRAME)throw new Error("Invalid capture frame");
       const opus=encoder.encode(data.samples);

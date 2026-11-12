@@ -66,11 +66,24 @@ try {
   await b.waitForFunction(()=>fixture.snapshot().received>=25,null,{timeout:20000});
   await b.waitForFunction(()=>fixture.measure()?.rms>0.001,null,{timeout:15000});
   const initial=await b.evaluate(()=>fixture.measure());assert.ok(initial.finite);assert.equal(initial.sink.type,"none");
+  // Receiver is already server-muted. A local microphone-only reset still
+  // must not revoke listening or reset its jitter/cache/Worklet clock.
+  const rxBefore=(await state(b)).receiveEpoch,txBefore=(await state(b)).txEpoch;
+  await b.getByRole("button",{name:"Mute microphone",exact:true}).click();
+  const continuity=[];
+  for(let index=0;index<12;index++) {
+    continuity.push(await b.evaluate(()=>fixture.measure().rms));
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  const afterMute=await state(b);assert.equal(afterMute.receiveEpoch,rxBefore);assert.notEqual(afterMute.txEpoch,txBefore);
+  assert.ok(continuity.every(rms=>rms>.001),"mic-only mute interrupted audible listening");
+  assert.equal(afterMute.audio.microphone,false);assert.ok(afterMute.packetInbox<=16);
   const captured=await b.evaluate(()=>fixture.received.filter(p=>!p.end).map(p=>p.opus).slice(0,50));
   await writeFile(join(output,"wire-opus.json"),JSON.stringify(captured));
   await b.getByRole("button",{name:"Deafen",exact:true}).click();
   await b.waitForFunction(()=>fixture.snapshot().voice?.deafened&&fixture.snapshot().voice.muted&&!fixture.snapshot().audio.playback);
   await new Promise(resolve=>setTimeout(resolve,150));
+  assert.notEqual((await state(b)).receiveEpoch,rxBefore,"deafen must revoke the receive epoch");
   const deaf=await b.evaluate(()=>fixture.measure());assert.ok(deaf.finite&&deaf.rms<1e-8,"deafened output retained sound");
   await b.getByRole("button",{name:"Deafen",exact:true}).click();
   await b.waitForFunction(()=>!fixture.snapshot().voice?.deafened&&fixture.snapshot().audio.playback);
@@ -118,8 +131,8 @@ try {
   for(const page of [a,b])violations.push(...await page.evaluate(()=>globalThis.policyViolations||[]));
   assert.deepEqual(violations,[]);assert.deepEqual(network,[]);assert.deepEqual(browserErrors,[]);
   const report={passed:true,actual_sdk:sdk,actual_codec:codec,csp,permissions_policy:"microphone=(self), camera=()",
-    initial_rms:initial.rms,deaf_rms:deaf.rms,received_packets:captured.length,sender:await state(a),receiver:await state(b),
-    checks:["actual TLS UDPTunnel and Rust WASM Opus","startup mute","explicit fake microphone permission","actual AudioWorklet PCM","deafen flush","undeafen without mic","mute stops transmission","late permission result stopped","rapid real deafen toggles flush capture","reconnect revokes old consent","null audio sink","production CSP","same-origin requests only"]};
+    initial_rms:initial.rms,deaf_rms:deaf.rms,mic_only_continuity_rms:continuity,received_packets:captured.length,sender:await state(a),receiver:await state(b),
+    checks:["actual TLS UDPTunnel and Rust WASM Opus","startup mute","explicit fake microphone permission","actual AudioWorklet PCM","mic-only mute preserves RX epoch and audible continuity","deafen flush and RX epoch revocation","undeafen without mic","mute stops transmission","late permission result stopped","rapid real deafen toggles flush capture","reconnect revokes old consent","null audio sink","production CSP","same-origin requests only"]};
   await writeFile(join(output,"browser-proof.json"),JSON.stringify(report,null,2));console.log(JSON.stringify({passed:true,received_packets:captured.length,rms:initial.rms,deaf_rms:deaf.rms}));
 } catch(error){
   await writeFile(join(output,"failure.json"),JSON.stringify({error:String(error),browserErrors,network,states:await Promise.all(contexts.map(async c=>c.pages()[0]?.evaluate(()=>window.fixture?.snapshot()).catch(()=>null)))},null,2));throw error;

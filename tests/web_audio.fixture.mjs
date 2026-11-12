@@ -72,7 +72,7 @@ function measure(){
     finite:samples.every(Number.isFinite),samples:Array.from(samples),sink:{type:audio.ctx.sinkId?.type}};
 }
 window.fixture={request,audio,measure,received,sent,errors,events,
-  snapshot:()=>({voice,servers,audio:audioState,received:receivedCount,sent:sent.length,errors:[...errors],events:events.slice(-100),sink:{type:audio.ctx?.sinkId?.type}}),
+  snapshot:()=>({voice,servers,audio:audioState,receiveEpoch:audio.receiveEpoch,txEpoch:audio.epoch,packetInbox:audio.decodeJobs.size,received:receivedCount,sent:sent.length,errors:[...errors],events:events.slice(-100),sink:{type:audio.ctx?.sinkId?.type}}),
   close:async()=>{await audio.dispose();worker.terminate();},
 };
 document.getElementById("loaded").textContent="ready";
