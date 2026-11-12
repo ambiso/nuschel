@@ -130,3 +130,38 @@ These are private Linux GNOME checks. They do not establish native Windows/macOS
 behavior or every possible negotiated server-version/security warning. Those
 warnings reuse the same migrated components; their negotiation/state tests are
 separate from this visual matrix.
+
+## Recorded Linux regression evidence
+
+The November 12, 2026 check used instrumented desktop source `9e45af8e` before
+and `74619877` after, with the same packaged sibling helpers, fonts, renderer,
+private fake-audio environment and real long-notice fixture. The source matrix
+passed all 12 window/sidebar/zoom combinations; the final rail check passed all
+eight endpoint/zoom combinations. The old executable failed the first tile's
+paint-gutter assertion (paint top 53, scroll viewport top 61 at 100%). Final desktop
+unit tests passed 75/75. Native Windows/macOS GUI behavior was not measured.
+
+Existing frame-timing instrumentation reported these milliseconds:
+
+| Operation | Before draw p50 / p95 | After draw p50 / p95 | Before / after layout p95 |
+| --- | ---: | ---: | ---: |
+| Resize sweep 100% | 2.787 / 3.437 | 3.271 / 4.293 | 0.988 / 1.151 |
+| Resize sweep 125% | 2.550 / 3.149 | 3.522 / 4.167 | 0.853 / 1.139 |
+| Pointer resize 100% | 2.510 / 3.083 | 3.398 / 4.552 | 0.741 / 1.083 |
+| Pointer resize 125% | 2.461 / 3.413 | 2.970 / 3.522 | 0.795 / 0.948 |
+
+The complete fix costs additional drawing/layout time in this fixture; it is not
+a measured speedup. The final maximum draw was 4.658 ms. Compositor lag p95 stayed
+at one tick during sweeps and two ticks during pointer drags. Both versions drew
+only twice during each three-second idle sample at both 100% and 125%, without a
+continuous redraw loop. These are bounded samples on a shared 24-CPU host; its
+one-minute load was 7.93 before and 10.11 after. Other owned builds/tests were held
+during timing, but unrelated host processes were not stopped.
+
+UI checks used the exact desktop executable with cached packaged sibling helpers
+and wrapper, without changing their IPC schema. This is scoped native UI proof,
+not proof of a newly rebuilt whole distribution. All fixture profiles, screenshots
+and logs were on disk. A Nix daemon build-directory override was rejected as
+restricted; the bounded cached desktop-leaf builds used the existing daemon
+scratch setting. Client-side TMPDIR does not establish the daemon's scratch path,
+and no exact daemon peak-memory measurement is claimed.

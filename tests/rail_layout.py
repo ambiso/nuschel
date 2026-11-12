@@ -70,8 +70,8 @@ def run(args, shell, registry, profile, shot):
             # host audio source (the fixture sets a nonexistent private socket).
             shell.click(*point(node),button=3)
             use=eventually(lambda:named('menu item','Use voice here'),'last voice route action absent');use.press()
-            unmute=named('push button','Unmute')
-            if unmute:unmute.press()
+            # Use voice here transfers the already-live route; wait for its
+            # acknowledgment instead of toggling a transient old Unmute label.
             eventually(lambda:'talking here' in node.name,'last voice intent not acknowledged')
         for percent,steps in [(100,0),(125,2),(150,3),(200,5)]:
             shell.chord('Control_L','0')
